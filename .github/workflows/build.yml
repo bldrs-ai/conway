@@ -44,9 +44,9 @@ jobs:
           echo "EMSDK=$EMSDK" >> $GITHUB_ENV
           echo "EMSCRIPTEN=$EMSCRIPTEN" >> $GITHUB_ENV
 
-      - run: yarn submodule-update
-
       - run: yarn install
+
+      - run: yarn submodule-update
 
       - name: Unzip wasm library dependencies
         run: |
