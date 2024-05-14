@@ -44,9 +44,15 @@ jobs:
           echo "EMSDK=$EMSDK" >> $GITHUB_ENV
           echo "EMSCRIPTEN=$EMSCRIPTEN" >> $GITHUB_ENV
 
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
       - run: yarn install
 
-      - run: git submodule update --init --recursive
+      - run: yarn submodule-update
 
       - name: Unzip wasm library dependencies
         run: |
