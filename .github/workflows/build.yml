@@ -1,0 +1,58 @@
+name: Build & Test
+
+# Keep this in sync with conway-geom
+env:
+  EMSDK_VERSION: 3.1.58
+  EMSDK_CACHE_FOLDER: 'cache/emsdk'
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable Emscripten System Library Cache
+        id: emscripten-cache
+        uses: actions/cache@v3
+        with:
+          path: ${{env.EMSDK_CACHE_FOLDER}}
+          key: ${{env.EMSDK_VERSION}}-${{ runner.os }}
+
+      - name: Install Emscripten
+        id: emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{env.EMSDK_VERSION}}
+          actions-cache-folder: ${{env.EMSDK_CACHE_FOLDER}}
+
+      - name: Add emsdk to env
+        run: |
+          echo 'which em++:'
+          which em++
+          em++ -v
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "emsdk: $EMSDK"
+          echo "emscripten bin dir: $EMSCRIPTEN"
+          echo "EMSDK=$EMSDK" >> $GITHUB_ENV
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> $GITHUB_ENV
+
+      - run: yarn submodule-update
+
+      - run: yarn install
+
+      - name: Unzip wasm library dependencies
+        run: |
+          cd dependencies/wasm
+          unzip dependencies.zip
+
+      - run: yarn build
+
+      - run: yarn test
