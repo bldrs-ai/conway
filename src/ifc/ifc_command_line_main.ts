@@ -18,6 +18,7 @@ import Logger from '../logging/logger'
 import Environment from '../utilities/environment'
 import Memory from '../memory/memory'
 import { ExtractResult } from '../core/shared_constants'
+import path from 'path'
 
 // create a model ID
 const modelID: number = 0
@@ -207,10 +208,14 @@ function doWork() {
           model.nullOnErrors = !strict
 
           if (geometry) {
-          // Get the filename with extension
-            const fileNameWithExtension = ifcFile.split('/').pop()!
+
+
             // Get the filename without extension
-            const fileName = fileNameWithExtension.split('.')[0]
+            const fileName =
+              path.join(
+                  path.dirname( ifcFile ),
+                  path.basename( ifcFile, path.extname( ifcFile) ) )
+
             const result = await geometryExtraction(model)
             if (result !== void 0) {
               const scene = result[0]

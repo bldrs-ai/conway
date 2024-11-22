@@ -137,7 +137,10 @@
       "core": "cpp",
       "charconv": "cpp",
       "span": "cpp",
-      "resumable": "cpp"
+      "resumable": "cpp",
+      "execution": "cpp",
+      "coroutine": "cpp",
+      "stop_token": "cpp"
     },
     "dotnet.defaultSolution": "disable"
 	}
