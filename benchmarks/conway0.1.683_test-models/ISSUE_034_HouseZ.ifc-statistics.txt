@@ -1,0 +1,1 @@
+[Nov 22 2024 05:06:03 AM]: Load Status: OK, Project Name: undefined, Version: IFC2X3, Conway Version: 0.1.683, Parse Time: 88 ms, Geometry Time: 206 ms, Total Time: 294 ms, Geometry Memory: 3.549 MB, Memory Statistics: Node Memory Usage: RSS 321.047 MB, Heap Total: 156.484 MB, Heap Used: 131.578 MB, Preprocessor Version: 'ASIFC - 2.15.0.991', Originating System: ''

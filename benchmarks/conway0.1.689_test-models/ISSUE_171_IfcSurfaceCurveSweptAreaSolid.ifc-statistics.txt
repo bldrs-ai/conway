@@ -1,0 +1,1 @@
+[Dec 3 2024 01:56:32 AM]: Load Status: OK, Project Name: Homemaker Project, Version: IFC4, Conway Version: 0.1.689, Parse Time: 19 ms, Geometry Time: 59 ms, Total Time: 78 ms, Geometry Memory: 0.245 MB, Memory Statistics: Node Memory Usage: RSS 310.953 MB, Heap Total: 125.266 MB, Heap Used: 102.813 MB, Preprocessor Version: 'BlenderBIM 0.0.999999', Originating System: 'Nobody'
