@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.4.716",
+  "version": "0.4.719",
   "repository": "https://github.com/bldrs-ai/conway",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -107,6 +107,8 @@
     "run-script-os": "^1.1.6",
     "ts-jest": "^29.0.3",
     "ts-node": "^10.9.1",
+    "typedoc": "^0.27.5",
+    "typedoc-plugin-markdown": "^4.3.2",
     "typescript": "^4.8.4"
   },
   "type": "module"

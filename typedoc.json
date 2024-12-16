@@ -1,0 +1,16 @@
+{
+  "entryPoints": ["src/**/*.ts"], 
+  "out": "docs",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "hideGenerator": true,
+  "name": "conway",
+  "readme": "README.md",
+  "tsconfig": "./tsconfig.json",
+  "exclude": [
+    "**/node_modules/**",
+    "**/dependencies/**/*.ts",
+    "**/*.test.ts"
+  ]
+}
