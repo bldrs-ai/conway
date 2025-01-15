@@ -223,6 +223,9 @@ echo "${all_status}, ${delta_time}s, ALL_FILES" >> $basicStatsFilename
 # Use npm to get the latest version of @bldrs-ai/conway
 oldVersion=$(npm show @bldrs-ai/conway version --registry=https://npm.pkg.github.com/)
 
+# Decrement the minor version
+oldVersion=$(echo "$oldVersion" | awk -F. '{print $1 "." $2-1 "." $3}')
+
 # Construct the paths for the current and latest runs
 oldResults="${outputBase}/conway${oldVersion}_${modelDirName}/performance-detail.csv"
 

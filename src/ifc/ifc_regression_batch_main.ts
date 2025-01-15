@@ -144,54 +144,74 @@ async function runDiff(
   }
 }
 
+let totalTime = 0 // To keep track of the running total time
+
 /**
  * Run a regression test digest for a file.
  */
 async function runForFile( filePath: string, outputPath: string ): Promise< RunResults > {
 
+  const MAX_TIMEOUT_MS = 180000 // 3 minutes
+  const startTime = Date.now() // Start time
+
   // eslint-disable-next-line max-len
-  const process = await safeExec( `node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d "${filePath}" "${outputPath}"` )
+  const safeExecCommand = `node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d "${filePath}" "${outputPath}"`
 
-  if ( process.type === 'Failed' ) {
+  console.log(`Current File: ${filePath}`)
 
+  const processPromise = safeExec(safeExecCommand)
+
+  const timeoutPromise: Promise<RunErrorResults> = new Promise((resolve) =>
+    setTimeout(() => {
+      resolve({
+        type: 'Failed',
+        message: 'Execution timed out',
+        name: '',
+      })
+    }, MAX_TIMEOUT_MS),
+  )
+
+  const process = await Promise.race([processPromise, timeoutPromise])
+
+  totalTime += Date.now() - startTime
+
+  console.log(`totalTime: ${totalTime}`)
+
+  if (process.type === 'Failed') {
+    if (process.message && process.message === 'Execution timed out') {
+      console.log('Timed out.')
+    }
     return process
   }
 
-  let stdErr = process.stderr
+  const stdErr = process.stderr.replaceAll('\r', '')
 
-  stdErr = stdErr.replaceAll( '\r', '' )
+  let errorLines = stdErr.split('\n').filter((line) => line.length > 0)
+  errorLines = errorLines.map((line) => `${line}\n`)
 
-  let errorLines = stdErr.split( '\n' )
-
-  errorLines = errorLines.filter( ( where ) => where.length > 0 )
-  errorLines = errorLines.map( ( where ) => `${where}\n` )
-
-  const indexOfHeader = errorLines.findIndex( ( where ) => where.startsWith( errorCSVHeader ) )
-
-  if ( indexOfHeader >= 0 ) {
-    errorLines.splice(
-        0,
-        indexOfHeader + 1 )
+  const indexOfHeader = errorLines.findIndex((line) => line.startsWith(errorCSVHeader))
+  if (indexOfHeader >= 0) {
+    errorLines.splice(0, indexOfHeader + 1)
   } else {
     errorLines.length = 0
   }
 
-  const outputFile = path.basename( outputPath )
+  const outputFile = path.basename(outputPath)
 
-  let fileHash: string | undefined = void 0
+  let fileHash: string | undefined
 
   const outputCSV = `${outputPath}.csv`
-
-  if ( fs.existsSync( outputCSV ) ) {
-
-    fileHash = crypto.createHash( 'sha1' ).update(
-        await fsPromises.readFile( outputCSV ) ).digest().toString( 'hex' )
+  if (fs.existsSync(outputCSV)) {
+    fileHash = crypto
+        .createHash('sha1')
+        .update(await fsPromises.readFile(outputCSV))
+        .digest('hex')
   }
 
   return {
     type: 'Run',
-    errorLines: errorLines.length > 0 ? errorLines : void 0,
-    outputFile: outputFile,
+    errorLines: errorLines.length > 0 ? errorLines : undefined,
+    outputFile,
     hash: fileHash,
   }
 }
@@ -328,5 +348,8 @@ const args = // eslint-disable-line no-unused-vars
         await failedFile.close()
 
         await runDiff( outputPath, target, changes, dryRun )
+
+        // TODO(@nickcastel50) - figure out why this hangs at the end sometimes
+        process.exit(0)
       })
       .help().argv
