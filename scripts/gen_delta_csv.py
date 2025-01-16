@@ -3,13 +3,15 @@ import sys
 
 
 def compute_deltas(data1, data2):
-    # Reorganize the data by file
     data1_by_file_dict = {entry['filename']: entry for entry in data1}
     data2_by_file_dict = {entry['filename']: entry for entry in data2}
     deltas = []
     for filename, entry1 in data1_by_file_dict.items():
         entry2 = data2_by_file_dict.get(filename)
         if entry2:
+            total_time_delta = computeDelta('totalTimeMs', entry2, entry1)
+            total_time_percentage_change = computePercentageChange(entry1.get('totalTimeMs'), entry2.get('totalTimeMs'))
+            
             delta = {
                 'timestamp': entry1.get('timestamp'),
                 'loadStatus1': entry1.get('loadStatus'),
@@ -23,7 +25,8 @@ def compute_deltas(data1, data2):
                 'engine2TotalTimeMs': entry2.get('totalTimeMs'),
                 'parseTimeMsDelta': computeDelta('parseTimeMs', entry2, entry1),
                 'geometryTimeMsDelta': computeDelta('geometryTimeMs', entry2, entry1),
-                'totalTimeMsDelta': computeDelta('totalTimeMs', entry2, entry1),
+                'totalTimeMsDelta': total_time_delta,
+                'totalTimeMsPercentageChange': total_time_percentage_change,
                 'geometryMemoryMbDelta': computeDelta('geometryMemoryMb', entry2, entry1),
                 'rssMbDelta': computeDelta('rssMb', entry2, entry1),
                 'heapUsedMbDelta': computeDelta('heapUseMb', entry2, entry1),
@@ -45,6 +48,7 @@ def compute_deltas(data1, data2):
                 'parseTimeMsDelta': 'N/A',
                 'geometryTimeMsDelta': 'N/A',
                 'totalTimeMsDelta': 'N/A',
+                'totalTimeMsPercentageChange': 'N/A',
                 'geometryMemoryMbDelta': 'N/A',
                 'rssMbDelta': 'N/A',
                 'heapUsedMbDelta': 'N/A',
@@ -55,18 +59,19 @@ def compute_deltas(data1, data2):
         if filename not in data1_by_file_dict:
             delta = {
                 'timestamp': entry2.get('timestamp'),
-                'loadStatus1': entry2.get('loadStatus'),
-                'loadStatus2': 'N/A',
+                'loadStatus1': 'N/A',
+                'loadStatus2': entry2.get('loadStatus'),
                 'uname': entry2.get('uname'),
-                'engine1': entry2.get('engine'),
-                'engine2': 'N/A',
+                'engine1': 'N/A',
+                'engine2': entry2.get('engine'),
                 'filename': filename,
                 'schemaVersion': entry2.get('schemaVersion'),
-                'engine1TotalTimeMs': entry2.get('totalTimeMs'),
-                'engine2TotalTimeMs': 'N/A',
+                'engine1TotalTimeMs': 'N/A',
+                'engine2TotalTimeMs': entry2.get('totalTimeMs'),
                 'parseTimeMsDelta': 'N/A',
                 'geometryTimeMsDelta': 'N/A',
                 'totalTimeMsDelta': 'N/A',
+                'totalTimeMsPercentageChange': 'N/A',
                 'geometryMemoryMbDelta': 'N/A',
                 'rssMbDelta': 'N/A',
                 'heapUsedMbDelta': 'N/A',
@@ -74,6 +79,15 @@ def compute_deltas(data1, data2):
             }
             deltas.append(delta)
     return deltas
+
+
+def computePercentageChange(old_value, new_value):
+    old_value = parse_value(old_value)
+    new_value = parse_value(new_value)
+    if old_value == 0:
+        return 'Infinity' if new_value > 0 else '0%'
+    return f"{((new_value - old_value) / old_value) * 100:.2f}%"
+
 
 
 def computeDelta(field, e2, e1):
@@ -98,8 +112,9 @@ def read_data_from_csv(stats_filepath):
 def write_data_to_csv(data, csv_filename):
     # Define CSV header
     csv_header = ['timestamp', 'loadStatus1', 'loadStatus2', 'uname', 'engine1', 'engine2', 'filename', 'schemaVersion',
-                  'engine1TotalTimeMs', 'engine2TotalTimeMs', 'parseTimeMsDelta', 'geometryTimeMsDelta', 'totalTimeMsDelta',
-                  'geometryMemoryMbDelta', 'rssMbDelta', 'heapUsedMbDelta', 'heapTotalMbDelta']
+              'engine1TotalTimeMs', 'engine2TotalTimeMs', 'parseTimeMsDelta', 'geometryTimeMsDelta', 'totalTimeMsDelta',
+              'totalTimeMsPercentageChange', 'geometryMemoryMbDelta', 'rssMbDelta', 'heapUsedMbDelta', 'heapTotalMbDelta']
+
     
     # Write data to CSV
     with open(csv_filename, mode='w', newline='') as file:
