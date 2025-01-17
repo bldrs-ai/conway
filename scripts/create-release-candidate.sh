@@ -50,6 +50,10 @@ fi
 
 echo "New version is $NEW_VERSION"
 
+# Run the build-incremental script
+echo "Running build-incremental"
+yarn build-incremental
+
 # Create a git tag for the new version without creating a commit
 echo "Creating git tag $NEW_VERSION..."
 git tag "$NEW_VERSION"

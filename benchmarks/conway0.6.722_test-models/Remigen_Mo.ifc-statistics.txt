@@ -1,0 +1,1 @@
+[Jan 15 2025 07:18:52 PM]: Load Status: OK, Project Name: Undefined, Version: IFC4, Conway Version: 0.6.722, Parse Time: 23 ms, Geometry Time: 83 ms, Total Time: 106 ms, Geometry Memory: 1.801 MB, Memory Statistics: Node Memory Usage: RSS 283.766 MB, Heap Total: 132.781 MB, Heap Used: 106.694 MB, Preprocessor Version: 'TrimBimToIFC ver 1.0', Originating System: 'IFC4 model'

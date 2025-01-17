@@ -46,9 +46,10 @@ currentDate=$(date +"%Y%m%d_%H%M%S")
 
 # If web-ifc, get the version once
 if [ $isEngineConway -eq 1 ] ; then
-   engine="conway"$(cd "$serverDir/node_modules/@bldrs-ai/conway-web-ifc-adapter/node_modules/@bldrs-ai/conway"; \
-  node -p "require('./package.json').version"; \
-  cd "$scriptDir")
+   #engine="conway"$(cd "$serverDir/node_modules/@bldrs-ai/conway-web-ifc-adapter/node_modules/@bldrs-ai/conway"; \
+   engine="conway"$(cd $serverDir; yarn list --pattern @bldrs-ai/conway 2>&1 | grep '@bldrs-ai/conway@' | sed 's/.*@//g')
+  #node -p "require('./package.json').version"; \
+  #cd "$scriptDir")
 else
   engine="webifc"$(cd $serverDir; yarn list --pattern web-ifc 2>&1 | grep web-ifc | sed 's/.*@//g' ; cd $scriptDir)
 fi
@@ -222,6 +223,9 @@ echo "${all_status}, ${delta_time}s, ALL_FILES" >> $basicStatsFilename
 
 # Use npm to get the latest version of @bldrs-ai/conway
 oldVersion=$(npm show @bldrs-ai/conway version --registry=https://npm.pkg.github.com/)
+
+# Decrement the minor version
+oldVersion=$(echo "$oldVersion" | awk -F. '{print $1 "." $2-1 "." $3}')
 
 # Construct the paths for the current and latest runs
 oldResults="${outputBase}/conway${oldVersion}_${modelDirName}/performance-detail.csv"
