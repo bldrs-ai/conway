@@ -285,11 +285,6 @@ async function main() {
     await sleep(3);
 
     const modelStartTime = Date.now();
-
-    // Our rendering endpoint
-    // 'file://...' + path. But the script used localhost:8001/render? We do the same:
-    // Actually the script did: URL = "file:///..."
-    // Then we do: POST to http://localhost:8001/render with JSON: {"url": "file:///..."}
     const encodedFileName = encodeFileName(baseFilename);
     const url = `file://${filePath}`; // local file path
 
@@ -496,14 +491,6 @@ async function main() {
   appendLineToFile(basicStatsFilename, `${allStatus}, ${deltaTimeSec}s, ALL_FILES`);
 
   // Attempt to do the delta with old results
-  // The script does:
-  //   oldVersion=$(npm show @bldrs-ai/conway version --registry=https://npm.pkg.github.com/)
-  //   oldVersion = oldVersion with minor decremented, etc...
-  //   oldResults = ...
-  //   newVersion extracted from engine
-  //   deltaOutputPath = ...
-  //   python3 gen_delta_csv.py ...
-  // We'll do a simpler approach (if you want the advanced logic, replicate it).
   let oldVersion = '';
   try {
     if (isEngineConway) {
