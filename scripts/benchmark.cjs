@@ -125,6 +125,12 @@ async function main() {
     usageAndExit();
   }
 
+  // Reconstruct something like: node benchmark.cjs '../headless-three' '../test-models'
+  const command = [
+    'node benchmark.cjs',
+    ...args.map(a => JSON.stringify(a))
+  ].join(' ');
+
   // Determine engine usage
   let isEngineConway = true;
   let engineSuffix = "";
@@ -209,15 +215,19 @@ async function main() {
   const testRunName = `${engineStr}_${modelDirName}`;
 
   // Construct output directory
-  const outputBase = path.join(scriptDir, '..', 'benchmarks');
+  const outputBase = path.join(modelDir, 'benchmarks');
   const outputDir = path.join(outputBase, testRunName);
   fs.mkdirSync(outputDir, { recursive: true });
+
+  // Write to file
+  const logOutputFile = path.join(outputDir, '00-command.log.txt');
+  fs.writeFileSync(logOutputFile, command + '\n', { encoding: 'utf8' });
 
   // CSV files
   const basicStatsFilename = path.join(outputDir, 'performance.csv');
   const newResults = path.join(outputDir, 'performance-detail.csv');
   const errorLogFile = path.join(outputDir, 'performance.err.txt');
-  const tempServerOutputFile = path.join(outputDir, 'rendering-server.log.txt');
+  const tempServerOutputFile = path.join(outputDir, '00_rendering-server.log.txt');
 
   // Initialize the CSV
   fs.writeFileSync(
@@ -292,7 +302,7 @@ async function main() {
 
     let curlSuccess = true;
 
-    const renderEndpoint = 'http://localhost:8001/render';
+    const renderEndpoint = 'http://localhost:8001/renderPanoramic';
 
     // Attempt the request
     try {
