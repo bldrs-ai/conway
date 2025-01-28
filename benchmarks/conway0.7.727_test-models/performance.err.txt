@@ -1,0 +1,3 @@
+Error processing file file:///Users/soar/Documents/GitHub/test-models/ifc/misc/bath-csg-solid.ifc
+Error processing file file:///Users/soar/Documents/GitHub/test-models/ifc/sp/sp-946MB.ifc
+Error processing file file:///Users/soar/Documents/GitHub/test-models/ifc/thatopen/ifcfiles/KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc

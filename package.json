@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.1.689",
+  "version": "0.7.727",
   "repository": "https://github.com/bldrs-ai/conway",
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -25,11 +25,14 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "clean": "yarn clean-conway_geom",
+    "clean": "run-script-os",
+    "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",
+    "clean:darwin": "rm -rf compiled && rm -rf dependencies/conway-geom/bin/release && rm -rf dependencies/conway-geom/Dist/*.{map,js} && yarn clean-conway_geom",
     "build": "yarn clean && yarn update-version && yarn build-all-release-node && yarn build-all-release-web",
     "build-web": "yarn clean && yarn update-version && yarn build-all-release-web",
     "build-node": "yarn clean && yarn update-version && yarn build-all-release-node",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "create-release-candidate": "./scripts/create-release-candidate.sh",
     "build-all-profile-node": "yarn build-profile-conway_geom-node && tsc --build",
     "build-all-profile-web": "yarn build-profile-conway_geom-web && tsc --build",
     "build-all-release-node": "yarn build-conway_geom-node && tsc --build",

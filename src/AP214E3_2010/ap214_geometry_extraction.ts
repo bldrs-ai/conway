@@ -848,22 +848,10 @@ export class AP214GeometryExtraction {
     const firstMesh =
       this.model.geometry.getByLocalID( firstOperand.localID )
 
-    let flatFirstMeshVectorFromParts: boolean = false
-
     if ( firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY ) {
-      const geometryParts = firstMesh.geometry.getParts()
 
-      if (geometryParts.size() > 0) {
-        /* for (let geometryPartIndex = 0;
-          geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
-          flatFirstMeshVector.push_back(geometryParts.get(geometryPartIndex))
-        }*/
-        flatFirstMeshVector = geometryParts
-        flatFirstMeshVectorFromParts = true
-      } else {
-        flatFirstMeshVector = this.nativeVectorGeometry()
-        flatFirstMeshVector.push_back(firstMesh.geometry)
-      }
+      flatFirstMeshVector = this.nativeVectorGeometry()
+      flatFirstMeshVector.push_back(firstMesh.geometry)
     } else {
       console.log(
           `Error extracting firstOperand geometry for expressID: 
@@ -873,25 +861,14 @@ export class AP214GeometryExtraction {
     }
 
     let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-    let flatSecondMeshVectorFromParts: boolean = false
 
     const secondMesh =
       this.model.geometry.getByLocalID( from.second_operand.localID )
 
     if ( secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY ) {
 
-      const geometryParts = secondMesh.geometry.getParts()
-
-      if (geometryParts.size() > 0) {
-
-        flatSecondMeshVector = geometryParts
-        flatSecondMeshVectorFromParts = true
-
-      } else {
-
-        flatSecondMeshVector = this.nativeVectorGeometry()
-        flatSecondMeshVector.push_back(secondMesh.geometry)
-      }
+      flatSecondMeshVector = this.nativeVectorGeometry()
+      flatSecondMeshVector.push_back(secondMesh.geometry)
     } else {
       console.log(
           `Error extracting secondOperand geometry for expressID: 
@@ -922,14 +899,6 @@ export class AP214GeometryExtraction {
       this.dropNonSceneGeometry(firstMesh.localID)
       this.dropNonSceneGeometry(secondMesh.localID)
       this.model.geometry.add(canonicalMesh)
-    }
-
-    if (!flatFirstMeshVectorFromParts) {
-      flatFirstMeshVector.delete()
-    }
-
-    if (!flatSecondMeshVectorFromParts) {
-      flatSecondMeshVector.delete()
     }
 
     // console.log("deleting paramsGetBooleanResult...")
@@ -989,18 +958,8 @@ export class AP214GeometryExtraction {
 
       if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-        const geometryParts = firstMesh.geometry.getParts()
-
-        if (geometryParts.size() > 0) {
-          /* for (let geometryPartIndex = 0;
-            geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
-            flatFirstMeshVector.push_back(geometryParts.get(geometryPartIndex))
-          }*/
-          flatFirstMeshVector = geometryParts
-        } else {
-          flatFirstMeshVector = this.nativeVectorGeometry()
-          flatFirstMeshVector.push_back(firstMesh.geometry)
-        }
+        flatFirstMeshVector = this.nativeVectorGeometry()
+        flatFirstMeshVector.push_back(firstMesh.geometry)
       } else {
         console.log(
             `(Operand) Error extracting firstOperand geometry for expressID: 
@@ -1016,18 +975,8 @@ export class AP214GeometryExtraction {
 
       if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-        const geometryParts = secondMesh.geometry.getParts()
-
-        if (geometryParts.size() > 0) {
-        /* for (let geometryPartIndex = 0;
-            geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
-            flatSecondMeshVector.push_back(geometryParts.get(geometryPartIndex))
-          }*/
-          flatSecondMeshVector = geometryParts
-        } else {
-          flatSecondMeshVector = this.nativeVectorGeometry()
-          flatSecondMeshVector.push_back(secondMesh.geometry)
-        }
+        flatSecondMeshVector = this.nativeVectorGeometry()
+        flatSecondMeshVector.push_back(secondMesh.geometry)
       } else {
         console.log(
             `(Operand) Error extracting secondOperand geometry for expressID: 

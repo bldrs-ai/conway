@@ -8,6 +8,5 @@ Found null for nonnullable field IfcReflectanceMethodEnum.,9,4035 4370 39964 417
 No basis found for brep!,12,,ISSUE_126_model.ifc
 Error processing relAggregate,14,"370003, error: Value in STEP was incorrectly typed 43, error: Value in STEP was incorrectly typed 44, error: Value in STEP was incorrectly typed 3090003, error: Value in STEP was incorrectly typed 11280003, error: Value in STEP was incorrectly typed 14100003, error: Value in STEP was incorrectly typed 23420003, error: Value in STEP was incorrectly typed 31610003, error: Value in STEP was incorrectly typed 34300003, error: Value in STEP was incorrectly typed 36990003, error: Value in STEP was incorrectly typed 39680003, error: Value in STEP was incorrectly typed 42370005, error: Value in STEP was incorrectly typed 58330003, error: Value in STEP was incorrectly typed 61020003, error: Value in STEP was incorrectly typed",KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
 No basis found for brep!,48,,S_Office_Integrated Design Archi.ifc
-Error processing relatingMaterial,2,"232, error: Value in select must be populated 242, error: Value in select must be populated",Sample_entities.ifc
 Error processing relatingMaterial,1,"271790, error: Value in select must be populated",ifcbridge-model01.ifc
 No basis found for brep!,41,,SKYLARK250_design-kit_blocks_detailed.ifc

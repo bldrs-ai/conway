@@ -1,0 +1,41 @@
+ok, 1s, ifc/misc/haus.ifc
+ok, 0s, ifc/misc/box.ifc
+error, 1s, ifc/misc/bath-csg-solid.ifc
+ok, 52s, ifc/sp/sp-469MB.ifc
+ok, 155s, ifc/sp/sp-946MB.ifc
+ok, 24s, ifc/sp/sp-231MB.ifc
+ok, 1s, ifc/bldrs/ïndex wëird, chars!123.ifc
+ok, 1s, ifc/bldrs/b.ifc
+ok, 0s, ifc/bldrs/index.ifc
+ok, 4s, ifc/openifcmodels/20160125Trapelo - Existing-Trapelo_Design_Intent.ifc
+ok, 0s, ifc/openifcmodels/171210AISC_Sculpture_param.ifc
+ok, 3s, ifc/Schependomlaan.ifc
+ok, 0s, ifc/index.ifc
+ok, 39s, ifc/wikihouse/SKYLARK250_design-kit_blocks_detailed.ifc
+ok, 1s, ifc/thatopen/ifcfiles/ISSUE_005_haus.ifc
+ok, 2s, ifc/thatopen/ifcfiles/dental_clinic.ifc
+ok, 2s, ifc/thatopen/ifcfiles/C20-Institute-Var-2.ifc
+ok, 1s, ifc/thatopen/ifcfiles/ISSUE_102_M3D-CON.ifc
+ok, 2s, ifc/thatopen/ifcfiles/ISSUE_159_kleine_Wohnung_R22.ifc
+ok, 0s, ifc/thatopen/ifcfiles/IfcOpenHouse_IFC4.ifc
+ok, 1s, ifc/thatopen/ifcfiles/ISSUE_034_HouseZ.ifc
+ok, 3s, ifc/thatopen/ifcfiles/FM_ARC_DigitalHub.ifc
+ok, 0s, ifc/thatopen/ifcfiles/tested_sample_project.ifc
+ok, 1s, ifc/thatopen/ifcfiles/example.ifc
+ok, 0s, ifc/thatopen/ifcfiles/Sample_entities.ifc
+ok, 2s, ifc/thatopen/ifcfiles/ifcbridge-model01.ifc
+ok, 1s, ifc/thatopen/ifcfiles/duplex.ifc
+ok, 0s, ifc/thatopen/ifcfiles/ISSUE_044_test_IFCCOMPOSITEPROFILEDEF.ifc
+ok, 1s, ifc/thatopen/ifcfiles/ISSUE_171_IfcSurfaceCurveSweptAreaSolid.ifc
+ok, 2s, ifc/thatopen/ifcfiles/schependomlaan.ifc
+ok, 5s, ifc/thatopen/ifcfiles/ISSUE_068_ARK_NUS_skolebygg.ifc
+ok, 9s, ifc/thatopen/ifcfiles/S_Office_Integrated Design Archi.ifc
+ok, 1s, ifc/thatopen/ifcfiles/AC20-FZK-Haus.ifc
+ok, 3s, ifc/thatopen/ifcfiles/ISSUE_102_M3D-CON-CD.ifc
+ok, 3s, ifc/thatopen/ifcfiles/ISSUE_021_Mini Project.ifc
+ok, 1s, ifc/thatopen/ifcfiles/Office_A_20110811.ifc
+ok, 2s, ifc/thatopen/ifcfiles/ISSUE_129_N1540_17_EXE_MOD_448200_02_09_11SMC_IGC_V17.ifc
+error, 0s, ifc/thatopen/ifcfiles/KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
+ok, 1s, ifc/thatopen/ifcfiles/ISSUE_126_model.ifc
+ok, 4s, ifc/thatopen/ifcfiles/advanced_model.ifc
+OK, 530s, ALL_FILES

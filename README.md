@@ -22,7 +22,7 @@ On macOS, it should be installable with brew using:
 brew install dotnet@6
 ```
 
-### Build
+### Initial Build
  
 Clone the repository, then in the root directory of the repository, run the yarn install, followed by using yarn to initialise the IFC-gen submodule:
 ```
@@ -43,16 +43,17 @@ yarn build
 yarn test
 ```
 
-After this, you can build using either an incremental build (which will not perform code-gen and will lead to the fastest build times), a watch build (which will automatically update changes), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
+### Pulling in Updated Source Changes
+After this, you can build using either an incremental build (which will rebuild the typescript only and will lead to the fastest build times), a yarn build (will recompile the wasm module and build the typescript source), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
 
 For the incremental build:
 ```
 yarn build-incremental
 ```
 
-For the watch build:
+For the wasm / typescript build:
 ```
-yarn build-watch
+yarn build
 ```
 
 For a full, clean rebuild:
@@ -153,9 +154,7 @@ Conway also has a regression testing framework, which can be run on individual m
 1. Build Conway with `yarn build` via the above steps depending on your platform.
 2. Run the performance test script, instructions outlined in the [performance documentation](scripts/README.md)
 3. Run the regression testing batch script, instructions outlined in the [regression documentation](regression/README.md)
-4. Publish to GitHub. From the repository root, log in with npm, and then publish the package. Once published, it will appear in the list of releases in the repository: 
-
-```
-npm login --registry=https://npm.pkg.github.com
-npm publish
-```
+4. Run `yarn create-release-candidate <major | minor> <GITHUB_PAT>`. This package release is by default tagged "latest". 
+5. Send PR with updated version + benchmarks and await approval.
+6. Once approved, Go to GitHub, select the new tagged version, and create a release from it. This means we also have changelogs for patch level releases.
+7. Once release has been deployed into Share, tag package as stable.

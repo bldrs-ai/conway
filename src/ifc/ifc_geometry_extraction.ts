@@ -825,7 +825,7 @@ export class IfcGeometryExtraction {
       temporary:boolean = false,
       isRelVoid:boolean = false ) {
     // Flatten points / indices into a single array
-    const points = new Float32Array(entity.Coordinates.CoordList.flat())
+    const points = new Float64Array(entity.Coordinates.CoordList.flat())
     const indices = new Uint32Array(entity.CoordIndex.flat())
 
     const pointsArrayPtr = this.arrayToWasmHeap(points)
@@ -869,7 +869,7 @@ export class IfcGeometryExtraction {
     const result: ExtractResult = ExtractResult.COMPLETE
 
     // Flatten points into a single Float32Array
-    const points = new Float32Array(entity.Coordinates.CoordList.flat())
+    const points = new Float64Array(entity.Coordinates.CoordList.flat())
 
     // Temporary storage for indices and start indices
     const allIndices: number[] = []

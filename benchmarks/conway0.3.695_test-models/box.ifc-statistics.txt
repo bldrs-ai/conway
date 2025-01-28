@@ -1,0 +1,1 @@
+[Dec 6 2024 10:26:40 PM]: Load Status: OK, Project Name: Proxy with extruded box, Version: IFC4, Conway Version: 0.1.695, Parse Time: 2 ms, Geometry Time: 3 ms, Total Time: 6 ms, Geometry Memory: 0.002 MB, Memory Statistics: Node Memory Usage: RSS 262.656 MB, Heap Total: 125.188 MB, Heap Used: 96.972 MB, Preprocessor Version: '', Originating System: ''

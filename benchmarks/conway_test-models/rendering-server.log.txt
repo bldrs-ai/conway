@@ -1,0 +1,4 @@
+yarn run v1.22.19
+warning package.json: No license field
+$ node --enable-source-maps build/server.node.js
+Listening on 0.0.0.0:8001
