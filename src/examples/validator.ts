@@ -35,16 +35,6 @@ if (!modelPath) {
   process.exit(1);
 }
 
-// 2. For demonstration, we'll just store some IFC class names in an array
-//    In real usage, you might discover these dynamically from the IFC file.
-const ifcClasses = [
-  'IfcWall',
-  'IfcWindow',
-  'IfcDoor',
-  'IfcColumn',
-  'IfcBeam',
-];
-
 // 3. Define the completer function signature for TypeScript:
 //    The function should return a tuple: [string[], string].
 function completer(line: string): [string[], string] {
@@ -128,9 +118,7 @@ switch (result0) {
   default:
 }
 
-const parseDataTimeStart = Date.now()
 const [result1, model] = parser.parseDataToModel(bufferInput)
-const parseDataTimeEnd = Date.now()
 
 switch (result1) {
   case ParseResult.COMPLETE:
@@ -163,6 +151,14 @@ switch (result1) {
 if (model === void 0) {
   Logger.error(`Model not loaded.`)
 }
+
+// Assuming `model?.types()` returns an IterableIterator of instances
+const typeInstances = model?.types?.() || [];
+
+model.
+
+// Extracting the type names into a string array
+const typeNames: string[] = Array.from(typeInstances).map((instance) => instance.constructor.name);
 
 // 5. Print some info and start prompting
 console.log(`Loaded model: ${modelPath}`);
