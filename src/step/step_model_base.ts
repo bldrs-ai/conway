@@ -361,6 +361,28 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * Get the non empty type IDs for this.
+   *
+   * @return {Set} The unique set of non empty type IDs for this model.
+   */
+  public nonEmptyTypeIDs() : Set< EntityTypeIDs > {
+
+    const types = Array.from( this.typeIndex.types() )
+
+    return new Set( types.flatMap((type) => this.schema.queries[ type as number ] ) )
+  }
+
+  /**
+   * Get the non empty type IDs for this without including sub-types, only direct instances.
+   *
+   * @return {IterableIterator} The unique set of non empty type IDs for this model.
+   */
+  public nonEmptyTypeIDNoSubtypes() : IterableIterator< EntityTypeIDs > {
+
+    return this.typeIndex.types()
+  }
+
+  /**
    * Use the type index to get set of entities of a set of types not including sub-types from
    * the list of type ids, acts as a union given the input type list, with lazy iteration over
    * the set.
