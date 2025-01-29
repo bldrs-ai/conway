@@ -47,7 +47,7 @@ Follow the setup guide in the **main project README**:
 <ClassName>[#OptionalID].<Property> <Operator> <Value>
 ```
 
-- `<ClassName>` → The **IFC class** (e.g. `IFCWINDOW`, `IFCDOOR`).  
+- `<ClassName>` → The **IFC class** (e.g. `IFCWINDOW`, `IFCDOOR`)
 - `[#OptionalID]` → (Optional) A **specific instance Express ID** (e.g. `[#15]`).  
 - `<Property>` → The **property name** of the entity (e.g. `Height`, `Width`).  
 - `<Operator>` → A **JavaScript comparison operator** (`<`, `<=`, `>`, `>=`, `==`, `!=`).  
@@ -74,7 +74,7 @@ Follow the setup guide in the **main project README**:
 
 #### **1. Checking All IFC Windows with a Height Constraint**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW.Height <= 5"
+node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "query('IFCWINDOW.Height') <= 5"
 ```
 
 #### **2. Checking Specific IFC Window (Express ID `#15`)**
