@@ -52,3 +52,17 @@ OwningUser     OwningApplication
 > IFCBUILDINGELEMENTPROXY[#30].OwnerHistory.OwningApplication.Version
 > "4.0.0"
 ```
+
+## Development Path
+- [x] 
+- [ ] Spatial structure dot expansion, e.g. for this IFC:
+```
+#1 IFCSITE()
+#2 IFCBUILDING(#1)
+#3 IFCSTOREY('Story 1', #2)
+#4 IFCSTOREY('Story 2', #2)
+#5 IFCSTOREY('Story 3', #2)
+```
+This works:
+```IFCSITE.IFCBUILDING.IFCBUILDINGSTOREY[1] // Story 2```
+- [ ] Camel case, using the reverse name map, e.g. ```IfcSite.IfcBuilding.IfcBuildingStorey[1] // Story 2```
