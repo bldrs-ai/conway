@@ -4,13 +4,12 @@ set -euo pipefail
 # Arguments:
 # $1 = version bump type (major|minor)
 
-if [ $# -ne 2 ]; then
+if [ $# -ne 1 ]; then
     echo "Usage: yarn create-release-candidate <major|minor>"
     exit 1
 fi
 
 BUMP_TYPE=$1
-GITHUB_PAT=$2
 
 # Validate bump type
 if [ "$BUMP_TYPE" != "major" ] && [ "$BUMP_TYPE" != "minor" ]; then
