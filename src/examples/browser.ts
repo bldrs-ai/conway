@@ -10,8 +10,6 @@ import StepEntityBase from '../step/step_entity_base'
 import IfcStepModel from '../ifc/ifc_step_model'
 import Logger from '../logging/logger'
 import Environment from '../utilities/environment'
-import Memory from '../memory/memory'
-import path from 'path'
 import * as readline from 'node:readline'
 import { stdin as input, stdout as output } from 'node:process'
 import { EntityFieldDescription } from '../core/entity_field_description'
@@ -48,8 +46,8 @@ const parser = IfcStepParser.Instance
 const bufferInput = new ParsingBuffer(indexIfcBuffer)
 
 // Parse header
+// eslint-disable-next-line no-unused-vars
 const [stepHeader, resultHeader] = parser.parseHeader(bufferInput)
-// (handle resultHeader if needed)
 
 // Parse main data
 const [parseResult, model] = parser.parseDataToModel(bufferInput)
@@ -87,11 +85,16 @@ const ifcClasses: string[] = Array.from(nonEmptyTypeIDNoSubtypes || []).map(
 )
 const entityTypes: EntityTypesIfc[] = Array.from(nonEmptyTypeIDNoSubtypes || [])
 
-// A helper to parse something like "IFCBUILDINGELEMENTPROXY[#30]" => { className: "IFCBUILDINGELEMENTPROXY", expressID: 30 }
+// A helper to parse something like
+// "IFCBUILDINGELEMENTPROXY[#30]" => { className: "IFCBUILDINGELEMENTPROXY", expressID: 30 }
 /**
+ * Parses a token containing a class name and an optional express ID.
  *
+ * @param {string} token - The token to be parsed. Expected format: "CLASSNAME[#ID]".
+ * @return {{ className: string, expressID?: number }}
  */
-function parseClassAndOptionalID(token: string): { className: string; expressID?: number } {
+function parseClassAndOptionalID(token: string):
+{ className: string; expressID?: number } {
   // e.g. IFCBUILDINGELEMENTPROXY[#30]
   const match = token.match(/^(.+)\[#(\d+)\]$/)
   if (match) {
@@ -104,7 +107,11 @@ function parseClassAndOptionalID(token: string): { className: string; expressID?
 
 // Gather suggestions like "IFCBUILDINGELEMENTPROXY[#30]" for each instance of a class
 /**
+ * Retrieves instance suggestions based on the specified class name within an IFC model.
  *
+ * @param {string} clsName - The name of the class for which to retrieve suggestions.
+ * @param {IfcStepModel} theModel - The IFC model containing class and entity information.
+ * @return {string[]} An array of instance suggestions in the format "ClassName[#ID]".
  */
 function getInstanceSuggestions(clsName: string, theModel: IfcStepModel): string[] {
   const idx = ifcClasses.indexOf(clsName)
@@ -130,7 +137,16 @@ function getInstanceSuggestions(clsName: string, theModel: IfcStepModel): string
 
 // We build a 3-tuple for each field => [fieldName, fieldDescription, fieldData]
 /**
+ * Retrieves an array of local fields from the given IFC entity along with
+ * their descriptions and associated data.
  *
+ * @param {StepEntityBase<EntityTypesIfc>} entity - The IFC entity from which
+ * to extract fields and their data.
+ * @return {[string, EntityFieldDescription<EntityTypesIfc>, unknown][]}
+ * An array of tuples, where each tuple contains:
+ * - The field name as a string.
+ * - The field description object.
+ * - The associated data for the field.
  */
 function getLocalFieldsWithData(
     entity: StepEntityBase<EntityTypesIfc>,
@@ -144,7 +160,20 @@ function getLocalFieldsWithData(
 
 // The main recursive function that navigates dotted paths, now also supporting "Class[#ID]"
 /**
+ * Retrieves the value of a field or subfields from an IFC model by traversing a dotted path.
  *
+ * @param {string} dottedPath - The path to the desired field,
+ * with tokens separated by dots (e.g., "ClassName[#ID].fieldName").
+ * @param {IfcStepModel} theModel - The IFC model containing class and entity information.
+ * @return {{
+ *   isEntity: boolean;
+ *   subfieldNames: string[];
+ *   value: any;
+ * }} An object containing:
+ * - `isEntity`: A boolean indicating whether the final value is an entity with subfields.
+ * - `subfieldNames`: An array of subfield names if the final value is an entity,
+ * otherwise an empty array.
+ * - `value`: The value of the field if it is a primitive type, otherwise `null`.
  */
 function getFieldValueOrSubfields(
     dottedPath: string,
@@ -218,8 +247,9 @@ function getFieldValueOrSubfields(
       return { isEntity: false, subfieldNames: [], value: null }
     }
 
+    // eslint-disable-next-line no-unused-vars
     const [foundName, foundDesc, foundData] = tuple
-    if (foundData == null) {
+    if (foundData === null) {
       return { isEntity: false, subfieldNames: [], value: null }
     }
 
@@ -253,7 +283,13 @@ function getFieldValueOrSubfields(
 //    - With dot => partial subfields
 // ---------------------------------------------------------------------
 /**
+ * Provides autocomplete suggestions based on the user's input, which can include class names,
+ * instance IDs, or subfields within IFC entities.
  *
+ * @param {string} line - The current line of input entered by the user.
+ * @return {[string[], string]} A tuple containing:
+ * - An array of suggestions matching the user's input.
+ * - The current token being matched, which can be a class name, partial ID, or subfield.
  */
 function completer(line: string): [string[], string] {
   const trimmed = line.trim()
@@ -271,11 +307,13 @@ function completer(line: string): [string[], string] {
 
     // 1) Detect if user typed something like Class[# or Class[#3
     //    Example: "IFCPROPERTYSINGLEVALUE[#3"
+    // eslint-disable-next-line no-useless-escape
     const bracketMatch = partial.match(/^([^\[]+)\[#(\d*)$/)
     if (bracketMatch) {
       // bracketMatch[1] => the class name (lowercased)
       // bracketMatch[2] => the partial ID number as a string (possibly empty)
       const partialClass = bracketMatch[1].trim() // e.g. "ifcpropertysinglevalue"
+      // eslint-disable-next-line no-unused-vars
       const partialId = bracketMatch[2].trim()    // e.g. "3" (may be empty "" if user typed "[#")
 
       // Filter IFC classes by partialClass
@@ -381,9 +419,14 @@ const rl = readline.createInterface({
 // 6. Prompt user
 // ---------------------------------------------------------------------
 console.log(`Loaded model: ${modelPath}`)
+
 console.log('Type an IFC class name (partial) and press Tab (e.g. IfcB -> IFCBUILDING).')
 console.log('Also try "IFCBUILDINGELEMENTPROXY[#" to see instance completions.')
-console.log('Use a dot for subfields (e.g. IFCBUILDINGELEMENTPROXY[#30].Name). Press Enter to see final value.\n')
+
+console.log(
+    'Use a dot for subfields (e.g. IFCBUILDINGELEMENTPROXY[#30].Name). ' +
+  'Press Enter to see final value.\n',
+)
 
 rl.prompt()
 

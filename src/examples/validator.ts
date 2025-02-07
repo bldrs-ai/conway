@@ -3,16 +3,11 @@
 /**
  * IFC Model Validator
  *
- * Usage:
- *   npx ts-node validator.ts /path/to/model.ifc "IFCWINDOW.Height <= 5"
- *   node --experimental-specifier-resolution=node compiled/src/examples/validator.js /path/to/model.ifc "IFCWINDOW.Height <= 5"
- *
  * See the project README or the validator.md for details.
  */
 
 import { exit } from 'process'
 import fs from 'fs'
-import * as path from 'path'
 import IfcStepParser from '../ifc/ifc_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
@@ -28,8 +23,9 @@ import Environment from '../utilities/environment'
 // ---------------------------------------------------------------------
 Environment.checkEnvironment()
 Logger.initializeWasmCallbacks()
-
-if (process.argv.length < 4) {
+const maxCommandArgs = 4
+if (process.argv.length < maxCommandArgs) {
+  // eslint-disable-next-line max-len
   console.error(`Usage: validator <path_to_model>.ifc "IFCCLASS[#OptionalID].property <operator> value"`)
   exit(1)
 }
@@ -52,6 +48,7 @@ Logger.createStatistics(0)
 const parser = IfcStepParser.Instance
 const bufferInput = new ParsingBuffer(ifcBuffer)
 
+// eslint-disable-next-line no-unused-vars
 const [stepHeader, resultHeader] = parser.parseHeader(bufferInput)
 const [parseResult, model] = parser.parseDataToModel(bufferInput)
 
@@ -64,12 +61,15 @@ switch (parseResult) {
   case ParseResult.INVALID_STEP:
     Logger.error('Invalid STEP detected.')
     exit(1)
+    break
   case ParseResult.MISSING_TYPE:
     Logger.error('Missing STEP type.')
     exit(1)
+    break
   case ParseResult.SYNTAX_ERROR:
     Logger.error(`Syntax error at line ${bufferInput.lineCount}.`)
     exit(1)
+    break
   default:
 }
 
@@ -113,12 +113,16 @@ interface ParsedQuery {
 }
 
 /**
- * Returns a parsed structure or throws an Error if invalid.
+ * Parses a query string used for querying IFC classes, properties, and values.
+ *
+ * @param {string} query_ - The query string to be parsed.
+ * @return {ParsedQuery} An object containing:
+ * @throws {Error} If the query string contains multiple operators or has an invalid format.
  */
-function parseQueryString(query: string): ParsedQuery {
+function parseQueryString(query_: string): ParsedQuery {
   // This pattern finds any of these operators: <= >= < > == != === !==
   const operatorPatternGlobal = /(<=|>=|<|>|==|!=|===|!==)/g
-  const matches = [...query.matchAll(operatorPatternGlobal)]
+  const matches = [...query_.matchAll(operatorPatternGlobal)]
 
   if (matches.length > 1) {
     // If we detect more than 1 operator, we stop and notify the user
@@ -132,21 +136,23 @@ function parseQueryString(query: string): ParsedQuery {
     // operator = "<="
     // we can split around that operator or do a single match pattern
     const operatorPattern = /\s(<=|>=|<|>|==|!=|===|!==)\s/
-    const opMatch = query.match(operatorPattern)
+    const opMatch = query_.match(operatorPattern)
 
     if (!opMatch) {
       throw new Error(`Could not split query around operator.`)
     }
     const operator = opMatch[1]
     // Split out the left and right sides
-    const parts = query.split(operatorPattern).map((s) => s.trim()).filter(Boolean)
+    const parts = query_.split(operatorPattern).map((s) => s.trim()).filter(Boolean)
     // e.g. ["IFCWINDOW.OverallHeight", "<=", "5"]
 
+    // eslint-disable-next-line no-magic-numbers
     if (parts.length < 3) {
       throw new Error(`Invalid query format around operator "${operator}"`)
     }
 
     const classAndPropPart = parts[0]
+    // eslint-disable-next-line no-magic-numbers
     const valueStr = parts.slice(2).join(' ') // e.g. "5" (or "myStringValue")
 
     // parse left side => "IFCWINDOW.OverallHeight"
@@ -173,9 +179,9 @@ function parseQueryString(query: string): ParsedQuery {
   } else {
     // No operator => user might just be checking for "IFCWINDOW" or "IFCWINDOW[#15].Height"
     // We'll parse that similarly:
-    const match = query.match(/^([A-Za-z0-9_]+)(\[#(\d+)\])?(?:\.(.+))?$/)
+    const match = query_.match(/^([A-Za-z0-9_]+)(\[#(\d+)\])?(?:\.(.+))?$/)
     if (!match) {
-      throw new Error(`Invalid query format (no operator, unable to parse): "${query}"`)
+      throw new Error(`Invalid query format (no operator, unable to parse): "${query_}"`)
     }
     const classNameRaw = match[1].toUpperCase()
     const expressIDStr = match[3]
@@ -202,7 +208,16 @@ function parseQueryString(query: string): ParsedQuery {
 //    We want "entity[propertyName]" or entity.orderedFields, but ignoring case
 // ---------------------------------------------------------------------
 /**
+ * Retrieves an array of local fields from the given IFC entity along with
+ * their descriptions and associated data.
  *
+ * @param {StepEntityBase<EntityTypesIfc>} entity - The IFC entity from which
+ * to extract fields and their data.
+ * @return {[string, EntityFieldDescription<EntityTypesIfc>, unknown][]}
+ * An array of tuples, where each tuple contains:
+ * - The field name as a string.
+ * - The field description object.
+ * - The associated data for the field.
  */
 function getLocalFieldsWithData(
     entity: StepEntityBase<EntityTypesIfc>,
@@ -229,7 +244,12 @@ function getLocalFieldsWithData(
 
 
 /**
+ * Retrieves the value of a specified property from the given IFC entity.
  *
+ * @param {StepEntityBase<EntityTypesIfc>} entity - The IFC entity containing the property.
+ * @param {string} propertyName - The name of the property to retrieve
+ * @return {any} The value of the specified property, or `undefined`
+ * if the property is not found.
  */
 function getPropertyValue(
     entity: StepEntityBase<EntityTypesIfc>,
@@ -242,6 +262,7 @@ function getPropertyValue(
     return undefined
   }
 
+  // eslint-disable-next-line no-unused-vars
   const [_, _desc, data] = found
   // If it's an array, you might want to handle it specifically.
   // For example, returning the first element or the entire array.
@@ -253,10 +274,20 @@ function getPropertyValue(
 // 6. Perform Validation
 // ---------------------------------------------------------------------
 /**
+ * Validates an IFC model against a parsed query to check class existence,
+ * property values, or specific conditions.
  *
+ * @param {IfcStepModel} model_ - The IFC model to validate.
+ * @param {ParsedQuery} query_ - The parsed query containing class, property,
+ * and condition details.
+ * @return {void} Outputs validation results directly to the console.
+ *
+ * - Checks if the specified class and instance(s) exist in the model.
+ * - Validates property existence or evaluates conditions using operators and values.
+ * - Provides a summary of passing and failing entities.
  */
-function validateModel(model: IfcStepModel, query: ParsedQuery) {
-  const { className, expressID, property, operator, value } = query
+function validateModel(model_: IfcStepModel, query_: ParsedQuery) {
+  const { className, expressID, property, operator, value } = query_
 
   // 1) Check if the class exists in the model
   const clsIndex = ifcClasses.indexOf(className)
@@ -267,7 +298,7 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
 
   // Get the type + constructor
   const elementTypeID = entityTypes[clsIndex]
-  const ctor = model.schema.constructors[elementTypeID]
+  const ctor = model_.schema.constructors[elementTypeID]
   if (!ctor) {
     console.error(`❌ IFC class "${className}" not recognized in schema (missing constructor).`)
     return
@@ -277,7 +308,7 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
   let entities: StepEntityBase<EntityTypesIfc>[] = []
   if (expressID !== undefined) {
     // Single entity check
-    const all = Array.from(model.types(ctor))
+    const all = Array.from(model_.types(ctor))
     const found = all.find((e) => (e as any).expressID === expressID)
     if (!found) {
       console.error(`❌ No instance with Express ID #${expressID} found for class ${className}`)
@@ -286,7 +317,7 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
     entities.push(found)
   } else {
     // Convert the iterator to an array explicitly
-    const allEntities = Array.from(model.types(ctor)) as StepEntityBase<EntityTypesIfc>[]
+    const allEntities = Array.from(model_.types(ctor)) as StepEntityBase<EntityTypesIfc>[]
     if (!allEntities.length) {
       console.error(`❌ No instances of class "${className}" found in model.`)
       return
@@ -305,7 +336,6 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
     return
   }
 
-  // If user gave a property but no operator => that might be invalid or we can interpret “property is defined”.
   if (property && !operator) {
     console.log(`Checking if property "${property}" exists on ${className}`)
     let passCount = 0
@@ -319,7 +349,8 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
         console.log(`   ❌ ${className}[#${id}] has no .${property}`)
       }
     }
-    console.log(`\nProperty existence check: ${passCount} / ${entities.length} have property "${property}"`)
+    console.log(
+        `\nProperty existence check: ${passCount} / ${entities.length} have property "${property}"`)
     return
   }
 
@@ -330,6 +361,7 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
   }
 
   const numericValue = tryParseNumber(value)
+  // eslint-disable-next-line no-unused-vars
   const isNumeric = numericValue !== null
   let passCount = 0
   let failCount = 0
@@ -337,7 +369,8 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
   const passes: { id: number; propVal: any }[] = []
   const fails: { id: number; propVal: any; reason: string }[] = []
 
-  console.log(`\nValidation Report for Query: ${className}${expressID !== undefined ? `[#${  expressID  }]` : ''}.${property} ${operator} ${value}`)
+  console.log(`\nValidation Report for Query: ${className}${expressID !==
+    undefined ? `[#${  expressID  }]` : ''}.${property} ${operator} ${value}`)
 
   for (const e of entities) {
     const id = (e as any).expressID
@@ -356,6 +389,7 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
     let pass: boolean
     try {
       const expression = `${leftSide} ${operator} ${rightSide}`
+      // eslint-disable-next-line no-eval
       pass = eval(expression)
     } catch (err) {
       fails.push({ id, propVal, reason: `eval error: ${err}` })
@@ -367,7 +401,8 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
       passes.push({ id, propVal })
       passCount++
     } else {
-      fails.push({ id, propVal, reason: `failed comparison (${property}: ${JSON.stringify(propVal)})` })
+      fails.push({ id, propVal,
+        reason: `failed comparison (${property}: ${JSON.stringify(propVal)})` })
       failCount++
     }
   }
@@ -384,6 +419,7 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
 
   // Print fails
   console.log(`\n❌ Failing Entries:`)
+  // eslint-disable-next-line no-unused-vars
   for (const { id, propVal, reason } of fails) {
     console.log(`❌ ${className}[#${id}] => FAILED (${reason})`)
   }
@@ -394,7 +430,12 @@ function validateModel(model: IfcStepModel, query: ParsedQuery) {
 
 }
 
-/** A helper to parse a string as a number; returns null if not numeric */
+/**
+ * Attempts to parse a given string as a number, returning `null` if the parsing fails.
+ *
+ * @param {string} text - The input string to be parsed.
+ * @return {number | null} The parsed number, or `null` if the input is not a valid number.
+ */
 function tryParseNumber(text: string): number | null {
   // e.g. "3.14" => 3.14
   // e.g. "5" => 5
