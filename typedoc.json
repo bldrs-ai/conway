@@ -1,0 +1,32 @@
+{
+  "entryPoints": [
+    "src/index.ts",
+    "src/AP214E3_2010/**.ts",
+    "src/core/**.ts",
+    "src/ifc/**.ts",
+    "src/indexing/**.ts",
+    "src/logging/**.ts",
+    "src/memory/**.ts",
+    "src/parsing/**.ts",
+    "src/statistics/**.ts",
+    "src/step/**.ts",
+    "src/step/indexing/**.ts",
+    "src/step/parsing/**.ts",
+    "src/utilities/**.ts",
+    "src/version/**.ts"
+  ], 
+  "out": "docs",
+  "entryPointStrategy": "expand",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "hideGenerator": true,
+  "name": "conway",
+  "readme": "README.md",
+  "tsconfig": "./tsconfig.json",
+  "exclude": [
+    "**/node_modules/**",
+    "**/dependencies/**/*.ts",
+    "**/*.test.ts"
+  ]
+}
