@@ -1,7 +1,8 @@
 {
   "scripts": {
     "n": "node --experimental-specifier-resolution=node",
-    "validate": "yarn n ./node_modules/compiled/src/examples/browser.js"
+    "browse": "yarn n ./node_modules/compiled/src/examples/browser.js",
+    "validate": "yarn n ./node_modules/compiled/src/examples/validator.js"
   },
   "dependencies": {
     "@bldrs-ai/conway": "0.7.727"
