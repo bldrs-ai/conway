@@ -1,6 +1,22 @@
 {
-  "entryPoints": ["src/**/*.ts"], 
+  "entryPoints": [
+    "src/index.ts",
+    "src/AP214E3_2010/**.ts",
+    "src/core/**.ts",
+    "src/ifc/**.ts",
+    "src/indexing/**.ts",
+    "src/logging/**.ts",
+    "src/memory/**.ts",
+    "src/parsing/**.ts",
+    "src/statistics/**.ts",
+    "src/step/**.ts",
+    "src/step/indexing/**.ts",
+    "src/step/parsing/**.ts",
+    "src/utilities/**.ts",
+    "src/version/**.ts"
+  ], 
   "out": "docs",
+  "entryPointStrategy": "expand",
   "includeVersion": true,
   "excludePrivate": true,
   "excludeProtected": true,

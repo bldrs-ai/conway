@@ -1,0 +1,15 @@
+yarn run v1.22.19
+warning package.json: No license field
+$ node --enable-source-maps build/server.node.js
+Listening on 0.0.0.0:8001
+COMPLETE
+┌─────────┬────────┬────────────────────────────────┬───────┬────────────┐
+│ (index) │ level  │            message             │ count │ expressIDs │
+├─────────┼────────┼────────────────────────────────┼───────┼────────────┤
+│    0    │ 'info' │ 'Conway Web-Ifc Shim v0.6.722' │   1   │ Set(0) {}  │
+└─────────┴────────┴────────────────────────────────┴───────┴────────────┘
+[Jan 15 2025 07:23:20 PM]: Load Status: OK, Project Name: Project Number, Version: IFC2X3, Conway Version: 0.6.722, Parse Time: 495 ms, Geometry Time: 2106 ms, Total Time: 2601 ms, Geometry Memory: 15.636 MB, Memory Statistics: Node Memory Usage: RSS 641.906 MB, Heap Total: 330.359 MB, Heap Used: 297.990 MB, Preprocessor Version: '21.0.0.383 - Exporter 21.0.0.383 - IU alternativa 21.0.0.383', Originating System: ''
+Could not get all types of model.
+[32minfo[39m: [7gqJ58iMyjmNZ8vuuhBVr] ::1 - - [2025-01-15T19:23:17.570Z] "POST /render HTTP/1.1" 200 27827 
+[32minfo[39m: [7gqJ58iMyjmNZ8vuuhBVr] request headers: {"host":"localhost:8001","user-agent":"curl/8.4.0","accept":"*/*","content-type":"application/json","content-length":"99"}
+[32minfo[39m: [7gqJ58iMyjmNZ8vuuhBVr] request body: {"url":"file:///Users/soar/Documents/GitHub/test-models/ifc/thatopen/ifcfiles/advanced_model.ifc"}

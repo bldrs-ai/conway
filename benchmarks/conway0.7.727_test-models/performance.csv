@@ -1,0 +1,42 @@
+ok, 3.21s, ifc/Schependomlaan.ifc
+ok, 0.85s, ifc/bldrs/b.ifc
+ok, 0.28s, ifc/bldrs/index.ifc
+ok, 0.29s, ifc/bldrs/ïndex wëird, chars!123.ifc
+ok, 0.51s, ifc/citra/Remigen_Mo.ifc
+ok, 0.28s, ifc/index.ifc
+error, 0.36s, ifc/misc/bath-csg-solid.ifc
+ok, 0.27s, ifc/misc/box.ifc
+ok, 0.69s, ifc/misc/haus.ifc
+ok, 0.39s, ifc/openifcmodels/171210AISC_Sculpture_param.ifc
+ok, 3.75s, ifc/openifcmodels/20160125Trapelo - Existing-Trapelo_Design_Intent.ifc
+ok, 35.27s, ifc/sp/sp-231MB.ifc
+ok, 57.27s, ifc/sp/sp-469MB.ifc
+error, 180.02s, ifc/sp/sp-946MB.ifc
+ok, 0.78s, ifc/thatopen/ifcfiles/AC20-FZK-Haus.ifc
+ok, 1.70s, ifc/thatopen/ifcfiles/C20-Institute-Var-2.ifc
+ok, 2.82s, ifc/thatopen/ifcfiles/FM_ARC_DigitalHub.ifc
+ok, 0.69s, ifc/thatopen/ifcfiles/ISSUE_005_haus.ifc
+ok, 2.35s, ifc/thatopen/ifcfiles/ISSUE_021_Mini Project.ifc
+ok, 0.78s, ifc/thatopen/ifcfiles/ISSUE_034_HouseZ.ifc
+ok, 0.36s, ifc/thatopen/ifcfiles/ISSUE_044_test_IFCCOMPOSITEPROFILEDEF.ifc
+ok, 6.06s, ifc/thatopen/ifcfiles/ISSUE_068_ARK_NUS_skolebygg.ifc
+ok, 3.74s, ifc/thatopen/ifcfiles/ISSUE_102_M3D-CON-CD.ifc
+ok, 1.05s, ifc/thatopen/ifcfiles/ISSUE_102_M3D-CON.ifc
+ok, 1.01s, ifc/thatopen/ifcfiles/ISSUE_126_model.ifc
+ok, 2.63s, ifc/thatopen/ifcfiles/ISSUE_129_N1540_17_EXE_MOD_448200_02_09_11SMC_IGC_V17.ifc
+ok, 2.34s, ifc/thatopen/ifcfiles/ISSUE_159_kleine_Wohnung_R22.ifc
+ok, 0.48s, ifc/thatopen/ifcfiles/ISSUE_171_IfcSurfaceCurveSweptAreaSolid.ifc
+ok, 0.43s, ifc/thatopen/ifcfiles/IfcOpenHouse_IFC4.ifc
+error, 0.36s, ifc/thatopen/ifcfiles/KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
+ok, 0.86s, ifc/thatopen/ifcfiles/Office_A_20110811.ifc
+ok, 8.97s, ifc/thatopen/ifcfiles/S_Office_Integrated Design Archi.ifc
+ok, 0.34s, ifc/thatopen/ifcfiles/Sample_entities.ifc
+ok, 3.97s, ifc/thatopen/ifcfiles/advanced_model.ifc
+ok, 1.84s, ifc/thatopen/ifcfiles/dental_clinic.ifc
+ok, 0.66s, ifc/thatopen/ifcfiles/duplex.ifc
+ok, 0.50s, ifc/thatopen/ifcfiles/example.ifc
+ok, 2.14s, ifc/thatopen/ifcfiles/ifcbridge-model01.ifc
+ok, 2.78s, ifc/thatopen/ifcfiles/schependomlaan.ifc
+ok, 0.55s, ifc/thatopen/ifcfiles/tested_sample_project.ifc
+ok, 49.28s, ifc/wikihouse/SKYLARK250_design-kit_blocks_detailed.ifc
+fail, 626.09s, ALL_FILES

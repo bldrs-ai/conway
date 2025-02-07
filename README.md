@@ -22,7 +22,7 @@ On macOS, it should be installable with brew using:
 brew install dotnet@6
 ```
 
-### Build
+### Initial Build
  
 Clone the repository, then in the root directory of the repository, run the yarn install, followed by using yarn to initialise the IFC-gen submodule:
 ```
@@ -31,8 +31,6 @@ Clone the repository, then in the root directory of the repository, run the yarn
 git pull  # if you get an error about a submodule not found, run yarn submodule-update here and then pull again
 yarn install
 yarn submodule-update
-cd dependencies/conway-geom
-git status   # verify this is on HEAD of the main branch
 
 cd dependencies/conway-geom/dependencies/wasm/
 # Answer yes or all to replace files if they've already been unzipped before
@@ -43,16 +41,17 @@ yarn build
 yarn test
 ```
 
-After this, you can build using either an incremental build (which will not perform code-gen and will lead to the fastest build times), a watch build (which will automatically update changes), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
+### Pulling in Updated Source Changes
+After this, you can build using either an incremental build (which will rebuild the typescript only and will lead to the fastest build times), a yarn build (will recompile the wasm module and build the typescript source), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
 
 For the incremental build:
 ```
 yarn build-incremental
 ```
 
-For the watch build:
+For the wasm / typescript build:
 ```
-yarn build-watch
+yarn build
 ```
 
 For a full, clean rebuild:

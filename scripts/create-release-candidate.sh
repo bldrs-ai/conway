@@ -3,15 +3,13 @@ set -euo pipefail
 
 # Arguments:
 # $1 = version bump type (major|minor)
-# $2 = GitHub Personal Access Token (PAT)
 
-if [ $# -ne 2 ]; then
-    echo "Usage: yarn create-release-candidate <major|minor> <GitHub PAT>"
+if [ $# -ne 1 ]; then
+    echo "Usage: yarn create-release-candidate <major|minor>"
     exit 1
 fi
 
 BUMP_TYPE=$1
-GITHUB_PAT=$2
 
 # Validate bump type
 if [ "$BUMP_TYPE" != "major" ] && [ "$BUMP_TYPE" != "minor" ]; then
@@ -19,9 +17,9 @@ if [ "$BUMP_TYPE" != "major" ] && [ "$BUMP_TYPE" != "minor" ]; then
     exit 1
 fi
 
-# Authenticate to GitHub's npm registry
-echo "Authenticating to GitHub Packages..."
-npm set //npm.pkg.github.com/:_authToken=$GITHUB_PAT
+# Login to npmjs, uses OTP
+echo "Login to npmjs"
+npm login
 
 # Extract the current version from package.json
 CURRENT_VERSION=$(node -p "require('./package.json').version")
@@ -50,6 +48,10 @@ fi
 
 echo "New version is $NEW_VERSION"
 
+# Run the build-incremental script
+echo "Running build-incremental"
+yarn build-incremental
+
 # Create a git tag for the new version without creating a commit
 echo "Creating git tag $NEW_VERSION..."
 git tag "$NEW_VERSION"
@@ -59,6 +61,6 @@ git push origin "$NEW_VERSION"
 
 # Publish to GitHub npm registry
 echo "Publishing to GitHub npm registry..."
-npm publish
+npm publish --access public
 
 echo "Release candidate created, tagged (no commit), and published successfully!"
