@@ -1,20 +1,29 @@
 Status: DRAFT API DOCS.  Please join or Discord to disuss https://discord.gg/9SxguBkFfQ
 
 
-# Validation
+# Validation API & Validator Tool
+
+## Usage
+
+1. ```yarn install```
+2. ```yarn validator <your model.ifc>```
+3. You should see a prompt (>). Now you can type partial JS expressions to assert validation conditions.
+
 
 ## Validation API
 
-The **Model Validation API** (`validator.js`) allows you to **validate** conditions on model entities and their properties using **JavaScript expressions** and the powerful assertion frameworks of Jest/Mocha.
+The **Validation API** is used by the `validator.js` tool to **validate**
+conditions on model entities and their properties using **JavaScript
+expressions** and the powerful assertion frameworks of Jest/Mocha.
 
-Example:
+Example API call:
 
 ```
 expectElements('IfcWall.OverallHeight').toEqual(2.5)
 ```
 
 
-## Validation CLI Tool
+## Validator Tool
 
 Run validation checks from the command line:
 
@@ -30,39 +39,7 @@ Validation report for query: IfcWall.OverallHeight <= 5
 ❌ Total Failing: 1
 ```
 
-
-## 1. Setup
-
-Follow the setup guide in the **main project README**:
-
-- **[Setup Instructions](../../README.md)**
-- A local **IFC** file to test.
-
-
-### Requirements
-
-- **Node.js** (version 14+ recommended).  
-- **TypeScript** (if you compile locally) or use `ts-node` for direct execution.  
-- A valid **IFC file** to run validation on (e.g. `myFile.ifc`).
-
----
-
-## 2. Usage
-
-### Running the Validator
-
-1. Ensure your project is set up correctly using the **[../../README.md](../../README.md)** setup guide.
-2. Execute the validator with:
-   
-```bash
-./validate.sh /path/to/your.ifc "JSexpression"
-```
-
-3. The `<JSexpression>` is a **JavaScript-executable condition** to check against an IFC class or a specific instance.
-
----
-
-## 3. Query Syntax
+## Query Syntax
 
 Queries use pure JS expression syntax, on a built-in `query` function.
 ```text
@@ -139,7 +116,7 @@ IFCDOOR.Height > 2.1
 
 ---
 
-## 4. Validation Report Output
+## Validation Report Output
 
 After running a validation query, you will see a **summary report** in the terminal:
 
@@ -157,7 +134,7 @@ Validation Report for Query: IFCWINDOW.OverallHeight <= 5
 
 ---
 
-## 5. How Expressions Are Evaluated
+## How Expressions Are Evaluated
 
 This tool **directly evaluates** your query using **JavaScript expressions** (`eval`).  
 
@@ -186,7 +163,7 @@ Here’s what happens internally:
 
 ---
 
-## 6. Additional Features
+## Additional Features
 
 ### ✅ **Supports All IFC Entities**
 - Works on **all IFC classes** (`IFCWALL`, `IFCWINDOW`, `IFCDOOR`, etc.).
@@ -201,7 +178,7 @@ Here’s what happens internally:
 
 ---
 
-## 7. Error Handling
+## Error Handling
 
 ### ❌ **Invalid Query Format**
 ```js
@@ -236,7 +213,7 @@ query('IFCFAKECLASS.Height') > 3"
 
 ---
 
-## 8. Summary
+## Summary
 
 - ✅ **Pass a query** to filter IFC entities by **properties** and **values**.
 - ✅ **Supports expressions** using **JavaScript operators** (`<=`, `>=`, `==`, etc.).
