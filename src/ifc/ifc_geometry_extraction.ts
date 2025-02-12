@@ -1212,7 +1212,7 @@ export class IfcGeometryExtraction {
       secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
     }
     if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-   
+
       flatSecondMeshVector = this.nativeVectorGeometry()
       flatSecondMeshVector.push_back(secondMesh.geometry)
     } else {
