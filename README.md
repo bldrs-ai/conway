@@ -39,21 +39,14 @@ You can now load your IFC files. From the Conway root:
 See the full example docs at [Browser.md](src/examples/Browser.md) and [Validator.md](src/examples/Validator.md)
 
 ## Development
-You can build using either an incremental build (which will rebuild the typescript only and will lead to the fastest build times), a yarn build (will recompile the wasm module and build the typescript source), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
-
-A full build includes a rebuild of conway-geom and conway. You should only need to run a full build if you make local changes to conway-geom. 
-
-An incremental build is useful for building changes to conway.  
-
-
-For the incremental build:
-```
-yarn build-incremental
-```
-
-For the full build of conway and conway-geom:
+For the full build of both conway (TypeScript) and conway-geom (WASM subproject):
 ```
 yarn build
+```
+
+Build just conway, not conway-geom, e.g. for updating just the Conway API or tools:
+```
+yarn build-incremental
 ```
 
 For a full, clean rebuild:
@@ -70,8 +63,6 @@ And finally, using the watch functionality, you can also have the code automatic
 ```
 yarn build-test-watch
 ```
-
-If you have Visual Studio Code, Conway also comes with a Visual Studio Code workspace to add IDE accessability to these features, and also let you edit the IFC-gen C# code in place.
 
 ### Pulling in Updated Source Changes
 ```git pull```
