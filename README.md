@@ -36,7 +36,7 @@ You can now load your IFC files. From the Conway root:
 1. ```yarn browser model.ifc```
 2. ```yarn validator model.ifc "IFCWINDOW.OverallHeight <= 1500"```
 
-See the full example docs at [Browser.md](src/examples/Browser.md) and [Validator.md](src/examples/Validator.md)
+See the full example docs at [Browser.md](examples/Browser.md) and [Validator.md](examples/Validator.md)
 
 ## Development
 Update your client with changes since your last sync:

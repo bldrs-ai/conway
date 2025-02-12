@@ -1,19 +1,24 @@
 #!/usr/bin/env node
-
-import { exit } from 'process'
-import IfcStepParser from '../ifc/ifc_step_parser'
-import ParsingBuffer from '../parsing/parsing_buffer'
-import { ParseResult } from '../step/parsing/step_parser'
-import EntityTypesIfc from '../ifc/ifc4_gen/entity_types_ifc.gen'
 import fs from 'fs'
-import StepEntityBase from '../step/step_entity_base'
-import IfcStepModel from '../ifc/ifc_step_model'
-import Logger from '../logging/logger'
-import Environment from '../utilities/environment'
-import * as readline from 'node:readline'
+import { exit } from 'process'
 import { stdin as input, stdout as output } from 'node:process'
-import { EntityFieldDescription } from '../core/entity_field_description'
+import * as readline from 'node:readline'
+import { EntityFieldDescription } from './core/entity_field_description'
+import IfcStepModel from './ifc/ifc_step_model'
+import IfcStepParser from './ifc/ifc_step_parser'
+import EntityTypesIfc from './ifc/ifc4_gen/entity_types_ifc.gen'
+import Logger from './logging/logger'
+import ParsingBuffer from './parsing/parsing_buffer'
+import { ParseResult } from './step/parsing/step_parser'
+import StepEntityBase from './step/step_entity_base'
+import Environment from './utilities/environment'
 
+
+/**
+ * IFC Model Browser
+ *
+ * @see Browser.md
+ */
 // ---------------------------------------------------------------------
 // 1. Grab the path to the model from command line arguments
 // ---------------------------------------------------------------------

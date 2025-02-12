@@ -1,6 +1,8 @@
 # IFC Model Validator CLI
 
-The **IFC Model Validator** (`validator.js`) allows you to **validate** conditions on IFC entities and their properties using **JavaScript expressions**. 
+The **IFC Model Validator** (`validator.js`) allows you to **validate**
+conditions on IFC entities and their properties using **JavaScript
+expressions**.
 
 This tool lets you:
 
