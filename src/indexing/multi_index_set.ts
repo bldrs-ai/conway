@@ -25,6 +25,27 @@ export class MultiIndexSet< IndexType extends number > {
   /* eslint-enable no-useless-constructor, no-empty-function */
 
   /**
+   * All the types with a non-zero size in the index.
+   *
+   * @yields {IterableIterator}
+   */
+  public* types() : IterableIterator< IndexType > {
+
+    const prefixSumTable = this.prefixSumTable_
+
+    for (
+      let indexType: number = 0, end = prefixSumTable.length - 1;
+      indexType < end;
+      ++indexType ) {
+
+      if ( ( prefixSumTable[ indexType + 1 ] - prefixSumTable[ indexType ] ) > 0 ) {
+
+        yield indexType as IndexType
+      }
+    }
+  }
+
+  /**
    * Does the set have a particular index for a particular type.
    *
    * @param indexType The index type to check for.

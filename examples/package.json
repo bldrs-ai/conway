@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "n": "node --experimental-specifier-resolution=node",
+    "browse": "yarn n ./node_modules/@bldrs-ai/conway/compiled/src/examples/browser.js",
+    "validator": "yarn n ./node_modules/@bldrs-ai/conway/compiled/src/examples/validator.js"
+  },
+  "dependencies": {
+    "@bldrs-ai/conway": "latest"
+  }
+}
