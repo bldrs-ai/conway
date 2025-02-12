@@ -1,9 +1,21 @@
 import fs from 'fs'
-import { describe, expect, test } from '@jest/globals'
+import { beforeAll, describe, expect, test } from '@jest/globals'
 import { IfcPropertyExtraction, PropertyExtractResult } from './ifc_property_extraction'
 import { ParseResult } from '../step/parsing/step_parser'
 import IfcStepParser from './ifc_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
+import { ConwayGeometry } from '../../dependencies/conway-geom'
+
+
+const conwayGeometry = new ConwayGeometry()
+
+/**
+ * Intialize conway geom.
+ */
+async function initializeConwayGeom() {
+
+  await conwayGeometry.initialize()
+}
 
 
 /**
@@ -19,7 +31,7 @@ function parseProperties(): PropertyExtractResult {
     return PropertyExtractResult.INCOMPLETE
   }
 
-  const [, model] = parser.parseDataToModel(bufferInput)
+  const [, model] = parser.parseDataToModel( bufferInput)
 
   if (model === void 0) {
     return PropertyExtractResult.INCOMPLETE
@@ -30,6 +42,12 @@ function parseProperties(): PropertyExtractResult {
 
 
 describe('Ifc Properties Extraction', () => {
+
+  beforeAll(async () => {
+
+    await initializeConwayGeom()
+
+  })
 
   test('parseProperties()', () => {
 

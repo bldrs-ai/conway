@@ -30,7 +30,8 @@ export default class AP214StepParser extends StepParser< EntityTypesAP214 > {
    * @return {[ParseResult, AP214StepModel | undefined]} The parse result as well as the model,
    * if it can be extracted.
    */
-  public parseDataToModel( input: ParsingBuffer ): [ParseResult, AP214StepModel | undefined] {
+  public parseDataToModel(
+      input: ParsingBuffer ): [ParseResult, AP214StepModel | undefined] {
     const [itemIndex, parseResult] = this.parseDataBlock( input )
 
     return [parseResult, new AP214StepModel( input.buffer, itemIndex.elements )]

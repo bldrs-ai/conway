@@ -348,6 +348,8 @@ export class IfcGeometryExtraction {
   private identity2DNativeMatrix: NativeTransform3x3
   private identity3DNativeMatrix: NativeTransform4x4
 
+  private csgMemoization: boolean = true
+
   /**
    * Construct a geometry extraction from an IFC step model and conway model
    *
@@ -356,7 +358,10 @@ export class IfcGeometryExtraction {
    */
   constructor(
     private readonly conwayModel: ConwayGeometry,
-    public readonly model: IfcStepModel) {
+    public readonly model: IfcStepModel,
+    private readonly lowMemoryMode: boolean = false ) {
+
+    this.csgMemoization = !this.lowMemoryMode
 
     this.materials = model.materials
     this.scene = new IfcSceneBuilder(model, conwayModel, this.materials)
@@ -824,25 +829,28 @@ export class IfcGeometryExtraction {
   private extractTriangulatedFaceSet(entity:IfcTriangulatedFaceSet,
       temporary:boolean = false,
       isRelVoid:boolean = false ) {
-    // Flatten points / indices into a single array
-    const points = new Float64Array(entity.Coordinates.CoordList.flat())
-    const indices = new Uint32Array(entity.CoordIndex.flat())
 
-    const pointsArrayPtr = this.arrayToWasmHeap(points)
-    const indicesArrayPtr = this.arrayToWasmHeap(indices)
+    const conwayModel      = this.conwayModel
+    const geometry         = conwayModel.nativeGeometry()
+    const coordParseBuffer = conwayModel.nativeParseBuffer()
+    const faceParseBuffer  = conwayModel.nativeParseBuffer()
 
-    const parameters = this.paramsGetTriangulatedFaceSetPool!.acquire()
-    parameters.indices = indicesArrayPtr
-    parameters.indicesArrayLength = indices.length
-    parameters.points = pointsArrayPtr
-    parameters.pointsArrayLength = points.length
+    if ( !entity.Coordinates.extractParseBuffer(
+        0, coordParseBuffer, this.wasmModule.HEAPU8, true ) ) {
 
-    const geometry = this.conwayModel.getTriangulatedFaceSetGeometry(parameters)
+      coordParseBuffer.resize( 0 )
+    }
 
+    if ( !entity.extractParseBuffer(
+        3, faceParseBuffer, this.wasmModule.HEAPU8, true ) ) {
 
-    this.paramsGetTriangulatedFaceSetPool?.release(parameters)
-    this.wasmModule._free(pointsArrayPtr)
-    this.wasmModule._free(indicesArrayPtr)
+      faceParseBuffer.resize( 0 )
+    }
+
+    geometry.extractVerticesAndTriangles( coordParseBuffer, faceParseBuffer )
+
+    conwayModel.freeParseBuffer( coordParseBuffer )
+    conwayModel.freeParseBuffer( faceParseBuffer )
 
     const canonicalMesh: CanonicalMesh = {
       type: CanonicalMeshType.BUFFER_GEOMETRY,
@@ -867,9 +875,6 @@ export class IfcGeometryExtraction {
       temporary: boolean = false,
       isRelVoid: boolean = false): ExtractResult {
     const result: ExtractResult = ExtractResult.COMPLETE
-
-    // Flatten points into a single Float32Array
-    const points = new Float64Array(entity.Coordinates.CoordList.flat())
 
     // Temporary storage for indices and start indices
     const allIndices: number[] = []
@@ -922,8 +927,6 @@ export class IfcGeometryExtraction {
     const startIndicesBufferOffsetsArray = new Uint32Array(startIndicesBufferOffsets)
     const startIndicesBufferOffsetsArrayPtr = this.arrayToWasmHeap(startIndicesBufferOffsetsArray)
 
-    const pointsArrayPtr = this.arrayToWasmHeap(points)
-
     const polygonalFaceVector = this.wasmModule.buildIndexedPolygonalFaceVector(
         indicesArrayPtr,
         indicesArray.length,
@@ -933,7 +936,20 @@ export class IfcGeometryExtraction {
         startIndicesBufferOffsetsArrayPtr,
         startIndicesBufferOffsets.length)
 
-    const pointsArrayNative = this.wasmModule.createVertexVector(pointsArrayPtr, points.length)
+    const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+
+    if ( !entity.Coordinates.extractParseBuffer(
+        0,
+        pointsParseBuffer,
+        this.wasmModule.HEAPU8,
+        true ) ) {
+
+      pointsParseBuffer.resize( 0 )
+    }
+
+    const pointsArrayNative = this.wasmModule.parseVertexVector( pointsParseBuffer )
+
+    this.conwayModel.freeParseBuffer( pointsParseBuffer )
 
     const parameters: ParamsPolygonalFaceSet = {
       indicesPerFace: indicesPerFace,
@@ -950,7 +966,6 @@ export class IfcGeometryExtraction {
     this.wasmModule._free(startIndicesArrayPtr)
     this.wasmModule._free(polygonalFaceBufferOffsetsArrayPtr)
     this.wasmModule._free(startIndicesBufferOffsetsArrayPtr)
-    this.wasmModule._free(pointsArrayPtr)
 
     polygonalFaceVector.delete()
 
@@ -987,7 +1002,7 @@ export class IfcGeometryExtraction {
   }
 
   /** @return {Uint8Array}  */
-  arrayToSharedHeap(array:Float32Array | Uint32Array): Uint8Array {
+  arrayToSharedHeap(array:Float64Array | Float32Array | Uint32Array): Uint8Array {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
     const numBytes = array.length * bytesPerElement
@@ -1108,6 +1123,16 @@ export class IfcGeometryExtraction {
   extractBooleanResult(from: IfcBooleanResult | IfcBooleanClippingResult,
       isRelVoid: boolean = false) {
 
+    if ( this.csgMemoization ) {
+      const geometry =
+        ( isRelVoid ? this.model.voidGeometry : this.model.geometry ).getByLocalID( from.localID )
+
+      if ( geometry !== void 0 ) {
+
+        return
+      }
+    }
+
     this.csgOperations.add(
         from.localID,
         {
@@ -1124,7 +1149,7 @@ export class IfcGeometryExtraction {
       from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
       from.FirstOperand instanceof IfcHalfSpaceSolid ||
       from.FirstOperand instanceof IfcFacetedBrep) {
-      this.extractBooleanOperand(from.FirstOperand, isRelVoid, from)
+      this.extractBooleanOperand(from.FirstOperand, isRelVoid, from, isRelVoid)
     }
 
     if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
@@ -1134,7 +1159,7 @@ export class IfcGeometryExtraction {
       from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
       from.SecondOperand instanceof IfcHalfSpaceSolid ||
       from.SecondOperand instanceof IfcFacetedBrep) {
-      this.extractBooleanOperand(from.SecondOperand, isRelVoid)
+      this.extractBooleanOperand(from.SecondOperand, isRelVoid, undefined, true )
     }
 
     // get geometry TODO(nickcastel50): eventually support flattening meshes
@@ -1187,22 +1212,9 @@ export class IfcGeometryExtraction {
       secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
     }
     if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-      /* const _testEntity2 = this.model.getElementByLocalID(secondMesh.localID)!
-      const outputFilePath_ =
-      `${_testEntity2.expressID}_${EntityTypesIfc[_testEntity2.type]}_SECOND_MESH.obj`
-      this.dumpGeometry(outputFilePath_, secondMesh.geometry) */
-      // const geometryParts = secondMesh.geometry.getParts()
-
-      // if (false) {// geometryParts.size() > 0) {
-
-      //   flatSecondMeshVector = geometryParts
-      //   flatSecondMeshVectorFromParts = true
-
-      // } else {
-
+   
       flatSecondMeshVector = this.nativeVectorGeometry()
       flatSecondMeshVector.push_back(secondMesh.geometry)
-      // }
     } else {
       Logger.error(
           `Error extracting secondOperand geometry for expressID: 
@@ -1216,6 +1228,7 @@ export class IfcGeometryExtraction {
     parameters.flatFirstMesh = flatFirstMeshVector
     parameters.flatSecondMesh = flatSecondMeshVector
     parameters.operatorType = from.Operator.valueOf()
+    parameters.isSubtractOperand = isRelVoid
 
     const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
 
@@ -1253,7 +1266,8 @@ export class IfcGeometryExtraction {
 
       // add mesh to the list of mesh objects
       if (!isRelVoid) {
-        if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+        if ( !this.csgMemoization &&
+          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
           this.dropNonSceneGeometry(firstMesh.localID)
           this.dropNonSceneGeometry(secondMesh.localID)
         }
@@ -1261,7 +1275,8 @@ export class IfcGeometryExtraction {
         this.model.geometry.add(canonicalMesh)
       } else {
 
-        if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+        if ( !this.csgMemoization &&
+          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
           this.model.voidGeometry.delete(firstMesh.localID)
           this.model.voidGeometry.delete(secondMesh.localID)
         }
@@ -1295,7 +1310,18 @@ export class IfcGeometryExtraction {
     IfcBooleanClippingResult |
     IfcFacetedBrep,
   isRelVoid: boolean = false,
-  representationItem?:IfcRepresentationItem) {
+  representationItem?:IfcRepresentationItem,
+  isSecondOperand: boolean = false ) {
+
+    if ( this.csgMemoization ) {
+      const geometry =
+        ( isRelVoid ? this.model.voidGeometry : this.model.geometry ).getByLocalID( from.localID )
+
+      if ( geometry !== void 0 ) {
+
+        return
+      }
+    }
 
     if (from instanceof IfcExtrudedAreaSolid) {
       // mark as temporary
@@ -1327,9 +1353,8 @@ export class IfcGeometryExtraction {
         from.FirstOperand instanceof IfcHalfSpaceSolid ||
         from.FirstOperand instanceof IfcFacetedBrep) {
 
-        this.extractBooleanOperand(from.FirstOperand, isRelVoid, representationItem)
-
-
+        this.extractBooleanOperand(
+            from.FirstOperand, isRelVoid, representationItem, isSecondOperand)
       }
 
       if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
@@ -1339,7 +1364,7 @@ export class IfcGeometryExtraction {
         from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
         from.SecondOperand instanceof IfcHalfSpaceSolid ||
         from.SecondOperand instanceof IfcFacetedBrep) {
-        this.extractBooleanOperand(from.SecondOperand, isRelVoid)
+        this.extractBooleanOperand(from.SecondOperand, isRelVoid, void 0, true )
       }
 
       // get geometry TODO(nickcastel50): eventually support flattening meshes
@@ -1354,24 +1379,8 @@ export class IfcGeometryExtraction {
       }
       if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-        /* const _testEntity = this.model.getElementByLocalID(firstMesh.localID)!
-        const outputFilePath_ =
-        `${_testEntity.expressID}_${EntityTypesIfc[_testEntity.type]}FIRST_MESH.obj`
-
-        this.dumpGeometry(outputFilePath_, firstMesh.geometry) */
-
-        // const geometryParts = firstMesh.geometry.getParts()
-
-        // if (geometryParts.size() > 0) {
-        //   /* for (let geometryPartIndex = 0;
-        //     geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
-        //     flatFirstMeshVector.push_back(geometryParts.get(geometryPartIndex))
-        //   }*/
-        //   flatFirstMeshVector = geometryParts
-        // } else {
         flatFirstMeshVector = this.nativeVectorGeometry()
         flatFirstMeshVector.push_back(firstMesh.geometry)
-        // }
       } else {
         Logger.error(
             `(Operand) Error extracting firstOperand geometry for expressID: 
@@ -1391,24 +1400,8 @@ export class IfcGeometryExtraction {
       }
       if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-        /* const _testEntity2 = this.model.getElementByLocalID(secondMesh.localID)!
-        const outputFilePath_ =
-        `${_testEntity2.expressID}_${EntityTypesIfc[_testEntity2.type]}_SECOND_MESH.obj`
-
-        this.dumpGeometry(outputFilePath_, secondMesh.geometry) */
-
-        // const geometryParts = secondMesh.geometry.getParts()
-
-        // if (geometryParts.size() > 0) {
-        //   /* for (let geometryPartIndex = 0;
-        //     geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
-        //     flatSecondMeshVector.push_back(geometryParts.get(geometryPartIndex))
-        //   }*/
-        //   flatSecondMeshVector = geometryParts
-        // } else {
         flatSecondMeshVector = this.nativeVectorGeometry()
         flatSecondMeshVector.push_back(secondMesh.geometry)
-        // }
       } else {
         Logger.error(
             `(Operand) Error extracting secondOperand geometry for expressID: 
@@ -1422,13 +1415,9 @@ export class IfcGeometryExtraction {
       parameters.flatFirstMesh = flatFirstMeshVector
       parameters.flatSecondMesh = flatSecondMeshVector
       parameters.operatorType = from.Operator.valueOf()
+      parameters.isSubtractOperand = isSecondOperand
 
       const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
-
-      // const outputFilePath =
-      // `${from.expressID}_${EntityTypesIfc[from.type]}_post_subtract_operand.obj`
-
-      // this.dumpGeometry(outputFilePath, booleanGeometryObject)
 
       const canonicalMesh: CanonicalMesh = {
         type: CanonicalMeshType.BUFFER_GEOMETRY,
@@ -1456,7 +1445,8 @@ export class IfcGeometryExtraction {
       // add mesh to the list of mesh objects
       if (!isRelVoid) {
 
-        if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+        if ( !this.csgMemoization &&
+          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
           this.dropNonSceneGeometry(firstMesh.localID)
           this.dropNonSceneGeometry(secondMesh.localID)
         }
@@ -1464,7 +1454,8 @@ export class IfcGeometryExtraction {
         this.model.geometry.add(canonicalMesh)
       } else {
 
-        if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+        if ( !this.csgMemoization &&
+          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
           this.model.voidGeometry.delete(firstMesh.localID)
           this.model.voidGeometry.delete(secondMesh.localID)
         }
@@ -1723,9 +1714,9 @@ export class IfcGeometryExtraction {
     }
 
     const radius = from.Radius
-    const innerRadius = from.InnerRadius || -1
-    const startParam = from.StartParam || -1
-    const endParam = from.EndParam || -1
+    const innerRadius = from.InnerRadius ?? -1
+    const startParam = from.StartParam ?? -1
+    const endParam = from.EndParam ?? -1
     const closed = false
 
     const parameters: ParamsGetSweptDiskSolid = {
@@ -3213,9 +3204,9 @@ export class IfcGeometryExtraction {
    * @param dimensions - dimensions of points
    * @return {Float32Array}
    */
-  flattenPointsToFloat32Array(points: IfcCartesianPoint[], dimensions:number): Float32Array {
+  flattenPointsToFloat64Array(points: IfcCartesianPoint[], dimensions:number): Float64Array {
     const totalCoordinates = points.length * dimensions
-    const flatCoordinates = new Float32Array(totalCoordinates)
+    const flatCoordinates = new Float64Array(totalCoordinates)
 
     let offset = 0
     points.forEach((point) => {
@@ -3241,7 +3232,7 @@ export class IfcGeometryExtraction {
     const dim = from.Dim
 
     if (pointsLength > 0) {
-      const pointsFlattened = this.flattenPointsToFloat32Array(points, dim)
+      const pointsFlattened = this.flattenPointsToFloat64Array(points, dim)
 
       const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
 
@@ -3462,10 +3453,28 @@ export class IfcGeometryExtraction {
 
       for (let i = 0; i < from.Segments.length; i++) {
 
-        const indexArray = this.createAndPopulateNativeIndices(from.Segments[i].Value)
+        const localSegment = from.Segments[ i ]
+
+        const parseBuffer = this.conwayModel.nativeParseBuffer()
+
+        let indexArray: StdVector< number >
+
+        try {
+
+          if ( !localSegment.extractParseBuffer( 0, parseBuffer, this.wasmModule.HEAPU8, true ) ) {
+
+            parseBuffer.resize( 0 )
+          }
+
+          indexArray = this.wasmModule.parseUint32Vector( parseBuffer )
+        } finally {
+
+          this.conwayModel.freeParseBuffer( parseBuffer )
+
+        }
 
         const segment: Segment = {
-          isArcType: (from.Segments[i].type === EntityTypesIfc.IFCARCINDEX),
+          isArcType: (localSegment.type === EntityTypesIfc.IFCARCINDEX),
           indices: indexArray,
         }
 
@@ -3480,19 +3489,39 @@ export class IfcGeometryExtraction {
     }
 
     // initialize new native glm::vec3 array object (free memory with delete())
-    const pointsArray = this.nativeVectorGlmVec2((fromPoints as any).CoordList.length)
+    let pointsArray : StdVector< Vector2 >
+    // = this.nativeVectorGlmdVec2((fromPoints as any).CoordList.length)
+    const parseBuffer = this.conwayModel.nativeParseBuffer()
 
-    if ( fromPoints instanceof IfcCartesianPointList2D ||
-       fromPoints instanceof IfcCartesianPointList3D ) {
+    try {
 
-      const coords = fromPoints.CoordList
-      // populate points array
-      for (let i = 0; i < coords.length; i++) {
+      if ( !fromPoints.extractParseBuffer( 0, parseBuffer, this.wasmModule.HEAPU8, true ) ) {
 
-        const coord = coords[ i ]
-
-        pointsArray.set(i, { x: coord[ 0 ], y: coord[ 1 ] })
+        parseBuffer.resize( 0 )
       }
+
+      if ( fromPoints instanceof IfcCartesianPointList2D ) {// ||
+      //  fromPoints instanceof IfcCartesianPointList3D ) {
+
+        pointsArray = this.wasmModule.parsePoint2DVector( parseBuffer )
+
+        // populate points array
+        // for (let i = 0; i < coords.length; i++) {
+
+        //   const coord = coords[ i ]
+
+        //   pointsArray.set(i, { x: coord[ 0 ], y: coord[ 1 ] })
+        // }
+
+      } else {
+
+        pointsArray = this.wasmModule.parsePoint3Dto2DVector( parseBuffer )
+
+      }
+
+    } finally {
+
+      this.conwayModel.freeParseBuffer( parseBuffer )
     }
 
     const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve = {
@@ -3663,7 +3692,14 @@ export class IfcGeometryExtraction {
 
     if (foundGeometry !== void 0) {
 
+      if ( foundGeometry.temporary ) {
+
+        foundGeometry.temporary = false
+      }
+
       if (addGeometry) {
+
+
         this.scene.addGeometry(from.localID, owningElementLocalID, isSpace)
       }
       return
@@ -4082,33 +4118,31 @@ export class IfcGeometryExtraction {
 
       const bound3DVector = this.nativeBound3DVector()
 
+      const conwayModel      = this.conwayModel
+
       for (const bound of from.Bounds) {
-        const vec3Array = this.nativeVectorGlmdVec3()
+        let vec3Array: StdVector< Vector3 >
 
         const innerBound = bound.Bound
         const nativeEdgeCurves = this.nativeVectorCurve()
 
         if (innerBound instanceof IfcPolyLoop) {
 
-          let prevLocalID: number = -1
+          // let prevLocalID: number = -1
+          const coordParseBuffer = conwayModel.nativeParseBuffer()
 
-          for ( const point of innerBound.Polygon ) {
+          if ( !innerBound.extractParseBuffer(
+              0, coordParseBuffer, this.wasmModule.HEAPU8, true ) ) {
 
-            const coords = point.Coordinates
-            const vec3 = {
-              x: coords[0],
-              y: coords[1],
-              z: coords[2],
-            }
-
-            const currentLocalID: number = point.localID
-
-            if ( currentLocalID !== prevLocalID ) {
-              vec3Array.push_back(vec3)
-              prevLocalID = currentLocalID
-            }
+            coordParseBuffer.resize( 0 )
           }
+
+          vec3Array = this.wasmModule.parseVertexVector( coordParseBuffer )
+
+          this.wasmModule.freeParseBuffer( coordParseBuffer )
         } else if (innerBound instanceof IfcEdgeLoop) {
+
+          vec3Array = this.nativeVectorGlmdVec3()
           // Logger.info("innerBound Ne: " + innerBound.Ne)
           for (const edge of innerBound.EdgeList) {
             // //  Logger.info("IfcOrientedEdge expressID: " + edge.expressID)
@@ -5389,7 +5423,7 @@ export class IfcGeometryExtraction {
       default:
         return null
     }
-    /* eslint-enable no-case-declarations */
+
   }
 
   /**
@@ -5432,7 +5466,7 @@ export class IfcGeometryExtraction {
       // win from memoization, but much larger models it uses far too much heap.
       const MEMOIZATION_THRESHOLD = 256 * 1024 * 1024
 
-      if ( this.model.bufferBytesize > MEMOIZATION_THRESHOLD ) {
+      if ( this.lowMemoryMode || this.model.bufferBytesize > MEMOIZATION_THRESHOLD ) {
         this.model.elementMemoization = false
       }
 
@@ -5815,6 +5849,11 @@ export class IfcGeometryExtraction {
             Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
           }
         }
+      }
+
+      if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+        this.model.geometry.deleteTemporaries()
+        this.model.voidGeometry.deleteTemporaries()
       }
 
       result = ExtractResult.COMPLETE

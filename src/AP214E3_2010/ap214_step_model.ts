@@ -28,7 +28,9 @@ export default class AP214StepModel extends StepModelBase< EntityTypesAP214 > {
    * @param buffer The buffer to values from.
    * @param elementIndex The parsed index to elements in the STEP.
    */
-  constructor( buffer: Uint8Array, elementIndex: StepIndexEntry< EntityTypesAP214 >[] ) {
+  constructor(
+      buffer: Uint8Array,
+      elementIndex: StepIndexEntry< EntityTypesAP214 >[] ) {
     super( SchemaAP214, buffer, elementIndex )
 
     this.typeIndex = indexerInstance.create( elementIndex )

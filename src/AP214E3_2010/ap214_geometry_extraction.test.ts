@@ -29,24 +29,28 @@ async function initializeGeometryExtractor() {
     return ExtractResult.INCOMPLETE
   }
 
-  const [, model0] = parser.parseDataToModel(tubeBufferInput)
-  const [, model1] = parser.parseDataToModel(gearBufferInput)
+  const conwayGeometryTube: ConwayGeometry = new ConwayGeometry()
+  const conwayGeometryGear: ConwayGeometry = new ConwayGeometry()
+  let initializationStatus = await conwayGeometryTube.initialize()
 
-  if (model0 === void 0 || model1 === void 0) {
-    return ExtractResult.INCOMPLETE
-  }
-  const conwayGeometry: ConwayGeometry = new ConwayGeometry()
-  const initializationStatus = await conwayGeometry.initialize()
+  initializationStatus &&= await conwayGeometryGear.initialize()
 
   if (!initializationStatus) {
     return
   }
 
-  conwayTubeModel = new AP214GeometryExtraction(conwayGeometry, model0)
-  conwayGearModel = new AP214GeometryExtraction(conwayGeometry, model1)
+  const [, model0] = parser.parseDataToModel( tubeBufferInput )
+  const [, model1] = parser.parseDataToModel( gearBufferInput )
 
-  const tubeModelResult = await conwayTubeModel.isInitialized()
-  const gearModelResult = await conwayGearModel.isInitialized()
+  if (model0 === void 0 || model1 === void 0) {
+    return ExtractResult.INCOMPLETE
+  }
+
+  conwayTubeModel = new AP214GeometryExtraction( conwayGeometryTube, model0 )
+  conwayGearModel = new AP214GeometryExtraction( conwayGeometryGear, model1 )
+
+  const tubeModelResult = conwayTubeModel.isInitialized()
+  const gearModelResult = conwayGearModel.isInitialized()
 
   return tubeModelResult && gearModelResult
 }
@@ -114,13 +118,13 @@ function destroy(): Boolean {
     conwayGearModel.isInitialized()
 }
 
-beforeAll(async () => {
-
-  await initializeGeometryExtractor()
-
-})
-
 describe('AP214 Geometry Extraction', () => {
+
+  beforeAll(async () => {
+
+    await initializeGeometryExtractor()
+
+  })
 
   test('initialize()', () => {
 
@@ -141,7 +145,7 @@ describe('AP214 Geometry Extraction', () => {
   })
 
   test('tubeGeometryArrayLength()', () => {
-    const testParameter:Number = 8832
+    const testParameter:Number = 7176
     expect(getTubeMeshSize()).toBe(testParameter)
 
   })

@@ -33,10 +33,13 @@ export default class IfcStepModel extends StepModelBase< EntityTypesIfc > {
    * Construct this model given a buffer containing the data and the parsed data index on that,
    * adding the typeIndex on top of that.
    *
+   * @param wasmModule
    * @param buffer The buffer to values from.
    * @param elementIndex The parsed index to elements in the STEP.
    */
-  constructor( buffer: Uint8Array, elementIndex: StepIndexEntry< EntityTypesIfc >[] ) {
+  constructor(
+      buffer: Uint8Array,
+      elementIndex: StepIndexEntry< EntityTypesIfc >[] ) {
     super( SchemaIfc, buffer, elementIndex )
 
     this.typeIndex = indexerInstance.create( elementIndex )

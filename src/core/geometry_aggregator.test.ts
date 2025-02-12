@@ -26,15 +26,16 @@ async function initializeGeometryExtractor() {
     return ExtractResult.INCOMPLETE
   }
 
-  const [, model] = parser.parseDataToModel(bufferInput)
-
-  if (model === void 0) {
-    return ExtractResult.INCOMPLETE
-  }
   const initializationStatus = await conwayGeometry.initialize()
 
   if (!initializationStatus) {
     return
+  }
+
+  const [, model] = parser.parseDataToModel(bufferInput)
+
+  if (model === void 0) {
+    return ExtractResult.INCOMPLETE
   }
 
   conwayModel = new IfcGeometryExtraction(conwayGeometry, model)
@@ -102,13 +103,13 @@ function testAggregateGeometryMultiple() : boolean {
   return aggregationResult.chunks.length === aggregationResult.geometry.size()
 }
 
-beforeAll(async () => {
-
-  await initializeGeometryExtractor()
-
-})
-
 describe('Geometry Aggregator', () => {
+
+  beforeAll(async () => {
+
+    await initializeGeometryExtractor()
+
+  })
 
   test('testAggregateGeometrySingle()', () => {
 

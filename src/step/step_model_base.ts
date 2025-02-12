@@ -53,7 +53,7 @@ implements Iterable<BaseEntity>, Model {
    * ownership of this array in the sense it will modify values/unfold inline elements etc.
    */
   constructor(
-    public readonly schema: StepEntitySchema<EntityTypeIDs, BaseEntity>,
+    public readonly schema: StepEntitySchema< EntityTypeIDs, BaseEntity >,
     private readonly buffer_: Uint8Array, elementIndex: StepIndexEntry<EntityTypeIDs>[]) {
 
     const localElementIndex: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity>[] =
@@ -67,7 +67,6 @@ implements Iterable<BaseEntity>, Model {
       const element = localElementIndex[where]
 
       if (element.inlineEntities !== void 0) {
-
 
         localElementIndex.push(...element.inlineEntities)
       }
@@ -133,6 +132,7 @@ implements Iterable<BaseEntity>, Model {
     this.elementIndex_ = localElementIndex
   }
 
+
   /**
    * Invalidate the cache store for this, so new items will be created.
    *
@@ -194,6 +194,7 @@ implements Iterable<BaseEntity>, Model {
 
     element.vtableIndex = extratedEntry[ 0 ]
     element.vtableCount = extratedEntry[ 1 ]
+    element.endCursor   = extratedEntry[ 2 ]
     element.buffer = this.buffer_
     element.vtable = this.vtableBuilder_.buffer
 
@@ -207,7 +208,7 @@ implements Iterable<BaseEntity>, Model {
    * @param localID The local id to fetch the buffer entry for.
    * @throws {Error} Throws an error if the ID is invalid.
    */
-  public populateBufferEntry(localID: number): void {
+  public populateBufferEntry( localID: number ): void {
     if (localID > this.elementIndex_.length) {
       throw new Error(`Invalid localID ${localID}`)
     }

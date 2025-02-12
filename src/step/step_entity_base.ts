@@ -1,3 +1,4 @@
+import { ParseBuffer } from '../../dependencies/conway-geom/interface/parse_buffer'
 import { Entity } from '../core/entity'
 import { EntityDescription, EntityFieldsDescription } from '../core/entity_description'
 import { EntityFieldDescription } from '../core/entity_field_description'
@@ -182,23 +183,27 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param optional Whether this is a potentially optional field
    * @return {number | null | undefined} The extracted number.
    */
-  public extractNumber(offset: number, optional: true): number | null
+  public extractNumber(vtableOffset: number, optional: true): number | null
   // eslint-disable-next-line no-dupe-class-members
-  public extractNumber(offset: number, optional: false): number
+  public extractNumber(vtableOffset: number, optional: false): number
   // eslint-disable-next-line no-dupe-class-members, require-jsdoc
-  public extractNumber(offset: number, optional: boolean): number |
+  public extractNumber(vtableOffset: number, optional: boolean): number |
     null {
 
-    const cursor    = this.getOffsetCursor( offset )
+    this.guaranteeVTable()
+
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
     const buffer    = this.buffer
-    const endCursor = buffer.length
 
     const value = stepExtractNumber(buffer, cursor, endCursor)
 
     if (value === void 0) {
+
       if (!optional) {
         throw new Error('Value in STEP was incorrectly typed')
       }
+
+      const buffer    = this.buffer
 
       if ( !this.model.nullOnErrors && stepExtractOptional(buffer, cursor, endCursor) !== null ) {
         throw new Error('Value in STEP was incorrectly typed')
@@ -229,9 +234,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractString(offset: number, optional: boolean): string |
     null {
 
-    const cursor    = this.getOffsetCursor( offset )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
+    const buffer              = this.buffer
 
     const value = stepExtractString(buffer, cursor, endCursor)
 
@@ -268,9 +272,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   // eslint-disable-next-line no-dupe-class-members, require-jsdoc
   public extractLogical(offset: number, optional: boolean): boolean | null {
 
-    const cursor    = this.getOffsetCursor( offset )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
+    const buffer              = this.buffer
 
     const value = stepExtractLogical(buffer, cursor, endCursor)
 
@@ -503,9 +506,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       ExtractionType | null | undefined,
       optional: boolean): ExtractionType | null {
 
-    const cursor    = this.getOffsetCursor( offset )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
+    const buffer              = this.buffer
 
     const value = extractor(buffer, cursor, endCursor)
 
@@ -578,10 +580,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       entityConstructor: T):
     InstanceType<T> | null {
 
-    const cursor    = this.getOffsetCursor( offset )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
-    const model     = this.model
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
+    const buffer              = this.buffer
+    const model               = this.model
 
     const expressID = stepExtractReference(buffer, cursor, endCursor)
     const value =
@@ -630,7 +631,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       entityConstructor: T ):
       InstanceType< T > | undefined {
 
-    const model = this.model
+    const model     = this.model
     const expressID = stepExtractReference( buffer, cursor, endCursor )
     const value =
       expressID !== void 0 ? model.getElementByExpressID( expressID ) :
@@ -665,9 +666,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   // eslint-disable-next-line no-dupe-class-members, require-jsdoc
   public extractBinary(vtableOffset: number, optional: boolean): [Uint8Array, number] | null {
 
-    const cursor    = this.getOffsetCursor( vtableOffset )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
+    const buffer              = this.buffer
 
     const value = stepExtractBinary(buffer, cursor, endCursor)
 
@@ -695,6 +695,51 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       StepEntityInternalReferencePrivate< EntityTypeIDs, StepEntityBase< EntityTypeIDs > >).entity =
        void 0
   }
+
+  /**
+   * Extract a parse buffer at a particular vtable offset.
+   *
+   * @param offset
+   * @param buffer
+   * @param optional
+   * @return {boolean} True if this extracts, false (usually because this is optional)
+   */
+  public extractParseBuffer(
+      offset: number,
+      result: ParseBuffer,
+      nativeBuffer: Uint8Array,
+      optional: boolean ): boolean {
+
+    this.guaranteeVTable()
+
+    const internalReference =
+      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
+
+    if ( offset >= internalReference.vtableCount ) {
+      throw new Error( 'Couldn\'t read field due to too few fields in record' )
+    }
+
+    const buffer     = this.buffer
+    const vtableSlot = internalReference.vtableIndex + offset
+    const cursor     = internalReference.vtable[ vtableSlot ]
+    const nextSlot   = vtableSlot + 1
+    const endCursor  =
+      nextSlot < internalReference.vtableCount ?
+        ( internalReference.vtable[ nextSlot ] - 1 ) :
+        internalReference.endCursor
+
+    if ( optional && stepExtractOptional( buffer, cursor, endCursor ) === null ) {
+
+      return false
+    }
+
+    const dataPtr = result.resize( endCursor - cursor )
+
+    nativeBuffer.set( buffer.subarray( cursor, endCursor ), dataPtr )
+
+    return true
+  }
+
 
   /**
    * Extract a number at the particular vtable offset (i.e. the position
@@ -737,9 +782,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   // eslint-disable-next-line no-dupe-class-members, require-jsdoc
   public extractBoolean(offset: number, optional: boolean): boolean | null {
 
-    const cursor    = this.getOffsetCursor( offset )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
+    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
+    const buffer              = this.buffer
 
     const value = stepExtractBoolean(buffer, cursor, endCursor)
 
@@ -770,18 +814,74 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   }
 
   /**
+   * Get both the buffer offset and end cursor for
+   * a particular vtable offset.
+   *
+   * @param vtableOffset The vtable offset to get the cursor/endcursor for.
+   * @return {[number,number]} The cursor and end cursor in the read buffer.
+   */
+  protected getOffsetAndEndCursor( vtableOffset: number ): [number, number] {
+
+    this.guaranteeVTable()
+
+    const internalReference =
+      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
+
+    if ( vtableOffset >= internalReference.vtableCount ) {
+      throw new Error( 'Couldn\'t read field due to too few fields in record' )
+    }
+
+    const vtableSlot = internalReference.vtableIndex + vtableOffset
+
+    return [
+      internalReference.vtable[ vtableSlot ],
+      ( ( vtableOffset + 1 ) !== internalReference.vtableCount ) ?
+        ( internalReference.vtable[ vtableSlot + 1 ] - 1 ) :
+        internalReference.endCursor,
+    ]
+  }
+
+  /**
    * Get the buffer cursor for a particular offset.
    *
    * @param offset The offset in the v-table.
    * @return {number} The cursor.
    */
   protected getOffsetCursor( offset: number ): number {
+
     this.guaranteeVTable()
 
     const internalReference =
       this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
 
     if ( offset >= internalReference.vtableCount ) {
+      throw new Error( 'Couldn\'t read field due to too few fields in record' )
+    }
+
+    const vtableSlot = internalReference.vtableIndex + offset
+
+    return internalReference.vtable[ vtableSlot ]
+  }
+
+  /**
+   * Get the buffer cursor for a particular offset.
+   *
+   * @param offset The offset in the v-table.
+   * @return {number} The cursor.
+   */
+  protected getEndCursor( offset: number ): number {
+
+    const internalReference =
+      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
+
+    ++offset
+
+    if ( offset === internalReference.vtableCount ) {
+
+      return internalReference.endCursor
+    }
+
+    if ( offset > internalReference.vtableCount ) {
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
     }
 

@@ -12,10 +12,25 @@ import { ExtractResult } from '../core/shared_constants'
 
 let conwayModel:IfcGeometryExtraction
 
+
+const conwayGeometry = new ConwayGeometry()
+
+/**
+ * Intialize conway geom.
+ */
+async function initializeConwayGeom() {
+
+  await conwayGeometry.initialize()
+}
+
+
 /**
  * Initialize the geometry extractor with index IFC.
  */
 async function initializeGeometryExtractor() {
+
+  await initializeConwayGeom()
+
   const parser = IfcStepParser.Instance
   const indexIfcBuffer: Buffer = fs.readFileSync('data/index.ifc')
   const bufferInput = new ParsingBuffer(indexIfcBuffer)
@@ -29,12 +44,6 @@ async function initializeGeometryExtractor() {
 
   if (model === void 0) {
     return ExtractResult.INCOMPLETE
-  }
-  const conwayGeometry: ConwayGeometry = new ConwayGeometry()
-  const initializationStatus = await conwayGeometry.initialize()
-
-  if (!initializationStatus) {
-    return
   }
 
   conwayModel = new IfcGeometryExtraction(conwayGeometry, model)
@@ -120,13 +129,13 @@ function correctTriangleCount(): boolean {
         Math.trunc( value[ 0 ].GetIndexDataSize() / 3 ) )
 }
 
-beforeAll(async () => {
-
-  await initializeGeometryExtractor()
-
-})
-
 describe('IfcSceneBuilder', () => {
+
+  beforeAll(async () => {
+
+    await initializeGeometryExtractor()
+
+  })
 
   test('packMesh()', () => {
 
