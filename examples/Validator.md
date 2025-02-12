@@ -11,37 +11,25 @@ This tool lets you:
 - **Validate** a condition across all instances and **generate a report**  
 - **Check specific IFC entities** by their Express ID (e.g. `IFCWINDOW[#15]`)  
 
-## 1. Prerequisites
-
-Follow the setup guide in the **main project README**:
-
-- **[Setup Instructions](../../README.md)**
-- A local **IFC** file to test.
-
-### Requirements
-
-- **Node.js** (version 14+ recommended).  
-- **TypeScript** (if you compile locally) or use `ts-node` for direct execution.  
-- A valid **IFC file** to run validation on (e.g. `myFile.ifc`).
 
 ---
 
-## 2. Usage
+## Usage
 
 ### Running the Validator
 
-1. Ensure your project is set up correctly using the **[../../README.md](../../README.md)** setup guide.
+1. Ensure your project is set up correctly using the **[../README.md](../README.md)** setup guide.
 2. Execute the validator with:
    
    ```bash
-   node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js '/path/to/your.ifc' "JSexpression"
+   yarn validator model.ifc "JSexpression"
    ```
 
 3. The `<JSexpression>` is a **JavaScript-executable condition** to check against an IFC class or a specific instance.
 
 ---
 
-## 3. Query Syntax
+## Query Syntax
 
 ### **Basic Structure**
 
@@ -76,37 +64,37 @@ Follow the setup guide in the **main project README**:
 
 #### **1. Checking All IFC Windows with a Height Constraint**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW.Height <= 5"
+yarn validator myModel.ifc "IFCWINDOW.Height <= 5"
 ```
 
 #### **2. Checking Specific IFC Window (Express ID `#15`)**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW[#15].Height <= 5"
+yarn validator myModel.ifc "IFCWINDOW[#15].Height <= 5"
 ```
 
 #### **3. Checking IFC Doors That Are Taller Than 2.1**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCDOOR.Height > 2.1"
+yarn validator myModel.ifc "IFCDOOR.Height > 2.1"
 ```
 
 #### **4. Checking If A Window Width Is Exactly 1.2**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW.Width == 1.2"
+yarn validator myModel.ifc "IFCWINDOW.Width == 1.2"
 ```
 
 #### **5. Checking If A Window Has a Specific Name**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc 'IFCWINDOW.Name == "LivingRoomWindow"'
+yarn validator myModel.ifc 'IFCWINDOW.Name == "LivingRoomWindow"'
 ```
 
 #### **6. Checking If An IFC Site Exists**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCSITE"
+yarn validator myModel.ifc "IFCSITE"
 ```
 
 ---
 
-## 4. Validation Report Output
+## Validation Report Output
 
 After running a validation query, you will see a **summary report** in the terminal:
 
@@ -124,7 +112,7 @@ Validation Report for Query: IFCWINDOW.Height <= 5
 
 ---
 
-## 5. How Expressions Are Evaluated
+## How Expressions Are Evaluated
 
 This tool **directly evaluates** your query using **JavaScript expressions** (`eval`).  
 Here’s what happens internally:
@@ -145,7 +133,7 @@ Here’s what happens internally:
 
 ---
 
-## 6. Additional Features
+## Additional Features
 
 ### ✅ **Supports All IFC Entities**
 - Works on **all IFC classes** (`IFCWALL`, `IFCWINDOW`, `IFCDOOR`, etc.).
@@ -159,24 +147,24 @@ Here’s what happens internally:
 
 ---
 
-## 7. Error Handling
+## Error Handling
 
 ### ❌ **Invalid Query Format**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW.[Height] <= 5"
+yarn validator myModel.ifc "IFCWINDOW.[Height] <= 5"
 ```
 **Error:** `"Invalid query format"`
 
 ✅ **Fix:** Remove extra brackets:  
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW.Height <= 5"
+yarn validator myModel.ifc "IFCWINDOW.Height <= 5"
 ```
 
 ---
 
 ### ❌ **Property Does Not Exist**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCWINDOW.NonExistentProp == 1"
+yarn validator myModel.ifc "IFCWINDOW.NonExistentProp == 1"
 ```
 **Error:** `"Property 'NonExistentProp' not found on IFCWINDOW"`
 
@@ -186,7 +174,7 @@ node --experimental-specifier-resolution=node ./compiled/src/examples/validator.
 
 ### ❌ **Unknown IFC Class**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCFAKECLASS.Height > 3"
+yarn validator myModel.ifc "IFCFAKECLASS.Height > 3"
 ```
 **Error:** `"IFC class 'IFCFAKECLASS' does not exist in this model"`
 
@@ -194,7 +182,7 @@ node --experimental-specifier-resolution=node ./compiled/src/examples/validator.
 
 ---
 
-## 8. Summary
+## Summary
 
 - ✅ **Pass a query** to filter IFC entities by **properties** and **values**.
 - ✅ **Supports expressions** using **JavaScript operators** (`<=`, `>=`, `==`, etc.).
@@ -207,7 +195,7 @@ node --experimental-specifier-resolution=node ./compiled/src/examples/validator.
 
 ### 🎯 **Try It Now!**
 ```bash
-node --experimental-specifier-resolution=node ./compiled/src/examples/validator.js myModel.ifc "IFCDOOR.Height >= 2.1"
+yarn validator myModel.ifc "IFCDOOR.Height >= 2.1"
 ```
 
 This CLI makes **IFC validation intuitive, powerful, and scriptable**—directly in **JavaScript expressions**. 🚀
