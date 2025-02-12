@@ -39,6 +39,12 @@ You can now load your IFC files. From the Conway root:
 See the full example docs at [Browser.md](src/examples/Browser.md) and [Validator.md](src/examples/Validator.md)
 
 ## Development
+Update your client with changes since your last sync:
+```
+git pull
+yarn setup
+```
+
 For the full build of both conway (TypeScript) and conway-geom (WASM subproject):
 ```
 yarn build
@@ -63,11 +69,6 @@ And finally, using the watch functionality, you can also have the code automatic
 ```
 yarn build-test-watch
 ```
-
-### Pulling in Updated Source Changes
-```git pull```
-
-If you get an error about a submodule not found, run ```yarn submodule-update``` here and then pull again. 
 
 # Production NPM Build
 ```
