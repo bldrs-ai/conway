@@ -8,48 +8,50 @@ Conway includes two major subcomponents:
 
 ## Getting Started
 
-### Deps
-Conway generates a lot of code. To run code-generation, you'll need to install version 6.0 of the .NET framework.
+### Windows Setup
+1. [Install MinGW-64](https://github.com/msys2/msys2-installer/releases/download/2022-06-03/msys2-x86_64-20220603.exe) and add ```g++.exe``` location to your PATH variable.
 
-On a Ubuntu or Debian style distribution, you can install it like so:
-```
-sudo apt-get update && \
-  sudo apt-get install -y dotnet-sdk-6.0
-```
+### MacOS Setup 
 
-On macOS, it should be installable with brew using:
-```
-brew install dotnet@6
-```
+1. Install the `gmake` and `node` dependencies via Homebrew (```brew install gmake node```).
+
+### EMSDK Setup
+1. [Install EMSDK](https://github.com/emscripten-core/emsdk). Install version 3.1.72 or higher. ```git checkout 3.1.72```
+2. Add EMSDK environment variable to your terminal.
+   - Windows: ```EMSDK=C:\path\to\emsdk```
+   - MacOS: ```export EMSDK=/path/to/emsdk```
 
 ### Initial Build
- 
-Clone the repository, then in the root directory of the repository, run the yarn install, followed by using yarn to initialise the IFC-gen submodule:
+
+Clone the Conway repository, then in the root directory of the repository:
 ```
-# 1) Setup your EMSDK environment
-# 2) Make sure you're in main repo, not fork
-git pull  # if you get an error about a submodule not found, run yarn submodule-update here and then pull again
-yarn install
-yarn submodule-update
-
-cd dependencies/conway-geom/dependencies/wasm/
-# Answer yes or all to replace files if they've already been unzipped before
-unzip dependencies.zip
-cd -
-
+# Make sure EMSDK environment is set up.
+yarn setup
 yarn build
 yarn test
 ```
 
-### Pulling in Updated Source Changes
-After this, you can build using either an incremental build (which will rebuild the typescript only and will lead to the fastest build times), a yarn build (will recompile the wasm module and build the typescript source), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
+### Example Uses
+You can now load your IFC files. From the Conway root:
+1. ```yarn browser model.ifc```
+2. ```yarn validator model.ifc "IFCWINDOW.OverallHeight <= 1500"```
+
+See the full example docs at [Browser.md](src/examples/Browser.md) and [Validator.md](src/examples/Validator.md)
+
+## Development
+You can build using either an incremental build (which will rebuild the typescript only and will lead to the fastest build times), a yarn build (will recompile the wasm module and build the typescript source), or a full rebuild, which will clean all build artefacts and perform code-gen, before running a build.
+
+A full build includes a rebuild of conway-geom and conway. You should only need to run a full build if you make local changes to conway-geom. 
+
+An incremental build is useful for building changes to conway.  
+
 
 For the incremental build:
 ```
 yarn build-incremental
 ```
 
-For the wasm / typescript build:
+For the full build of conway and conway-geom:
 ```
 yarn build
 ```
@@ -70,6 +72,11 @@ yarn build-test-watch
 ```
 
 If you have Visual Studio Code, Conway also comes with a Visual Studio Code workspace to add IDE accessability to these features, and also let you edit the IFC-gen C# code in place.
+
+### Pulling in Updated Source Changes
+```git pull```
+
+If you get an error about a submodule not found, run ```yarn submodule-update``` here and then pull again. 
 
 # Production NPM Build
 ```
