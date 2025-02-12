@@ -1,23 +1,22 @@
 #!/usr/bin/env node
+import fs from 'fs'
+import { exit } from 'process'
+import { EntityFieldDescription } from './core/entity_field_description'
+import EntityTypesIfc from './ifc/ifc4_gen/entity_types_ifc.gen'
+import IfcStepModel from './ifc/ifc_step_model'
+import IfcStepParser from './ifc/ifc_step_parser'
+import Logger from './logging/logger'
+import ParsingBuffer from './parsing/parsing_buffer'
+import { ParseResult } from './step/parsing/step_parser'
+import StepEntityBase from './step/step_entity_base'
+import Environment from './utilities/environment'
+
 
 /**
  * IFC Model Validator
  *
- * See the project README or the validator.md for details.
+ * @see Validtor.md
  */
-
-import { exit } from 'process'
-import fs from 'fs'
-import IfcStepParser from '../ifc/ifc_step_parser'
-import ParsingBuffer from '../parsing/parsing_buffer'
-import { ParseResult } from '../step/parsing/step_parser'
-import EntityTypesIfc from '../ifc/ifc4_gen/entity_types_ifc.gen'
-import IfcStepModel from '../ifc/ifc_step_model'
-import StepEntityBase from '../step/step_entity_base'
-import { EntityFieldDescription } from '../core/entity_field_description'
-import Logger from '../logging/logger'
-import Environment from '../utilities/environment'
-
 // ---------------------------------------------------------------------
 // 1. Parse Command-Line Args
 // ---------------------------------------------------------------------
