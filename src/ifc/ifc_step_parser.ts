@@ -26,11 +26,13 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
   /**
    * Parse data to the model
    *
+   * @param wasmModule A conway-geom wasm module environnment for this.
    * @param input The parsing buffer, set to user data, to read.
    * @return {[ParseResult, IfcStepModel | undefined]} The parse result as well as the model,
    * if it can be extracted.
    */
-  public parseDataToModel( input: ParsingBuffer ): [ParseResult, IfcStepModel | undefined] {
+  public parseDataToModel(
+      input: ParsingBuffer ): [ParseResult, IfcStepModel | undefined] {
     const [itemIndex, parseResult] = this.parseDataBlock( input )
 
     return [parseResult, new IfcStepModel( input.buffer, itemIndex.elements )]

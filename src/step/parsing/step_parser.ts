@@ -345,7 +345,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       input: Uint8Array,
       cursor: number,
       endCursor: number,
-      vtableBuilder: StepVtableBuilder): [IndexMark, number] | undefined {
+      vtableBuilder: StepVtableBuilder): [IndexMark, number, number] | undefined {
     let stackDepth = 1
 
     while (cursor < endCursor && stackDepth > 0) {
@@ -356,7 +356,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
       if (cursor === endCursor) {
         if (stackDepth === 1) {
-          return vtableBuilder.complete()
+          return vtableBuilder.complete( cursor )
         } else {
           return
         }
@@ -390,7 +390,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         if (readChar === COMMA) {
           break
         } else if (readChar === SEMICOLON) {
-          return vtableBuilder.complete()
+          return vtableBuilder.complete( cursor - 1 )
 
           // Will effectively terminate if this is the end of the entity,
           // or simply end the inline entity/container case otherwise.
@@ -405,7 +405,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       }
     }
 
-    return vtableBuilder.complete()
+    return vtableBuilder.complete( cursor )
   }
 
   /**

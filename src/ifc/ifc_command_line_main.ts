@@ -23,16 +23,29 @@ import path from 'path'
 // create a model ID
 const modelID: number = 0
 
+
+const conwaywasm = new ConwayGeometry()
+
+
 main()
 
 
 /**
  * Generalised error handling wrapper
  */
-function main() {
-  Environment.checkEnvironment()
-  Logger.initializeWasmCallbacks()
+async function main() {
+
   try {
+
+    const initializationStatus = await conwaywasm.initialize()
+
+    if (!initializationStatus) {
+      return
+    }
+
+    Environment.checkEnvironment()
+    Logger.initializeWasmCallbacks()
+
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
@@ -97,7 +110,7 @@ function doWork() {
           })
 
           yargs2.positional('filename', { describe: 'IFC File Paths', type: 'string' })
-        }, async (argv) => {
+        }, (argv) => {
           const ifcFile = argv['filename'] as string
 
           let indexIfcBuffer: Buffer | undefined
@@ -216,10 +229,9 @@ function doWork() {
                   path.dirname( ifcFile ),
                   path.basename( ifcFile, path.extname( ifcFile) ) )
 
-            const result = await geometryExtraction(model)
+            const result = geometryExtraction(model)
             if (result !== void 0) {
-              const scene = result[0]
-              const conwaywasm = result[1]
+              const scene = result
 
               if (outputProperties) {
                 propertyExtraction(model)
@@ -230,7 +242,7 @@ function doWork() {
               const maxChunk = (argv['maxchunk'] as number | undefined) ?? DEFAULT_CHUNK
               const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
 
-              serializeGeometry(scene, conwaywasm, fileName, maxGeometrySize, includeSpace)
+              serializeGeometry(scene, fileName, maxGeometrySize, includeSpace)
             }
 
 
@@ -386,7 +398,6 @@ function parseFileHeader(input: string): string[] {
  */
 function serializeGeometry(
     scene: IfcSceneBuilder,
-    conwaywasm: ConwayGeometry,
     fileNameNoExtension: string,
     maxGeometrySize: number,
     includeSpaces?: boolean  ) {
@@ -592,16 +603,11 @@ function propertyExtraction(model: IfcStepModel) {
 
 /**
  * Function to extract Geometry from an IfcStepModel
+ *
+ * @return {IfcSceneBuilder | undefined} The scene or undefined on error.
  */
-async function geometryExtraction(model: IfcStepModel):
-  Promise<[IfcSceneBuilder, ConwayGeometry] | undefined> {
-
-  const conwaywasm = new ConwayGeometry()
-  const initializationStatus = await conwaywasm.initialize()
-
-  if (!initializationStatus) {
-    return
-  }
+function geometryExtraction(model: IfcStepModel):
+  IfcSceneBuilder | undefined {
 
   const conwayModel = new IfcGeometryExtraction(conwaywasm, model)
 
@@ -633,5 +639,5 @@ async function geometryExtraction(model: IfcStepModel):
     return void 0
   }
 
-  return [scene, conwaywasm]
+  return scene
 }

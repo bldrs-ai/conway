@@ -27,7 +27,7 @@ function main() {
   // Check if IFC-gen-internal directory exists
   if (!fs.existsSync(ifcGenPath)) {
     console.log('IFC-gen-internal not found. Attempting to clone...');
-    const cloneCommand = `git clone git@github.com:bldrs-ai/IFC-gen-internal.git ${ifcGenPath}`;
+    const cloneCommand = `git clone https://github.com/bldrs-ai/IFC-gen-internal.git ${ifcGenPath}`;
     if (!runCommand(cloneCommand)) {
       console.log('Could not clone IFC-gen-internal. Please ensure you have access rights.');
       process.exit(0); // Exit gracefully

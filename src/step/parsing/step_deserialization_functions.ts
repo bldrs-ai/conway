@@ -30,6 +30,7 @@ const SLASH        = ParsingConstants.SLASH
 
 const parsingBufferReusable = new ParsingBuffer( new Uint8Array( 1 ), 0, 1 )
 
+
 /**
  * NVL is a null coalescing function required for STEP.
  *
@@ -104,6 +105,7 @@ export function stepExtractNumber(
 
   return parsingBufferReusable.readReal()
 }
+
 
 /**
  * Extract a STEP logical value (which can be true, false or unknown)
@@ -314,7 +316,7 @@ export function stepExtractArrayBegin(
  * @param endCursor The last position accessible for this read in the buffer.
  * @return {number} Returns a negative number on termination/error
  * matching the values in IncermentalParseEndState, or the new cursor
- * if there is a value in .
+ * if there is a value in the token.
  */
 export function stepExtractArrayToken(
     buffer: Uint8Array,

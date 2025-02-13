@@ -1,5 +1,5 @@
 /* eslint-disable camelcase */
-import {describe, expect, test} from '@jest/globals'
+import {beforeAll, describe, expect, test} from '@jest/globals'
 
 import AP214StepExternalMapping from '../AP214E3_2010/ap214_step_external_mapping'
 import AP214StepParser from '../AP214E3_2010/ap214_step_parser'
@@ -10,6 +10,7 @@ import {
   parametric_representation_context,
   representation_context,
 } from '../AP214E3_2010/AP214E3_2010_gen'
+import { ConwayGeometry } from '../../dependencies/conway-geom'
 
 
 const parser = AP214StepParser.Instance
@@ -20,6 +21,17 @@ const externalMappingString = '#42 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2) PARAM
 const externalMappingStringBuffer = new TextEncoder().encode( externalMappingString )
 
 const EXTERNAL_REFERENCE_EXPRESS_ID = 42
+
+const conwayGeometry = new ConwayGeometry()
+
+/**
+ * Intialize conway geom.
+ */
+async function initializeConwayGeom() {
+
+  await conwayGeometry.initialize()
+}
+
 
 /**
  * Test for extracting an external mapping.
@@ -61,6 +73,13 @@ function extractExternalMapping() {
 
 
 describe( 'External Mapping Test', () => {
+
+  beforeAll(async () => {
+
+    await initializeConwayGeom()
+
+  })
+
   test( 'extractExternalMapping()', () => {
     expect( extractExternalMapping() ).toBe( true )
   } )

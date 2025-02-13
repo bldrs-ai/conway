@@ -24,6 +24,8 @@ import { dumpProfileOBJs, profileHashes } from './ifc_model_profile_node'
 import { Console } from 'console'
 
 
+const conwayGeom = new ConwayGeometry()
+
 main()
 
 /**
@@ -74,10 +76,15 @@ function displayErrors( filePath: string ) {
 /**
  * Generalised error handling wrapper
  */
-function main() {
-  Environment.checkEnvironment()
-  Logger.initializeWasmCallbacks()
+async function main() {
+
   try {
+
+    await conwayGeom.initialize()
+
+    Environment.checkEnvironment()
+    Logger.initializeWasmCallbacks()
+
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
@@ -179,7 +186,7 @@ function doWork() {
             default:
           }
 
-          const [result1, model] = parser.parseDataToModel(bufferInput)
+          const [result1, model] = parser.parseDataToModel( bufferInput)
 
           switch (result1) {
             case ParseResult.COMPLETE:

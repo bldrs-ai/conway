@@ -1,11 +1,23 @@
 /* eslint-disable camelcase */
-import {describe, expect, test} from '@jest/globals'
+import {beforeAll, describe, expect, test} from '@jest/globals'
 
 import AP214StepParser from './ap214_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
 import { product_definition_formation } from './AP214E3_2010_gen'
+import { ConwayGeometry } from '../../dependencies/conway-geom'
 
+
+const conwayGeom = new ConwayGeometry()
+
+/**
+ * Initialize the wasm
+ */
+async function initializeWasm() {
+
+  await conwayGeom.initialize()
+
+}
 
 const parser = AP214StepParser.Instance
 
@@ -60,6 +72,13 @@ function extractContext() {
 
 
 describe( 'AP214 Step Model Test', () => {
+
+  beforeAll(async () => {
+
+    await initializeWasm()
+
+  })
+
   test( 'extractContext()', () => {
     expect( extractContext() ).toBe( true )
   } )

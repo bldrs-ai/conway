@@ -1,4 +1,4 @@
-import {describe, expect, test} from '@jest/globals'
+import {beforeAll, describe, expect, test} from '@jest/globals'
 
 import fs from 'fs'
 import ParsingBuffer from '../parsing/parsing_buffer'
@@ -19,12 +19,23 @@ import {
   IfcShapeAspect,
   IfcTelecomAddress,
 } from './ifc4_gen/index'
+import { ConwayGeometry } from '../../dependencies/conway-geom'
 
 
 const parser = IfcStepParser.Instance
 const indexIfcBuffer = fs.readFileSync( 'data/index.ifc' )
 
 const EXPECTED_ENTITY_COUNT = 287
+
+const conwayGeometry = new ConwayGeometry()
+
+/**
+ * Intialize conway geom.
+ */
+async function initializeConwayGeom() {
+
+  await conwayGeometry.initialize()
+}
 
 /**
  * Test of extracting the IFC data from index.ifc and getting the right number of entities.
@@ -644,6 +655,13 @@ function extractWeirdArrayTest() {
 }
 
 describe( 'IFC Step Model Test', () => {
+
+  beforeAll(async () => {
+
+    await initializeConwayGeom()
+
+  })
+
   test( 'extractIFCData()', () => {
     expect( extractIFCData() ).toBe( ParseResult.COMPLETE )
   } )

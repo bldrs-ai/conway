@@ -26,16 +26,17 @@ async function initializeGeometryExtractor() {
     return ExtractResult.INCOMPLETE
   }
 
-  const [, model] = parser.parseDataToModel(bufferInput)
-
-  if (model === void 0) {
-    return ExtractResult.INCOMPLETE
-  }
   const conwayGeometry: ConwayGeometry = new ConwayGeometry()
   const initializationStatus = await conwayGeometry.initialize()
 
   if (!initializationStatus) {
     return
+  }
+
+  const [, model] = parser.parseDataToModel( bufferInput )
+
+  if (model === void 0) {
+    return ExtractResult.INCOMPLETE
   }
 
   conwayModel = new IfcGeometryExtraction(conwayGeometry, model)

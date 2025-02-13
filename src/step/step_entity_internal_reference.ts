@@ -10,6 +10,7 @@ export default interface StepEntityInternalReference< EntityTypeIDs extends numb
   StepIndexEntryBase< EntityTypeIDs > {
   vtableIndex?: IndexMark
   vtableCount?: number
+  endCursor?: number
   buffer?: Uint8Array
   vtable?: Uint32Array
 }

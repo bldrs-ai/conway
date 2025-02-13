@@ -20,7 +20,7 @@ export interface CanonicalMeshBase {
      * calculation purposes, and is removed, if it is not final.
      */
     // todo, change back to readonly
-    readonly temporary?: boolean
+    temporary?: boolean
 }
 
 export interface CanonicalMeshBuffer extends CanonicalMeshBase {

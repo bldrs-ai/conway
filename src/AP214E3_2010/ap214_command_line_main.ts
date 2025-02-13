@@ -15,6 +15,8 @@ import { AP214GeometryExtraction } from './ap214_geometry_extraction'
 import { ExtractResult } from '../core/shared_constants'
 
 
+const conwaywasm = new ConwayGeometry()
+
 main()
 
 /**
@@ -22,6 +24,7 @@ main()
  */
 async function main() {
   try {
+    await conwaywasm.initialize()
     await doWork()
   } catch (error) {
     console.error('An error occurred:', error)
@@ -80,7 +83,7 @@ async function doWork() {
           })
 
           yargs2.positional('filename', { describe: 'AP214 STEP-File Paths', type: 'string' })
-        }, async (argv) => {
+        }, (argv) => {
           const ifcFile = argv['filename'] as string
 
           let indexAP214Buffer: Buffer | undefined
@@ -143,7 +146,8 @@ async function doWork() {
           }
 
           const parseDataTimeStart = Date.now()
-          const model: AP214StepModel | undefined = parser.parseDataToModel(bufferInput)[1]
+          const model: AP214StepModel | undefined =
+            parser.parseDataToModel(bufferInput)[1]
           const parseDataTimeEnd = Date.now()
 
           if (model === void 0) {
@@ -160,18 +164,17 @@ async function doWork() {
             // Get the filename without extension
             const fileName = fileNameWithExtension.split('.')[0]
 
-            const result = await geometryExtraction(model)
+            const result = geometryExtraction(model)
 
             if (result !== void 0) {
-              const scene = result[0]
-              const conwaywasm = result[1]
+              const scene = result
 
               const DEFAULT_CHUNK = 128
               const MEGABYTE_SHIFT = 20
               const maxChunk = (argv['maxchunk'] as number | undefined) ?? DEFAULT_CHUNK
               const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
 
-              serializeGeometry(scene, conwaywasm, fileName, maxGeometrySize)
+              serializeGeometry(scene, fileName, maxGeometrySize)
             }
           } else {
 
@@ -241,7 +244,6 @@ async function doWork() {
  */
 function serializeGeometry(
     scene: AP214SceneBuilder,
-    conwaywasm: ConwayGeometry,
     fileNameNoExtension: string,
     maxGeometrySize: number,
     includeSpaces?: boolean  ) {
@@ -446,16 +448,11 @@ function serializeGeometry(
 
 /**
  * Function to extract Geometry from an IfcStepModel
+ *
+ * @return {AP214SceneBuilder | undefined} The scene or undefined on error.
  */
-async function geometryExtraction(model: AP214StepModel):
-  Promise<[AP214SceneBuilder, ConwayGeometry] | undefined> {
-
-  const conwaywasm = new ConwayGeometry()
-  const initializationStatus = await conwaywasm.initialize()
-
-  if (!initializationStatus) {
-    return
-  }
+function geometryExtraction(model: AP214StepModel):
+  AP214SceneBuilder | undefined {
 
   const conwayModel = new AP214GeometryExtraction(conwaywasm, model)
 
@@ -471,7 +468,7 @@ async function geometryExtraction(model: AP214StepModel):
       return void 0
     }
 
-    return [scene, conwaywasm]
+    return scene
   } catch ( ex ) {
 
     console.log( ex )

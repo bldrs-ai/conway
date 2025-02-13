@@ -70,14 +70,15 @@ export default class StepVtableBuilder {
    * Complete a row of vtable entries in the buffer, returning the index mark of the vtable run +
    * the number of entries.
    *
-   * @return {[IndexMark, number]} The index mark (i.e. location in the buffer this run exists)
-   * and the number of entries.
+   * @return {[IndexMark, number, number]} The index mark (i.e. location in the buffer this run
+   * exists),
+   * the number of entries, and the last cursor position.
    */
-  public complete(): [IndexMark, number] {
+  public complete( endCursor: number ): [IndexMark, number, number] {
     const indexMark = this.indexMark_
 
     this.indexMark_ = this.bufferMark_
 
-    return [indexMark, this.indexMark_ - indexMark]
+    return [indexMark, this.indexMark_ - indexMark, endCursor]
   }
 }

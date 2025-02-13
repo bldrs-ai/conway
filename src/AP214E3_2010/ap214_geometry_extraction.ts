@@ -3332,7 +3332,7 @@ export class AP214GeometryExtraction {
       default:
         return null
     }
-    /* eslint-enable no-case-declarations */
+
   }
 
   /**
