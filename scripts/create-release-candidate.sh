@@ -63,4 +63,7 @@ git push origin "$NEW_VERSION"
 echo "Publishing to GitHub npm registry..."
 npm publish --access public
 
+# Generate type docs
+yarn typedoc
+
 echo "Release candidate created, tagged (no commit), and published successfully!"
