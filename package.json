@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.7.772",
+  "version": "0.7.782",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -68,7 +68,7 @@
     "prepare": "husky install",
     "submodule-update": "git submodule update --init --recursive",
     "test-watch": "jest --watchAll  --notify",
-    "update-version": "./scripts/updateVersion.mjs",
+    "update-version": "node ./scripts/updateVersion.mjs",
     "code-gen-ifc": "node scripts/code-gen.cjs \"make 'OUTDIR=../../src/ifc/ifc4_gen' 'SCHEMA_INPUT=IFC' 'SHORTNAME=Ifc'\"",
     "code-gen-ap214": "node scripts/code-gen.cjs \"make 'OUTDIR=../../src/AP214E3_2010/AP214E3_2010_gen' 'SCHEMA_INPUT=AP214E3_2010' 'SHORTNAME=AP214'\""
   },
