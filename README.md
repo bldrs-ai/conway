@@ -16,10 +16,17 @@ Conway includes two major subcomponents:
 1. Install the `gmake` and `node` dependencies via Homebrew (```brew install gmake node```).
 
 ### EMSDK Setup
-1. [Install EMSDK](https://github.com/emscripten-core/emsdk). Install version 3.1.72 or higher. ```git checkout 3.1.72```
-2. Add EMSDK environment variable to your terminal.
-   - Windows: ```EMSDK=C:\path\to\emsdk```
-   - MacOS: ```export EMSDK=/path/to/emsdk```
+1. Clone the [EMSDK](https://github.com/emscripten-core/emsdk) repo and add it to your path (see their instructions)
+2. Conway is using `3.1.72`
+```
+> cd $EMSDK
+> ./emsdk install 3.1.72
+> ./emsdk activate 3.1.72
+> cd $CONWAY
+conway> emcc -v
+emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.72 (437140d149d9c977ffc8b09dbaf9b0f5a02db190)
+...
+```
 
 ### Initial Build
 

@@ -11,7 +11,12 @@
  *    - Spawns a server using "yarn serve" or "yarn serve-webifc".
  *    - Iterates over all IFC files in modelDir/ifc, skipping any in EXCLUDE_FILENAMES.
  *    - Renders each IFC, collects performance stats, and writes them to CSV.
- *    - If old performance data is found, calls a Python script to generate a delta CSV.
+ *    - At the end, generates an HTML report in outputDir that displays:
+ *         • Full IFC file path,
+ *         • Rendered image,
+ *         • A link to view the IFC on bldrs.ai.
+ *      The link follows the format:
+ *         https://bldrs.ai/share/v/gh/bldrs-ai/<modelDirName>/main/<relative-ifc-path>
  */
 
 const { spawn, execSync, exec } = require('child_process');
@@ -39,7 +44,7 @@ function encodeFileName(filename) {
 }
 
 /**
- * Perform a POST request with JSON body, save response to file (binary).
+ * Perform a POST request with JSON body, save response to file (PNG).
  * @param {string} url Endpoint to POST to.
  * @param {Object} body JSON object for the POST body.
  * @param {string} outputPath Path to save the response as a file (PNG).
@@ -65,15 +70,11 @@ function postToServerAndSaveFile(url, body, outputPath, timeoutSeconds = 180) {
 
     const req = http.request(options, (res) => {
       if (res.statusCode < 200 || res.statusCode >= 300) {
-        // Non-2xx => fail
-        res.resume(); // Consume response data to free up memory
+        res.resume(); // consume response data to free up memory
         return resolve(false);
       }
-
-      // Pipe the response to the file
       const fileStream = fs.createWriteStream(outputPath);
       res.pipe(fileStream);
-
       fileStream.on('finish', () => {
         fileStream.close(() => {
           resolve(true);
@@ -81,24 +82,20 @@ function postToServerAndSaveFile(url, body, outputPath, timeoutSeconds = 180) {
       });
     });
 
-    req.on('error', () => {
-      resolve(false);
-    });
-
+    req.on('error', () => resolve(false));
     req.on('timeout', () => {
       req.destroy(new Error('Request timed out'));
       resolve(false);
     });
 
-    // Write body and finalize request
     req.write(data);
     req.end();
   });
 }
 
 /**
- * Sleep for N seconds. 
- * @param {number} sec 
+ * Sleep for N seconds.
+ * @param {number} sec
  * @returns {Promise<void>}
  */
 function sleep(sec) {
@@ -125,7 +122,6 @@ async function main() {
     usageAndExit();
   }
 
-  // Reconstruct something like: node benchmark.cjs '../headless-three' '../test-models'
   const command = [
     'node benchmark.cjs',
     ...args.map(a => JSON.stringify(a))
@@ -143,38 +139,29 @@ async function main() {
     engineSuffix = "-webifc";
   }
 
-  // We retrieve EXCLUDE_FILENAMES from environment
   const excludeFilenamesEnv = process.env.EXCLUDE_FILENAMES || "";
-  // Convert to a set for easy membership checks
-  // split on whitespace
   const excludeSet = new Set(excludeFilenamesEnv.split(/\s+/).filter(Boolean));
 
-  // Some path definitions
   const scriptDir = process.cwd();
   const currentDate = new Date()
     .toISOString()
     .replace(/[-:T]/g, '')
-    .split('.')[0]; // e.g. 20230101_123456
+    .split('.')[0];
 
   // Determine engine version
   let engineVersion = "";
   if (isEngineConway) {
-    // We'll parse `yarn list --pattern @bldrs-ai/conway`
-    // (Redirect errors to stdout so we can parse them)
     try {
       const yarnListOutput = execSync(
         `yarn list --pattern @bldrs-ai/conway --json`,
         { cwd: serverDir, stdio: ['pipe','pipe','pipe'] }
       ).toString();
-
       const matchedLines = yarnListOutput
         .split(/\r?\n/)
         .filter((line) => line.includes('@bldrs-ai/conway@'));
-
       if (matchedLines.length > 0) {
         const jsonLine = JSON.parse(matchedLines[0]);
-        // e.g. "@bldrs-ai/conway@0.1.560"
-        const name = jsonLine.data.trees[0].name;
+        const name = jsonLine.data.trees[0].name; // e.g., "@bldrs-ai/conway@0.1.560"
         const parts = name.split('@');
         engineVersion = parts[2] || '';
       }
@@ -183,22 +170,19 @@ async function main() {
       engineVersion = 'unknown';
     }
   } else {
-    // web-ifc version
     try {
       const yarnListOutput = execSync(
         `yarn list --pattern web-ifc --json`,
         { cwd: serverDir, stdio: ['pipe','pipe','pipe'] }
       ).toString();
-
       const matchedLines = yarnListOutput
         .split(/\r?\n/)
         .filter((line) => line.includes('web-ifc@'));
-
       if (matchedLines.length > 0) {
         const jsonLine = JSON.parse(matchedLines[0]);
-        const name = jsonLine.data.name; // e.g. "web-ifc@0.0.45"
+        const name = jsonLine.data.name; // e.g., "web-ifc@0.0.45"
         const parts = name.split('@');
-        engineVersion = parts[1] || ''; // e.g. '0.0.45'
+        engineVersion = parts[1] || '';
       }
     } catch (e) {
       console.error('Failed to get web-ifc version from yarn list. Using fallback "unknown".', e);
@@ -208,55 +192,51 @@ async function main() {
 
   const engineStr = (isEngineConway ? 'conway' : 'webifc') + (engineVersion ? engineVersion : '');
 
-  // Extract last folder name from modelDir
+  // Extract the model directory’s base name (used in the share link)
   const modelDirName = path.basename(modelDir);
-
-  // e.g. conway@0.1.560_test-models => we'll do conway0.1.560_test-models
+  // Test run name for the benchmarks folder.
   const testRunName = `${engineStr}_${modelDirName}`;
 
-  // Construct output directory
+  // Construct output directory for logs/CSVs.
   const outputBase = path.join(modelDir, 'benchmarks');
   const outputDir = path.join(outputBase, testRunName);
   fs.mkdirSync(outputDir, { recursive: true });
 
-  // Write to file
+  // Write command log.
   const logOutputFile = path.join(outputDir, '00-command.log.txt');
   fs.writeFileSync(logOutputFile, command + '\n', { encoding: 'utf8' });
 
-  // CSV files
+  // CSV files.
   const basicStatsFilename = path.join(outputDir, 'performance.csv');
   const newResults = path.join(outputDir, 'performance-detail.csv');
   const errorLogFile = path.join(outputDir, 'performance.err.txt');
   const tempServerOutputFile = path.join(outputDir, '00_rendering-server.log.txt');
 
-  // Initialize the CSV
   fs.writeFileSync(
     newResults,
     "timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,heapUsedMb,heapTotalMb,preprocessorVersion,originatingSystem\n",
     'utf8'
   );
 
-  // We'll remove old logs if they exist
   [basicStatsFilename, errorLogFile].forEach((f) => {
-    if (fs.existsSync(f)) {
-      fs.unlinkSync(f);
-    }
+    if (fs.existsSync(f)) fs.unlinkSync(f);
   });
 
   let allStatus = 'OK';
   const startTime = Date.now();
 
-  // Helper function to append line to file
+  // Array to hold entries for the HTML report.
+  const htmlEntries = [];
+
+  // Helper to append a line to a file.
   function appendLineToFile(filename, line) {
     fs.appendFileSync(filename, line + "\n", 'utf8');
   }
 
-  // We'll gather all IFC files under modelDir/ifc (recursively).
+  // Function to recursively get all IFC files.
   function getIfcFiles(directory) {
     let results = [];
-    if (!fs.existsSync(directory)) {
-      return results;
-    }
+    if (!fs.existsSync(directory)) return results;
     const list = fs.readdirSync(directory, { withFileTypes: true });
     list.forEach((dirent) => {
       const fullPath = path.join(directory, dirent.name);
@@ -275,36 +255,31 @@ async function main() {
   for (const filePath of allIfcFiles) {
     const baseFilename = path.basename(filePath);
 
-    // skip excluded
+    // Skip excluded files.
     if (excludeSet.has(baseFilename)) {
-      // "skip, 0s, ${f#$modelDir/}" in the bash script
       appendLineToFile(basicStatsFilename, `skip, 0s, ${filePath.replace(modelDir + '/', '')}`);
       continue;
     }
 
-    // Start the server
+    // Start the server.
     const serverCmd = `yarn serve${engineSuffix}`;
     const serverChild = spawn(serverCmd, { cwd: serverDir, shell: true });
-
-    // Stream server output to tempServerOutputFile
     const writeStream = fs.createWriteStream(tempServerOutputFile, { flags: 'w' });
     serverChild.stdout.pipe(writeStream);
     serverChild.stderr.pipe(writeStream);
 
-    // Wait a bit for the server to be up
     await sleep(3);
 
     const modelStartTime = Date.now();
     const encodedFileName = encodeFileName(baseFilename);
     const url = `file://${filePath}`; // local file path
 
-    const outputPng = path.join(outputDir, `${baseFilename}-fit.png`);
+    // --- Save the output PNG in the same directory as the IFC file ---
+    const outputPng = path.join(path.dirname(filePath), `${baseFilename}-fit.png`);
 
     let curlSuccess = true;
-
     const renderEndpoint = 'http://localhost:8001/renderPanoramic';
 
-    // Attempt the request
     try {
       const success = await postToServerAndSaveFile(
         renderEndpoint,
@@ -314,40 +289,25 @@ async function main() {
       );
       const modelEndTime = Date.now();
       const deltaTimeSec = ((modelEndTime - modelStartTime) / 1000).toFixed(2);
-
       if (!success) {
         curlSuccess = false;
         appendLineToFile(errorLogFile, `Error processing file ${url}`);
-        appendLineToFile(
-          basicStatsFilename,
-          `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`
-        );
+        appendLineToFile(basicStatsFilename, `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
       } else {
-        appendLineToFile(
-          basicStatsFilename,
-          `ok, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`
-        );
+        appendLineToFile(basicStatsFilename, `ok, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
       }
     } catch (err) {
       curlSuccess = false;
       const modelEndTime = Date.now();
       const deltaTimeSec = ((modelEndTime - modelStartTime) / 1000).toFixed(2);
       appendLineToFile(errorLogFile, `Error processing file ${url}: ${err.message}`);
-      appendLineToFile(
-        basicStatsFilename,
-        `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`
-      );
+      appendLineToFile(basicStatsFilename, `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
     }
 
-    // If success, parse stats from tempServerOutputFile
     if (curlSuccess) {
-      // Wait for the serverChild to flush logs
       await sleep(1);
-
-      // We'll close the writeStream so we can read from it
       writeStream.close();
 
-      // Synchronously read the log file
       let logContents = '';
       try {
         logContents = fs.readFileSync(tempServerOutputFile, 'utf8');
@@ -357,7 +317,7 @@ async function main() {
 
       let timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
       let loadStatus = 'OK';
-      const unameVal = os.arch(); // or os.platform(), or process.arch
+      const unameVal = os.arch();
       let schemaVersion = 'N/A';
       let parseTimeMs = 'N/A';
       let geometryTimeMs = 'N/A';
@@ -370,86 +330,47 @@ async function main() {
       let originatingSystem = 'N/A';
 
       if (isEngineConway) {
-        // We replicate the logic of:
-        //   awk '/\[.*\]: Load Status: OK/{flag=1} ...'
-        // The easiest approach is to do a few regexes.
-
-        // Try to see if "Load Status: OK" is in the logs
         if (!/Load Status: OK/.test(logContents)) {
           loadStatus = 'FAIL';
         } else {
-          // Parse Time
           const parseTimeMatch = logContents.match(/Parse Time: (\d+) ms/);
-
           if (parseTimeMatch) parseTimeMs = parseTimeMatch[1];
-
-          // Geometry Time
           const geometryTimeMatch = logContents.match(/Geometry Time: (\d+) ms/);
           if (geometryTimeMatch) geometryTimeMs = geometryTimeMatch[1];
-
-          // Total Time
           const totalTimeMatch = logContents.match(/Total Time: (\d+) ms/);
           if (totalTimeMatch) totalTimeMs = totalTimeMatch[1];
-
-          // Geometry Memory
           const geomMemMatch = logContents.match(/Geometry Memory: ([\d.]+) MB/);
           if (geomMemMatch) geometryMemoryMb = geomMemMatch[1];
-
-          // RSS
           const rssMatch = logContents.match(/RSS ([\d.]+) MB/);
           if (rssMatch) rssMb = rssMatch[1];
-
-          // Heap Used
           const heapUsedMatch = logContents.match(/Heap Used: ([\d.]+) MB/);
           if (heapUsedMatch) heapUsedMb = heapUsedMatch[1];
-
-          // Heap Total
           const heapTotalMatch = logContents.match(/Heap Total: ([\d.]+) MB/);
           if (heapTotalMatch) heapTotalMb = heapTotalMatch[1];
-
-          // schemaVersion
           const schemaVersionMatch = logContents.match(/Version: (IFC[^\s]+)/);
-          if (schemaVersionMatch) schemaVersion = schemaVersionMatch[1].substring(0, schemaVersionMatch[1].length - 1);
-
-          // Preprocessor Version
+          if (schemaVersionMatch) schemaVersion = schemaVersionMatch[1].slice(0, -1);
           const ppVersionMatch = logContents.match(/Preprocessor Version: '([^']+)'/);
           if (ppVersionMatch) preprocessorVersion = ppVersionMatch[1];
-
-          // Originating System
           const originMatch = logContents.match(/Originating System: '([^']+)'/);
           if (originMatch) originatingSystem = originMatch[1];
         }
       } else {
-        // web-ifc approach:
-        // grep -E '(Total Time|web-ifc memory)' and parse
-        // totalTimeMs -> /Total Time: (\d+) ms/
         const totalTimeMatch = logContents.match(/Total Time: (\d+) ms/);
         if (totalTimeMatch) totalTimeMs = totalTimeMatch[1];
-
-        // geometryMemoryMb -> /Geometry Memory: (\d+) MB/
         const geomMemMatch = logContents.match(/Geometry Memory: ([\d.]+) MB/);
         if (geomMemMatch) geometryMemoryMb = geomMemMatch[1];
-
-        // rssMb -> /RSS ([\d.]+) MB/
         const rssMatch = logContents.match(/RSS ([\d.]+) MB/);
         if (rssMatch) rssMb = rssMatch[1];
-
-        // heapUsedMb -> /Heap Used: ([\d.]+) MB/
         const heapUsedMatch = logContents.match(/Heap Used: ([\d.]+) MB/);
         if (heapUsedMatch) heapUsedMb = heapUsedMatch[1];
-
-        // heapTotalMb -> /Heap Total: ([\d.]+) MB/
         const heapTotalMatch = logContents.match(/Heap Total: ([\d.]+) MB/);
         if (heapTotalMatch) heapTotalMb = heapTotalMatch[1];
-
-        // For web-ifc, parseTimeMs = geometryTimeMs = preprocessorVersion = originatingSystem = '0' or 'N/A'
         parseTimeMs = 0;
         geometryTimeMs = 0;
         preprocessorVersion = 0;
         originatingSystem = 0;
       }
 
-      // Write CSV
       const line = [
         timestamp,
         loadStatus,
@@ -467,23 +388,29 @@ async function main() {
         preprocessorVersion,
         originatingSystem
       ].join(',');
-
-
       appendLineToFile(newResults, line);
-    } else {
-      // If fail
-      const timestamp = new Date()
-        .toISOString()
-        .replace(/[-:T]/g, '')
-        .split('.')[0];
-      const unameVal = os.arch();
 
+      // --- RECORD THE HTML ENTRY ---
+      if (fs.existsSync(outputPng)) {
+        // Compute a relative path from outputDir to the image.
+        const relImagePath = path.relative(outputDir, outputPng);
+        // Compute the IFC file path relative to the modelDir so that the "ifc/" folder is included.
+        const relativeIfcPath = path.relative(modelDir, filePath).split(path.sep).join('/');
+        console.log(`modelDir: ${modelDir}\nfilePath: ${filePath}\nrelativeIfcPath: ${relativeIfcPath}`);
+        // Link format: https://bldrs.ai/share/v/gh/bldrs-ai/<modelDirName>/main/<relative-ifc-path>
+        const link = `https://bldrs.ai/share/v/gh/bldrs-ai/${modelDirName}/main/${relativeIfcPath}`;
+        console.log(`link: ${link}`);
+        htmlEntries.push({ ifcFullPath: filePath, image: relImagePath, link });
+      }
+    } else {
+      const timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
+      const unameVal = os.arch();
       allStatus = 'fail';
       const failLine = `${timestamp},FAIL,${unameVal},N/A,${baseFilename},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A`;
       appendLineToFile(newResults, failLine);
     }
 
-    // Kill the server
+    // Kill the server.
     if (serverChild && serverChild.pid) {
       try {
         process.kill(serverChild.pid);
@@ -491,8 +418,6 @@ async function main() {
         // ignore
       }
     }
-
-    // Wait a bit
     await sleep(2);
   }
 
@@ -500,16 +425,14 @@ async function main() {
   const deltaTimeSec = ((endTime - startTime) / 1000).toFixed(2);
   appendLineToFile(basicStatsFilename, `${allStatus}, ${deltaTimeSec}s, ALL_FILES`);
 
-  // Attempt to do the delta with old results
+  // Delta CSV generation (if applicable).
   let oldVersion = '';
   try {
     if (isEngineConway) {
-      // Using the GitHub registry
       oldVersion = execSync(
-        `npm show @bldrs-ai/conway version --registry=https://npm.pkg.github.com/`,
+        `npm show @bldrs-ai/conway version`,
         { stdio: ['pipe','pipe','ignore'] }
       ).toString().trim();
-      // Decrement minor (like old script). Example: 0.1.560 => 0.0.560
       const parts = oldVersion.split('.');
       if (parts.length === 3) {
         const minor = parseInt(parts[1], 10);
@@ -518,18 +441,14 @@ async function main() {
       }
     }
   } catch (e) {
-    // fallback
     console.warn('Could not fetch oldVersion from npm show. Skipping delta generation.', e);
   }
 
   if (oldVersion && isEngineConway) {
-    // e.g. conway + oldVersion + _ + modelDirName
     const oldResultsFileName = `conway${oldVersion}_${modelDirName}/performance-detail.csv`;
     const oldResultsPath = path.join(outputBase, oldResultsFileName);
-
     const newVersionOnly = engineVersion || 'unknown';
     const deltaOutputPath = path.join(outputDir, `conway${newVersionOnly}_${oldVersion}_delta.csv`);
-
     if (fs.existsSync(oldResultsPath)) {
       console.log(`Generating delta file: ${deltaOutputPath}`);
       try {
@@ -544,9 +463,48 @@ async function main() {
   } else if (!isEngineConway) {
     console.log("Web-ifc mode, skipping the oldVersion delta logic.");
   }
+
+  // --- GENERATE THE HTML REPORT ---
+  const htmlFile = path.join(outputDir, "index.html");
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IFC Rendered Images</title>
+  <style>
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    img { max-width: 300px; max-height: 300px; }
+  </style>
+</head>
+<body>
+  <h1>Conway version: ${engineVersion}</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>Full IFC File Path</th>
+        <th>Image</th>
+        <th>Link</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${htmlEntries.map(entry => `
+        <tr>
+          <td>${entry.ifcFullPath}</td>
+          <td><img src="${entry.image}" alt="${entry.ifcFullPath}"></td>
+          <td><a href="${entry.link}" target="_blank">View on bldrs.ai</a></td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+</body>
+</html>
+  `;
+  fs.writeFileSync(htmlFile, htmlContent, 'utf8');
+  console.log(`HTML report generated at: ${htmlFile}`);
 }
 
-// Start
 main().catch((err) => {
   console.error(err);
   process.exit(1);
