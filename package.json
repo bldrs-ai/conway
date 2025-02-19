@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.9.797",
+  "version": "0.10.798",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -34,6 +34,7 @@
     "build-web-MT": "yarn clean && yarn update-version && yarn build-all-release-web-MT",
     "build-node-MT": "yarn clean && yarn update-version && yarn build-all-release-node-MT",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "cli": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js",
     "browser": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/examples/browser.js",
     "validator": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/examples/validator.js",
     "extract-wasm-dependencies": "node ./scripts/extract-wasm-dependencies.cjs",
