@@ -2,7 +2,7 @@
 
 /**
  * Usage:
- *    node benchmark.js /path/to/headless_three /path/to/model_directory [useWebIfc]
+ *    node benchmark.js /path/to/headless_three /path/to/model_directory [useWebIfc | singleThread]
  *
  * Environment variables:
  *    EXCLUDE_FILENAMES   list of file names to skip, e.g. 'foo.ifc bar.ifc'
@@ -131,12 +131,15 @@ async function main() {
   let isEngineConway = true;
   let engineSuffix = "";
   if (thirdArg) {
-    if (thirdArg !== "useWebIfc") {
-      console.error("Error: unknown engine command (to use conway leave blank or pass 'useWebIfc').");
+    if (thirdArg === "useWebIfc") {
+      isEngineConway = false;
+      engineSuffix = "-webifc";
+    } else if (thirdArg === "singleThread") {
+      engineSuffix = "-single-thread"
+    } else {
+      console.error("Error: unknown engine command: can pass useWebIfc or singleThread for Conway single threaded mode.");
       usageAndExit();
     }
-    isEngineConway = false;
-    engineSuffix = "-webifc";
   }
 
   const excludeFilenamesEnv = process.env.EXCLUDE_FILENAMES || "";
@@ -173,16 +176,24 @@ async function main() {
     try {
       const yarnListOutput = execSync(
         `yarn list --pattern web-ifc --json`,
-        { cwd: serverDir, stdio: ['pipe','pipe','pipe'] }
+        { cwd: serverDir, stdio: ['pipe', 'pipe', 'pipe'] }
       ).toString();
-      const matchedLines = yarnListOutput
-        .split(/\r?\n/)
-        .filter((line) => line.includes('web-ifc@'));
-      if (matchedLines.length > 0) {
-        const jsonLine = JSON.parse(matchedLines[0]);
-        const name = jsonLine.data.name; // e.g., "web-ifc@0.0.45"
-        const parts = name.split('@');
-        engineVersion = parts[1] || '';
+      
+      // Split the output into lines and get the last non-empty line.
+      const lines = yarnListOutput.trim().split(/\r?\n/);
+      const lastLine = lines[lines.length - 1];
+      const parsedOutput = JSON.parse(lastLine);
+      
+      // Ensure the output is the dependency tree.
+      if (parsedOutput.type === 'tree' && parsedOutput.data && parsedOutput.data.trees) {
+        // Find the entry whose name starts with "web-ifc@".
+        const webIfcEntry = parsedOutput.data.trees.find(entry =>
+          entry.name.startsWith('web-ifc@')
+        );
+        if (webIfcEntry) {
+          const parts = webIfcEntry.name.split('@');
+          engineVersion = parts[1] || '';
+        }
       }
     } catch (e) {
       console.error('Failed to get web-ifc version from yarn list. Using fallback "unknown".', e);
@@ -190,7 +201,10 @@ async function main() {
     }
   }
 
-  const engineStr = (isEngineConway ? 'conway' : 'webifc') + (engineVersion ? engineVersion : '');
+  const engineStr =
+  (isEngineConway ? 'conway' : 'webifc') +
+  (engineVersion ? engineVersion : '') +
+  (engineSuffix === "-single-thread" ? engineSuffix : "");
 
   // Extract the model directory’s base name (used in the share link)
   const modelDirName = path.basename(modelDir);
@@ -210,7 +224,7 @@ async function main() {
   const basicStatsFilename = path.join(outputDir, 'performance.csv');
   const newResults = path.join(outputDir, 'performance-detail.csv');
   const errorLogFile = path.join(outputDir, 'performance.err.txt');
-  const tempServerOutputFile = path.join(outputDir, '00_rendering-server.log.txt');
+  const tempServerOutputFile = path.join(outputDir, '00-rendering-server.log.txt');
 
   fs.writeFileSync(
     newResults,
@@ -263,7 +277,7 @@ async function main() {
 
     // Start the server.
     const serverCmd = `yarn serve${engineSuffix}`;
-    const serverChild = spawn(serverCmd, { cwd: serverDir, shell: true });
+    const serverChild = spawn(serverCmd, { cwd: serverDir, shell: true, detached:true });
     const writeStream = fs.createWriteStream(tempServerOutputFile, { flags: 'w' });
     serverChild.stdout.pipe(writeStream);
     serverChild.stderr.pipe(writeStream);
@@ -413,7 +427,7 @@ async function main() {
     // Kill the server.
     if (serverChild && serverChild.pid) {
       try {
-        process.kill(serverChild.pid);
+        process.kill(-serverChild.pid);
       } catch (e) {
         // ignore
       }
