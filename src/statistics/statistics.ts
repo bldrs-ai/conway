@@ -1,4 +1,5 @@
 import { versionString } from '../version/version'
+import { wasmType } from '../../dependencies/conway-geom'
 
 /**
  * Class to compile a list of runtime statistics for models and memory
@@ -218,7 +219,7 @@ export class Statistics {
     console.log(
         `[${dateString}]: Load Status: ${this.loadStatus}, ` +
             `Project Name: ${this.projectName}, Version: ${versionStr}, ` +
-            `Conway Version: ${conwayVersionNumber}, ` +
+            `Conway Version: ${conwayVersionNumber}-${wasmType}, ` +
             `Parse Time: ${this.parseTime} ms, Geometry Time: ${this.geometryTime} ms, ` +
             `Total Time: ${this.totalTime} ms, ` +
             `Geometry Memory: ${this.geometryMemory?.toFixed(3)} MB, ` +

@@ -2,6 +2,7 @@ import { ParseBuffer } from '../../dependencies/conway-geom/interface/parse_buff
 import { Entity } from '../core/entity'
 import { EntityDescription, EntityFieldsDescription } from '../core/entity_description'
 import { EntityFieldDescription } from '../core/entity_field_description'
+import { WasmModule } from '../core/native_types'
 import {
   stepExtractArray,
   stepExtractBinary,
@@ -707,7 +708,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractParseBuffer(
       offset: number,
       result: ParseBuffer,
-      nativeBuffer: Uint8Array,
+      module: WasmModule,
       optional: boolean ): boolean {
 
     this.guaranteeVTable()
@@ -735,7 +736,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
     const dataPtr = result.resize( endCursor - cursor )
 
-    nativeBuffer.set( buffer.subarray( cursor, endCursor ), dataPtr )
+    module.HEAPU8.set( buffer.subarray( cursor, endCursor ), dataPtr )
 
     return true
   }
