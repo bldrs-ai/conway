@@ -836,13 +836,13 @@ export class IfcGeometryExtraction {
     const faceParseBuffer  = conwayModel.nativeParseBuffer()
 
     if ( !entity.Coordinates.extractParseBuffer(
-        0, coordParseBuffer, this.wasmModule.HEAPU8, true ) ) {
+        0, coordParseBuffer, this.wasmModule, true ) ) {
 
       coordParseBuffer.resize( 0 )
     }
 
     if ( !entity.extractParseBuffer(
-        3, faceParseBuffer, this.wasmModule.HEAPU8, true ) ) {
+        3, faceParseBuffer, this.wasmModule, true ) ) {
 
       faceParseBuffer.resize( 0 )
     }
@@ -941,7 +941,7 @@ export class IfcGeometryExtraction {
     if ( !entity.Coordinates.extractParseBuffer(
         0,
         pointsParseBuffer,
-        this.wasmModule.HEAPU8,
+        this.wasmModule,
         true ) ) {
 
       pointsParseBuffer.resize( 0 )
@@ -3461,7 +3461,7 @@ export class IfcGeometryExtraction {
 
         try {
 
-          if ( !localSegment.extractParseBuffer( 0, parseBuffer, this.wasmModule.HEAPU8, true ) ) {
+          if ( !localSegment.extractParseBuffer( 0, parseBuffer, this.wasmModule, true ) ) {
 
             parseBuffer.resize( 0 )
           }
@@ -3495,7 +3495,7 @@ export class IfcGeometryExtraction {
 
     try {
 
-      if ( !fromPoints.extractParseBuffer( 0, parseBuffer, this.wasmModule.HEAPU8, true ) ) {
+      if ( !fromPoints.extractParseBuffer( 0, parseBuffer, this.wasmModule, true ) ) {
 
         parseBuffer.resize( 0 )
       }
@@ -4132,7 +4132,7 @@ export class IfcGeometryExtraction {
           const coordParseBuffer = conwayModel.nativeParseBuffer()
 
           if ( !innerBound.extractParseBuffer(
-              0, coordParseBuffer, this.wasmModule.HEAPU8, true ) ) {
+              0, coordParseBuffer, this.wasmModule, true ) ) {
 
             coordParseBuffer.resize( 0 )
           }
