@@ -479,44 +479,99 @@ async function main() {
   }
 
   // --- GENERATE THE HTML REPORT ---
-  const htmlFile = path.join(outputDir, "index.html");
-  const htmlContent = `
+const htmlFile = path.join(outputDir, "index.html");
+
+/**
+ * Extracts "test-models" or "test-models-private" + everything after,
+ * e.g. "/home/user/whatever/test-models/ifc/file.ifc" -> "test-models/ifc/file.ifc".
+ * Returns null if neither is found.
+ */
+function truncateBeforeTestModels(fullPath) {
+  const re = /(test-models(?:-private)?)(.*)/;
+  const match = fullPath.match(re);
+  if (!match) return null;  // Did not find "test-models" or "test-models-private"
+  const repo = match[1];    // e.g. "test-models" or "test-models-private"
+  let subPath = match[2];   // e.g. "/ifc/file.ifc"
+  // Remove leading slashes
+  subPath = subPath.replace(/^[/\\]+/, '');
+  return { repo, subPath };
+}
+
+let htmlContent = `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>IFC Rendered Images</title>
-  <style>
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-    img { max-width: 300px; max-height: 300px; }
+  <style type="text/css">
+    body { font-family: Verdana, Arial, sans-serif; }
+    table { border-collapse: collapse; margin: 0 auto; }
+    th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
+    img { max-width: 600px; max-height: 600px; }
   </style>
 </head>
-<body>
-  <h1>Conway version: ${engineVersion}</h1>
+<body style="text-align: center">
+  <h1>Conway ${engineVersion}</h1>
+  <p><a href="https://bldrs.ai">https://bldrs.ai</a></p>
+  <p><a href="https://github.com/bldrs-ai/conway/pulls">https://github.com/bldrs-ai/conway</a></p>
+  <p><a href="https://www.npmjs.com/package/@bldrs-ai/conway">https://www.npmjs.com/package/@bldrs-ai/conway</a></p>
   <table>
     <thead>
       <tr>
-        <th>Full IFC File Path</th>
-        <th>Image</th>
-        <th>Link</th>
+        <th>Model</th>
+        <th>Panorama &amp; Mid-plane</th>
       </tr>
     </thead>
     <tbody>
-      ${htmlEntries.map(entry => `
-        <tr>
-          <td>${entry.ifcFullPath}</td>
-          <td><img src="${entry.image}" alt="${entry.ifcFullPath}"></td>
-          <td><a href="${entry.link}" target="_blank">View on bldrs.ai</a></td>
-        </tr>
-      `).join('')}
+`;
+
+for (const entry of htmlEntries) {
+  // entry.ifcFullPath = full path to IFC file
+  // entry.image       = relative path to the local PNG
+  // entry.link        = "https://bldrs.ai/share/v/gh/bldrs-ai/<repo>/main/<ifcPath>"
+
+  // Truncate the portion before test-models or test-models-private.
+  // This will give us something like:  test-models/ifc/Foo.ifc
+  const truncated = truncateBeforeTestModels(entry.ifcFullPath);
+
+  // If we did not find test-models( or private ), just use the full path as fallback.
+  let modelCellText = entry.ifcFullPath;
+  let rawImageUrl = entry.image; // By default, your local screenshot path.
+  let modelLink = entry.link;    // By default, the share link you generated.
+
+  if (truncated) {
+    const { repo, subPath } = truncated;
+    // Construct a share link to bldrs.ai (which you already have in entry.link).
+    // If you need a raw GitHub link for the image, you can do something like:
+    // rawImageUrl = `https://raw.githubusercontent.com/bldrs-ai/${repo}/refs/heads/main/${subPath}-fit.png`
+    // But only do this if you actually want to serve the images from GitHub,
+    // rather than from your local benchmark output directory.
+
+    // For the cell text, "repo/subPath" will look like "test-models/ifc/Foo.ifc".
+    modelCellText = `${repo}/${subPath}`;
+  }
+
+  htmlContent += `
+      <tr>
+        <td>
+          <a href="${modelLink}" target="_blank">${modelCellText}</a>
+        </td>
+        <td>
+          <img src="${rawImageUrl}" alt="${modelCellText}">
+        </td>
+      </tr>
+  `;
+}
+
+htmlContent += `
     </tbody>
   </table>
 </body>
 </html>
-  `;
-  fs.writeFileSync(htmlFile, htmlContent, 'utf8');
-  console.log(`HTML report generated at: ${htmlFile}`);
+`;
+
+fs.writeFileSync(htmlFile, htmlContent, 'utf8');
+console.log(`HTML report generated at: ${htmlFile}`);
 }
 
 main().catch((err) => {
