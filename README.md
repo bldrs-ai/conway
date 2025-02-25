@@ -151,7 +151,7 @@ git merge -X rename-threshold=25 --no-commit
 
 # Regression Testing Framework
 
-Conway also has a regression testing framework, which can be run on individual model files in a digest or verbose mode, or as a large batch across several models at the same time. For more details see the [documentation](regression/README.MD).
+Conway also has a regression testing framework, which can be run on individual model files in a digest or verbose mode, or as a large batch across several models at the same time. For more details see the [documentation](regression/README.md).
 
 
 # Release Steps
