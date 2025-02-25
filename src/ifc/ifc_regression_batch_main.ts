@@ -12,38 +12,70 @@ import pLimit from 'p-limit'
 const errorCSVHeader = 'message,count,expressids,file'
 const exec = promisify( childProcess.exec )
 
+/* eslint-disable require-await */
 /**
- * Safe execute a process command
+ * Safe execute a process command with cancellation support.
  *
- * @param command The command to run
- * @return {ExecException | { type: 'Success', stdout: string, stderr: string }}
+ * @param command The command to run.
+ * @param timeoutMs Number of milliseconds to wait before timing out.
+ * @return {Promise<RunErrorResults | { type: 'Success', stdout: string, stderr: string }>}
  */
-async function safeExec( command: string ):
-  Promise< RunErrorResults | { type: 'Success', stdout: string, stderr: string } > {
+async function safeExecWithCancellation(
+    command: string,
+    timeoutMs: number,
+): Promise<
+  | RunErrorResults
+  | { type: 'Success'; stdout: string; stderr: string }
+> {
+  return new Promise((resolve) => {
+    // Start the child process using childProcess.exec
+    const child = childProcess.exec(
+        command,
+        { maxBuffer: STD_OUT_ERR_MAX_BUFFER },
+        (err, stdout, stderr) => {
+        // If the process finishes before the timeout, clear the timer...
+          clearTimeout(timeoutHandle)
+          if (err) {
+            const errResult = err as ExecException
+            resolve({
+              type: 'Failed',
+              name: errResult.name,
+              message: errResult.message,
+              code: errResult.code,
+              cmd: errResult.cmd,
+              signal: errResult.signal,
+              killed: errResult.killed,
+            })
+          } else {
+            resolve({
+              type: 'Success',
+              stdout,
+              stderr,
+            })
+          }
+        },
+    )
 
-  try {
-    const result = await exec( command, { maxBuffer: STD_OUT_ERR_MAX_BUFFER } )
+    // Set up the timeout promise.
+    const timeoutHandle = setTimeout(() => {
+      // Timeout occurred: kill the child process.
+      child.kill()
+      resolve({
+        type: 'Failed',
+        name: 'TimeoutError',
+        message: 'Execution timed out',
+        cmd: command,
+        killed: true,
+      })
+    }, timeoutMs)
 
-    return {
-      type: 'Success',
-      stdout: result.stdout,
-      stderr: result.stderr,
-    }
-  } catch ( err ) {
-
-    const errResult = err as ExecException
-
-    return {
-      type: 'Failed',
-      name: errResult.name,
-      message: errResult.message,
-      code: errResult.code,
-      cmd: errResult.cmd,
-      signal: errResult.signal,
-      killed: errResult.killed,
-    }
-  }
+    // When the child exits naturally, clear the timeout.
+    child.on('exit', () => {
+      clearTimeout(timeoutHandle)
+    })
+  })
 }
+/* eslint-enable require-await */
 
 const SKIP_PARAMS = 2
 
@@ -163,8 +195,7 @@ let totalTime = 0 // To keep track of the running total time
 /**
  * Run a regression test digest for a file.
  */
-async function runForFile( filePath: string, outputPath: string ): Promise< RunResults > {
-
+async function runForFile(filePath: string, outputPath: string): Promise<RunResults> {
   const MAX_TIMEOUT_MS = 180000 // 3 minutes
   const startTime = Date.now() // Start time
 
@@ -173,22 +204,10 @@ async function runForFile( filePath: string, outputPath: string ): Promise< RunR
 
   console.log(`Current File: ${filePath}`)
 
-  const processPromise = safeExec(safeExecCommand)
-
-  const timeoutPromise: Promise<RunErrorResults> = new Promise((resolve) =>
-    setTimeout(() => {
-      resolve({
-        type: 'Failed',
-        message: 'Execution timed out',
-        name: '',
-      })
-    }, MAX_TIMEOUT_MS),
-  )
-
-  const process = await Promise.race([processPromise, timeoutPromise])
+  // Use safeExecWithCancellation, will kill the process if it takes longer than MAX_TIMEOUT_MS.
+  const process = await safeExecWithCancellation(safeExecCommand, MAX_TIMEOUT_MS)
 
   totalTime += Date.now() - startTime
-
   console.log(`totalTime: ${totalTime}`)
 
   if (process.type === 'Failed') {
@@ -199,7 +218,6 @@ async function runForFile( filePath: string, outputPath: string ): Promise< RunR
   }
 
   const stdErr = process.stderr.replaceAll('\r', '')
-
   let errorLines = stdErr.split('\n').filter((line) => line.length > 0)
   errorLines = errorLines.map((line) => `${line}\n`)
 
@@ -213,7 +231,6 @@ async function runForFile( filePath: string, outputPath: string ): Promise< RunR
   const outputFile = path.basename(outputPath)
 
   let fileHash: string | undefined
-
   const outputCSV = `${outputPath}.csv`
   if (fs.existsSync(outputCSV)) {
     fileHash = crypto
@@ -510,9 +527,6 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const overallEnd = Date.now()
           const totalSec = ((overallEnd - overallStart) / divisor).toFixed(fixedPoint)
           console.log(`\nAll tasks completed. Total runtime: ${totalSec} seconds.`)
-
-          // TODO(@nickcastel50) - figure out why this hangs at the end sometimes
-          process.exit(0)
         },
     )
     .help().argv
