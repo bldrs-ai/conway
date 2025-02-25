@@ -267,6 +267,22 @@ async function collectIFCFiles(
 }
 
 /**
+ * @return {number} percentage of memory used on machine
+ */
+function getSystemMemoryUsagePercent(): number {
+  const total = os.totalmem()  // total system memory in bytes
+  const free = os.freemem()    // free system memory in bytes
+  const used = total - free
+  /* eslint-disable no-magic-numbers */
+  console.log(`total: 
+    ${total / 1000 / 1000 / 1000} GB - used: 
+    ${used / 1000 / 1000 / 1000} GB - free: 
+    ${free / 1000 / 1000 / 1000} GB`)
+  return (used / total) * 100
+  /* eslint-enable no-magic-numbers */
+}
+
+/**
  * Parallel processing, using p-limit to limit concurrency to number of CPU cores.
  */
 async function processIFCFilesInParallel(
@@ -276,24 +292,42 @@ async function processIFCFilesInParallel(
     fileLines: string[],
     failedLines: string[],
 ): Promise<void> {
-  // Limit concurrency to the number of CPU cores:
   const concurrencyLimit = os.cpus().length
+  console.log(`concurrencyLimit: ${concurrencyLimit}`)
   const limit = pLimit(concurrencyLimit)
+  const percentLimit = 95
+  const taskTimeout = 2000
+  let activeTasks = 0
 
-  // Process all IFC files in parallel with concurrency-limit
-  const results = await Promise.all(
-      ifcFiles.map((ifcPath) =>
-        limit(async () => {
-          const fileResults = await runForFile(
-              ifcPath,
-              path.join(outputPath, path.basename(ifcPath, '.ifc')),
-          )
-          return { ifcPath, fileResults }
-        }),
-      ),
+  // Create an array of task promises using map (without awaiting immediately)
+  const tasks = ifcFiles.map((ifcPath) =>
+    limit(async () => {
+      // Wait if system memory usage is above 95%
+      while (getSystemMemoryUsagePercent() > percentLimit) {
+        console.log('Memory usage > 95%, waiting 2s...')
+        await new Promise((resolve) => setTimeout(resolve, taskTimeout))
+      }
+
+      activeTasks++
+      console.log(
+          `Starting task for "${path.basename(ifcPath)}". Active tasks: ${activeTasks}`,
+      )
+      const fileResults = await runForFile(
+          ifcPath,
+          path.join(outputPath, path.basename(ifcPath, '.ifc')),
+      )
+      activeTasks--
+      console.log(
+          `Completed task for "${path.basename(ifcPath)}". Active tasks: ${activeTasks}`,
+      )
+      return { ifcPath, fileResults }
+    }),
   )
 
-  // Aggregate the results
+  // Wait for all tasks to complete in parallel
+  const results: { ifcPath: string; fileResults: RunResults }[] = await Promise.all(tasks)
+
+  // Aggregate results
   for (const { ifcPath, fileResults } of results) {
     if (fileResults.type === 'Run') {
       if (fileResults.errorLines) {
@@ -418,6 +452,8 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           })
         },
         async (argv) => {
+          // ---- New: record overall start time
+          const overallStart = Date.now()
           const ifcFolder = argv['model_folder'] as string
           const outputPath = argv['output_folder'] as string
           let changes = (argv['changes'] as string) ?? ''
@@ -468,6 +504,13 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
 
           // If user wants a git diff
           await runDiff(ifcFolder, outputPath, target, changes, dryRun)
+
+          // ---- New: log total runtime
+          const divisor = 1000
+          const fixedPoint = 2
+          const overallEnd = Date.now()
+          const totalSec = ((overallEnd - overallStart) / divisor).toFixed(fixedPoint)
+          console.log(`\nAll tasks completed. Total runtime: ${totalSec} seconds.`)
 
           // TODO(@nickcastel50) - figure out why this hangs at the end sometimes
           process.exit(0)
