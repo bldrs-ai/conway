@@ -274,10 +274,9 @@ function getSystemMemoryUsagePercent(): number {
   const free = os.freemem()    // free system memory in bytes
   const used = total - free
   /* eslint-disable no-magic-numbers */
-  console.log(`total: 
-    ${total / 1000 / 1000 / 1000} GB - used: 
-    ${used / 1000 / 1000 / 1000} GB - free: 
-    ${free / 1000 / 1000 / 1000} GB`)
+  console.log(`total: ${total / 1000 / 1000 / 1000} GB - ` +
+    `used: ${used / 1000 / 1000 / 1000} GB - ` +
+    `free: ${free / 1000 / 1000 / 1000} GB`)
   return (used / total) * 100
   /* eslint-enable no-magic-numbers */
 }
