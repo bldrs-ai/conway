@@ -230,10 +230,6 @@ async function runForFile( filePath: string, outputPath: string ): Promise< RunR
   }
 }
 
-
-// ---------------------------------------------------------
-// The new concurrency-related code:
-
 /**
  * Recursively collect all IFC file paths (instead of processing them immediately).
  */
@@ -318,7 +314,6 @@ async function processIFCFilesInParallel(
     }
   }
 }
-// ---------------------------------------------------------
 
 
 // The original recursive approach (unchanged, except it won't be used if -parallel is set)
