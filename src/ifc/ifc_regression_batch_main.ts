@@ -307,11 +307,12 @@ async function processIFCFilesInParallel(
     errorLines: string[],
     fileLines: string[],
     failedLines: string[],
+    memUtilization: number,
 ): Promise<void> {
   const concurrencyLimit = os.cpus().length
   console.log(`concurrencyLimit: ${concurrencyLimit}`)
+
   const limit = pLimit(concurrencyLimit)
-  const percentLimit = 95
   const taskTimeout = 2000
   let activeTasks = 0
 
@@ -319,8 +320,8 @@ async function processIFCFilesInParallel(
   const tasks = ifcFiles.map((ifcPath) =>
     limit(async () => {
       // Wait if system memory usage is above 95%
-      while (getSystemMemoryUsagePercent() > percentLimit) {
-        console.log('Memory usage > 95%, waiting 2s...')
+      while (getSystemMemoryUsagePercent() > memUtilization) {
+        console.log(`Memory usage > ${memUtilization}%, waiting 2s...`)
         await new Promise((resolve) => setTimeout(resolve, taskTimeout))
       }
 
@@ -449,12 +450,31 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
             alias: 'e',
             default: '',
           })
-          // New parallel argument
+
           yargs2.option('parallel', {
             describe: 'Process IFC files in parallel (limited by CPU cores)',
             type: 'boolean',
             alias: 'p',
             default: false,
+          })
+          // only relevant if parallel is enabled
+          yargs2.option('mem-utilization', {
+            // eslint-disable-next-line max-len
+            describe: 'Memory utilization threshold percentage for parallel processing (1-100, default: 95)',
+            type: 'number',
+            alias: 'm',
+            default: 95,
+          })
+          // Validate mem-utilization only if parallel mode is active
+          yargs2.check((argv) => {
+            if (argv.parallel) {
+              const memUtil = argv['mem-utilization']
+              // eslint-disable-next-line no-magic-numbers
+              if (typeof memUtil !== 'number' || memUtil < 1 || memUtil > 100) {
+                throw new Error('mem-utilization must be a number between 1 and 100')
+              }
+            }
+            return true
           })
 
           yargs2.positional('model_folder', {
@@ -477,6 +497,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const dryRun = (argv['dryrun'] as boolean) ?? false
           const excludeFilter = (argv['exclude'] as string) ?? ''
           const doParallel = (argv['parallel'] as boolean) ?? false // <--- read the parallel flag
+          const memUtilization = (argv['mem-utilization'] as number)
 
           if (changes.length === 0) {
             changes = path.join(outputPath, 'changes')
@@ -506,6 +527,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
                 errorLines,
                 fileLines,
                 failedLines,
+                memUtilization,
             )
           } else {
             console.log('Processing in serial mode...')
