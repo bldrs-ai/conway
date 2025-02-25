@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.12.802",
+  "version": "0.13.802",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -92,6 +92,7 @@
     "adm-zip": "^0.5.16",
     "buffer": "^6.0.3",
     "gl-matrix": "^3.4.3",
+    "p-limit": "^6.2.0",
     "seedrandom": "^3.0.5",
     "smart-buffer": "^4.2.0",
     "yargs": "^17.7.1"
