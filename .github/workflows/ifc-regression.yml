@@ -1,0 +1,77 @@
+name: IFC Regression Batch
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+env:
+  TEST_MODELS_TAG: '0.13.802'
+
+jobs:
+  run-ifc-regression:
+    # Use your GitHub managed large runner from the RegressionTesting group.
+    runs-on: [RegressionTesting, linux-x64]
+
+    steps:
+      # 1. Checkout the conway repository (your main repo)
+      - name: Checkout Conway Repo
+        uses: actions/checkout@v3
+
+      # 2. Install dependencies and build your project
+      - name: Install Dependencies and Build
+        run: |
+          yarn install
+          yarn build-node-MT
+          yarn build-incremental
+
+      # 3. Restore cached test-models repository (this will be at the workspace root)
+      - name: Restore Test Models Cache
+        id: cache-test-models
+        uses: actions/cache@v3
+        with:
+          path: test-models
+          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+
+      # 4. Clone test-models if not cached; it will be a top-level directory called "test-models"
+      - name: Checkout Test Models Repo if Not Cached
+        if: steps.cache-test-models.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+
+      # 5. Run your IFC regression batch script from the conway repository root.
+      - name: Run IFC Regression Batch Script
+        run: |
+          node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
+            -e "sp-.*\.ifc" \
+            -t ${{ env.TEST_MODELS_TAG }} \
+            test-models \
+            test-models/regression/test_models \
+            --parallel --mem-utilization 90
+
+      # 6. Gather regression results from test-models/regression folder (only failed.csv)
+      - name: Gather Regression Results
+        id: regression_results
+        run: |
+          cd test-models/regression
+          if [ -f failed.csv ]; then
+            FAILED=$(cat failed.csv)
+          else
+            FAILED="No failed.csv found."
+          fi
+          echo "failed<<EOF" >> $GITHUB_OUTPUT
+          echo "$FAILED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 7. Post a comment on the pull request with the regression results
+      - name: Comment on Pull Request with Regression Results
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## IFC Regression Results
+            **Failed.csv:**  
+            ```
+            ${{ steps.regression_results.outputs.failed }}
+            ```
