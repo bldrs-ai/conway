@@ -109,19 +109,35 @@ jobs:
             test-models/regression/test_models \
             --parallel --mem-utilization 90
 
-      - name: Gather Regression Results
+        - name: Gather Regression Results
         id: regression_results
         run: |
           cd test-models/regression/test_models
+          # Process failed.csv: Check if it contains only the header.
           if [ -f failed.csv ]; then
-            FAILED=$(cat failed.csv)
+            HEADER="file,code,signal"
+            CONTENT=$(cat failed.csv | tr -d '\r\n')
+            if [ "$CONTENT" = "$HEADER" ]; then
+              FAILED="No failures :white_check_mark:"
+            else
+              FAILED=$(cat failed.csv)
+            fi
           else
             FAILED="No failed.csv found."
+          fi
+          # Process errors.csv.
+          if [ -f errors.csv ]; then
+            ERRORS=$(cat errors.csv)
+          else
+            ERRORS="No errors.csv found."
           fi
           echo "failed<<EOF" >> $GITHUB_OUTPUT
           echo "$FAILED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
+          echo "errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
       - name: Comment on Pull Request with Regression Results
         if: ${{ github.event_name == 'pull_request' }}
         uses: peter-evans/create-or-update-comment@v2
@@ -134,3 +150,8 @@ jobs:
             ```
             ${{ steps.regression_results.outputs.failed }}
             ```
+            **Errors.csv:**  
+            ```
+            ${{ steps.regression_results.outputs.errors }}
+            ```
+      
