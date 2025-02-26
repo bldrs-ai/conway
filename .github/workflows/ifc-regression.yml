@@ -112,7 +112,7 @@ jobs:
       - name: Gather Regression Results
         id: regression_results
         run: |
-          cd test-models/regression/test-models
+          cd test-models/regression/test_models
           if [ -f failed.csv ]; then
             FAILED=$(cat failed.csv)
           else
