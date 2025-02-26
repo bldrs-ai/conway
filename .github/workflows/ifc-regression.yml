@@ -22,8 +22,7 @@ jobs:
         run: |
           yarn setup
           yarn install
-          yarn build-node-MT
-          yarn build-incremental
+          yarn build-all-release-node-MT
 
       # 3. Restore cached test-models repository (this will be at the workspace root)
       - name: Restore Test Models Cache
