@@ -22,7 +22,8 @@ jobs:
         run: |
           yarn setup
           yarn install
-          yarn build-all-release-node-MT
+          yarn build-conway_geom-web-MT:darwin
+          yarn build-incremental
 
       # 3. Restore cached test-models repository (this will be at the workspace root)
       - name: Restore Test Models Cache
