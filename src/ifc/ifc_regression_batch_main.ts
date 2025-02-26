@@ -312,7 +312,7 @@ async function processIFCFilesInParallel(
     maxTimeout:number,
 ): Promise<void> {
   const concurrencyLimit = os.cpus().length
-  console.log(`concurrencyLimit: ${concurrencyLimit}`)
+  console.log(`Concurrency: ${concurrencyLimit} threads - Max Timeout: ${maxTimeout} ms`)
 
   const limit = pLimit(concurrencyLimit)
   const taskTimeout = 2000
@@ -458,14 +458,6 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
             default: '',
           })
 
-          yargs2.option('timeout', {
-
-            describe: 'IFC per-file loading timeout in ms (default: 150000)',
-            type: 'number',
-            alias: 'm',
-            default: 150000,
-          })
-
           yargs2.option('parallel', {
             describe: 'Process IFC files in parallel (limited by CPU cores)',
             type: 'boolean',
@@ -490,6 +482,14 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
               }
             }
             return true
+          })
+
+          yargs2.option('timeout', {
+
+            describe: 'IFC per-file loading timeout in ms (default: 150000)',
+            type: 'number',
+            alias: 'timeout',
+            default: 150000,
           })
 
           yargs2.positional('model_folder', {
