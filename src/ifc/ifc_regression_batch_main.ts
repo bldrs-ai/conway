@@ -196,7 +196,7 @@ let totalTime = 0 // To keep track of the running total time
  * Run a regression test digest for a file.
  */
 async function runForFile(filePath: string, outputPath: string): Promise<RunResults> {
-  const MAX_TIMEOUT_MS = 180000 // 3 minutes
+  const MAX_TIMEOUT_MS = 150000 // 2.5 minutes
   const startTime = Date.now() // Start time
 
   // eslint-disable-next-line max-len
