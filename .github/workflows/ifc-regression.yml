@@ -53,12 +53,6 @@ jobs:
           path: bin/linux/genie
           key: genie-${{ runner.os }}
 
-      - name: Generate Makefiles with GENie
-        run: |
-          cd dependencies/conway-geom
-          chmod +x ../../bin/linux/genie
-          ../../bin/linux/genie gmake
-
       # --- EMSDK Setup ---
       - name: Enable Emscripten System Library Cache
         id: emscripten-cache
