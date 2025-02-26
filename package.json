@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.13.811",
+  "version": "0.13.817",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -33,6 +33,7 @@
     "build-node": "yarn clean && yarn update-version && yarn build-all-release-node",
     "build-web-MT": "yarn clean && yarn update-version && yarn build-all-release-web-MT",
     "build-node-MT": "yarn clean && yarn update-version && yarn build-all-release-node-MT",
+    "build-GHA-MT": "cd dependencies/conway-geom/gmake && make config=releaseemscripten ConwayGeomWasmNode && cd .. && mkdir -p Dist && cp ./bin/release/* Dist/ && cp ConwayGeomWasm.d.ts Dist/ && mkdir -p ../../compiled/dependencies/conway-geom/Dist && cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist && cd ../.../ && yarn build-incremental",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "cli": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js",
     "browser": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/examples/browser.js",
