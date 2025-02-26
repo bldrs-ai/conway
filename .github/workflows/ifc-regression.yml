@@ -6,10 +6,12 @@ on:
 
 env:
   TEST_MODELS_TAG: '0.13.802'
+  EMSDK_VERSION: '3.1.72'
+  EMSDK_CACHE_FOLDER: 'cache/emsdk'
 
 jobs:
   run-ifc-regression:
-    # Use your GitHub managed large runner from the RegressionTesting group.
+    # This job uses your GitHub-managed large runner from the RegressionTesting group.
     runs-on: RegressionTesting
 
     steps:
@@ -17,7 +19,73 @@ jobs:
       - name: Checkout Conway Repo
         uses: actions/checkout@v3
 
-      # 2. Install dependencies and build your project
+      # --- GENie Setup ---
+      - name: Restore Cached GENie Build Artifact
+        id: cache-genie-restore
+        uses: actions/cache/restore@v3
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      - name: Checkout GENie Repository
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: bkaradzic/GENie
+          path: GENie
+
+      - name: Build GENie
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        run: |
+          cd GENie
+          make
+
+      - name: Copy GENie Binary
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p bin/linux
+          cp GENie/bin/linux/genie bin/linux/genie
+
+      - name: Cache GENie Build Artifact
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      - name: Generate Makefiles with GENie
+        run: |
+          chmod +x bin/linux/genie
+          bin/linux/genie gmake
+
+      # --- EMSDK Setup ---
+      - name: Enable Emscripten System Library Cache
+        id: emscripten-cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.EMSDK_CACHE_FOLDER }}
+          key: ${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten
+        id: emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
+
+      - name: Add emsdk to env
+        run: |
+          echo 'which em++:'
+          which em++
+          em++ -v
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "emsdk: $EMSDK"
+          echo "emscripten bin dir: $EMSCRIPTEN"
+          echo "EMSDK=$EMSDK" >> $GITHUB_ENV
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> $GITHUB_ENV
+
+      # --- Build Conway Project ---
       - name: Install Dependencies and Build
         run: |
           yarn setup
@@ -25,7 +93,7 @@ jobs:
           yarn build-conway_geom-web-MT:darwin
           yarn build-incremental
 
-      # 3. Restore cached test-models repository (this will be at the workspace root)
+      # --- Test Models Checkout & Regression ---
       - name: Restore Test Models Cache
         id: cache-test-models
         uses: actions/cache@v3
@@ -33,13 +101,11 @@ jobs:
           path: test-models
           key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
 
-      # 4. Clone test-models if not cached; it will be a top-level directory called "test-models"
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
 
-      # 5. Run your IFC regression batch script from the conway repository root.
       - name: Run IFC Regression Batch Script
         run: |
           node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
@@ -49,7 +115,6 @@ jobs:
             test-models/regression/test_models \
             --parallel --mem-utilization 90
 
-      # 6. Gather regression results from test-models/regression folder (only failed.csv)
       - name: Gather Regression Results
         id: regression_results
         run: |
@@ -63,7 +128,6 @@ jobs:
           echo "$FAILED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # 7. Post a comment on the pull request with the regression results
       - name: Comment on Pull Request with Regression Results
         if: ${{ github.event_name == 'pull_request' }}
         uses: peter-evans/create-or-update-comment@v2
