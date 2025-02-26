@@ -109,7 +109,7 @@ jobs:
             test-models/regression/test_models \
             --parallel --mem-utilization 90
 
-        - name: Gather Regression Results
+      - name: Gather Regression Results
         id: regression_results
         run: |
           cd test-models/regression/test_models
@@ -154,4 +154,4 @@ jobs:
             ```
             ${{ steps.regression_results.outputs.errors }}
             ```
-      
+    
