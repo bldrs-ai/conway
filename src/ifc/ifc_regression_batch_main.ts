@@ -195,8 +195,9 @@ let totalTime = 0 // To keep track of the running total time
 /**
  * Run a regression test digest for a file.
  */
-async function runForFile(filePath: string, outputPath: string): Promise<RunResults> {
-  const MAX_TIMEOUT_MS = 180000 // 3 minutes
+async function runForFile(filePath: string,
+    outputPath: string, maxTimeout:number): Promise<RunResults> {
+  const MAX_TIMEOUT_MS = maxTimeout
   const startTime = Date.now() // Start time
 
   // eslint-disable-next-line max-len
@@ -308,9 +309,10 @@ async function processIFCFilesInParallel(
     fileLines: string[],
     failedLines: string[],
     memUtilization: number,
+    maxTimeout:number,
 ): Promise<void> {
   const concurrencyLimit = os.cpus().length
-  console.log(`concurrencyLimit: ${concurrencyLimit}`)
+  console.log(`Concurrency: ${concurrencyLimit} threads - Max Timeout: ${maxTimeout} ms`)
 
   const limit = pLimit(concurrencyLimit)
   const taskTimeout = 2000
@@ -332,7 +334,9 @@ async function processIFCFilesInParallel(
       const fileResults = await runForFile(
           ifcPath,
           path.join(outputPath, path.basename(ifcPath, '.ifc')),
+          maxTimeout,
       )
+
       activeTasks--
       console.log(
           `Completed task for "${path.basename(ifcPath)}". Active tasks: ${activeTasks}`,
@@ -378,6 +382,7 @@ async function recursiveWalk(
     errorLines: string[],
     fileLines: string[],
     failedLines: string[],
+    maxTimeout: number,
 ) {
   const items = await fsPromises.readdir(parentPath, { withFileTypes: true })
   items.sort((a, b) => (a.name > b.name ? 1 : -1))
@@ -390,11 +395,13 @@ async function recursiveWalk(
     }
 
     if (item.isDirectory()) {
-      await recursiveWalk(resolved, excludeRegex, outputPath, errorLines, fileLines, failedLines)
+      await recursiveWalk(resolved, excludeRegex, outputPath,
+          errorLines, fileLines, failedLines, maxTimeout)
     } else if (path.extname(resolved).toLowerCase() === '.ifc') {
       const fileResults = await runForFile(
           resolved,
           path.join(outputPath, path.basename(resolved, '.ifc')),
+          maxTimeout,
       )
 
       if (fileResults.type === 'Run') {
@@ -477,6 +484,14 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
             return true
           })
 
+          yargs2.option('timeout', {
+
+            describe: 'IFC per-file loading timeout in ms (default: 150000)',
+            type: 'number',
+            alias: 'timeout',
+            default: 150000,
+          })
+
           yargs2.positional('model_folder', {
             describe: 'Folder containing IFC files, recursively walked',
             type: 'string',
@@ -498,6 +513,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const excludeFilter = (argv['exclude'] as string) ?? ''
           const doParallel = (argv['parallel'] as boolean) ?? false // <--- read the parallel flag
           const memUtilization = (argv['mem-utilization'] as number)
+          const maxTimeout = (argv['timeout'] as number)
 
           if (changes.length === 0) {
             changes = path.join(outputPath, 'changes')
@@ -528,11 +544,12 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
                 fileLines,
                 failedLines,
                 memUtilization,
+                maxTimeout,
             )
           } else {
             console.log('Processing in serial mode...')
             // eslint-disable-next-line max-len
-            await recursiveWalk(ifcFolder, excludeRegex, outputPath, errorLines, fileLines, failedLines)
+            await recursiveWalk(ifcFolder, excludeRegex, outputPath, errorLines, fileLines, failedLines, maxTimeout)
           }
 
           // Write out results
