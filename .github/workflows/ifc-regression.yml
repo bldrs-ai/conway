@@ -129,7 +129,8 @@ jobs:
               print(header_line)
               print(separator_line)
               for row in reader[1:]:
-                  print("| " + " | ".join(row) + " |")
+                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
+                print("| " + " | ".join(sanitized_row) + " |")
           EOF
           )
           else
@@ -151,7 +152,8 @@ jobs:
               print(header_line)
               print(separator_line)
               for row in reader[1:]:
-                  print("| " + " | ".join(row) + " |")
+                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
+                print("| " + " | ".join(sanitized_row) + " |")
           EOF
           )
           else
