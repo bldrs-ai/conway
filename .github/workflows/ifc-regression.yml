@@ -113,29 +113,47 @@ jobs:
         id: regression_results
         run: |
           cd test-models/regression/test_models
-          # Process failed.csv: Check if it contains only the header.
+      
+          # Process failed.csv
           if [ -f failed.csv ]; then
-            HEADER="file,code,signal"
-            CONTENT=$(cat failed.csv | tr -d '\r\n')
-            if [ "$CONTENT" = "$HEADER" ]; then
-              FAILED="No failures :white_check_mark:"
+            LINE_COUNT=$(wc -l < failed.csv)
+            if [ "$LINE_COUNT" -eq 1 ]; then
+              FAILED_OUTPUT="No failures :white_check_mark:"
             else
-              FAILED=$(cat failed.csv)
+              HEADER_LINE=$(head -n 1 failed.csv)
+              DATA_LINES=$(tail -n +2 failed.csv)
+              TABLE_HEADER=$(echo "$HEADER_LINE" | awk -F, '{printf "| %s", $1; for(i=2;i<=NF;i++) printf " | %s", $i; print " |"}')
+              HEADER_SEPARATOR=$(echo "$HEADER_LINE" | awk -F, '{printf "|"; for(i=1;i<=NF;i++) printf " --- |"; print ""}')
+              TABLE_DATA=$(echo "$DATA_LINES" | awk -F, '{printf "| %s", $1; for(i=2;i<=NF;i++) printf " | %s", $i; print " |"}')
+              FAILED_OUTPUT="$TABLE_HEADER"$'\n'"$HEADER_SEPARATOR"$'\n'"$TABLE_DATA"
             fi
           else
-            FAILED="No failed.csv found."
+            FAILED_OUTPUT="No failed.csv found."
           fi
-          # Process errors.csv.
+      
+          # Process errors.csv
           if [ -f errors.csv ]; then
-            ERRORS=$(cat errors.csv)
+            LINE_COUNT=$(wc -l < errors.csv)
+            if [ "$LINE_COUNT" -eq 1 ]; then
+              ERRORS_OUTPUT="No errors found."
+            else
+              HEADER_LINE=$(head -n 1 errors.csv)
+              DATA_LINES=$(tail -n +2 errors.csv)
+              TABLE_HEADER=$(echo "$HEADER_LINE" | awk -F, '{printf "| %s", $1; for(i=2;i<=NF;i++) printf " | %s", $i; print " |"}')
+              HEADER_SEPARATOR=$(echo "$HEADER_LINE" | awk -F, '{printf "|"; for(i=1;i<=NF;i++) printf " --- |"; print ""}')
+              TABLE_DATA=$(echo "$DATA_LINES" | awk -F, '{printf "| %s", $1; for(i=2;i<=NF;i++) printf " | %s", $i; print " |"}')
+              ERRORS_OUTPUT="$TABLE_HEADER"$'\n'"$HEADER_SEPARATOR"$'\n'"$TABLE_DATA"
+            fi
           else
-            ERRORS="No errors.csv found."
+            ERRORS_OUTPUT="No errors.csv found."
           fi
-          echo "failed<<EOF" >> $GITHUB_OUTPUT
-          echo "$FAILED" >> $GITHUB_OUTPUT
+      
+          echo "failed_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$FAILED_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "errors<<EOF" >> $GITHUB_OUTPUT
-          echo "$ERRORS" >> $GITHUB_OUTPUT
+      
+          echo "errors_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
       
       - name: Comment on Pull Request with Regression Results
@@ -146,12 +164,10 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             ## IFC Regression Results
-            **Failed.csv:**  
-            ```
-            ${{ steps.regression_results.outputs.failed }}
-            ```
-            **Errors.csv:**  
-            ```
-            ${{ steps.regression_results.outputs.errors }}
-            ```
+      
+            **Failed.csv:**
+            ${{ steps.regression_results.outputs.failed_output }}
+      
+            **Errors.csv:**
+            ${{ steps.regression_results.outputs.errors_output }}
     
