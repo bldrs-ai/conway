@@ -7,10 +7,14 @@ import { IIndexSetCursor } from '../core/i_index_set_cursor'
 import { extractOneHotLow } from '../indexing/bit_operations'
 import { MultiIndexSet } from '../indexing/multi_index_set'
 import StepEntityConstructor, { StepEntityConstructorAbstract } from './step_entity_constructor'
-import { Model } from '../core/model'
+import { Model, ModelGeometry } from '../core/model'
 import { ReadonlyUint32Array } from '../core/readonly_typed_array'
 import { TriangleElementMap } from '../core/triangle_element_map'
 import InterpolationSearchTable32 from '../indexing/interpolation_search_table_32'
+import { CanonicalMaterial } from '../core/canonical_material'
+import { SceneNodeGeometry } from '../core/scene_node'
+import { CanonicalMesh } from '../core/canonical_mesh'
+import { ModelMaterials } from '../core/model_materials'
 
 
 /**
@@ -43,6 +47,10 @@ implements Iterable<BaseEntity>, Model {
    * error, and the field is optional, return null instead of throwing an exception.
    */
   public nullOnErrors: boolean = true
+
+  public abstract readonly materials?: ModelMaterials
+
+  public abstract readonly geometry?: ModelGeometry
 
   /**
    * Construct this step model with its matching schema, a buffer to read from and an element index.
@@ -477,5 +485,33 @@ implements Iterable<BaseEntity>, Model {
         yield foundElement
       }
     }
+  }
+
+
+  /**
+   * Get the material matching a geometry node.
+   *
+   * Geometry must have been extracted first.
+   *
+   * @param node The geometry node to match a material for.
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
+   */
+  public getMaterialFromGeometryNode( node: SceneNodeGeometry ):
+    CanonicalMaterial | undefined {
+
+    return this.materials?.getMaterialFromGeometryNode( node )
+  }
+
+  /**
+   * Get the material matching a geometry node.
+   *
+   * Geometry must have been extracted first.
+   *
+   * @param node The geometry node to match a material for.
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
+   */
+  public getMeshFromGeometryNode( node: SceneNodeGeometry ): CanonicalMesh | undefined {
+
+    return this.geometry?.getByLocalID( node.localID )
   }
 }

@@ -2,7 +2,7 @@ import { ConwayGeometry, GeometryCollection } from '../../dependencies/conway-ge
 import { CanonicalMaterial, toNativeMaterial } from './canonical_material'
 import { CanonicalMeshType } from './canonical_mesh'
 import { NativeVectorGeometryCollection, NativeVectorMaterial } from './native_types'
-import { Scene } from './scene'
+import { WalkableScene } from './scene'
 
 
 export interface GeometryAggregatorOptions {
@@ -63,7 +63,7 @@ export default class GeometryAggregator {
    *
    * @return {void}
    */
-  public append< SceneEntityType >( scene: Scene< SceneEntityType > ): void {
+  public append< SceneEntityType >( scene: WalkableScene< SceneEntityType > ): void {
 
     const conwaywasm       = this.wasmModule
     const materialGeometry = this.materialGeometry

@@ -5,7 +5,7 @@ import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { Model } from '../core/model'
 import { NativeTransform4x4 } from '../../dependencies/conway-geom'
 import { PackedMesh } from '../core/packed_mesh'
-import { Scene } from '../core/scene'
+import { SceneListener, SceneListenerOptions, WalkableScene } from '../core/scene'
 import {
   SceneNodeModelType,
   SceneNodeGeometry,
@@ -84,7 +84,7 @@ export type IfcSceneNode = IfcSceneTransform | IfcSceneGeometry
 /**
  *
  */
-export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > > {
+export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTypesIfc > > {
 
   public roots: number[] = []
 
@@ -94,6 +94,9 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
 
   private sceneStack_: IfcSceneTransform[] = []
   private currentParent_?: IfcSceneTransform
+
+  private transformListeners_?: SceneListener[]
+  private geometryListeners_?: SceneListener[]
 
   /**
    * Get the current transform for this.
@@ -115,6 +118,116 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
     public readonly conwayGeometry: ConwayGeometry,
     public readonly materials: IfcMaterialCache) {
 
+  }
+
+  /**
+   *
+   * @param listener
+   * @param options
+   */
+  addSceneListener(
+      listener: SceneListener,
+      options?: SceneListenerOptions ): void {
+
+    options ??= SceneListenerOptions.defaults
+
+    if ( !options.disableTransformEvents ) {
+
+      this.transformListeners_ ??= []
+      this.transformListeners_.push( listener )
+    }
+
+    if ( !options.disableGeometryEvents ) {
+
+      this.geometryListeners_ ??= []
+      this.geometryListeners_.push( listener )
+    }
+
+    if ( options.replayCurrentScene ) {
+
+      const sceneStack = [...this.roots]
+
+      const nodes = this.scene_
+      const model = this.model
+
+      while ( sceneStack.length > 0 ) {
+
+        const nodeIndex = sceneStack.pop()!
+
+        const node = nodes[ nodeIndex ]
+
+        if ( node instanceof IfcSceneTransform ) {
+
+          if ( !options.disableTransformEvents ) {
+
+            listener.onTransformAdded( node )
+          }
+
+          sceneStack.push( ...node.children )
+
+        } else if ( node instanceof IfcSceneGeometry ) {
+
+          if ( !options.disableGeometryEvents ) {
+
+            const transform =
+              ( node.parentIndex !== void 0 ?
+                nodes[ node.parentIndex ] : void 0 ) as ( IfcSceneTransform | undefined )
+
+            const geometry = model.geometry?.getByLocalID( node.localID )
+
+            if ( geometry === void 0 ) {
+              continue
+            }
+
+            listener.onGeometryAdded(
+                node,
+                transform )
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   *
+   * @param listener
+   */
+  removeSceneListener( listener: SceneListener ): void {
+
+    const geoemtryListeners = this.geometryListeners_
+    const transformListeners = this.transformListeners_
+
+    if ( geoemtryListeners !== void 0 ) {
+
+      const indexOfListener =  geoemtryListeners.indexOf( listener )
+
+      if ( indexOfListener >= 0 ) {
+
+        geoemtryListeners[ indexOfListener ] = geoemtryListeners[ geoemtryListeners.length - 1 ]
+        geoemtryListeners.pop()
+
+        if ( geoemtryListeners.length === 0 ) {
+
+          this.geometryListeners_ = void 0
+        }
+      }
+    }
+
+    if ( transformListeners !== void 0 ) {
+
+      const indexOfListener =  transformListeners.indexOf( listener )
+
+      if ( indexOfListener >= 0 ) {
+
+        transformListeners[ indexOfListener ] = transformListeners[ transformListeners.length - 1 ]
+        transformListeners.pop()
+
+        if ( transformListeners.length === 0 ) {
+
+          this.transformListeners_ = void 0
+        }
+      }
+    }
   }
   /* eslint-enable no-useless-constructor, no-empty-function */
 
@@ -424,10 +537,35 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
 
     this.scene_.push(result)
 
+    const geoemtryListeners = this.geometryListeners_
+
+    if ( geoemtryListeners !== void 0 ) {
+
+      const transform =
+      ( parentIndex !== void 0 ?
+        this.scene_[ parentIndex ] : void 0 ) as ( IfcSceneTransform | undefined )
+
+      const geometry = this.model.geometry?.getByLocalID(localID)
+
+      if ( geometry === void 0 ) {
+        return result
+      }
+
+      for ( const listener of geoemtryListeners ) {
+
+        listener.onGeometryAdded( result, transform )
+      }
+    }
+
     return result
   }
 
   /**
+   * Add a transform node and make the current transform stack parent its parent.
+   *
+   * Items added will be made the top of the transform stack.
+   *
+   * To prevent a node being used as a parent, pop it subsequently.
    *
    * @param localID
    * @param transform
@@ -487,6 +625,16 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
           parentIndex)
 
     this.scene_.push(result)
+
+    const transformListeners = this.transformListeners_
+
+    if ( transformListeners !== void 0 ) {
+
+      for ( const listener of transformListeners ) {
+
+        listener.onTransformAdded( result )
+      }
+    }
 
     if (!isMappedItem) {
       this.sceneLocalIdMap_.set(localID, nodeIndex)

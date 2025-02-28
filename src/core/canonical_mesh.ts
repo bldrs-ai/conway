@@ -2,17 +2,19 @@ import { GeometryObject } from '../../dependencies/conway-geom'
 import { Model } from './model'
 
 
-/* eslint-disable no-shadow,no-unused-vars,no-magic-numbers */
+/* eslint-disable no-shadow,no-unused-vars */
 export enum CanonicalMeshType {
-    BUFFER_GEOMETRY = 0,
-    GLTF_URL        = 1,
-    GLB_BUFFER      = 2
+    BUFFER_GEOMETRY = 0
 }
 
 
 export interface CanonicalMeshBase {
     readonly type: CanonicalMeshType
-    readonly geometry: GeometryObject | string | ArrayBuffer
+    readonly geometry:
+      GeometryObject |
+      string |
+      ArrayBuffer |
+      ( () => ( Promise< GeometryObject > | GeometryObject ) )
     readonly model: Model
     readonly localID: number
     /**
@@ -28,16 +30,4 @@ export interface CanonicalMeshBuffer extends CanonicalMeshBase {
     readonly geometry: GeometryObject
 }
 
-export interface CanonicalMeshUrl extends CanonicalMeshBase {
-    readonly type: CanonicalMeshType.GLTF_URL
-    readonly geometry: string
-    readonly temporary: undefined
-}
-
-export interface CanonicalMeshGLBBuffer extends CanonicalMeshBase {
-    readonly type: CanonicalMeshType.GLB_BUFFER
-    readonly geometry: ArrayBuffer
-    readonly temporary: undefined
-}
-
-export type CanonicalMesh = CanonicalMeshBuffer | CanonicalMeshUrl | CanonicalMeshGLBBuffer
+export type CanonicalMesh = CanonicalMeshBuffer

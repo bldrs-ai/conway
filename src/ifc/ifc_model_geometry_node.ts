@@ -5,6 +5,7 @@ import { dumpMTL } from '../core/canonical_material'
 import { IfcGeometricRepresentationItem } from './ifc4_gen'
 import { IfcModelGeometry } from './ifc_model_geometry'
 
+/* Note this file should only be used from node environments, not the browser */
 
 const MAX_FILES_OPEN = 64
 

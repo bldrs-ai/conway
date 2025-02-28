@@ -4,7 +4,7 @@ import { CanonicalMaterial } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { Model } from '../core/model'
 import { PackedMesh } from '../core/packed_mesh'
-import { Scene } from '../core/scene'
+import { WalkableScene, SceneListener, SceneListenerOptions } from '../core/scene'
 import {
   SceneNodeModelType,
   SceneNodeGeometry,
@@ -58,6 +58,16 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
 
   readonly type = SceneNodeModelType.GEOMETRY
 
+  /**
+   * No Spaces for AP214
+   *
+   * @return {boolean} Always false, no spaces.
+   */
+  public get isSpace(): boolean {
+
+    return false
+  }
+
   /* eslint-disable no-useless-constructor, no-empty-function */
   /**
    * Construct a scene geometry node
@@ -81,7 +91,7 @@ export type AP214SceneNode = AP214SceneTransform | AP214SceneGeometry
 /**
  *
  */
-export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP214 > > {
+export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityTypesAP214 > > {
 
   public roots: number[] = []
 
@@ -91,6 +101,9 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
 
   private sceneStack_: AP214SceneTransform[] = []
   private currentParent_?: AP214SceneTransform
+
+  private transformListeners_?: SceneListener[]
+  private geometryListeners_?: SceneListener[]
 
   /* eslint-disable no-useless-constructor, no-empty-function */
   /**
@@ -105,6 +118,115 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
 
   }
   /* eslint-enable no-useless-constructor, no-empty-function */
+
+
+  /**
+   *
+   * @param listener
+   * @param options
+   */
+  addSceneListener(
+      listener: SceneListener,
+      options?: SceneListenerOptions ): void {
+
+    options ??= SceneListenerOptions.defaults
+
+    if ( !options.disableTransformEvents ) {
+
+      this.transformListeners_ ??= []
+      this.transformListeners_.push( listener )
+    }
+
+    if ( !options.disableGeometryEvents ) {
+
+      this.geometryListeners_ ??= []
+      this.geometryListeners_.push( listener )
+    }
+
+    if ( options.replayCurrentScene ) {
+
+      const sceneStack = [...this.roots]
+
+      const nodes = this.scene_
+      const model = this.model
+
+      while ( sceneStack.length > 0 ) {
+
+        const nodeIndex = sceneStack.pop()!
+
+        const node = nodes[ nodeIndex ]
+
+        if ( node instanceof AP214SceneTransform ) {
+
+          if ( !options.disableTransformEvents ) {
+
+            listener.onTransformAdded( node )
+          }
+
+        } else if ( node instanceof AP214SceneGeometry ) {
+
+          if ( !options.disableGeometryEvents ) {
+
+            const transform =
+              ( node.parentIndex !== void 0 ?
+                nodes[ node.parentIndex ] : void 0 ) as ( AP214SceneTransform | undefined )
+
+            const geometry = model.geometry?.getByLocalID( node.localID )
+
+            if ( geometry === void 0 ) {
+              continue
+            }
+
+            listener.onGeometryAdded(
+                node,
+                transform )
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   *
+   * @param listener
+   */
+  removeSceneListener( listener: SceneListener ): void {
+
+    const geoemtryListeners = this.geometryListeners_
+    const transformListeners = this.transformListeners_
+
+    if ( geoemtryListeners !== void 0 ) {
+
+      const indexOfListener =  geoemtryListeners.indexOf( listener )
+
+      if ( indexOfListener >= 0 ) {
+
+        geoemtryListeners[ indexOfListener ] = geoemtryListeners[ geoemtryListeners.length - 1 ]
+        geoemtryListeners.pop()
+
+        if ( geoemtryListeners.length === 0 ) {
+
+          this.geometryListeners_ = void 0
+        }
+      }
+    }
+
+    if ( transformListeners !== void 0 ) {
+
+      const indexOfListener =  transformListeners.indexOf( listener )
+
+      if ( indexOfListener >= 0 ) {
+
+        transformListeners[ indexOfListener ] = transformListeners[ transformListeners.length - 1 ]
+        transformListeners.pop()
+
+        if ( transformListeners.length === 0 ) {
+
+          this.transformListeners_ = void 0
+        }
+      }
+    }
+  }
 
   /**
    *

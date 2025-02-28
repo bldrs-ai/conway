@@ -1,9 +1,11 @@
 import { CanonicalMaterial } from '../core/canonical_material'
+import { ModelMaterials } from '../core/model_materials'
+import { SceneNodeGeometry } from '../core/scene_node'
 
 /**
  * Cache of materials via their local ID
  */
-export class AP214MaterialCache {
+export class AP214MaterialCache implements ModelMaterials {
 
   private readonly cache_ =
     new Map< number, CanonicalMaterial >()
@@ -137,4 +139,33 @@ export class AP214MaterialCache {
 
     return [material, materialID]
   }
+
+
+  /**
+   * Get the material for a geometry scene node from the scene with these materials.
+   *
+   * @param node The scene geometry node.
+   * @return {CanonicalMaterial | undefined} The canonical material associated with the geometry or
+   * undefined if none is available.
+   */
+  getMaterialFromGeometryNode(node: SceneNodeGeometry): CanonicalMaterial | undefined {
+
+    const geometryLocalID = ( node.materialOverideLocalID ?? node.localID )
+
+    const materialID = this.assignments_.get( geometryLocalID ) ?? this.defaultMaterialLocalID
+
+    if ( materialID === void 0 ) {
+
+      return void 0
+    }
+
+    const material = this.get( materialID )
+
+    if ( material === void 0 ) {
+      return void 0
+    }
+
+    return material
+  }
+
 }

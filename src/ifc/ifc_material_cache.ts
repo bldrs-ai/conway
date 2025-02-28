@@ -4,12 +4,14 @@ import { CanonicalMaterial, dumpMTL } from '../core/canonical_material'
 import IfcStepModel from './ifc_step_model'
 import StepEntityBase from '../step/step_entity_base'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
+import { ModelMaterials } from '../core/model_materials'
+import { SceneNodeGeometry } from '../core/scene_node'
 
 
 /**
  * Cache of materials via their local ID
  */
-export class IfcMaterialCache {
+export class IfcMaterialCache implements ModelMaterials {
 
   private readonly cache_ =
     new Map< number, CanonicalMaterial >()
@@ -86,6 +88,32 @@ export class IfcMaterialCache {
   public get( localID: number ): CanonicalMaterial | undefined {
 
     return this.cache_.get( localID )
+  }
+
+  /**
+   * Get the material matching a geometry node.
+   *
+   * @param node The geometry node to match a material for.
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
+   */
+  public getMaterialFromGeometryNode( node: SceneNodeGeometry ): CanonicalMaterial | undefined {
+
+    const geometryLocalID = ( node.materialOverideLocalID ?? node.localID )
+
+    const materialID = this.assignments_.get( geometryLocalID ) ?? this.defaultMaterialLocalID
+
+    if ( materialID === void 0 ) {
+
+      return void 0
+    }
+
+    const material = this.get( materialID )
+
+    if ( material === void 0 ) {
+      return void 0
+    }
+
+    return material
   }
 
   /**

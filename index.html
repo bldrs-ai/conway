@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<title>My first three.js app</title>
+		<style>
+			body { margin: 0; }
+		</style>
+  <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.module.js"
+        }
+    }
+  </script>
+
+		<script type="module">
+      import {dropHandler,initViewer} from '/compiled/src/rendering/threejs/conway_html_viewer.js'
+      import {setModulePrefix} from '/compiled/dependencies/conway-geom/interface/conway_geometry.js'
+
+      globalThis.process = { env: { PLATFORM: 'web' } }
+
+      setModulePrefix( '/dependencies/conway-geom/Dist/' )
+
+      window.onload = () => {
+
+        initViewer()
+      //  document.body.addEventListener( 'drop', ( e ) => dropHandler( e ) )
+        console.log( 'Viewer initialised' )
+      }
+    </script>
+	</head>
+	<body>
+	</body>
+</html>
