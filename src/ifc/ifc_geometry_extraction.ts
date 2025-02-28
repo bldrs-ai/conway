@@ -3217,6 +3217,46 @@ export class IfcGeometryExtraction {
     return flatCoordinates
   }
 
+  /**
+   * Efficiently flatten the points into a Float64Array while skipping
+   * consecutive points with the same localID.
+   *
+   * @param points - Array of IfcCartesianPoint
+   * @param dimensions - Number of coordinates per point (e.g. 3 for x,y,z)
+   * @return {Float64Array}
+   */
+  flattenCartesianPointsToFloat64ArrayFiltered(points: IfcCartesianPoint[],
+      dimensions: number): Float64Array {
+  // 1) First pass: figure out how many points *actually* get included
+  //    (skipping consecutive duplicates by localID)
+    let uniqueCount = 0
+    for (let i = 0; i < points.length; i++) {
+      if (i === 0 || points[i].localID !== points[i - 1].localID) {
+        uniqueCount++
+      }
+    }
+
+    // 2) Knowing how many we'll include, allocate the final TypedArray
+    const totalCoordinates = uniqueCount * dimensions
+    const flatCoordinates = new Float64Array(totalCoordinates)
+
+    // 3) Second pass: populate flatCoordinates
+    let offset = 0
+    let prevLocalID = -1
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i]
+      if (i === 0 || point.localID !== prevLocalID) {
+      // Copy only if localID changed
+        flatCoordinates.set(point.Coordinates, offset)
+        offset += point.Coordinates.length // or offset += dimensions if all are guaranteed
+        prevLocalID = point.localID
+      }
+    }
+
+    return flatCoordinates
+  }
+
 
   /**
    *
@@ -3594,7 +3634,6 @@ export class IfcGeometryExtraction {
             parents !== void 0 ? [from, ...parents] : [from] )
 
       } else {
-
         this.extractRepresentationItem(representationItem,
             owningElement.localID,
             isRelVoid,
@@ -3702,6 +3741,7 @@ export class IfcGeometryExtraction {
 
         this.scene.addGeometry(from.localID, owningElementLocalID, isSpace)
       }
+
       return
     }
 
@@ -4139,7 +4179,7 @@ export class IfcGeometryExtraction {
 
           vec3Array = this.wasmModule.parseVertexVector( coordParseBuffer )
 
-          this.wasmModule.freeParseBuffer( coordParseBuffer )
+          conwayModel.freeParseBuffer( coordParseBuffer )
         } else if (innerBound instanceof IfcEdgeLoop) {
 
           vec3Array = this.nativeVectorGlmdVec3()
@@ -4502,49 +4542,26 @@ export class IfcGeometryExtraction {
       const bound3DVector = this.nativeBound3DVector()
 
       for (let boundIndex = 0; boundIndex < from.Bounds.length; ++boundIndex) {
-        const vec3Array = this.nativeVectorGlmdVec3()
         const bound = from.Bounds[boundIndex]
+        const innerBound = bound.Bound
 
-        if (bound.Bound instanceof IfcPolyLoop) {
+        if (innerBound instanceof IfcPolyLoop) {
 
-          let prevLocalID: number = -1
+          const pointsFlattened = this.flattenCartesianPointsToFloat64ArrayFiltered(
+              innerBound.Polygon,
+              this.THREE_DIMENSIONS)
 
-          for (let pointIndex = 0; pointIndex < bound.Bound.Polygon.length; ++pointIndex) {
-            const vec3 = {
-              x: bound.Bound.Polygon[pointIndex].Coordinates[0],
-              y: bound.Bound.Polygon[pointIndex].Coordinates[1],
-              z: bound.Bound.Polygon[pointIndex].Coordinates[2],
-            }
+          const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
 
-            const currentLocalID: number = bound.Bound.Polygon[pointIndex].localID
-            if (currentLocalID !== prevLocalID) {
-              vec3Array.push_back(vec3)
-              prevLocalID = currentLocalID
-            }
-          }
+          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(pointsPtr,
+              pointsFlattened.length,
+              bound.Orientation,
+            (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1)
+
+          bound3DVector.push_back(bound3D)
+
+          this.wasmModule._free(pointsPtr)
         }
-
-        const edgesDummy: StdVector<CurveObject> = this.nativeVectorCurve()
-        // get curve
-        const parameters: ParamsGetLoop = {
-          points: vec3Array,
-          edges: edgesDummy,
-        }
-
-        const curve: CurveObject = this.conwayModel.getLoop(parameters)
-
-        // create bound vector
-        const parametersCreateBounds3D: ParamsCreateBound3D = {
-          curve: curve,
-          orientation: bound.Orientation,
-          type: (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1,
-        }
-
-        const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
-
-        bound3DVector.push_back(bound3D)
-        vec3Array.delete()
-        edgesDummy.delete()
       }
 
       // add face to geometry
