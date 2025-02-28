@@ -142,7 +142,7 @@ export default class Logger {
 
   /**
    * Create the statistics for a model ID.
-   * 
+   *
    * @param modelID The model ID to create statistics for
    * @return {Statistics} The created statistics object.
    */
