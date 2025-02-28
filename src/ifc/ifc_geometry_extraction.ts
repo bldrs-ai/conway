@@ -23,6 +23,7 @@ import {
   Bound3DObject,
   ParamsCreateBound3D,
   ParamsAddFaceToGeometry,
+  ParamsAddFaceToGeometrySimple,
   SurfaceObject,
   ParamsGetRectangleProfileCurve,
   ParamsRelVoidSubtract,
@@ -46,6 +47,7 @@ import {
   ParamsGetIfcLine,
   NativeTransform4x4,
   NativeTransform3x3,
+  FlattenedPointsResult,
 } from '../../dependencies/conway-geom'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
@@ -344,6 +346,9 @@ export class IfcGeometryExtraction {
   ObjectPool<ParamsGetTriangulatedFaceSetGeometry> | undefined
 
   private paramsGetPolyCurvePool: ObjectPool<ParamsGetPolyCurve> | undefined
+
+
+  public pointBuffer: FlattenedPointsResult | null = null
 
   private identity2DNativeMatrix: NativeTransform3x3
   private identity3DNativeMatrix: NativeTransform4x4
@@ -3257,6 +3262,74 @@ export class IfcGeometryExtraction {
     return flatCoordinates
   }
 
+  /**
+   * Flatten the points into WASM memory (skipping consecutive duplicates).
+   * Reuses an existing WASM buffer if provided and large enough.
+   *
+   * @param points - Array of IfcCartesianPoint
+   * @param dimensions - Number of coordinates per point (e.g. 3 for x,y,z)
+   * @param existingPtr - (Optional) Pointer to an existing WASM buffer
+   * @param existingCapacity - (Optional) Capacity of that buffer in Float64 elements
+   * @return {FlattenedPointsResult} pointer, length used, total capacity
+   */
+  flattenCartesianPointsToWasmFiltered(
+      points: IfcCartesianPoint[],
+      dimensions: number,
+      existingPtr?: number,
+      existingCapacity?: number,
+  ): FlattenedPointsResult {
+
+    // The maximum we might need if we do NOT skip duplicates
+    const maxPossibleFloats = points.length * dimensions
+    const bytesPerElement = 8 // Float64
+
+    // 1) Allocate or reuse memory in WASM
+    let pointer: number = existingPtr ?? 0
+    let capacity: number = existingCapacity ?? 0
+
+    // If we have no existing buffer OR it's too small, allocate a new one
+    if (!pointer || capacity < maxPossibleFloats) {
+    // Free the old buffer if it exists and is too small
+      if (pointer) {
+        this.wasmModule._free(pointer)
+      }
+
+      const numBytes = maxPossibleFloats * bytesPerElement
+
+      pointer = this.wasmModule._malloc(numBytes)
+      capacity = maxPossibleFloats
+    }
+
+    // 2) Create a Float64Array view into WASM memory
+    // We only need to create a subarray up to the capacity
+    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
+        pointer / bytesPerElement,
+        // eslint-disable-next-line no-mixed-operators
+        pointer / bytesPerElement + capacity,
+    )
+
+    // 3) Single pass to skip consecutive duplicates, fill up the wasm array
+    let offset = 0
+    let prevLocalID = -1
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i]
+      if (i === 0 || point.localID !== prevLocalID) {
+      // Copy 'dimensions' values for the current point
+        wasmFloat64View.set(point.Coordinates, offset)
+        offset += dimensions
+        prevLocalID = point.localID
+      }
+    }
+
+    // 4) Return the pointer, the actual usage, and the capacity
+    return {
+      pointer,
+      length: offset,  // how many Float64 values were used
+      capacity,
+    }
+  }
+
 
   /**
    *
@@ -4541,42 +4614,53 @@ export class IfcGeometryExtraction {
 
       const bound3DVector = this.nativeBound3DVector()
 
+      // let pointsPtrs:any[]
+
       for (let boundIndex = 0; boundIndex < from.Bounds.length; ++boundIndex) {
         const bound = from.Bounds[boundIndex]
         const innerBound = bound.Bound
 
         if (innerBound instanceof IfcPolyLoop) {
 
-          const pointsFlattened = this.flattenCartesianPointsToFloat64ArrayFiltered(
+          // Attempt to reuse the pointer/capacity from `pointBuffer`
+          const result = this.flattenCartesianPointsToWasmFiltered(
               innerBound.Polygon,
-              this.THREE_DIMENSIONS)
+              this.THREE_DIMENSIONS,
+              this.pointBuffer?.pointer,
+              this.pointBuffer?.capacity,
+          )
 
-          const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
+          // Now `result.pointer` is your up-to-date pointer (maybe a new allocation).
+          // `result.length` is how many Float64 coords are valid.
+          // `result.capacity` is how many Float64 coords that pointer can hold.
+          // eslint-disable-next-line no-unused-vars
+          const { pointer, length, capacity } = result
 
-          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(pointsPtr,
-              pointsFlattened.length,
+          // Use them in your WASM call
+          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
+              pointer,
+              length,
               bound.Orientation,
-            (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1)
+            bound.type === EntityTypesIfc.IFCFACEOUTERBOUND ? 0 : 1,
+          )
 
+          // Push your result somewhere
           bound3DVector.push_back(bound3D)
 
-          this.wasmModule._free(pointsPtr)
+          // Save the buffer for reuse in the next iteration
+          this.pointBuffer = result
         }
       }
 
       // add face to geometry
-      const defaultSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
-      const parameters: ParamsAddFaceToGeometry = {
+      const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
-        advancedBrep: false,
-        surface: defaultSurface,
         scaling: this.getLinearScalingFactor(),
       }
 
-      this.conwayModel.addFaceToGeometry(parameters, geometry)
+      this.conwayModel.addFaceToGeometrySimple(parameters, geometry)
 
       bound3DVector.delete()
-      defaultSurface.delete()
     }
   }
 
@@ -5871,6 +5955,12 @@ export class IfcGeometryExtraction {
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
         this.model.geometry.deleteTemporaries()
         this.model.voidGeometry.deleteTemporaries()
+      }
+
+      // free buffer at the end if you don't need it anymore
+      if (this.pointBuffer?.pointer) {
+        this.wasmModule._free(this.pointBuffer.pointer)
+        this.pointBuffer = null
       }
 
       result = ExtractResult.COMPLETE

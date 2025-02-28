@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.14.835",
+  "version": "0.14.836",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
