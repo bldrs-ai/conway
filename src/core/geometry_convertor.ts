@@ -17,7 +17,7 @@ export default class GeometryConvertor {
    *
    * @param wasmModule The wasm module.
    */
-  // eslint-disable-next-line no-useless-constructor, require-jsdoc, no-empty-function
+  // eslint-disable-next-line no-useless-constructor, no-empty-function
   constructor( private readonly wasmModule: ConwayGeometry ) {}
 
   /**

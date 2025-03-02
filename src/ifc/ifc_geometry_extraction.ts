@@ -4438,7 +4438,7 @@ export class IfcGeometryExtraction {
         y: directionCoords[1],
         z: directionCoords[2],
       },
-      profile: profile?.nativeProfile!,
+      profile: profile?.nativeProfile,
     }
   }
 
@@ -4687,7 +4687,7 @@ export class IfcGeometryExtraction {
     from: IfcAxis1Placement,
     parentLocalId: number,
     extractOnly: true): ParamsAxis1Placement3D
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   extractAxis1Placement3D(
       from: IfcAxis1Placement,
       parentLocalId: number,
@@ -4764,7 +4764,7 @@ export class IfcGeometryExtraction {
     from: IfcAxis2Placement3D,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   extractAxis2Placement3D(
       from: IfcAxis2Placement3D,
       parentLocalId: number,
@@ -4856,7 +4856,7 @@ export class IfcGeometryExtraction {
     from: IfcAxis2Placement3D,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   extractAxis2Placement3DRelVoid(
       from: IfcAxis2Placement3D,
       parentLocalId: number,

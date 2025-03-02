@@ -85,7 +85,7 @@ export class CsgMemoization extends SimpleMemoization< CsgOperations > {
   /**
    * Updates simple memoization
    */
-  // eslint-disable-next-line no-useless-constructor, require-jsdoc
+  // eslint-disable-next-line no-useless-constructor
   constructor() {
     super()
   }
