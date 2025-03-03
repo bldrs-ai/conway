@@ -12,8 +12,8 @@ enum REAL_STATES {
   MUST_DIGIT_E_EXIT = 4,
   MAYBE_DIGIT_F     = 5,
   SIGN_OR_DIGIT_E   = 6,
-  MUST_DIGIT_E      = 6,
-  MAYBE_DIGIT_E     = 7
+  MUST_DIGIT_E      = 7,
+  MAYBE_DIGIT_E     = 8
 }
 /* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
 
