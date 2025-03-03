@@ -205,7 +205,7 @@ async function doWork() {
                       if (current === 'type') {
                         result = elementTypeID
                       } else {
-                        result = ((element as { [key: string] })[current])
+                        result = ((element as { [key: string]: any })[current])
                         if (result === null) {
                           result = 'null'
                         } else if (result === void 0) {

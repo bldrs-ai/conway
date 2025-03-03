@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.15.839",
+  "version": "0.15.843",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -29,7 +29,7 @@
     "clean": "run-script-os",
     "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",
     "clean:darwin": "rm -rf compiled && rm -rf dependencies/conway-geom/bin/release && rm -rf dependencies/conway-geom/Dist/*.{map,js} && yarn clean-conway_geom",
-    "build": "yarn clean && yarn update-version && yarn build-all-release-node && yarn build-all-release-node-MT && yarn build-all-release-web && yarn build-all-release-web-MT && yarn bundle-example",
+    "build": "yarn clean && yarn update-version && yarn build-all-release-node && yarn build-all-release-node-MT && yarn build-all-release-web && yarn build-all-release-web-MT && yarn bundle-examples",
     "build-single-thread": "yarn clean && yarn update-version && yarn build-all-release-node && yarn build-all-release-web",
     "build-MT": "yarn clean && yarn update-version && yarn build-all-release-node-MT && yarn build-all-release-web-MT",
     "build-web": "yarn clean && yarn update-version && yarn build-all-release-web",
