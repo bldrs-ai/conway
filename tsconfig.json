@@ -103,6 +103,7 @@
   "include": [
     "src/**/*",
     "dependencies/conway-geom/*.ts",
-    "dependencies/conway-geom/interface/**/*"
+    "dependencies/conway-geom/interface/**/*",
+    "examples/**/*"
   ]
 }
