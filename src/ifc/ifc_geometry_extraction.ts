@@ -8,6 +8,7 @@ import {
   Vector3,
   Segment,
   ParamsGetIfcIndexedPolyCurve,
+  ParamsGetIfcIndexedPolyCurve3D,
   CurveObject,
   ParamsGetAxis2Placement2D,
   ParamsGetCircleCurve,
@@ -3554,11 +3555,6 @@ export class IfcGeometryExtraction {
    */
   extractIndexedPolyCurve(from: IfcIndexedPolyCurve): CurveObject | undefined {
 
-    if (from.Points instanceof IfcCartesianPointList3D) {
-      Logger.error('IfcCartesianPointList3D not supported in IfcIndexedPolycurve.')
-      return
-    }
-
     // initialize new segment vector
     const segmentVector = this.nativeSegmentVector()
 
@@ -3602,9 +3598,11 @@ export class IfcGeometryExtraction {
     }
 
     // initialize new native glm::vec3 array object (free memory with delete())
-    let pointsArray : StdVector< Vector2 >
+    let pointsArray2D : StdVector< Vector2 >
+    let pointsArray3D : StdVector< Vector3 >
     // = this.nativeVectorGlmdVec2((fromPoints as any).CoordList.length)
     const parseBuffer = this.conwayModel.nativeParseBuffer()
+    let dimensions = 2
 
     try {
 
@@ -3616,19 +3614,14 @@ export class IfcGeometryExtraction {
       if ( fromPoints instanceof IfcCartesianPointList2D ) {// ||
       //  fromPoints instanceof IfcCartesianPointList3D ) {
 
-        pointsArray = this.wasmModule.parsePoint2DVector( parseBuffer )
+        pointsArray2D = this.wasmModule.parsePoint2DVector( parseBuffer )
 
-        // populate points array
-        // for (let i = 0; i < coords.length; i++) {
-
-        //   const coord = coords[ i ]
-
-        //   pointsArray.set(i, { x: coord[ 0 ], y: coord[ 1 ] })
-        // }
-
+      } else if (fromPoints instanceof IfcCartesianPointList3D) {
+        pointsArray3D = this.wasmModule.parsePoint3DVector(parseBuffer)
+        dimensions = this.THREE_DIMENSIONS
       } else {
 
-        pointsArray = this.wasmModule.parsePoint3Dto2DVector( parseBuffer )
+        pointsArray2D = this.wasmModule.parsePoint3Dto2DVector( parseBuffer )
 
       }
 
@@ -3637,17 +3630,32 @@ export class IfcGeometryExtraction {
       this.conwayModel.freeParseBuffer( parseBuffer )
     }
 
-    const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve = {
-      dimensions: 2,
-      segments: segmentVector,
-      points: pointsArray,
+    if (dimensions === this.TWO_DIMENSIONS) {
+      const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve = {
+        dimensions: dimensions,
+        segments: segmentVector,
+        points: pointsArray2D!,
+      }
+
+      const ifcCurve: CurveObject = this.conwayModel.getIndexedPolyCurve(paramsGetIndexedPolyCurve)
+
+      segmentVector.delete()
+
+      return ifcCurve
+    } else {
+      const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve3D = {
+        dimensions: dimensions,
+        segments: segmentVector,
+        points: pointsArray3D!,
+      }
+
+      const ifcCurve: CurveObject = this.conwayModel.getIndexedPolyCurve3D(
+          paramsGetIndexedPolyCurve)
+
+      segmentVector.delete()
+
+      return ifcCurve
     }
-
-    const ifcCurve: CurveObject = this.conwayModel.getIndexedPolyCurve(paramsGetIndexedPolyCurve)
-
-    segmentVector.delete()
-
-    return ifcCurve
 
   }
 
