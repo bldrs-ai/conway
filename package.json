@@ -42,6 +42,8 @@
     "bundle-browser": "yarn bundle compiled/examples/browser.js --outfile=compiled/examples/browser-bundled.js",
     "bundle-validator": "yarn bundle compiled/examples/validator.js --outfile=compiled/examples/validator-bundled.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "generate-flamegraph": "node ./scripts/generate_flame_graph.cjs",
+    "cli-profile": "FORCE_SINGLE_THREAD='true' node --experimental-wasm-threads --prof --logfile=flamegraph.log --no-logfile-per-isolate --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js -g -n",
     "cli": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js",
     "browser": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/examples/browser.js",
     "validator": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/examples/validator.js",
