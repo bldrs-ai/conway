@@ -17,7 +17,7 @@
   ], 
   "out": "docs",
   "entryPointStrategy": "expand",
-  "includeVersion": true,
+  "includeVersion": false,
   "excludePrivate": true,
   "excludeProtected": true,
   "hideGenerator": true,
