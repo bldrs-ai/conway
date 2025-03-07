@@ -1,4 +1,4 @@
-const versionString: string = 'Conway Web-Ifc Shim v0.16.849'
+const versionString: string = 'Conway Web-Ifc Shim v0.17.852'
 
 
 export {versionString}
