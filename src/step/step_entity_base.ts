@@ -187,7 +187,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractNumber(vtableOffset: number, optional: true): number | null
   // eslint-disable-next-line no-dupe-class-members
   public extractNumber(vtableOffset: number, optional: false): number
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractNumber(vtableOffset: number, optional: boolean): number |
     null {
 
@@ -231,7 +231,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractString(offset: number, optional: true): string | null
   // eslint-disable-next-line no-dupe-class-members
   public extractString(offset: number, optional: false): string
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractString(offset: number, optional: boolean): string |
     null {
 
@@ -270,7 +270,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractLogical(offset: number, optional: true): boolean | null
   // eslint-disable-next-line no-dupe-class-members
   public extractLogical(offset: number, optional: false): boolean
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractLogical(offset: number, optional: boolean): boolean | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
@@ -304,7 +304,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractReference(offset: number, optional: true): StepEntityBase<EntityTypeIDs> | null
   // eslint-disable-next-line no-dupe-class-members
   public extractReference(offset: number, optional: false): StepEntityBase<EntityTypeIDs>
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractReference(offset: number, optional: boolean):
     StepEntityBase<EntityTypeIDs> | null {
 
@@ -361,7 +361,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param {t} ifc token type
    * @return {any} ifc token
    */
-  readValue(buffer: Uint8Array, cursor: number, t: IfcTokenType): any {
+  readValue(buffer: Uint8Array, cursor: number, t: IfcTokenType) {
     const view = new DataView(buffer.buffer)
     /* eslint-disable no-case-declarations */
     switch (t) {
@@ -432,7 +432,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param rank number array rank
    * @return {Array<any>} array of values
    */
-  public extractArray(offset: number, rank: number): Array<any> {
+  public extractArray(offset: number): Array<any> {
 
     const arrayObjects: Array<any> = this.extractLambda(offset, (buffer, cursor, endCursor) => {
 
@@ -500,7 +500,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param optional Is this an optional field?
    * @return {ExtractionType | null} The extracted value or null for optionals.
    */
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractLambda<ExtractionType>(
       offset: number,
       extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
@@ -574,7 +574,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {StepEntityBase} The extracted element, or null if optional
    * and this value isn't specified.
    */
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
       offset: number,
       optional: boolean,
@@ -664,7 +664,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   public extractBinary(vtableOffset: number, optional: true): [Uint8Array, number] | null
   // eslint-disable-next-line no-dupe-class-members
   public extractBinary(vtableOffset: number, optional: false): [Uint8Array, number]
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractBinary(vtableOffset: number, optional: boolean): [Uint8Array, number] | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
@@ -780,7 +780,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {boolean | null} The extracted number or null if it's
    * not supplied.
    */
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   public extractBoolean(offset: number, optional: boolean): boolean | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
@@ -899,14 +899,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param internalReference_  The internal reference to model components etc.
    * @param model The model this came from.
    */
-  /* eslint-disable no-useless-constructor, require-jsdoc, no-empty-function */
+  /* eslint-disable no-useless-constructor, no-empty-function */
   /* Note that ES lint doesn't parse the typescript meaning of this constructor
    * correctly. */
   constructor(
     public readonly localID: number,
     protected readonly internalReference_: StepEntityInternalReference<EntityTypeIDs>,
     public readonly model: StepModelBase<EntityTypeIDs>) { }
-  /* eslint-enable no-useless-constructor, require-jsdoc, no-empty-function */
+  /* eslint-enable no-useless-constructor, no-empty-function */
 
   /**
    * Guarantees the VTable of this has been parsed from the model so that values can be read out.
