@@ -37,171 +37,167 @@ async function main() {
 async function doWork() {
   const SKIP_PARAMS = 2
 
-  const args = // eslint-disable-line no-unused-vars
-    await yargs(process.argv.slice(SKIP_PARAMS))
-        .command('$0 <filename>', 'Query file', (yargs2) => {
-          yargs2.option('express_ids', {
-            describe: 'A list of express IDs',
-            type: 'number',
-            array: true,
-            alias: 'e',
-          })
-          yargs2.option('types', {
-            describe: 'A list of express IDs',
-            type: 'string',
-            array: true, alias: 't',
-          })
-          yargs2.option('fields', {
-            describe: 'A list of fields to extract',
-            type: 'string',
-            array: true,
-            alias: 'f',
-          })
-          yargs2.option('geometry', {
-            describe: 'Output Geometry in OBJ + GLTF + GLB formats',
-            type: 'boolean',
-            alias: 'g',
-          })
-          yargs2.option('properties', {
-            describe: 'Output PropertySets',
-            type: 'boolean',
-            alias: 'p',
-          })
-          yargs2.option('maxchunk', {
-            // eslint-disable-next-line max-len
-            describe: 'Maximum chunk size in megabytes (note, this is the allocation size, not the output size)',
-            type: 'number',
-            alias: 'm',
-            default: 128,
-          })
-          yargs2.option('strict', {
-            // eslint-disable-next-line max-len
-            describe: 'Makes parser/reference errors on nullable fields return null instead of an error',
-            type: 'boolean',
-            alias: 's',
-            default: false,
-          })
+  await yargs(process.argv.slice(SKIP_PARAMS))
+    .command('$0 <filename>', 'Query file', (yargs2) => {
+      yargs2.option('express_ids', {
+        describe: 'A list of express IDs',
+        type: 'number',
+        array: true,
+        alias: 'e',
+      })
+      yargs2.option('types', {
+        describe: 'A list of express IDs',
+        type: 'string',
+        array: true, alias: 't',
+      })
+      yargs2.option('fields', {
+        describe: 'A list of fields to extract',
+        type: 'string',
+        array: true,
+        alias: 'f',
+      })
+      yargs2.option('geometry', {
+        describe: 'Output Geometry in OBJ + GLTF + GLB formats',
+        type: 'boolean',
+        alias: 'g',
+      })
+      yargs2.option('properties', {
+        describe: 'Output PropertySets',
+        type: 'boolean',
+        alias: 'p',
+      })
+      yargs2.option('maxchunk', {
+        describe: 'Maximum chunk size in megabytes (note, this is the allocation size, not the output size)',
+        type: 'number',
+        alias: 'm',
+        default: 128,
+      })
+      yargs2.option('strict', {
+        describe: 'Makes parser/reference errors on nullable fields return null instead of an error',
+        type: 'boolean',
+        alias: 's',
+        default: false,
+      })
+      yargs2.positional('filename', { describe: 'AP214 STEP-File Paths', type: 'string' })
+    }, (argv) => {
+      const ifcFile = argv['filename'] as string
 
-          yargs2.positional('filename', { describe: 'AP214 STEP-File Paths', type: 'string' })
-        }, (argv) => {
-          const ifcFile = argv['filename'] as string
+      let indexAP214Buffer: Buffer | undefined
 
-          let indexAP214Buffer: Buffer | undefined
-
-          const expressIDs = (argv['express_ids'] as number[] | undefined)
-          const types = (argv['types'] as string[] | undefined)?.map((value) => {
-            return EntityTypesAP214[value.toLocaleUpperCase() as keyof typeof EntityTypesAP214]
-          }).filter((value) => value !== void 0)
-          const fields = (argv['fields'] as string[] | undefined) ??
+      const expressIDs = (argv['express_ids'] as number[] | undefined)
+      const types = (argv['types'] as string[] | undefined)?.map((value) => {
+        return EntityTypesAP214[value.toLocaleUpperCase() as keyof typeof EntityTypesAP214]
+      }).filter((value) => value !== void 0)
+      const fields = (argv['fields'] as string[] | undefined) ??
             ['expressID', 'type', 'localID']
-          const geometry = (argv['geometry'] as boolean | undefined)
-          const strict = (argv['strict'] as boolean | undefined) ?? false
+      const geometry = (argv['geometry'] as boolean | undefined)
+      const strict = (argv['strict'] as boolean | undefined) ?? false
 
-          try {
-            indexAP214Buffer = fs.readFileSync(ifcFile)
-          } catch (ex) {
-            console.log(
-                'Error: couldn\'t read file, check that it is accessible at the specified path.')
-            exit()
-          }
+      try {
+        indexAP214Buffer = fs.readFileSync(ifcFile)
+      } catch {
+        console.log(
+          'Error: couldn\'t read file, check that it is accessible at the specified path.')
+        exit()
+      }
 
-          if (indexAP214Buffer === void 0) {
-            console.log(
-                'Error: couldn\'t read file, check that it is accessible at the specified path.')
-            exit()
-          }
+      if (indexAP214Buffer === void 0) {
+        console.log(
+          'Error: couldn\'t read file, check that it is accessible at the specified path.')
+        exit()
+      }
 
-          const parser = AP214StepParser.Instance
-          const bufferInput = new ParsingBuffer(indexAP214Buffer)
-          const headerDataTimeStart = Date.now()
-          const result0 = parser.parseHeader(bufferInput)[1]
-          const headerDataTimeEnd = Date.now()
+      const parser = AP214StepParser.Instance
+      const bufferInput = new ParsingBuffer(indexAP214Buffer)
+      const headerDataTimeStart = Date.now()
+      const result0 = parser.parseHeader(bufferInput)[1]
+      const headerDataTimeEnd = Date.now()
 
-          switch (result0) {
-            case ParseResult.COMPLETE:
+      switch (result0) {
+      case ParseResult.COMPLETE:
 
-              break
+        break
 
-            case ParseResult.INCOMPLETE:
+      case ParseResult.INCOMPLETE:
 
-              console.log('Parse incomplete but no errors')
-              break
+        console.log('Parse incomplete but no errors')
+        break
 
-            case ParseResult.INVALID_STEP:
+      case ParseResult.INVALID_STEP:
 
-              console.log('Error: Invalid STEP detected in parse, but no syntax error detected')
-              break
+        console.log('Error: Invalid STEP detected in parse, but no syntax error detected')
+        break
 
-            case ParseResult.MISSING_TYPE:
+      case ParseResult.MISSING_TYPE:
 
-              console.log('Error: missing STEP type, but no syntax error detected')
-              break
+        console.log('Error: missing STEP type, but no syntax error detected')
+        break
 
-            case ParseResult.SYNTAX_ERROR:
+      case ParseResult.SYNTAX_ERROR:
 
-              console.log(`Error: Syntax error detected on line ${bufferInput.lineCount}`)
-              break
+        console.log(`Error: Syntax error detected on line ${bufferInput.lineCount}`)
+        break
 
-            default:
-          }
+      default:
+      }
 
-          const parseDataTimeStart = Date.now()
-          const model: AP214StepModel | undefined =
+      const parseDataTimeStart = Date.now()
+      const model: AP214StepModel | undefined =
             parser.parseDataToModel(bufferInput)[1]
-          const parseDataTimeEnd = Date.now()
+      const parseDataTimeEnd = Date.now()
 
-          if (model === void 0) {
-            return
-          }
+      if (model === void 0) {
+        return
+      }
 
-          model.nullOnErrors = !strict
+      model.nullOnErrors = !strict
 
-          if (geometry) {
+      if (geometry) {
 
-            console.log(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)
-            // Get the filename with extension
-            const fileNameWithExtension = ifcFile.split('/').pop()!
-            // Get the filename without extension
-            const fileName = fileNameWithExtension.split('.')[0]
+        console.log(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)
+        // Get the filename with extension
+        const fileNameWithExtension = ifcFile.split('/').pop()!
+        // Get the filename without extension
+        const fileName = fileNameWithExtension.split('.')[0]
 
-            const result = geometryExtraction(model)
+        const result = geometryExtraction(model)
 
-            if (result !== void 0) {
-              const scene = result
+        if (result !== void 0) {
+          const scene = result
 
-              const DEFAULT_CHUNK = 128
-              const MEGABYTE_SHIFT = 20
-              const maxChunk = (argv['maxchunk'] as number | undefined) ?? DEFAULT_CHUNK
-              const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
+          const DEFAULT_CHUNK = 128
+          const MEGABYTE_SHIFT = 20
+          const maxChunk = (argv['maxchunk'] as number | undefined) ?? DEFAULT_CHUNK
+          const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
 
-              serializeGeometry(scene, fileName, maxGeometrySize)
-            }
-          } else {
+          serializeGeometry(scene, fileName, maxGeometrySize)
+        }
+      } else {
 
-            console.log('\n')
+        console.log('\n')
 
-            console.log(fields.reduce((previous, current, currentIndex) => {
-              return `${previous}${(currentIndex === 0) ? '|' : ''}${current}|`
-            }, ''))
+        console.log(fields.reduce((previous, current, currentIndex) => {
+          return `${previous}${(currentIndex === 0) ? '|' : ''}${current}|`
+        }, ''))
 
-            console.log(fields.reduce((previous, current, currentIndex) => {
-              return `${previous}${(currentIndex === 0) ? '|' : ''}---|`
-            }, ''))
+        console.log(fields.reduce((previous, current, currentIndex) => {
+          return `${previous}${(currentIndex === 0) ? '|' : ''}---|`
+        }, ''))
 
-            let rowCount = 0
+        let rowCount = 0
 
-            const elements =
-            (expressIDs?.map((value) => model?.getElementByExpressID(value))?.filter(
+        const elements =
+              (expressIDs?.map((value) => model?.getElementByExpressID(value))?.filter(
                 (value) => value !== void 0 && (types === void 0 ||
-                types.includes(value.type))) ??
-              (types !== void 0 ? model.typeIDs(...types) : void 0) ??
-              model) as StepEntityBase<EntityTypesAP214>[] |
-            IterableIterator<StepEntityBase<EntityTypesAP214>>
+                                                types.includes(value.type))) ??
+               (types !== void 0 ? model.typeIDs(...types) : void 0) ??
+               model) as StepEntityBase<EntityTypesAP214>[] |
+              IterableIterator<StepEntityBase<EntityTypesAP214>>
 
-            for (const element of elements) {
-              const elementTypeID = EntityTypesAP214[element.type]
+              for (const element of elements) {
+                const elementTypeID = EntityTypesAP214[element.type]
 
-              console.log(
+                console.log(
                   fields.reduce((previous, current, currentIndex) => {
                     let result
 
@@ -210,7 +206,6 @@ async function doWork() {
                         result = elementTypeID
                       } else {
                         result = ((element as { [key: string]: any })[current])
-
                         if (result === null) {
                           result = 'null'
                         } else if (result === void 0) {
@@ -219,23 +214,23 @@ async function doWork() {
                           result = `#${result}`
                         }
                       }
-                    } catch (ex) {
+                    } catch {
                       result = 'err'
                     }
 
                     return `${previous}${(currentIndex === 0) ? '|' : ''}${result}|`
                   }, ''))
 
-              ++rowCount
-            }
+                ++rowCount
+              }
 
-            console.log('\n')
-            console.log(`Row Count: ${rowCount}`)
-            console.log(`Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms`)
-            console.log(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)
-          }
-        })
-        .help().argv
+        console.log('\n')
+        console.log(`Row Count: ${rowCount}`)
+        console.log(`Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms`)
+        console.log(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)
+      }
+    })
+    .help().argv
 }
 
 

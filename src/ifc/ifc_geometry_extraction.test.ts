@@ -45,7 +45,7 @@ async function initializeGeometryExtractor() {
 /**
  *  @return {boolean} indicating whether the wasm module is initialized.
  */
-function isInitialized(): Boolean {
+function isInitialized(): boolean {
   return conwayModel.isInitialized()
 }
 
@@ -59,7 +59,7 @@ function extractGeometry(): ExtractResult {
 /**
  * @return {number} indicating number of meshes
  */
-function getMeshSize(): Number {
+function getMeshSize(): number {
   return Array.from( conwayModel.scene.walk() ).length
 }
 
@@ -87,7 +87,7 @@ function materialColorMatches(materialIndex: number, equal: ColorRGBA): boolean 
 /**
  * @return {boolean} indicating if the geometry extraction module is still initialized or not
  */
-function destroy(): Boolean {
+function destroy(): boolean {
   conwayModel.destroy()
   return conwayModel.isInitialized()
 }
@@ -113,7 +113,7 @@ describe('Ifc Geometry Extraction', () => {
   })
 
   test('materialExtractionLength()', () => {
-    const testParameter:Number = 1
+    const testParameter:number = 1
     expect(getMaterialCount()).toBe(testParameter)
 
   })
@@ -124,7 +124,7 @@ describe('Ifc Geometry Extraction', () => {
   })
 
   test('geometryArrayLength()', () => {
-    const testParameter:Number = 7
+    const testParameter:number = 7
     expect(getMeshSize()).toBe(testParameter)
 
   })
