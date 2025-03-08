@@ -84,6 +84,11 @@ function doWork() {
             type: 'boolean',
             alias: 'g',
           })
+          yargs2.option('nooutput', {
+            describe: 'Run geometry processing but do not output files.',
+            type: 'boolean',
+            alias: 'n',
+          })
           yargs2.option('properties', {
             describe: 'Output PropertySets',
             type: 'boolean',
@@ -126,6 +131,7 @@ function doWork() {
           const outputProperties = (argv['properties'] as boolean | undefined)
           const strict = (argv['strict'] as boolean | undefined) ?? false
           const includeSpace = (argv['spaces'] as boolean | undefined)
+          const noOutput = (argv['nooutput'] as boolean | undefined)
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
@@ -242,7 +248,9 @@ function doWork() {
               const maxChunk = (argv['maxchunk'] as number | undefined) ?? DEFAULT_CHUNK
               const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
 
-              serializeGeometry(scene, fileName, maxGeometrySize, includeSpace)
+              if (noOutput === undefined || !noOutput) {
+                serializeGeometry(scene, fileName, maxGeometrySize, includeSpace)
+              }
             }
 
 

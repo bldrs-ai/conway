@@ -8,6 +8,7 @@ import {
   Vector3,
   Segment,
   ParamsGetIfcIndexedPolyCurve,
+  ParamsGetIfcIndexedPolyCurve3D,
   CurveObject,
   ParamsGetAxis2Placement2D,
   ParamsGetCircleCurve,
@@ -23,6 +24,7 @@ import {
   Bound3DObject,
   ParamsCreateBound3D,
   ParamsAddFaceToGeometry,
+  ParamsAddFaceToGeometrySimple,
   SurfaceObject,
   ParamsGetRectangleProfileCurve,
   ParamsRelVoidSubtract,
@@ -46,6 +48,7 @@ import {
   ParamsGetIfcLine,
   NativeTransform4x4,
   NativeTransform3x3,
+  FlattenedPointsResult,
 } from '../../dependencies/conway-geom'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
@@ -344,6 +347,9 @@ export class IfcGeometryExtraction {
   ObjectPool<ParamsGetTriangulatedFaceSetGeometry> | undefined
 
   private paramsGetPolyCurvePool: ObjectPool<ParamsGetPolyCurve> | undefined
+
+
+  public pointBuffer: FlattenedPointsResult | null = null
 
   private identity2DNativeMatrix: NativeTransform3x3
   private identity3DNativeMatrix: NativeTransform4x4
@@ -3217,6 +3223,114 @@ export class IfcGeometryExtraction {
     return flatCoordinates
   }
 
+  /**
+   * Efficiently flatten the points into a Float64Array while skipping
+   * consecutive points with the same localID.
+   *
+   * @param points - Array of IfcCartesianPoint
+   * @param dimensions - Number of coordinates per point (e.g. 3 for x,y,z)
+   * @return {Float64Array}
+   */
+  flattenCartesianPointsToFloat64ArrayFiltered(points: IfcCartesianPoint[],
+      dimensions: number): Float64Array {
+  // 1) First pass: figure out how many points *actually* get included
+  //    (skipping consecutive duplicates by localID)
+    let uniqueCount = 0
+    for (let i = 0; i < points.length; i++) {
+      if (i === 0 || points[i].localID !== points[i - 1].localID) {
+        uniqueCount++
+      }
+    }
+
+    // 2) Knowing how many we'll include, allocate the final TypedArray
+    const totalCoordinates = uniqueCount * dimensions
+    const flatCoordinates = new Float64Array(totalCoordinates)
+
+    // 3) Second pass: populate flatCoordinates
+    let offset = 0
+    let prevLocalID = -1
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i]
+      if (i === 0 || point.localID !== prevLocalID) {
+      // Copy only if localID changed
+        flatCoordinates.set(point.Coordinates, offset)
+        offset += point.Coordinates.length // or offset += dimensions if all are guaranteed
+        prevLocalID = point.localID
+      }
+    }
+
+    return flatCoordinates
+  }
+
+  /**
+   * Flatten the points into WASM memory (skipping consecutive duplicates).
+   * Reuses an existing WASM buffer if provided and large enough.
+   *
+   * @param points - Array of IfcCartesianPoint
+   * @param dimensions - Number of coordinates per point (e.g. 3 for x,y,z)
+   * @param existingPtr - (Optional) Pointer to an existing WASM buffer
+   * @param existingCapacity - (Optional) Capacity of that buffer in Float64 elements
+   * @return {FlattenedPointsResult} pointer, length used, total capacity
+   */
+  flattenCartesianPointsToWasmFiltered(
+      points: IfcCartesianPoint[],
+      dimensions: number,
+      existingPtr?: number,
+      existingCapacity?: number,
+  ): FlattenedPointsResult {
+
+    // The maximum we might need if we do NOT skip duplicates
+    const maxPossibleFloats = points.length * dimensions
+    const bytesPerElement = 8 // Float64
+
+    // 1) Allocate or reuse memory in WASM
+    let pointer: number = existingPtr ?? 0
+    let capacity: number = existingCapacity ?? 0
+
+    // If we have no existing buffer OR it's too small, allocate a new one
+    if (!pointer || capacity < maxPossibleFloats) {
+    // Free the old buffer if it exists and is too small
+      if (pointer) {
+        this.wasmModule._free(pointer)
+      }
+
+      const numBytes = maxPossibleFloats * bytesPerElement
+
+      pointer = this.wasmModule._malloc(numBytes)
+      capacity = maxPossibleFloats
+    }
+
+    // 2) Create a Float64Array view into WASM memory
+    // We only need to create a subarray up to the capacity
+    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
+        pointer / bytesPerElement,
+        // eslint-disable-next-line no-mixed-operators
+        pointer / bytesPerElement + capacity,
+    )
+
+    // 3) Single pass to skip consecutive duplicates, fill up the wasm array
+    let offset = 0
+    let prevLocalID = -1
+
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i]
+      if (i === 0 || point.localID !== prevLocalID) {
+      // Copy 'dimensions' values for the current point
+        wasmFloat64View.set(point.Coordinates, offset)
+        offset += dimensions
+        prevLocalID = point.localID
+      }
+    }
+
+    // 4) Return the pointer, the actual usage, and the capacity
+    return {
+      pointer,
+      length: offset,  // how many Float64 values were used
+      capacity,
+    }
+  }
+
 
   /**
    *
@@ -3441,11 +3555,6 @@ export class IfcGeometryExtraction {
    */
   extractIndexedPolyCurve(from: IfcIndexedPolyCurve): CurveObject | undefined {
 
-    if (from.Points instanceof IfcCartesianPointList3D) {
-      Logger.error('IfcCartesianPointList3D not supported in IfcIndexedPolycurve.')
-      return
-    }
-
     // initialize new segment vector
     const segmentVector = this.nativeSegmentVector()
 
@@ -3489,9 +3598,11 @@ export class IfcGeometryExtraction {
     }
 
     // initialize new native glm::vec3 array object (free memory with delete())
-    let pointsArray : StdVector< Vector2 >
+    let pointsArray2D : StdVector< Vector2 >
+    let pointsArray3D : StdVector< Vector3 >
     // = this.nativeVectorGlmdVec2((fromPoints as any).CoordList.length)
     const parseBuffer = this.conwayModel.nativeParseBuffer()
+    let dimensions = 2
 
     try {
 
@@ -3503,19 +3614,14 @@ export class IfcGeometryExtraction {
       if ( fromPoints instanceof IfcCartesianPointList2D ) {// ||
       //  fromPoints instanceof IfcCartesianPointList3D ) {
 
-        pointsArray = this.wasmModule.parsePoint2DVector( parseBuffer )
+        pointsArray2D = this.wasmModule.parsePoint2DVector( parseBuffer )
 
-        // populate points array
-        // for (let i = 0; i < coords.length; i++) {
-
-        //   const coord = coords[ i ]
-
-        //   pointsArray.set(i, { x: coord[ 0 ], y: coord[ 1 ] })
-        // }
-
+      } else if (fromPoints instanceof IfcCartesianPointList3D) {
+        pointsArray3D = this.wasmModule.parsePoint3DVector(parseBuffer)
+        dimensions = this.THREE_DIMENSIONS
       } else {
 
-        pointsArray = this.wasmModule.parsePoint3Dto2DVector( parseBuffer )
+        pointsArray2D = this.wasmModule.parsePoint3Dto2DVector( parseBuffer )
 
       }
 
@@ -3524,17 +3630,32 @@ export class IfcGeometryExtraction {
       this.conwayModel.freeParseBuffer( parseBuffer )
     }
 
-    const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve = {
-      dimensions: 2,
-      segments: segmentVector,
-      points: pointsArray,
+    if (dimensions === this.TWO_DIMENSIONS) {
+      const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve = {
+        dimensions: dimensions,
+        segments: segmentVector,
+        points: pointsArray2D!,
+      }
+
+      const ifcCurve: CurveObject = this.conwayModel.getIndexedPolyCurve(paramsGetIndexedPolyCurve)
+
+      segmentVector.delete()
+
+      return ifcCurve
+    } else {
+      const paramsGetIndexedPolyCurve: ParamsGetIfcIndexedPolyCurve3D = {
+        dimensions: dimensions,
+        segments: segmentVector,
+        points: pointsArray3D!,
+      }
+
+      const ifcCurve: CurveObject = this.conwayModel.getIndexedPolyCurve3D(
+          paramsGetIndexedPolyCurve)
+
+      segmentVector.delete()
+
+      return ifcCurve
     }
-
-    const ifcCurve: CurveObject = this.conwayModel.getIndexedPolyCurve(paramsGetIndexedPolyCurve)
-
-    segmentVector.delete()
-
-    return ifcCurve
 
   }
 
@@ -3594,7 +3715,6 @@ export class IfcGeometryExtraction {
             parents !== void 0 ? [from, ...parents] : [from] )
 
       } else {
-
         this.extractRepresentationItem(representationItem,
             owningElement.localID,
             isRelVoid,
@@ -3702,6 +3822,7 @@ export class IfcGeometryExtraction {
 
         this.scene.addGeometry(from.localID, owningElementLocalID, isSpace)
       }
+
       return
     }
 
@@ -4139,7 +4260,7 @@ export class IfcGeometryExtraction {
 
           vec3Array = this.wasmModule.parseVertexVector( coordParseBuffer )
 
-          this.wasmModule.freeParseBuffer( coordParseBuffer )
+          conwayModel.freeParseBuffer( coordParseBuffer )
         } else if (innerBound instanceof IfcEdgeLoop) {
 
           vec3Array = this.nativeVectorGlmdVec3()
@@ -4501,65 +4622,53 @@ export class IfcGeometryExtraction {
 
       const bound3DVector = this.nativeBound3DVector()
 
+      // let pointsPtrs:any[]
+
       for (let boundIndex = 0; boundIndex < from.Bounds.length; ++boundIndex) {
-        const vec3Array = this.nativeVectorGlmdVec3()
         const bound = from.Bounds[boundIndex]
+        const innerBound = bound.Bound
 
-        if (bound.Bound instanceof IfcPolyLoop) {
+        if (innerBound instanceof IfcPolyLoop) {
 
-          let prevLocalID: number = -1
+          // Attempt to reuse the pointer/capacity from `pointBuffer`
+          const result = this.flattenCartesianPointsToWasmFiltered(
+              innerBound.Polygon,
+              this.THREE_DIMENSIONS,
+              this.pointBuffer?.pointer,
+              this.pointBuffer?.capacity,
+          )
 
-          for (let pointIndex = 0; pointIndex < bound.Bound.Polygon.length; ++pointIndex) {
-            const vec3 = {
-              x: bound.Bound.Polygon[pointIndex].Coordinates[0],
-              y: bound.Bound.Polygon[pointIndex].Coordinates[1],
-              z: bound.Bound.Polygon[pointIndex].Coordinates[2],
-            }
+          // Now `result.pointer` is your up-to-date pointer (maybe a new allocation).
+          // `result.length` is how many Float64 coords are valid.
+          // `result.capacity` is how many Float64 coords that pointer can hold.
+          // eslint-disable-next-line no-unused-vars
+          const { pointer, length, capacity } = result
 
-            const currentLocalID: number = bound.Bound.Polygon[pointIndex].localID
-            if (currentLocalID !== prevLocalID) {
-              vec3Array.push_back(vec3)
-              prevLocalID = currentLocalID
-            }
-          }
+          // Use them in your WASM call
+          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
+              pointer,
+              length,
+              bound.Orientation,
+            bound.type === EntityTypesIfc.IFCFACEOUTERBOUND ? 0 : 1,
+          )
+
+          // Push your result somewhere
+          bound3DVector.push_back(bound3D)
+
+          // Save the buffer for reuse in the next iteration
+          this.pointBuffer = result
         }
-
-        const edgesDummy: StdVector<CurveObject> = this.nativeVectorCurve()
-        // get curve
-        const parameters: ParamsGetLoop = {
-          points: vec3Array,
-          edges: edgesDummy,
-        }
-
-        const curve: CurveObject = this.conwayModel.getLoop(parameters)
-
-        // create bound vector
-        const parametersCreateBounds3D: ParamsCreateBound3D = {
-          curve: curve,
-          orientation: bound.Orientation,
-          type: (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1,
-        }
-
-        const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
-
-        bound3DVector.push_back(bound3D)
-        vec3Array.delete()
-        edgesDummy.delete()
       }
 
       // add face to geometry
-      const defaultSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
-      const parameters: ParamsAddFaceToGeometry = {
+      const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
-        advancedBrep: false,
-        surface: defaultSurface,
         scaling: this.getLinearScalingFactor(),
       }
 
-      this.conwayModel.addFaceToGeometry(parameters, geometry)
+      this.conwayModel.addFaceToGeometrySimple(parameters, geometry)
 
       bound3DVector.delete()
-      defaultSurface.delete()
     }
   }
 
@@ -5854,6 +5963,12 @@ export class IfcGeometryExtraction {
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
         this.model.geometry.deleteTemporaries()
         this.model.voidGeometry.deleteTemporaries()
+      }
+
+      // free buffer at the end if you don't need it anymore
+      if (this.pointBuffer?.pointer) {
+        this.wasmModule._free(this.pointBuffer.pointer)
+        this.pointBuffer = null
       }
 
       result = ExtractResult.COMPLETE

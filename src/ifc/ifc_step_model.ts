@@ -33,7 +33,6 @@ export default class IfcStepModel extends StepModelBase< EntityTypesIfc > {
    * Construct this model given a buffer containing the data and the parsed data index on that,
    * adding the typeIndex on top of that.
    *
-   * @param wasmModule
    * @param buffer The buffer to values from.
    * @param elementIndex The parsed index to elements in the STEP.
    */
