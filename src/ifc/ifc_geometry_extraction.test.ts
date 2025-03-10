@@ -43,21 +43,21 @@ async function initializeGeometryExtractor() {
 }
 
 /**
- *  @return {boolean} indicating whether the wasm module is initialized.
+ *  @returns indicating whether the wasm module is initialized.
  */
 function isInitialized(): boolean {
   return conwayModel.isInitialized()
 }
 
 /**
- * @return {ExtractResult} indicating whether the geometry extraction was successful.
+ * @returns indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
 }
 
 /**
- * @return {number} indicating number of meshes
+ * @returns indicating number of meshes
  */
 function getMeshSize(): number {
   return Array.from( conwayModel.scene.walk() ).length
@@ -65,8 +65,7 @@ function getMeshSize(): number {
 
 /**
  * Get the materials from the model.
- *
- * @return {number} The number of materials in this.
+ * @returns The number of materials in this.
  */
 function getMaterialCount(): number {
   return conwayModel.materials.size
@@ -74,8 +73,9 @@ function getMaterialCount(): number {
 
 /**
  * Test if a material colour at a particular index matches a value.
- *
- * @return {boolean} True if a match, false otherwise.
+ * @param materialIndex
+ * @param equal
+ * @returns True if a match, false otherwise.
  */
 function materialColorMatches(materialIndex: number, equal: ColorRGBA): boolean {
   return Array.from(
@@ -85,7 +85,7 @@ function materialColorMatches(materialIndex: number, equal: ColorRGBA): boolean 
 }
 
 /**
- * @return {boolean} indicating if the geometry extraction module is still initialized or not
+ * @returns indicating if the geometry extraction module is still initialized or not
  */
 function destroy(): boolean {
   conwayModel.destroy()
@@ -119,7 +119,7 @@ describe('Ifc Geometry Extraction', () => {
   })
 
   test('materialColorMatches(0)', () => {
-    // eslint-disable-next-line no-magic-numbers
+     
     expect(materialColorMatches(0, [0.4, 0.8, 0, 1])).toBe(true)
   })
 

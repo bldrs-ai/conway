@@ -1,5 +1,5 @@
-/* eslint-disable no-empty-function */
-/* eslint-disable no-useless-constructor */
+ 
+ 
 import { CanonicalProfile } from '../core/canonical_profile'
 import {ModelProfile} from '../core/model'
 import { IfcProfileDef } from './ifc4_gen'
@@ -15,15 +15,13 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Construct this with its parent model.
-   *
    * @param model The model for this.
    */
   constructor( public readonly model: IfcStepModel ) {}
 
   /**
    * Get the number of profiles in this.
-   *
-   * @return {number}
+   * @returns
    */
   get length(): number {
     return this.profiles_.size
@@ -31,7 +29,6 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Add a profile to the cache.
-   *
    * @param profile
    */
   public add( profile: CanonicalProfile ) {
@@ -40,9 +37,8 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Get a profile by its local id.
-   *
    * @param localID
-   * @return {CanonicalProfile | undefined}
+   * @returns
    */
   public getByLocalID(localID: number): CanonicalProfile | undefined {
     return this.profiles_.get(localID)
@@ -50,8 +46,7 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Iterate through the profiles in this.
-   *
-   * @return {IterableIterator<CanonicalProfile>}
+   * @returns
    */
   public [Symbol.iterator](): IterableIterator<CanonicalProfile> {
     return this.profiles_.values()
@@ -60,7 +55,6 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Get the OBJs for all the curves in the cache (lazily)
-   *
    * @yields {[IfcProfileDef, string]} Curves with their matching OBJ as a string
    */
   public* objs() : IterableIterator< [IfcProfileDef, string] > {

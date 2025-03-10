@@ -46,8 +46,7 @@ async function initializeGeometryExtractor() {
 
 /**
  * Extract the geometry from index IFC
- *
- * @return {ExtractResult} indicating whether the geometry extraction was successful.
+ * @returns indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
@@ -58,8 +57,7 @@ let packedModel: PackedMesh< IfcStepModel > | undefined
 /**
  * Build the packed mesh model if it hasn't been built and memoize it,
  * and return the memoized value.
- *
- * @return {PackedMesh | undefined} The packed mesh if it can be built,
+ * @returns The packed mesh if it can be built,
  * or undefined (void 0) otherwise.
  */
 function packMesh(): PackedMesh< IfcStepModel > | undefined {
@@ -82,8 +80,7 @@ const ELEMENT_CURSOR_TRIANGLES_SET_COUNT = 7
 /**
  * Get all the elements in a from a product query, find their matching triangles
  * given the cursor, then check the triangle map matches.
- *
- * @return {boolean} True if all triangle elements map, false if otherwise.
+ * @returns True if all triangle elements map, false if otherwise.
  */
 function checkTrianglesMatch(): boolean {
 

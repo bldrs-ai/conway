@@ -32,8 +32,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits
    * padded to zero.
-   *
-   * @return {number} The high bits.
+   * @returns The high bits.
    */
   public get high(): number {
     return this.high_
@@ -42,8 +41,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
   /**
    * Get a set of up to 32 low bits, in one-hot format or'd together,
    * so that each bit index represents a 5 bit bottom part corresponding to the top 27
-   *
-   * @return {number} The high bits.
+   * @returns The high bits.
    */
   public get low(): number {
     return this.low_
@@ -51,8 +49,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
   /**
    * Step this cursor to the next high (and matching set of lows)
-   *
-   * @return {boolean} True if this is not at the end of the sequence,
+   * @returns True if this is not at the end of the sequence,
    * false otherwise.
    */
   public step(): boolean {
@@ -62,7 +59,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
     let result: boolean
 
     do {
-      // eslint-disable-next-line no-magic-numbers
+       
       lowestHigh = 0xFFFFFFFF
       result     = false
       currentLow = 0
@@ -71,7 +68,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
       const setEnd     = this.currentOpCount_ << 1
       const buffer     = this.buffer_ as Uint32Array
 
-      // eslint-disable-next-line no-magic-numbers
+       
       for ( let where = 0; where < setEnd; where += 2 ) {
         const opPosition = cursorSet[ where ]
         const opEnd      = cursorSet[ where + 1 ]
@@ -91,7 +88,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
         return false
       }
 
-      // eslint-disable-next-line no-magic-numbers
+       
       for ( let where = 0; where < setEnd; where += 2 ) {
         const opPosition = cursorSet[ where ]
         const opEnd      = cursorSet[ where + 1 ]
@@ -100,7 +97,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
           const bufferHigh = buffer[ opPosition ] & MASK_TOPBITS
 
           if ( lowestHigh === bufferHigh ) {
-            // eslint-disable-next-line no-magic-numbers
+             
             this.cursorSet_[ where ] = opPosition + 2
 
             currentLow ^= buffer[ opPosition + 1 ]
@@ -118,8 +115,8 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
   /**
    * Allocate a MultiIndexSetCursorXor, re-using freed ones in the pool.
-   *
-   * @return {MultiIndexSetCursorXor} The allocated cursor.
+   * @param buffer
+   * @returns The allocated cursor.
    */
   public static allocate( buffer: Uint32Array ): MultiIndexSetCursorXor {
     let result: MultiIndexSetCursorXor
@@ -138,13 +135,12 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
   /**
    * Add a range from the multi-set buffer to the cursor.
-   *
    * @param from The start of the range.
    * @param to The end of the range (not inclusive)
    */
   public addRange( from: number, to: number ): void {
     if ( ( this.cursorSet_.length >>> 1 ) <= this.currentOpCount_ ) {
-      /* eslint-disable no-magic-numbers */
+       
       const newLength = this.currentOpCount_ * 4
 
       const newCursorSet = new Uint32Array( newLength )
@@ -158,7 +154,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
     this.cursorSet_[ opIndex ]     = from * 2
     this.cursorSet_[ opIndex + 1 ] = to * 2
-    /* eslint-enable no-magic-numbers */
+     
   }
 
   /**

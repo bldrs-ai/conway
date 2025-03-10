@@ -14,9 +14,8 @@ const ROUGNESS_CONVERSION_FACTOR = 2.0
  * Convert a specular exponent (e.g. phong or blinn) to roughness
  *
  * Uses the conversion from - http://simonstechblog.blogspot.com/2011/12/microfacet-brdf.html
- *
  * @param shininess The shinyness exponent/𝛼 to convert to roughness
- * @return {number} The resultant roughness.
+ * @returns The resultant roughness.
  */
 export function exponentToRoughness(shininess: number): number {
   return Math.sqrt(ROUGNESS_CONVERSION_FACTOR /
@@ -27,9 +26,9 @@ export function exponentToRoughness(shininess: number): number {
  * Convert a roughness to specular exponent
  *
  * Uses the conversion from - http://simonstechblog.blogspot.com/2011/12/microfacet-brdf.html
- *
  * @param shininess The shinyness exponent/𝛼 to convert to roughness
- * @return {number} The resultant roughness.
+ * @param roughness
+ * @returns The resultant roughness.
  */
 export function roughnessToExponent(roughness: number): number {
   return ( ROUGNESS_CONVERSION_FACTOR /
@@ -95,9 +94,8 @@ export interface CanonicalMaterial {
 
 /**
  * A materila name cleaned for OBJ syntax
- *
  * @param from The material to get a clean name for
- * @return {string} The cleaned name
+ * @returns The cleaned name
  */
 export function getMTLCleanName( from: CanonicalMaterial ): string {
   return from.name.replaceAll( '#', '_' )
@@ -105,9 +103,8 @@ export function getMTLCleanName( from: CanonicalMaterial ): string {
 
 /**
  * Dump a material to MTL format.
- *
  * @param from The material to dump.
- * @return {string} The MTL formatted string.
+ * @returns The MTL formatted string.
  */
 export function dumpMTL( from: CanonicalMaterial ): string {
 
@@ -115,7 +112,7 @@ export function dumpMTL( from: CanonicalMaterial ): string {
 
   const AMBIENT = 0.05
 
-  // eslint-disable-next-line max-len
+   
   result += `Ka ${from.baseColor[0] * AMBIENT} ${from.baseColor[1] * AMBIENT} ${from.baseColor[2] * AMBIENT}\n`
 
   if ( from.metalness === void 0 ) {
@@ -124,7 +121,7 @@ export function dumpMTL( from: CanonicalMaterial ): string {
 
     const albedoFactor = 1.0 - from.metalness
 
-    // eslint-disable-next-line max-len
+     
     result += `Kd ${from.baseColor[0] * albedoFactor} ${from.baseColor[1] * albedoFactor} ${from.baseColor[2] * albedoFactor}\n`
   }
 
@@ -173,7 +170,7 @@ export function dumpMTL( from: CanonicalMaterial ): string {
   return result
 }
 
-/* eslint-disable no-magic-numbers */
+ 
 export const defaultCanonicalMaterial: CanonicalMaterial = {
 
   name: 'Default Conway Material',
@@ -186,14 +183,13 @@ export const defaultCanonicalMaterial: CanonicalMaterial = {
   ior: 1.5,
 }
 
-/* eslint-enable no-magic-numbers */
+ 
 
 /**
  * Convert a canonical material to a native material
- *
  * @param wasm The wasm object to use for conversion.
  * @param from The material to convert.
- * @return {MaterialObject} The native material object.
+ * @returns The native material object.
  */
 export function toNativeMaterial(
     wasm: ConwayGeometryWasm,
@@ -209,7 +205,7 @@ export function toNativeMaterial(
       w: from.baseColor[3],
     },
     doubleSided: from.doubleSided,
-    /* eslint-disable no-magic-numbers */
+     
     ior: from.ior ?? 1.5,
     metallic: from.metalness ?? 1.0,
     roughness: from.roughness ?? 1.0,
@@ -225,6 +221,6 @@ export function toNativeMaterial(
       w: 1,
     },
   }
-  /* eslint-enable no-magic-numbers */
+   
   return native
 }

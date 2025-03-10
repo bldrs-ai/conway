@@ -3,20 +3,19 @@ import { SingleIndexSet } from './single_index_set'
 import { cursorIterator } from './cursor_utilities'
 
 
-/* eslint-disable no-magic-numbers */
+ 
 const ID_SET = [
   9, 17, 31, 102, 103, 1042, 1045, 1046,
   63212, 68993, 68994, ( 1 << 24 ) + 1023, ( 1 << 24 ) + 1024,
 ]
-/* eslint-enable no-magic-numbers */
+ 
 
 const PERMUTE_CONSTANT = 237
 
 /**
  * Build a single id set from an array of mock local IDs and test
  * that it they are present and permutations not in the set aren't.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function buildAndTestSingleSet(): boolean {
 

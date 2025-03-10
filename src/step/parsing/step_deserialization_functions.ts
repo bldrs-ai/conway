@@ -33,10 +33,9 @@ const parsingBufferReusable = new ParsingBuffer( new Uint8Array( 1 ), 0, 1 )
 
 /**
  * NVL is a null coalescing function required for STEP.
- *
  * @param testValue The value to test.
  * @param replaceValue The value to replace it with if the test fails.
- * @return {any | null | undefined} Test value if it's not nullish, replaceValue otherwise.
+ * @returns Test value if it's not nullish, replaceValue otherwise.
  */
 export function NVL< T >( testValue: T | null | undefined, replaceValue: T ): T {
   return testValue ?? replaceValue
@@ -45,9 +44,8 @@ export function NVL< T >( testValue: T | null | undefined, replaceValue: T ): T 
 
 /**
  * Return the Hi Index of an array (Express expects 1 based here, so it's length).
- *
  * @param testValue The value try and get a length from.
- * @return {number} The length if this is a valid array, or 0 otherwise.
+ * @returns The length if this is a valid array, or 0 otherwise.
  */
 export function HIINDEX< T >( testValue: T[] | null | undefined ): number {
   return testValue?.length ?? 0
@@ -55,9 +53,8 @@ export function HIINDEX< T >( testValue: T[] | null | undefined ): number {
 
 /**
  * Return the size of an array
- *
  * @param testValue The value try and get a length from.
- * @return {number} The length if this is a valid array, or 0 otherwise.
+ * @returns The length if this is a valid array, or 0 otherwise.
  */
 export function SIZEOF< T >( testValue: T[] | null | undefined ): number {
   return testValue?.length ?? 0
@@ -66,11 +63,10 @@ export function SIZEOF< T >( testValue: T[] | null | undefined ): number {
 
 /**
  * Step try and extract an optional value (null).
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {null | undefined} Null if this is optional, undefined otherwise.
+ * @returns Null if this is optional, undefined otherwise.
  */
 export function stepExtractOptional(
     buffer: Uint8Array,
@@ -89,11 +85,10 @@ export function stepExtractOptional(
 
 /**
  * Extract a STEP number
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {number | undefined} The number if it can be extracted, undefined otherwise.
+ * @returns The number if it can be extracted, undefined otherwise.
  */
 export function stepExtractNumber(
     buffer: Uint8Array,
@@ -109,11 +104,10 @@ export function stepExtractNumber(
 
 /**
  * Extract a STEP logical value (which can be true, false or unknown)
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {boolean | null | undefined} The boolean if it can be extracted, null for unknown
+ * @returns The boolean if it can be extracted, null for unknown
  * and undefined if the value can't be extracted.
  */
 export function stepExtractLogical(
@@ -148,11 +142,10 @@ export function stepExtractLogical(
 
 /**
  * Extract a STEP boolean value (which can be true or false)
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {boolean | undefined} The boolean if it can be extracted
+ * @returns The boolean if it can be extracted
  * and undefined if the value can't be extracted.
  */
 export function stepExtractBoolean(
@@ -179,12 +172,11 @@ export function stepExtractBoolean(
 /**
  * Skip a value in the parse (doesn't apply to arrays, just flat),
  * either til the next array end (close bracket) or the next comma.
- *
  * @param buffer The buffer to read from.
  * @param cursor The current read cursor.
  * @param endCursor The highest possible cursor to read from.
  * @throws {Error} When the parse syntax is incorrect.
- * @return {number} The new cursor.
+ * @returns The new cursor.
  */
 export function skipValue(
     buffer: Uint8Array,
@@ -268,11 +260,10 @@ export function skipValue(
 
 /**
  * Extract a STEP an array (iterable set of indices to array values to extract)
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {number} Returns a negative number on termination/error
+ * @returns Returns a negative number on termination/error
  * matching the values in IncermentalParseEndState, or the new cursor
  * if there is a value in .
  */
@@ -309,12 +300,11 @@ export function stepExtractArrayBegin(
 
 /**
  * Extract a STEP an array (iterable set of indices to array values to extract)
- *
  * @param isInitial Is this the initial element?
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {number} Returns a negative number on termination/error
+ * @returns Returns a negative number on termination/error
  * matching the values in IncermentalParseEndState, or the new cursor
  * if there is a value in the token.
  */
@@ -367,13 +357,12 @@ export function stepExtractArrayToken(
 
 /**
  * Extract a STEP an array (iterable set of indices to array values to extract)
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
  * @throws {Error} If there is a syntax error, an error is thrown.
  * @yields {number} The index for each entry.
- * @return {IterableIterator} Lazy iterator to extract value.
+ * @returns Lazy iterator to extract value.
  */
 export function* stepExtractArray(
     buffer: Uint8Array,
@@ -481,11 +470,10 @@ export function* stepExtractArray(
 
 /**
  * Extracts an inline element and returns its cursor, or none if it can't be found.
- *
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {number | undefined} The index address of the start of the inline element, or
+ * @returns The index address of the start of the inline element, or
  * undefined if one can't be found.
  */
 export function stepExtractInlineElemement(
@@ -542,11 +530,11 @@ const MINIMUM_REFERENCE_LENGTH = 2
 /**
  * Match an unsigned integer and return the updated cursor position or
  * undefined if no match is found
- *
  * @param buffer The buffer to extract it from.
+ * @param input
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
- * @return {number | undefined} The reference express ID of the start of the inline element, or
+ * @returns The reference express ID of the start of the inline element, or
  * undefined if one can't be found.
  */
 export function stepExtractReference(
@@ -565,7 +553,7 @@ export function stepExtractReference(
 
   const firstChar = input[ cursor ] - ZERO
 
-  // eslint-disable-next-line no-magic-numbers
+   
   if ( firstChar < 0 || firstChar > 9 ) {
     return
   }
@@ -577,12 +565,12 @@ export function stepExtractReference(
   while ( cursor < endCursor ) {
     const currentChar = input[ cursor ] - ZERO
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( currentChar < 0 || currentChar > 9 ) {
       return base
     }
 
-    // eslint-disable-next-line no-magic-numbers
+     
     base *= 10
     base += currentChar
 

@@ -6,8 +6,7 @@ const parserInstance = StepEntityIdentifierParser.Instance
 
 /**
  * Tests parsing a simple enum value.
- *
- * @return {boolean} True if the test parses.
+ * @returns True if the test parses.
  */
 function testParseCorrectValue() {
   const data = new TextEncoder().encode( '.TEST.' )
@@ -19,8 +18,7 @@ function testParseCorrectValue() {
 
 /**
  * Tests an unterminated enum value failing parse.
- *
- * @return {boolean} True if the test parses.
+ * @returns True if the test parses.
  */
 function testParseUnterminated() {
   const data = new TextEncoder().encode( '.TEST' )
@@ -32,8 +30,7 @@ function testParseUnterminated() {
 
 /**
  * Tests an enum value failing on missing starting discriminator.
- *
- * @return {boolean} True if the test parses.
+ * @returns True if the test parses.
  */
 function testParseMissingDiscriminator() {
   const data = new TextEncoder().encode( 'TEST.' )
@@ -45,8 +42,7 @@ function testParseMissingDiscriminator() {
 
 /**
  * Tests a parse failing for enum missing any letters between dots.
- *
- * @return {boolean} True if the test parses.
+ * @returns True if the test parses.
  */
 function testParseMissingLetter() {
   const data = new TextEncoder().encode( '..' )
@@ -58,8 +54,7 @@ function testParseMissingLetter() {
 
 /**
  * Tests a parse failing for lower case.
- *
- * @return {boolean} True if the test parses.
+ * @returns True if the test parses.
  */
 function testParseLowerCase() {
   const data = new TextEncoder().encode( '.test.' )

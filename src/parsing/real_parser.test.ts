@@ -6,8 +6,7 @@ const parserInstance = RealParser.Instance
 
 /**
  * Tests parsing an unsigned number.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testUnsigned() {
   const data = new TextEncoder().encode( '0123456789' )
@@ -19,8 +18,7 @@ function testUnsigned() {
 
 /**
  * Tests that parsing an unsigned with a negative fails.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testUnsignedNegative() {
   const data = new TextEncoder().encode( '-0123456789' )
@@ -32,8 +30,7 @@ function testUnsignedNegative() {
 
 /**
  * Tests that parsing an unsigned with a negative fails.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testSignedPositive() {
   const data = new TextEncoder().encode( '+0123456789' )
@@ -46,8 +43,7 @@ function testSignedPositive() {
 
 /**
  * Tests parsing an signed positive number.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testSignedNoNegative() {
   const data = new TextEncoder().encode( '0123456789' )
@@ -59,8 +55,7 @@ function testSignedNoNegative() {
 
 /**
  * Tests parsing an signed negative number.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testSignedNegative() {
   const data = new TextEncoder().encode( '-0123456789' )
@@ -72,8 +67,7 @@ function testSignedNegative() {
 
 /**
  * Tests parsing failing for a non-number input.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testNotInteger() {
   const data = new TextEncoder().encode( 'TEST' )
@@ -85,8 +79,7 @@ function testNotInteger() {
 
 /**
  * Tests parsing a signed number terminating correctly at a space.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testTermination() {
   const data = new TextEncoder().encode( '-0123456789 ' )
@@ -98,8 +91,7 @@ function testTermination() {
 
 /**
  * Tests parsing an signed negative number with a bunch of decimal places.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testDecimalPoint() {
   const data = new TextEncoder().encode( '-0123456789.0123456789' )
@@ -111,8 +103,7 @@ function testDecimalPoint() {
 
 /**
  * Tests parsing an signed negative number with scientific notation (lowercase e).
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testScientific() {
   const data = new TextEncoder().encode( '-0123456789.0123456789e534' )
@@ -125,8 +116,7 @@ function testScientific() {
 /**
  * Tests parsing an signed negative number with scientific notation (lowercase e)
  * with the decimal point just before e.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testScientificPeriod() {
   const data = new TextEncoder().encode( '-0123456789.e534' )
@@ -138,8 +128,7 @@ function testScientificPeriod() {
 
 /**
  * Tests parsing an signed negative number with scientific notation (uppercase E).
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testScientificUpper() {
   const data = new TextEncoder().encode( '-0123456789.0123456789E534' )
@@ -152,8 +141,7 @@ function testScientificUpper() {
 /**
  * Tests parsing an signed negative number with scientific notation (uppercase E) and no
  * decimal point.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testScientificNoDecimal() {
   const data = new TextEncoder().encode( '-0123456789e534' )

@@ -8,14 +8,14 @@ import { extractOneHotLow, pop32 } from './bit_operations'
 describe( 'Index Bit Operations Test', () => {
   test( 'extractOneHotLow()', () => {
 
-    // eslint-disable-next-line no-magic-numbers
+     
     expect( extractOneHotLow( BINARY_LITERAL_4_TRAILING_ZEROS ) ).toBe( 4 )
 
   } )
 
   test( 'pop32()', () => {
 
-    // eslint-disable-next-line no-magic-numbers
+     
     expect( pop32( BINARY_9_BITS_OF_32 ) ).toBe( 9 )
 
   } )

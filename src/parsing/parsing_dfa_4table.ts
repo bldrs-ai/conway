@@ -14,7 +14,6 @@ export default abstract class ParsingDfa4Table {
 
   /**
    * Construct the DFA table with a maximum state count, which allows limited length arrays.
-   *
    * @param maximumState The maximum state value, shouldn't be more than 3.
    */
   constructor( maximumState: number = 3 ) {
@@ -24,14 +23,13 @@ export default abstract class ParsingDfa4Table {
   /**
    * Specify a range of transition bytes from one state to another.
    * another state.
-   *
    * @param fromState The state to transition from.
    * @param begin The beginning of the range of byte values.
    * Can be a single character string or number.
    * @param end  The ending of the range of byte values (inclusive).
    * Can be a single character string or number.
    * @param value The state to transition to.
-   * @return {void}
+   * @returns
    */
   protected range(
       fromState: number,
@@ -54,11 +52,10 @@ export default abstract class ParsingDfa4Table {
   /**
    * Specify a transition byte from one state to another.
    * another state.
-   *
    * @param fromState The state to transition from.
    * @param entry The byte value to transition on.
    * @param value The state to transition to.
-   * @return {void}
+   * @returns
    */
   protected set( fromState: number, entry: number | string | Uint8Array, value: number ) {
     if ( typeof entry === 'string' ) {
@@ -75,7 +72,7 @@ export default abstract class ParsingDfa4Table {
       return
     }
 
-    /* eslint-disable no-magic-numbers */ // -- All 2 bit related.
+      // -- All 2 bit related.
     if ( entry < 0 || entry > 255 ) {
       throw Error( 'Character for parse was not byte' )
     }
@@ -86,35 +83,33 @@ export default abstract class ParsingDfa4Table {
 
     this.table_[( ( fromState - 1 ) << 4 ) + ( entry >>> 4 ) ] =
       ( value << ( ( entry & 15 ) << 1 ) ) | previousValueMasked
-    /* eslint-enable no-magic-numbers */
+     
   }
 
   /**
    * Get the value of a given state for a given value.
    *
    * Useful for using this for mappings. Will cause an exception if out of bounds.
-   *
    * @param value The byte value to lookup.
    * @param state The state to get the value for.
-   * @return {number}
+   * @returns
    */
   public get( value: number, state: number ): number {
 
-    /* eslint-disable no-magic-numbers */
+     
     return (
       this.table_[ ( ( state - 1 ) << 4 ) + ( value >>> 4 ) ] >>> ( ( value & 15 ) << 1 ) ) & 3
-    /* eslint-enable no-magic-numbers */
+     
   }
 
   /**
    * Match a byte run against the DFA.
-   *
    * @param buffer The buffer to read from.
    * @param validTerminusFlags What states are terminus (as flags)
    * @param cursor The position in the buffer to start the match from.
    * @param endCursor The last possible position in the buffer to find the match.
    * @param state The initial state to start on.
-   * @return {number | undefined} The position in the buffer of the end of the match,
+   * @returns The position in the buffer of the end of the match,
    * or undefined if none found.
    */
   protected match(
@@ -128,10 +123,10 @@ export default abstract class ParsingDfa4Table {
     while ( cursor < endCursor ) {
       const value     = buffer[ cursor ]
 
-      /* eslint-disable no-magic-numbers */
+       
       const nextState =
         ( table[ ( ( state - 1 ) << 4 ) + ( value >>> 4 ) ] >>> ( ( value & 15 ) << 1 ) ) & 3
-      /* eslint-enable no-magic-numbers */
+       
 
       if ( nextState === 0 ) {
         break

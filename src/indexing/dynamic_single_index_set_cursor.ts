@@ -18,18 +18,17 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
   private high_: number = 0
   private low_: number = 0
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this, not accessible.
    */
   private constructor() {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits
    * padded to zero.
-   *
-   * @return {number} The high bits.
+   * @returns The high bits.
    */
   public get high(): number {
     return this.high_
@@ -38,8 +37,7 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
   /**
    * Get a set of up to 32 low bits, in one-hot format or'd together,
    * so that each bit index represents a 5 bit bottom part corresponding to the top 27
-   *
-   * @return {number} The high bits.
+   * @returns The high bits.
    */
   public get low(): number {
     return this.low_
@@ -47,8 +45,7 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
 
   /**
    * Step this cursor to the next high (and matching set of lows)
-   *
-   * @return {boolean} True if this is not at the end of the sequence,
+   * @returns True if this is not at the end of the sequence,
    * false otherwise.
    */
   public step(): boolean {
@@ -61,7 +58,7 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
     const localCursors = this.cursorStack_
     const stackSize = localSet.length
 
-    // eslint-disable-next-line no-magic-numbers
+     
     let currentMinimum = ( 0xFFFFFFFF ) >>> 0
     let currentBottom  = 0
     let stackIndex: number | undefined = void 0
@@ -109,9 +106,8 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
 
   /**
    * Allocate a DynamicSingleIndexSetCursor, re-using freed ones in the pool.
-   *
    * @param set The set to construct the cursor from.
-   * @return {DynamicSingleIndexSetCursor} The allocated cursor.
+   * @returns The allocated cursor.
    */
   public static allocate( set: Uint32Array[] ): DynamicSingleIndexSetCursor {
 

@@ -1,4 +1,4 @@
-/* eslint-disable camelcase */
+ 
 import {
   ConwayGeometry,
   GeometryObject,
@@ -123,10 +123,9 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
  *
  * Transparency is usually handled via pre-multiplied alpha, and this is what
  * gltf (for example) expects.
- *
  * @param from The color to extract.
  * @param alpha The alpha value to be associated with the colour.
- * @return {ColorRGBA} The created colour.
+ * @returns The created colour.
  */
 export function extractColorRGBPremultiplied(from: colour_rgb, alpha: number = 1): ColorRGBA {
   return [from.red * alpha, from.green * alpha, from.blue * alpha, alpha]
@@ -134,10 +133,9 @@ export function extractColorRGBPremultiplied(from: colour_rgb, alpha: number = 1
 
 /**
  * Extract an AP214 Colour into our RGBA color.
- *
  * @param from The color to extract.
  * @param alpha The alpha value to be associated with the colour.
- * @return {ColorRGBA} The created colour.
+ * @returns The created colour.
  */
 export function extractColorRGB(from: colour_rgb, alpha: number = 1): ColorRGBA {
 
@@ -146,12 +144,11 @@ export function extractColorRGB(from: colour_rgb, alpha: number = 1): ColorRGBA 
 
 /**
  * Use to extract a color or a factor from a color/factor select.
- *
  * @param from The color or factor to extract this from.
  * @param surfaceColor The surface color (if this is a factor), which will be used to
  * create the factor.
  * @param alpha The alpha to use for this.
- * @return {ColorRGBA}
+ * @returns
  */
 export function extractColorOrFactor(
     from: colour_rgb | ratio_measure,
@@ -178,7 +175,7 @@ export function extractColorOrFactor(
  */
 export class AP214GeometryExtraction {
 
-  /* eslint-disable no-magic-numbers */
+   
   private readonly TWO_DIMENSIONS: number = 2
   private readonly THREE_DIMENSIONS: number = 3
 
@@ -204,7 +201,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Construct a geometry extraction from an AP214 step model and conway model
-   *
    * @param conwayModel
    * @param model
    */
@@ -223,8 +219,7 @@ export class AP214GeometryExtraction {
 
   /**
    * Get the product name for this.
-   *
-   * @return {string} The product name or an empty struct if none can be found.
+   * @returns The product name or an empty struct if none can be found.
    */
   getAP214ProductName(): string {
 
@@ -316,7 +311,7 @@ export class AP214GeometryExtraction {
 
   /**
    *
-   * @return {number} linear matrix scaling factor for geometry
+   * @returns linear matrix scaling factor for geometry
    */
   getLinearScalingFactor(): number {
     // console.log(`linearScalingFactor: ${this.linearScalingFactor}`)
@@ -325,7 +320,7 @@ export class AP214GeometryExtraction {
 
   /**
    *
-   * @return {WasmModule} - A handle to the loaded wasm module
+   * @returns - A handle to the loaded wasm module
    */
   getWasmModule(): WasmModule {
     return this.wasmModule
@@ -335,11 +330,11 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {StdVector<GeometryObject>} - a native std::vector<GeometryObject> from the wasm module
+   * @returns - a native std::vector<GeometryObject> from the wasm module
    */
   nativeVectorGeometry(initialSize?: number): StdVector<GeometryObject> {
     const nativeVectorGeometry_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.geometryArray)()) as StdVector<GeometryObject>
 
     if (initialSize) {
@@ -353,13 +348,12 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native vector of geometry collections.
-   *
-   * @return {NativeVectorGeometryCollection} A newly initialised native
+   * @returns A newly initialised native
    * vector of geometry collections
    */
   nativeVectorGeometryCollection(): NativeVectorGeometryCollection {
     const nativeVectorGeometryCollection =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.geometryCollectionArray)()) as NativeVectorGeometryCollection
 
     return nativeVectorGeometryCollection
@@ -367,9 +361,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native material from a canonical one.
-   *
    * @param from The material to create the native material from
-   * @return {MaterialObject} The created canonical material.
+   * @returns The created canonical material.
    */
   nativeMaterial(from: CanonicalMaterial): MaterialObject {
     const native: MaterialObject = {
@@ -383,7 +376,7 @@ export class AP214GeometryExtraction {
         w: from.baseColor[3],
       },
       doubleSided: from.doubleSided,
-      /* eslint-disable no-magic-numbers */
+       
       ior: from.ior ?? 1.4,
       metallic: from.metalness ?? 1.0,
       roughness: from.roughness ?? 1.0,
@@ -394,17 +387,17 @@ export class AP214GeometryExtraction {
         w: from.specular[3],
       } : void 0,
     }
-    /* eslint-enable no-magic-numbers */
+     
     return native
   }
 
   /**
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorGlmVec2} - a native std::vector<glm::vec2> from the wasm module
+   * @returns - a native std::vector<glm::vec2> from the wasm module
    */
   nativeVectorGlmVec2(initialSize?: number): NativeVectorGlmVec2 {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorGlmVec2_ = new (this.wasmModule.vec2Array)() as NativeVectorGlmVec2
 
     if (initialSize) {
@@ -417,12 +410,11 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native vector profile to pass across the boundary.
-   *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorProfile} - a native std::vector<AP214Profile> from the wasm module
+   * @returns - a native std::vector<AP214Profile> from the wasm module
    */
   nativeVectorProfile(initialSize?: number): NativeVectorProfile {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorProfile_ = new (this.wasmModule.profileArray)() as NativeVectorProfile
 
     if (initialSize) {
@@ -436,12 +428,11 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native version of a vector curve to parse across the boundary.
-   *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorCurve} - a native std::vector<AP214Curve> from the wasm module
+   * @returns - a native std::vector<AP214Curve> from the wasm module
    */
   nativeVectorCurve(initialSize?: number): StdVector<CurveObject> {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorCurve_ = new (this.wasmModule.curveArray)() as NativeVectorCurve
 
     if (initialSize) {
@@ -456,11 +447,11 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorGlmVec3} - a native std::vector<glm::vec3> from the wasm module
+   * @returns - a native std::vector<glm::vec3> from the wasm module
    */
   nativeVectorGlmVec3(initialSize?: number): NativeVectorGlmVec3 {
     const nativeVectorGlmVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmVec3Array)()) as NativeVectorGlmVec3
 
     if (initialSize) {
@@ -474,11 +465,11 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorGlmVec3} - a native std::vector<glm::vec3> from the wasm module
+   * @returns - a native std::vector<glm::vec3> from the wasm module
    */
   nativeVectorVectorGlmdVec3(): StdVector<NativeVectorGlmVec3> {
     const nativeVectorVectorGlmdVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec3ArrayArray)()) as StdVector<NativeVectorGlmVec3>
 
     return nativeVectorVectorGlmdVec3_
@@ -487,11 +478,11 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorGlmVec3} - a native std::vector<glm::vec3> from the wasm module
+   * @returns - a native std::vector<glm::vec3> from the wasm module
    */
   nativeVectorGlmdVec3(initialSize?: number): NativeVectorGlmVec3 {
     const nativeVectorGlmdVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec3Array)()) as NativeVectorGlmVec3
 
     if (initialSize) {
@@ -506,11 +497,11 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorGlmVec3} - a native std::vector<glm::vec3> from the wasm module
+   * @returns - a native std::vector<glm::vec3> from the wasm module
    */
   nativeVectorGlmdVec2(initialSize?: number): NativeVectorGlmVec2 {
     const nativeVectorGlmdVec2_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec2Array)()) as NativeVectorGlmVec2
 
     if (initialSize) {
@@ -523,9 +514,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native 32bit uint vector.
-   *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeUintVector} - a native std::vector<uint32_t> from the wasm module
+   * @param initialize
+   * @returns - a native std::vector<uint32_t> from the wasm module
    */
   nativeUintVector(initialize?: number): NativeUintVector {
     const nativeUintVector_ = (new (this.wasmModule.UintVector)()) as NativeUintVector
@@ -540,9 +531,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native 32bit size_t vector.
-   *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeULongVector} - a native std::vector<size_t> from the wasm module
+   * @param initialize
+   * @returns - a native std::vector<size_t> from the wasm module
    */
   nativeULongVector(initialize?: number): NativeULongVector {
     const nativeULongVector_ = new (this.wasmModule.ULongVector)() as NativeULongVector
@@ -570,7 +561,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Free the native indexed polygon face.
-   *
    * @param nativeVectorIndexedPolygonalFace The native item to free.
    */
   freeNativeIndexedPolygonalFaceVector(
@@ -581,9 +571,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native vector of indexed polygonal faces uint vector.
-   *
    * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorIndexedPolygonalFace} - a native object from the wasm module
+   * @param initialize
+   * @returns - a native object from the wasm module
    */
   nativeIndexedPolygonalFaceVector(initialize?: number): NativeVectorIndexedPolygonalFace {
     let nativeVectorIndexedPolygonalFace: NativeVectorIndexedPolygonalFace
@@ -611,9 +601,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Create a native vector of segments.
-   *
    * @param initialize number - initial size of the vector (optional)
-   * @return {NativeVectorSegment} - a native object from the wasm module
+   * @returns - a native object from the wasm module
    */
   nativeSegmentVector(initialize?: number): NativeVectorSegment {
     const nativeVectorSegment =
@@ -630,7 +619,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param initialize
-   * @return {NativeVectorBound3D}
+   * @returns
    */
   nativeBound3DVector(initialize?: number): NativeVectorBound3D {
     const nativeVectorBound3D =
@@ -647,8 +636,7 @@ export class AP214GeometryExtraction {
 
   /**
    * Has the wasm module been initialised?
-   *
-   * @return {boolean} indicating if the wasm module has been initialized
+   * @returns indicating if the wasm module has been initialized
    */
   isInitialized(): boolean {
     if (this.conwayModel !== void 0) {
@@ -660,6 +648,7 @@ export class AP214GeometryExtraction {
 
   /**
    * Destroy geometry processor and deinitialize
+   * @param modelId
    */
   destroy(modelId: number = 0) {
     if (this.conwayModel !== void 0) {
@@ -671,7 +660,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param arr - a 2D number array
-   * @return {number} - total length of all 2D array elements
+   * @returns - total length of all 2D array elements
    */
   private getTotalLength(arr: number[][]): number {
     return arr.reduce((totalLength, innerArray) => totalLength + innerArray.length, 0)
@@ -680,7 +669,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param indices
-   * @return {NativeUintVector}
+   * @returns
    */
   private createAndPopulateNativeIndices(indices: number[]): NativeUintVector {
     // Create native indices array
@@ -696,9 +685,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Create and populate a list of native profiles from an array of canonical profiles.
-   *
    * @param profiles The profiles to convert to native profiles.
-   * @return {NativeVectorProfile} The populated native profiles.
+   * @returns The populated native profiles.
    */
   private createAndPopulateNativeProfiles(profiles: CanonicalProfile[]): NativeVectorProfile {
     // Create native indices array
@@ -713,7 +701,10 @@ export class AP214GeometryExtraction {
   }
 
 
-  /** @return {number} Pointer/memory address */
+  /**
+   * @param array
+   * @returns Pointer/memory address
+   */
   arrayToWasmHeap(array:Float32Array | Uint32Array): any {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
@@ -727,7 +718,10 @@ export class AP214GeometryExtraction {
     return arrayPtr
   }
 
-  /** @return {Uint8Array}  */
+  /**
+   * @param array
+   * @returns
+   */
   arrayToSharedHeap(array:Float32Array | Uint32Array): Uint8Array {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
@@ -745,9 +739,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a 3D direction vector from an AP214 direction.
-   *
    * @param from The AP214 direction to extract the vector from.
-   * @return {Vector3 | undefined} The vector, or undefined if it can't be extracted.
+   * @returns The vector, or undefined if it can't be extracted.
    */
   static extractDirection(from: direction | null): Vector3 | undefined {
 
@@ -758,16 +751,15 @@ export class AP214GeometryExtraction {
     return {
       x: from.direction_ratios[0],
       y: from.direction_ratios[1],
-      // eslint-disable-next-line no-magic-numbers
+       
       z: (from.direction_ratios.length > 2) ? from.direction_ratios[2] : 0,
     }
   }
 
   /**
    * Extract an AP214 3D cartesian transform operator as a transform matrix.
-   *
    * @param from The AP214 cartesian transform to extract from.
-   * @return {any} The internal matrix type extract.
+   * @returns The internal matrix type extract.
    */
   extractCartesianTransformOperator3D(from: cartesian_transformation_operator_3d) {
     const conwayModel = this.conwayModel
@@ -805,7 +797,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Drop geometry that isn't in the scene.
-   *
    * @param localID The id of the mesh to drop.
    */
   dropNonSceneGeometry( localID: number ) {
@@ -817,7 +808,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Accepts AP214BooleanResult and AP214BooleanClippingResult
-   *
    * @param from
    */
   extractBooleanResult( from: boolean_result ) {
@@ -908,9 +898,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a boolean operand from a boolean result.
-   *
    * @param from The operand to extract.
-   * @return {void}
+   * @returns
    */
   extractBooleanOperand( from:
     extruded_area_solid |
@@ -1022,11 +1011,10 @@ export class AP214GeometryExtraction {
     }
   }
 
-  /* eslint-disable no-magic-numbers */ // No magic numbers disabled
+    // No magic numbers disabled
   // Cos we have *lots* of default material values.
   /**
    * Extract a canonical material from a surface style.
-   *
    * @param from The surface style to extract a material from.
    */
   extractSurfaceStyle(from: surface_style_usage) {
@@ -1079,13 +1067,13 @@ export class AP214GeometryExtraction {
     }
 
   }
-  /* eslint-enable no-magic-numbers */
+   
 
   /**
    * Extract a style item.
-   *
    * @param from The styled item to extract from
-   * @return {number | undefined}
+   * @param representationItem
+   * @returns
    */
   extractStyledItem(
       from: styled_item,
@@ -1234,9 +1222,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a canonical profile from a profile definition.
-   *
    * @param from The profile definition to extract from.
-   * @return {CanonicalProfile | undefined} The extracted profile,
+   * @returns The extracted profile,
    * or undefined if one cannot be extracted.
    */
   extractProfile(from: curve): CanonicalProfile | undefined {
@@ -1265,7 +1252,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {CurveObject | undefined}
+   * @returns
    */
   extractCompositeCurve( from: composite_curve ): CurveObject | undefined {
 
@@ -1305,7 +1292,8 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {CurveObject | undefined}
+   * @param trimmingArguments
+   * @returns
    */
   extractCurve(
       from: curve |
@@ -1368,7 +1356,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {CurveObject | undefined}
+   * @returns
    */
   extractPScurve1( from: pcurve ): CurveObject | undefined {
 
@@ -1389,7 +1377,7 @@ export class AP214GeometryExtraction {
     pointsFlattened[ 0 ] = point[ 0 ]
     pointsFlattened[ 1 ] = point[ 1 ]
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( dim > 2 ) {
 
       pointsFlattened[ 2 ] = point[ 2 ]
@@ -1421,9 +1409,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a line
-   *
    * @param from The line to extract.
-   * @return {CurveObject | undefined} The curve object for the line.
+   * @param trimmingArguments
+   * @returns The curve object for the line.
    */
   extractLine( from: line, trimmingArguments?: TrimmingArguments ): CurveObject | undefined {
 
@@ -1438,7 +1426,7 @@ export class AP214GeometryExtraction {
       pointsFlattened[ 0 ] = point[ 0 ]
       pointsFlattened[ 1 ] = point[ 1 ]
 
-      // eslint-disable-next-line no-magic-numbers
+       
       if ( dim > 2 ) {
 
         pointsFlattened[ 2 ] = point[ 2 ]
@@ -1463,7 +1451,7 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      // eslint-disable-next-line no-magic-numbers
+       
       const pointsFlattened = new Float32Array( 6 )
 
       pointsFlattened[ 0 ] = trimmingArguments.start?.pos3D?.x ?? 0
@@ -1494,9 +1482,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Exctact a BSpline Curve
-   *
    * @param from The bspline curve, potentially with knots/rational.
-   * @return {CurveObject} The constructed curve object.
+   * @returns The constructed curve object.
    */
   extractBSplineCurve(from: b_spline_curve): CurveObject {
 
@@ -1519,7 +1506,7 @@ export class AP214GeometryExtraction {
       isEdge: false,
     }
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if (dimensions === 2) {
 
       const outputPoints = params.points2
@@ -1537,7 +1524,7 @@ export class AP214GeometryExtraction {
 
       for (const point of from.control_points_list) {
 
-        // eslint-disable-next-line no-magic-numbers
+         
         if (point.coordinates.length !== 3) {
           continue
         }
@@ -1588,7 +1575,7 @@ export class AP214GeometryExtraction {
 
     } else {
       // This is just a AP214BsplineCurve, build default parameter lists
-      // eslint-disable-next-line no-lonely-if
+       
       if (dimensions === this.TWO_DIMENSIONS) {
         // build default knots
         const outputKnots = params.knots
@@ -1628,7 +1615,7 @@ export class AP214GeometryExtraction {
    *
    * @param from
    * @param parametersTrimmedCurve
-   * @return {CurveObject | undefined}
+   * @returns
    */
   extractAP214Circle( from: circle, parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
     masterRepresentation: 0,
@@ -1683,7 +1670,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {CurveObject | undefined}
+   * @returns
    */
   extractAP214TrimmedCurve(from: trimmed_curve): CurveObject | undefined {
 
@@ -1797,10 +1784,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Efficiently flatten the points into a Float32Array
-   *
    * @param points - Array of AP214CartesianPoint
    * @param dimensions - dimensions of points
-   * @return {Float32Array}
+   * @returns
    */
   flattenPointsToFloat32Array( points: cartesian_point[], dimensions:number ): Float32Array {
 
@@ -1821,7 +1807,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {CurveObject | undefined }
+   * @returns
    */
   extractPolyline( from: polyline ): CurveObject | undefined {
 
@@ -1854,9 +1840,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a curve object from a circle profile.
-   *
    * @param from The circle definition to extract from.
-   * @return {CurveObject | undefined} The extracted circle curve,
+   * @returns The extracted circle curve,
    * or undefined if one cannot be extracted.
    */
   extractCircleCurve( from: circle ): CurveObject | undefined {
@@ -1895,9 +1880,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extracts the curve for an ellipse from an AP214 ellipse profile definition.
-   *
    * @param from The AP214 ellipse profile definition to extract the curve from.
-   * @return {CurveObject} A CurveObject representing the ellipse curve,
+   * @returns A CurveObject representing the ellipse curve,
    *  or undefined if not extractable.
    */
   extractEllipseProfileCurve(from: ellipse): CurveObject | undefined {
@@ -1938,8 +1922,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a mapped item to add its transform to instance an item.
-   *
    * @param from The mapped item to extract.
+   * @param owningElementLocalID
    */
   extractMappedItem(
       from: mapped_item,
@@ -2000,8 +1984,8 @@ export class AP214GeometryExtraction {
    * adding it to the current scene walk.
    *
    * Note - memoized result for instancing.
-   *
    * @param from The representation to extract from.
+   * @param owningElementLocalID
    */
   extractRepresentationItem(
       from: representation_item,
@@ -2067,7 +2051,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract geometry from a manifold solid brep.
-   *
    * @param from The brep to extract from.
    */
   extractManifoldSolidBrep(from: manifold_solid_brep) {
@@ -2121,6 +2104,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param temporary
    */
   extractAP214FacetedBrep(
       from: faceted_brep,
@@ -2135,6 +2119,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param owningElementLocalID
    */
   extractAP214ShellBasedSurfaceModel(
       from: shell_based_surface_model,
@@ -2155,7 +2140,8 @@ export class AP214GeometryExtraction {
    * @param parentLocalID
    * @param geometry_
    * @param isRelVoid
-   * @return {GeometryObject}
+   * @param temporary
+   * @returns
    */
   extractFaces(
       from: face[],
@@ -2200,9 +2186,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract an AP214 plane.
-   *
    * @param from The plane to extract from
-   * @return {NativeTransform4x4} The transform matching the plane.
+   * @returns The transform matching the plane.
    */
   extractPlane( from: plane ): NativeTransform4x4 {
 
@@ -2216,9 +2201,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a pointlist to a native vector.
-   *
    * @param from
-   * @return {StdVector< Vector3 >} The native vector of 3D vectors.
+   * @returns The native vector of 3D vectors.
    */
   extractPointList3D(from: Array< cartesian_point >): StdVector< Vector3 > {
 
@@ -2240,10 +2224,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a list of a list of points to a native object.
-   *
    * @param from the list of lists of cartesian points
    * @param to {out} the native vector of vector of points.
-   * @return {void}
+   * @returns
    */
   extractPointListList3D(
       from: Array<Array< cartesian_point >>,
@@ -2256,9 +2239,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a bspline surface
-   *
    * @param from The bspline surface to extract
-   * @return {BSplineSurface}
+   * @returns
    */
   extractBSplineSurface( from: b_spline_surface ): BSplineSurface {
 
@@ -2283,9 +2265,10 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a bspline surface
-   *
    * @param from The bspline surface to extract
    * @param to The surface to extract to
+   * @param start
+   * @param end
    */
   extractToDoubleVector(
       from: Array<number>,
@@ -2302,7 +2285,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a bspline surface
-   *
    * @param from The bspline surface to extract
    * @param to The surface to extract to
    */
@@ -2321,9 +2303,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a bspline surface
-   *
    * @param from The bspline surface to extract
-   * @return {BSplineSurface}
+   * @returns
    */
   extractBSplineSurfaceWithKnots( from: b_spline_surface_with_knots ): BSplineSurface {
 
@@ -2353,9 +2334,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a bspline surface
-   *
    * @param from The bspline surface to extract
-   * @return {BSplineSurface} The extracted surface
+   * @returns The extracted surface
    */
   extractRationalBSplineSurface(
       from: rational_b_spline_surface ): BSplineSurface {
@@ -2369,10 +2349,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Checks if a given point is not present in a collection of points.
-   *
    * @param pt The point to check for presence.
    * @param points A collection of points to compare against.
-   * @return {boolean} A boolean indicating whether the point
+   * @returns A boolean indicating whether the point
    * is not present in the collection.
    */
   notPresent(pt: Vector3, points: NativeVectorGlmVec3): boolean {
@@ -2436,7 +2415,7 @@ export class AP214GeometryExtraction {
 
             const startPoint = edgeStart.vertex_geometry
 
-            // eslint-disable-next-line no-magic-numbers
+             
             if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
 
               const startCoords = startPoint.coordinates
@@ -2460,7 +2439,7 @@ export class AP214GeometryExtraction {
 
             const endPoint = edgeEnd.vertex_geometry
 
-            // eslint-disable-next-line no-magic-numbers
+             
             if (endPoint instanceof cartesian_point && endPoint.coordinates.length === 3) {
 
               const endCoords = endPoint.coordinates
@@ -2512,7 +2491,7 @@ export class AP214GeometryExtraction {
 
             const startPoint = start.vertex_geometry
 
-            // eslint-disable-next-line no-magic-numbers
+             
             if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
 
               const startCoords = startPoint.coordinates
@@ -2533,7 +2512,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract an advanced (NURBS) b-rep face.
-   *
    * @param from
    * @param geometry
    */
@@ -2652,7 +2630,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a linear extrusion/sweep surface
-   *
    * @param from
    * @param nativeSurface
    */
@@ -2684,7 +2661,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a surface of revolution/rotational sweep surface
-   *
    * @param from
    * @param nativeSurface
    */
@@ -2721,7 +2697,6 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a cylindrical surface.
-   *
    * @param from The AP214 object to extract from.
    * @param nativeSurface The native surface representation.
    */
@@ -2811,9 +2786,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract an axis placement 2D native object.
-   *
    * @param from The axis 2 placement to extract.
-   * @return {any} The native placement transform.
+   * @returns The native placement transform.
    */
   extractAxis2Placement2D( from: axis2_placement_2d ): NativeTransform3x3 {
 
@@ -2860,11 +2834,10 @@ export class AP214GeometryExtraction {
 
   /**
    * Extracts a 2D Cartesian transformation operator from an AP214 Cartesian
-   *  transformation operator definition. The transformation can be uniform or non-uniform.
-   *
+   * transformation operator definition. The transformation can be uniform or non-uniform.
    * @param from The AP214 Cartesian transformation operator definition,
    *  which can be either uniform or non-uniform.
-   * @return {any} The resulting transformation operator parameters.
+   * @returns The resulting transformation operator parameters.
    */
   extractCartesianTransformOperator2D( from: cartesian_transformation_operator_2d ): any {
     let scale1: number = 1.0
@@ -2905,26 +2878,24 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a placement, adding it to the scene.
-   *
    * @param from The transform to extract.
    * @param parentLocalId The parent's local ID.
-   * @return {void}
+   * @returns {void}
    */
   extractAxis1Placement3D(from: axis1_placement, parentLocalId: number): void
   /**
    * Extract a placement (no memoization/scene creation)
-   *
    * @param from The transform to extract.
    * @param parentLocalId The parent's local ID.
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
-   * @return {ParamsAxis1Placement3D} The extracted placement.
+   * @returns {ParamsAxis1Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis1Placement3D(
     from: axis1_placement,
     parentLocalId: number,
     extractOnly: true): ParamsAxis1Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis1Placement3D(
       from: axis1_placement,
       parentLocalId: number,
@@ -2982,26 +2953,24 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract a placement, adding it to the scene.
-   *
    * @param from The transform to extract.
    * @param parentLocalId The parent's local ID.
-   * @return {void}
+   * @returns {void}
    */
   extractAxis2Placement3D(from: axis2_placement_3d, parentLocalId: number): void
   /**
    * Extract a placement (no memoization/scene creation)
-   *
    * @param from The transform to extract.
    * @param parentLocalId The parent's local ID.
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
-   * @return {ParamsAxis2Placement3D} The extracted placement.
+   * @returns {ParamsAxis2Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3D(
     from: axis2_placement_3d,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3D(
       from: axis2_placement_3d,
       parentLocalId: number,
@@ -3096,7 +3065,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {number | undefined}
+   * @returns {number | undefined}
    */
   // extractMaterial(
   //     from: AP214Material |
@@ -3163,7 +3132,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {number | undefined}
+   * @returns {number | undefined}
    */
   // extractMaterialStyle(from: AP214Product): number | undefined {
   //   let styledItemID: number | undefined
@@ -3292,10 +3261,10 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param prefix
-   * @return {number | null}
+   * @returns
    */
   convertPrefix(prefix: si_prefix): number | null {
-    /* eslint-disable no-magic-numbers */
+     
     switch (prefix) {
       case si_prefix.EXA:
         return 1e18
@@ -3337,10 +3306,9 @@ export class AP214GeometryExtraction {
 
   /**
    * Extract the geometry data from the AP214
-   *
    * @param model - Input AP214StepModel to extract geometry data from
    * @param logTime boolean - print execution time (default no)
-   * @return {[ExtractResult, AP214SceneBuilder]} - Enum indicating extraction result
+   * @returns - Enum indicating extraction result
    * + Geometry array
    */
   extractAP214GeometryData(logTime: boolean = false):

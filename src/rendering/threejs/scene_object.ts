@@ -1,4 +1,4 @@
-/* eslint-disable new-cap */
+ 
 
 import {
   Group,
@@ -42,8 +42,7 @@ export default class SceneObject extends Group {
    * Note that this should be used like an RTC reference to
    * calculate relative transforms in a high bit space or using fixed
    * point to produce an eye relative transform matrix.
-   *
-   * @return {Vector3} The reference point.
+   * @returns The reference point.
    */
   public get referencePoint(): Vector3 {
 
@@ -52,14 +51,14 @@ export default class SceneObject extends Group {
 
   /**
    * Construct this from a conway scene.
-   *
    * @param target The target scene to use.
+   * @param cork
    */
-  constructor( public readonly target : ConwayScene ) {
+  constructor( public readonly target : ConwayScene, cork: boolean = true ) {
 
     super()
 
-    this.sink_ = new SceneEventSink( this, target )
+    this.sink_ = new SceneEventSink( this, target, cork )
 
     target.addSceneListener( this.sink_, eventListenerOptions )
   }
@@ -90,7 +89,7 @@ const normalizeMat: Matrix4 = new Matrix4(
 
 const invertNormalizeMat = normalizeMat.clone().transpose()
 
-/* eslint-disable no-useless-constructor, no-empty-function */
+ 
 
 /**
  * Sink for receiving events from a target scene
@@ -110,8 +109,7 @@ class SceneEventSink implements SceneListener {
    * Note that this should be used like an RTC reference to
    * calculate relative transforms in a high bit space or using fixed
    * point to produce an eye relative transform matrix.
-   *
-   * @return {Vector3} The reference point.
+   * @returns The reference point.
    */
   public get referencePoint(): Vector3 {
 
@@ -133,8 +131,7 @@ class SceneEventSink implements SceneListener {
    * This should be used for relative positioning to work out
    * camera relative matrices in double precision, which can then be used
    * to translate the whole group.
-   *
-   * @return {Vector3} The relative position.
+   * @returns The relative position.
    */
   public get relativeTo(): Vector3 {
 
@@ -150,9 +147,9 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Construct this with the group items will be attached to.
-   *
    * @param group The group this will be attached to.
    * @param scene The scene this comes from.
+   * @param cork_
    */
   constructor(
     private readonly group: Group,
@@ -230,9 +227,8 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Get the mesh cache item for a particular mesh buffer.
-   *
    * @param from The mesh buffer to get the cached item for.
-   * @return {MeshCacheItem} The cached items.
+   * @returns The cached items.
    */
   private getMeshItem( from: CanonicalMeshBuffer ): MeshCacheItem {
 
@@ -250,7 +246,7 @@ class SceneEventSink implements SceneListener {
             fromGeometry.GetVertexData(),
             fromGeometry.GetVertexDataSize() )
 
-      // eslint-disable-next-line no-magic-numbers
+       
       const interleavedBuffer = new InterleavedBuffer( vertexBuffer, 6 )
 
       geometry.setIndex(
@@ -261,12 +257,12 @@ class SceneEventSink implements SceneListener {
 
       geometry.setAttribute(
           'position',
-          // eslint-disable-next-line no-magic-numbers
+           
           new InterleavedBufferAttribute( interleavedBuffer, 3, 0 ) )
 
       geometry.setAttribute(
           'normal',
-          // eslint-disable-next-line no-magic-numbers
+           
           new InterleavedBufferAttribute( interleavedBuffer, 3, 3, true ) )
 
       cacheItem = new MeshCacheItem( from, geometry )
@@ -278,11 +274,10 @@ class SceneEventSink implements SceneListener {
   }
 
 
-  /* eslint-disable no-empty-function */
+   
 
   /**
    * Callback when a transform is added (not used)
-   *
    * @param node
    */
   onTransformAdded( node: SceneNodeTransform ): void {
@@ -291,7 +286,6 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Callback when a transform is uupdated (not used)
-   *
    * @param node
    */
   onTransformUpdated( node: SceneNodeTransform ): void {
@@ -300,7 +294,6 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Callback when a transform is removed (not used)
-   *
    * @param node
    */
   onTransformRemoved( node: SceneNodeTransform ): void {
@@ -309,7 +302,6 @@ class SceneEventSink implements SceneListener {
   /**
    * Callback when geometry is added, with its matching
    * transform node (if the geometry is not top level)
-   *
    * @param node
    * @param transform
    */
@@ -326,7 +318,6 @@ class SceneEventSink implements SceneListener {
   /**
    * Callback when geometry is updated, or its matching
    * transform node is updated (if the geometry is not top level)
-   *
    * @param node
    * @param transform
    */
@@ -558,7 +549,7 @@ class SceneEventSink implements SceneListener {
         let batchGeometry: BatchGeometry | undefined =
           instance.batched ?? batch.geometryMap.get( mesh )
 
-        // eslint-disable-next-line no-magic-numbers
+         
         const vertexCount = ( mesh.geometry.GetVertexDataSize() / 6 ) | 0
 
         const indexCount = ( mesh.geometry.GetIndexDataSize() ) | 0
@@ -676,7 +667,6 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Callback when a geometry node is removed.
-   *
    * @param node
    */
   onGeometryRemoved( node: SceneNodeGeometry ): void {
@@ -699,6 +689,7 @@ class BatchGeometry {
   /**
    *
    * @param mesh
+   * @param meshItem
    * @param geometryID
    */
   constructor(
@@ -726,6 +717,7 @@ class MaterialMeshBatch {
   /**
    *
    * @param material The material this corresponds to.
+   * @param threeMaterial
    */
   constructor(
     public readonly material: CanonicalMaterial,

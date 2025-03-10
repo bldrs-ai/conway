@@ -17,7 +17,6 @@ export class PackedMesh< ModelType extends Model > {
 
   /**
    * Construct a packed mesh.
-   *
    * @param model The model this mesh came from.
    * @param materials The materials array for the packed mesh (referenced
    * by index by primitives)
@@ -28,18 +27,17 @@ export class PackedMesh< ModelType extends Model > {
    * @param elementPrimitiveIndex Element primitive index, maps
    * element local ids to the correct primitive.
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor(
     public readonly model: ModelType,
     public readonly materials: ReadonlyArray< CanonicalMaterial >,
     public readonly primitives: ReadonlyArray< [GeometryObject, number | undefined] >,
     public readonly triangleElementMaps: ReadonlyArray< TriangleElementMap >,
-    // eslint-disable-next-line no-empty-function
+     
     public readonly elementPrimitiveIndex: ReadonlyMap< number, number[] >) {}
 
   /**
    * Get triangles from a cursor.
-   *
    * @param cursor The cursor to extract triangles for
    * @yields {[number, number, ReadonlyUint32Array]} Returns a tuple containing
    * the local ID of the element, the primitive index, and the triangles.

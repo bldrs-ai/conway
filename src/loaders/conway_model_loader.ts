@@ -22,12 +22,11 @@ export class ConwayModelLoader {
 
   /**
    * Load a model using the format detector
-   *
    * @param modelID
    * @param data
    * @param wasmModule
    * @param settings
-   * @return {Model | undefined}
+   * @returns
    */
   public static async loadModelWithScene(
       data: Uint8Array,
@@ -143,7 +142,7 @@ export class ConwayModelLoader {
           statistics.setGeometryTime(executionTimeInMs)
 
           statistics.setGeometryMemory(
-              // eslint-disable-next-line no-magic-numbers
+               
               conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
 
           model.invalidate(true)
@@ -180,7 +179,7 @@ export class ConwayModelLoader {
               const fileNameSplit: string[] = parseFileHeader(FILE_NAME)
 
 
-              // eslint-disable-next-line no-magic-numbers
+               
               if (fileNameSplit.length > 6) {
                 const preprocessorVersion = fileNameSplit[5]
                 const originatingSystem = fileNameSplit[6]
@@ -204,7 +203,7 @@ export class ConwayModelLoader {
 
           if ( e instanceof Error ) {
 
-            // eslint-disable-next-line max-len
+             
             Logger.error( `Error loading AP214 model in passthrough factory ${modelID}:\n${e.message}\n\n${e.stack}`)
           } else {
 
@@ -318,7 +317,7 @@ export class ConwayModelLoader {
           statistics.setGeometryTime(executionTimeInMs)
 
           statistics.setGeometryMemory(
-              // eslint-disable-next-line no-magic-numbers
+               
               conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
 
           const ifcProjectName = conwayModel.getIfcProjectName()
@@ -361,7 +360,7 @@ export class ConwayModelLoader {
               const fileNameSplit: string[] = parseFileHeader(FILE_NAME)
 
 
-              // eslint-disable-next-line no-magic-numbers
+               
               if (fileNameSplit.length > 6) {
                 const preprocessorVersion = fileNameSplit[5]
                 const originatingSystem = fileNameSplit[6]
@@ -385,7 +384,7 @@ export class ConwayModelLoader {
 
           if ( e instanceof Error ) {
 
-            // eslint-disable-next-line max-len
+             
             Logger.error( `Error loading IFC model in passthrough factory ${modelID}:\n${e.message}\n\n${e.stack}`)
           } else {
 

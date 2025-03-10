@@ -11,8 +11,7 @@ const indexIfcBuffer = fs.readFileSync( 'data/index.ifc' )
 
 /**
  * Test parsing an index header.
- *
- * @return {ParseResult} Returns the parse result from parsing the header from the index IFC buffer.
+ * @returns Returns the parse result from parsing the header from the index IFC buffer.
  */
 function parseIndexIfcHeader() {
   const bufferInput = new ParsingBuffer( indexIfcBuffer )
@@ -23,8 +22,7 @@ function parseIndexIfcHeader() {
 
 /**
  * Test parsing the data block from index IFC.
- *
- * @return {ParseResult} Returns the parse result from parsing the data block.
+ * @returns Returns the parse result from parsing the data block.
  */
 function parseIndexIfcData() {
   const bufferInput = new ParsingBuffer( indexIfcBuffer )

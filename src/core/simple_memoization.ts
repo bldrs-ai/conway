@@ -1,4 +1,4 @@
-/* eslint-disable jsdoc/no-undefined-types */
+ 
 import { MemoizationCapture, RegressionCaptureState } from './regression_capture_state'
 
 /**
@@ -13,9 +13,9 @@ export default class SimpleMemoization< T > {
    * Construct this, with an optional cache passthrough method. Use this
    * to add idempotency to memoized objects where needed, such as cloning them
    * or locking them.
-   *
    * @param cachePassthrough_ A function that is called to transform or clone
    * a memoized object when it is added.
+   * @param cachePassthrough
    */
   constructor( cachePassthrough?: ( from: T ) => T ) {
     this.cachePassthrough_ = cachePassthrough ?? ( ( from : T ) => from )
@@ -23,8 +23,7 @@ export default class SimpleMemoization< T > {
 
   /**
    * Get the number of memoized items
-   *
-   * @return {number} The number of items memoized in this.
+   * @returns The number of items memoized in this.
    */
   public get length(): number {
     return this.cache_.size
@@ -32,8 +31,7 @@ export default class SimpleMemoization< T > {
 
   /**
    * Iterate through the cached objects
-   *
-   * @return {IterableIterator<[ number, T ]>} Iterate over this.
+   * @returns Iterate over this.
    */
   [Symbol.iterator](): IterableIterator<[ number, T ]> {
     return this.cache_[Symbol.iterator]()
@@ -41,9 +39,9 @@ export default class SimpleMemoization< T > {
 
   /**
    * Add an item to the cache.
-   *
    * @param id
    * @param value
+   * @param temporary
    */
   public add( id: number, value: T, temporary: boolean = false ) {
     if ( !temporary || RegressionCaptureState.memoization === MemoizationCapture.FULL ) {
@@ -53,9 +51,8 @@ export default class SimpleMemoization< T > {
 
   /**
    * Delete an item from the cache.
-   *
    * @param id
-   * @return {boolean} True if the item was in the cache.
+   * @returns True if the item was in the cache.
    */
   public delete( id: number ): boolean {
     return this.cache_.delete( id )
@@ -63,9 +60,8 @@ export default class SimpleMemoization< T > {
 
   /**
    * Get the cached item for a particular id.
-   *
    * @param id
-   * @return {T | undefined}
+   * @returns
    */
   public get( id: number ): T | undefined  {
     return this.cache_.get( id )

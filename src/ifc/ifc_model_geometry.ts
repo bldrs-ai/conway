@@ -1,4 +1,4 @@
-/* eslint-disable no-useless-constructor, no-empty-function */
+ 
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { ModelGeometry } from '../core/model'
 import IfcStepModel from './ifc_step_model'
@@ -15,13 +15,13 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    * Construct this with an IFC step model.
-   *
    * @param model The model this is from
+   * @param isVoid
    */
   constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {}
 
   /**
-   * @return {number}
+   * @returns
    */
   get length(): number {
     return this.meshes_.size
@@ -57,7 +57,6 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    * Drop the mesh for a particular local ID
-   *
    * @param localID The local ID of the item to delete.
    */
   public delete(localID: number) {
@@ -78,7 +77,7 @@ export class IfcModelGeometry implements ModelGeometry {
   /**
    *
    * @param localID
-   * @return {CanonicalMesh | undefined}
+   * @returns
    */
   public getByLocalID(localID: number): CanonicalMesh | undefined {
     return this.meshes_.get(localID)
@@ -86,7 +85,7 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    *
-   * @return {IterableIterator<CanonicalMesh>}
+   * @returns
    */
   public [Symbol.iterator](): IterableIterator<CanonicalMesh> {
     return this.meshes_.values()
@@ -94,21 +93,21 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    *
-   * @return {number} - size of the geometry data
+   * @returns - size of the geometry data
    */
   public calculateGeometrySize(): number {
     let size:number = 0
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, mesh] of this.meshes_) {
       if (mesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
         const geometryObject = mesh.geometry
 
         // using * 8 here because the points are being stored as doubles
-        // eslint-disable-next-line new-cap,no-magic-numbers
+         
         const pointsDataSize = geometryObject.GetVertexDataSize() * 8
 
-        // eslint-disable-next-line new-cap,no-magic-numbers
+         
         const indexDataSize = geometryObject.GetIndexDataSize() * 4
         size += pointsDataSize + indexDataSize
       }
@@ -119,7 +118,6 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    * Get the OBJs for all the curves in the cache (lazily)
-   *
    * @yields {[IfcGeometricRepresentationItem, string]} Curves with their matching OBJ as a string
    */
   public* objs() : IterableIterator< [

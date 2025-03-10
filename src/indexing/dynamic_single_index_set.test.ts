@@ -8,17 +8,15 @@ const rng = seedrandom( 'dynamic index set tests')
 /**
  * Get a random 32 bit safe unsigned integer (seeded
  * for determinism).
- *
- * @return {number} A random 32 bit safe unsigned integer
+ * @returns A random 32 bit safe unsigned integer
  */
 function getRandom32(): number {
-  // eslint-disable-next-line no-magic-numbers
+   
   return Math.floor(rng() * 0xFFFFFFFF) >>> 0
 }
 
 /**
  * Get a list of 32 bit safe unsigned integers (seeded for determinism)
- *
  * @param count The number of integers to return.
  * @yields {number} A 32 bit safe unsigned integer.
  */
@@ -29,14 +27,14 @@ function* getRandom32List( count: number ): IterableIterator< number > {
   }
 }
 
-// eslint-disable-next-line no-magic-numbers
+ 
 const testInsertList = Array.from( getRandom32List( 100000 ) )
 
 const filterSetOne = new Set< number >( testInsertList )
 
 const testNotFoundList =
   Array.from(
-      // eslint-disable-next-line no-magic-numbers
+       
       getRandom32List( 100000 ) ).filter( (value ) => !filterSetOne.has( value ) )
 
 const filterSetOneIterator = filterSetOne.keys()
@@ -71,8 +69,7 @@ const notDeletedList: number[] = []
  * Test that builds a dynamic set via inserts and that none
  * of the initial inserts return false, while subsequent
  * inserts of duplicate values do return false.
- *
- * @return {boolean} True if the test passes, false otherwise
+ * @returns True if the test passes, false otherwise
  */
 function buildDynamicSetAndTest(): boolean {
 
@@ -104,8 +101,7 @@ function buildDynamicSetAndTest(): boolean {
  * Test that builds a dynamic set via inserts and that none
  * of the initial inserts return false, while subsequent
  * inserts of duplicate values do return false.
- *
- * @return {boolean} True if the test passes, false otherwise
+ * @returns True if the test passes, false otherwise
  */
 function buildDynamicSetAndTestHas(): boolean {
 
@@ -145,8 +141,7 @@ function buildDynamicSetAndTestHas(): boolean {
  * Test that builds a dynamic set via inserts and that none
  * of the initial inserts return false, while subsequent
  * inserts of duplicate values do return false.
- *
- * @return {boolean} True if the test passes, false otherwise
+ * @returns True if the test passes, false otherwise
  */
 function buildDynamicSetAndTestDelete(): boolean {
 

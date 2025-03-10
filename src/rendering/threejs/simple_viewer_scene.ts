@@ -1,4 +1,4 @@
-/* eslint-disable no-magic-numbers */
+ 
 import * as THREE from 'three'
 import SceneObject from './scene_object'
 import { ConwayModelLoader } from '../../loaders/conway_model_loader'
@@ -15,14 +15,14 @@ const DEFAULT_FAR = 1000
  * Shadow quality, lower values use lower resolution/faster settings,
  * higher values use high resolution/slower but more aesthetic settings.
  */
-// eslint-disable-next-line no-shadow
+ 
 export const enum ShadowQuality {
 
-  /* eslint-disable no-unused-vars */ // Please learn enums exist eslist
+    // Please learn enums exist eslist
   LOW,
   MEDIUM,
   HIGH
-  /* eslint-enable no-unused-vars */
+   
 }
 
 /**
@@ -100,15 +100,19 @@ export class SimpleViewerScene {
 
   /**
    * Get the current light direction.
-   *
-   * @return {THREE.Vector3} The current light direction.
+   * @returns The current light direction.
    */
   public get lightDirection(): THREE.Vector3 {
 
     return this.lightDir_
   }
 
-  /** Update the shadow quality for this */
+  /**
+   * Update the shadow quality for this
+   * @param light
+   * @param quality
+   * @param vsm
+   */
   private updateShadowQuality(
       light: THREE.DirectionalLight,
       quality: ShadowQuality,
@@ -163,8 +167,7 @@ export class SimpleViewerScene {
 
   /**
    * Are shadows enabled?
-   *
-   * @return {boolean} True if shadows are enabled.
+   * @returns True if shadows are enabled.
    */
   public get shadowsEnabled(): boolean {
 
@@ -173,7 +176,6 @@ export class SimpleViewerScene {
 
   /**
    * Are shadows enabled?
-   *
    * @param value True if shadows are enabled.
    */
   public set shadowsEnabled( value: boolean ) {
@@ -210,8 +212,7 @@ export class SimpleViewerScene {
 
   /**
    * Get the shadow quality for this.
-   *
-   * @return {ShadowQuality} The current shadow quality.
+   * @returns The current shadow quality.
    */
   public get shadowQuality(): ShadowQuality {
 
@@ -220,7 +221,6 @@ export class SimpleViewerScene {
 
   /**
    * Get the shadow quality for this.
-   *
    * @param value The new shadow value.
    */
   public set shadowQuality( value: ShadowQuality ) {
@@ -235,10 +235,10 @@ export class SimpleViewerScene {
 
   /**
    * Construct the simple viewer scene
-   *
    * @param renderer
    * @param scene
    * @param camera
+   * @param dimensionsFunction
    * @param options
    */
   constructor(
@@ -282,9 +282,8 @@ export class SimpleViewerScene {
   /**
    * Load a new model, replacing any current model in the scene,
    * uses promises/exceptions for error handling
-   *
    * @param buffer The buffer to load the model from
-   * @return {Promise<void>} A promise to await on for loading.
+   * @returns A promise to await on for loading.
    */
   public async load( buffer: ArrayBuffer ): Promise< void > {
 
@@ -390,12 +389,11 @@ export class SimpleViewerScene {
   /**
    * Create a simple viewer scene, including the required
    * threejs artefacts and attach it to a DOM element.
-   *
    * @param element The element to attach to.
    * @param useElementDimensions If true use the width and height of the element,
    * if false use the window dimensions.
    * @param options The scene viewer options for attaching this element.
-   * @return {SimpleViewerScene} The created scene.
+   * @returns The created scene.
    */
   public static createSceneAttachedToElement(
       element: HTMLElement,

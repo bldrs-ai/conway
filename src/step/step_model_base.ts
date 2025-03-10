@@ -54,7 +54,6 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Construct this step model with its matching schema, a buffer to read from and an element index.
-   *
    * @param schema The Step schema this is based on.
    * @param buffer_ The buffer to read this from.
    * @param elementIndex The element index for this, parsed or deserialized - note this takes
@@ -143,7 +142,6 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Invalidate the cache store for this, so new items will be created.
-   *
    * @param dropVtable If true, remove the vtable entries for old entries as well,
    * freeing up the v-table space on garbage collection.
    */
@@ -173,10 +171,9 @@ implements Iterable<BaseEntity>, Model {
   /**
    * Force the population of the the vtable entry for a particular ID
    * (i.e. extracting the field locations)
-   *
    * @param localID The id to fetch the vtable entry for.
    * @throws {Error} Throws an error if the ID is invalid.
-   * @return {boolean} Did the vtable entry populate correctly?
+   * @returns Did the vtable entry populate correctly?
    */
   public populateVtableEntry(localID: number): boolean {
     if (localID > this.elementIndex_.length) {
@@ -212,7 +209,6 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Force the population of the the buffer entry for a particular element.
-   *
    * @param localID The local id to fetch the buffer entry for.
    * @throws {Error} Throws an error if the ID is invalid.
    */
@@ -228,8 +224,7 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Get the number of elements/entities in this model.
-   *
-   * @return {number} The number of elements.
+   * @returns The number of elements.
    */
   public get bufferBytesize(): number {
     return this.buffer_.byteLength
@@ -238,8 +233,7 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Get the number of elements/entities in this model.
-   *
-   * @return {number} The number of elements.
+   * @returns The number of elements.
    */
   public get size(): number {
     return this.elementIndex_.length
@@ -247,9 +241,8 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Get an inline element by its address within a data-block.
-   *
    * @param address The addres to get the element from
-   * @return {object | undefined} The element if one exsists at
+   * @returns The element if one exsists at
    * that adddress, otherwise undefined.
    */
   public getInlineElementByAddress(address: number | undefined): BaseEntity | undefined {
@@ -268,9 +261,8 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Given an express ID, return the matching element if one exists.
-   *
-   * @param {number} expressID The express ID to fetch the element for.
-   * @return {object | undefined} The element if one exists for that ID,
+   * @param expressID The express ID to fetch the element for.
+   * @returns The element if one exists for that ID,
    * otherwise undefined.
    */
   public getElementByExpressID(expressID: number): BaseEntity | undefined {
@@ -285,8 +277,9 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    *
-   * @param {from} local ID array
-   * @return {Uint32Array} express ID array
+   * @param local ID array
+   * @param from
+   * @returns express ID array
    */
   public mapLocalIDsToExpressIDs( from: ReadonlyUint32Array ): Uint32Array {
 
@@ -297,9 +290,8 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Given an express ID, return the matching element if one exists.
-   *
-   * @param {number} localID The local ID to fetch the element for.
-   * @return {number | undefined} The express ID if one exists for that local ID,
+   * @param localID The local ID to fetch the element for.
+   * @returns The express ID if one exists for that local ID,
    * otherwise undefined.
    */
   public getExpressIDByLocalID(localID: number): number | undefined {
@@ -313,9 +305,8 @@ implements Iterable<BaseEntity>, Model {
   /**
    * Given a local ID (i.e. dense index/reference), return the matching element if one
    * exists.
-   *
-   * @param {number} localID The local ID to fetch for.
-   * @return {object | undefined} The matching element or undefined
+   * @param localID The local ID to fetch for.
+   * @returns The matching element or undefined
    * if none exists.
    */
   public getElementByLocalID(localID: number): BaseEntity | undefined {
@@ -339,7 +330,7 @@ implements Iterable<BaseEntity>, Model {
           this.externalMappingType
 
       if (constructorRead !== void 0) {
-        // eslint-disable-next-line new-cap -- This is a variable constructor.
+         
         entity = new constructorRead(localID, element, this) as BaseEntity
 
         if ( this.elementMemoization ) {
@@ -354,9 +345,8 @@ implements Iterable<BaseEntity>, Model {
   /**
    * Use the type index to get set of entities of a set of types including sub-types, acts
    * as a union given the input type list, with lazy iteration over the set.
-   *
    * @param types The list of types to return
-   * @return {IterableIterator} An iterable corresponding to
+   * @returns An iterable corresponding to
    * the lazy set of items.
    */
   public types<T extends StepEntityConstructorAbstract<EntityTypeIDs>[]>(...types: T):
@@ -371,8 +361,7 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Get the non empty type IDs for this.
-   *
-   * @return {Set} The unique set of non empty type IDs for this model.
+   * @returns The unique set of non empty type IDs for this model.
    */
   public nonEmptyTypeIDs() : Set< EntityTypeIDs > {
 
@@ -383,8 +372,7 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Get the non empty type IDs for this without including sub-types, only direct instances.
-   *
-   * @return {IterableIterator} The unique set of non empty type IDs for this model.
+   * @returns The unique set of non empty type IDs for this model.
    */
   public nonEmptyTypeIDNoSubtypes() : IterableIterator< EntityTypeIDs > {
 
@@ -395,9 +383,8 @@ implements Iterable<BaseEntity>, Model {
    * Use the type index to get set of entities of a set of types not including sub-types from
    * the list of type ids, acts as a union given the input type list, with lazy iteration over
    * the set.
-   *
    * @param types The type ids for the types to get.
-   * @return {IterableIterator} An iterable corresponding to the lazy set of items.
+   * @returns An iterable corresponding to the lazy set of items.
    */
   public typeIDs(...types: EntityTypeIDs[]): IterableIterator<BaseEntity> {
     const distinctTypes = types.length === 1 ? (this.schema.queries[types[0] as number]) :
@@ -410,9 +397,8 @@ implements Iterable<BaseEntity>, Model {
    * Use the type index to get set of entities of a set of types including sub-types from the
    * list of type ids, acts as a union given the input type list, with lazy
    * iteration over the set.
-   *
    * @param types The type ids for the types to get.
-   * @return {IterableIterator} An iterable corresponding to the lazy set of items.
+   * @returns An iterable corresponding to the lazy set of items.
    */
   public typesIDSNoSubtypes(...types: EntityTypeIDs[]): IterableIterator<BaseEntity> {
     return this.from(this.typeIndex.cursor(...types), true)
@@ -420,10 +406,9 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Given a cursor, get the matching entities for it as a lazy iterable iterator.
-   *
    * @param cursor The cursor to iterate over.
    * @param freeCursor Should the cursor be freed after
-   * @return {IterableIterator} The iterable iterator to allow lazy
+   * @returns The iterable iterator to allow lazy
    * iteration over a cursor.
    * @yields An element per iteration matching the ids in the cursor.
    */
@@ -454,9 +439,8 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Extract a set of elements given a local ID iterator.
-   *
    * @param from An iterable of local IDs
-   * @return {IterableIterator} The iterable iterator to allow lazy
+   * @returns The iterable iterator to allow lazy
    * iteration over the elements matching the local ids.
    * @yields An element per iteration matching the ids in from.
    */
@@ -472,8 +456,7 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Iterate over all the elements in this.
-   *
-   * @return {IterableIterator} The iterable iterator to allow lazy
+   * @returns The iterable iterator to allow lazy
    * iteration over all the elements in this.
    * @yields An element per iteration for all the elements in this.
    */
@@ -492,9 +475,8 @@ implements Iterable<BaseEntity>, Model {
    * Get the material matching a geometry node.
    *
    * Geometry must have been extracted first.
-   *
    * @param node The geometry node to match a material for.
-   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
+   * @returns A material, or undefined if it is not found.
    */
   public getMaterialFromGeometryNode( node: SceneNodeGeometry ):
     CanonicalMaterial | undefined {
@@ -506,9 +488,8 @@ implements Iterable<BaseEntity>, Model {
    * Get the material matching a geometry node.
    *
    * Geometry must have been extracted first.
-   *
    * @param node The geometry node to match a material for.
-   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
+   * @returns A material, or undefined if it is not found.
    */
   public getMeshFromGeometryNode( node: SceneNodeGeometry ): CanonicalMesh | undefined {
 

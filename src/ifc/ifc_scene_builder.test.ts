@@ -53,8 +53,7 @@ async function initializeGeometryExtractor() {
 
 /**
  * Extract the geometry from index IFC
- *
- * @return {ExtractResult} indicating whether the geometry extraction was successful.
+ * @returns indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
@@ -65,8 +64,7 @@ let packedModel: PackedMesh< IfcStepModel > | undefined
 /**
  * Build the packed mesh model if it hasn't been built and memoize it,
  * and return the memoized value.
- *
- * @return {PackedMesh | undefined} The packed mesh if it can be built,
+ * @returns The packed mesh if it can be built,
  * or undefined (void 0) otherwise.
  */
 function packMesh(): PackedMesh< IfcStepModel > | undefined {
@@ -88,8 +86,7 @@ const FIRST_BUILDING_ELEMENT = 265
 
 /**
  * Test that the extracted element matches the particular triangle.
- *
- * @return {boolean} True if the first element has the expected express ID
+ * @returns True if the first element has the expected express ID
  */
 function isFirstElementCorrect(): boolean {
 
@@ -111,8 +108,7 @@ function isFirstElementCorrect(): boolean {
 
 /**
  * Test that the extracted element matches the particular triangle.
- *
- * @return {boolean} True if the first element has the expected express ID
+ * @returns True if the first element has the expected express ID
  */
 function correctTriangleCount(): boolean {
 
@@ -125,7 +121,7 @@ function correctTriangleCount(): boolean {
   return packedModelLocal.primitives.every(
       (value, index) =>
         packedModelLocal.triangleElementMaps[ index ].size ===
-        // eslint-disable-next-line no-magic-numbers, new-cap
+         
         Math.trunc( value[ 0 ].GetIndexDataSize() / 3 ) )
 }
 

@@ -49,19 +49,19 @@ export default class GeometryAggregator {
 
   /**
    * Construct this with a wasm module.
-   *
    * @param wasmModule The current wasm module.
+   * @param options
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor(
     private readonly wasmModule: ConwayGeometry,
-    // eslint-disable-next-line no-empty-function
+     
     public readonly options: Readonly< GeometryAggregatorOptions > ) {}
 
   /**
    * Add a scene to this aggregator's batch geometry.
-   *
-   * @return {void}
+   * @param scene
+   * @returns
    */
   public append< SceneEntityType >( scene: WalkableScene< SceneEntityType > ): void {
 
@@ -73,7 +73,7 @@ export default class GeometryAggregator {
 
     const outputSpaces = scene.isAllSpaces() || (!!this.options.outputSpaces)
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, nativeTransform, geometry, material] of scene.walk( outputSpaces )) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {
 
@@ -108,8 +108,7 @@ export default class GeometryAggregator {
   /**
    * Aggregate this into a set of native/wasm objects to be passed to conway-geom,
    * and also partition the aggregate into chunks based on the max data size.
-   *
-   * @return {AggregatedNativeGeometry} The aggregated & chunked geometry.
+   * @returns The aggregated & chunked geometry.
    */
   public aggregateNative(): AggregatedNativeGeometry {
 
@@ -119,7 +118,7 @@ export default class GeometryAggregator {
     const materialVector   =
       conwaywasm.nativeVectorMaterial() as NativeVectorMaterial
     const materialGeometry = this.materialGeometry
-    // eslint-disable-next-line no-magic-numbers
+     
     const maxGeometrySize  = this.options.maxGeometrySize ?? 0xFFFFFFFF
     const chunks : GeometryChunk[] = []
 

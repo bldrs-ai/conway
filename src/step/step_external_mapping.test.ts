@@ -1,4 +1,4 @@
-/* eslint-disable camelcase */
+ 
 import {beforeAll, describe, expect, test} from '@jest/globals'
 
 import AP214StepExternalMapping from '../AP214E3_2010/ap214_step_external_mapping'
@@ -15,7 +15,7 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 
 const parser = AP214StepParser.Instance
 
-// eslint-disable-next-line max-len
+ 
 const externalMappingString = '#42 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2) PARAMETRIC_REPRESENTATION_CONTEXT() REPRESENTATION_CONTEXT(\'2D SPACE\',\'\' ) );'
 
 const externalMappingStringBuffer = new TextEncoder().encode( externalMappingString )
@@ -35,8 +35,7 @@ async function initializeConwayGeom() {
 
 /**
  * Test for extracting an external mapping.
- *
- * @return {boolean} True if the test succeeds, false if it doesn't.
+ * @returns True if the test succeeds, false if it doesn't.
  */
 function extractExternalMapping() {
 
@@ -56,7 +55,7 @@ function extractExternalMapping() {
     return false
   }
 
-  // eslint-disable-next-line no-magic-numbers
+   
   if ( externalMapping.items.length !== 3 ) {
     return false
   }

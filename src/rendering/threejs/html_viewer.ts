@@ -4,7 +4,7 @@ import { SimpleViewerScene } from './simple_viewer_scene'
 
 /**
  * Handler for drop events.
- *
+ * @param scene
  * @param event The event to handle.
  */
 export function dropHandler( scene: SimpleViewerScene, event: DragEvent ): void {
@@ -32,7 +32,6 @@ export function dropHandler( scene: SimpleViewerScene, event: DragEvent ): void 
             }
 
             const buffer = await file.arrayBuffer()
-
 
             await scene.load( buffer )
           }

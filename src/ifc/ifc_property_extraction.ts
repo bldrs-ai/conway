@@ -15,7 +15,7 @@ import IfcStepModel from './ifc_step_model'
 /**
  *
  */
-/* eslint-disable no-shadow, no-unused-vars, no-magic-numbers */
+ 
 // -- eslint doesn't understand enums properly.
 export enum PropertyExtractResult {
 
@@ -35,7 +35,7 @@ export class IfcPropertyExtraction {
    *
    * @param model - IfcStepModel to extract properties from
    * @param logTime - optional parameter to print execution time
-   * @return {PropertyExtractResult} indicating the status of the parsing
+   * @returns indicating the status of the parsing
    */
   static extractIFCProperties(model: IfcStepModel, logTime: boolean = false):
         PropertyExtractResult {
@@ -75,7 +75,7 @@ export class IfcPropertyExtraction {
   /**
    *
    * @param properties
-   * @return {PropertyExtractResult}
+   * @returns
    */
   static processIfcProperties(properties: IfcProperty[]): PropertyExtractResult {
     let result: PropertyExtractResult = PropertyExtractResult.COMPLETE

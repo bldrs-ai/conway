@@ -27,7 +27,7 @@ export class IfcSceneTransform implements SceneNodeTransform {
   readonly type = SceneNodeModelType.TRANSFORM
 
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
@@ -48,7 +48,7 @@ export class IfcSceneTransform implements SceneNodeTransform {
     public readonly nativeTransform: NativeTransform4x4,
     public readonly absoluteNativeTransform: NativeTransform4x4,
     public readonly parentIndex?: number) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
   public children: number[] = []
 }
 
@@ -59,14 +59,16 @@ export class IfcSceneGeometry implements SceneNodeGeometry {
 
   readonly type = SceneNodeModelType.GEOMETRY
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct a scene geometry node
-   *
    * @param model
    * @param localID
    * @param index
+   * @param relatedElementLocalId
    * @param parentIndex
+   * @param isSpace
+   * @param materialOverideLocalID
    */
   constructor(
     public readonly model: Model,
@@ -76,7 +78,7 @@ export class IfcSceneGeometry implements SceneNodeGeometry {
     public readonly parentIndex?: number,
     public readonly isSpace: boolean = false,
     public readonly materialOverideLocalID?: number ) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 }
 
 export type IfcSceneNode = IfcSceneTransform | IfcSceneGeometry
@@ -100,18 +102,18 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
   /**
    * Get the current transform for this.
-   *
-   * @return {IfcSceneTransform|undefined}
+   * @returns
    */
   public get currentTransform(): IfcSceneTransform | undefined {
     return this.currentParent_
   }
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
    * @param conwayGeometry
+   * @param materials
    */
   public constructor(
     public readonly model: IfcStepModel,
@@ -229,12 +231,12 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
       }
     }
   }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    *
    * @param nodeIndex
-   * @return {IfcSceneNode | undefined}
+   * @returns
    */
   public getByNodeIndex(nodeIndex: number): IfcSceneNode | undefined {
     return this.scene_[nodeIndex]
@@ -243,7 +245,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   /**
    *
    * @param localID
-   * @return {IfcSceneNode | undefined}
+   * @returns
    */
   private get(localID: number): IfcSceneNode | undefined {
 
@@ -265,7 +267,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   /**
    *
    * @param localID
-   * @return {IfcSceneTransform | undefined}
+   * @returns
    */
   public getTransform(localID: number): IfcSceneTransform | undefined {
 
@@ -282,7 +284,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   /**
    *
    * @param localID
-   * @return {IfcSceneGeometry | undefined}
+   * @returns
    */
   public getGeometry(localID: number): IfcSceneGeometry | undefined {
 
@@ -298,8 +300,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
   /**
    * Build a packed/optimised mesh model with triangle element maps.
-   *
-   * @return {PackedMesh< IfcStepModel >} Maps materials to a geometry object
+   * @returns Maps materials to a geometry object
    * and triangle element map.
    */
   public buildPackedMeshModel(): PackedMesh<IfcStepModel> {
@@ -310,7 +311,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
     const triangleMaps: TriangleElementMap[] = []
     const elementMap = new Map<number, number[]>()
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, nativeTransform, geometry, material, entity] of this.walk()) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -339,7 +340,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
           triangleMap.addMappingRange(
               0,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -374,7 +375,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
           triangleMap.addMappingRange(
               triangleMap.size,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               triangleMap.size + Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -408,8 +409,7 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
   /**
    * Are all the geometry nodes in the scene spaces
-   *
-   * @return {boolean} Are all the geometry nodes in the scene spaces
+   * @returns Are all the geometry nodes in the scene spaces
    */
   public isAllSpaces(): boolean {
 
@@ -420,8 +420,8 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
   /**
    * Walk the current scene.
-   *
    * @yields Raw absolute matrix transform, the native absolute transform, the canonical mesh,
+   * @param includeSpaces
    * the canonical material and the associated step element as it walks the hierarchy.
    * @param walkTemporary Include temporary items.
    */
@@ -489,9 +489,8 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
   /**
    * Does this scene have a particular piece of geometry?
-   *
    * @param localID The local ID of the geometry
-   * @return {boolean} True if the scene has this geometry.
+   * @returns True if the scene has this geometry.
    */
   public hasGeometry(localID: number): boolean {
 
@@ -501,7 +500,10 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   /**
    *
    * @param localID
-   * @return {IfcSceneGeometry}
+   * @param owningElementLocalID
+   * @param isSpace
+   * @param materialOverrideLocalID
+   * @returns
    */
   public addGeometry(
       localID: number,
@@ -566,11 +568,11 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
    * Items added will be made the top of the transform stack.
    *
    * To prevent a node being used as a parent, pop it subsequently.
-   *
    * @param localID
    * @param transform
    * @param nativeTransform
-   * @return {IfcSceneTransform}
+   * @param isMappedItem
+   * @returns
    */
   public addTransform(
       localID: number,

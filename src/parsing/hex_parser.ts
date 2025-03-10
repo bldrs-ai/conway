@@ -4,14 +4,14 @@ import ParsingDfa4Table from './parsing_dfa_4table'
 /**
  * DFA State machine states for parsing a hex number.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum HEX_STATES {
     TERMINUS        = 0,
     MUST_DIGIT      = 1,
     MAYBE_DIGIT     = 2,
     EXPONENT_PREFIX = 3
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const DOUBLEQUOTE        = ParsingConstants.DOUBLEQUOTE
 const HEX_TERMINUS_FLAGS = 1 << HEX_STATES.MAYBE_DIGIT // only maybe digit.
@@ -42,11 +42,10 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Match unprefixed hex data.
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {number | undefined} The end of the match or undefined if none found.
+   * @returns The end of the match or undefined if none found.
    */
   public unprefixed = (
       input: Uint8Array,
@@ -57,17 +56,16 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Match hex data, with a C style prefix of 0x or 0X.
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {number | undefined} The end of the match or undefined if none found.
+   * @returns The end of the match or undefined if none found.
    */
   public prefixed = (
       input: Uint8Array,
       cursor: number,
       endCursor: number ) : number | undefined => {
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( ( endCursor - cursor ) < 3 ) {
       return
     }
@@ -82,20 +80,19 @@ export default class HexParser extends ParsingDfa4Table {
       return
     }
 
-    // eslint-disable-next-line no-magic-numbers
+     
     return this.match( input, HEX_TERMINUS_FLAGS, cursor + 2, endCursor, HEX_STATES.MUST_DIGIT )
   }
 
   /**
    * Match hex data, with a STEP style
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {number | undefined} The end of the match or undefined if none found.
+   * @returns The end of the match or undefined if none found.
    */
   public step = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( ( endCursor - cursor ) < 4 ) {
       return
     }
@@ -117,17 +114,16 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Parse a step hex value out to a binary value with the number of bits.
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {[Uint8Array, number] | undefined} The extracted value or undefined.
+   * @returns The extracted value or undefined.
    */
   public extractStep = (
       input: Uint8Array,
       cursor: number,
       endCursor: number ) : [Uint8Array, number] | undefined => {
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( ( endCursor - cursor ) < 4 ) {
       return
     }
@@ -150,20 +146,20 @@ export default class HexParser extends ParsingDfa4Table {
 
     const hexExponent = input[ exponentCursor ] - ZERO
     const startHex    = exponentCursor + 1
-    // eslint-disable-next-line no-magic-numbers
+     
     const bitCount    = ( ( prefixResult - startHex ) * 4 ) - hexExponent
     const hexBuffer   = new Uint8Array( ( prefixResult - exponentCursor ) >>> 1 )
 
     for ( let where = startHex; where < prefixResult; ++where ) {
       const currentChar = input[ ( 1 + prefixResult ) - where ]
 
-      /* eslint-disable no-magic-numbers */
+       
       hexBuffer[ ( where - startHex ) >>> 1 ] |=
         ( currentChar >= a ?
           ( 10 + ( currentChar - a ) ) :
           ( currentChar >= A ? 10 + ( currentChar - A ) : currentChar - ZERO ) ) <<
             ( ( ~where & 1 ) << 2 )
-      /* eslint-enable no-magic-numbers */
+       
     }
 
     return [hexBuffer, bitCount]

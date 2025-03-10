@@ -56,7 +56,7 @@ async function initializeGeometryExtractor() {
 }
 
 /**
- *  @return {boolean} indicating whether the wasm module is initialized.
+ *  @returns indicating whether the wasm module is initialized.
  */
 function isInitialized(): boolean {
   return conwayTubeModel.isInitialized() &&
@@ -64,14 +64,14 @@ function isInitialized(): boolean {
 }
 
 /**
- * @return {ExtractResult} indicating whether the geometry extraction was successful.
+ * @returns indicating whether the geometry extraction was successful.
  */
 function extractTubeGeometry(): ExtractResult {
   return conwayTubeModel.extractAP214GeometryData()[0]
 }
 
 /**
- * @return {ExtractResult} indicating whether the geometry extraction was successful.
+ * @returns indicating whether the geometry extraction was successful.
  */
 function extractGearGeometry(): ExtractResult {
   return conwayGearModel.extractAP214GeometryData()[0]
@@ -79,20 +79,20 @@ function extractGearGeometry(): ExtractResult {
 
 /**
  * Get the number of triangles in a mesh.
- *
- * @return {number} Number of triangles in a model's mesh.
+ * @param model
+ * @returns Number of triangles in a model's mesh.
  */
 function getMeshSize( model: AP214GeometryExtraction ): number {
 
   return Array.from( model.scene.walk() ).reduce<number>(
       ( ( previous, current ) => (
-        // eslint-disable-next-line new-cap
+         
         current[2].geometry as GeometryObject ).GetIndexDataSize() + previous ),
       0 )
 }
 
 /**
- * @return {number} indicating number of meshes
+ * @returns indicating number of meshes
  */
 function getTubeMeshSize(): number {
 
@@ -100,7 +100,7 @@ function getTubeMeshSize(): number {
 }
 
 /**
- * @return {number} indicating number of meshes
+ * @returns indicating number of meshes
  */
 function getGearMeshSize(): number {
 
@@ -108,7 +108,7 @@ function getGearMeshSize(): number {
 }
 
 /**
- * @return {boolean} indicating if the geometry extraction module is still initialized or not
+ * @returns indicating if the geometry extraction module is still initialized or not
  */
 function destroy(): boolean {
   conwayTubeModel.destroy()

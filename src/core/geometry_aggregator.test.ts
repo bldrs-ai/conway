@@ -44,7 +44,7 @@ async function initializeGeometryExtractor() {
 }
 
 /**
- * @return {ExtractResult} indicating whether the geometry extraction was successful.
+ * @returns indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
@@ -52,8 +52,7 @@ function extractGeometry(): ExtractResult {
 
 /**
  * Test aggregating geometry with a single chunk.
- *
- * @return {boolean} True if the test succeeds.
+ * @returns True if the test succeeds.
  */
 function testAggregateGeometrySingle() : boolean {
 
@@ -63,7 +62,7 @@ function testAggregateGeometrySingle() : boolean {
 
   const aggregator = new GeometryAggregator(
       conwayGeometry,
-      // eslint-disable-next-line no-magic-numbers
+       
       { maxGeometrySize: 128 << 20 } )
 
   if ( extractGeometry() !== ExtractResult.COMPLETE ) {
@@ -79,8 +78,7 @@ function testAggregateGeometrySingle() : boolean {
 
 /**
  * Test aggregating geometry with multiple chunks.
- *
- * @return {boolean} True if the test succeeds or false otherwise.
+ * @returns True if the test succeeds or false otherwise.
  */
 function testAggregateGeometryMultiple() : boolean {
 

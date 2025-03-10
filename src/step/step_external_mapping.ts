@@ -13,8 +13,7 @@ export default abstract class StepExternalMapping<
 
   /**
    * Get the type of this entity (0 is always external mapping)
-   *
-   * @return {number} The type code of this.
+   * @returns The type code of this.
    */
   public get type(): EntityTypeIDs {
     return 0 as EntityTypeIDs
@@ -22,12 +21,11 @@ export default abstract class StepExternalMapping<
 
   /**
    * Construct this external mapping.
-   *
    * @param localID The local ID for this.
    * @param internalReference_ The internal reference matching this.
    * @param model The model matching this.
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor(
       localID: number,
       internalReference_: StepEntityInternalReference<EntityTypeIDs>,
@@ -38,8 +36,7 @@ export default abstract class StepExternalMapping<
 
   /**
    * Get the externally mapped elements in this.
-   *
-   * @return {StepEntityBase} The inline elements of this.
+   * @returns The inline elements of this.
    */
   public get items(): StepEntityBase<EntityTypeIDs>[] {
 

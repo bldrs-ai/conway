@@ -7,10 +7,9 @@ import { SingleIndexSetCursor } from './single_index_set_cursor'
  * A set of indices each associated with a number identifier.
  */
 export class MultiIndexSet< IndexType extends number > {
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this with a prefix sum table and matching elements table.
-   *
    * @param prefixSumTable_ A prefix sum array where each item is its summed index,
    * with an extra element at the end with the entire count.
    * @param elements_ The elements in the index, matching the prefix sum indices * 2,
@@ -22,11 +21,10 @@ export class MultiIndexSet< IndexType extends number > {
   public constructor(
     private readonly prefixSumTable_: Uint32Array,
     private readonly elements_: Uint32Array ) {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * All the types with a non-zero size in the index.
-   *
    * @yields {IterableIterator}
    */
   public* types() : IterableIterator< IndexType > {
@@ -47,10 +45,9 @@ export class MultiIndexSet< IndexType extends number > {
 
   /**
    * Does the set have a particular index for a particular type.
-   *
    * @param indexType The index type to check for.
    * @param denseIndex The dense index in the set to check.
-   * @return {boolean} True if it has the type.
+   * @returns True if it has the type.
    */
   public has( indexType: IndexType, denseIndex: number ): boolean {
     if ( indexType >= this.prefixSumTable_.length - 1 ) {
@@ -58,9 +55,9 @@ export class MultiIndexSet< IndexType extends number > {
     }
 
     const prefixSum   = this.prefixSumTable_
-    // eslint-disable-next-line no-magic-numbers
+     
     const indexOffset = prefixSum[ indexType ] * 2
-    // eslint-disable-next-line no-magic-numbers
+     
     const indexEnd    = prefixSum[ indexType + 1 ] * 2
 
     return indexSetPointQuery32( denseIndex, this.elements_, indexOffset, indexEnd )
@@ -68,9 +65,8 @@ export class MultiIndexSet< IndexType extends number > {
 
   /**
    * Get a cursor that lets you iterate over the union of the sets of multiple indices.
-   *
    * @param indexTypes The list of types to build a cursor out of.
-   * @return {IIndexSetCursor} The cursor for the list of types.
+   * @returns The cursor for the list of types.
    */
   public cursor( ...indexTypes: IndexType[] ): IIndexSetCursor {
     const prefixSum = this.prefixSumTable_

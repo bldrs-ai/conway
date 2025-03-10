@@ -1,5 +1,5 @@
 declare global {
-    /* eslint-disable-next-line no-unused-vars */
+     
     interface Performance {
         memory?: {
             jsHeapSizeLimit: number
@@ -18,7 +18,7 @@ import Logger from '../logging/logger'
 export default class Memory {
   /**
    *
-   * @return {string} - memory usage result
+   * @returns - memory usage result
    */
   static checkMemoryUsage(): string {
     switch (Environment.environmentType) {
@@ -39,12 +39,12 @@ export default class Memory {
 
   /**
    *
-   * @return {string} - memory usage result for browser systems
+   * @returns - memory usage result for browser systems
    */
   private static checkBrowserMemory(): string {
     if (window && window.performance && window.performance.memory) {
       const memoryUsage = window.performance.memory
-      // eslint-disable-next-line no-magic-numbers
+       
       const usedJSHeapSize = (memoryUsage.usedJSHeapSize / 1024 / 1024).toFixed(3)
 
       return `JS heap allocated ${usedJSHeapSize} MB`
@@ -55,15 +55,15 @@ export default class Memory {
 
   /**
    *
-   * @return {string} - memory usage result for node systems
+   * @returns - memory usage result for node systems
    */
   private static checkNodeMemory(): string {
     const memoryUsage = process.memoryUsage()
-    /* eslint-disable no-magic-numbers */
+     
     const rss = (memoryUsage.rss / 1024 / 1024).toFixed(3)
     const heapTotal = (memoryUsage.heapTotal / 1024 / 1024).toFixed(3)
     const heapUsed = (memoryUsage.heapUsed / 1024 / 1024).toFixed(3)
-    /* eslint-enable no-magic-numbers */
+     
 
     return `Node Memory Usage: RSS ${rss} MB, ` +
            `Heap Total: ${heapTotal} MB, ` +

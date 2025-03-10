@@ -19,8 +19,7 @@ export interface IIndexSetCursor {
   /**
    * Step this forwards to the next "high" value and its corresponding low. This allows lazy
    * iteration through the cursor.
-   *
-   * @return {boolean} False if the sequence has ended, true otherwise.
+   * @returns False if the sequence has ended, true otherwise.
    */
   step(): boolean
 

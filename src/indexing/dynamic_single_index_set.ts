@@ -28,10 +28,9 @@ export default class DynamicSingleIndexSet {
 
   /**
    * Construct this empty or with a predefined index set or cursor.
-   *
    * @param from The index set or cursor to create this from if
    * this is defined.
-   * @return {DynamicSingleIndexSet} An instance of DynamicSingleIndexSet
+   * @returns An instance of DynamicSingleIndexSet
    */
   constructor( from?: SingleIndexSet | IIndexSetCursor ) {
 
@@ -71,9 +70,8 @@ export default class DynamicSingleIndexSet {
 
   /**
    * Insert a local ID in the set.
-   *
    * @param localID The id to insert.
-   * @return {boolean} True if the value was inserted, not a duplicate
+   * @returns True if the value was inserted, not a duplicate
    */
   public insert( localID: number ): boolean {
 
@@ -132,7 +130,7 @@ export default class DynamicSingleIndexSet {
 
       while ( mergeCount < totalToMerge ) {
 
-        // eslint-disable-next-line no-magic-numbers
+         
         let currentMinimum  = ( 0xFFFFFFFF ) >>> 0 // maximum uint32
         let currentRowIndex = 0
 
@@ -203,8 +201,7 @@ export default class DynamicSingleIndexSet {
 
   /**
    * Get the number of elements in this set
-   *
-   * @return {number} The size of this.
+   * @returns The size of this.
    */
   public get size(): number {
     return this.size_
@@ -212,9 +209,9 @@ export default class DynamicSingleIndexSet {
 
   /**
    * Delete a local ID from this.
-   *
    * @param key the key to delete.
-   * @return {boolean} True if the item existed to be deleted.
+   * @param localID
+   * @returns True if the item existed to be deleted.
    */
   public delete( localID: number ): boolean {
 
@@ -248,9 +245,8 @@ export default class DynamicSingleIndexSet {
 
   /**
    * Does the set have a particular index for a particular type.
-   *
    * @param localID The dense index in the set to check.
-   * @return {boolean} True if it has the type.
+   * @returns True if it has the type.
    */
   public has( localID: number ): boolean {
 
@@ -281,9 +277,8 @@ export default class DynamicSingleIndexSet {
 
   /**
    * Get a cursor that lets you iterate over the union of the sets of multiple indices.
-   *
    * @param indexTypes The list of types to build a cursor out of.
-   * @return {IIndexSetCursor} The cursor for the list of types.
+   * @returns The cursor for the list of types.
    */
   public cursor(): DynamicSingleIndexSetCursor {
 

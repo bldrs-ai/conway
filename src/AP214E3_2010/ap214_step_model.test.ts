@@ -1,4 +1,4 @@
-/* eslint-disable camelcase */
+ 
 import {beforeAll, describe, expect, test} from '@jest/globals'
 
 import AP214StepParser from './ap214_step_parser'
@@ -33,8 +33,7 @@ const PRODUCT_DEFINITION_FORMATION_EXPRESS_ID = 6
 
 /**
  * Extract a product definition formation/context.
- *
- * @return {boolean} True if the test succeeds, false if it doesn't.
+ * @returns True if the test succeeds, false if it doesn't.
  */
 function extractContext() {
 

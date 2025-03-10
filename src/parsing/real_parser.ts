@@ -3,7 +3,7 @@ import ParsingDfa16Table from './parsing_dfa_16table'
 /**
  * DFA State machine states for parsing a real.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum REAL_STATES {
   TERMINUS          = 0,
   SIGN_OR_DIGIT_I   = 1,
@@ -15,7 +15,7 @@ enum REAL_STATES {
   MUST_DIGIT_E      = 7,
   MAYBE_DIGIT_E     = 8
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const REAL_TERMINUS_FLAGS =
   ( 1 << REAL_STATES.MAYBE_DIGIT_E ) |
@@ -56,11 +56,10 @@ export default class RealParser extends ParsingDfa16Table {
 
   /**
    * Match a signed real and returned the updated cursor position or undefined if no match is found
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {number | undefined} The end of the match or undefined if none found.
+   * @returns The end of the match or undefined if none found.
    */
   public signed = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
     return this.match( input, REAL_TERMINUS_FLAGS, cursor, endCursor, REAL_STATES.SIGN_OR_DIGIT_I )
@@ -68,11 +67,10 @@ export default class RealParser extends ParsingDfa16Table {
 
   /**
    * Match an unsigned real and return the updated cursor position or undefined if no match is found
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {number | undefined} The end of the match or undefined if none found.
+   * @returns The end of the match or undefined if none found.
    */
   public unsigned = (
       input: Uint8Array,

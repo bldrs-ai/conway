@@ -50,7 +50,7 @@ export default class Logger {
    *
    * @param message - log message
    * @param level - log level
-   * @return {number} log index
+   * @returns log index
    */
   private static findLogIndex(message: string, level: LogLevel): number {
     return Logger.logs.findIndex((log) => log.message === message && log.level === level)
@@ -134,7 +134,7 @@ export default class Logger {
   /**
    *
    * @param modelID
-   * @return {Statistics | undefined}
+   * @returns
    */
   public static getStatistics(modelID: number): Statistics | undefined {
     return this.statistics.get(modelID)
@@ -142,9 +142,8 @@ export default class Logger {
 
   /**
    * Create the statistics for a model ID.
-   *
    * @param modelID The model ID to create statistics for
-   * @return {Statistics} The created statistics object.
+   * @returns The created statistics object.
    */
   public static createStatistics(modelID: number): Statistics {
     const statistics: Statistics = new Statistics()
@@ -171,8 +170,7 @@ export default class Logger {
   /**
    * Compresses the logs if they haven't been compressed,
    * then returns a list of just the errors.
-   *
-   * @return {LogEntry[]} The errors.
+   * @returns The errors.
    */
   public static getErrors(): LogEntry[] {
 
@@ -199,7 +197,7 @@ export default class Logger {
 
   /**
    *
-   * @return {LogEntry[]} - list of logs
+   * @returns - list of logs
    */
   public static getLogs(): LogEntry[] {
     return Logger.logs

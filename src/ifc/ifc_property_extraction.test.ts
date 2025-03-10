@@ -19,7 +19,7 @@ async function initializeConwayGeom() {
 
 
 /**
- * @return {PropertyExtractResult} indicating whether the IFC properties extraction was successful.
+ * @returns indicating whether the IFC properties extraction was successful.
  */
 function parseProperties(): PropertyExtractResult {
   const parser = IfcStepParser.Instance

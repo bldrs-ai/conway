@@ -60,7 +60,7 @@ function doWork() {
   const allTimeStart = Date.now()
   const SKIP_PARAMS = 2
 
-  const args = // eslint-disable-line no-unused-vars
+  const args =  
     yargs(process.argv.slice(SKIP_PARAMS))
         .command('$0 <filename>', 'Query file', (yargs2) => {
           yargs2.option('express_ids', {
@@ -96,14 +96,14 @@ function doWork() {
             alias: 'p',
           })
           yargs2.option('maxchunk', {
-          // eslint-disable-next-line max-len
+           
             describe: 'Maximum chunk size in megabytes (note, this is the allocation size, not the output size)',
             type: 'number',
             alias: 'm',
             default: 128,
           })
           yargs2.option('strict', {
-          // eslint-disable-next-line max-len
+           
             describe: 'Makes parser/reference errors on nullable fields return null instead of an error',
             type: 'boolean',
             alias: 's',
@@ -348,7 +348,7 @@ function doWork() {
               const fileNameSplit: string[] = parseFileHeader(FILE_NAME)
 
 
-              // eslint-disable-next-line no-magic-numbers
+               
               if (fileNameSplit.length > 6) {
                 const preprocessorVersion = fileNameSplit[5]
                 const originatingSystem = fileNameSplit[6]
@@ -371,6 +371,10 @@ function doWork() {
 
 /**
  * Serialize the geometry.
+ * @param scene
+ * @param fileNameNoExtension
+ * @param maxGeometrySize
+ * @param includeSpaces
  */
 function serializeGeometry(
     scene: IfcSceneBuilder,
@@ -571,6 +575,7 @@ function serializeGeometry(
 
 /**
  * Function to extract PropertySets from an IfcStepModel
+ * @param model
  */
 function propertyExtraction(model: IfcStepModel) {
 
@@ -579,8 +584,8 @@ function propertyExtraction(model: IfcStepModel) {
 
 /**
  * Function to extract Geometry from an IfcStepModel
- *
- * @return {IfcSceneBuilder | undefined} The scene or undefined on error.
+ * @param model
+ * @returns The scene or undefined on error.
  */
 function geometryExtraction(model: IfcStepModel):
   IfcSceneBuilder | undefined {
@@ -598,7 +603,7 @@ function geometryExtraction(model: IfcStepModel):
   statistics?.setGeometryTime(executionTimeInMs)
 
 
-  // eslint-disable-next-line no-magic-numbers
+   
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
 
 

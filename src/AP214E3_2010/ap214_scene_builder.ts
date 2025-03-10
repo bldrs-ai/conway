@@ -26,7 +26,7 @@ export class AP214SceneTransform implements SceneNodeTransform {
   readonly type = SceneNodeModelType.TRANSFORM
 
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
@@ -47,7 +47,7 @@ export class AP214SceneTransform implements SceneNodeTransform {
     public readonly nativeTransform: NativeTransform4x4,
     public readonly absoluteNativeTransform: NativeTransform4x4,
     public readonly parentIndex?: number) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
   public children: number[] = []
 }
 
@@ -60,21 +60,20 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
 
   /**
    * No Spaces for AP214
-   *
-   * @return {boolean} Always false, no spaces.
+   * @returns Always false, no spaces.
    */
   public get isSpace(): boolean {
 
     return false
   }
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct a scene geometry node
-   *
    * @param model
    * @param localID
    * @param index
+   * @param relatedElementLocalId
    * @param parentIndex
    */
   constructor(
@@ -83,7 +82,7 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
     public readonly index: number,
     public readonly relatedElementLocalId?: number,
     public readonly parentIndex?: number ) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 }
 
 export type AP214SceneNode = AP214SceneTransform | AP214SceneGeometry
@@ -105,11 +104,12 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   private transformListeners_?: SceneListener[]
   private geometryListeners_?: SceneListener[]
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
    * @param conwayGeometry
+   * @param materials
    */
   public constructor(
     public readonly model: AP214StepModel,
@@ -117,7 +117,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
     public readonly materials: AP214MaterialCache) {
 
   }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
 
   /**
@@ -233,7 +233,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param nodeIndex
-   * @return {AP214SceneNode | undefined}
+   * @returns
    */
   public getByNodeIndex(nodeIndex: number): AP214SceneNode | undefined {
     return this.scene_[nodeIndex]
@@ -242,7 +242,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param localID
-   * @return {AP214SceneNode | undefined}
+   * @returns
    */
   private get(localID: number): AP214SceneNode | undefined {
 
@@ -264,7 +264,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param localID
-   * @return {AP214SceneTransform | undefined}
+   * @returns
    */
   public getTransform(localID: number): AP214SceneTransform | undefined {
 
@@ -280,8 +280,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Build a packed/optimised mesh model with triangle element maps.
-   *
-   * @return {PackedMesh< AP214StepModel >} Maps materials to a geometry object
+   * @returns Maps materials to a geometry object
    * and triangle element map.
    */
   public buildPackedMeshModel(): PackedMesh<AP214StepModel> {
@@ -292,7 +291,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
     const triangleMaps: TriangleElementMap[] = []
     const elementMap = new Map<number, number[]>()
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, nativeTransform, geometry, material, entity] of this.walk()) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -321,7 +320,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
           triangleMap.addMappingRange(
               0,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -356,7 +355,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
           triangleMap.addMappingRange(
               triangleMap.size,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               triangleMap.size + Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -390,8 +389,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Are all the geometry nodes in the scene spaces
-   *
-   * @return {boolean} Are all the geometry nodes in the scene spaces
+   * @returns Are all the geometry nodes in the scene spaces
    */
   public isAllSpaces(): boolean {
 
@@ -400,8 +398,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Walk the current scene.
-   *
    * @yields Raw absolute matrix transform, the native absolute transform, the canonical mesh,
+   * @param includeSpaces
    * the canonical material and the associated step element as it walks the hierarchy.
    * @param walkTemporary Include temporary items.
    */
@@ -468,9 +466,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Does this scene have a particular piece of geometry?
-   *
    * @param localID The local ID of the geometry
-   * @return {boolean} True if the scene has this geometry.
+   * @returns True if the scene has this geometry.
    */
   public hasGeometry(localID: number): boolean {
 
@@ -480,7 +477,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param localID
-   * @return {AP214SceneGeometry}
+   * @param owningElementLocalID
+   * @returns
    */
   public addGeometry(
       localID: number,
@@ -540,7 +538,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
    * @param localID
    * @param transform
    * @param nativeTransform
-   * @return {AP214SceneTransform}
+   * @returns
    */
   public addTransform(
       localID: number,

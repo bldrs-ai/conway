@@ -5,14 +5,14 @@ import ParsingDfa4Table from '../../parsing/parsing_dfa_4table'
 /**
  * DFA State machine states for parsing an enum.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum ENUM_PARSER_STATE {
     TERMINUS         = 0,
     AFTER_DOT        = 1,
     MUST_UPPER_CASE  = 2,
     MAYBE_UPPER_CASE = 3
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const ENUM_PARSER_TERMINUS_FLAGS = ( 1 << ENUM_PARSER_STATE.AFTER_DOT )
 
@@ -40,13 +40,12 @@ export default class StepEnumParser extends ParsingDfa4Table {
 
   /**
    * Parse a generated enum that is based on a minimal perfect hash.
-   *
    * @param typeMap The map to the enum type using a minimal perfect hash that doesn't
    * require string extraction.
    * @param input The input buffer.
    * @param cursor The offset in the input buffer where the enum may be.
    * @param endCursor The end point of the parse which should not be overflowed.
-   * @return {number | undefined} The matching enum value or undefined if none matches
+   * @returns The matching enum value or undefined if none matches
    * or the parse fails.
    */
   public extract = < T extends number >(
@@ -66,11 +65,10 @@ export default class StepEnumParser extends ParsingDfa4Table {
 
   /**
    * Match a step enum
-   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @return {number | undefined} The end of the match.
+   * @returns The end of the match.
    */
   public match = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
     if ( ( endCursor - cursor ) < ENUM_MINIMUM_SIZE ) {

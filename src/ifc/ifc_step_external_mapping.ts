@@ -10,12 +10,11 @@ export default class IfcStepExternalMapping extends StepExternalMapping< EntityT
 
   /**
    * Construct this external mapping.
-   *
    * @param localID The local ID for this.
    * @param internalReference_ The internal reference matching this.
    * @param model The model matching this.
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor(
       localID: number,
       internalReference_: StepEntityInternalReference< EntityTypesIfc >,

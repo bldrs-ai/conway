@@ -11,8 +11,7 @@ export class AP214ModelProfile implements ModelProfile {
 
   /**
    * Get the number of profiles in this.
-   *
-   * @return {number}
+   * @returns
    */
   get length(): number {
     return this.profiles_.size
@@ -20,7 +19,6 @@ export class AP214ModelProfile implements ModelProfile {
 
   /**
    * Add a profile to the cache.
-   *
    * @param profile
    */
   public add( profile: CanonicalProfile ) {
@@ -29,9 +27,8 @@ export class AP214ModelProfile implements ModelProfile {
 
   /**
    * Get a profile by its local id.
-   *
    * @param localID
-   * @return {CanonicalProfile | undefined}
+   * @returns
    */
   public getByLocalID(localID: number): CanonicalProfile | undefined {
     return this.profiles_.get(localID)
@@ -39,8 +36,7 @@ export class AP214ModelProfile implements ModelProfile {
 
   /**
    * Iterate through the profiles in this.
-   *
-   * @return {IterableIterator<CanonicalProfile>}
+   * @returns
    */
   public [Symbol.iterator](): IterableIterator<CanonicalProfile> {
     return this.profiles_.values()

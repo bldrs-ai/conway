@@ -6,8 +6,7 @@ const parserInstance = HexParser.Instance
 
 /**
  * Tests correctly parsing a STEP hex number.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testParseCorrectValueStep() {
   const data = new TextEncoder().encode( '"201234567ABCDEF"' )
@@ -19,8 +18,7 @@ function testParseCorrectValueStep() {
 
 /**
  * Tests parsing a C style hex number.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testParseCorrectValueC() {
   const data = new TextEncoder().encode( '0x0123456789ABCDEF' )
@@ -32,8 +30,7 @@ function testParseCorrectValueC() {
 
 /**
  * Tests parsing an unprefixed hex number.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testParseCorrectValueUnprefixed() {
   const data = new TextEncoder().encode( '0123456789ABCDEF' )
@@ -45,8 +42,7 @@ function testParseCorrectValueUnprefixed() {
 
 /**
  * Tests that parsing an incorrectly formatted STEP hex number fails.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testParseIncorrectStep() {
   const data = new TextEncoder().encode( '"G1235"' )
@@ -58,8 +54,7 @@ function testParseIncorrectStep() {
 
 /**
  * Tests that parsing an incorrectly formatted C prefixed hex number fails.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testParseIncorrectC() {
   const data = new TextEncoder().encode( 'X12450324BEF' )
@@ -71,8 +66,7 @@ function testParseIncorrectC() {
 
 /**
  * Tests that extracting a STEP hex number works correctly.
- *
- * @return {boolean} True if the test passes.
+ * @returns True if the test passes.
  */
 function testParseExtract() {
   const testDataMatch = Buffer.from( '0FFEDCBA76543210', 'hex' )
@@ -97,7 +91,7 @@ function testParseExtract() {
     }
   }
 
-  // eslint-disable-next-line no-magic-numbers
+   
   return ( ( testDataMatch.length * 8 ) - 2 ) === bitCount
 }
 

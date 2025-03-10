@@ -1,4 +1,4 @@
-/* eslint-disable no-magic-numbers */
+ 
 
 const uInt32 = new Uint32Array([0x11223344])
 const uInt8 = new Uint8Array(uInt32.buffer)
@@ -7,17 +7,16 @@ const littleEndian = uInt8[0] === 0x44
 
 /**
  * Search an index set using a binary search
- *
  * @param searchValue The value to search for.
  * @param buffer The index set to search in.
  * @param offset The offset to the start of the range to search
  * @param end The end of the buffer.
- * @return {number} The closest found location.
+ * @returns The closest found location.
  */
 function keySearch32(
     searchValue: number,
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): number {
 
@@ -40,17 +39,16 @@ function keySearch32(
 
 /**
  * Search an index set using a binary search
- *
  * @param searchValue The value to search for.
  * @param buffer The index set to search in.
  * @param offset The offset to the start of the range to search
  * @param end The end of the buffer.
- * @return {number} The closest found location.
+ * @returns The closest found location.
  */
 function keyProbe32(
     searchValue: number,
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): number {
 
@@ -85,8 +83,7 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Get the number of items in this.
-   *
-   * @return {number} The number of itmes in this.
+   * @returns The number of itmes in this.
    */
   public get size(): number {
 
@@ -95,12 +92,12 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Construct the interpolation search table
-   *
    * @param keyValues_ This is expected to be an array with pairs of elements
    * as a key-value pair packed into the array with keys. e.g. [0] = value, [1] = key
    * and so on.
    *
    * This will be mutated in-place, so copy if you do not wish the array to be mutated.
+   * @param alreadySorted
    */
   constructor( private readonly keyValues_: Uint32Array, alreadySorted: boolean = false ) {
 
@@ -191,7 +188,6 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Implements Map Foreach.
-   *
    * @param callbackfn The for each callback.
    * @param thisArg Overridable this arg.
    */
@@ -217,9 +213,8 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Does this have the matching key?
-   *
    * @param key The key to search for
-   * @return {boolean} True if found, false otherwise.
+   * @returns True if found, false otherwise.
    */
   public has(key: number): boolean {
     return this.get( key ) !== void 0
@@ -227,7 +222,6 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Iterate through all entries (key value pairs)
-   *
    * @yields {[number, number]} A key value pair.
    */
   public* entries(): IterableIterator<[number, number]> {
@@ -244,7 +238,6 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Iterate through all keys in sort order.
-   *
    * @yields {number} A key.
    */
   public* keys(): IterableIterator<number> {
@@ -258,7 +251,6 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Iterate through all values in key sort order.
-   *
    * @yields {number} A value.
    */
   public* values(): IterableIterator<number> {
@@ -273,8 +265,7 @@ export default class InterpolationSearchTable32 implements
 
   /**
    * Iterates through all the entries in this.
-   *
-   * @return {IterableIterator<[number, number]>} Iterate through all entries.
+   * @returns Iterate through all entries.
    */
   [Symbol.iterator](): IterableIterator<[number, number]> {
     return this.entries()
@@ -285,9 +276,8 @@ export default class InterpolationSearchTable32 implements
   /**
    * Will find an exact key (first match) and return its value,
    * or undefined if not found.
-   *
    * @param key The key to search for.
-   * @return {number | undefined} The matching value, or undefined
+   * @returns The matching value, or undefined
    * if no matching value is found.
    */
   public get( key: number ): number | undefined {

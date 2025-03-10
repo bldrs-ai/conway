@@ -14,7 +14,6 @@ export class StepTypeIndexer< TypeIDType extends number > {
 
   /**
    * Construct this with the number of types that will be indexed.
-   *
    * @param typeCount The number of types that will be indexed.
    */
   public constructor( typeCount: number ) {
@@ -23,12 +22,11 @@ export class StepTypeIndexer< TypeIDType extends number > {
 
   /**
    * Create a type index from a set of parsed STEP elements.
-   *
    * @param elements The elements to type index.
-   * @return {MultiIndexSet} The created multi-set index.
+   * @returns The created multi-set index.
    */
   public create( elements: StepIndexEntry< TypeIDType >[] ): MultiIndexSet< TypeIDType > {
-    // eslint-disable-next-line no-magic-numbers
+     
     for ( let where = 0, end = this.elementCounter_.length; where < end; where += 2 ) {
       initCountCompactedElements32State( this.elementCounter_, where )
     }
@@ -53,7 +51,7 @@ export class StepTypeIndexer< TypeIDType extends number > {
 
     // Reset, because now we have actually counted all the indices, we can put out the
     // compacted versions
-    // eslint-disable-next-line no-magic-numbers -- we're using a 2 stride here, it's not magic.
+     
     for ( let where = 0, end = this.elementCounter_.length; where < end; where += 2 ) {
       initCountCompactedElements32State( this.elementCounter_, where )
     }

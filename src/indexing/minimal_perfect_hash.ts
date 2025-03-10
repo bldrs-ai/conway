@@ -7,7 +7,7 @@ import { blobEquals, fnv1a as fnv1A, fnv1a24 as fnv1A24 } from './hashing'
 export default class MinimalPerfectHash< ValueType extends number > implements
   ReadonlyMap< Uint8Array, ValueType >, TypeIndex< ValueType > {
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param gMap_ The G mapping (see minimum perfect hashing algorithm)
@@ -23,12 +23,11 @@ export default class MinimalPerfectHash< ValueType extends number > implements
     private readonly keyPrefixSum_: Uint32Array,
     private readonly slotMap_: Int32Array,
     private readonly keyBlob_: Uint8Array ) {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Iterates through this (alias for this.entries() that works with for of loop).
-   *
-   * @return {IterableIterator} The iterator to iterate through this.
+   * @returns The iterator to iterate through this.
    */
   public [Symbol.iterator](): IterableIterator<[Uint8Array, ValueType]> {
     return this.entries()
@@ -36,8 +35,7 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Get the number of keys/slots in this.
-   *
-   * @return {number} The number of keys/slots.
+   * @returns The number of keys/slots.
    */
   public get size(): number {
     return this.slotMap_.length
@@ -45,7 +43,6 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Implements the for each idiom on this map.
-   *
    * @param callbackfn The callback function to call per element.
    * @param thisArg Extra arg to bind this to callback function.
    */
@@ -75,8 +72,7 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Get all the items in this map in the form of a lazy iterator.
-   *
-   * @return {IterableIterator} The lazy iterator to loop through the entries in the map.
+   * @returns The lazy iterator to loop through the entries in the map.
    * @yields {[Uint8Array, number]} A key value tuple pair between slot valeus and the
    * key data.
    */
@@ -98,8 +94,7 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Get all the keys in this map in the form of a lazy iterator.
-   *
-   * @return {IterableIterator} The lazy iterator to loop through the keys in the map.
+   * @returns The lazy iterator to loop through the keys in the map.
    * @yields {Uint8Array} A key from this map.
    */
   public* keys(): IterableIterator<Uint8Array> {
@@ -120,8 +115,7 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Get all the values in this map in the form of a lazy iterator.
-   *
-   * @return {IterableIterator} The lazy iterator to loop through the values in the map.
+   * @returns The lazy iterator to loop through the values in the map.
    * @yields {number} A value from this map.
    */
   public* values(): IterableIterator<ValueType> {
@@ -138,11 +132,10 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Does this map have a particular key.
-   *
    * @param buffer The buffer to get the key to match from.
    * @param offset An optional offset into the buffer (will be 0 if not specified)
    * @param end The end offset in the buffer (non inclusive, will be length if specified.
-   * @return {boolean} True if the key is in the map.
+   * @returns True if the key is in the map.
    */
   public has( buffer: Uint8Array, offset?: number, end?: number ): boolean {
     return this.get( buffer, offset, end ) !== void 0
@@ -150,11 +143,10 @@ export default class MinimalPerfectHash< ValueType extends number > implements
 
   /**
    * Get the corresponding value in this map for a particular key.
-   *
    * @param buffer The buffer to get the key to match from.
    * @param offset An optional offset into the buffer (will be 0 if not specified)
    * @param end The end offset in the buffer (non inclusive, will be length if specified.
-   * @return {number | undefined} The matching value if the key is in the map,
+   * @returns The matching value if the key is in the map,
    * otherwise undefined.
    */
   public get( buffer: Uint8Array, offset?: number, end?: number ): ValueType | undefined {

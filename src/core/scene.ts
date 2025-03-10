@@ -30,12 +30,15 @@ export interface SceneListener {
  */
 export class SceneListenerOptions {
 
-  /** Construct the options with default values as necessary */
-  // eslint-disable-next-line no-useless-constructor, require-jsdoc
+  /**
+   * Construct the options with default values as necessary
+   * @param replayCurrentScene
+   * @param disableGeometryEvents
+   * @param disableTransformEvents
+   */
   constructor(
     public readonly replayCurrentScene = true,
-    public readonly disableGeometryEvents: boolean = false,
-    // eslint-disable-next-line no-empty-function
+    public readonly disableGeometryEvents: boolean = false,     
     public readonly  disableTransformEvents: boolean = true ) {}
 
   /** The default options */

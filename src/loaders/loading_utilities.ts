@@ -2,7 +2,7 @@
 /**
  *
  * @param input - FILE_HEADER from step header
- * @return {string[]} array of fields in FILE_NAME
+ * @returns array of fields in FILE_NAME
  */
 export function parseFileHeader(input: string): string[] {
   const result: string[] = []

@@ -7,17 +7,18 @@ import {
 import { indexSetPointQuery32 } from './search_operations'
 import { SingleIndexSetCursor } from './single_index_set_cursor'
 
-// eslint-disable-next-line no-magic-numbers
+ 
 const localState = new Int32Array( 2 )
 
 /**
  * A single set of indices
  */
 export class SingleIndexSet {
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this with a matching elements table.
-   *
+   * @param start_
+   * @param end_
    * @param elements_ The elements in the index, matching the start->end indices * 2,
    * where there's 2 elements in the array for each item,
    * packed (first has the bottom 5 bits masked out, and is the top bits, the second
@@ -28,12 +29,11 @@ export class SingleIndexSet {
     private readonly start_: number,
     private readonly end_: number,
     private readonly elements_: Uint32Array ) {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Get the buffer elements from this (treat as immutable)
-   *
-   * @return {ReadonlyUint32Array} The buffer elements.
+   * @returns The buffer elements.
    */
   public get buffer(): ReadonlyUint32Array {
     return this.elements_
@@ -41,10 +41,9 @@ export class SingleIndexSet {
 
   /**
    * Does the set have a particular index for a particular type.
-   *
    * @param indexType The index type to check for.
    * @param denseIndex The dense index in the set to check.
-   * @return {boolean} True if it has the type.
+   * @returns True if it has the type.
    */
   public has( denseIndex: number ): boolean {
     return indexSetPointQuery32( denseIndex, this.elements_, this.start_, this.end_ << 1 )
@@ -52,9 +51,8 @@ export class SingleIndexSet {
 
   /**
    * Get a cursor that lets you iterate over the union of the sets of multiple indices.
-   *
    * @param indexTypes The list of types to build a cursor out of.
-   * @return {IIndexSetCursor} The cursor for the list of types.
+   * @returns The cursor for the list of types.
    */
   public cursor(): IIndexSetCursor {
 
@@ -64,9 +62,8 @@ export class SingleIndexSet {
 
   /**
    * Create an index from a single local id.
-   *
    * @param localId The local id.
-   * @return {SingleIndexSet} The created multi-set index.
+   * @returns The created multi-set index.
    */
   public static createFromSingleLocalId( localId: number ): SingleIndexSet {
 
@@ -86,9 +83,8 @@ export class SingleIndexSet {
 
   /**
    * Create an index from an ascended sorting set of local IDs.
-   *
    * @param localIds The local ids to create this
-   * @return {SingleIndexSet} The created index sex.
+   * @returns The created index sex.
    */
   public static createFromLocalIds( localIds: number[] | ReadonlyUint32Array ): SingleIndexSet {
 
