@@ -203,6 +203,7 @@ export default class InterpolationSearchTable32 implements
 
     const keyValues = this.keyValues_
 
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     thisArg ??= this
 
     for ( let where = 0, end = keyValues.length; where < end; where += 2 ) {

@@ -59,6 +59,7 @@ export default class MinimalPerfectHash< ValueType extends number > implements
     const keyPrefixSum = this.keyPrefixSum_
     const keyBlob      = this.keyBlob_
 
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     thisArg ??= this
 
     for ( let where = 0, end = slotMap.length; where < end; ++where ) {

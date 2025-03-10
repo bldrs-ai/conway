@@ -39,8 +39,6 @@ export default [
       'prefer-const': 'warn',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': 'warn',
-      // TODO(pablo): REMOVE IN REVIEW
-      '@typescript-eslint/no-this-alias': 'warn',
     }
   }
 ]
