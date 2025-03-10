@@ -1,68 +1,50 @@
-# Performance Test
+## Regression Testing
 
-This document provides detailed instructions on how to set up and run the
-performance tests for the project.
+Conway has a built in regression testing framework that is designed to be run as a batch process for release checking, but also supports spot and verbose output to track down where regressions are.
 
-## Prerequisites
+ ### Individual models
 
-Before you begin, ensure you have the following installed:
-- Node.js and npm
-- A Unix-like environment (for running shell scripts)
-- Checkout and build https://github.com/bldrs-ai/headless-three
-- Checkout a model repo, like https://github.com/bldrs-ai/test-models
+Conway can run produce regression dump output, designed to be diffed against the dumps of previous versions. This is done by the individual regression testing console application, which has a manifest digest mode (which produces a CSV hash manifest of all the curve, profile and mesh components of an IFC file) and a verbose mode (produces OBJ files for all the same components in a directory).
 
-## Build headless-three with latest Conway
-
-Conway performance test uses headless-three (H3) for its rendering environment.  So we have to update it to use the latest conway.  H3 accesses conway via the conway-web-ifc-adapter package.  To get these all using the latest conway version locally (without publishing candidate packages) we use yarn link, which symlinks a project's node_modules/{dependency} to a working repo on your machine.
-
-Follow these steps to cross-link your working repos:
-
- 1. In conway repo, build and test conway (see this project's root README)
- 2. Run `npm pack` to verify the npm will look good (i.e. is the size you expect, has the right files)
- 3. Run `yarn link`, copy the value it gives you
- 4. cd to your local root for `conway-web-ifc-adapter`, paste the value and execute that yarn linking command
-    1.  `yarn build` (in conway-web-ifc-adapter root)
-    2.  `yarn link`, copy the value it gives you
-       1.  cd ${headless-three}, paste the value and execute that yarn linking command
-       2.  `yarn build` (in headless-three root)
- 5. cd ${conway}
-
-Now your local headless-three depends on your local conway-web-ifc-adapter which depends on the new version of conway.
-
-## Run Performance Test
-
-Run the performance test script using the following command:
-```
-./performance_test.sh <path to headless-three> <path to models directory>
-```
-
-For example, with output:
-```
-conway/scripts> ./performance_test.sh $HOME/c/b/headless-three $HOME/c/b/test-models
-ok, 1s, haus.ifc
-ok, 0s, box.ifc
-error, 1s, bath-csg-solid.ifc
-```
-
-This will also leave output in the `../benchmarks` directory (../ relative to scripts) named for the engine and model dir being tested, e.g. `benchmarks/conway0.1.553_test-models`, including:
-- performance.csv             Basic status and timings from performance script
-- performance-detail.csv      A rollup of detailed stats from the renering server for all models
-- $OLD_$NEW_delta.csv         Delta of performance-detail.csv between NEW and OLD versions, e.g. 0.1.500_0.1.490_delta.csv
-- performance.err.txt         The error output from the script
-- rendering-server.log.txt    Output from the headless-three http server, including model loading problems
-
-There are also per model outputs including .png renders and .txt detailed stats:
-```
-conway/scripts> ls ../benchmarks/conway0.1.553_test-models | head
-171210AISC_Sculpture_param.ifc-fit.png
-171210AISC_Sculpture_param.ifc-statistics.txt
-AC20-FZK-Haus.ifc-fit.png
-AC20-FZK-Haus.ifc-statistics.txt
-C20-Institute-Var-2.ifc-fit.png
-```
-
-That directory will also have a delta file comparing the new version of conway to the old version (npm latest).
+It can be run with:
 
 ```
 
+node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d <ifc file path> [output path]
+
+node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -v <ifc file path> [output path]
+
+node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d -v <ifc file path> [output path]
+
 ```
+
+The digest (-d) or verbose OBJ modes (-v) can be run separately or together. The output path is optional and is otherwise the ifc file path without the ".ifc" extension. For verbose mode a folder with "_obj" appended will be used for the output, and for the digest mode, the ".csv" extension will be appended to the output path.
+
+Digests for IFC files are stably sorted (by Express ID) and have SHA1 hashes for the individual pieces of geometry produced by Conway, including curves, meshes, profiles and materials, as well as the type and references for the operands for boolean operators, and if the particular element is a void. For an example, check out the manifest of the index.ifc file from the [test models repository](https://github.com/bldrs-ai/test-models) [here](test_models/index.csv).
+
+### Batch Mode
+
+There is a batch mode console application that is used for batch mode testing that is expected to be run on repositories of test models and have its results put into the regression baselines folder (the regression folder in the repository), with a sub-folder per set of baselines. The regression baseline application is designed to be run from the Conway repository root.
+
+The batch mode only runs regressions in digest mode, putting them into the output folder, and then creates a master manifest/digest, in a stable sorted order, with a hash of each digest and the corresponding model name. The batch mode also creates an errors manifest, containing the logged errors and counts for each file that has been run.
+
+After this, it also runs a diff using git against the previous version (or one specified by a git commit reference such as a commit hash, tag or branch head) of the folder to create a changes csv file that summarizes the number of changed lines in each digest/manifest. In addition to this there is a "dry run" mode which will roll back the changes to the manifests after producing the changes file. This can be used for running regression tests after making changes before commit. 
+
+The batch app can be run like so: 
+
+```
+node --experimental-specifier-resolution=node .\compiled\src\ifc\ifc_regression_batch_main.js [options...] <input IFC file> <output folder>
+```
+Here are the options:
+
+ 1. Setting a commit diff target (_--target_ or _-t_ &lt;commit reference&gt;)
+ 2. Dry run mode (_--dryrun_ or _-d_)
+ 3. Set the changes file output path (_--changes_ or _-c_ &lt;file path without csv extension&gt;)
+ 4. Exclusion regex filter that filters out files from being processed (_--exclude_ or _-e_ &lt;regex&gt;).
+
+Assuming you have the test models repository checked out in the cloned in the same parent folder as the conway repository, here would be an example of how to run regression on an the repo, putting the regression baselines in the correct place, as well as creating a custom change file, for a release. This assumes there is a tag (conway-0.1.596) in this case for the release, and that there is a new release for history that will be 0.2.597.
+
+```
+node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js -e "sp-.*\.ifc" -t conway-0.1.596 -c ./regression/history/test-models-conway-0.2.597-vs-conway-0.1.596 ../test-models ./regression/test_models
+```
+

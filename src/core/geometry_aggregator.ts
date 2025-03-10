@@ -52,7 +52,7 @@ export default class GeometryAggregator {
    *
    * @param wasmModule The current wasm module.
    */
-  // eslint-disable-next-line no-useless-constructor, require-jsdoc
+  // eslint-disable-next-line no-useless-constructor
   constructor(
     private readonly wasmModule: ConwayGeometry,
     // eslint-disable-next-line no-empty-function

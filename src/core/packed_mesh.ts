@@ -28,7 +28,7 @@ export class PackedMesh< ModelType extends Model > {
    * @param elementPrimitiveIndex Element primitive index, maps
    * element local ids to the correct primitive.
    */
-  // eslint-disable-next-line no-useless-constructor, require-jsdoc
+  // eslint-disable-next-line no-useless-constructor
   constructor(
     public readonly model: ModelType,
     public readonly materials: ReadonlyArray< CanonicalMaterial >,

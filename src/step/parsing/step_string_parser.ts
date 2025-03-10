@@ -230,12 +230,11 @@ export default class StepStringParser extends ParsingDfa16Table {
               /* eslint-disable no-magic-numbers */
               if (nextChar3 < 0x7F) {
                 result += String.fromCharCode(nextChar3)
-              } else
-                if (nextChar >= 0xA1 && nextChar <= 0xFF) {
-                  result += ISO8859Table[codePage][nextChar - 0xA1]
-                } else {
-                  return result
-                }
+              } else if (nextChar >= 0xA1 && nextChar <= 0xFF) {
+                result += ISO8859Table[codePage][nextChar - 0xA1]
+              } else {
+                return result
+              }
               /* eslint-enable no-magic-numbers */
 
               cursor = nextCursor3 + 1

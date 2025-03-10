@@ -2678,7 +2678,7 @@ export class AP214GeometryExtraction {
         y: directionCoords[1],
         z: directionCoords[2],
       },
-      profile: profile?.nativeProfile!,
+      profile: profile?.nativeProfile,
     }
   }
 
@@ -2924,7 +2924,7 @@ export class AP214GeometryExtraction {
     from: axis1_placement,
     parentLocalId: number,
     extractOnly: true): ParamsAxis1Placement3D
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   extractAxis1Placement3D(
       from: axis1_placement,
       parentLocalId: number,
@@ -3001,7 +3001,7 @@ export class AP214GeometryExtraction {
     from: axis2_placement_3d,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members, require-jsdoc
+  // eslint-disable-next-line no-dupe-class-members
   extractAxis2Placement3D(
       from: axis2_placement_3d,
       parentLocalId: number,

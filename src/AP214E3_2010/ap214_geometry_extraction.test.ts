@@ -58,7 +58,7 @@ async function initializeGeometryExtractor() {
 /**
  *  @return {boolean} indicating whether the wasm module is initialized.
  */
-function isInitialized(): Boolean {
+function isInitialized(): boolean {
   return conwayTubeModel.isInitialized() &&
     conwayGearModel.isInitialized()
 }
@@ -110,7 +110,7 @@ function getGearMeshSize(): number {
 /**
  * @return {boolean} indicating if the geometry extraction module is still initialized or not
  */
-function destroy(): Boolean {
+function destroy(): boolean {
   conwayTubeModel.destroy()
   conwayGearModel.destroy()
 
@@ -145,13 +145,13 @@ describe('AP214 Geometry Extraction', () => {
   })
 
   test('tubeGeometryArrayLength()', () => {
-    const testParameter:Number = 7182
+    const testParameter:number = 7182
     expect(getTubeMeshSize()).toBe(testParameter)
 
   })
 
   test('gearGeometryArrayLength()', () => {
-    const testParameter:Number = 33948
+    const testParameter:number = 33948
     expect(getGearMeshSize()).toBe(testParameter)
 
   })

@@ -1,0 +1,186 @@
+name: IFC Regression Batch
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+env:
+  TEST_MODELS_TAG: '0.13.802'
+  EMSDK_VERSION: '3.1.72'
+  EMSDK_CACHE_FOLDER: 'cache/emsdk'
+
+jobs:
+  run-ifc-regression:
+    # This job uses your GitHub-managed large runner from the RegressionTesting group.
+    runs-on: RegressionTesting
+
+    steps:
+      # 1. Checkout the conway repository (your main repo)
+      - name: Checkout Conway Repo
+        uses: actions/checkout@v3
+
+      # --- GENie Setup ---
+      - name: Restore Cached GENie Build Artifact
+        id: cache-genie-restore
+        uses: actions/cache/restore@v3
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      - name: Checkout GENie Repository
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: bkaradzic/GENie
+          path: GENie
+
+      - name: Build GENie
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        run: |
+          cd GENie
+          make
+
+      - name: Copy GENie Binary
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p bin/linux
+          cp GENie/bin/linux/genie bin/linux/genie
+
+      - name: Cache GENie Build Artifact
+        if: steps.cache-genie-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v3
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      # --- EMSDK Setup ---
+      - name: Enable Emscripten System Library Cache
+        id: emscripten-cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.EMSDK_CACHE_FOLDER }}
+          key: ${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten
+        id: emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
+
+      - name: Add emsdk to env
+        run: |
+          echo 'which em++:'
+          which em++
+          em++ -v
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "emsdk: $EMSDK"
+          echo "emscripten bin dir: $EMSCRIPTEN"
+          echo "EMSDK=$EMSDK" >> $GITHUB_ENV
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> $GITHUB_ENV
+
+      # --- Build Conway Project ---
+      - name: Install Dependencies and Build
+        run: |
+          yarn setup
+          yarn install
+          yarn build-GHA-MT
+
+      # --- Test Models Checkout & Regression ---
+      - name: Restore Test Models Cache
+        id: cache-test-models
+        uses: actions/cache@v3
+        with:
+          path: test-models
+          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+
+      - name: Checkout Test Models Repo if Not Cached
+        if: steps.cache-test-models.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+
+      - name: Run IFC Regression Batch Script
+        run: |
+          node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
+            -e "sp-.*\.ifc" \
+            -t ${{ env.TEST_MODELS_TAG }} \
+            test-models \
+            test-models/regression/test_models \
+            --parallel --mem-utilization 90
+
+      - name: Gather Regression Results
+        id: regression_results
+        run: |
+          cd test-models/regression/test_models
+      
+          # Process failed.csv with Python CSV parsing
+          if [ -f failed.csv ]; then
+            FAILED_OUTPUT=$(python - <<'EOF'
+          import csv
+          with open('failed.csv', newline='') as csvfile:
+              reader = list(csv.reader(csvfile))
+          if len(reader) <= 1:
+              print("No failures :white_check_mark:")
+          else:
+              header = reader[0]
+              header_line = "| " + " | ".join(header) + " |"
+              separator_line = "|" + " --- |" * len(header)
+              print(header_line)
+              print(separator_line)
+              for row in reader[1:]:
+                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
+                print("| " + " | ".join(sanitized_row) + " |")
+          EOF
+          )
+          else
+            FAILED_OUTPUT="No failed.csv found."
+          fi
+      
+          # Process errors.csv with Python CSV parsing
+          if [ -f errors.csv ]; then
+            ERRORS_OUTPUT=$(python - <<'EOF'
+          import csv
+          with open('errors.csv', newline='') as csvfile:
+              reader = list(csv.reader(csvfile))
+          if len(reader) <= 1:
+              print("No errors found.")
+          else:
+              header = reader[0]
+              header_line = "| " + " | ".join(header) + " |"
+              separator_line = "|" + " --- |" * len(header)
+              print(header_line)
+              print(separator_line)
+              for row in reader[1:]:
+                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
+                print("| " + " | ".join(sanitized_row) + " |")
+          EOF
+          )
+          else
+            ERRORS_OUTPUT="No errors.csv found."
+          fi
+      
+          echo "failed_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$FAILED_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+          echo "errors_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+      - name: Comment on Pull Request with Regression Results
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## IFC Regression Results
+      
+            **Failed.csv:**
+            ${{ steps.regression_results.outputs.failed_output }}
+      
+            **Errors.csv:**
+            ${{ steps.regression_results.outputs.errors_output }}
+      
+    
