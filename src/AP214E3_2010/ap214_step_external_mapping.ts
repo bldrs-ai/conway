@@ -16,7 +16,7 @@ export default class AP214StepExternalMapping extends StepExternalMapping< Entit
    * @param internalReference_ The internal reference matching this.
    * @param model The model matching this.
    */
-  // eslint-disable-next-line no-useless-constructor, require-jsdoc
+  // eslint-disable-next-line no-useless-constructor
   constructor(
       localID: number,
       internalReference_: StepEntityInternalReference< EntityTypesAP214 >,

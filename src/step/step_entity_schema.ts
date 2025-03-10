@@ -19,12 +19,12 @@ export default class StepEntitySchema<
    */
   /* Note that ES lint doesn't parse the typescript meaning of this constructor
    * correctly. */
-  /* eslint-disable no-useless-constructor, require-jsdoc, no-empty-function */
+  /* eslint-disable no-useless-constructor, no-empty-function */
   constructor(
     public readonly constructors: ReadonlyArray<
       StepEntityConstructor< EntityTypeIDs, BaseEntity > | undefined >,
     public readonly parser: StepParser< EntityTypeIDs >,
     public readonly queries: ReadonlyArray< ReadonlyArray< EntityTypeIDs > >,
     public readonly reflection: ReadonlyArray< EntityDescription< EntityTypeIDs > > ) {}
-  /* eslint-enable no-useless-constructor, require-jsdoc, no-empty-function */
+  /* eslint-enable no-useless-constructor, no-empty-function */
 }

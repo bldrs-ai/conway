@@ -260,7 +260,7 @@ async function collectIFCFiles(
   /**
    * Recursively walk ifc files
    */
-  // eslint-disable-next-line no-shadow, require-jsdoc
+  // eslint-disable-next-line no-shadow
   async function recursiveWalk(currentPath: string) {
     const items = await fsPromises.readdir(currentPath, { withFileTypes: true })
     items.sort((a, b) => (a.name > b.name ? 1 : -1))
