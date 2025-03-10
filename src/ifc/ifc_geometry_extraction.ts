@@ -1491,8 +1491,7 @@ export class IfcGeometryExtraction {
 
     if (material === void 0) {
 
-      const readDoubleSided = from.Side === IfcSurfaceSide.BOTH ||
-        from.Side === IfcSurfaceSide.POSITIVE
+      const readDoubleSided = from.Side === IfcSurfaceSide.BOTH
 
       const newMaterial: Mutable<CanonicalMaterial> = {
         name: `#${from.expressID}`,

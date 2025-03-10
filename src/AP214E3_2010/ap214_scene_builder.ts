@@ -163,6 +163,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
             listener.onTransformAdded( node )
           }
 
+          sceneStack.push(...node.children)
+
         } else if ( node instanceof AP214SceneGeometry ) {
 
           if ( !options.disableGeometryEvents ) {
@@ -510,6 +512,26 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
     this.scene_.push(result)
 
+    const geoemtryListeners = this.geometryListeners_
+
+    if ( geoemtryListeners !== void 0 ) {
+
+      const transform =
+      ( parentIndex !== void 0 ?
+        this.scene_[ parentIndex ] : void 0 ) as ( AP214SceneTransform | undefined )
+
+      const geometry = this.model.geometry?.getByLocalID(localID)
+
+      if ( geometry === void 0 ) {
+        return result
+      }
+
+      for ( const listener of geoemtryListeners ) {
+
+        listener.onGeometryAdded( result, transform )
+      }
+    }
+
     return result
   }
 
@@ -574,6 +596,16 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
     this.scene_.push(result)
 
     this.sceneLocalIdMap_.set(localID, nodeIndex)
+
+    const transformListeners = this.transformListeners_
+
+    if ( transformListeners !== void 0 ) {
+
+      for ( const listener of transformListeners ) {
+
+        listener.onTransformAdded( result )
+      }
+    }
 
     this.pushTransform(result)
 

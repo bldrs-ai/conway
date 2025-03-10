@@ -9,13 +9,14 @@
   <script type="importmap">
     {
         "imports": {
-            "three": "/node_modules/three/build/three.module.js"
+            "three": "/node_modules/three/build/three.module.js",
+            "three/addons/": "/node_modules/three/examples/jsm/"
         }
     }
   </script>
 
 		<script type="module">
-      import {dropHandler,initViewer} from '/compiled/src/rendering/threejs/conway_html_viewer.js'
+      import {dropHandler,initViewer} from '/compiled/src/rendering/threejs/html_viewer.js'
       import {setModulePrefix} from '/compiled/dependencies/conway-geom/interface/conway_geometry.js'
 
       globalThis.process = { env: { PLATFORM: 'web' } }
@@ -25,7 +26,6 @@
       window.onload = () => {
 
         initViewer()
-      //  document.body.addEventListener( 'drop', ( e ) => dropHandler( e ) )
         console.log( 'Viewer initialised' )
       }
     </script>

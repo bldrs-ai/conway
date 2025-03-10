@@ -98,6 +98,9 @@
     /* Completeness */
     // "skipDefaultLibCheck": true,                      /* Skip type checking .d.ts files that are included with TypeScript. */
     //"skipLibCheck": true                                 /* Skip type checking all .d.ts files. */
+    "paths": {
+      "three/addons/*": ["./node_modules/@types/three/examples/jsm/*"] 
+    }
   },
   "exclude": ["external/**/*", "compiled/**/*", "dependencies/**/compiled/**"],
   "include": [

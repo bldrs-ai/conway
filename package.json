@@ -21,6 +21,12 @@
     "./dependencies/conway-geom": "./dependencies/conway-geom/index.js",
     "./package.json": "./package.json"
   },
+  "imports": {
+    "three/addons/": {
+      "require": "three",
+      "import": "./three/examples/jsm"
+    } 
+  },
   "scripts": {
     "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies",
     "clean": "run-script-os",

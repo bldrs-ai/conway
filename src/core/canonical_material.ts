@@ -173,6 +173,20 @@ export function dumpMTL( from: CanonicalMaterial ): string {
   return result
 }
 
+/* eslint-disable no-magic-numbers */
+export const defaultCanonicalMaterial: CanonicalMaterial = {
+
+  name: 'Default Conway Material',
+  blend: BlendMode.OPAQUE,
+  baseColor: [0.7, 0.7, 0.9, 1],
+  doubleSided: true,
+  legacyColor: [0.7, 0.7, 0.9, 1],
+  metalness: 0,
+  roughness: 1,
+  ior: 1.5,
+}
+
+/* eslint-enable no-magic-numbers */
 
 /**
  * Convert a canonical material to a native material
@@ -196,7 +210,7 @@ export function toNativeMaterial(
     },
     doubleSided: from.doubleSided,
     /* eslint-disable no-magic-numbers */
-    ior: from.ior ?? 1.4,
+    ior: from.ior ?? 1.5,
     metallic: from.metalness ?? 1.0,
     roughness: from.roughness ?? 1.0,
     specular: from.specular !== void 0 ? {

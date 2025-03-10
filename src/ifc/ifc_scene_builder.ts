@@ -626,6 +626,10 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
     this.scene_.push(result)
 
+    if (!isMappedItem) {
+      this.sceneLocalIdMap_.set(localID, nodeIndex)
+    }
+
     const transformListeners = this.transformListeners_
 
     if ( transformListeners !== void 0 ) {
@@ -634,10 +638,6 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
 
         listener.onTransformAdded( result )
       }
-    }
-
-    if (!isMappedItem) {
-      this.sceneLocalIdMap_.set(localID, nodeIndex)
     }
 
     this.pushTransform(result)

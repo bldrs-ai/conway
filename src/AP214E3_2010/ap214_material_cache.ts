@@ -77,7 +77,7 @@ export class AP214MaterialCache implements ModelMaterials {
   }
 
   /**
-   * Get a material by its local ID.
+   * Get a material local id by its geometry local ID.
    *
    * @param geometryLocalID The local ID of the geometry to fetch
    * @return {[CanonicalMaterial, number] | undefined} A tuple containing the
@@ -85,7 +85,7 @@ export class AP214MaterialCache implements ModelMaterials {
    */
   public getMaterialIDByGeometryID( geometryLocalID: number ): number | undefined {
 
-    return this.assignments_.get( geometryLocalID )
+    return this.assignments_.get( geometryLocalID ) ?? this.defaultMaterialLocalID
   }
 
   /**
@@ -125,7 +125,8 @@ export class AP214MaterialCache implements ModelMaterials {
   public getMaterialByGeometryID( geometryLocalID: number ) :
     [CanonicalMaterial, number] | undefined {
 
-    const materialID = this.getMaterialIDByGeometryID( geometryLocalID )
+    const materialID =
+      this.getMaterialIDByGeometryID( geometryLocalID ) ?? this.defaultMaterialLocalID
 
     if ( materialID === void 0 ) {
       return
@@ -148,11 +149,10 @@ export class AP214MaterialCache implements ModelMaterials {
    * @return {CanonicalMaterial | undefined} The canonical material associated with the geometry or
    * undefined if none is available.
    */
-  getMaterialFromGeometryNode(node: SceneNodeGeometry): CanonicalMaterial | undefined {
+  getMaterialFromGeometryNode( node: SceneNodeGeometry ): CanonicalMaterial | undefined {
 
     const geometryLocalID = ( node.materialOverideLocalID ?? node.localID )
-
-    const materialID = this.assignments_.get( geometryLocalID ) ?? this.defaultMaterialLocalID
+    const materialID      = this.assignments_.get( geometryLocalID ) ?? this.defaultMaterialLocalID
 
     if ( materialID === void 0 ) {
 

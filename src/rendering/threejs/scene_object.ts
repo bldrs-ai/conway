@@ -12,11 +12,16 @@ import {
   MeshPhysicalMaterial,
   FrontSide,
   DoubleSide,
+  LinearSRGBColorSpace,
+  Vector4,
+  Vector3,
 } from 'three'
 import { Scene as ConwayScene, SceneListener, SceneListenerOptions } from '../../core/scene'
 import { SceneNodeGeometry, SceneNodeTransform } from '../../core/scene_node'
 import { CanonicalMesh, CanonicalMeshBuffer } from '../../core/canonical_mesh'
-import { CanonicalMaterial } from '../../core/canonical_material'
+import { CanonicalMaterial, defaultCanonicalMaterial } from '../../core/canonical_material'
+import Logger from '../../logging/logger'
+import { BlendMode } from '../../../dependencies/conway-geom'
 
 
 const identity = new Matrix4()
@@ -27,9 +32,23 @@ const eventListenerOptions = new SceneListenerOptions( true, false, true )
 /**
  * A three proxy for a conway scene of a model.
  */
-export default class ConwaySceneObject extends Group {
+export default class SceneObject extends Group {
 
   private readonly sink_: SceneEventSink
+
+  /**
+   * Get the reference point for this in absolute space.
+   *
+   * Note that this should be used like an RTC reference to
+   * calculate relative transforms in a high bit space or using fixed
+   * point to produce an eye relative transform matrix.
+   *
+   * @return {Vector3} The reference point.
+   */
+  public get referencePoint(): Vector3 {
+
+    return this.sink_.referencePoint
+  }
 
   /**
    * Construct this from a conway scene.
@@ -82,6 +101,53 @@ class SceneEventSink implements SceneListener {
   private readonly instances_ = new Map< SceneNodeGeometry, GeometryInstance >()
   private readonly meshes_ = new Map< CanonicalMesh, MeshCacheItem >()
 
+  private firstAbsolutePoint_?: Vector4
+  private positionNormalization_?: Matrix4
+
+  /**
+   * Get the reference point for this in absolute space.
+   *
+   * Note that this should be used like an RTC reference to
+   * calculate relative transforms in a high bit space or using fixed
+   * point to produce an eye relative transform matrix.
+   *
+   * @return {Vector3} The reference point.
+   */
+  public get referencePoint(): Vector3 {
+
+    const firstAbsolutePoint = this.firstAbsolutePoint_
+
+    if ( firstAbsolutePoint === void 0 ) {
+
+      return new Vector3( 0, 0, 0 )
+    }
+
+    return new Vector3( firstAbsolutePoint.x, firstAbsolutePoint.y, firstAbsolutePoint.z )
+  }
+
+  /**
+   * Get the position geometry in this is relative to,
+   * not this position will only be set when the first geometry is
+   * passed through to this listener.
+   *
+   * This should be used for relative positioning to work out
+   * camera relative matrices in double precision, which can then be used
+   * to translate the whole group.
+   *
+   * @return {Vector3} The relative position.
+   */
+  public get relativeTo(): Vector3 {
+
+    const firstAbsolutePoint = this.firstAbsolutePoint_
+
+    if ( firstAbsolutePoint !== void 0 ) {
+
+      return new Vector3( firstAbsolutePoint.x, firstAbsolutePoint.y, firstAbsolutePoint.z )
+    }
+
+    return new Vector3()
+  }
+
   /**
    * Construct this with the group items will be attached to.
    *
@@ -113,7 +179,6 @@ class SceneEventSink implements SceneListener {
 
     for ( const batch of this.materialMap_.values() ) {
 
-
       const batchMesh =
         new BatchedMesh(
             batch.instanceCount,
@@ -123,6 +188,13 @@ class SceneEventSink implements SceneListener {
             batch.threeMaterial )
 
       this.group.add( batchMesh )
+
+      if ( batch.material.blend === BlendMode.OPAQUE && batch.material.baseColor[ 3 ] === 1 ) {
+
+        batchMesh.castShadow = true
+      }
+
+      batchMesh.receiveShadow = true
 
       batch.mesh = batchMesh
 
@@ -134,9 +206,8 @@ class SceneEventSink implements SceneListener {
 
         } catch ( e: any ) {
 
-          console.log( 'Error adding geometry item: ', e?.message )
+          Logger.error( `Error adding geometry item: ${e?.message}` )
         }
-
       }
     }
 
@@ -263,27 +334,69 @@ class SceneEventSink implements SceneListener {
       node: SceneNodeGeometry,
       transform?: SceneNodeTransform ): void {
 
+    if ( node.isSpace ) {
+
+      return
+    }
+
     const model = node.model
 
     const mesh = model.getMeshFromGeometryNode( node )
-    const material = model.getMaterialFromGeometryNode( node )
+    const materialFromNode = model.getMaterialFromGeometryNode( node )
+    const material = materialFromNode ?? defaultCanonicalMaterial
 
     const transformTuple = (transform?.absoluteTransform as Matrix4Tuple)
 
-    const transformMatrix =
+    let transformMatrix =
       transformTuple !== void 0 ?
         new Matrix4(...transformTuple)
             .transpose()
             .premultiply( invertNormalizeMat ) :
         void 0
 
+    if ( this.firstAbsolutePoint_ === void 0 && mesh !== void 0 ) {
+
+      const hasVertices = mesh.geometry.getVertexCount() > 0
+
+      if ( hasVertices ) {
+
+        const readFirstPoint = mesh.geometry.getPoint( 0 )
+
+        const firstPointThree =
+          new Vector4( readFirstPoint.x, readFirstPoint.y, readFirstPoint.z, 1 )
+
+        if ( transformMatrix !== void 0 ) {
+
+          firstPointThree.applyMatrix4( transformMatrix )
+
+        }
+
+        this.firstAbsolutePoint_ = firstPointThree
+
+        this.positionNormalization_ =
+          new Matrix4().makeTranslation(
+              -firstPointThree.x,
+              -firstPointThree.y,
+              -firstPointThree.z )
+      }
+    }
+
+    if ( this.positionNormalization_ !== void 0 ) {
+
+      if ( transformMatrix === void 0 ) {
+
+        transformMatrix = this.positionNormalization_
+      } else {
+
+        transformMatrix.premultiply( this.positionNormalization_ )
+      }
+    }
+
     const instances = this.instances_
 
     let instance = instances.get( node )
 
     if ( instance === void 0 ) {
-
-      console.log( 'adding an instance for ', node.localID, instances.size )
 
       instance = new GeometryInstance( node, transformMatrix ?? identity, void 0, void 0 )
 
@@ -370,13 +483,14 @@ class SceneEventSink implements SceneListener {
     }
 
     if (
-      material !== void 0 &&
       mesh !== void 0 &&
       ( instanceMaterial !== material || instanceMesh !== mesh ) ) {
 
-      let batch =  batches.get( material )
+      let batch = batches.get( material )
 
       if ( batch === void 0 ) {
+
+        console.log( 'batch created' )
 
         const threeMaterial = new MeshPhysicalMaterial()
 
@@ -391,12 +505,13 @@ class SceneEventSink implements SceneListener {
 
         threeMaterial.side = material.doubleSided ? DoubleSide : FrontSide
 
-        if ( materialAlpha < 1.0 ) {
+        if ( material.blend !== BlendMode.OPAQUE && materialAlpha < 1.0 ) {
 
           threeMaterial.transparent        = true
           threeMaterial.opacity            = materialAlpha
           threeMaterial.premultipliedAlpha = true
           threeMaterial.depthWrite         = false
+          threeMaterial.side               = DoubleSide
         }
 
         if ( ior !== void 0 ) {
@@ -417,13 +532,15 @@ class SceneEventSink implements SceneListener {
           threeMaterial.specularColor.setRGB(
               specular[ 0 ],
               specular[ 1 ],
-              specular[ 2 ] )
+              specular[ 2 ],
+              LinearSRGBColorSpace )
         }
 
         threeMaterial.color.setRGB(
-            baseColor[ 0 ],
-            baseColor[ 1 ],
-            baseColor[ 2 ] )
+            baseColor[ 0 ] / baseColor[ 3 ],
+            baseColor[ 1 ] / baseColor[ 3 ],
+            baseColor[ 2 ] / baseColor[ 3 ],
+            LinearSRGBColorSpace )
 
         batch = new MaterialMeshBatch( material, threeMaterial )
 
@@ -473,6 +590,16 @@ class SceneEventSink implements SceneListener {
 
                 indexCount,
                 batch.threeMaterial )
+
+          if ( batch.material.baseColor[ 3 ] < 1 ) {
+
+            batchMesh.castShadow = false
+          } else {
+
+            batchMesh.castShadow = true
+          }
+
+          batchMesh.receiveShadow = true
 
           this.group.add( batchMesh )
 
