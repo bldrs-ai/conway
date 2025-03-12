@@ -1,6 +1,14 @@
 import Logger from '../logging/logger'
 
 
+export enum EnvironmentType {
+  BROWSER = 0,
+  NODE = 1,
+  BOTH_FEATURES = 2,
+  UNKNOWN = 3,
+}
+
+
 /** Environment class detects the runtime environment */
 export default class Environment {
   static environmentType:EnvironmentType = EnvironmentType.UNKNOWN
@@ -28,12 +36,4 @@ export default class Environment {
       this.environmentType = EnvironmentType.UNKNOWN
     }
   }
-}
-
-
-export enum EnvironmentType {
-  BROWSER = 0,
-  NODE = 1,
-  BOTH_FEATURES = 2,
-  UNKNOWN = 3,
 }
