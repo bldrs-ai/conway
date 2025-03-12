@@ -4,7 +4,7 @@ import ParsingDfa4Table from '../../parsing/parsing_dfa_4table'
 /**
  * DFA State machine states for parsing a comment.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum COMMENT_STATE
 {
     TERMINUS         = 0,
@@ -12,7 +12,7 @@ enum COMMENT_STATE
     STAR_CASE        = 2,
     SLASH_CASE       = 3
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const COMMENT_PARSER_TERMINUS_FLAGS = ( 1 << COMMENT_STATE.SLASH_CASE )
 

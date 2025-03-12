@@ -54,6 +54,7 @@ export function pop32( x: number ): number {
  * stateBuffer needs at least 2 elements at stateBufferOffset.
  *
  * @param buffer
+ * @param value
  * @param stateBuffer
  * @param stateBufferOffset
  * @return {number} The current count.
@@ -166,7 +167,7 @@ export function initCountCompactedElements32State(
  */
 export function countCompactedElements32(
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): number {
   end ??= buffer.length
@@ -206,7 +207,7 @@ export function compactElements32(
     output: Uint32Array,
     outputOffset: number,
     input: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     inputOffset: number = 0,
     inputEnd?: number ) {
   inputEnd ??= input.length
@@ -225,7 +226,7 @@ export function compactElements32(
       output[ outputOffset ]     = highBits
       output[ outputOffset + 1 ] = 0
 
-      // eslint-disable-next-line no-magic-numbers
+       
       outputOffset += 2
     }
 

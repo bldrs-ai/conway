@@ -236,6 +236,11 @@ async function doWork() {
 
 /**
  * Serialize the geometry.
+ *
+ * @param scene
+ * @param fileNameNoExtension
+ * @param maxGeometrySize
+ * @param includeSpaces
  */
 function serializeGeometry(
     scene: AP214SceneBuilder,
@@ -444,6 +449,7 @@ function serializeGeometry(
 /**
  * Function to extract Geometry from an IfcStepModel
  *
+ * @param model
  * @return {AP214SceneBuilder | undefined} The scene or undefined on error.
  */
 function geometryExtraction(model: AP214StepModel):

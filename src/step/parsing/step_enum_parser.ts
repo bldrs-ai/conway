@@ -5,14 +5,14 @@ import ParsingDfa4Table from '../../parsing/parsing_dfa_4table'
 /**
  * DFA State machine states for parsing an enum.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum ENUM_PARSER_STATE {
     TERMINUS         = 0,
     AFTER_DOT        = 1,
     MUST_UPPER_CASE  = 2,
     MAYBE_UPPER_CASE = 3
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const ENUM_PARSER_TERMINUS_FLAGS = ( 1 << ENUM_PARSER_STATE.AFTER_DOT )
 

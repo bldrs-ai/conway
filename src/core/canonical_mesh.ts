@@ -2,7 +2,7 @@ import { GeometryObject } from '../../dependencies/conway-geom'
 import { Model } from './model'
 
 
-/* eslint-disable no-shadow,no-unused-vars,no-magic-numbers */
+ 
 export enum CanonicalMeshType {
     BUFFER_GEOMETRY = 0,
     GLTF_URL        = 1,

@@ -16,7 +16,7 @@ const MASK_TOPBITS    = IndexSetConstants.MASK_TOPBITS
 export function indexSetSearch32(
     searchValue: number,
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): number {
   let right = end ?? buffer.length
@@ -28,7 +28,7 @@ export function indexSetSearch32(
     const mid = ( ( offset + right ) >>> 1 ) & ( ~1 >>> 0 )
 
     if ( buffer[ mid ] < searchValue ) {
-      // eslint-disable-next-line no-magic-numbers
+       
       offset = mid + 2
     } else {
       right = mid
@@ -50,7 +50,7 @@ export function indexSetSearch32(
 export function indexSetPointQuery32(
     searchValue: number,
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): boolean {
   const newOffset = indexSetSearch32( searchValue, buffer, offset, end )

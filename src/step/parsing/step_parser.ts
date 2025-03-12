@@ -51,7 +51,7 @@ export interface Argument {
 /**
  *
  */
-/* eslint-disable no-shadow, no-unused-vars, no-magic-numbers */
+ 
 // -- eslint doesn't understand enums properly.
 export enum ParseResult {
 
@@ -61,7 +61,7 @@ export enum ParseResult {
   MISSING_TYPE = 3,
   INVALID_STEP = 4,
 }
-/* eslint-enable no-shadow, no-unused-vars, no-magic-numbers */
+ 
 
 const BYTE_ORDER_MARK = encodeToken(decodeURIComponent('%EF%BB%BF'))
 const ISO_10303_21 = encodeToken('ISO-10303-21')
@@ -797,6 +797,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    * Parse arguments from a single line from a step file, indexing it.,
    *
    * @param input The input parsing buffer, in the data section.
+   * @param expressID
    * @return {LineArgumentParseResult} The parsing result, including the
    * arguments array and result enum.
    */

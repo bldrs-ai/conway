@@ -214,6 +214,7 @@ export default class DynamicSingleIndexSet {
    * Delete a local ID from this.
    *
    * @param key the key to delete.
+   * @param localID
    * @return {boolean} True if the item existed to be deleted.
    */
   public delete( localID: number ): boolean {

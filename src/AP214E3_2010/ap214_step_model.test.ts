@@ -1,4 +1,4 @@
-/* eslint-disable camelcase */
+ 
 import {beforeAll, describe, expect, test} from '@jest/globals'
 
 import AP214StepParser from './ap214_step_parser'

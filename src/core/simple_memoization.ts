@@ -1,4 +1,4 @@
-/* eslint-disable jsdoc/no-undefined-types */
+ 
 import { MemoizationCapture, RegressionCaptureState } from './regression_capture_state'
 
 /**
@@ -16,6 +16,7 @@ export default class SimpleMemoization< T > {
    *
    * @param cachePassthrough_ A function that is called to transform or clone
    * a memoized object when it is added.
+   * @param cachePassthrough
    */
   constructor( cachePassthrough?: ( from: T ) => T ) {
     this.cachePassthrough_ = cachePassthrough ?? ( ( from : T ) => from )
@@ -44,6 +45,7 @@ export default class SimpleMemoization< T > {
    *
    * @param id
    * @param value
+   * @param temporary
    */
   public add( id: number, value: T, temporary: boolean = false ) {
     if ( !temporary || RegressionCaptureState.memoization === MemoizationCapture.FULL ) {

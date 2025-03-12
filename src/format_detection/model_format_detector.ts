@@ -6,11 +6,11 @@
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult, StepHeaderParser } from '../step/parsing/step_parser'
 
-// eslint-disable-next-line no-shadow
+ 
 export enum ModelFormatType {
-  // eslint-disable-next-line no-unused-vars
+   
   IFC = 0,
-  // eslint-disable-next-line no-unused-vars
+   
   AP214 = 1,
 }
 
@@ -22,6 +22,7 @@ export default class ModelFormatDetector {
   /**
    * Detect the model format
    *
+   * @param input
    * @return {ModelFormatType | undefined} The type of the model, or undefined
    * if none can be found.
    */

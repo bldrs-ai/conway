@@ -75,6 +75,8 @@ function getMaterialCount(): number {
 /**
  * Test if a material colour at a particular index matches a value.
  *
+ * @param materialIndex
+ * @param equal
  * @return {boolean} True if a match, false otherwise.
  */
 function materialColorMatches(materialIndex: number, equal: ColorRGBA): boolean {

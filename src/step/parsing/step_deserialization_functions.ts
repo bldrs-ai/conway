@@ -544,6 +544,7 @@ const MINIMUM_REFERENCE_LENGTH = 2
  * undefined if no match is found
  *
  * @param buffer The buffer to extract it from.
+ * @param input
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
  * @return {number | undefined} The reference express ID of the start of the inline element, or
@@ -565,7 +566,7 @@ export function stepExtractReference(
 
   const firstChar = input[ cursor ] - ZERO
 
-  // eslint-disable-next-line no-magic-numbers
+   
   if ( firstChar < 0 || firstChar > 9 ) {
     return
   }
@@ -577,12 +578,12 @@ export function stepExtractReference(
   while ( cursor < endCursor ) {
     const currentChar = input[ cursor ] - ZERO
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( currentChar < 0 || currentChar > 9 ) {
       return base
     }
 
-    // eslint-disable-next-line no-magic-numbers
+     
     base *= 10
     base += currentChar
 

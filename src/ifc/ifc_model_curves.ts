@@ -10,6 +10,8 @@ export default class IfcModelCurves extends SimpleMemoization< CurveObject > {
 
   /**
    * Construct this.
+   *
+   * @param model
    */
   constructor( public readonly model: IfcStepModel ) {
     super()

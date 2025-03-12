@@ -17,7 +17,7 @@ const littleEndian = uInt8[0] === 0x44
 function keySearch32(
     searchValue: number,
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): number {
 
@@ -50,7 +50,7 @@ function keySearch32(
 function keyProbe32(
     searchValue: number,
     buffer: Uint32Array,
-    // eslint-disable-next-line default-param-last
+     
     offset: number = 0,
     end?: number ): number {
 
@@ -101,6 +101,7 @@ export default class InterpolationSearchTable32 implements
    * and so on.
    *
    * This will be mutated in-place, so copy if you do not wish the array to be mutated.
+   * @param alreadySorted
    */
   constructor( private readonly keyValues_: Uint32Array, alreadySorted: boolean = false ) {
 

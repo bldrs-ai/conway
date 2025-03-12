@@ -4,7 +4,7 @@ import ParsingDfa4Table from '../../parsing/parsing_dfa_4table'
 /**
  * DFA State machine states for parsing an identifier.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum IDENTIFIER_PARSER_STATE
 {
     TERMINUS             = 0,

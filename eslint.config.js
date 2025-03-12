@@ -36,9 +36,24 @@ export default [
     },
     rules: {
       semi: ['error', 'never'],
+      'jsdoc/no-types': 'off',
+      'jsdoc/tag-lines': ['warn', 'any', {startLines: 1}],
+      'no-magic-numbers': ['error', {
+        ignore: [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        ignoreArrayIndexes: true,
+        ignoreClassFieldInitialValues: true,
+        ignoreDefaultValues: true,
+      }],
       'prefer-const': 'warn',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': 'warn',
+    },
+    settings: {
+      jsdoc: {
+        tagNamePreference: {
+          returns: 'return'
+        }
+      }
     }
-  }
+  },
 ]

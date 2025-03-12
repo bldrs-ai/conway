@@ -3,14 +3,14 @@ import ParsingDfa4Table from './parsing_dfa_4table'
 /**
  * DFA State machine states for parsing an integer.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum INTEGER_STATES {
     TERMINUS       = 0,
     SIGN_OR_DIGIT  = 1,
     MUST_DIGIT     = 2,
     MAYBE_DIGIT    = 3
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const INTEGER_TERMINUS_FLAGS = 1 << INTEGER_STATES.MAYBE_DIGIT // only maybe digit.
 

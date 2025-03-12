@@ -19,7 +19,7 @@ import StepEntityInternalReference,
 { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
 import StepModelBase from './step_model_base'
 
-/* eslint-disable no-shadow,no-unused-vars,no-magic-numbers */
+ 
 enum IfcTokenType {
   UNKNOWN = 0,
   STRING,
@@ -185,11 +185,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {number | null | undefined} The extracted number.
    */
   public extractNumber(vtableOffset: number, optional: true): number | null
-  // eslint-disable-next-line no-dupe-class-members
   public extractNumber(vtableOffset: number, optional: false): number
-  // eslint-disable-next-line no-dupe-class-members
-  public extractNumber(vtableOffset: number, optional: boolean): number |
-    null {
+  public extractNumber(vtableOffset: number, optional: boolean): number | null {
 
     this.guaranteeVTable()
 
@@ -229,11 +226,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * and this value isn't specified.
    */
   public extractString(offset: number, optional: true): string | null
-  // eslint-disable-next-line no-dupe-class-members
   public extractString(offset: number, optional: false): string
-  // eslint-disable-next-line no-dupe-class-members
-  public extractString(offset: number, optional: boolean): string |
-    null {
+  public extractString(offset: number, optional: boolean): string | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
     const buffer              = this.buffer
@@ -268,9 +262,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {boolean | null} The extracted logical or null for optionals.
    */
   public extractLogical(offset: number, optional: true): boolean | null
-  // eslint-disable-next-line no-dupe-class-members
   public extractLogical(offset: number, optional: false): boolean
-  // eslint-disable-next-line no-dupe-class-members
   public extractLogical(offset: number, optional: boolean): boolean | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
@@ -302,11 +294,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {StepEntityBase | undefined} Extracted entity or undefined.
    */
   public extractReference(offset: number, optional: true): StepEntityBase<EntityTypeIDs> | null
-  // eslint-disable-next-line no-dupe-class-members
   public extractReference(offset: number, optional: false): StepEntityBase<EntityTypeIDs>
-  // eslint-disable-next-line no-dupe-class-members
-  public extractReference(offset: number, optional: boolean):
-    StepEntityBase<EntityTypeIDs> | null {
+  public extractReference(offset: number, optional: boolean): StepEntityBase<EntityTypeIDs> | null {
 
     const cursor    = this.getOffsetCursor( offset )
     const buffer    = this.buffer
@@ -337,6 +326,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * @param {buffer} string buffer
    * @param {cursor} current cursor
+   * @param buffer
+   * @param cursor
    * @return {{ data: string, length: number }} string and length
    */
   readStringView(buffer: Uint8Array, cursor: number): { data: string, length: number } {
@@ -352,13 +343,16 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     return { data, length }
   }
 
-  /* eslint-disable jsdoc/no-undefined-types */
+   
   /**
    *
    * @param {buffer} value array
    * @param {cursor} current cursor
    * // eslint-disable-next-line jsdoc/no-undefined-types
    * @param {t} ifc token type
+   * @param buffer
+   * @param cursor
+   * @param t
    * @return {any} ifc token
    */
   readValue(buffer: Uint8Array, cursor: number, t: IfcTokenType) {
@@ -382,7 +376,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
         return { value: undefined, length: 0 }
     }
     /* eslint-enable no-case-declarations */
-    /* eslint-enable jsdoc/no-undefined-types */
+     
   }
 
   /**
@@ -457,7 +451,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
-   * @typedef ExtractionType Type to be extracted
+   * ExtractionType Type to be extracted
+   *
    * @param offset The offset in the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field? (true)
@@ -475,13 +470,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
-   * @typedef ExtractionType Type to be extracted
+   * ExtractionType Type to be extracted
+   *
    * @param offset The offset in the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field? (false)
    * @return {ExtractionType} The extracted value or null for optionals.
    */
-  // eslint-disable-next-line no-dupe-class-members
   public extractLambda<ExtractionType>(
     offset: number,
     extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
@@ -494,13 +489,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
-   * @typedef ExtractionType Type to be extracted
+   * ExtractionType Type to be extracted
+   *
    * @param offset The offset in the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field?
    * @return {ExtractionType | null} The extracted value or null for optionals.
    */
-  // eslint-disable-next-line no-dupe-class-members
   public extractLambda<ExtractionType>(
       offset: number,
       extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
@@ -556,7 +551,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param optional Is this an optional field? (false)
    * @return {StepEntityBase} The extracted element.
    */
-  // eslint-disable-next-line no-dupe-class-members
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
     offset: number,
     optional: false,
@@ -571,10 +565,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
+   * @param entityConstructor
    * @return {StepEntityBase} The extracted element, or null if optional
    * and this value isn't specified.
    */
-  // eslint-disable-next-line no-dupe-class-members
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
       offset: number,
       optional: boolean,
@@ -662,9 +656,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {boolean | null} The extracted number.
    */
   public extractBinary(vtableOffset: number, optional: true): [Uint8Array, number] | null
-  // eslint-disable-next-line no-dupe-class-members
   public extractBinary(vtableOffset: number, optional: false): [Uint8Array, number]
-  // eslint-disable-next-line no-dupe-class-members
   public extractBinary(vtableOffset: number, optional: boolean): [Uint8Array, number] | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
@@ -702,6 +694,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * @param offset
    * @param buffer
+   * @param result
+   * @param module
    * @param optional
    * @return {boolean} True if this extracts, false (usually because this is optional)
    */
@@ -766,7 +760,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param optional Is this an optional field? (false).
    * @return {boolean} The extracted number.
    */
-  // eslint-disable-next-line no-dupe-class-members
   public extractBoolean(offset: number, optional: false): boolean
   /**
    * Extract a number at the particular vtable offset (i.e. the position
@@ -780,7 +773,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {boolean | null} The extracted number or null if it's
    * not supplied.
    */
-  // eslint-disable-next-line no-dupe-class-members
   public extractBoolean(offset: number, optional: boolean): boolean | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
@@ -899,14 +891,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param internalReference_  The internal reference to model components etc.
    * @param model The model this came from.
    */
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /* Note that ES lint doesn't parse the typescript meaning of this constructor
    * correctly. */
   constructor(
     public readonly localID: number,
     protected readonly internalReference_: StepEntityInternalReference<EntityTypeIDs>,
     public readonly model: StepModelBase<EntityTypeIDs>) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Guarantees the VTable of this has been parsed from the model so that values can be read out.

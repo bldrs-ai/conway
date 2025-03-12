@@ -12,7 +12,7 @@ import pLimit from 'p-limit'
 const errorCSVHeader = 'message,count,expressids,file'
 const exec = promisify( childProcess.exec )
 
-/* eslint-disable require-await */
+ 
 /**
  * Safe execute a process command with cancellation support.
  *
@@ -75,7 +75,7 @@ async function safeExecWithCancellation(
     })
   })
 }
-/* eslint-enable require-await */
+ 
 
 const SKIP_PARAMS = 2
 
@@ -194,13 +194,17 @@ let totalTime = 0 // To keep track of the running total time
 
 /**
  * Run a regression test digest for a file.
+ *
+ * @param filePath
+ * @param outputPath
+ * @param maxTimeout
  */
 async function runForFile(filePath: string,
     outputPath: string, maxTimeout:number): Promise<RunResults> {
   const MAX_TIMEOUT_MS = maxTimeout
   const startTime = Date.now() // Start time
 
-  // eslint-disable-next-line max-len
+   
   const safeExecCommand = `node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d "${filePath}" "${outputPath}"`
 
   console.log(`Current File: ${filePath}`)
@@ -250,6 +254,9 @@ async function runForFile(filePath: string,
 
 /**
  * Recursively collect all IFC file paths (instead of processing them immediately).
+ *
+ * @param parentPath
+ * @param excludeRegex
  */
 async function collectIFCFiles(
     parentPath: string,
@@ -259,8 +266,14 @@ async function collectIFCFiles(
 
   /**
    * Recursively walk ifc files
+   *
+   * @param currentPath
    */
-  // eslint-disable-next-line no-shadow
+   
+  /**
+   *
+   * @param currentPath
+   */
   async function recursiveWalk(currentPath: string) {
     const items = await fsPromises.readdir(currentPath, { withFileTypes: true })
     items.sort((a, b) => (a.name > b.name ? 1 : -1))
@@ -301,6 +314,14 @@ function getSystemMemoryUsagePercent(): number {
 
 /**
  * Parallel processing, using p-limit to limit concurrency to number of CPU cores.
+ *
+ * @param ifcFiles
+ * @param outputPath
+ * @param errorLines
+ * @param fileLines
+ * @param failedLines
+ * @param memUtilization
+ * @param maxTimeout
  */
 async function processIFCFilesInParallel(
     ifcFiles: string[],
@@ -374,6 +395,13 @@ async function processIFCFilesInParallel(
 // The original recursive approach (unchanged, except it won't be used if -parallel is set)
 /**
  *
+ * @param parentPath
+ * @param excludeRegex
+ * @param outputPath
+ * @param errorLines
+ * @param fileLines
+ * @param failedLines
+ * @param maxTimeout
  */
 async function recursiveWalk(
     parentPath: string,
@@ -425,7 +453,7 @@ async function recursiveWalk(
   }
 }
 
-// eslint-disable-next-line no-unused-vars
+ 
 const args = yargs(process.argv.slice(SKIP_PARAMS))
     .command(
         '$0 <model_folder> <output_folder>',
@@ -445,7 +473,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           })
           yargs2.option('changes', {
             describe:
-            // eslint-disable-next-line max-len
+             
           'Custom output location for the diff output (filepath, should include file name but not extension, the folder will be created if it doesn\'t exist)',
             type: 'string',
             alias: 'c',
@@ -466,7 +494,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           })
           // only relevant if parallel is enabled
           yargs2.option('mem-utilization', {
-            // eslint-disable-next-line max-len
+             
             describe: 'Memory utilization threshold percentage for parallel processing (1-100, default: 95)',
             type: 'number',
             alias: 'm',
@@ -548,7 +576,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
             )
           } else {
             console.log('Processing in serial mode...')
-            // eslint-disable-next-line max-len
+             
             await recursiveWalk(ifcFolder, excludeRegex, outputPath, errorLines, fileLines, failedLines, maxTimeout)
           }
 

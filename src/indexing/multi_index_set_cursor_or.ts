@@ -61,7 +61,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
 
     let result = false
 
-    // eslint-disable-next-line no-magic-numbers
+     
     for ( let where = 0; where < setEnd; where += 2 ) {
       const opPosition = cursorSet[ where ]
       const opEnd     = cursorSet[ where + 1 ]
@@ -83,7 +83,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
 
     let currentLow = 0
 
-    // eslint-disable-next-line no-magic-numbers
+     
     for ( let where = 0; where < setEnd; where += 2 ) {
       const opPosition = cursorSet[ where ]
       const opEnd     = cursorSet[ where + 1 ]
@@ -92,7 +92,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
         const bufferHigh = buffer[ opPosition ] & MASK_TOPBITS
 
         if ( lowestHigh === bufferHigh ) {
-          // eslint-disable-next-line no-magic-numbers
+           
           this.cursorSet_[ where ] = opPosition + 2
 
           currentLow |= buffer[ opPosition + 1 ]
@@ -109,6 +109,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
   /**
    * Allocate a MultiIndexSetCursorOr, re-using freed ones in the pool.
    *
+   * @param buffer
    * @return {MultiIndexSetCursorOr} The allocated cursor.
    */
   public static allocate( buffer: Uint32Array ): MultiIndexSetCursorOr {
@@ -134,7 +135,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
    */
   public addRange( from: number, to: number ): void {
     if ( ( this.cursorSet_.length >>> 1 ) <= this.currentOpCount_ ) {
-      // eslint-disable-next-line no-magic-numbers
+       
       const newLength = this.currentOpCount_ * 4
 
       const newCursorSet = new Uint32Array( newLength )
@@ -144,12 +145,12 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
       this.cursorSet_ = newCursorSet
     }
 
-    /* eslint-disable no-magic-numbers */
+     
     const opIndex = this.currentOpCount_ * 2
 
     this.cursorSet_[ opIndex ]     = from * 2
     this.cursorSet_[ opIndex + 1 ] = to * 2
-    /* eslint-enable no-magic-numbers */
+     
 
     ++this.currentOpCount_
   }

@@ -1,18 +1,15 @@
 import Logger from '../logging/logger'
 
 
-/* eslint-disable no-shadow,no-unused-vars,no-magic-numbers*/
 export enum EnvironmentType {
-    BROWSER = 0,
-    NODE = 1,
-    BOTH_FEATURES = 2,
-    UNKNOWN = 3,
-  }
-/* eslint-enable no-shadow,no-unused-vars,no-magic-numbers*/
+  BROWSER = 0,
+  NODE = 1,
+  BOTH_FEATURES = 2,
+  UNKNOWN = 3,
+}
 
-/**
- * Environment class detects the runtime environment
- */
+
+/** Environment class detects the runtime environment */
 export default class Environment {
   static environmentType:EnvironmentType = EnvironmentType.UNKNOWN
 

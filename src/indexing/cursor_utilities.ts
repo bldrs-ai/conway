@@ -47,6 +47,7 @@ export function* cursorIterator( cursor: IIndexSetCursor ):
  * Iterate over a cursor, mapping the extracted local IDs to values.
  *
  * @param cursor The cursor to iterate over.
+ * @param func
  * @yields {number} Every local ID within the cursor.
  */
 export function* cursorMap< TResult >(

@@ -1,4 +1,4 @@
-/* eslint-disable camelcase */
+ 
 
 import StepEntityBase from '../step/step_entity_base'
 import {
@@ -109,6 +109,7 @@ export function boolean_choose< T >(orientation: boolean, fromTrue: T, fromFalse
 
 /**
  *
+ * @param ref_direction
  */
 export function build_2axes(ref_direction: direction | null): direction[] {
   throw new Error('Function not implemented.')
@@ -116,6 +117,8 @@ export function build_2axes(ref_direction: direction | null): direction[] {
 
 /**
  *
+ * @param axis
+ * @param ref_direction
  */
 export function build_axes(axis: direction | null, ref_direction: direction | null): direction[] {
   throw new Error('Function not implemented.')
@@ -123,6 +126,7 @@ export function build_axes(axis: direction | null, ref_direction: direction | nu
 
 /**
  *
+ * @param arg0
  */
 export function is_sql_mappable(arg0: expression): boolean {
   throw new Error('Function not implemented.')
@@ -130,6 +134,7 @@ export function is_sql_mappable(arg0: expression): boolean {
 
 /**
  *
+ * @param arg0
  */
 export function is_int_expr(arg0: expression): boolean {
   throw new Error('Function not implemented.')
@@ -137,6 +142,7 @@ export function is_int_expr(arg0: expression): boolean {
 
 /**
  *
+ * @param base
  */
 export function representation_of_link(base: kinematic_link): kinematic_link_representation {
   throw new Error('Function not implemented.')
@@ -144,6 +150,7 @@ export function representation_of_link(base: kinematic_link): kinematic_link_rep
 
 /**
  *
+ * @param arg0
  */
 export function get_name_value(arg0: StepEntityBase< EntityTypesIfc >): string {
   throw new Error('Function not implemented.')
@@ -161,6 +168,7 @@ export function get_id_value(arg0: StepEntityBase< EntityTypesIfc >): string {
 
 /**
  *
+ * @param arg0
  */
 export function get_description_value(arg0: StepEntityBase< EntityTypesIfc >): string {
   throw new Error('Function not implemented.')
@@ -168,6 +176,7 @@ export function get_description_value(arg0: StepEntityBase< EntityTypesIfc >): s
 
 /**
  *
+ * @param arg0
  */
 export function get_multi_language(arg0: StepEntityBase< EntityTypesIfc >): string {
   throw new Error('Function not implemented.')
@@ -175,6 +184,7 @@ export function get_multi_language(arg0: StepEntityBase< EntityTypesIfc >): stri
 
 /**
  *
+ * @param unit
  */
 export function derive_dimensional_exponents( unit: derived_unit | named_unit ):
   dimensional_exponents {

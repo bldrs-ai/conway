@@ -15,7 +15,7 @@ import IfcStepModel from './ifc_step_model'
 /**
  *
  */
-/* eslint-disable no-shadow, no-unused-vars, no-magic-numbers */
+ 
 // -- eslint doesn't understand enums properly.
 export enum PropertyExtractResult {
 

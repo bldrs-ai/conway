@@ -80,13 +80,14 @@ function extractGearGeometry(): ExtractResult {
 /**
  * Get the number of triangles in a mesh.
  *
+ * @param model
  * @return {number} Number of triangles in a model's mesh.
  */
 function getMeshSize( model: AP214GeometryExtraction ): number {
 
   return Array.from( model.scene.walk() ).reduce<number>(
       ( ( previous, current ) => (
-        // eslint-disable-next-line new-cap
+         
         current[2].geometry as GeometryObject ).GetIndexDataSize() + previous ),
       0 )
 }

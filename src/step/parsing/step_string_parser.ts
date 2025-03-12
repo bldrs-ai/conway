@@ -4,8 +4,6 @@ import ParsingDfa16Table from '../../parsing/parsing_dfa_16table'
 /**
  * Enum representing the state machine of the string parser DFA.
  */
-/* eslint-disable no-shadow, no-unused-vars, no-magic-numbers */
-// eslint doesn't really understand enums?
 enum STRING_PARSER_STATE {
   TERMINUS = 0,
   REGULAR = 1,
@@ -14,7 +12,6 @@ enum STRING_PARSER_STATE {
   SPECIAL = 4,
   SPECIAL_BSLASH = 5
 }
-/* eslint-enable no-shadow, no-unused-vars, no-magic-numbers */
 
 const STRING_PARSER_TERMINUS_FLAGS = (1 << STRING_PARSER_STATE.QUOTE)
 const QUOTE = ParsingConstants.QUOTE
@@ -25,37 +22,32 @@ const P = ParsingConstants.CAPITAL_P
 const A = ParsingConstants.A
 const I = ParsingConstants.I
 const F = ParsingConstants.F
-// eslint-disable-next-line no-magic-numbers
 const TWO = ParsingConstants.ZERO + 2
-// eslint-disable-next-line no-magic-numbers
 const FOUR = ParsingConstants.ZERO + 4
 const ZERO = ParsingConstants.ZERO
 const NINE = ParsingConstants.NINE
 
 const decoder = new TextDecoder()
 
-// eslint-disable-next-line max-len -- Generated code do not edit, do not worry about max-len.
+ 
 const ISO8859Table = [['¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '­', '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ð', 'Ñ', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'Ý', 'Þ', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ð', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù', 'ú', 'û', 'ü', 'ý', 'þ'], ['Ą', '˘', 'Ł', '¤', 'Ľ', 'Ś', '§', '¨', 'Š', 'Ş', 'Ť', 'Ź', '­', 'Ž', 'Ż', '°', 'ą', '˛', 'ł', '´', 'ľ', 'ś', 'ˇ', '¸', 'š', 'ş', 'ť', 'ź', '˝', 'ž', 'ż', 'Ŕ', 'Á', 'Â', 'Ă', 'Ä', 'Ĺ', 'Ć', 'Ç', 'Č', 'É', 'Ę', 'Ë', 'Ě', 'Í', 'Î', 'Ď', 'Đ', 'Ń', 'Ň', 'Ó', 'Ô', 'Ő', 'Ö', '×', 'Ř', 'Ů', 'Ú', 'Ű', 'Ü', 'Ý', 'Ţ', 'ß', 'ŕ', 'á', 'â', 'ă', 'ä', 'ĺ', 'ć', 'ç', 'č', 'é', 'ę', 'ë', 'ě', 'í', 'î', 'ď', 'đ', 'ń', 'ň', 'ó', 'ô', 'ő', 'ö', '÷', 'ř', 'ů', 'ú', 'ű', 'ü', 'ý', 'ţ'], ['Ħ', '˘', '£', '¤', '', 'Ĥ', '§', '¨', 'İ', 'Ş', 'Ğ', 'Ĵ', '­', '', 'Ż', '°', 'ħ', '²', '³', '´', 'µ', 'ĥ', '·', '¸', 'ı', 'ş', 'ğ', 'ĵ', '½', '', 'ż', 'À', 'Á', 'Â', '', 'Ä', 'Ċ', 'Ĉ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', '', 'Ñ', 'Ò', 'Ó', 'Ô', 'Ġ', 'Ö', '×', 'Ĝ', 'Ù', 'Ú', 'Û', 'Ü', 'Ŭ', 'Ŝ', 'ß', 'à', 'á', 'â', '', 'ä', 'ċ', 'ĉ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', '', 'ñ', 'ò', 'ó', 'ô', 'ġ', 'ö', '÷', 'ĝ', 'ù', 'ú', 'û', 'ü', 'ŭ', 'ŝ'], ['Ą', 'ĸ', 'Ŗ', '¤', 'Ĩ', 'Ļ', '§', '¨', 'Š', 'Ē', 'Ģ', 'Ŧ', '­', 'Ž', '¯', '°', 'ą', '˛', 'ŗ', '´', 'ĩ', 'ļ', 'ˇ', '¸', 'š', 'ē', 'ģ', 'ŧ', 'Ŋ', 'ž', 'ŋ', 'Ā', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Į', 'Č', 'É', 'Ę', 'Ë', 'Ė', 'Í', 'Î', 'Ī', 'Đ', 'Ņ', 'Ō', 'Ķ', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ų', 'Ú', 'Û', 'Ü', 'Ũ', 'Ū', 'ß', 'ā', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'į', 'č', 'é', 'ę', 'ë', 'ė', 'í', 'î', 'ī', 'đ', 'ņ', 'ō', 'ķ', 'ô', 'õ', 'ö', '÷', 'ø', 'ų', 'ú', 'û', 'ü', 'ũ', 'ū'], ['Ё', 'Ђ', 'Ѓ', 'Є', 'Ѕ', 'І', 'Ї', 'Ј', 'Љ', 'Њ', 'Ћ', 'Ќ', '­', 'Ў', 'Џ', 'А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ж', 'З', 'И', 'Й', 'К', 'Л', 'М', 'Н', 'О', 'П', 'Р', 'С', 'Т', 'У', 'Ф', 'Х', 'Ц', 'Ч', 'Ш', 'Щ', 'Ъ', 'Ы', 'Ь', 'Э', 'Ю', 'Я', 'а', 'б', 'в', 'г', 'д', 'е', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о', 'п', 'р', 'с', 'т', 'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я', '№', 'ё', 'ђ', 'ѓ', 'є', 'ѕ', 'і', 'ї', 'ј', 'љ', 'њ', 'ћ', 'ќ', '§', 'ў'], ['', '', '', '¤', '', '', '', '', '', '', '', '،', '­', '', '', '', '', '', '', '', '', '', '', '', '', '', '؛', '', '', '', '؟', '', 'ء', 'آ', 'أ', 'ؤ', 'إ', 'ئ', 'ا', 'ب', 'ة', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', '', '', '', '', '', 'ـ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ى', 'ي', 'ً', 'ٌ', 'ٍ', 'َ', 'ُ', 'ِ', 'ّ', 'ْ', '', '', '', '', '', '', '', '', '', '', '', ''], ['ʽ', 'ʼ', '£', '', '', '¦', '§', '¨', '©', '', '«', '¬', '­', '', '―', '°', '±', '²', '³', '΄', '΅', 'Ά', '·', 'Έ', 'Ή', 'Ί', '»', 'Ό', '½', 'Ύ', 'Ώ', 'ΐ', 'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ζ', 'Η', 'Θ', 'Ι', 'Κ', 'Λ', 'Μ', 'Ν', 'Ξ', 'Ο', 'Π', 'Ρ', '', 'Σ', 'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω', 'Ϊ', 'Ϋ', 'ά', 'έ', 'ή', 'ί', 'ΰ', 'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'ς', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω', 'ϊ', 'ϋ', 'ό', 'ύ', 'ώ'], ['', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', '×', '«', '¬', '­', '®', '‾', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', '÷', '»', '¼', '½', '¾', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '‗', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'ך', 'כ', 'ל', 'ם', 'מ', 'ן', 'נ', 'ס', 'ע', 'ף', 'פ', 'ץ', 'צ', 'ק', 'ר', 'ש', 'ת', '', '', '', ''], ['¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '­', '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ğ', 'Ñ', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'İ', 'Ş', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ğ', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù', 'ú', 'û', 'ü', 'ı', 'ş']]
 
 /**
  * Read the number value from a hex character.
  *
+ * @param character
  * @return {number | undefined} The numeric value of the hex character or
  * undefined if it isn't a valid hex character.
  */
 function readHex(character: number): number | undefined {
   if (character >= A && character <= F) {
-
-    // eslint-disable-next-line no-magic-numbers
     return (character - A) + 10
-
   } else if (character >= ZERO && character <= NINE) {
-
     return character - ZERO
   }
-
   return undefined
 }
+
 
 /**
  * String parser for step, note we don't do an exact check here, we wait for z
@@ -99,7 +91,6 @@ export default class StepStringParser extends ParsingDfa16Table {
       endCursor: number,
       codePage: number = 0): string | undefined => {
 
-    // eslint-disable-next-line no-magic-numbers -- 2 is a minimum length.
     if ((endCursor - cursor) < 2) {
       return
     }
@@ -253,7 +244,6 @@ export default class StepStringParser extends ParsingDfa16Table {
               result ??= ''
               result += decoder.decode(input.subarray(reificationIndex, cursor))
 
-              // eslint-disable-next-line no-loop-func
               const hexParserTil0 = (count: number) => {
 
                 if (nextCursor2 + 1 >= endCursor || input[nextCursor2 + 1] !== BSLASH) {
@@ -261,7 +251,6 @@ export default class StepStringParser extends ParsingDfa16Table {
                 }
 
                 // Parsing offsets
-                /* eslint-disable no-magic-numbers */
                 let intermediateCursor = nextCursor2 + 2
                 let characterCode = 0
 
@@ -305,8 +294,6 @@ export default class StepStringParser extends ParsingDfa16Table {
                   intermediateCursor += 2
 
                   --count
-
-                  /* eslint-enable no-magic-numbers */
                 }
 
                 return false
@@ -314,8 +301,6 @@ export default class StepStringParser extends ParsingDfa16Table {
 
               switch (nextChar2) {
                 case BSLASH: {
-
-                  /* eslint-disable no-magic-numbers */
                   if (nextCursor2 + 2 >= endCursor) {
                     return result
                   }
@@ -332,7 +317,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
                   try {
                     codePoint = String.fromCodePoint(characterCode)
-                  } catch (_) {
+                  } catch {
                     codePoint = '<invalid codepoint>'
                   }
 
@@ -340,7 +325,6 @@ export default class StepStringParser extends ParsingDfa16Table {
 
                   cursor = nextCursor2 + 3
                   reificationIndex = cursor
-                  /* eslint-disable no-magic-numbers */
                 }
 
                   break

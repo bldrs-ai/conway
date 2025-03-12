@@ -27,7 +27,7 @@ export class IfcSceneTransform implements SceneNodeTransform {
   readonly type = SceneNodeModelType.TRANSFORM
 
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
@@ -48,7 +48,7 @@ export class IfcSceneTransform implements SceneNodeTransform {
     public readonly nativeTransform: NativeTransform4x4,
     public readonly absoluteNativeTransform: NativeTransform4x4,
     public readonly parentIndex?: number) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
   public children: number[] = []
 }
 
@@ -59,14 +59,17 @@ export class IfcSceneGeometry implements SceneNodeGeometry {
 
   readonly type = SceneNodeModelType.GEOMETRY
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct a scene geometry node
    *
    * @param model
    * @param localID
    * @param index
+   * @param relatedElementLocalId
    * @param parentIndex
+   * @param isSpace
+   * @param materialOverideLocalID
    */
   constructor(
     public readonly model: Model,
@@ -76,7 +79,7 @@ export class IfcSceneGeometry implements SceneNodeGeometry {
     public readonly parentIndex?: number,
     public readonly isSpace: boolean = false,
     public readonly materialOverideLocalID?: number ) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 }
 
 export type IfcSceneNode = IfcSceneTransform | IfcSceneGeometry
@@ -104,11 +107,12 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
     return this.currentParent_
   }
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
    * @param conwayGeometry
+   * @param materials
    */
   public constructor(
     public readonly model: IfcStepModel,
@@ -116,7 +120,7 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
     public readonly materials: IfcMaterialCache) {
 
   }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    *
@@ -197,7 +201,7 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
     const triangleMaps: TriangleElementMap[] = []
     const elementMap = new Map<number, number[]>()
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, nativeTransform, geometry, material, entity] of this.walk()) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -226,7 +230,7 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
 
           triangleMap.addMappingRange(
               0,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -261,7 +265,7 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
 
           triangleMap.addMappingRange(
               triangleMap.size,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               triangleMap.size + Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -309,6 +313,7 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
    * Walk the current scene.
    *
    * @yields Raw absolute matrix transform, the native absolute transform, the canonical mesh,
+   * @param includeSpaces
    * the canonical material and the associated step element as it walks the hierarchy.
    * @param walkTemporary Include temporary items.
    */
@@ -388,6 +393,9 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
   /**
    *
    * @param localID
+   * @param owningElementLocalID
+   * @param isSpace
+   * @param materialOverrideLocalID
    * @return {IfcSceneGeometry}
    */
   public addGeometry(
@@ -432,6 +440,7 @@ export class IfcSceneBuilder implements Scene< StepEntityBase< EntityTypesIfc > 
    * @param localID
    * @param transform
    * @param nativeTransform
+   * @param isMappedItem
    * @return {IfcSceneTransform}
    */
   public addTransform(

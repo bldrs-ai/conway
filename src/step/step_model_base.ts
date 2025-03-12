@@ -218,6 +218,7 @@ implements Iterable<BaseEntity>, Model {
     element.buffer = this.buffer_
   }
 
+
   /**
    * Get the number of elements/entities in this model.
    *
@@ -236,6 +237,7 @@ implements Iterable<BaseEntity>, Model {
   public get size(): number {
     return this.elementIndex_.length
   }
+
 
   /**
    * Get an inline element by its address within a data-block.
@@ -258,6 +260,7 @@ implements Iterable<BaseEntity>, Model {
     return this.getElementByLocalID(localID)
   }
 
+
   /**
    * Given an express ID, return the matching element if one exists.
    *
@@ -275,9 +278,11 @@ implements Iterable<BaseEntity>, Model {
     return this.getElementByLocalID(localID)
   }
 
+
   /**
    *
    * @param {from} local ID array
+   * @param from
    * @return {Uint32Array} express ID array
    */
   public mapLocalIDsToExpressIDs( from: ReadonlyUint32Array ): Uint32Array {
@@ -286,6 +291,7 @@ implements Iterable<BaseEntity>, Model {
 
     return from.map( (value) => index[ value ]?.expressID ?? TriangleElementMap.NO_ELEMENT )
   }
+
 
   /**
    * Given an express ID, return the matching element if one exists.
@@ -331,7 +337,7 @@ implements Iterable<BaseEntity>, Model {
           this.externalMappingType
 
       if (constructorRead !== void 0) {
-        // eslint-disable-next-line new-cap -- This is a variable constructor.
+         
         entity = new constructorRead(localID, element, this) as BaseEntity
 
         if ( this.elementMemoization ) {

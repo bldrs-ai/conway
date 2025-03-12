@@ -29,6 +29,7 @@ export function exponentToRoughness(shininess: number): number {
  * Uses the conversion from - http://simonstechblog.blogspot.com/2011/12/microfacet-brdf.html
  *
  * @param shininess The shinyness exponent/𝛼 to convert to roughness
+ * @param roughness
  * @return {number} The resultant roughness.
  */
 export function roughnessToExponent(roughness: number): number {
@@ -115,7 +116,7 @@ export function dumpMTL( from: CanonicalMaterial ): string {
 
   const AMBIENT = 0.05
 
-  // eslint-disable-next-line max-len
+   
   result += `Ka ${from.baseColor[0] * AMBIENT} ${from.baseColor[1] * AMBIENT} ${from.baseColor[2] * AMBIENT}\n`
 
   if ( from.metalness === void 0 ) {
@@ -124,7 +125,7 @@ export function dumpMTL( from: CanonicalMaterial ): string {
 
     const albedoFactor = 1.0 - from.metalness
 
-    // eslint-disable-next-line max-len
+     
     result += `Kd ${from.baseColor[0] * albedoFactor} ${from.baseColor[1] * albedoFactor} ${from.baseColor[2] * albedoFactor}\n`
   }
 

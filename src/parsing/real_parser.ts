@@ -3,7 +3,7 @@ import ParsingDfa16Table from './parsing_dfa_16table'
 /**
  * DFA State machine states for parsing a real.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 enum REAL_STATES {
   TERMINUS          = 0,
   SIGN_OR_DIGIT_I   = 1,
@@ -15,7 +15,7 @@ enum REAL_STATES {
   MUST_DIGIT_E      = 7,
   MAYBE_DIGIT_E     = 8
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 const REAL_TERMINUS_FLAGS =
   ( 1 << REAL_STATES.MAYBE_DIGIT_E ) |

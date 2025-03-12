@@ -1,7 +1,7 @@
 import { LogEntry, LoggingProxy } from '../logging/logger'
 
 
-/* eslint-disable no-unused-vars */
+ 
 /**
  * When we are ready to handle Sentry Logging, this is a skeleton for a logging proxy.
  */
@@ -15,7 +15,7 @@ class SentryLoggingProxy implements LoggingProxy {
     throw new Error( 'Not Implemented' )
   }
 }
-/* eslint-enable no-unused-vars */
+ 
 
 /*
 //Example proxy Usage

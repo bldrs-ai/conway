@@ -1,4 +1,4 @@
-/* eslint-disable camelcase */
+ 
 import {
   ConwayGeometry,
   GeometryObject,
@@ -178,7 +178,6 @@ export function extractColorOrFactor(
  */
 export class AP214GeometryExtraction {
 
-  /* eslint-disable no-magic-numbers */
   private readonly TWO_DIMENSIONS: number = 2
   private readonly THREE_DIMENSIONS: number = 3
 
@@ -339,7 +338,7 @@ export class AP214GeometryExtraction {
    */
   nativeVectorGeometry(initialSize?: number): StdVector<GeometryObject> {
     const nativeVectorGeometry_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.geometryArray)()) as StdVector<GeometryObject>
 
     if (initialSize) {
@@ -359,7 +358,7 @@ export class AP214GeometryExtraction {
    */
   nativeVectorGeometryCollection(): NativeVectorGeometryCollection {
     const nativeVectorGeometryCollection =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.geometryCollectionArray)()) as NativeVectorGeometryCollection
 
     return nativeVectorGeometryCollection
@@ -372,6 +371,13 @@ export class AP214GeometryExtraction {
    * @return {MaterialObject} The created canonical material.
    */
   nativeMaterial(from: CanonicalMaterial): MaterialObject {
+    /**
+      - Glass: ~1.5
+      - Water: ~1.33
+      - Plastics (like acrylic): ~1.3 - 1.5
+      - Most common materials fall within the range of 1.3 to 1.5.
+     */
+    const IOR_PLASTIC = 1.4
     const native: MaterialObject = {
 
       alphaCutoff: 0,
@@ -383,8 +389,7 @@ export class AP214GeometryExtraction {
         w: from.baseColor[3],
       },
       doubleSided: from.doubleSided,
-      /* eslint-disable no-magic-numbers */
-      ior: from.ior ?? 1.4,
+      ior: from.ior ?? IOR_PLASTIC,
       metallic: from.metalness ?? 1.0,
       roughness: from.roughness ?? 1.0,
       specular: from.specular !== void 0 ? {
@@ -394,7 +399,6 @@ export class AP214GeometryExtraction {
         w: from.specular[3],
       } : void 0,
     }
-    /* eslint-enable no-magic-numbers */
     return native
   }
 
@@ -404,7 +408,7 @@ export class AP214GeometryExtraction {
    * @return {NativeVectorGlmVec2} - a native std::vector<glm::vec2> from the wasm module
    */
   nativeVectorGlmVec2(initialSize?: number): NativeVectorGlmVec2 {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorGlmVec2_ = new (this.wasmModule.vec2Array)() as NativeVectorGlmVec2
 
     if (initialSize) {
@@ -422,7 +426,7 @@ export class AP214GeometryExtraction {
    * @return {NativeVectorProfile} - a native std::vector<AP214Profile> from the wasm module
    */
   nativeVectorProfile(initialSize?: number): NativeVectorProfile {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorProfile_ = new (this.wasmModule.profileArray)() as NativeVectorProfile
 
     if (initialSize) {
@@ -441,7 +445,7 @@ export class AP214GeometryExtraction {
    * @return {NativeVectorCurve} - a native std::vector<AP214Curve> from the wasm module
    */
   nativeVectorCurve(initialSize?: number): StdVector<CurveObject> {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorCurve_ = new (this.wasmModule.curveArray)() as NativeVectorCurve
 
     if (initialSize) {
@@ -460,7 +464,7 @@ export class AP214GeometryExtraction {
    */
   nativeVectorGlmVec3(initialSize?: number): NativeVectorGlmVec3 {
     const nativeVectorGlmVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmVec3Array)()) as NativeVectorGlmVec3
 
     if (initialSize) {
@@ -478,7 +482,7 @@ export class AP214GeometryExtraction {
    */
   nativeVectorVectorGlmdVec3(): StdVector<NativeVectorGlmVec3> {
     const nativeVectorVectorGlmdVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec3ArrayArray)()) as StdVector<NativeVectorGlmVec3>
 
     return nativeVectorVectorGlmdVec3_
@@ -491,7 +495,7 @@ export class AP214GeometryExtraction {
    */
   nativeVectorGlmdVec3(initialSize?: number): NativeVectorGlmVec3 {
     const nativeVectorGlmdVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec3Array)()) as NativeVectorGlmVec3
 
     if (initialSize) {
@@ -510,7 +514,7 @@ export class AP214GeometryExtraction {
    */
   nativeVectorGlmdVec2(initialSize?: number): NativeVectorGlmVec2 {
     const nativeVectorGlmdVec2_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec2Array)()) as NativeVectorGlmVec2
 
     if (initialSize) {
@@ -525,6 +529,7 @@ export class AP214GeometryExtraction {
    * Create a native 32bit uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
+   * @param initialize
    * @return {NativeUintVector} - a native std::vector<uint32_t> from the wasm module
    */
   nativeUintVector(initialize?: number): NativeUintVector {
@@ -542,6 +547,7 @@ export class AP214GeometryExtraction {
    * Create a native 32bit size_t vector.
    *
    * @param initialSize number - initial size of the vector (optional)
+   * @param initialize
    * @return {NativeULongVector} - a native std::vector<size_t> from the wasm module
    */
   nativeULongVector(initialize?: number): NativeULongVector {
@@ -583,6 +589,7 @@ export class AP214GeometryExtraction {
    * Create a native vector of indexed polygonal faces uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
+   * @param initialize
    * @return {NativeVectorIndexedPolygonalFace} - a native object from the wasm module
    */
   nativeIndexedPolygonalFaceVector(initialize?: number): NativeVectorIndexedPolygonalFace {
@@ -660,6 +667,8 @@ export class AP214GeometryExtraction {
 
   /**
    * Destroy geometry processor and deinitialize
+   *
+   * @param modelId
    */
   destroy(modelId: number = 0) {
     if (this.conwayModel !== void 0) {
@@ -713,7 +722,10 @@ export class AP214GeometryExtraction {
   }
 
 
-  /** @return {number} Pointer/memory address */
+  /**
+   * @param array
+   * @return {number} Pointer/memory address
+   */
   arrayToWasmHeap(array:Float32Array | Uint32Array): any {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
@@ -727,7 +739,10 @@ export class AP214GeometryExtraction {
     return arrayPtr
   }
 
-  /** @return {Uint8Array}  */
+  /**
+   * @param array
+   * @return {Uint8Array}
+   */
   arrayToSharedHeap(array:Float32Array | Uint32Array): Uint8Array {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
@@ -758,7 +773,6 @@ export class AP214GeometryExtraction {
     return {
       x: from.direction_ratios[0],
       y: from.direction_ratios[1],
-      // eslint-disable-next-line no-magic-numbers
       z: (from.direction_ratios.length > 2) ? from.direction_ratios[2] : 0,
     }
   }
@@ -1022,8 +1036,6 @@ export class AP214GeometryExtraction {
     }
   }
 
-  /* eslint-disable no-magic-numbers */ // No magic numbers disabled
-  // Cos we have *lots* of default material values.
   /**
    * Extract a canonical material from a surface style.
    *
@@ -1035,6 +1047,8 @@ export class AP214GeometryExtraction {
 
     const material = materials.get(from.localID)
 
+    const lightGrey = 0.8
+
     if (material === void 0) {
 
       const readDoubleSided = from.side === surface_side.BOTH ||
@@ -1042,8 +1056,8 @@ export class AP214GeometryExtraction {
 
       const newMaterial: Mutable<CanonicalMaterial> = {
         name: `#${from.expressID}`,
-        baseColor: [0.8, 0.8, 0.8, 1],
-        legacyColor: [0.8, 0.8, 0.8, 1],
+        baseColor: [lightGrey, lightGrey, lightGrey, 1],
+        legacyColor: [lightGrey, lightGrey, lightGrey, 1],
         doubleSided: readDoubleSided,
         blend: BlendMode.OPAQUE,
       }
@@ -1079,13 +1093,12 @@ export class AP214GeometryExtraction {
     }
 
   }
-  /* eslint-enable no-magic-numbers */
+
 
   /**
-   * Extract a style item.
-   *
    * @param from The styled item to extract from
-   * @return {number | undefined}
+   * @param representationItem
+   * @return surafceStyleId or undefined if could not be determined
    */
   extractStyledItem(
       from: styled_item,
@@ -1122,10 +1135,10 @@ export class AP214GeometryExtraction {
     return surfaceStyleID
   }
 
+
   /**
-   *
-   * @param from
-   * @param temporary
+   * @param from Geometry source
+   * @param temporary Is the extracted mesh temporary
    */
   extractHalfspaceSolid(
       from: half_space_solid,
@@ -1162,10 +1175,11 @@ export class AP214GeometryExtraction {
     }
   }
 
+
   /**
    *
-   * @param from
-   * @param temporary
+   * @param from Geometry source
+   * @param temporary Is this temporary
    */
   /* extractPolygonalBoundedHalfSpace(from: AP214PolygonalBoundedHalfSpace,
     temporary: boolean = false) {
@@ -1180,10 +1194,10 @@ export class AP214GeometryExtraction {
         .getAxis2Placement3D(paramsAxis2Placement3D)
   }*/
 
+
   /**
-   *
-   * @param from
-   * @param temporary
+   * @param from Geometry source
+   * @param temporary Is this extracted mesh temporary
    */
   extractExtrudedAreaSolid(
       from: extruded_area_solid,
@@ -1305,6 +1319,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param trimmingArguments
    * @return {CurveObject | undefined}
    */
   extractCurve(
@@ -1389,7 +1404,7 @@ export class AP214GeometryExtraction {
     pointsFlattened[ 0 ] = point[ 0 ]
     pointsFlattened[ 1 ] = point[ 1 ]
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if ( dim > 2 ) {
 
       pointsFlattened[ 2 ] = point[ 2 ]
@@ -1423,6 +1438,7 @@ export class AP214GeometryExtraction {
    * Extract a line
    *
    * @param from The line to extract.
+   * @param trimmingArguments
    * @return {CurveObject | undefined} The curve object for the line.
    */
   extractLine( from: line, trimmingArguments?: TrimmingArguments ): CurveObject | undefined {
@@ -1438,7 +1454,7 @@ export class AP214GeometryExtraction {
       pointsFlattened[ 0 ] = point[ 0 ]
       pointsFlattened[ 1 ] = point[ 1 ]
 
-      // eslint-disable-next-line no-magic-numbers
+       
       if ( dim > 2 ) {
 
         pointsFlattened[ 2 ] = point[ 2 ]
@@ -1463,7 +1479,7 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      // eslint-disable-next-line no-magic-numbers
+       
       const pointsFlattened = new Float32Array( 6 )
 
       pointsFlattened[ 0 ] = trimmingArguments.start?.pos3D?.x ?? 0
@@ -1519,7 +1535,7 @@ export class AP214GeometryExtraction {
       isEdge: false,
     }
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if (dimensions === 2) {
 
       const outputPoints = params.points2
@@ -1537,7 +1553,7 @@ export class AP214GeometryExtraction {
 
       for (const point of from.control_points_list) {
 
-        // eslint-disable-next-line no-magic-numbers
+         
         if (point.coordinates.length !== 3) {
           continue
         }
@@ -1588,7 +1604,7 @@ export class AP214GeometryExtraction {
 
     } else {
       // This is just a AP214BsplineCurve, build default parameter lists
-      // eslint-disable-next-line no-lonely-if
+       
       if (dimensions === this.TWO_DIMENSIONS) {
         // build default knots
         const outputKnots = params.knots
@@ -1940,6 +1956,7 @@ export class AP214GeometryExtraction {
    * Extract a mapped item to add its transform to instance an item.
    *
    * @param from The mapped item to extract.
+   * @param owningElementLocalID
    */
   extractMappedItem(
       from: mapped_item,
@@ -2002,6 +2019,7 @@ export class AP214GeometryExtraction {
    * Note - memoized result for instancing.
    *
    * @param from The representation to extract from.
+   * @param owningElementLocalID
    */
   extractRepresentationItem(
       from: representation_item,
@@ -2121,6 +2139,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param temporary
    */
   extractAP214FacetedBrep(
       from: faceted_brep,
@@ -2135,6 +2154,7 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param owningElementLocalID
    */
   extractAP214ShellBasedSurfaceModel(
       from: shell_based_surface_model,
@@ -2155,6 +2175,7 @@ export class AP214GeometryExtraction {
    * @param parentLocalID
    * @param geometry_
    * @param isRelVoid
+   * @param temporary
    * @return {GeometryObject}
    */
   extractFaces(
@@ -2286,6 +2307,8 @@ export class AP214GeometryExtraction {
    *
    * @param from The bspline surface to extract
    * @param to The surface to extract to
+   * @param start
+   * @param end
    */
   extractToDoubleVector(
       from: Array<number>,
@@ -2436,7 +2459,7 @@ export class AP214GeometryExtraction {
 
             const startPoint = edgeStart.vertex_geometry
 
-            // eslint-disable-next-line no-magic-numbers
+             
             if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
 
               const startCoords = startPoint.coordinates
@@ -2460,7 +2483,7 @@ export class AP214GeometryExtraction {
 
             const endPoint = edgeEnd.vertex_geometry
 
-            // eslint-disable-next-line no-magic-numbers
+             
             if (endPoint instanceof cartesian_point && endPoint.coordinates.length === 3) {
 
               const endCoords = endPoint.coordinates
@@ -2512,7 +2535,7 @@ export class AP214GeometryExtraction {
 
             const startPoint = start.vertex_geometry
 
-            // eslint-disable-next-line no-magic-numbers
+             
             if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
 
               const startCoords = startPoint.coordinates
@@ -2919,12 +2942,12 @@ export class AP214GeometryExtraction {
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
    * @return {ParamsAxis1Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis1Placement3D(
     from: axis1_placement,
     parentLocalId: number,
     extractOnly: true): ParamsAxis1Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis1Placement3D(
       from: axis1_placement,
       parentLocalId: number,
@@ -2996,12 +3019,12 @@ export class AP214GeometryExtraction {
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
    * @return {ParamsAxis2Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3D(
     from: axis2_placement_3d,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3D(
       from: axis2_placement_3d,
       parentLocalId: number,

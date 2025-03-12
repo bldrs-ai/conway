@@ -5,7 +5,7 @@ export { ConwayGeometry, GeometryObject, FileHandlerFunction} from '../dependenc
 export { versionString } from './version/version'
 // Replace your current Logger export with this
 export { default as Logger } from './logging/logger'
-// eslint-disable-next-line camelcase
+ 
 export { product, shape_definition_representation } from './AP214E3_2010/AP214E3_2010_gen'
 export { CanonicalMeshType } from './core/canonical_mesh'
 export { CanonicalMaterial } from './core/canonical_material'

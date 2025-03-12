@@ -15,12 +15,12 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
   private high_: number = 0
   private low_: number = 0
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this, not accessible.
    */
   private constructor() {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits
@@ -60,7 +60,7 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
     this.high_ = buffer[ currentIndex ]
     this.low_  = buffer[ currentIndex + 1 ]
 
-    // eslint-disable-next-line no-magic-numbers
+     
     this.currentIndex_ = currentIndex + 2
 
     return true
@@ -69,11 +69,14 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
   /**
    * Allocate a SingleIndexSetCursor, re-using freed ones in the pool.
    *
+   * @param buffer
+   * @param currentIndex
+   * @param end
    * @return {SingleIndexSetCursor} The allocated cursor.
    */
   public static allocate(
       buffer: Uint32Array,
-      // eslint-disable-next-line default-param-last
+       
       currentIndex: number = 0, // note, ? is default undefined
       end?: number ): SingleIndexSetCursor {
     end ??= buffer.length >>> 1
@@ -88,10 +91,10 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
 
     result.buffer_       = buffer
 
-    // eslint-disable-next-line no-magic-numbers
+     
     result.currentIndex_ = currentIndex * 2
 
-    // eslint-disable-next-line no-magic-numbers
+     
     result.end_          = end * 2
 
     return result

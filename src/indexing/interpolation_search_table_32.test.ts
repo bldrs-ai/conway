@@ -64,7 +64,7 @@ const notInsertSet: number[] = []
 
 const matchingMap = new Map< number, number >()
 
-// eslint-disable-next-line no-magic-numbers
+ 
 for ( let where = 0; where < insertSet.length; where += 2 ) {
 
   matchingMap.set( insertSet[ where + 1 ], insertSet[ where ] )

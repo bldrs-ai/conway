@@ -17,7 +17,7 @@ export default class GeometryConvertor {
    *
    * @param wasmModule The wasm module.
    */
-  // eslint-disable-next-line no-useless-constructor, no-empty-function
+   
   constructor( private readonly wasmModule: ConwayGeometry ) {}
 
   /**
@@ -84,6 +84,7 @@ export default class GeometryConvertor {
    * Convert geometry to a GLTF/GLB
    *
    * @param geometry - GeometryObject to convert to GLTF / GLB
+   * @param materials
    * @param isGlb boolean - Should the output be a single GLB file?
    * @param outputDraco boolean - Should the output be Draco compressed?
    * @param fileUri string - base filenames for GLTF / GLB files

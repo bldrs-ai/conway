@@ -97,7 +97,7 @@ function testParseExtract() {
     }
   }
 
-  // eslint-disable-next-line no-magic-numbers
+   
   return ( ( testDataMatch.length * 8 ) - 2 ) === bitCount
 }
 

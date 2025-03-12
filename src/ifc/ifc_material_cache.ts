@@ -1,5 +1,5 @@
-/* eslint-disable no-empty-function */
-/* eslint-disable no-useless-constructor */
+ 
+ 
 import { CanonicalMaterial, dumpMTL } from '../core/canonical_material'
 import IfcStepModel from './ifc_step_model'
 import StepEntityBase from '../step/step_entity_base'
@@ -26,6 +26,7 @@ export class IfcMaterialCache {
    * Construct this with an IFC step model.
    *
    * @param model The model this is from
+   * @param isVoid
    */
   constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {}
 

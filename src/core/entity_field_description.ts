@@ -1,4 +1,4 @@
-/* eslint-disable no-shadow,no-unused-vars,no-magic-numbers */
+ 
 export enum FieldDescriptionKind {
   SELECT         = 0,
   NUMBER         = 1,
@@ -8,12 +8,12 @@ export enum FieldDescriptionKind {
   ENUM           = 5,
   BINARY_DATA    = 6,
 }
-/* eslint-enable no-shadow,no-unused-vars,no-magic-numbers */
+ 
 
 /**
  * Base field type for an entity described via reflection.
  */
-// eslint-disable-next-line no-unused-vars
+ 
 export interface EntityFieldDescription< EntityTypeIDs extends number > {
   /**
    * The kind of this field.

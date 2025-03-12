@@ -7,7 +7,7 @@ import { blobEquals, fnv1a as fnv1A, fnv1a24 as fnv1A24 } from './hashing'
 export default class MinimalPerfectHash< ValueType extends number > implements
   ReadonlyMap< Uint8Array, ValueType >, TypeIndex< ValueType > {
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param gMap_ The G mapping (see minimum perfect hashing algorithm)
@@ -23,7 +23,7 @@ export default class MinimalPerfectHash< ValueType extends number > implements
     private readonly keyPrefixSum_: Uint32Array,
     private readonly slotMap_: Int32Array,
     private readonly keyBlob_: Uint8Array ) {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Iterates through this (alias for this.entries() that works with for of loop).
