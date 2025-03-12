@@ -1,5 +1,5 @@
-/* eslint-disable no-empty-function */
-/* eslint-disable no-useless-constructor */
+ 
+ 
 import { CanonicalProfile } from '../core/canonical_profile'
 import {ModelProfile} from '../core/model'
 import { IfcProfileDef } from './ifc4_gen'

@@ -361,6 +361,7 @@ export class IfcGeometryExtraction {
    *
    * @param conwayModel
    * @param model
+   * @param lowMemoryMode
    */
   constructor(
     private readonly conwayModel: ConwayGeometry,
@@ -485,7 +486,7 @@ export class IfcGeometryExtraction {
    */
   nativeVectorGeometry(initialSize?: number): StdVector<GeometryObject> {
     const nativeVectorGeometry_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.geometryArray)()) as StdVector<GeometryObject>
 
     if (initialSize) {
@@ -505,7 +506,7 @@ export class IfcGeometryExtraction {
    */
   nativeVectorGeometryCollection(): NativeVectorGeometryCollection {
     const nativeVectorGeometryCollection =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.geometryCollectionArray)()) as NativeVectorGeometryCollection
 
     return nativeVectorGeometryCollection
@@ -518,7 +519,7 @@ export class IfcGeometryExtraction {
    * @return {NativeVectorGlmVec2} - a native std::vector<glm::vec2> from the wasm module
    */
   nativeVectorGlmVec2(initialSize?: number): NativeVectorGlmVec2 {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorGlmVec2_ = new (this.wasmModule.vec2Array)() as NativeVectorGlmVec2
 
     if (initialSize) {
@@ -536,7 +537,7 @@ export class IfcGeometryExtraction {
    * @return {NativeVectorProfile} - a native std::vector<IfcProfile> from the wasm module
    */
   nativeVectorProfile(initialSize?: number): NativeVectorProfile {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorProfile_ = new (this.wasmModule.profileArray)() as NativeVectorProfile
 
     if (initialSize) {
@@ -555,7 +556,7 @@ export class IfcGeometryExtraction {
    * @return {NativeVectorCurve} - a native std::vector<IfcCurve> from the wasm module
    */
   nativeVectorCurve(initialSize?: number): StdVector<CurveObject> {
-    // eslint-disable-next-line new-cap
+     
     const nativeVectorCurve_ = new (this.wasmModule.curveArray)() as NativeVectorCurve
 
     if (initialSize) {
@@ -574,7 +575,7 @@ export class IfcGeometryExtraction {
    */
   nativeVectorGlmVec3(initialSize?: number): NativeVectorGlmVec3 {
     const nativeVectorGlmVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmVec3Array)()) as NativeVectorGlmVec3
 
     if (initialSize) {
@@ -592,7 +593,7 @@ export class IfcGeometryExtraction {
    */
   nativeVectorVectorGlmdVec3(): StdVector<NativeVectorGlmVec3> {
     const nativeVectorVectorGlmdVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec3ArrayArray)()) as StdVector<NativeVectorGlmVec3>
 
     return nativeVectorVectorGlmdVec3_
@@ -605,7 +606,7 @@ export class IfcGeometryExtraction {
    */
   nativeVectorGlmdVec3(initialSize?: number): NativeVectorGlmVec3 {
     const nativeVectorGlmdVec3_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec3Array)()) as NativeVectorGlmVec3
 
     if (initialSize) {
@@ -624,7 +625,7 @@ export class IfcGeometryExtraction {
    */
   nativeVectorGlmdVec2(initialSize?: number): NativeVectorGlmVec2 {
     const nativeVectorGlmdVec2_ =
-      // eslint-disable-next-line new-cap
+       
       (new (this.wasmModule.glmdVec2Array)()) as NativeVectorGlmVec2
 
     if (initialSize) {
@@ -639,6 +640,7 @@ export class IfcGeometryExtraction {
    * Create a native 32bit uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
+   * @param initialize
    * @return {NativeUintVector} - a native std::vector<uint32_t> from the wasm module
    */
   nativeUintVector(initialize?: number): NativeUintVector {
@@ -656,6 +658,7 @@ export class IfcGeometryExtraction {
    * Create a native 32bit size_t vector.
    *
    * @param initialSize number - initial size of the vector (optional)
+   * @param initialize
    * @return {NativeULongVector} - a native std::vector<size_t> from the wasm module
    */
   nativeULongVector(initialize?: number): NativeULongVector {
@@ -697,6 +700,7 @@ export class IfcGeometryExtraction {
    * Create a native vector of indexed polygonal faces uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
+   * @param initialize
    * @return {NativeVectorIndexedPolygonalFace} - a native object from the wasm module
    */
   nativeIndexedPolygonalFaceVector(initialize?: number): NativeVectorIndexedPolygonalFace {
@@ -774,6 +778,8 @@ export class IfcGeometryExtraction {
 
   /**
    * Destroy geometry processor and deinitialize
+   *
+   * @param modelId
    */
   destroy(modelId: number = 0) {
     if (this.conwayModel !== void 0) {
@@ -875,6 +881,9 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * @param entity
+   * @param temporary
+   * @param isRelVoid
    * @return {ExtractResult}
    */
   private extractPolygonalFaceSet(entity: IfcPolygonalFaceSet,
@@ -993,7 +1002,10 @@ export class IfcGeometryExtraction {
     return result
   }
 
-  /** @return {number} Pointer/memory address */
+  /**
+   * @param array
+   * @return {number} Pointer/memory address
+   */
   arrayToWasmHeap(array:Float32Array | Float64Array | Uint32Array): any {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
@@ -1007,7 +1019,10 @@ export class IfcGeometryExtraction {
     return arrayPtr
   }
 
-  /** @return {Uint8Array}  */
+  /**
+   * @param array
+   * @return {Uint8Array}
+   */
   arrayToSharedHeap(array:Float64Array | Float32Array | Uint32Array): Uint8Array {
     // Allocate memory for the array within the Wasm module
     const bytesPerElement = array.BYTES_PER_ELEMENT
@@ -1125,6 +1140,7 @@ export class IfcGeometryExtraction {
    * Accepts IfcBooleanResult and IfcBooleanClippingResult
    *
    * @param from
+   * @param isRelVoid
    */
   extractBooleanResult(from: IfcBooleanResult | IfcBooleanClippingResult,
       isRelVoid: boolean = false) {
@@ -1302,11 +1318,14 @@ export class IfcGeometryExtraction {
     this.paramsGetBooleanResultPool!.release(parameters)
   }
 
-  /* eslint-disable default-param-last */
+   
   /**
    * Extract a boolean operand from a boolean result.
    *
    * @param from The operand to extract.
+   * @param isRelVoid
+   * @param representationItem
+   * @param isSecondOperand
    * @return {void}
    */
   extractBooleanOperand(from: IfcExtrudedAreaSolid |
@@ -1480,7 +1499,7 @@ export class IfcGeometryExtraction {
       this.paramsGetBooleanResultPool!.release(parameters)
     }
   }
-  /* eslint-enable default-param-last */
+   
 
   /* eslint-disable no-magic-numbers */ // No magic numbers disabled
   // Cos we have *lots* of default material values.
@@ -1657,6 +1676,8 @@ export class IfcGeometryExtraction {
    * Extract a style item.
    *
    * @param from The styled item to extract from
+   * @param representationItem
+   * @param mappedItem
    * @return {number | undefined}
    */
   extractStyledItem(from: IfcStyledItem,
@@ -1759,6 +1780,7 @@ export class IfcGeometryExtraction {
    *
    * @param from
    * @param temporary
+   * @param isRelVoid
    */
   extractHalfspaceSolid(from: IfcHalfSpaceSolid,
       temporary: boolean = false,
@@ -1804,6 +1826,7 @@ export class IfcGeometryExtraction {
    *
    * @param from
    * @param temporary
+   * @param isRelVoid
    */
   extractPolygonalBoundedHalfSpace(from: IfcPolygonalBoundedHalfSpace,
       temporary: boolean = false,
@@ -1866,6 +1889,7 @@ export class IfcGeometryExtraction {
    *
    * @param from
    * @param temporary
+   * @param isRelVoid
    */
   extractExtrudedAreaSolid(from: IfcExtrudedAreaSolid,
       temporary: boolean = false,
@@ -2592,6 +2616,8 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param parentSense
+   * @param close
    * @return {CurveObject | undefined}
    */
   extractCompositeCurve(from: IfcCompositeCurve,
@@ -2643,6 +2669,9 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param parentSense
+   * @param isEdge
+   * @param trimmingArguments
    * @return {CurveObject | undefined}
    */
   extractCurve(from: IfcCurve,
@@ -2739,6 +2768,8 @@ export class IfcGeometryExtraction {
    * Exctact a BSpline Curve
    *
    * @param from The bspline curve, potentially with knots/rational.
+   * @param parentSense
+   * @param isEdge
    * @return {CurveObject} The constructed curve object.
    */
   extractBSplineCurve(from: IfcBSplineCurve,
@@ -2765,7 +2796,7 @@ export class IfcGeometryExtraction {
       isEdge: isEdge,
     }
 
-    // eslint-disable-next-line no-magic-numbers
+     
     if (dimensions === 2) {
 
       const outputPoints = params.points2
@@ -2783,7 +2814,7 @@ export class IfcGeometryExtraction {
       // Logger.info(`express ID: ${from.expressID} controlPointsList: ${from.ControlPointsList}`)
       for (const point of from.ControlPointsList) {
 
-        // eslint-disable-next-line no-magic-numbers
+         
         if (point.Dim !== 3) {
           continue
         }
@@ -2833,7 +2864,7 @@ export class IfcGeometryExtraction {
       }
     } else {
       // This is just a IfcBsplineCurve, build default parameter lists
-      // eslint-disable-next-line no-lonely-if
+       
       if (dimensions === this.TWO_DIMENSIONS) {
         // build default knots
         const outputKnots = params.knots
@@ -2872,7 +2903,7 @@ export class IfcGeometryExtraction {
   }
 
 
-  /* eslint-disable default-param-last */
+   
   /**
    * Extract a IfcLine curve
    *
@@ -2953,13 +2984,14 @@ export class IfcGeometryExtraction {
 
     return curve
   }
-  /* eslint-enable default-param-last */
+   
 
 
-  /* eslint-disable default-param-last */
+   
   /**
    *
    * @param from
+   * @param parentSense
    * @param parametersTrimmedCurve
    * @return {CurveObject | undefined}
    */
@@ -3016,12 +3048,13 @@ export class IfcGeometryExtraction {
     return curve
   }
 
-  /* eslint-enable default-param-last */
+   
 
-  /* eslint-disable default-param-last */
+   
   /**
    *
    * @param from
+   * @param parentSense
    * @param parametersTrimmedCurve
    * @return {CurveObject | undefined}
    */
@@ -3077,11 +3110,13 @@ export class IfcGeometryExtraction {
     return curve
   }
 
-  /* eslint-enable default-param-last */
+   
 
   /**
    *
    * @param from
+   * @param parentSense
+   * @param isEdge
    * @return {CurveObject | undefined}
    */
   extractIfcTrimmedCurve(from: IfcTrimmedCurve,
@@ -3305,7 +3340,7 @@ export class IfcGeometryExtraction {
     // We only need to create a subarray up to the capacity
     const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
         pointer / bytesPerElement,
-        // eslint-disable-next-line no-mixed-operators
+         
         pointer / bytesPerElement + capacity,
     )
 
@@ -3335,6 +3370,8 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param parentSense
+   * @param isEdge
    * @return {CurveObject | undefined }
    */
   extractIfcPolyline(from: IfcPolyline,
@@ -3663,6 +3700,10 @@ export class IfcGeometryExtraction {
    * Extract a mapped item to add its transform to instance an item.
    *
    * @param from The mapped item to extract.
+   * @param owningElement
+   * @param isRelVoid
+   * @param isSpace
+   * @param parents
    */
   extractMappedItem(
       from: IfcMappedItem,
@@ -3793,6 +3834,10 @@ export class IfcGeometryExtraction {
    * Note - memoized result for instancing.
    *
    * @param from The representation to extract from.
+   * @param owningElementLocalID
+   * @param isRelVoid
+   * @param isSpace
+   * @param isMappedItem
    */
   extractRepresentationItem(from: IfcRepresentationItem,
       owningElementLocalID?: number,
@@ -3952,6 +3997,8 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param temporary
+   * @param isRelVoid
    */
   extractIfcFacetedBrep(from: IfcFacetedBrep,
       temporary: boolean = false, isRelVoid: boolean = false) {
@@ -3964,6 +4011,9 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param owningElementLocalID
+   * @param isRelVoid
+   * @param isSpace
    */
   extractIfcShellBasedSurfaceModel(
       from: IfcShellBasedSurfaceModel,
@@ -3988,6 +4038,7 @@ export class IfcGeometryExtraction {
    * @param from
    * @param parentLocalID
    * @param geometry_
+   * @param temporary
    * @param isRelVoid
    * @return {GeometryObject}
    */
@@ -4125,6 +4176,8 @@ export class IfcGeometryExtraction {
    *
    * @param from The bspline surface to extract
    * @param to The surface to extract to
+   * @param start
+   * @param end
    */
   extractToDoubleVector(
       from: Array<number>,
@@ -4284,7 +4337,7 @@ export class IfcGeometryExtraction {
 
                 const startPoint = edgeStart.VertexGeometry
 
-                // eslint-disable-next-line no-magic-numbers
+                 
                 if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
 
                   const startCoords = startPoint.Coordinates
@@ -4308,7 +4361,7 @@ export class IfcGeometryExtraction {
 
                 const endPoint = edgeEnd.VertexGeometry
 
-                // eslint-disable-next-line no-magic-numbers
+                 
                 if (endPoint instanceof IfcCartesianPoint && endPoint.Dim === 3) {
 
                   const endCoords = endPoint.Coordinates
@@ -4401,7 +4454,7 @@ export class IfcGeometryExtraction {
 
                 const startPoint = start.VertexGeometry
 
-                // eslint-disable-next-line no-magic-numbers
+                 
                 if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
 
                   const startCoords = startPoint.Coordinates
@@ -4641,7 +4694,7 @@ export class IfcGeometryExtraction {
           // Now `result.pointer` is your up-to-date pointer (maybe a new allocation).
           // `result.length` is how many Float64 coords are valid.
           // `result.capacity` is how many Float64 coords that pointer can hold.
-          // eslint-disable-next-line no-unused-vars
+           
           const { pointer, length, capacity } = result
 
           // Use them in your WASM call
@@ -4791,12 +4844,12 @@ export class IfcGeometryExtraction {
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
    * @return {ParamsAxis1Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis1Placement3D(
     from: IfcAxis1Placement,
     parentLocalId: number,
     extractOnly: true): ParamsAxis1Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis1Placement3D(
       from: IfcAxis1Placement,
       parentLocalId: number,
@@ -4868,12 +4921,12 @@ export class IfcGeometryExtraction {
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
    * @return {ParamsAxis2Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3D(
     from: IfcAxis2Placement3D,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3D(
       from: IfcAxis2Placement3D,
       parentLocalId: number,
@@ -4960,12 +5013,12 @@ export class IfcGeometryExtraction {
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
    * @return {ParamsAxis2Placement3D} The extracted placement.
    */
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3DRelVoid(
     from: IfcAxis2Placement3D,
     parentLocalId: number,
     extractOnly: true): ParamsAxis2Placement3D
-  // eslint-disable-next-line no-dupe-class-members
+   
   extractAxis2Placement3DRelVoid(
       from: IfcAxis2Placement3D,
       parentLocalId: number,
@@ -5037,6 +5090,7 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param isRelVoid
    */
   extractPlacement(from: IfcObjectPlacement, isRelVoid: boolean = false) {
 
@@ -5091,6 +5145,10 @@ export class IfcGeometryExtraction {
    * @param flattenedGeometry
    * @param relVoidLocalID
    * @param geometryCount
+   * @param owningElementLocalID
+   * @param relVoidLocalIDs
+   * @param materialOverrideId
+   * @param isSpace
    */
   applyRelVoidToRepresentation(
       from: IfcRepresentationItem,
@@ -5538,6 +5596,7 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param outputFilePath
    * @param geometry
    */
   dumpGeometry(outputFilePath:string, geometry:GeometryObject) {

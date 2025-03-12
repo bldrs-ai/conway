@@ -125,7 +125,7 @@ function correctTriangleCount(): boolean {
   return packedModelLocal.primitives.every(
       (value, index) =>
         packedModelLocal.triangleElementMaps[ index ].size ===
-        // eslint-disable-next-line no-magic-numbers, new-cap
+         
         Math.trunc( value[ 0 ].GetIndexDataSize() / 3 ) )
 }
 

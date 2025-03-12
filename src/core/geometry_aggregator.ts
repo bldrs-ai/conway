@@ -51,16 +51,18 @@ export default class GeometryAggregator {
    * Construct this with a wasm module.
    *
    * @param wasmModule The current wasm module.
+   * @param options
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor(
     private readonly wasmModule: ConwayGeometry,
-    // eslint-disable-next-line no-empty-function
+     
     public readonly options: Readonly< GeometryAggregatorOptions > ) {}
 
   /**
    * Add a scene to this aggregator's batch geometry.
    *
+   * @param scene
    * @return {void}
    */
   public append< SceneEntityType >( scene: Scene< SceneEntityType > ): void {
@@ -73,7 +75,7 @@ export default class GeometryAggregator {
 
     const outputSpaces = scene.isAllSpaces() || (!!this.options.outputSpaces)
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, nativeTransform, geometry, material] of scene.walk( outputSpaces )) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {
 

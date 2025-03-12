@@ -32,12 +32,12 @@ const radixLUT  = new Float64Array( RADIX_LUT_SIZE )
 
     radixLUT[ where ] = radixMultiplier
 
-    // eslint-disable-next-line no-magic-numbers
+     
     radixMultiplier *= 10
   }
 }
 
-// eslint-disable-next-line no-magic-numbers
+ 
 const MAX_SAFE_FACTOR_INT = Math.trunc( Number.MAX_SAFE_INTEGER / 10 )
 
 /**
@@ -163,6 +163,7 @@ export default class ParsingBuffer {
    * Move the cursor forwards while a particular char isn't found.
    *
    * @param char
+   * @param chars
    */
   public whileNot = ( chars: ByteBitSet ): void => {
     let   localCursor  = this.cursor_
@@ -424,6 +425,7 @@ export default class ParsingBuffer {
    * Match against any one of the chars in a token and return the index in the token.
    *
    * @param value A char in the ascii range that's been encoded into a number.
+   * @param encoded
    * @return {number | undefined} True if the match was successful.
    */
   public indexof = ( encoded: EncodedToken ): number | undefined => {
@@ -547,7 +549,7 @@ export default class ParsingBuffer {
       return
     }
 
-    /* eslint-disable no-magic-numbers */
+     
     let primarySign = 1
 
     if ( input[ cursor ] === ParsingConstants.SIGN ) {
@@ -620,7 +622,7 @@ export default class ParsingBuffer {
       }
     }
 
-    /* eslint-enable no-magic-numbers */
+     
 
     if ( absPrimary === 0 ) {
       this.cursor_ = cursor
@@ -685,7 +687,7 @@ export default class ParsingBuffer {
     const input  = this.buffer
     const end    = this.end
 
-    /* eslint-disable no-magic-numbers */
+     
     if ( cursor >= end  ) {
       return
     }
@@ -715,7 +717,7 @@ export default class ParsingBuffer {
       ++cursor
     }
 
-    /* eslint-enable no-magic-numbers */
+     
 
     this.cursor_ = cursor
 
@@ -758,7 +760,7 @@ export default class ParsingBuffer {
       firstChar = input[ cursor ] - ZERO
     }
 
-    /* eslint-disable no-magic-numbers */
+     
     if ( firstChar < 0 || firstChar > 9 ) {
 
       return
@@ -784,7 +786,7 @@ export default class ParsingBuffer {
 
       ++cursor
     }
-    /* eslint-enable no-magic-numbers */
+     
 
     this.cursor_ = cursor
 

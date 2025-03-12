@@ -18,12 +18,12 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
   private high_: number = 0
   private low_: number = 0
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this, not accessible.
    */
   private constructor() {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits

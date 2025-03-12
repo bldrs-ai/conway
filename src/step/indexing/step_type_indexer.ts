@@ -28,7 +28,7 @@ export class StepTypeIndexer< TypeIDType extends number > {
    * @return {MultiIndexSet} The created multi-set index.
    */
   public create( elements: StepIndexEntry< TypeIDType >[] ): MultiIndexSet< TypeIDType > {
-    // eslint-disable-next-line no-magic-numbers
+     
     for ( let where = 0, end = this.elementCounter_.length; where < end; where += 2 ) {
       initCountCompactedElements32State( this.elementCounter_, where )
     }
@@ -53,7 +53,7 @@ export class StepTypeIndexer< TypeIDType extends number > {
 
     // Reset, because now we have actually counted all the indices, we can put out the
     // compacted versions
-    // eslint-disable-next-line no-magic-numbers -- we're using a 2 stride here, it's not magic.
+     
     for ( let where = 0, end = this.elementCounter_.length; where < end; where += 2 ) {
       initCountCompactedElements32State( this.elementCounter_, where )
     }

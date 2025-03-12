@@ -26,7 +26,7 @@ export class AP214SceneTransform implements SceneNodeTransform {
   readonly type = SceneNodeModelType.TRANSFORM
 
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
@@ -47,7 +47,7 @@ export class AP214SceneTransform implements SceneNodeTransform {
     public readonly nativeTransform: NativeTransform4x4,
     public readonly absoluteNativeTransform: NativeTransform4x4,
     public readonly parentIndex?: number) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
   public children: number[] = []
 }
 
@@ -58,13 +58,14 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
 
   readonly type = SceneNodeModelType.GEOMETRY
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct a scene geometry node
    *
    * @param model
    * @param localID
    * @param index
+   * @param relatedElementLocalId
    * @param parentIndex
    */
   constructor(
@@ -73,7 +74,7 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
     public readonly index: number,
     public readonly relatedElementLocalId?: number,
     public readonly parentIndex?: number ) { }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 }
 
 export type AP214SceneNode = AP214SceneTransform | AP214SceneGeometry
@@ -92,11 +93,12 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
   private sceneStack_: AP214SceneTransform[] = []
   private currentParent_?: AP214SceneTransform
 
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    *
    * @param model
    * @param conwayGeometry
+   * @param materials
    */
   public constructor(
     public readonly model: AP214StepModel,
@@ -104,7 +106,7 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
     public readonly materials: AP214MaterialCache) {
 
   }
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    *
@@ -168,7 +170,7 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
     const triangleMaps: TriangleElementMap[] = []
     const elementMap = new Map<number, number[]>()
 
-    // eslint-disable-next-line no-unused-vars
+     
     for (const [_, nativeTransform, geometry, material, entity] of this.walk()) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -197,7 +199,7 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
 
           triangleMap.addMappingRange(
               0,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -232,7 +234,7 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
 
           triangleMap.addMappingRange(
               triangleMap.size,
-              // eslint-disable-next-line no-magic-numbers, new-cap
+               
               triangleMap.size + Math.trunc(clonedGeometry.GetIndexDataSize() / 3),
               entityLocalId ?? TriangleElementMap.NO_ELEMENT)
 
@@ -278,6 +280,7 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
    * Walk the current scene.
    *
    * @yields Raw absolute matrix transform, the native absolute transform, the canonical mesh,
+   * @param includeSpaces
    * the canonical material and the associated step element as it walks the hierarchy.
    * @param walkTemporary Include temporary items.
    */
@@ -356,6 +359,7 @@ export class AP214SceneBuilder implements Scene< StepEntityBase< EntityTypesAP21
   /**
    *
    * @param localID
+   * @param owningElementLocalID
    * @return {AP214SceneGeometry}
    */
   public addGeometry(

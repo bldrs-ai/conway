@@ -20,6 +20,7 @@ export default class ByteBitSet {
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
+   * @param end
    * @return {number} The end of the match.
    */
   public star = ( input: Uint8Array, cursor: number, end: number ) : number => {
@@ -36,6 +37,7 @@ export default class ByteBitSet {
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
+   * @param end
    * @return {number | undefined} The end of the match or undefined.
    */
   public plus = ( input: Uint8Array, cursor: number, end: number ) : number | undefined => {

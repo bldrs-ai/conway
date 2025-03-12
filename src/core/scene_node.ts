@@ -2,7 +2,7 @@ import { Model } from './model'
 import { ReadonlyUint32Array } from './readonly_typed_array'
 
 
-/* eslint-disable no-shadow,no-unused-vars,no-magic-numbers */
+ 
 export enum SceneNodeModelType {
     GEOMETRY  = 0,
     TRANSFORM = 1,

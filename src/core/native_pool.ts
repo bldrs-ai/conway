@@ -17,7 +17,7 @@ export class ObjectPool<T> {
     this.destroy = destroy
   }
 
-  /* eslint-disable jsdoc/no-undefined-types */
+   
   /**
    * Acquires an object from the pool or creates a new one if the pool is empty.
    *
@@ -29,7 +29,7 @@ export class ObjectPool<T> {
     }
     return this.factory()
   }
-  /* eslint-enable jsdoc/no-undefined-types */
+   
 
   /**
    * Releases an object back into the pool for reuse.

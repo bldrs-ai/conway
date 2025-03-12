@@ -7,7 +7,7 @@ import { SingleIndexSetCursor } from './single_index_set_cursor'
  * A set of indices each associated with a number identifier.
  */
 export class MultiIndexSet< IndexType extends number > {
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this with a prefix sum table and matching elements table.
    *
@@ -22,7 +22,7 @@ export class MultiIndexSet< IndexType extends number > {
   public constructor(
     private readonly prefixSumTable_: Uint32Array,
     private readonly elements_: Uint32Array ) {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * All the types with a non-zero size in the index.
@@ -58,9 +58,9 @@ export class MultiIndexSet< IndexType extends number > {
     }
 
     const prefixSum   = this.prefixSumTable_
-    // eslint-disable-next-line no-magic-numbers
+     
     const indexOffset = prefixSum[ indexType ] * 2
-    // eslint-disable-next-line no-magic-numbers
+     
     const indexEnd    = prefixSum[ indexType + 1 ] * 2
 
     return indexSetPointQuery32( denseIndex, this.elements_, indexOffset, indexEnd )

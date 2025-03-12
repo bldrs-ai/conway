@@ -1,9 +1,9 @@
-// eslint-disable-next-line no-shadow
+ 
 export enum MemoizationCapture {
 
-  // eslint-disable-next-line no-unused-vars
+   
   OPTIMAL  = 0, // Only capture optimal states
-  // eslint-disable-next-line no-unused-vars
+   
   FULL     = 1, // Capture temporaries, booleans etc
 }
 

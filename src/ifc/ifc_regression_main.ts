@@ -49,6 +49,8 @@ function csvSafeString( from: string ): string {
 
 /**
  * Display errors and dump errors errors to stderr
+ *
+ * @param filePath
  */
 function displayErrors( filePath: string ) {
 
@@ -66,7 +68,7 @@ function displayErrors( filePath: string ) {
 
       for ( const error of errors ) {
 
-        // eslint-disable-next-line max-len
+         
         errConsole.log( `${csvSafeString(error.message)},${error.count},${csvSafeString( Array.from(error.expressIDs.keys()).join(' ') ) },${fileName}`)
       }
     }
@@ -97,11 +99,11 @@ async function main() {
 function doWork() {
   const SKIP_PARAMS = 2
 
-  const args = // eslint-disable-line no-unused-vars
+  const args =  
     yargs(process.argv.slice(SKIP_PARAMS))
         .command('$0 <filename> [output]', 'Query file', (yargs2) => {
           yargs2.option('strict', {
-          // eslint-disable-next-line max-len
+           
             describe: 'Makes parser/reference errors on nullable fields return null instead of an error',
             type: 'boolean',
             alias: 's',
@@ -250,7 +252,7 @@ function doWork() {
                 }
 
                 csvLines.push([item.expressID ?? item.toString(),
-                  // eslint-disable-next-line max-len
+                   
                   `${item.toString()},${Buffer.from(hash).toString( 'hex' )},${EntityTypesIfc[item.type]},${operand1},${operand2},FALSE\n`])
               }
 
@@ -267,35 +269,35 @@ function doWork() {
                 }
 
                 csvLines.push([item.expressID ?? item.toString(),
-                  // eslint-disable-next-line max-len
+                   
                   `${item.toString()},${Buffer.from(hash).toString( 'hex' )},${EntityTypesIfc[item.type]},${operand1},${operand2},TRUE\n`])
               }
 
               for ( const [item, hash] of curveHashes( model.curves ) ) {
 
                 csvLines.push([item.expressID ?? item.toString(),
-                  // eslint-disable-next-line max-len
+                   
                   `${item.toString()},${Buffer.from(hash).toString( 'hex' )},${EntityTypesIfc[item.type]},,,\n`])
               }
 
               for ( const [item, hash] of profileHashes( model.profiles ) ) {
 
                 csvLines.push([item.expressID ?? item.toString(),
-                  // eslint-disable-next-line max-len
+                   
                   `${item.toString()},${Buffer.from(hash).toString( 'hex' )},${EntityTypesIfc[item.type]},,,\n`])
               }
 
               for ( const [item, hash] of materialHashes( model.materials ) ) {
 
                 csvLines.push([item.expressID ?? item.toString(),
-                  // eslint-disable-next-line max-len
+                   
                   `${item.toString()},${Buffer.from(hash).toString( 'hex' )},${EntityTypesIfc[item.type]},,,\n`])
               }
 
               for ( const [item, hash] of materialHashes( model.voidMaterials ) ) {
 
                 csvLines.push([item.expressID ?? item.toString(),
-                  // eslint-disable-next-line max-len
+                   
                   `${item.toString()},${Buffer.from(hash).toString( 'hex' )},${EntityTypesIfc[item.type]},,,\n`])
               }
 
@@ -346,6 +348,8 @@ function doWork() {
 
 /**
  * Function to extract Geometry from an IfcStepModel
+ *
+ * @param model
  */
 async function geometryExtraction(model: IfcStepModel):
   Promise<[IfcSceneBuilder, ConwayGeometry] | undefined> {

@@ -7,17 +7,19 @@ import {
 import { indexSetPointQuery32 } from './search_operations'
 import { SingleIndexSetCursor } from './single_index_set_cursor'
 
-// eslint-disable-next-line no-magic-numbers
+ 
 const localState = new Int32Array( 2 )
 
 /**
  * A single set of indices
  */
 export class SingleIndexSet {
-  /* eslint-disable no-useless-constructor, no-empty-function */
+   
   /**
    * Construct this with a matching elements table.
    *
+   * @param start_
+   * @param end_
    * @param elements_ The elements in the index, matching the start->end indices * 2,
    * where there's 2 elements in the array for each item,
    * packed (first has the bottom 5 bits masked out, and is the top bits, the second
@@ -28,7 +30,7 @@ export class SingleIndexSet {
     private readonly start_: number,
     private readonly end_: number,
     private readonly elements_: Uint32Array ) {}
-  /* eslint-enable no-useless-constructor, no-empty-function */
+   
 
   /**
    * Get the buffer elements from this (treat as immutable)

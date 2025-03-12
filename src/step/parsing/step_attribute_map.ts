@@ -3,7 +3,7 @@ import ParsingDfa16Table from '../../parsing/parsing_dfa_16table'
 /**
  * DFA State machine states for parsing a comment.
  */
-/* eslint-disable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 export enum ATTRIBUTE_PARSE_TYPE {
   INVALID         = 0, // TERMINUS TYPE
   NUMBER          = 1, // 0-9 or -
@@ -16,7 +16,7 @@ export enum ATTRIBUTE_PARSE_TYPE {
   DERIVED         = 8,  // *
   INLINE_INSTANCE = 9
 }
-/* eslint-enable no-shadow, no-magic-numbers, no-unused-vars */
+ 
 
 /**
  * Maps characters to attributes for discriminators in STEP.

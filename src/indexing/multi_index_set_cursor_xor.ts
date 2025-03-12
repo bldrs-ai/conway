@@ -71,7 +71,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
       const setEnd     = this.currentOpCount_ << 1
       const buffer     = this.buffer_ as Uint32Array
 
-      // eslint-disable-next-line no-magic-numbers
+       
       for ( let where = 0; where < setEnd; where += 2 ) {
         const opPosition = cursorSet[ where ]
         const opEnd      = cursorSet[ where + 1 ]
@@ -91,7 +91,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
         return false
       }
 
-      // eslint-disable-next-line no-magic-numbers
+       
       for ( let where = 0; where < setEnd; where += 2 ) {
         const opPosition = cursorSet[ where ]
         const opEnd      = cursorSet[ where + 1 ]
@@ -100,7 +100,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
           const bufferHigh = buffer[ opPosition ] & MASK_TOPBITS
 
           if ( lowestHigh === bufferHigh ) {
-            // eslint-disable-next-line no-magic-numbers
+             
             this.cursorSet_[ where ] = opPosition + 2
 
             currentLow ^= buffer[ opPosition + 1 ]
@@ -119,6 +119,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
   /**
    * Allocate a MultiIndexSetCursorXor, re-using freed ones in the pool.
    *
+   * @param buffer
    * @return {MultiIndexSetCursorXor} The allocated cursor.
    */
   public static allocate( buffer: Uint32Array ): MultiIndexSetCursorXor {
@@ -144,7 +145,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
    */
   public addRange( from: number, to: number ): void {
     if ( ( this.cursorSet_.length >>> 1 ) <= this.currentOpCount_ ) {
-      /* eslint-disable no-magic-numbers */
+       
       const newLength = this.currentOpCount_ * 4
 
       const newCursorSet = new Uint32Array( newLength )
@@ -158,7 +159,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
     this.cursorSet_[ opIndex ]     = from * 2
     this.cursorSet_[ opIndex + 1 ] = to * 2
-    /* eslint-enable no-magic-numbers */
+     
   }
 
   /**

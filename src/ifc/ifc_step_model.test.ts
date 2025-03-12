@@ -103,7 +103,7 @@ function extractLogical() {
   return true
 }
 
-// eslint-disable-next-line max-len -- needed literal CS
+ 
 const ifcUFCCodePointString = '#181096= IFCPROPERTYSINGLEVALUE(\'Gr\\X2\\00F600DF\\X0\\e Wandloch\',$,IFCLABEL(\'0.89\\X2\\00D7\\X0\\2.14\'),$);'
 const ifcUFCCodePointStringBuffer = new TextEncoder().encode( ifcUFCCodePointString )
 
@@ -142,7 +142,7 @@ function extractInvalidUnicodePoint() {
   return true
 }
 
-// eslint-disable-next-line max-len -- needed literal CS
+ 
 const ifcCartesianPoint3DString = '#171= IFCCARTESIANPOINTLIST3D(((76.,-11.4504049888,0.),(76.,-11.4504049888,15.),(76.,0.,15.),(76.,0.,0.),(86.,-11.4504049888,15.),(86.,-11.4504049888,0.),(86.,0.,15.),(86.,0.,0.)));'
 
 const ifcCartesianPoint3DStringBuffer = new TextEncoder().encode( ifcCartesianPoint3DString )
@@ -223,7 +223,7 @@ function extractCartesianPointList3D() {
 }
 
 // This test won't run in a browser where this isn't supported - CS
-/* eslint-disable no-multi-str */
+ 
 const derivedSubtextString =
 '#74= IFCDIRECTION((1.,0.,0.));\
 #78= IFCDIRECTION((0.,0.,1.));\
@@ -233,7 +233,7 @@ const derivedSubtextString =
 #85= IFCGEOMETRICREPRESENTATIONCONTEXT($,\'Model\',3,1.0E-5,#82,#83);\
 #169= IFCGEOMETRICREPRESENTATIONSUBCONTEXT(\'Body\',\'Model\',*,*,*,*,#85,$,.MODEL_VIEW.,$);'
 
-/* eslint-enable no-multi-str */
+ 
 
 const derivedSubtextStringBuffer = new TextEncoder().encode( derivedSubtextString )
 
@@ -353,13 +353,13 @@ function extractScientificNumber() {
 }
 
 // This test won't run in a browser where this isn't supported - CS
-/* eslint-disable no-multi-str,max-len */
+ 
 const personTestString =
 '#1= IFCPOSTALADDRESS(.USERDEFINED.,$,\'Address\',$,(\'Bldrs Plaza\'),$,\'The City\',$,\'0\',\'AI\');\
 #5= IFCTELECOMADDRESS(.USERDEFINED.,$,\'Phone\',(\'+00 11 101 10 10\'),$,$,$,\'http://bldrs.ai\',$);\
 #7= IFCPERSON($,\'Pablo\',$,$,$,$,$,(#1,#5));'
 
-/* eslint-enable no-multi-str,max-len */
+ 
 
 const personTestStringStringBuffer = new TextEncoder().encode( personTestString )
 
@@ -390,7 +390,7 @@ function extractArraysTest() {
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.
-  /* eslint-disable no-magic-numbers */
+   
   if ( person.Addresses === null ||
          person.Addresses.length !== 2 ||
          !(person.Addresses[0] instanceof IfcPostalAddress ) ||
@@ -424,7 +424,7 @@ function extractArraysTest() {
     return false
   }
 
-  /* eslint-enable no-magic-numbers */
+   
 
   return true
 }
@@ -467,10 +467,10 @@ function extractEnumsTest() {
   return true
 }
 
-/* eslint-disable max-len */
+ 
 const classificationTestString =
 '#314= IFCCLASSIFICATION(\'SP - GK\\X2\\00FC\\X0\\r\',\'2.0\',\'2022-02-28\',\'BLDRS\',\'Klassifizirunssystem f\\X2\\00FC\\X0\\r BLDRS Logo\',\'SP - GK\',$);'
-/* eslint-enable max-len */
+ 
 
 const classificationTestStringBuffer = new TextEncoder().encode( classificationTestString )
 
@@ -566,12 +566,12 @@ function indexTypeTest() {
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.
-  /* eslint-disable no-magic-numbers */
+   
   return entities.every(
       (entity) =>
         entity instanceof IfcCartesianPointList3D ||
         entity instanceof IfcPerson ) && entities.length === 8
-  /* eslint-enable no-magic-numbers */
+   
 }
 
 
@@ -646,7 +646,7 @@ function extractWeirdArrayTest() {
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.
-  /* eslint-disable no-magic-numbers */
+   
   if ( closedShell.CfsFaces.length !== 4 ) {
     return false
   }

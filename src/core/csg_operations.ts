@@ -1,14 +1,14 @@
 import SimpleMemoization from './simple_memoization'
 
-// eslint-disable-next-line no-shadow
+ 
 export enum CsgOperationType {
 
-  /* eslint-disable no-unused-vars, no-magic-numbers */
+   
   UNION = 0,
   INTERSECTION = 1,
   DIFFERENCE = 2,
   NEGATION = 3
-  /* eslint-enable no-unused-vars, no-magic-numbers */
+   
 }
 
 // Here, we represent CSG operations as data.
@@ -85,7 +85,7 @@ export class CsgMemoization extends SimpleMemoization< CsgOperations > {
   /**
    * Updates simple memoization
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor() {
     super()
   }

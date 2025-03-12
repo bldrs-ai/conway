@@ -28,13 +28,13 @@ export class PackedMesh< ModelType extends Model > {
    * @param elementPrimitiveIndex Element primitive index, maps
    * element local ids to the correct primitive.
    */
-  // eslint-disable-next-line no-useless-constructor
+   
   constructor(
     public readonly model: ModelType,
     public readonly materials: ReadonlyArray< CanonicalMaterial >,
     public readonly primitives: ReadonlyArray< [GeometryObject, number | undefined] >,
     public readonly triangleElementMaps: ReadonlyArray< TriangleElementMap >,
-    // eslint-disable-next-line no-empty-function
+     
     public readonly elementPrimitiveIndex: ReadonlyMap< number, number[] >) {}
 
   /**

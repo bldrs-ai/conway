@@ -215,7 +215,7 @@ export class Statistics {
       versionStr = 'Version not defined'
     }
 
-    /* eslint-disable no-magic-numbers */
+     
     console.log(
         `[${dateString}]: Load Status: ${this.loadStatus}, ` +
             `Project Name: ${this.projectName}, Version: ${versionStr}, ` +
@@ -227,6 +227,6 @@ export class Statistics {
             `Preprocessor Version: ${this.preprocessorVersion}, ` +
             `Originating System: ${this.originatingSystem}`,
     )
-    /* eslint-enable no-magic-numbers */
+     
   }
 }

@@ -60,6 +60,7 @@ export class TriangleElementMap {
    * @param beginTriangleIndex The beginning triangle index (inclusive)
    * @param endTriangleIndex The ending triangle index (exclusive)
    * @param elementIndex The element index to fill in.
+   * @param elementLocalIndex
    */
   public addMappingRange(
       beginTriangleIndex: number,
