@@ -11,6 +11,7 @@ export default class AP214StepExternalMapping extends StepExternalMapping< Entit
 
   /**
    * Construct this external mapping.
+   *
    * @param localID The local ID for this.
    * @param internalReference_ The internal reference matching this.
    * @param model The model matching this.

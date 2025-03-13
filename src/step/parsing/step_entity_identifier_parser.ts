@@ -52,10 +52,11 @@ export default class StepEntityIdentifierParser extends ParsingDfa4Table {
 
   /**
    * Match a step enum
+   *
    * @param input The input buffer
    * @param cursor The position in the buffer to test for the match.
    * @param endCursor The end position in the buffer by which the match must terminate.
-   * @returns The length of the match or undefined.
+   * @return {number | undefined} The length of the match or undefined.
    */
   public match = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
     return super.match(

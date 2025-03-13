@@ -22,35 +22,35 @@ const nativeHDBufferInput = new ParsingBuffer(nativeHDBuffer)
 const emptyBufferInput = new ParsingBuffer(emptyBuffer)
 
 /**
- * @returns The type for model formats, should be IFC.
+ * @return {ModelFormatType} The type for model formats, should be IFC.
  */
 function testIndexIfc(): ModelFormatType | undefined  {
   return ModelFormatDetector.detect( indexIfcBufferInput )
 }
 
 /**
- * @returns The type for model formats, should be AP214.
+ * @return {ModelFormatType} The type for model formats, should be AP214.
  */
 function testTubeStep(): ModelFormatType | undefined {
   return ModelFormatDetector.detect( tubeBufferInput )
 }
 
 /**
- * @returns The type for model formats, should be AP214.
+ * @return {ModelFormatType} The type for model formats, should be AP214.
  */
 function testGearStep(): ModelFormatType | undefined {
   return ModelFormatDetector.detect( gearBufferInput )
 }
 
 /**
- * @returns The type for model formats, should be AP214.
+ * @return {ModelFormatType} The type for model formats, should be AP214.
  */
 function testNotAModel(): ModelFormatType | undefined {
   return ModelFormatDetector.detect( nativeHDBufferInput )
 }
 
 /**
- * @returns The type for model formats, should be AP214.
+ * @return {ModelFormatType} The type for model formats, should be AP214.
  */
 function testEmpty(): ModelFormatType | undefined {
   return ModelFormatDetector.detect( emptyBufferInput )

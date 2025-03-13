@@ -20,7 +20,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - load status or undefined
+   * @return {string | undefined} - load status or undefined
    */
   getLoadStatus(): string | undefined {
     return this.loadStatus
@@ -36,7 +36,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - project name or undefined
+   * @return {string | undefined} - project name or undefined
    */
   getProjectName(): string | undefined {
     return this.projectName
@@ -52,7 +52,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - version or undefined
+   * @return {string | undefined} - version or undefined
    */
   getVersion(): string | undefined {
     return this.version
@@ -68,7 +68,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - parse time or undefined
+   * @return {number | undefined} - parse time or undefined
    */
   getParseTime(): number | undefined {
     return this.parseTime
@@ -84,7 +84,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - geometry parse time or undefined
+   * @return {number | undefined} - geometry parse time or undefined
    */
   getGeometryTime(): number | undefined {
     return this.geometryTime
@@ -100,7 +100,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - total execution time or undefined
+   * @return {number | undefined} - total execution time or undefined
    */
   getTotalTime(): number | undefined {
     return this.totalTime
@@ -116,7 +116,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - geometry memory or undefined
+   * @return {number | undefined} - geometry memory or undefined
    */
   getGeometryMemory(): number | undefined {
     return this.geometryMemory
@@ -132,7 +132,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - preprocessor version or undefined
+   * @return {string | undefined} - preprocessor version or undefined
    */
   getPreprocessorVersion(): string | undefined {
     return this.preprocessorVersion
@@ -148,7 +148,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - originating system or undefined
+   * @return {string | undefined} - originating system or undefined
    */
   getOriginatingSystem(): string | undefined {
     return this.originatingSystem
@@ -164,7 +164,7 @@ export class Statistics {
 
   /**
    *
-   * @returns - memory statistics or undefined
+   * @return {string | undefined} - memory statistics or undefined
    */
   getMemoryStatistics(): string | undefined {
     return this.memoryStatistics

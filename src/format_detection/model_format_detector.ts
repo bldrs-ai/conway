@@ -21,8 +21,9 @@ export default class ModelFormatDetector {
 
   /**
    * Detect the model format
+   *
    * @param input
-   * @returns The type of the model, or undefined
+   * @return {ModelFormatType | undefined} The type of the model, or undefined
    * if none can be found.
    */
   public static detect( input: ParsingBuffer ): ModelFormatType | undefined {

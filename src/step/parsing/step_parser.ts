@@ -105,7 +105,8 @@ export class StepHeaderParser {
 
   /**
    * Get the singleton static instance of this.
-   * @returns The singleton instance of this.
+   *
+   * @return {StepHeaderParser} The singleton instance of this.
    */
   public static get instance(): StepHeaderParser {
 
@@ -119,8 +120,9 @@ export class StepHeaderParser {
 
   /**
    * Will parse the input up to data block (including the DATA token).
+   *
    * @param input The input buffer to parse the header from.
-   * @returns The parse result for the header, plus the header values.
+   * @return {HeaderParseResult} The parse result for the header, plus the header values.
    */
   public parseHeader(input: ParsingBuffer): HeaderParseResult {
     const match = input.match
@@ -317,6 +319,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   /**
    * Construct this with the type-index that will be used to map element types
    * to tokens.
+   *
    * @param index_ The index.
    */
   constructor(private readonly index_: Readonly<TypeIndex<TypeIDType>>) {
@@ -330,11 +333,12 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    * append the top level entries.
    *
    * In this case, the cursor should represent the start of the
+   *
    * @param input
    * @param cursor
    * @param endCursor
    * @param vtableBuilder
-   * @returns The vtable slice or undefined if it's not
+   * @return {[IndexMark, number] | undefined} The vtable slice or undefined if it's not
    * defined due to an error.
    */
   public extractDataEntry(
@@ -406,8 +410,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
   /**
    * Parse the data block of a step file, indexing it.,
+   *
    * @param input The input parsing buffer, in the data section.
-   * @returns The parsing result, including the index and result enum.
+   * @return {BlockParseResult} The parsing result, including the index and result enum.
    */
   public parseDataBlock(input: ParsingBuffer): BlockParseResult<TypeIDType> {
 
@@ -790,9 +795,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
   /**
    * Parse arguments from a single line from a step file, indexing it.,
+   *
    * @param input The input parsing buffer, in the data section.
    * @param expressID
-   * @returns The parsing result, including the
+   * @return {LineArgumentParseResult} The parsing result, including the
    * arguments array and result enum.
    */
   public extractArguments(input: ParsingBuffer, expressID: number): [any, ParseResult] {

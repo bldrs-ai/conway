@@ -10,7 +10,7 @@ export class AP214ModelGeometry implements ModelGeometry {
   private readonly meshes_ = new Map< number, CanonicalMesh >()
 
   /**
-   * @returns
+   * @return {number}
    */
   get length(): number {
     return this.meshes_.size
@@ -27,6 +27,7 @@ export class AP214ModelGeometry implements ModelGeometry {
 
   /**
    * Drop the mesh for a particular local ID
+   *
    * @param localID The local ID of the item to delete.
    */
   public delete( localID: number ) {
@@ -47,7 +48,7 @@ export class AP214ModelGeometry implements ModelGeometry {
   /**
    *
    * @param localID
-   * @returns
+   * @return {CanonicalMesh | undefined}
    */
   public getByLocalID(localID: number): CanonicalMesh | undefined {
     return this.meshes_.get(localID)
@@ -55,7 +56,7 @@ export class AP214ModelGeometry implements ModelGeometry {
 
   /**
    *
-   * @returns
+   * @return {IterableIterator<CanonicalMesh>}
    */
   public [Symbol.iterator](): IterableIterator<CanonicalMesh> {
     return this.meshes_.values()
@@ -63,7 +64,7 @@ export class AP214ModelGeometry implements ModelGeometry {
 
   /**
    *
-   * @returns - size of the geometry data
+   * @return {number} - size of the geometry data
    */
   public calculateGeometrySize(): number {
     let size:number = 0

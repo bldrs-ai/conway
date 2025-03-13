@@ -15,8 +15,11 @@ let conwayModel:IfcGeometryExtraction
 
 /**
  * Initialize the geometry extractor with index IFC.
+ *
+ * @return {Promise< ExtractResult | boolean | void >}
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor(): 
+  Promise< ExtractResult | boolean | void > {
   const parser = IfcStepParser.Instance
   const indexIfcBuffer: Buffer = fs.readFileSync('data/index.ifc')
   const bufferInput = new ParsingBuffer(indexIfcBuffer)
@@ -46,7 +49,8 @@ async function initializeGeometryExtractor() {
 
 /**
  * Extract the geometry from index IFC
- * @returns indicating whether the geometry extraction was successful.
+ *
+ * @return {ExtractResult} indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
@@ -57,7 +61,8 @@ let packedModel: PackedMesh< IfcStepModel > | undefined
 /**
  * Build the packed mesh model if it hasn't been built and memoize it,
  * and return the memoized value.
- * @returns The packed mesh if it can be built,
+ *
+ * @return {PackedMesh | undefined} The packed mesh if it can be built,
  * or undefined (void 0) otherwise.
  */
 function packMesh(): PackedMesh< IfcStepModel > | undefined {
@@ -80,7 +85,8 @@ const ELEMENT_CURSOR_TRIANGLES_SET_COUNT = 7
 /**
  * Get all the elements in a from a product query, find their matching triangles
  * given the cursor, then check the triangle map matches.
- * @returns True if all triangle elements map, false if otherwise.
+ *
+ * @return {boolean} True if all triangle elements map, false if otherwise.
  */
 function checkTrianglesMatch(): boolean {
 

@@ -17,6 +17,7 @@ export class PackedMesh< ModelType extends Model > {
 
   /**
    * Construct a packed mesh.
+   *
    * @param model The model this mesh came from.
    * @param materials The materials array for the packed mesh (referenced
    * by index by primitives)
@@ -38,6 +39,7 @@ export class PackedMesh< ModelType extends Model > {
 
   /**
    * Get triangles from a cursor.
+   *
    * @param cursor The cursor to extract triangles for
    * @yields {[number, number, ReadonlyUint32Array]} Returns a tuple containing
    * the local ID of the element, the primitive index, and the triangles.

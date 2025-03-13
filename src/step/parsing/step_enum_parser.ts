@@ -40,12 +40,13 @@ export default class StepEnumParser extends ParsingDfa4Table {
 
   /**
    * Parse a generated enum that is based on a minimal perfect hash.
+   *
    * @param typeMap The map to the enum type using a minimal perfect hash that doesn't
    * require string extraction.
    * @param input The input buffer.
    * @param cursor The offset in the input buffer where the enum may be.
    * @param endCursor The end point of the parse which should not be overflowed.
-   * @returns The matching enum value or undefined if none matches
+   * @return {number | undefined} The matching enum value or undefined if none matches
    * or the parse fails.
    */
   public extract = < T extends number >(
@@ -65,10 +66,11 @@ export default class StepEnumParser extends ParsingDfa4Table {
 
   /**
    * Match a step enum
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match.
+   * @return {number | undefined} The end of the match.
    */
   public match = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
     if ( ( endCursor - cursor ) < ENUM_MINIMUM_SIZE ) {

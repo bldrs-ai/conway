@@ -40,17 +40,19 @@ export interface Model extends Iterable<Entity> {
    * Get the material matching a geometry node.
    *
    * Geometry must have been extracted first.
+   *
    * @param node The geometry node to match a material for.
-   * @returns A material, or undefined if it is not found.
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
    */
   getMaterialFromGeometryNode( node: SceneNodeGeometry ): CanonicalMaterial | undefined
 
   /**
-   * Get the material matching a geometry node.
+   * Get the mesh matching a geometry node.
    *
    * Geometry must have been extracted first.
-   * @param node The geometry node to match a material for.
-   * @returns A material, or undefined if it is not found.
+   *
+   * @param node The geometry node to match a mesh for.
+   * @return {CanonicalMesh | undefined} A mesh, or undefined if it is not found.
    */
   getMeshFromGeometryNode( node: SceneNodeGeometry ): CanonicalMesh | undefined
 

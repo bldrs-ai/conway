@@ -25,7 +25,8 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits
    * padded to zero.
-   * @returns The high bits.
+   *
+   * @return {number} The high bits.
    */
   public get high(): number {
     return this.high_
@@ -34,7 +35,8 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
   /**
    * Get a set of up to 32 low bits, in one-hot format or'd together,
    * so that each bit index represents a 5 bit bottom part corresponding to the top 27
-   * @returns The high bits.
+   *
+   * @return {number} The high bits.
    */
   public get low(): number {
     return this.low_
@@ -42,7 +44,8 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
 
   /**
    * Step this cursor to the next high (and matching set of lows)
-   * @returns True if this is not at the end of the sequence,
+   *
+   * @return {boolean} True if this is not at the end of the sequence,
    * false otherwise.
    */
   public step(): boolean {
@@ -65,14 +68,14 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
 
   /**
    * Allocate a SingleIndexSetCursor, re-using freed ones in the pool.
+   *
    * @param buffer
    * @param currentIndex
    * @param end
-   * @returns The allocated cursor.
+   * @return {SingleIndexSetCursor} The allocated cursor.
    */
   public static allocate(
-      buffer: Uint32Array,
-       
+      buffer: Uint32Array,       
       currentIndex: number = 0, // note, ? is default undefined
       end?: number ): SingleIndexSetCursor {
     end ??= buffer.length >>> 1

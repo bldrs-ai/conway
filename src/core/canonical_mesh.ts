@@ -2,7 +2,6 @@ import { GeometryObject } from '../../dependencies/conway-geom'
 import { Model } from './model'
 
 
- 
 export enum CanonicalMeshType {
     BUFFER_GEOMETRY = 0
 }

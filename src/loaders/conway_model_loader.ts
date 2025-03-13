@@ -13,6 +13,9 @@ import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
 import { parseFileHeader } from './loading_utilities'
 
+const ONE_KB = 1024
+const ONE_MB = ONE_KB * ONE_KB
+
 /**
  * Static class for loading a model from a Uint 8 array...
  *
@@ -22,11 +25,10 @@ export class ConwayModelLoader {
 
   /**
    * Load a model using the format detector
-   * @param modelID
-   * @param data
-   * @param wasmModule
-   * @param settings
-   * @returns
+   *
+   * @param data The buffer to load from.
+   * @param modelID The model id to use for statistics (or 0 if none is provided)
+   * @return {Promise<[Model, Scene]>} A promise to return the loaded model and scene.
    */
   public static async loadModelWithScene(
       data: Uint8Array,
@@ -143,7 +145,7 @@ export class ConwayModelLoader {
 
           statistics.setGeometryMemory(
                
-              conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
+              conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
           model.invalidate(true)
 
@@ -318,7 +320,7 @@ export class ConwayModelLoader {
 
           statistics.setGeometryMemory(
                
-              conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
+              conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
           const ifcProjectName = conwayModel.getIfcProjectName()
 

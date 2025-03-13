@@ -13,9 +13,9 @@ export default class SimpleMemoization< T > {
    * Construct this, with an optional cache passthrough method. Use this
    * to add idempotency to memoized objects where needed, such as cloning them
    * or locking them.
-   * @param cachePassthrough_ A function that is called to transform or clone
+   *
+   * @param cachePassthrough A function that is called to transform or clone
    * a memoized object when it is added.
-   * @param cachePassthrough
    */
   constructor( cachePassthrough?: ( from: T ) => T ) {
     this.cachePassthrough_ = cachePassthrough ?? ( ( from : T ) => from )
@@ -23,7 +23,8 @@ export default class SimpleMemoization< T > {
 
   /**
    * Get the number of memoized items
-   * @returns The number of items memoized in this.
+   *
+   * @return {number} The number of items memoized in this.
    */
   public get length(): number {
     return this.cache_.size
@@ -31,7 +32,8 @@ export default class SimpleMemoization< T > {
 
   /**
    * Iterate through the cached objects
-   * @returns Iterate over this.
+   *
+   * @return {IterableIterator<[ number, T ]>} Iterate over this.
    */
   [Symbol.iterator](): IterableIterator<[ number, T ]> {
     return this.cache_[Symbol.iterator]()
@@ -39,6 +41,7 @@ export default class SimpleMemoization< T > {
 
   /**
    * Add an item to the cache.
+   *
    * @param id
    * @param value
    * @param temporary
@@ -51,8 +54,9 @@ export default class SimpleMemoization< T > {
 
   /**
    * Delete an item from the cache.
+   *
    * @param id
-   * @returns True if the item was in the cache.
+   * @return {boolean} True if the item was in the cache.
    */
   public delete( id: number ): boolean {
     return this.cache_.delete( id )
@@ -60,8 +64,9 @@ export default class SimpleMemoization< T > {
 
   /**
    * Get the cached item for a particular id.
+   *
    * @param id
-   * @returns
+   * @return {T | undefined}
    */
   public get( id: number ): T | undefined  {
     return this.cache_.get( id )

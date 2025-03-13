@@ -4,7 +4,8 @@ import { SimpleViewerScene } from './simple_viewer_scene'
 
 /**
  * Handler for drop events.
- * @param scene
+ *
+ * @param scene The scene this drop handler is for.
  * @param event The event to handle.
  */
 export function dropHandler( scene: SimpleViewerScene, event: DragEvent ): void {
@@ -55,8 +56,10 @@ export function dropHandler( scene: SimpleViewerScene, event: DragEvent ): void 
 
 /**
  * Initialise the viewer.
+ * 
+ * @return {void}
  */
-export function initViewer() {
+export function initViewer(): void {
 
   const simpleViewerScene = SimpleViewerScene.createSceneAttachedToElement( document.body )
 
@@ -70,5 +73,4 @@ export function initViewer() {
   document.addEventListener( 'dragenter', ( e ) => e.preventDefault() )
   document.addEventListener( 'dragleave', ( e ) => e.preventDefault() )
   document.addEventListener( 'drop', ( e ) => dropHandler( simpleViewerScene, e ) )
-
 }

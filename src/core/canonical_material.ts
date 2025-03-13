@@ -6,6 +6,10 @@ import {
 } from '../../dependencies/conway-geom'
 
 
+// This file contains lots of colours etc - CS
+/* eslint-disable no-magic-numbers */
+
+
 export type ColorRGBA = [number, number, number, number]
 
 const ROUGNESS_CONVERSION_FACTOR = 2.0
@@ -14,8 +18,9 @@ const ROUGNESS_CONVERSION_FACTOR = 2.0
  * Convert a specular exponent (e.g. phong or blinn) to roughness
  *
  * Uses the conversion from - http://simonstechblog.blogspot.com/2011/12/microfacet-brdf.html
+ *
  * @param shininess The shinyness exponent/𝛼 to convert to roughness
- * @returns The resultant roughness.
+ * @return {number} The resultant roughness.
  */
 export function exponentToRoughness(shininess: number): number {
   return Math.sqrt(ROUGNESS_CONVERSION_FACTOR /
@@ -26,9 +31,9 @@ export function exponentToRoughness(shininess: number): number {
  * Convert a roughness to specular exponent
  *
  * Uses the conversion from - http://simonstechblog.blogspot.com/2011/12/microfacet-brdf.html
- * @param shininess The shinyness exponent/𝛼 to convert to roughness
- * @param roughness
- * @returns The resultant roughness.
+ *
+ * @param roughness The roughness to convert to shinyness/exponent
+ * @return {number} The resultant shinyness.
  */
 export function roughnessToExponent(roughness: number): number {
   return ( ROUGNESS_CONVERSION_FACTOR /
@@ -94,8 +99,9 @@ export interface CanonicalMaterial {
 
 /**
  * A materila name cleaned for OBJ syntax
+ *
  * @param from The material to get a clean name for
- * @returns The cleaned name
+ * @return {string} The cleaned name
  */
 export function getMTLCleanName( from: CanonicalMaterial ): string {
   return from.name.replaceAll( '#', '_' )
@@ -103,8 +109,9 @@ export function getMTLCleanName( from: CanonicalMaterial ): string {
 
 /**
  * Dump a material to MTL format.
+ *
  * @param from The material to dump.
- * @returns The MTL formatted string.
+ * @return {string} The MTL formatted string.
  */
 export function dumpMTL( from: CanonicalMaterial ): string {
 
@@ -183,13 +190,13 @@ export const defaultCanonicalMaterial: CanonicalMaterial = {
   ior: 1.5,
 }
 
- 
 
 /**
  * Convert a canonical material to a native material
+ *
  * @param wasm The wasm object to use for conversion.
  * @param from The material to convert.
- * @returns The native material object.
+ * @return {MaterialObject} The native material object.
  */
 export function toNativeMaterial(
     wasm: ConwayGeometryWasm,
@@ -205,7 +212,6 @@ export function toNativeMaterial(
       w: from.baseColor[3],
     },
     doubleSided: from.doubleSided,
-     
     ior: from.ior ?? 1.5,
     metallic: from.metalness ?? 1.0,
     roughness: from.roughness ?? 1.0,

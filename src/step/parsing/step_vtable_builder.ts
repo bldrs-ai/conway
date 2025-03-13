@@ -11,7 +11,8 @@ export default class StepVtableBuilder {
 
   /**
    * Get the buffer associated with this V-Table
-   * @returns The buffer associated with this v-table builder that contains the
+   *
+   * @return {Uint32Array} The buffer associated with this v-table builder that contains the
    * addresses.
    */
   public get buffer(): Uint32Array {
@@ -20,6 +21,7 @@ export default class StepVtableBuilder {
 
   /**
    * Construct this with an initial buffer allocation.
+   *
    * @param startingBufferSize The initial size of the buffer to allocate, in 32 bit intervals.
    */
   constructor( startingBufferSize: number = 16 ) {
@@ -30,13 +32,14 @@ export default class StepVtableBuilder {
 
   /**
    * Clear this out, note that anything using the table should also be invalidated.
+   *
    * @param dropBuffer Should we also drop the buffer to allow it to be garbage collected,
    * or should we drop it and allow the memory to be reclaimed.
    */
   public clear( dropBuffer: boolean = false ): void {
 
     if ( dropBuffer ) {
-       
+      // eslint-disable-next-line no-magic-numbers
       this.buffer_ = new Uint32Array( 16 )
     }
 
@@ -46,6 +49,7 @@ export default class StepVtableBuilder {
 
   /**
    * Push an address to the back of this current entry.
+   *
    * @param address The address to put back.
    */
   public push( address: number ) : void {
@@ -65,8 +69,9 @@ export default class StepVtableBuilder {
   /**
    * Complete a row of vtable entries in the buffer, returning the index mark of the vtable run +
    * the number of entries.
+   *
    * @param endCursor
-   * @returns The index mark (i.e. location in the buffer this run
+   * @return {[IndexMark, number, number]} The index mark (i.e. location in the buffer this run
    * exists),
    * the number of entries, and the last cursor position.
    */

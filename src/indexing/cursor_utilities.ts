@@ -4,8 +4,9 @@ import { IIndexSetCursor } from '../core/i_index_set_cursor'
 
 /**
  * Count the number of set items in a cursor.
+ *
  * @param cursor The cursor to count the items in.
- * @returns The count of items in the cursor set.
+ * @return {number} The count of items in the cursor set.
  */
 export function cursorCount( cursor: IIndexSetCursor ): number {
   let result = 0
@@ -19,6 +20,7 @@ export function cursorCount( cursor: IIndexSetCursor ): number {
 
 /**
  * Iterate over a cursor, getting all the local IDs.
+ *
  * @param cursor The cursor to iterate over.
  * @yields {number} Every local ID within the cursor.
  */
@@ -43,6 +45,7 @@ export function* cursorIterator( cursor: IIndexSetCursor ):
 
 /**
  * Iterate over a cursor, mapping the extracted local IDs to values.
+ *
  * @param cursor The cursor to iterate over.
  * @param func
  * @yields {number} Every local ID within the cursor.

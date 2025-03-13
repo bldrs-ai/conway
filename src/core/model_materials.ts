@@ -20,8 +20,9 @@ export interface ModelMaterials {
 
   /**
    * Get the material matching a geometry node.
+   *
    * @param node The geometry node to match a material for.
-   * @returns A material, or undefined if it is not found.
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
    */
   getMaterialFromGeometryNode( node: SceneNodeGeometry ): CanonicalMaterial | undefined
 }

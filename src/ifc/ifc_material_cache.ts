@@ -26,6 +26,7 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Construct this with an IFC step model.
+   *
    * @param model The model this is from
    * @param isVoid
    */
@@ -39,7 +40,8 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get the number of materials in this.
-   * @returns The number of materials in this.
+   *
+   * @return {number} The number of materials in this.
    */
   public get size(): number {
     return this.cache_.size
@@ -47,7 +49,8 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get the materials in the cache.
-   * @returns The iterator for the
+   *
+   * @return {IterableIterator} The iterator for the
    * local IDs and their respective materials.
    */
   public [Symbol.iterator](): IterableIterator<[number, CanonicalMaterial]> {
@@ -57,7 +60,8 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get the materials in the cache (values only).
-   * @returns The iterator for the respective
+   *
+   * @return {IterableIterator} The iterator for the respective
    * materials.
    */
   public materials(): IterableIterator<CanonicalMaterial> {
@@ -67,6 +71,7 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Add a material to the cache
+   *
    * @param localID The local ID of the source material object
    * @param material The canonical material version of the material to add
    */
@@ -77,8 +82,9 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get a material by its local ID.
+   *
    * @param localID The local ID to fetch a material for.
-   * @returns The material for the matching local ID
+   * @return {CanonicalMaterial | undefined} The material for the matching local ID
    */
   public get( localID: number ): CanonicalMaterial | undefined {
 
@@ -87,8 +93,10 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get the material matching a geometry node.
+   *
    * @param node The geometry node to match a material for.
-   * @returns A material, or undefined if it is not found.
+   *
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
    */
   public getMaterialFromGeometryNode( node: SceneNodeGeometry ): CanonicalMaterial | undefined {
 
@@ -112,8 +120,9 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get a material by its local ID.
+   *
    * @param geometryLocalID The local ID of the geometry to fetch
-   * @returns A tuple containing the
+   * @return {number | undefined} A tuple containing the
    * material and its id, or undefined if it is not found.
    */
   public getMaterialIDByGeometryID( geometryLocalID: number ): number | undefined {
@@ -123,6 +132,7 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Assign a particular geometry to a particular material
+   *
    * @param geometryLocalID The geometry
    * @param materialLocalID The material
    */
@@ -133,6 +143,7 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Map the current geometry to the current default material, if one is set.
+   *
    * @param geometryLocalID The geometry ID to add.
    */
   public addDefaultGeometryMapping( geometryLocalID: number ): void {
@@ -147,9 +158,10 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get a material by its local geometry ID.
+   *
    * @param geometryLocalID The local ID of the geometry to get the associated
    * material for.
-   * @returns A tuple containing the
+   * @return {[CanonicalMaterial, number] | undefined} A tuple containing the
    * material and its id, or undefined if it is not found.
    */
   public getMaterialByGeometryID( geometryLocalID: number ) :
@@ -172,6 +184,7 @@ export class IfcMaterialCache implements ModelMaterials {
 
   /**
    * Get the OBJs for all the curves in the cache (lazily)
+   *
    * @yields {[StepEntityBase, string]} Curves with their matching OBJ as a string
    */
   public* mtls() : IterableIterator< [StepEntityBase< EntityTypesIfc >, string] > {

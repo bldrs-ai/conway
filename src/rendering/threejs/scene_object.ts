@@ -42,7 +42,8 @@ export default class SceneObject extends Group {
    * Note that this should be used like an RTC reference to
    * calculate relative transforms in a high bit space or using fixed
    * point to produce an eye relative transform matrix.
-   * @returns The reference point.
+   *
+   * @return {Vector3} The reference point.
    */
   public get referencePoint(): Vector3 {
 
@@ -51,8 +52,10 @@ export default class SceneObject extends Group {
 
   /**
    * Construct this from a conway scene.
+   *
    * @param target The target scene to use.
-   * @param cork
+   * @param cork Should this start corked/not creating geometry batches (defaults to true),
+   * call uncork to create geometry on a corked sink.
    */
   constructor( public readonly target : ConwayScene, cork: boolean = true ) {
 
@@ -89,8 +92,6 @@ const normalizeMat: Matrix4 = new Matrix4(
 
 const invertNormalizeMat = normalizeMat.clone().transpose()
 
- 
-
 /**
  * Sink for receiving events from a target scene
  */
@@ -109,7 +110,8 @@ class SceneEventSink implements SceneListener {
    * Note that this should be used like an RTC reference to
    * calculate relative transforms in a high bit space or using fixed
    * point to produce an eye relative transform matrix.
-   * @returns The reference point.
+   *
+   * @return {Vector3} The reference point.
    */
   public get referencePoint(): Vector3 {
 
@@ -131,7 +133,8 @@ class SceneEventSink implements SceneListener {
    * This should be used for relative positioning to work out
    * camera relative matrices in double precision, which can then be used
    * to translate the whole group.
-   * @returns The relative position.
+   *
+   * @return {Vector3} The relative position.
    */
   public get relativeTo(): Vector3 {
 
@@ -147,9 +150,12 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Construct this with the group items will be attached to.
+   *
    * @param group The group this will be attached to.
    * @param scene The scene this comes from.
-   * @param cork_
+   * @param cork_ Should this start corked (defaults to true), meaning
+   * geometry wont be added to batches. To add geometry to batches on a 
+   * corkerd scene object, call "uncork".
    */
   constructor(
     private readonly group: Group,
@@ -201,9 +207,9 @@ class SceneEventSink implements SceneListener {
 
           batchGeometry.geometryID = batchMesh.addGeometry( batchGeometry.meshItem.geometry )
 
-        } catch ( e: any ) {
+        } catch ( e ) {
 
-          Logger.error( `Error adding geometry item: ${e?.message}` )
+          Logger.error( `Error adding geometry item: ${(e as Error | undefined)?.message}` )
         }
       }
     }
@@ -227,8 +233,9 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Get the mesh cache item for a particular mesh buffer.
+   *
    * @param from The mesh buffer to get the cached item for.
-   * @returns The cached items.
+   * @return {MeshCacheItem} The cached items.
    */
   private getMeshItem( from: CanonicalMeshBuffer ): MeshCacheItem {
 
@@ -273,11 +280,9 @@ class SceneEventSink implements SceneListener {
     return cacheItem
   }
 
-
-   
-
   /**
    * Callback when a transform is added (not used)
+   *
    * @param node
    */
   onTransformAdded( node: SceneNodeTransform ): void {
@@ -286,6 +291,7 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Callback when a transform is uupdated (not used)
+   *
    * @param node
    */
   onTransformUpdated( node: SceneNodeTransform ): void {
@@ -294,6 +300,7 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Callback when a transform is removed (not used)
+   *
    * @param node
    */
   onTransformRemoved( node: SceneNodeTransform ): void {
@@ -302,6 +309,7 @@ class SceneEventSink implements SceneListener {
   /**
    * Callback when geometry is added, with its matching
    * transform node (if the geometry is not top level)
+   *
    * @param node
    * @param transform
    */
@@ -318,6 +326,7 @@ class SceneEventSink implements SceneListener {
   /**
    * Callback when geometry is updated, or its matching
    * transform node is updated (if the geometry is not top level)
+   *
    * @param node
    * @param transform
    */
@@ -667,6 +676,7 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Callback when a geometry node is removed.
+   *
    * @param node
    */
   onGeometryRemoved( node: SceneNodeGeometry ): void {

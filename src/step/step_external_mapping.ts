@@ -13,7 +13,8 @@ export default abstract class StepExternalMapping<
 
   /**
    * Get the type of this entity (0 is always external mapping)
-   * @returns The type code of this.
+   *
+   * @return {number} The type code of this.
    */
   public get type(): EntityTypeIDs {
     return 0 as EntityTypeIDs
@@ -21,6 +22,7 @@ export default abstract class StepExternalMapping<
 
   /**
    * Construct this external mapping.
+   *
    * @param localID The local ID for this.
    * @param internalReference_ The internal reference matching this.
    * @param model The model matching this.
@@ -36,7 +38,8 @@ export default abstract class StepExternalMapping<
 
   /**
    * Get the externally mapped elements in this.
-   * @returns The inline elements of this.
+   *
+   * @return {StepEntityBase} The inline elements of this.
    */
   public get items(): StepEntityBase<EntityTypeIDs>[] {
 

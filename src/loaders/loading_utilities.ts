@@ -1,8 +1,9 @@
 
 /**
+ * Parse a FILE_HEADER header from a STEP file to extract relevant info.
  *
  * @param input - FILE_HEADER from step header
- * @returns array of fields in FILE_NAME
+ * @return {string[]} array of fields in FILE_NAME
  */
 export function parseFileHeader(input: string): string[] {
   const result: string[] = []

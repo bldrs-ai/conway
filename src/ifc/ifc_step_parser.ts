@@ -25,8 +25,9 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
 
   /**
    * Parse data to the model
+   *
    * @param input The parsing buffer, set to user data, to read.
-   * @returns The parse result as well as the model,
+   * @return {[ParseResult, IfcStepModel | undefined]} The parse result as well as the model,
    * if it can be extracted.
    */
   public parseDataToModel(

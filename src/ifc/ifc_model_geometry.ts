@@ -15,13 +15,16 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    * Construct this with an IFC step model.
+   *
    * @param model The model this is from
    * @param isVoid
    */
   constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {}
 
   /**
-   * @returns
+   * Get the number of items in this.
+   *
+   * @return {number}
    */
   get length(): number {
     return this.meshes_.size
@@ -47,6 +50,7 @@ export class IfcModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Add a mesh to the geometry cache.
    *
    * @param mesh
    */
@@ -57,6 +61,7 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    * Drop the mesh for a particular local ID
+   *
    * @param localID The local ID of the item to delete.
    */
   public delete(localID: number) {
@@ -75,25 +80,28 @@ export class IfcModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Get an mesh by its matching local ID.
    *
    * @param localID
-   * @returns
+   * @return {CanonicalMesh | undefined}
    */
   public getByLocalID(localID: number): CanonicalMesh | undefined {
     return this.meshes_.get(localID)
   }
 
   /**
+   * Allows iteration through this.
    *
-   * @returns
+   * @return {IterableIterator}
    */
   public [Symbol.iterator](): IterableIterator<CanonicalMesh> {
     return this.meshes_.values()
   }
 
   /**
+   * Calculate the size of the geometry data in this.
    *
-   * @returns - size of the geometry data
+   * @return {number} - size of the geometry data
    */
   public calculateGeometrySize(): number {
     let size:number = 0
@@ -118,6 +126,7 @@ export class IfcModelGeometry implements ModelGeometry {
 
   /**
    * Get the OBJs for all the curves in the cache (lazily)
+   *
    * @yields {[IfcGeometricRepresentationItem, string]} Curves with their matching OBJ as a string
    */
   public* objs() : IterableIterator< [

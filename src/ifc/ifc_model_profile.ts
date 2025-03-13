@@ -15,13 +15,15 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Construct this with its parent model.
+   *
    * @param model The model for this.
    */
   constructor( public readonly model: IfcStepModel ) {}
 
   /**
    * Get the number of profiles in this.
-   * @returns
+   *
+   * @return {number}
    */
   get length(): number {
     return this.profiles_.size
@@ -29,6 +31,7 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Add a profile to the cache.
+   *
    * @param profile
    */
   public add( profile: CanonicalProfile ) {
@@ -37,8 +40,9 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Get a profile by its local id.
+   *
    * @param localID
-   * @returns
+   * @return {CanonicalProfile | undefined}
    */
   public getByLocalID(localID: number): CanonicalProfile | undefined {
     return this.profiles_.get(localID)
@@ -46,7 +50,8 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Iterate through the profiles in this.
-   * @returns
+   *
+   * @return {IterableIterator}
    */
   public [Symbol.iterator](): IterableIterator<CanonicalProfile> {
     return this.profiles_.values()
@@ -55,6 +60,7 @@ export class IfcModelProfile implements ModelProfile {
 
   /**
    * Get the OBJs for all the curves in the cache (lazily)
+   *
    * @yields {[IfcProfileDef, string]} Curves with their matching OBJ as a string
    */
   public* objs() : IterableIterator< [IfcProfileDef, string] > {
@@ -74,6 +80,5 @@ export class IfcModelProfile implements ModelProfile {
 
       yield [profileItem, objFileContents]
     }
-
   }
 }

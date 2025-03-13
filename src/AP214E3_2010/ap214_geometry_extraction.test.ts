@@ -12,9 +12,12 @@ let conwayTubeModel:AP214GeometryExtraction
 let conwayGearModel:AP214GeometryExtraction
 
 /**
+ * Initialise geometry extraction
  *
+ * @return {Promise< ExtractResult | boolean | void >} A promise with the result.
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor():
+ Promise< ExtractResult | boolean | void > {
   const parser = IfcStepParser.Instance
   const tubeBuffer: Buffer =
     fs.readFileSync('data/create-a-tube.step')
@@ -56,7 +59,7 @@ async function initializeGeometryExtractor() {
 }
 
 /**
- *  @returns indicating whether the wasm module is initialized.
+ *  @return {boolean} indicating whether the wasm module is initialized.
  */
 function isInitialized(): boolean {
   return conwayTubeModel.isInitialized() &&
@@ -64,14 +67,14 @@ function isInitialized(): boolean {
 }
 
 /**
- * @returns indicating whether the geometry extraction was successful.
+ * @return {ExtractResult} indicating whether the geometry extraction was successful.
  */
 function extractTubeGeometry(): ExtractResult {
   return conwayTubeModel.extractAP214GeometryData()[0]
 }
 
 /**
- * @returns indicating whether the geometry extraction was successful.
+ * @return {ExtractResult} indicating whether the geometry extraction was successful.
  */
 function extractGearGeometry(): ExtractResult {
   return conwayGearModel.extractAP214GeometryData()[0]
@@ -79,8 +82,9 @@ function extractGearGeometry(): ExtractResult {
 
 /**
  * Get the number of triangles in a mesh.
+ *
  * @param model
- * @returns Number of triangles in a model's mesh.
+ * @return {number} Number of triangles in a model's mesh.
  */
 function getMeshSize( model: AP214GeometryExtraction ): number {
 
@@ -92,7 +96,7 @@ function getMeshSize( model: AP214GeometryExtraction ): number {
 }
 
 /**
- * @returns indicating number of meshes
+ * @return {number} indicating number of meshes
  */
 function getTubeMeshSize(): number {
 
@@ -100,7 +104,7 @@ function getTubeMeshSize(): number {
 }
 
 /**
- * @returns indicating number of meshes
+ * @return {number} indicating number of meshes
  */
 function getGearMeshSize(): number {
 
@@ -108,7 +112,7 @@ function getGearMeshSize(): number {
 }
 
 /**
- * @returns indicating if the geometry extraction module is still initialized or not
+ * @return {boolean} indicating if the geometry extraction module is still initialized or not
  */
 function destroy(): boolean {
   conwayTubeModel.destroy()

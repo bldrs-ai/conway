@@ -4,8 +4,6 @@ import ParsingDfa16Table from '../../parsing/parsing_dfa_16table'
 /**
  * Enum representing the state machine of the string parser DFA.
  */
- 
-// eslint doesn't really understand enums?
 enum STRING_PARSER_STATE {
   TERMINUS = 0,
   REGULAR = 1,
@@ -14,7 +12,6 @@ enum STRING_PARSER_STATE {
   SPECIAL = 4,
   SPECIAL_BSLASH = 5
 }
- 
 
 const STRING_PARSER_TERMINUS_FLAGS = (1 << STRING_PARSER_STATE.QUOTE)
 const QUOTE = ParsingConstants.QUOTE
@@ -25,9 +22,7 @@ const P = ParsingConstants.CAPITAL_P
 const A = ParsingConstants.A
 const I = ParsingConstants.I
 const F = ParsingConstants.F
- 
 const TWO = ParsingConstants.ZERO + 2
- 
 const FOUR = ParsingConstants.ZERO + 4
 const ZERO = ParsingConstants.ZERO
 const NINE = ParsingConstants.NINE
@@ -39,23 +34,20 @@ const ISO8859Table = [['¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª
 
 /**
  * Read the number value from a hex character.
+ *
  * @param character
- * @returns The numeric value of the hex character or
+ * @return {number | undefined} The numeric value of the hex character or
  * undefined if it isn't a valid hex character.
  */
 function readHex(character: number): number | undefined {
   if (character >= A && character <= F) {
-
-     
     return (character - A) + 10
-
   } else if (character >= ZERO && character <= NINE) {
-
     return character - ZERO
   }
-
   return undefined
 }
+
 
 /**
  * String parser for step, note we don't do an exact check here, we wait for z
@@ -69,7 +61,7 @@ export default class StepStringParser extends ParsingDfa16Table {
     super(STRING_PARSER_STATE.SPECIAL_BSLASH)
 
     // 0xFF is not a magic number, it's a byte mask.
-     
+    /* eslint-disable no-magic-numbers */
     this.range(STRING_PARSER_STATE.REGULAR, 0, 0xFF, STRING_PARSER_STATE.REGULAR)
     this.set(STRING_PARSER_STATE.REGULAR, '\\', STRING_PARSER_STATE.BSLASH)
     this.set(STRING_PARSER_STATE.REGULAR, '\'', STRING_PARSER_STATE.QUOTE)
@@ -90,7 +82,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
     // Special Bslash always skip back to regular after the char.
     this.range(STRING_PARSER_STATE.SPECIAL_BSLASH, 0, 0xFF, STRING_PARSER_STATE.REGULAR)
-     
+    /* eslint-enable no-magic-numbers */
   }
 
   public extract = (
@@ -99,7 +91,6 @@ export default class StepStringParser extends ParsingDfa16Table {
       endCursor: number,
       codePage: number = 0): string | undefined => {
 
-     
     if ((endCursor - cursor) < 2) {
       return
     }
@@ -227,7 +218,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               result ??= ''
               result += decoder.decode(input.subarray(reificationIndex, cursor))
 
-               
+              /* eslint-disable no-magic-numbers */
               if (nextChar3 < 0x7F) {
                 result += String.fromCharCode(nextChar3)
               } else if (nextChar >= 0xA1 && nextChar <= 0xFF) {
@@ -235,7 +226,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               } else {
                 return result
               }
-               
+              /* eslint-enable no-magic-numbers */
 
               cursor = nextCursor3 + 1
               reificationIndex = cursor
@@ -253,7 +244,6 @@ export default class StepStringParser extends ParsingDfa16Table {
               result ??= ''
               result += decoder.decode(input.subarray(reificationIndex, cursor))
 
-               
               const hexParserTil0 = (count: number) => {
 
                 if (nextCursor2 + 1 >= endCursor || input[nextCursor2 + 1] !== BSLASH) {
@@ -261,7 +251,6 @@ export default class StepStringParser extends ParsingDfa16Table {
                 }
 
                 // Parsing offsets
-                 
                 let intermediateCursor = nextCursor2 + 2
                 let characterCode = 0
 
@@ -305,8 +294,6 @@ export default class StepStringParser extends ParsingDfa16Table {
                   intermediateCursor += 2
 
                   --count
-
-                   
                 }
 
                 return false
@@ -314,8 +301,6 @@ export default class StepStringParser extends ParsingDfa16Table {
 
               switch (nextChar2) {
                 case BSLASH: {
-
-                   
                   if (nextCursor2 + 2 >= endCursor) {
                     return result
                   }
@@ -332,7 +317,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
                   try {
                     codePoint = String.fromCodePoint(characterCode)
-                  } catch (_) {
+                  } catch {
                     codePoint = '<invalid codepoint>'
                   }
 
@@ -340,7 +325,6 @@ export default class StepStringParser extends ParsingDfa16Table {
 
                   cursor = nextCursor2 + 3
                   reificationIndex = cursor
-                   
                 }
 
                   break
@@ -388,10 +372,11 @@ export default class StepStringParser extends ParsingDfa16Table {
 
   /**
    * Match a STEP string
+   *
    * @param input The input buffer.
    * @param cursor The offset in the input buffer where the string may be.
    * @param endCursor The end point of the parse which should not be overflowed.
-   * @returns The matching string value or undefined if none matches
+   * @return {number | undefined} The matching string value or undefined if none matches
    * or the parse fails.
    */
   public match = (input: Uint8Array, cursor: number, endCursor: number): number | undefined => {

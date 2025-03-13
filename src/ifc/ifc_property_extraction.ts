@@ -35,7 +35,7 @@ export class IfcPropertyExtraction {
    *
    * @param model - IfcStepModel to extract properties from
    * @param logTime - optional parameter to print execution time
-   * @returns indicating the status of the parsing
+   * @return {PropertyExtractResult} indicating the status of the parsing
    */
   static extractIFCProperties(model: IfcStepModel, logTime: boolean = false):
         PropertyExtractResult {
@@ -75,7 +75,7 @@ export class IfcPropertyExtraction {
   /**
    *
    * @param properties
-   * @returns
+   * @return {PropertyExtractResult}
    */
   static processIfcProperties(properties: IfcProperty[]): PropertyExtractResult {
     let result: PropertyExtractResult = PropertyExtractResult.COMPLETE

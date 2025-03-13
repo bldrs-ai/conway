@@ -28,7 +28,8 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits
    * padded to zero.
-   * @returns The high bits.
+   *
+   * @return {number} The high bits.
    */
   public get high(): number {
     return this.high_
@@ -37,7 +38,8 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
   /**
    * Get a set of up to 32 low bits, in one-hot format or'd together,
    * so that each bit index represents a 5 bit bottom part corresponding to the top 27
-   * @returns The high bits.
+   *
+   * @return {number} The high bits.
    */
   public get low(): number {
     return this.low_
@@ -45,7 +47,8 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
 
   /**
    * Step this cursor to the next high (and matching set of lows)
-   * @returns True if this is not at the end of the sequence,
+   *
+   * @return {boolean} True if this is not at the end of the sequence,
    * false otherwise.
    */
   public step(): boolean {
@@ -58,7 +61,7 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
     const localCursors = this.cursorStack_
     const stackSize = localSet.length
 
-     
+    // eslint-disable-next-line no-magic-numbers
     let currentMinimum = ( 0xFFFFFFFF ) >>> 0
     let currentBottom  = 0
     let stackIndex: number | undefined = void 0
@@ -106,8 +109,9 @@ export class DynamicSingleIndexSetCursor implements IIndexSetCursor {
 
   /**
    * Allocate a DynamicSingleIndexSetCursor, re-using freed ones in the pool.
+   *
    * @param set The set to construct the cursor from.
-   * @returns The allocated cursor.
+   * @return {DynamicSingleIndexSetCursor} The allocated cursor.
    */
   public static allocate( set: Uint32Array[] ): DynamicSingleIndexSetCursor {
 

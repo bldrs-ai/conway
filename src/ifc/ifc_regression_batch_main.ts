@@ -15,9 +15,10 @@ const exec = promisify( childProcess.exec )
  
 /**
  * Safe execute a process command with cancellation support.
+ *
  * @param command The command to run.
  * @param timeoutMs Number of milliseconds to wait before timing out.
- * @returns
+ * @return {Promise<RunErrorResults | { type: 'Success', stdout: string, stderr: string }>}
  */
 async function safeExecWithCancellation(
     command: string,
@@ -78,7 +79,7 @@ async function safeExecWithCancellation(
 
 const SKIP_PARAMS = 2
 
- 
+// eslint-disable-next-line no-magic-numbers
 const STD_OUT_ERR_MAX_BUFFER = 64 * 1024 * 1024
 
 interface RunSuccessResults {
@@ -102,8 +103,9 @@ type RunResults = RunSuccessResults | RunErrorResults
 
 /**
  * Encapsulates a string in a CSV safe way.
+ *
  * @param from
- * @returns
+ * @return {string}
  */
 function csvSafeString( from: string ): string {
 
@@ -122,8 +124,9 @@ function csvSafeString( from: string ): string {
  * Encapsulates a string in a CSV safe way, taking
  * file paths (assumed by directory characters / and \,
  * ) and shortening them to file names without ".csv".
+ *
  * @param from
- * @returns
+ * @return {string}
  */
 function csvSafeStringFileNames( from: string ): string {
 
@@ -145,6 +148,7 @@ function csvSafeStringFileNames( from: string ): string {
 
 /**
  * Run the git diff
+ *
  * @param ifcFolder    The folder we want to `cd` into before running git
  * @param outputFolder The folder containing outputs that we compare
  * @param target       The Git diff target (branch, commit, etc.)
@@ -190,6 +194,7 @@ let totalTime = 0 // To keep track of the running total time
 
 /**
  * Run a regression test digest for a file.
+ *
  * @param filePath
  * @param outputPath
  * @param maxTimeout
@@ -249,6 +254,7 @@ async function runForFile(filePath: string,
 
 /**
  * Recursively collect all IFC file paths (instead of processing them immediately).
+ *
  * @param parentPath
  * @param excludeRegex
  */
@@ -260,6 +266,7 @@ async function collectIFCFiles(
 
   /**
    * Recursively walk ifc files
+   *
    * @param currentPath
    */
    
@@ -291,22 +298,23 @@ async function collectIFCFiles(
 }
 
 /**
- * @returns percentage of memory used on machine
+ * @return {number} percentage of memory used on machine
  */
 function getSystemMemoryUsagePercent(): number {
   const total = os.totalmem()  // total system memory in bytes
   const free = os.freemem()    // free system memory in bytes
   const used = total - free
-   
+  /* eslint-disable no-magic-numbers */
   console.log(`total: ${total / 1000 / 1000 / 1000} GB - ` +
     `used: ${used / 1000 / 1000 / 1000} GB - ` +
     `free: ${free / 1000 / 1000 / 1000} GB`)
   return (used / total) * 100
-   
+  /* eslint-enable no-magic-numbers */
 }
 
 /**
  * Parallel processing, using p-limit to limit concurrency to number of CPU cores.
+ *
  * @param ifcFiles
  * @param outputPath
  * @param errorLines
@@ -496,7 +504,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           yargs2.check((argv) => {
             if (argv.parallel) {
               const memUtil = argv['mem-utilization']
-               
+              // eslint-disable-next-line no-magic-numbers
               if (typeof memUtil !== 'number' || memUtil < 1 || memUtil > 100) {
                 throw new Error('mem-utilization must be a number between 1 and 100')
               }

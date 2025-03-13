@@ -10,32 +10,34 @@ const clz = Math.clz32
 /**
  * Extracts the lowest set bit and turns it from one hot format
  * into a number between 0 and 31.
+ *
  * @param low The 32bit unsigned binary number to extract bits from.
- * @returns The extracted lowest bit offset.
+ * @return {number} The extracted lowest bit offset.
  */
 export function extractOneHotLow( low: number ): number {
   low >>>= 0
 
-   
+  /* eslint-disable no-magic-numbers */
   low &= ~low + 1 // equixalent to `int = int & (~int + 1)`
 
   return 31 - clz( low )
-   
+  /* eslint-enable no-magic-numbers */
 }
 
 /**
  * 32 bit pop count, count hamming weight/number of bits set in x
+ *
  * @param x 32bit unsigned integer.
- * @returns The number of bits set high in the 32bit integer.
+ * @return {number} The number of bits set high in the 32bit integer.
  */
 export function pop32( x: number ): number {
   x >>>= 0
 
-   
+  /* eslint-disable no-magic-numbers */
   x = x - ((x >> 1) & 0x55555555)                    // reuse input as temporary
   x = (x & 0x33333333) + ((x >> 2) & 0x33333333)     // temp
   x = ((x + (x >> 4) & 0xF0F0F0F) * 0x1010101) >> 24 // count
-   
+  /* eslint-enable no-magic-numbers */
 
   return x
 }
@@ -50,11 +52,11 @@ export function pop32( x: number ): number {
  * Use this to determine the buffer size to allocate.
  *
  * stateBuffer needs at least 2 elements at stateBufferOffset.
- * @param buffer
+ *
  * @param value
  * @param stateBuffer
  * @param stateBufferOffset
- * @returns The current count.
+ * @return {number} The current count.
  */
 export function addCompactedElementCount32State(
     value: number,
@@ -84,12 +86,13 @@ export function addCompactedElementCount32State(
  * run oxer the same set to make sure there is enough room for all the set elements.
  *
  * It's expected that all xalues are added in ascending order.
+ *
  * @param value
  * @param stateBuffer
  * @param outputBuffer
  * @param stateBufferOffset
  * @param outputOffset
- * @returns The current count.
+ * @return {number} The current count.
  */
 export function addCompactedElement32State(
     value: number,
@@ -126,9 +129,10 @@ export function addCompactedElement32State(
 
 /**
  * Get the compacted count from the state buffer.
+ *
  * @param stateBuffer
  * @param stateBufferOffset
- * @returns The compacted element count at a particular offset.
+ * @return {number} The compacted element count at a particular offset.
  */
 export function getCountCompactedElements32State(
     stateBuffer: Int32Array,
@@ -138,6 +142,7 @@ export function getCountCompactedElements32State(
 
 /**
  * Set-up a compacted element count state record.
+ *
  * @param stateBuffer
  * @param stateBufferOffset
  */
@@ -152,11 +157,12 @@ export function initCountCompactedElements32State(
  * Count the number of compacted elements that would result from using the
  * 32-bit index compaction across the supplied span.
  *
- * Use this to determine the buffer size to allocate
+ *  Use this to determine the buffer size to allocate
+ *
  * @param buffer
  * @param offset
  * @param end
- * @returns The number of compacted elements in a buffer run.
+ * @return {number} The number of compacted elements in a buffer run.
  */
 export function countCompactedElements32(
     buffer: Uint32Array,
@@ -189,6 +195,7 @@ export function countCompactedElements32(
  *
  * The output array has to contain enough elements in the range, which the count
  * should be obtained using countCompactedElements32
+ *
  * @param output
  * @param outputOffset
  * @param input

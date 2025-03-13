@@ -10,9 +10,10 @@ const MAX_FILES_OPEN = 64
 
 /**
  * Dump the OBJs in this to a particular folder
+ *
  * @param from
  * @param folder The folder to dump to
- * @returns A promise to wait on when this completes.
+ * @return {Promise<void>} A promise to wait on when this completes.
  */
 export async function dumpCurveOBJs( from: IfcModelCurves, folder: string ): Promise< void > {
 
@@ -55,6 +56,7 @@ export async function dumpCurveOBJs( from: IfcModelCurves, folder: string ): Pro
 
 /**
  * Build a set of hashes with their matching IFC curves.
+ *
  * @param from
  * @yields {[IfcCurve, Uint8Array]} A list of curves with their corresponding hash.
  */

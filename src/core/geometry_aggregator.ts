@@ -49,6 +49,7 @@ export default class GeometryAggregator {
 
   /**
    * Construct this with a wasm module.
+   *
    * @param wasmModule The current wasm module.
    * @param options
    */
@@ -60,8 +61,9 @@ export default class GeometryAggregator {
 
   /**
    * Add a scene to this aggregator's batch geometry.
+   *
    * @param scene
-   * @returns
+   * @return {void}
    */
   public append< SceneEntityType >( scene: WalkableScene< SceneEntityType > ): void {
 
@@ -108,7 +110,8 @@ export default class GeometryAggregator {
   /**
    * Aggregate this into a set of native/wasm objects to be passed to conway-geom,
    * and also partition the aggregate into chunks based on the max data size.
-   * @returns The aggregated & chunked geometry.
+   *
+   * @return {AggregatedNativeGeometry} The aggregated & chunked geometry.
    */
   public aggregateNative(): AggregatedNativeGeometry {
 
@@ -118,7 +121,7 @@ export default class GeometryAggregator {
     const materialVector   =
       conwaywasm.nativeVectorMaterial() as NativeVectorMaterial
     const materialGeometry = this.materialGeometry
-     
+    // eslint-disable-next-line no-magic-numbers
     const maxGeometrySize  = this.options.maxGeometrySize ?? 0xFFFFFFFF
     const chunks : GeometryChunk[] = []
 

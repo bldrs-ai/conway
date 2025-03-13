@@ -38,6 +38,7 @@ enum IfcTokenType {
  *
  * Merging uses "hasOwnProperty" semantics to avoid overwriting
  * keys that have already been merged.
+ *
  * @param to Merge to this fields object.
  * @param from Merge from this fields object.
  */
@@ -67,7 +68,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Get the reflecterd type info for this element/entity.
-   * @returns The entity description for this.
+   *
+   * @return {EntityDescription} The entity description for this.
    */
   public get typeInfo(): EntityDescription<EntityTypeIDs> {
 
@@ -78,7 +80,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Get the reflected fields of this.
-   * @returns
+   *
+   * @return {EntityFieldsDescription}
    */
   public get fields(): EntityFieldsDescription<EntityTypeIDs> {
 
@@ -101,7 +104,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Get the reflected fields of this.
-   * @returns
+   *
+   * @return {EntityFieldsDescription}
    */
   public get orderedFields(): [string, EntityFieldDescription<EntityTypeIDs>][] {
 
@@ -133,7 +137,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Get the number of dimensions for this, some functions require every object to have this,
    *
    * The default value is 0.
-   * @returns The number of dimensions.
+   *
+   * @return {number} The number of dimensions.
    */
   public get Dim(): number {
     return 0
@@ -142,7 +147,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Get the express ID for this, note that if an element is inlined,
    * it will have not have an express ID.
-   * @returns The express ID of this or undefined if there isn't one.
+   *
+   * @return {number | undefined} The express ID of this or undefined if there isn't one.
    */
   public get expressID(): number | undefined {
     return this.internalReference_.expressID
@@ -150,7 +156,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Is this an inline element or fully specified?
-   * @returns Is this inline?
+   *
+   * @return {boolean} Is this inline?
    */
   public get isInline(): boolean {
     return this.expressID === void 0
@@ -159,7 +166,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Convert this to a string (which is the equivalent to a reference or
    * '#inline' for inline elements).
-   * @returns Convert this to a string
+   *
+   * @return {string} Convert this to a string
    */
   public toString(): string {
     return `#${this.expressID ?? `inline(${this.localID})`}`
@@ -171,16 +179,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param vtableOffset The offset in the vtable to extract from
    * @param optional Whether this is a potentially optional field
-   * @returns {number | null | undefined} The extracted number.
+   * @return {number | null | undefined} The extracted number.
    */
   public extractNumber(vtableOffset: number, optional: true): number | null
-   
   public extractNumber(vtableOffset: number, optional: false): number
-   
-  public extractNumber(vtableOffset: number, optional: boolean): number |
-    null {
+  public extractNumber(vtableOffset: number, optional: boolean): number | null {
 
     this.guaranteeVTable()
 
@@ -213,17 +219,15 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
-   * @returns {string | null} The extracted string, or null if optional
+   * @return {string | null} The extracted string, or null if optional
    * and this value isn't specified.
    */
   public extractString(offset: number, optional: true): string | null
-   
   public extractString(offset: number, optional: false): string
-   
-  public extractString(offset: number, optional: boolean): string |
-    null {
+  public extractString(offset: number, optional: boolean): string | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
     const buffer              = this.buffer
@@ -252,14 +256,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
-   * @returns {boolean | null} The extracted logical or null for optionals.
+   * @return {boolean | null} The extracted logical or null for optionals.
    */
   public extractLogical(offset: number, optional: true): boolean | null
-   
   public extractLogical(offset: number, optional: false): boolean
-   
   public extractLogical(offset: number, optional: boolean): boolean | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
@@ -285,16 +288,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Extract a reference from an offset, without type check.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
-   * @returns {StepEntityBase | undefined} Extracted entity or undefined.
+   * @return {StepEntityBase | undefined} Extracted entity or undefined.
    */
   public extractReference(offset: number, optional: true): StepEntityBase<EntityTypeIDs> | null
-   
   public extractReference(offset: number, optional: false): StepEntityBase<EntityTypeIDs>
-   
-  public extractReference(offset: number, optional: boolean):
-    StepEntityBase<EntityTypeIDs> | null {
+  public extractReference(offset: number, optional: boolean): StepEntityBase<EntityTypeIDs> | null {
 
     const cursor    = this.getOffsetCursor( offset )
     const buffer    = this.buffer
@@ -323,11 +324,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    *
-   * @param string buffer
-   * @param current cursor
    * @param buffer
    * @param cursor
-   * @returns string and length
+   * @return {{ data: string, length: number }} string and length
    */
   readStringView(buffer: Uint8Array, cursor: number): { data: string, length: number } {
     const view = new DataView(buffer.buffer)
@@ -345,14 +344,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    
   /**
    *
-   * @param value array
-   * @param current cursor
-   * // eslint-disable-next-line jsdoc/no-undefined-types
-   * @param ifc token type
    * @param buffer
    * @param cursor
-   * @param t
-   * @returns ifc token
+   * @param t ifc token type
+   * @return {any} ifc token
    */
   readValue(buffer: Uint8Array, cursor: number, t: IfcTokenType) {
     const view = new DataView(buffer.buffer)
@@ -380,7 +375,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    *
-   * @returns buffer containing line data up to the semicolon
+   * @return {Uint8Array} buffer containing line data up to the semicolon
    */
   extractLineArguments(): Uint8Array {
 
@@ -399,10 +394,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Extract a reference from a buffer, without type check.
+   *
    * @param buffer The buffer to extract from.
    * @param cursor The position in the buffer to extract from.
    * @param endCursor The ending cursor.
-   * @returns Extracted entity or undefined.
+   * @return {StepEntityBase | undefined} Extracted entity or undefined.
    */
   protected extractBufferReference(
       buffer: Uint8Array,
@@ -419,16 +415,17 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   }
 
   /**
+   * Extract a flat array of references
    *
    * @param offset offset in ifc line
-   * @param rank number array rank
-   * @returns array of values
+   * @return {Array<any>} array of values
    */
-  public extractArray(offset: number): Array<any> {
+  public extractArray(offset: number): Array< StepEntityBase< EntityTypeIDs > | undefined > {
 
-    const arrayObjects: Array<any> = this.extractLambda(offset, (buffer, cursor, endCursor) => {
+    const arrayObjects: Array< StepEntityBase< EntityTypeIDs > | undefined > =
+      this.extractLambda(offset, (buffer, cursor, endCursor) => {
 
-      const value: Array<any> = []
+      const value: Array< StepEntityBase< EntityTypeIDs > | undefined > = []
 
       for (const address of stepExtractArray(buffer, cursor, endCursor)) {
 
@@ -448,11 +445,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * ExtractionType Type to be extracted
+   *
    * @param offset The offset in the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field? (true)
-   * @returns {ExtractionType | null} The extracted value or null for optionals.
+   * @return {ExtractionType | null} The extracted value or null for optionals.
    */
   public extractLambda<ExtractionType>(
     offset: number,
@@ -465,13 +464,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * ExtractionType Type to be extracted
+   *
    * @param offset The offset in the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field? (false)
-   * @returns {ExtractionType} The extracted value or null for optionals.
+   * @return {ExtractionType} The extracted value or null for optionals.
    */
-   
   public extractLambda<ExtractionType>(
     offset: number,
     extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
@@ -483,13 +483,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * ExtractionType Type to be extracted
+   *
    * @param offset The offset in the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field?
-   * @returns {ExtractionType | null} The extracted value or null for optionals.
+   * @return {ExtractionType | null} The extracted value or null for optionals.
    */
-   
   public extractLambda<ExtractionType>(
       offset: number,
       extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
@@ -523,9 +524,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field? (true)
-   * @returns {StepEntityBase | null} The extracted element, or null if optional
+   * @return {StepEntityBase | null} The extracted element, or null if optional
    * and this value isn't specified.
    */
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
@@ -539,11 +541,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field? (false)
-   * @returns {StepEntityBase} The extracted element.
+   * @return {StepEntityBase} The extracted element.
    */
-   
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
     offset: number,
     optional: false,
@@ -555,13 +557,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
    * @param entityConstructor
-   * @returns {StepEntityBase} The extracted element, or null if optional
+   * @return {StepEntityBase} The extracted element, or null if optional
    * and this value isn't specified.
    */
-   
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
       offset: number,
       optional: boolean,
@@ -604,11 +606,12 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param buffer The buffer to extract from
    * @param cursor The cursor to extract from.
    * @param endCursor The end of the memory space to extract from.
    * @param entityConstructor The entity constructor to use for type checks.
-   * @returns The extracted element, or null if optional
+   * @return {StepEntityBase | undefined } The extracted element, or null if optional
    * and this value isn't specified.
    */
   protected extractBufferElement< T extends StepEntityConstructorAbstract< EntityTypeIDs > >(
@@ -642,14 +645,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param vtableOffset The offset in the vtable to extract from
    * @param optional Is this an optional field?
-   * @returns {boolean | null} The extracted number.
+   * @return {boolean | null} The extracted number.
    */
   public extractBinary(vtableOffset: number, optional: true): [Uint8Array, number] | null
-   
   public extractBinary(vtableOffset: number, optional: false): [Uint8Array, number]
-   
   public extractBinary(vtableOffset: number, optional: boolean): [Uint8Array, number] | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
@@ -684,12 +686,12 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Extract a parse buffer at a particular vtable offset.
+   *
    * @param offset
-   * @param buffer
    * @param result
    * @param module
    * @param optional
-   * @returns True if this extracts, false (usually because this is optional)
+   * @return {boolean} True if this extracts, false (usually because this is optional)
    */
   public extractParseBuffer(
       offset: number,
@@ -734,9 +736,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field? (true)
-   * @returns {boolean | null} The extracted number or null if it's
+   * @return {boolean | null} The extracted number or null if it's
    * not supplied.
    */
   public extractBoolean(offset: number, optional: true): boolean | null
@@ -746,11 +749,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field? (false).
-   * @returns {boolean} The extracted number.
+   * @return {boolean} The extracted number.
    */
-   
   public extractBoolean(offset: number, optional: false): boolean
   /**
    * Extract a number at the particular vtable offset (i.e. the position
@@ -758,12 +761,12 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    *
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
+   *
    * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
-   * @returns {boolean | null} The extracted number or null if it's
+   * @return {boolean | null} The extracted number or null if it's
    * not supplied.
    */
-   
   public extractBoolean(offset: number, optional: boolean): boolean | null {
 
     const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
@@ -789,7 +792,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Get the backing buffer for this. Note this is only for internal
    * code-gen purposes, and is unsafe otherwise.
-   * @returns The buffer for this.
+   *
+   * @return {Uint8Array} The buffer for this.
    */
   protected get buffer(): Uint8Array {
 
@@ -799,8 +803,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Get both the buffer offset and end cursor for
    * a particular vtable offset.
+   *
    * @param vtableOffset The vtable offset to get the cursor/endcursor for.
-   * @returns The cursor and end cursor in the read buffer.
+   * @return {[number,number]} The cursor and end cursor in the read buffer.
    */
   protected getOffsetAndEndCursor( vtableOffset: number ): [number, number] {
 
@@ -825,8 +830,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Get the buffer cursor for a particular offset.
+   *
    * @param offset The offset in the v-table.
-   * @returns The cursor.
+   * @return {number} The cursor.
    */
   protected getOffsetCursor( offset: number ): number {
 
@@ -846,8 +852,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Get the buffer cursor for a particular offset.
+   *
    * @param offset The offset in the v-table.
-   * @returns The cursor.
+   * @return {number} The cursor.
    */
   protected getEndCursor( offset: number ): number {
 
@@ -873,6 +880,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Construct this with the local ID, internal reference and
    * the model.
+   *
    * @param localID The local (dense) ID within the model, that acts as a reference.
    * @param internalReference_  The internal reference to model components etc.
    * @param model The model this came from.

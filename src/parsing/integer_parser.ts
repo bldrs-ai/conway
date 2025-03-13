@@ -34,10 +34,11 @@ export default class IntegerParser extends ParsingDfa4Table {
   /**
    * Match a signed integer and returned the updated cursor position
    * or undefined if no match is found
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public signed = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
     return this.match(
@@ -51,10 +52,11 @@ export default class IntegerParser extends ParsingDfa4Table {
   /**
    * Match an unsigned integer and return the updated cursor position
    * or undefined if no match is found
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public unsigned = (
       input: Uint8Array,

@@ -9,7 +9,6 @@ export class TriangleElementMap {
   private map_: Uint32Array
   private size_: number
 
-   
   public static readonly NO_ELEMENT = 0xFFFFFFFF
 
   private currentSection_?: ReadonlyUint32Array
@@ -17,6 +16,7 @@ export class TriangleElementMap {
 
   /**
    * Create a triangle element map with an initial allocation capacity.
+   *
    * @param initialCapacity The initial allocation size for the map to grow up to
    */
   constructor( initialCapacity: number = 1 ) {
@@ -26,7 +26,8 @@ export class TriangleElementMap {
 
   /**
    * Get the number of triangles in the map.
-   * @returns Return the size of this.
+   *
+   * @return {number} Return the size of this.
    */
   public get size(): number {
     return this.size_
@@ -35,7 +36,8 @@ export class TriangleElementMap {
   /**
    * Get the current forwards mapping, note this is a snapshot
    * at the current time.
-   * @returns The forwards mapping.
+   *
+   * @return {ReadonlyUint32Array} The forwards mapping.
    */
   public get map() : ReadonlyUint32Array {
 
@@ -53,10 +55,10 @@ export class TriangleElementMap {
 
   /**
    * Add a mapping range for a particular element.
+   *
    * @param beginTriangleIndex The beginning triangle index (inclusive)
    * @param endTriangleIndex The ending triangle index (exclusive)
-   * @param elementIndex The element index to fill in.
-   * @param elementLocalIndex
+   * @param elementLocalIndex The element index to fill in.
    */
   public addMappingRange(
       beginTriangleIndex: number,
@@ -87,7 +89,8 @@ export class TriangleElementMap {
    * Get the inverse map from elements to triangle indices
    *
    * Note this is a snapshot at the current time.
-   * @returns
+   *
+   * @return {ReadonlyMap< number, ReadonlyUint32Array >}
    */
   public get inverseMap(): ReadonlyMap< number, ReadonlyUint32Array > {
 

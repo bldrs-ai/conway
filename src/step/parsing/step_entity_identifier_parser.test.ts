@@ -6,7 +6,8 @@ const parserInstance = StepEntityIdentifierParser.Instance
 
 /**
  * Test an identifier string with capitals, underscores and trialing numbers.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseCorrectValue() {
   const data = new TextEncoder().encode( 'TESTENTIT_TEST123' )
@@ -18,7 +19,8 @@ function testParseCorrectValue() {
 
 /**
  * Test an identifier with a space after it to make sure it terminates before the space.
- * @returns True if the test parses.
+ *
+ * @return {boolean} True if the test parses.
  */
 function testParseSpaceAtEnd() {
   const data = new TextEncoder().encode( 'TESTENTIT_TEST123 ' )
@@ -30,7 +32,8 @@ function testParseSpaceAtEnd() {
 
 /**
  * Test an identifier with clower case to make sure it fails.
- * @returns True if the test parses.
+ *
+ * @return {boolean} True if the test parses.
  */
 function testParseLowerCase() {
   const data = new TextEncoder().encode( 'testent_123' )
@@ -42,7 +45,8 @@ function testParseLowerCase() {
 
 /**
  * Test an identifier with a starting number to make sure it fails.
- * @returns True if the test parses.
+ *
+ * @return {boolean} True if the test parses.
  */
 function testParserStartWithDigit() {
   const data = new TextEncoder().encode( '5TESTENTIT_TEST123' )

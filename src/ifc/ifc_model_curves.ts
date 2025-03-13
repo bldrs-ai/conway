@@ -10,6 +10,7 @@ export default class IfcModelCurves extends SimpleMemoization< CurveObject > {
 
   /**
    * Construct this.
+   *
    * @param model
    */
   constructor( public readonly model: IfcStepModel ) {
@@ -18,6 +19,7 @@ export default class IfcModelCurves extends SimpleMemoization< CurveObject > {
 
   /**
    * Get the OBJs for all the curves in the cache (lazily)
+   *
    * @yields {[IfcCurve, string]} Curves with their matching OBJ as a string
    */
   public* objs() : IterableIterator< [IfcCurve, string] > {

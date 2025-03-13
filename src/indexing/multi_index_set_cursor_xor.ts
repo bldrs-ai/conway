@@ -32,7 +32,8 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
   /**
    * Get the current high 27 bits, as a regular number with the lower 5 bits
    * padded to zero.
-   * @returns The high bits.
+   *
+   * @return {number} The high bits.
    */
   public get high(): number {
     return this.high_
@@ -41,7 +42,8 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
   /**
    * Get a set of up to 32 low bits, in one-hot format or'd together,
    * so that each bit index represents a 5 bit bottom part corresponding to the top 27
-   * @returns The high bits.
+   *
+   * @return {number} The high bits.
    */
   public get low(): number {
     return this.low_
@@ -49,7 +51,8 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
   /**
    * Step this cursor to the next high (and matching set of lows)
-   * @returns True if this is not at the end of the sequence,
+   *
+   * @return {boolean} True if this is not at the end of the sequence,
    * false otherwise.
    */
   public step(): boolean {
@@ -59,7 +62,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
     let result: boolean
 
     do {
-       
+      // eslint-disable-next-line no-magic-numbers
       lowestHigh = 0xFFFFFFFF
       result     = false
       currentLow = 0
@@ -115,8 +118,9 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
   /**
    * Allocate a MultiIndexSetCursorXor, re-using freed ones in the pool.
+   *
    * @param buffer
-   * @returns The allocated cursor.
+   * @return {MultiIndexSetCursorXor} The allocated cursor.
    */
   public static allocate( buffer: Uint32Array ): MultiIndexSetCursorXor {
     let result: MultiIndexSetCursorXor
@@ -135,6 +139,7 @@ export class MultiIndexSetCursorXor implements IIndexSetCursor {
 
   /**
    * Add a range from the multi-set buffer to the cursor.
+   *
    * @param from The start of the range.
    * @param to The end of the range (not inclusive)
    */

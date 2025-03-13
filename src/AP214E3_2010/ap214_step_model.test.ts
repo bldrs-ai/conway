@@ -33,7 +33,8 @@ const PRODUCT_DEFINITION_FORMATION_EXPRESS_ID = 6
 
 /**
  * Extract a product definition formation/context.
- * @returns True if the test succeeds, false if it doesn't.
+ *
+ * @return {boolean} True if the test succeeds, false if it doesn't.
  */
 function extractContext() {
 

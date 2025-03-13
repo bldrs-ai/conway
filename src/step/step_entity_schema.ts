@@ -12,6 +12,7 @@ export default class StepEntitySchema<
     StepEntityBase< EntityTypeIDs > > {
   /**
    * Construct the schema
+   *
    * @param constructors The constructor array matching the entity type IDs for this entity.
    * @param parser The STEP parser used to extract entities that matches this schema.
    * @param queries The set of queries including subtypes to be able to read data from a type index.

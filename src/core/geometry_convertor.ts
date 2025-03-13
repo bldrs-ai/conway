@@ -14,15 +14,15 @@ export default class GeometryConvertor {
 
   /**
    * Construct this given a wasm module.
+   *
    * @param wasmModule The wasm module.
    */
    
   constructor( private readonly wasmModule: ConwayGeometry ) {}
 
   /**
-   * @param modelId - model ID
    * @param geometry - GeometryObject to convert to OBJ
-   * @returns - Obj string or blank string
+   * @return {string} - Obj string or blank string
    */
   toObj(
       geometry: GeometryObject ): string {
@@ -35,6 +35,7 @@ export default class GeometryConvertor {
 
   /**
    * Convert chunked geometry to one or more GLTF/GLBs
+   *
    * @param geometry - GeometryObject to convert to GLTF / GLB
    * @param isGlb boolean - Should the output be a single GLB file?
    * @param outputDraco boolean - Should the output be Draco compressed?
@@ -80,6 +81,7 @@ export default class GeometryConvertor {
 
   /**
    * Convert geometry to a GLTF/GLB
+   *
    * @param geometry - GeometryObject to convert to GLTF / GLB
    * @param materials
    * @param isGlb boolean - Should the output be a single GLB file?
@@ -87,7 +89,7 @@ export default class GeometryConvertor {
    * @param fileUri string - base filenames for GLTF / GLB files
    * @param geometryOffset The starting offset of the geometry span to convert (default 0).
    * @param geometryCount The number of items to convert (default )
-   * @returns - Structure containing GLTF / GLB filenames + data vectors
+   * @return {ResultsGltf} - Structure containing GLTF / GLB filenames + data vectors
    */
   public toGltf(
       geometry: NativeVectorGeometryCollection,

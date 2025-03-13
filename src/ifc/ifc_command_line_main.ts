@@ -136,7 +136,7 @@ function doWork() {
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
-          } catch (ex) {
+          } catch (_ex) {
             Logger.error(
                 'Couldn\'t read file, check that it is accessible at the specified path.')
             exit()
@@ -288,6 +288,7 @@ function doWork() {
                       if (current === 'type') {
                         result = elementTypeID
                       } else {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         result = ((element as { [key: string]: any })[current])
 
                         if (result === null) {
@@ -298,7 +299,7 @@ function doWork() {
                           result = `#${result}`
                         }
                       }
-                    } catch (ex) {
+                    } catch (_ex) {
                       result = 'err'
                     }
 
@@ -371,6 +372,7 @@ function doWork() {
 
 /**
  * Serialize the geometry.
+ *
  * @param scene
  * @param fileNameNoExtension
  * @param maxGeometrySize
@@ -575,6 +577,7 @@ function serializeGeometry(
 
 /**
  * Function to extract PropertySets from an IfcStepModel
+ *
  * @param model
  */
 function propertyExtraction(model: IfcStepModel) {
@@ -584,8 +587,9 @@ function propertyExtraction(model: IfcStepModel) {
 
 /**
  * Function to extract Geometry from an IfcStepModel
+ *
  * @param model
- * @returns The scene or undefined on error.
+ * @return {IfcSceneBuilder | undefined} The scene or undefined on error.
  */
 function geometryExtraction(model: IfcStepModel):
   IfcSceneBuilder | undefined {
@@ -602,9 +606,10 @@ function geometryExtraction(model: IfcStepModel):
   const statistics = Logger.getStatistics(0)
   statistics?.setGeometryTime(executionTimeInMs)
 
-
+  const ONE_KB = 1024
+  const ONE_MB = ONE_KB * ONE_KB
    
-  statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
+  statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
 
   const ifcProjectName = conwayModel.getIfcProjectName()

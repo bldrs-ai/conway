@@ -35,7 +35,8 @@ async function initializeConwayGeom() {
 
 /**
  * Test for extracting an external mapping.
- * @returns True if the test succeeds, false if it doesn't.
+ *
+ * @return {boolean} True if the test succeeds, false if it doesn't.
  */
 function extractExternalMapping() {
 
@@ -55,7 +56,6 @@ function extractExternalMapping() {
     return false
   }
 
-   
   if ( externalMapping.items.length !== 3 ) {
     return false
   }

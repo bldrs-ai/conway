@@ -30,8 +30,9 @@ main()
 
 /**
  * Encapsultes a string in a CSV safe way.
+ *
  * @param from
- * @returns
+ * @return {string}
  */
 function csvSafeString( from: string ): string {
 
@@ -48,6 +49,7 @@ function csvSafeString( from: string ): string {
 
 /**
  * Display errors and dump errors errors to stderr
+ *
  * @param filePath
  */
 function displayErrors( filePath: string ) {
@@ -346,6 +348,7 @@ function doWork() {
 
 /**
  * Function to extract Geometry from an IfcStepModel
+ *
  * @param model
  */
 async function geometryExtraction(model: IfcStepModel):

@@ -17,8 +17,10 @@ const conwayGeometry = new ConwayGeometry()
 
 /**
  * Intialize conway geom.
+ *
+ * @return {Promise< void >}
  */
-async function initializeConwayGeom() {
+async function initializeConwayGeom(): Promise< void > {
 
   await conwayGeometry.initialize()
 }
@@ -26,8 +28,11 @@ async function initializeConwayGeom() {
 
 /**
  * Initialize the geometry extractor with index IFC.
+ *
+ * @return {Promise< ExtractResult | boolean | void >}
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor():
+  Promise< ExtractResult | boolean | void > {
 
   await initializeConwayGeom()
 
@@ -53,7 +58,8 @@ async function initializeGeometryExtractor() {
 
 /**
  * Extract the geometry from index IFC
- * @returns indicating whether the geometry extraction was successful.
+ *
+ * @return {ExtractResult} indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
@@ -64,7 +70,8 @@ let packedModel: PackedMesh< IfcStepModel > | undefined
 /**
  * Build the packed mesh model if it hasn't been built and memoize it,
  * and return the memoized value.
- * @returns The packed mesh if it can be built,
+ *
+ * @return {PackedMesh | undefined} The packed mesh if it can be built,
  * or undefined (void 0) otherwise.
  */
 function packMesh(): PackedMesh< IfcStepModel > | undefined {
@@ -86,7 +93,8 @@ const FIRST_BUILDING_ELEMENT = 265
 
 /**
  * Test that the extracted element matches the particular triangle.
- * @returns True if the first element has the expected express ID
+ *
+ * @return {boolean} True if the first element has the expected express ID
  */
 function isFirstElementCorrect(): boolean {
 
@@ -108,7 +116,8 @@ function isFirstElementCorrect(): boolean {
 
 /**
  * Test that the extracted element matches the particular triangle.
- * @returns True if the first element has the expected express ID
+ *
+ * @return {boolean} True if the first element has the expected express ID
  */
 function correctTriangleCount(): boolean {
 

@@ -17,6 +17,7 @@ export class SingleIndexSet {
    
   /**
    * Construct this with a matching elements table.
+   *
    * @param start_
    * @param end_
    * @param elements_ The elements in the index, matching the start->end indices * 2,
@@ -33,7 +34,8 @@ export class SingleIndexSet {
 
   /**
    * Get the buffer elements from this (treat as immutable)
-   * @returns The buffer elements.
+   *
+   * @return {ReadonlyUint32Array} The buffer elements.
    */
   public get buffer(): ReadonlyUint32Array {
     return this.elements_
@@ -41,18 +43,18 @@ export class SingleIndexSet {
 
   /**
    * Does the set have a particular index for a particular type.
-   * @param indexType The index type to check for.
+   *
    * @param denseIndex The dense index in the set to check.
-   * @returns True if it has the type.
+   * @return {boolean} True if it has the type.
    */
   public has( denseIndex: number ): boolean {
     return indexSetPointQuery32( denseIndex, this.elements_, this.start_, this.end_ << 1 )
   }
 
   /**
-   * Get a cursor that lets you iterate over the union of the sets of multiple indices.
-   * @param indexTypes The list of types to build a cursor out of.
-   * @returns The cursor for the list of types.
+   * Get a cursor that lets you iterate over the items in this set.
+   *
+   * @return {IIndexSetCursor} The returned cursor.
    */
   public cursor(): IIndexSetCursor {
 
@@ -62,8 +64,9 @@ export class SingleIndexSet {
 
   /**
    * Create an index from a single local id.
+   *
    * @param localId The local id.
-   * @returns The created multi-set index.
+   * @return {SingleIndexSet} The created multi-set index.
    */
   public static createFromSingleLocalId( localId: number ): SingleIndexSet {
 
@@ -83,8 +86,9 @@ export class SingleIndexSet {
 
   /**
    * Create an index from an ascended sorting set of local IDs.
+   *
    * @param localIds The local ids to create this
-   * @returns The created index sex.
+   * @return {SingleIndexSet} The created index sex.
    */
   public static createFromLocalIds( localIds: number[] | ReadonlyUint32Array ): SingleIndexSet {
 

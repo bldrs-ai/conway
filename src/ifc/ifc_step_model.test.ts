@@ -39,7 +39,8 @@ async function initializeConwayGeom() {
 
 /**
  * Test of extracting the IFC data from index.ifc and getting the right number of entities.
- * @returns Undefined if the model is not parsed, otherwise the parse
+ *
+ * @return {ParseResult | undefined} Undefined if the model is not parsed, otherwise the parse
  * result.
  */
 function extractIFCData(): ParseResult | undefined {
@@ -73,7 +74,8 @@ const SHAPE_ASPECT_EXPRESS_ID = 767
 
 /**
  * Test for extractiong a logical value from STEP.
- * @returns True if the test succeeds, false if it doesn't.
+ *
+ * @return {boolean} True if the test succeeds, false if it doesn't.
  */
 function extractLogical() {
   const bufferInput = new ParsingBuffer( ifcShapeAspectStringBuffer )
@@ -109,7 +111,8 @@ const PROPERTY_SINGLE_VALUE_ID = 181096
 
 /**
  * Test extracting an invalid unicode endpoint with graceful failure.
- * @returns True of the test succeeds
+ *
+ * @return {boolean} True of the test succeeds
  */
 function extractInvalidUnicodePoint() {
   const bufferInput = new ParsingBuffer( ifcUFCCodePointStringBuffer )
@@ -148,7 +151,8 @@ const CARTESIAN_POINT_LIST3D_ID = 171
 
 /**
  * Test to extract a cartesian point list, which is a nested array in STEP.
- * @returns True if the test succeeds, false otherwise
+ *
+ * @return {boolean} True if the test succeeds, false otherwise
  */
 function extractCartesianPointList3D() {
   const bufferInput = new ParsingBuffer( ifcCartesianPoint3DStringBuffer )
@@ -171,7 +175,7 @@ function extractCartesianPointList3D() {
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.
-   
+  /* eslint-disable no-magic-numbers */
   if ( cartesianPointList3D.CoordList.length !== 8 ) {
     return false
   }
@@ -213,7 +217,7 @@ function extractCartesianPointList3D() {
     return false
   }
 
-   
+  /* eslint-enable no-magic-numbers */
 
   return true
 }
@@ -241,7 +245,8 @@ const CARTESIAN_POINT_EXPRESS_ID = 80
 /**
  * Tests derived subtexts to handle complex functions and
  * overrides.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractDerivedSubcontext() {
   const bufferInput = new ParsingBuffer( derivedSubtextStringBuffer )
@@ -261,7 +266,7 @@ function extractDerivedSubcontext() {
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.
-   
+  /* eslint-disable no-magic-numbers */
 
   if ( geometricSubRepresentation.CoordinateSpaceDimension !== 3 ) {
     return false
@@ -293,14 +298,15 @@ function extractDerivedSubcontext() {
     return false
   }
 
-   
+  /* eslint-enable no-magic-numbers */
 
   return true
 }
 
 /**
  * Tests extracting scientific number formats.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractScientificNumber() {
   const bufferInput = new ParsingBuffer( derivedSubtextStringBuffer )
@@ -320,7 +326,7 @@ function extractScientificNumber() {
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.
-   
+  /* eslint-disable no-magic-numbers */
 
   if ( geometricSubRepresentation.Precision !== 1e-5 ) {
     return false
@@ -341,7 +347,7 @@ function extractScientificNumber() {
     return false
   }
 
-   
+  /* eslint-enable no-magic-numbers */
 
   return true
 }
@@ -363,7 +369,8 @@ const TELECOM_EXPRESS_ID = 5
 
 /**
  * Test for array extraction.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractArraysTest() {
   const bufferInput = new ParsingBuffer( personTestStringStringBuffer )
@@ -424,7 +431,8 @@ function extractArraysTest() {
 
 /**
  * Test to extract STEP enums from IFC.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractEnumsTest() {
   const bufferInput = new ParsingBuffer( personTestStringStringBuffer )
@@ -470,7 +478,8 @@ const CLASSIFICATION_EXPRESS_ID = 314
 
 /**
  * Test extracting a more complicated string with an unicode escape sequence.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractStringTest() {
   const bufferInput = new ParsingBuffer( classificationTestStringBuffer )
@@ -498,7 +507,8 @@ function extractStringTest() {
 
 /**
  * Test extracting a more complicated string with an unicode escape sequence.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function easyReflectionTest() {
   const bufferInput = new ParsingBuffer( classificationTestStringBuffer )
@@ -533,7 +543,8 @@ function easyReflectionTest() {
 
 /**
  * Test the type indexing in the model.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function indexTypeTest() {
   const bufferInput = new ParsingBuffer( indexIfcBuffer )
@@ -566,7 +577,8 @@ function indexTypeTest() {
 
 /**
  * Test extracting a more complicated string with an unicode escape sequence.
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractRawReference() {
   const bufferInput = new ParsingBuffer( derivedSubtextStringBuffer )
@@ -613,7 +625,8 @@ const CLOSED_SHELL_EXPRESS_ID = 27309
 
 /**
  * Extract a "weird" syntax array array
- * @returns True if the test passes, false otherwise.
+ *
+ * @return {boolean} True if the test passes, false otherwise.
  */
 function extractWeirdArrayTest() {
   const bufferInput = new ParsingBuffer( weirdArrayBuffer )

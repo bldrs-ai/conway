@@ -10,6 +10,7 @@ export class MultiIndexSet< IndexType extends number > {
    
   /**
    * Construct this with a prefix sum table and matching elements table.
+   *
    * @param prefixSumTable_ A prefix sum array where each item is its summed index,
    * with an extra element at the end with the entire count.
    * @param elements_ The elements in the index, matching the prefix sum indices * 2,
@@ -25,6 +26,7 @@ export class MultiIndexSet< IndexType extends number > {
 
   /**
    * All the types with a non-zero size in the index.
+   *
    * @yields {IterableIterator}
    */
   public* types() : IterableIterator< IndexType > {
@@ -45,9 +47,10 @@ export class MultiIndexSet< IndexType extends number > {
 
   /**
    * Does the set have a particular index for a particular type.
+   *
    * @param indexType The index type to check for.
    * @param denseIndex The dense index in the set to check.
-   * @returns True if it has the type.
+   * @return {boolean} True if it has the type.
    */
   public has( indexType: IndexType, denseIndex: number ): boolean {
     if ( indexType >= this.prefixSumTable_.length - 1 ) {
@@ -65,8 +68,9 @@ export class MultiIndexSet< IndexType extends number > {
 
   /**
    * Get a cursor that lets you iterate over the union of the sets of multiple indices.
+   *
    * @param indexTypes The list of types to build a cursor out of.
-   * @returns The cursor for the list of types.
+   * @return {IIndexSetCursor} The cursor for the list of types.
    */
   public cursor( ...indexTypes: IndexType[] ): IIndexSetCursor {
     const prefixSum = this.prefixSumTable_

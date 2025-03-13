@@ -7,7 +7,8 @@ const parserInstance = StepStringParser.Instance
 
 /**
  * Test that a STEP string parses as a correct value.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseCorrectValue() {
   const data = new TextEncoder().encode( '\'Test String\'' )
@@ -20,7 +21,8 @@ function testParseCorrectValue() {
 
 /**
  * Test that a STEP string escape sequence parses correctly.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseEscape() {
   const data = new TextEncoder().encode( '\'Test Escape \'\' \\S\\\' \\X\\ \\ \'' )
@@ -33,7 +35,8 @@ function testParseEscape() {
 
 /**
  * Test that a STEP string with a missing discriminator fails  to parse correctly.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseMissingDiscriminator() {
   const data = new TextEncoder().encode( 'Test String\'' )
@@ -46,7 +49,8 @@ function testParseMissingDiscriminator() {
 
 /**
  * Test that a STEP string with a missing terminator fails  to parse correctly.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseMissingTerminator() {
   const data = new TextEncoder().encode( '\'Test String' )
@@ -58,7 +62,8 @@ function testParseMissingTerminator() {
 
 /**
  * Test that a STEP string with a bunch of escapes parses correctly.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function extractCorrectValue() {
   const data = new TextEncoder().encode( '\'Test String\\X2\\1E53\\X0\\\'' )

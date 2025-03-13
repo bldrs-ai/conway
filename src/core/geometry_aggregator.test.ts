@@ -14,9 +14,12 @@ let conwayModel:IfcGeometryExtraction
 const conwayGeometry: ConwayGeometry = new ConwayGeometry()
 
 /**
+ * Initialize the geometry extractor
  *
+ * @return {Promise< boolean | ExtractResult | void >} 
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor():
+  Promise< boolean | ExtractResult | void > {
   const parser = IfcStepParser.Instance
   const indexIfcBuffer: Buffer = fs.readFileSync('data/index.ifc')
   const bufferInput = new ParsingBuffer(indexIfcBuffer)
@@ -44,7 +47,7 @@ async function initializeGeometryExtractor() {
 }
 
 /**
- * @returns indicating whether the geometry extraction was successful.
+ * @return {ExtractResult} indicating whether the geometry extraction was successful.
  */
 function extractGeometry(): ExtractResult {
   return conwayModel.extractIFCGeometryData()[0]
@@ -52,7 +55,8 @@ function extractGeometry(): ExtractResult {
 
 /**
  * Test aggregating geometry with a single chunk.
- * @returns True if the test succeeds.
+ *
+ * @return {boolean} True if the test succeeds.
  */
 function testAggregateGeometrySingle() : boolean {
 
@@ -62,7 +66,7 @@ function testAggregateGeometrySingle() : boolean {
 
   const aggregator = new GeometryAggregator(
       conwayGeometry,
-       
+      // eslint-disable-next-line no-magic-numbers
       { maxGeometrySize: 128 << 20 } )
 
   if ( extractGeometry() !== ExtractResult.COMPLETE ) {
@@ -78,7 +82,8 @@ function testAggregateGeometrySingle() : boolean {
 
 /**
  * Test aggregating geometry with multiple chunks.
- * @returns True if the test succeeds or false otherwise.
+ *
+ * @return {boolean} True if the test succeeds or false otherwise.
  */
 function testAggregateGeometryMultiple() : boolean {
 

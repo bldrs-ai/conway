@@ -43,8 +43,9 @@ export default class StepAttributeMap extends ParsingDfa16Table {
 
   /**
    * Get the attribute for a character.
+   *
    * @param char The character to match.
-   * @returns The matching type.
+   * @return {ATTRIBUTE_PARSE_TYPE} The matching type.
    */
   public get = ( char: number ) : ATTRIBUTE_PARSE_TYPE => {
     return super.get( char, ATTRIBUTE_PARSE_TYPE.NUMBER ) as ATTRIBUTE_PARSE_TYPE

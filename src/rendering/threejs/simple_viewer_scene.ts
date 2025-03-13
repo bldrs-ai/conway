@@ -5,6 +5,8 @@ import { ConwayModelLoader } from '../../loaders/conway_model_loader'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import Logger from '../../logging/logger'
 
+// This file is obvious numbers heavy composing a scene - CS
+/* eslint-disable no-magic-numbers */
 
 const CAMERA_FOV = 75
 const NEAR_RATIO = 0.05
@@ -90,6 +92,8 @@ export class SimpleViewerScene {
 
   /**
    * Set the current light direction.
+   *
+   * @param value The light direction (THREE.Vector3)
    */
   public set lightDirection( value: THREE.Vector3 ) {
 
@@ -100,7 +104,8 @@ export class SimpleViewerScene {
 
   /**
    * Get the current light direction.
-   * @returns The current light direction.
+   *
+   * @return {THREE.Vector3} The current light direction.
    */
   public get lightDirection(): THREE.Vector3 {
 
@@ -109,6 +114,7 @@ export class SimpleViewerScene {
 
   /**
    * Update the shadow quality for this
+   *
    * @param light
    * @param quality
    * @param vsm
@@ -167,7 +173,8 @@ export class SimpleViewerScene {
 
   /**
    * Are shadows enabled?
-   * @returns True if shadows are enabled.
+   *
+   * @return {boolean} True if shadows are enabled.
    */
   public get shadowsEnabled(): boolean {
 
@@ -176,6 +183,7 @@ export class SimpleViewerScene {
 
   /**
    * Are shadows enabled?
+   *
    * @param value True if shadows are enabled.
    */
   public set shadowsEnabled( value: boolean ) {
@@ -212,7 +220,8 @@ export class SimpleViewerScene {
 
   /**
    * Get the shadow quality for this.
-   * @returns The current shadow quality.
+   *
+   * @return {ShadowQuality} The current shadow quality.
    */
   public get shadowQuality(): ShadowQuality {
 
@@ -221,6 +230,7 @@ export class SimpleViewerScene {
 
   /**
    * Get the shadow quality for this.
+   *
    * @param value The new shadow value.
    */
   public set shadowQuality( value: ShadowQuality ) {
@@ -235,6 +245,7 @@ export class SimpleViewerScene {
 
   /**
    * Construct the simple viewer scene
+   *
    * @param renderer
    * @param scene
    * @param camera
@@ -282,8 +293,9 @@ export class SimpleViewerScene {
   /**
    * Load a new model, replacing any current model in the scene,
    * uses promises/exceptions for error handling
+   *
    * @param buffer The buffer to load the model from
-   * @returns A promise to await on for loading.
+   * @return {Promise< void >} A promise to await on for loading.
    */
   public async load( buffer: ArrayBuffer ): Promise< void > {
 
@@ -378,9 +390,10 @@ export class SimpleViewerScene {
         this.orbitControls.update()
       }
 
-    } catch ( e: any ) {
+    } catch ( e ) {
 
-      Logger.error( `Error thrown loading dropped file: ${e?.message ?? '<unknown>'} `)
+      Logger.error(
+        `Error thrown loading dropped file: ${(e as Error | undefined)?.message ?? '<unknown>'} `)
 
       throw e
     }
@@ -389,11 +402,12 @@ export class SimpleViewerScene {
   /**
    * Create a simple viewer scene, including the required
    * threejs artefacts and attach it to a DOM element.
+   *
    * @param element The element to attach to.
    * @param useElementDimensions If true use the width and height of the element,
    * if false use the window dimensions.
    * @param options The scene viewer options for attaching this element.
-   * @returns The created scene.
+   * @return {SimpleViewerScene} The created scene.
    */
   public static createSceneAttachedToElement(
       element: HTMLElement,

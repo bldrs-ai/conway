@@ -42,10 +42,11 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Match unprefixed hex data.
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public unprefixed = (
       input: Uint8Array,
@@ -56,10 +57,11 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Match hex data, with a C style prefix of 0x or 0X.
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public prefixed = (
       input: Uint8Array,
@@ -86,10 +88,11 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Match hex data, with a STEP style
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public step = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
      
@@ -114,10 +117,11 @@ export default class HexParser extends ParsingDfa4Table {
 
   /**
    * Parse a step hex value out to a binary value with the number of bits.
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The extracted value or undefined.
+   * @return {[Uint8Array, number] | undefined} The extracted value or undefined.
    */
   public extractStep = (
       input: Uint8Array,

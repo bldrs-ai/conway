@@ -56,10 +56,11 @@ export default class RealParser extends ParsingDfa16Table {
 
   /**
    * Match a signed real and returned the updated cursor position or undefined if no match is found
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public signed = ( input: Uint8Array, cursor: number, endCursor: number ) : number | undefined => {
     return this.match( input, REAL_TERMINUS_FLAGS, cursor, endCursor, REAL_STATES.SIGN_OR_DIGIT_I )
@@ -67,10 +68,11 @@ export default class RealParser extends ParsingDfa16Table {
 
   /**
    * Match an unsigned real and return the updated cursor position or undefined if no match is found
+   *
    * @param input The input buffer to match against.
    * @param cursor The cursor to test the match against.
    * @param endCursor The end point to look at in the buffer.
-   * @returns The end of the match or undefined if none found.
+   * @return {number | undefined} The end of the match or undefined if none found.
    */
   public unsigned = (
       input: Uint8Array,

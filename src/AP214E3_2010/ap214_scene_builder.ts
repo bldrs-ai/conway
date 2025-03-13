@@ -60,7 +60,8 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
 
   /**
    * No Spaces for AP214
-   * @returns Always false, no spaces.
+   *
+   * @return {boolean} Always false, no spaces.
    */
   public get isSpace(): boolean {
 
@@ -70,6 +71,7 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
    
   /**
    * Construct a scene geometry node
+   *
    * @param model
    * @param localID
    * @param index
@@ -233,7 +235,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param nodeIndex
-   * @returns
+   * @return {AP214SceneNode | undefined}
    */
   public getByNodeIndex(nodeIndex: number): AP214SceneNode | undefined {
     return this.scene_[nodeIndex]
@@ -242,7 +244,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param localID
-   * @returns
+   * @return {AP214SceneNode | undefined}
    */
   private get(localID: number): AP214SceneNode | undefined {
 
@@ -264,7 +266,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   /**
    *
    * @param localID
-   * @returns
+   * @return {AP214SceneTransform | undefined}
    */
   public getTransform(localID: number): AP214SceneTransform | undefined {
 
@@ -280,7 +282,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Build a packed/optimised mesh model with triangle element maps.
-   * @returns Maps materials to a geometry object
+   *
+   * @return {PackedMesh< AP214StepModel >} Maps materials to a geometry object
    * and triangle element map.
    */
   public buildPackedMeshModel(): PackedMesh<AP214StepModel> {
@@ -389,7 +392,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Are all the geometry nodes in the scene spaces
-   * @returns Are all the geometry nodes in the scene spaces
+   *
+   * @return {boolean} Are all the geometry nodes in the scene spaces
    */
   public isAllSpaces(): boolean {
 
@@ -398,10 +402,10 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Walk the current scene.
+   *
    * @yields Raw absolute matrix transform, the native absolute transform, the canonical mesh,
    * @param includeSpaces
    * the canonical material and the associated step element as it walks the hierarchy.
-   * @param walkTemporary Include temporary items.
    */
   public* walk(includeSpaces: boolean = false):
     IterableIterator<[readonly number[] | undefined,
@@ -466,8 +470,9 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   /**
    * Does this scene have a particular piece of geometry?
+   *
    * @param localID The local ID of the geometry
-   * @returns True if the scene has this geometry.
+   * @return {boolean} True if the scene has this geometry.
    */
   public hasGeometry(localID: number): boolean {
 
@@ -478,7 +483,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
    *
    * @param localID
    * @param owningElementLocalID
-   * @returns
+   * @return {AP214SceneGeometry}
    */
   public addGeometry(
       localID: number,
@@ -538,7 +543,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
    * @param localID
    * @param transform
    * @param nativeTransform
-   * @returns
+   * @return {AP214SceneTransform}
    */
   public addTransform(
       localID: number,

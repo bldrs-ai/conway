@@ -14,6 +14,7 @@ export class StepTypeIndexer< TypeIDType extends number > {
 
   /**
    * Construct this with the number of types that will be indexed.
+   *
    * @param typeCount The number of types that will be indexed.
    */
   public constructor( typeCount: number ) {
@@ -22,8 +23,9 @@ export class StepTypeIndexer< TypeIDType extends number > {
 
   /**
    * Create a type index from a set of parsed STEP elements.
+   *
    * @param elements The elements to type index.
-   * @returns The created multi-set index.
+   * @return {MultiIndexSet} The created multi-set index.
    */
   public create( elements: StepIndexEntry< TypeIDType >[] ): MultiIndexSet< TypeIDType > {
      

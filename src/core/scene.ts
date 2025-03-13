@@ -32,6 +32,7 @@ export class SceneListenerOptions {
 
   /**
    * Construct the options with default values as necessary
+   *
    * @param replayCurrentScene
    * @param disableGeometryEvents
    * @param disableTransformEvents
@@ -66,24 +67,24 @@ export interface Scene {
 
 export interface WalkableScene< BaseEntityType > extends Scene {
 
-    getByNodeIndex( nodeIndex: number ): SceneNode | undefined
+  getByNodeIndex( nodeIndex: number ): SceneNode | undefined
 
-    readonly roots: ReadonlyUint32Array | ReadonlyArray< number >
+  readonly roots: ReadonlyUint32Array | ReadonlyArray< number >
 
-    readonly conwayGeometry: ConwayGeometry
+  readonly conwayGeometry: ConwayGeometry
 
-    isAllSpaces(): boolean
+  isAllSpaces(): boolean
 
-    addSceneListener(
-      listener: SceneListener,
-      options?: SceneListenerOptions ): void
+  addSceneListener(
+    listener: SceneListener,
+    options?: SceneListenerOptions ): void
 
-    removeSceneListener( listener: SceneListener ): void
+  removeSceneListener( listener: SceneListener ): void
 
-    walk( includeSpaces?: boolean ):
-      IterableIterator<[readonly number[] | undefined,
-        NativeTransform4x4 | undefined,
-        CanonicalMesh,
-        CanonicalMaterial | undefined,
-        BaseEntityType | undefined]>
+  walk( includeSpaces?: boolean ):
+    IterableIterator<[readonly number[] | undefined,
+      NativeTransform4x4 | undefined,
+      CanonicalMesh,
+      CanonicalMaterial | undefined,
+      BaseEntityType | undefined]>
 }

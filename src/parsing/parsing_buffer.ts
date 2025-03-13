@@ -68,7 +68,8 @@ export default class ParsingBuffer {
 
   /**
    * Get the current linecount for this parser.
-   * @returns The line count.
+   *
+   * @return {number} The line count.
    */
   public get lineCount(): number {
     return this.lineCount_
@@ -76,7 +77,8 @@ export default class ParsingBuffer {
 
   /**
    * Get the current position in the buffer this parser is at.
-   * @returns The cursor position in bytes.
+   *
+   * @return {number} The cursor position in bytes.
    */
   public get cursor(): number {
     return this.cursor_
@@ -84,7 +86,8 @@ export default class ParsingBuffer {
 
   /**
    * Has this parsing buffer hit or parsed its end mark?
-   * @returns True if the parsing buffer is not passed its end mark.
+   *
+   * @return {boolean} True if the parsing buffer is not passed its end mark.
    */
   public get unfinished(): boolean {
 
@@ -94,7 +97,8 @@ export default class ParsingBuffer {
 
   /**
    * Has this parsing buffer hit or parsed its end mark?
-   * @returns True if the parsing buffer has passed its end mark.
+   *
+   * @return {boolean} True if the parsing buffer has passed its end mark.
    */
   public get finished(): boolean {
 
@@ -104,7 +108,8 @@ export default class ParsingBuffer {
 
   /**
    * Get the current cursor address of the stream, relative the initial offset.
-   * @returns The cursor relative the initial offset,
+   *
+   * @return {number} The cursor relative the initial offset,
    * instead of absolute the start of the buffer.
    */
   public get address(): number {
@@ -114,6 +119,7 @@ export default class ParsingBuffer {
 
   /**
    * Reinitialize this with a new buffer, initial offset and end offset.
+   *
    * @param buffer The buffer to initialize this with.
    * @param initialOffset The initial offset in bytes to start the cursor at in
    * the buffer.
@@ -132,6 +138,7 @@ export default class ParsingBuffer {
 
   /**
    * Construct this with a buffer, initial offset into the buffer and an end offset.
+   *
    * @param buffer Input datasource.
    * @param initialOffset The initial offset in the buffer to start parsing from (will default to 0)
    * @param endOffset The (exclusive) offset to stop parsing/treat as the end of the buffer
@@ -154,7 +161,7 @@ export default class ParsingBuffer {
 
   /**
    * Move the cursor forwards while a particular char isn't found.
-   * @param char
+   *
    * @param chars
    */
   public whileNot = ( chars: ByteBitSet ): void => {
@@ -179,7 +186,8 @@ export default class ParsingBuffer {
   /**
    * Commit a parsing cursor transaction, ending the
    * transaction at the current cursor and accepting it.
-   * @returns
+   *
+   * @return {void}
    */
   public commit = (): void => {
 
@@ -191,7 +199,8 @@ export default class ParsingBuffer {
   /**
    * Rollback a parsing transaction, moving the cursor
    * back to its value at the beginning of a transaction.
-   * @returns
+   *
+   * @return {void}
    */
   public rollback = (): void => {
 
@@ -206,7 +215,8 @@ export default class ParsingBuffer {
 
   /**
    * Eat whitespace from the stream.
-   * @returns Always true, but this allows this to be used as a matcher
+   *
+   * @return {boolean} Always true, but this allows this to be used as a matcher
    */
   public whitespace = (): boolean => {
     let   localCursor  = this.cursor_
@@ -235,8 +245,9 @@ export default class ParsingBuffer {
   /**
    * Match an encoded token at the current cursor,
    * and rewind if it's not matched.
+   *
    * @param encoded The encoded token.
-   * @returns True if the token is matched.
+   * @return {boolean} True if the token is matched.
    */
   public token = ( encoded: EncodedToken ): boolean => {
     const tokenLength = encoded.length
@@ -267,7 +278,8 @@ export default class ParsingBuffer {
 
   /**
    * Match an integer
-   * @returns True if an integer has been parsed at the current location,
+   *
+   * @return {boolean} True if an integer has been parsed at the current location,
    * false if no integer has been found and the cursor has been rewound
    */
   public integer = (): boolean => {
@@ -285,8 +297,9 @@ export default class ParsingBuffer {
   /**
    * Try and match a single matching function, with rewind semantics.
    * (i.e. return to the initial cursor on failure).
+   *
    * @param against The matching function to run.
-   * @returns True if a match is found. False otherwise.
+   * @return {boolean} True if a match is found. False otherwise.
    */
   public match = (
       against: (
@@ -307,8 +320,9 @@ export default class ParsingBuffer {
   /**
    * Try and run a sequence of parsing operations, with rewind semantics
    * (i.e. return to the initial cursor on failure).
+   *
    * @param against The sequence to run.
-   * @returns True if all operations in the sequence return true in order. False otherwise.
+   * @return {boolean} True if all operations in the sequence return true in order. False otherwise.
    */
   public sequence = ( ...against : (() => boolean)[] ): boolean => {
     const initialCursor = this.cursor_
@@ -328,8 +342,9 @@ export default class ParsingBuffer {
    * (i.e. return to the initial cursor on failure).
    *
    * Also eats whitespace before each match.
+   *
    * @param against The sequence to run.
-   * @returns True if all operations in the sequence return true in order. False otherwise.
+   * @return {boolean} True if all operations in the sequence return true in order. False otherwise.
    */
   public sequencews = ( ...against : (() => boolean)[] ): boolean => {
     const initialCursor = this.cursor_
@@ -352,8 +367,9 @@ export default class ParsingBuffer {
   /**
    * In order of specification, try each operation in turn until one succeeds,
    * rewinding the cursor on each failure.
+   *
    * @param choices The sequence to run.
-   * @returns True if any operations in the sequence return true. False otherwise.
+   * @return {boolean} True if any operations in the sequence return true. False otherwise.
    */
   public choice = ( ...choices : (() => boolean)[] ): boolean => {
     const initialCursor = this.cursor_
@@ -371,7 +387,8 @@ export default class ParsingBuffer {
 
   /**
    * Match an unsigned number.
-   * @returns True if an integer has been parsed at the current location, false if
+   *
+   * @return {boolean} True if an integer has been parsed at the current location, false if
    * no integer has been found and the cursor has been rewound
    */
   public unsigned = (): boolean => {
@@ -388,8 +405,9 @@ export default class ParsingBuffer {
 
   /**
    * Match against a single char and move the cursor forwards if so.
+   *
    * @param value A char in the ascii range that's been encoded into a number.
-   * @returns True if the match was successful.
+   * @return {boolean} True if the match was successful.
    */
   public char = ( value: EncodedAsciiCharacter ): boolean => {
     const cursor = this.cursor_
@@ -404,9 +422,9 @@ export default class ParsingBuffer {
 
   /**
    * Match against any one of the chars in a token and return the index in the token.
-   * @param value A char in the ascii range that's been encoded into a number.
-   * @param encoded
-   * @returns True if the match was successful.
+   *
+   * @param encoded The encoded token to match against
+   * @return {number | undefined} True if the match was successful.
    */
   public indexof = ( encoded: EncodedToken ): number | undefined => {
 
@@ -440,7 +458,8 @@ export default class ParsingBuffer {
 
   /**
    * Match an unsigned hex number
-   * @returns True if a hex number has been parsed at the current location,
+   *
+   * @return {boolean} True if a hex number has been parsed at the current location,
    * false if none has been found and the cursor has been rewound
    */
   public hex = (): boolean => {
@@ -449,7 +468,8 @@ export default class ParsingBuffer {
 
   /**
    * Match an unsigned hex number with a C style prefix (0x 0X)
-   * @returns True if a hex number has been parsed at the current location,
+   *
+   * @return {boolean} True if a hex number has been parsed at the current location,
    * false if none has been found and the cursor has been rewound
    */
   public hexc = (): boolean => {
@@ -458,7 +478,8 @@ export default class ParsingBuffer {
 
   /**
    * Match a real
-   * @returns True if an integer has been parsed at the current location,
+   *
+   * @return {boolean} True if an integer has been parsed at the current location,
    * false if no integer has been found and the cursor has been rewound
    */
   public real = (): boolean => {
@@ -484,7 +505,8 @@ export default class ParsingBuffer {
 
   /**
    * Looks at the current cursor value without advancing.
-   * @returns the current byte value or undefined if past end of the buffer.
+   *
+   * @return {number | undefined} the current byte value or undefined if past end of the buffer.
    */
   public peek(): number | undefined {
 
@@ -497,7 +519,8 @@ export default class ParsingBuffer {
 
   /**
    * Looks at the current cursor value and advance.
-   * @returns the current byte value or undefined if past end of the buffer.
+   *
+   * @return {number | undefined} the current byte value or undefined if past end of the buffer.
    */
   public get(): number | undefined {
 
@@ -512,7 +535,8 @@ export default class ParsingBuffer {
    * Read a real valued number from the current stream, supports scientific notation.
    *
    * Rewinds the stream if no match is found.
-   * @returns The number, or undefined if no match is found.
+   *
+   * @return {number | undefined} The number, or undefined if no match is found.
    */
   public readReal = (): number | undefined => {
     let   cursor = this.cursor_
@@ -653,7 +677,8 @@ export default class ParsingBuffer {
    * Read an unsigned integer from UTF-8 or ASCII.
    *
    * Rewinds the stream if no match is found.
-   * @returns The number, or undefined if no match is found.
+   *
+   * @return {number | undefined} The number, or undefined if no match is found.
    */
   public readUnsigned = (): number | undefined => {
     let   cursor = this.cursor_
@@ -701,7 +726,8 @@ export default class ParsingBuffer {
    * Read an unsigned integer from UTF-8 or ASCII.
    *
    * Rewinds the stream if no match is found.
-   * @returns The number, or undefined if no match is found.
+   *
+   * @return {number | undefined} The number, or undefined if no match is found.
    */
   public readInteger = (): number | undefined => {
     let   cursor = this.cursor_

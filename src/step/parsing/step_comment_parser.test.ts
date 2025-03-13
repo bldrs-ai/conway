@@ -6,7 +6,8 @@ const parserInstance = StepCommentParser.Instance
 
 /**
  * Test parsing a correct comment
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseCorrectValue() {
   const data = new TextEncoder().encode( '/* Test sdfdsf /\\/ * */' )
@@ -18,7 +19,8 @@ function testParseCorrectValue() {
 
 /**
  * Test that parsing an unterminated comment fails.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseUnterminated() {
   const data = new TextEncoder().encode( '/* Test' )
@@ -30,7 +32,8 @@ function testParseUnterminated() {
 
 /**
  * Test that parsing an non-descriminated comment fails.
- * @returns True if the test passes.
+ *
+ * @return {boolean} True if the test passes.
  */
 function testParseMissingDiscriminator() {
   const data = new TextEncoder().encode( 'TEST */' )
