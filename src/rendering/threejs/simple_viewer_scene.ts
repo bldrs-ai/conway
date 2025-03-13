@@ -320,8 +320,6 @@ export class SimpleViewerScene {
 
       conwaySceneObject.uncork()
 
-      scene.add( conwaySceneObject )
-
       conwaySceneObject.castShadow = true
       conwaySceneObject.receiveShadow = true
 
@@ -336,6 +334,13 @@ export class SimpleViewerScene {
       const sphereRadius = currentBoundingSphere.radius
 
       conwaySceneObject.position.copy( currentBoundingSphere.center.clone().negate() )
+      
+      scene.add( conwaySceneObject )
+
+      // Add this to the scene to see the bounding box.
+      // const conwaySceneObjectHelper = new THREE.BoxHelper( conwaySceneObject )
+
+      // scene.add( conwaySceneObjectHelper )
 
       const light = this.light
 

@@ -1047,8 +1047,7 @@ export class AP214GeometryExtraction {
 
     if (material === void 0) {
 
-      const readDoubleSided = from.side === surface_side.BOTH ||
-        from.side === surface_side.POSITIVE
+      const readDoubleSided = from.side === surface_side.BOTH
 
       const newMaterial: Mutable<CanonicalMaterial> = {
         name: `#${from.expressID}`,

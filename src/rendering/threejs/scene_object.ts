@@ -21,8 +21,10 @@ import { SceneNodeGeometry, SceneNodeTransform } from '../../core/scene_node'
 import { CanonicalMesh, CanonicalMeshBuffer } from '../../core/canonical_mesh'
 import { CanonicalMaterial, defaultCanonicalMaterial } from '../../core/canonical_material'
 import Logger from '../../logging/logger'
-import { BlendMode } from '../../../dependencies/conway-geom'
+import { BlendMode, Vector3 as ConwayVector3 } from '../../../dependencies/conway-geom'
 
+
+const COMPONENT_TRANSLATION_THRESHOLD = 1024
 
 const identity = new Matrix4()
 
@@ -35,6 +37,54 @@ const eventListenerOptions = new SceneListenerOptions( true, false, true )
 export default class SceneObject extends Group {
 
   private readonly sink_: SceneEventSink
+
+  /**
+   * Does this have instances that aren't spaces?
+   */
+  public get hasNonSpaces(): boolean {
+
+    return this.sink_.hasNonSpaces
+  }
+
+  /**
+   * Should the spaces of this object be shown?
+   *
+   * @return {boolean} Whether spaces are shown.
+   */
+  public get showSpaces(): boolean {
+
+    return this.sink_.showSpaces
+  }
+
+  /**
+   * Should spaces of this object be shown?
+   *
+   * @param value The value to set (default is false)
+   */
+  public set showSpaces( value: boolean ) {
+
+    this.sink_.showSpaces = value
+  }
+  
+  /**
+   * Should non-space elements of this be hidden.
+   *
+   * @return {boolean} True if non-spaces are hidden.
+   */
+  public get hideNonSpaces(): boolean {
+
+    return this.sink_.hideNonSpaces
+  }
+
+  /**
+   * Should non-space elements of this be hidden.
+   *
+   * @param value The value to set (default is false)
+   */
+  public set hideNonSpaces( value: boolean ) {
+
+    this.sink_.hideNonSpaces = value
+  }
 
   /**
    * Get the reference point for this in absolute space.
@@ -101,8 +151,102 @@ class SceneEventSink implements SceneListener {
   private readonly instances_ = new Map< SceneNodeGeometry, GeometryInstance >()
   private readonly meshes_ = new Map< CanonicalMesh, MeshCacheItem >()
 
+  private nonSpaceCount_: number = 0
+
   private firstAbsolutePoint_?: Vector4
+  private reificationOffset_?: ConwayVector3
+
   private positionNormalization_?: Matrix4
+
+  private showSpaces_: boolean = false
+  private hideNonSpaces_: boolean = false
+
+  /**
+   * Reconcile space visibility.
+   */
+  private reconcileSpaces(): void {
+
+    const onlySpaces = this.nonSpaceCount_ === 0
+
+    for ( const [node, instance] of this.instances_.entries() ) {
+
+      const batch = instance.batch
+      const batched = instance.batched
+
+      if (
+        batch === void 0 ||
+        batched === void 0 ||
+        batched.geometryID === void 0 ||
+        instance.instanceID === void 0 ) {
+
+        continue
+      }
+
+      const batchMesh = batch.mesh!
+
+      const isVisible =
+        ( !node.isSpace && !this.hideNonSpaces_ ) ||
+        ( node.isSpace && ( onlySpaces || this.showSpaces_ ) )
+
+      batchMesh.setVisibleAt( instance.instanceID!, isVisible )
+    }
+  }
+
+  /**
+   * Does this have instances that aren't spaces?
+   */
+  public get hasNonSpaces(): boolean {
+
+    return this.nonSpaceCount_ > 0
+  }
+
+  /**
+   * Should the spaces of this object be shown?
+   *
+   * @return {boolean} Whether spaces are shown.
+   */
+  public get showSpaces(): boolean {
+
+    return this.showSpaces_
+  }
+
+  /**
+   * Should spaces of this object be shown?
+   *
+   * @param value The value to set (default is false)
+   */
+  public set showSpaces( value: boolean ) {
+
+    if ( this.showSpaces_ !== value ) {
+
+      this.showSpaces_ = value
+      this.reconcileSpaces()
+    }
+  }
+  
+  /**
+   * Should non-space elements of this be hidden.
+   *
+   * @return {boolean} True if non-spaces are hidden.
+   */
+  public get hideNonSpaces(): boolean {
+
+    return this.hideNonSpaces_
+  }
+
+  /**
+   * Should non-space elements of this be hidden.
+   *
+   * @param value The value to set (default is false)
+   */
+  public set hideNonSpaces( value: boolean ) {
+
+    if ( this.hideNonSpaces_ !== value ) {
+
+      this.hideNonSpaces_ = value
+      this.reconcileSpaces()
+    }
+  }
 
   /**
    * Get the reference point for this in absolute space.
@@ -123,29 +267,6 @@ class SceneEventSink implements SceneListener {
     }
 
     return new Vector3( firstAbsolutePoint.x, firstAbsolutePoint.y, firstAbsolutePoint.z )
-  }
-
-  /**
-   * Get the position geometry in this is relative to,
-   * not this position will only be set when the first geometry is
-   * passed through to this listener.
-   *
-   * This should be used for relative positioning to work out
-   * camera relative matrices in double precision, which can then be used
-   * to translate the whole group.
-   *
-   * @return {Vector3} The relative position.
-   */
-  public get relativeTo(): Vector3 {
-
-    const firstAbsolutePoint = this.firstAbsolutePoint_
-
-    if ( firstAbsolutePoint !== void 0 ) {
-
-      return new Vector3( firstAbsolutePoint.x, firstAbsolutePoint.y, firstAbsolutePoint.z )
-    }
-
-    return new Vector3()
   }
 
   /**
@@ -180,13 +301,14 @@ class SceneEventSink implements SceneListener {
 
     this.cork_ = false
 
+    const onlySpaces = this.nonSpaceCount_ === 0
+
     for ( const batch of this.materialMap_.values() ) {
 
       const batchMesh =
         new BatchedMesh(
             batch.instanceCount,
             batch.vertexCount,
-
             batch.indexCount,
             batch.threeMaterial )
 
@@ -214,7 +336,7 @@ class SceneEventSink implements SceneListener {
       }
     }
 
-    for ( const instance of this.instances_.values() ) {
+    for ( const [node, instance] of this.instances_.entries() ) {
 
       const batch = instance.batch
       const batched = instance.batched
@@ -227,6 +349,12 @@ class SceneEventSink implements SceneListener {
       const batchMesh = batch.mesh!
 
       instance.instanceID = batchMesh.addInstance( batched.geometryID! )
+
+      const isVisible =
+        ( !node.isSpace && !this.hideNonSpaces_ ) ||
+        ( node.isSpace && ( onlySpaces || this.showSpaces_ ) )
+
+      batchMesh.setVisibleAt( instance.instanceID, isVisible )
       batchMesh.setMatrixAt( instance.instanceID, instance.transform )
     }
   }
@@ -248,12 +376,16 @@ class SceneEventSink implements SceneListener {
       const conwayGeometry = this.scene.conwayGeometry
       const fromGeometry   = from.geometry
 
+      if ( this.reificationOffset_ !== void 0 ) {
+
+        fromGeometry.reify( this.reificationOffset_ )
+      }
+
       const vertexBuffer =
         conwayGeometry.floatHeapSlice(
             fromGeometry.GetVertexData(),
             fromGeometry.GetVertexDataSize() )
 
-       
       const interleavedBuffer = new InterleavedBuffer( vertexBuffer, 6 )
 
       geometry.setIndex(
@@ -320,7 +452,7 @@ class SceneEventSink implements SceneListener {
     // Note we pass this through because adding and updating are
     // idempotent and this handled multiple added cases for the same
     // node.
-    this.onGeometryUpdated( node, transform )
+    this.onGeometryUpdated( node, transform, true )
   }
 
   /**
@@ -329,14 +461,19 @@ class SceneEventSink implements SceneListener {
    *
    * @param node
    * @param transform
+   * @param isAdded
    */
   onGeometryUpdated(
       node: SceneNodeGeometry,
-      transform?: SceneNodeTransform ): void {
+      transform?: SceneNodeTransform,
+      isAdded: boolean = false ): void {
 
-    if ( node.isSpace ) {
+    if ( isAdded && !node.isSpace ) {
 
-      return
+      if ( ( this.nonSpaceCount_++ ) === 0 && !this.cork_ ) {
+
+        this.reconcileSpaces()
+      }
     }
 
     const model = node.model
@@ -352,7 +489,7 @@ class SceneEventSink implements SceneListener {
         new Matrix4(...transformTuple)
             .transpose()
             .premultiply( invertNormalizeMat ) :
-        void 0
+        invertNormalizeMat
 
     if ( this.firstAbsolutePoint_ === void 0 && mesh !== void 0 ) {
 
@@ -362,22 +499,52 @@ class SceneEventSink implements SceneListener {
 
         const readFirstPoint = mesh.geometry.getPoint( 0 )
 
+        const maxAbsComponent =
+          Math.max(
+              Math.abs( readFirstPoint.x ),
+              Math.abs( readFirstPoint.y ),
+              Math.abs( readFirstPoint.z ) )
+
+        if ( maxAbsComponent > COMPONENT_TRANSLATION_THRESHOLD ) {
+
+          console.log( 'First read point is out of safe float range, offseting' )
+          this.reificationOffset_ = readFirstPoint
+        }
+
         const firstPointThree =
           new Vector4( readFirstPoint.x, readFirstPoint.y, readFirstPoint.z, 1 )
 
         if ( transformMatrix !== void 0 ) {
 
           firstPointThree.applyMatrix4( transformMatrix )
-
         }
 
         this.firstAbsolutePoint_ = firstPointThree
 
-        this.positionNormalization_ =
-          new Matrix4().makeTranslation(
+        if ( this.reificationOffset_ === void 0 ) {
+          this.positionNormalization_ =
+            new Matrix4().makeTranslation(
               -firstPointThree.x,
               -firstPointThree.y,
               -firstPointThree.z )
+
+        } else if ( transformMatrix !== void 0 ) {
+
+          const zeroPoint =
+            new Vector4( 0, 0, 0, 1 )
+
+          zeroPoint.applyMatrix4( transformMatrix )
+
+          this.positionNormalization_ =
+            new Matrix4().makeTranslation(
+              -zeroPoint.x,
+              -zeroPoint.y,
+              -zeroPoint.z )
+
+        } else {
+
+          this.positionNormalization_ = identity
+        }
       }
     }
 
@@ -386,6 +553,7 @@ class SceneEventSink implements SceneListener {
       if ( transformMatrix === void 0 ) {
 
         transformMatrix = this.positionNormalization_
+
       } else {
 
         transformMatrix.premultiply( this.positionNormalization_ )
@@ -558,9 +726,12 @@ class SceneEventSink implements SceneListener {
         let batchGeometry: BatchGeometry | undefined =
           instance.batched ?? batch.geometryMap.get( mesh )
 
-         
-        const vertexCount = ( mesh.geometry.GetVertexDataSize() / 6 ) | 0
+        if ( this.reificationOffset_ !== void 0 ) {
 
+          mesh.geometry.reify( this.reificationOffset_ )
+        }
+
+        const vertexCount = ( mesh.geometry.GetVertexDataSize() / 6 ) | 0
         const indexCount = ( mesh.geometry.GetIndexDataSize() ) | 0
 
         if ( this.cork_ ) {
@@ -658,6 +829,13 @@ class SceneEventSink implements SceneListener {
 
         // Geometry id must exist if the batch is uncorked.
         const instanceID = batchMesh.addInstance( batchGeometry.geometryID! )
+
+        const onlySpaces = this.nonSpaceCount_ === 0
+        const isVisible =
+          ( !node.isSpace && !this.hideNonSpaces_ ) ||
+          ( node.isSpace && ( onlySpaces || this.showSpaces_ ) )
+
+        batchMesh.setVisibleAt( instanceID, isVisible )
 
         instance.instanceID = instanceID
 

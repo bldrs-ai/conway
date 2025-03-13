@@ -183,7 +183,7 @@ export const defaultCanonicalMaterial: CanonicalMaterial = {
   name: 'Default Conway Material',
   blend: BlendMode.OPAQUE,
   baseColor: [0.7, 0.7, 0.9, 1],
-  doubleSided: true,
+  doubleSided: false,
   legacyColor: [0.7, 0.7, 0.9, 1],
   metalness: 0,
   roughness: 1,
