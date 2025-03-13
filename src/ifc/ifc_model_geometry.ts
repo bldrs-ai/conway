@@ -22,6 +22,8 @@ export class IfcModelGeometry implements ModelGeometry {
   constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {}
 
   /**
+   * Get the number of items in this.
+   *
    * @return {number}
    */
   get length(): number {
@@ -48,6 +50,7 @@ export class IfcModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Add a mesh to the geometry cache.
    *
    * @param mesh
    */
@@ -77,6 +80,7 @@ export class IfcModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Get an mesh by its matching local ID.
    *
    * @param localID
    * @return {CanonicalMesh | undefined}
@@ -86,14 +90,16 @@ export class IfcModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Allows iteration through this.
    *
-   * @return {IterableIterator<CanonicalMesh>}
+   * @return {IterableIterator}
    */
   public [Symbol.iterator](): IterableIterator<CanonicalMesh> {
     return this.meshes_.values()
   }
 
   /**
+   * Calculate the size of the geometry data in this.
    *
    * @return {number} - size of the geometry data
    */

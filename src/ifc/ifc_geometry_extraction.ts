@@ -314,7 +314,7 @@ export function extractColorOrFactorMultiply(
  */
 export class IfcGeometryExtraction {
 
-  /* eslint-disable no-magic-numbers */
+   
   private readonly TWO_DIMENSIONS: number = 2
   private readonly THREE_DIMENSIONS: number = 3
 
@@ -588,8 +588,7 @@ export class IfcGeometryExtraction {
 
   /**
    *
-   * @param initialSize number - initial size of the vector (optional)
-   * @return {NativeVectorGlmVec3} - a native std::vector<glm::vec3> from the wasm module
+   * @return {StdVector<NativeVectorGlmVec3>} - a native std::vector<glm::vec3> from the wasm module
    */
   nativeVectorVectorGlmdVec3(): StdVector<NativeVectorGlmVec3> {
     const nativeVectorVectorGlmdVec3_ =
@@ -640,15 +639,14 @@ export class IfcGeometryExtraction {
    * Create a native 32bit uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @param initialize
    * @return {NativeUintVector} - a native std::vector<uint32_t> from the wasm module
    */
-  nativeUintVector(initialize?: number): NativeUintVector {
+  nativeUintVector(initialSize?: number): NativeUintVector {
     const nativeUintVector_ = (new (this.wasmModule.UintVector)()) as NativeUintVector
 
-    if (initialize) {
+    if (initialSize) {
       // resize has a required second parameter to set default values
-      nativeUintVector_.resize(initialize, 0)
+      nativeUintVector_.resize(initialSize, 0)
     }
 
     return nativeUintVector_
@@ -658,15 +656,14 @@ export class IfcGeometryExtraction {
    * Create a native 32bit size_t vector.
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @param initialize
    * @return {NativeULongVector} - a native std::vector<size_t> from the wasm module
    */
-  nativeULongVector(initialize?: number): NativeULongVector {
+  nativeULongVector(initialSize?: number): NativeULongVector {
     const nativeULongVector_ = new (this.wasmModule.ULongVector)() as NativeULongVector
 
-    if (initialize) {
+    if (initialSize) {
       // resize has a required second parameter to set default values
-      nativeULongVector_.resize(initialize, 0)
+      nativeULongVector_.resize(initialSize, 0)
     }
 
     return nativeULongVector_
@@ -700,10 +697,9 @@ export class IfcGeometryExtraction {
    * Create a native vector of indexed polygonal faces uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @param initialize
    * @return {NativeVectorIndexedPolygonalFace} - a native object from the wasm module
    */
-  nativeIndexedPolygonalFaceVector(initialize?: number): NativeVectorIndexedPolygonalFace {
+  nativeIndexedPolygonalFaceVector(initialSize?: number): NativeVectorIndexedPolygonalFace {
     let nativeVectorIndexedPolygonalFace: NativeVectorIndexedPolygonalFace
 
     if (this.freeVectorPolygonalFaces_.length > 0) {
@@ -719,9 +715,9 @@ export class IfcGeometryExtraction {
         (this.wasmModule.VectorIndexedPolygonalFace)() as NativeVectorIndexedPolygonalFace
     }
 
-    if (initialize) {
+    if (initialSize) {
       // resize has a required second parameter to set default values
-      nativeVectorIndexedPolygonalFace.resize(initialize)
+      nativeVectorIndexedPolygonalFace.resize(initialSize)
     }
 
     return nativeVectorIndexedPolygonalFace
@@ -747,16 +743,16 @@ export class IfcGeometryExtraction {
 
   /**
    *
-   * @param initialize
+   * @param initializeSize
    * @return {NativeVectorBound3D}
    */
-  nativeBound3DVector(initialize?: number): NativeVectorBound3D {
+  nativeBound3DVector(initializeSize?: number): NativeVectorBound3D {
     const nativeVectorBound3D =
       new (this.wasmModule.Bound3DArray)() as NativeVectorBound3D
 
-    if (initialize) {
+    if (initializeSize) {
       // resize has a required second parameter to set default values
-      nativeVectorBound3D.resize(initialize)
+      nativeVectorBound3D.resize(initializeSize)
     }
 
     return nativeVectorBound3D
@@ -1516,8 +1512,7 @@ export class IfcGeometryExtraction {
 
     if (material === void 0) {
 
-      const readDoubleSided = from.Side === IfcSurfaceSide.BOTH ||
-        from.Side === IfcSurfaceSide.POSITIVE
+      const readDoubleSided = from.Side === IfcSurfaceSide.BOTH
 
       const newMaterial: Mutable<CanonicalMaterial> = {
         name: `#${from.expressID}`,
@@ -1670,7 +1665,7 @@ export class IfcGeometryExtraction {
     }
 
   }
-  /* eslint-enable no-magic-numbers */
+   
 
   /**
    * Extract a style item.
@@ -2427,6 +2422,7 @@ export class IfcGeometryExtraction {
       return ifcCurve
     }
   }
+
   /**
    * Extracts an L-shape curve from an IFC L-shape profile definition.
    *
@@ -2903,7 +2899,6 @@ export class IfcGeometryExtraction {
   }
 
 
-   
   /**
    * Extract a IfcLine curve
    *
@@ -2984,17 +2979,15 @@ export class IfcGeometryExtraction {
 
     return curve
   }
-   
 
 
-   
-  /**
-   *
-   * @param from
-   * @param parentSense
-   * @param parametersTrimmedCurve
-   * @return {CurveObject | undefined}
-   */
+    /**
+     *
+     * @param from
+     * @param parentSense
+     * @param parametersTrimmedCurve
+     * @return {CurveObject | undefined}
+     */
   extractIfcCircle(from: IfcCircle,
       parentSense:boolean = true,
       parametersTrimmedCurve?: ParamsGetIfcTrimmedCurve ): CurveObject | undefined {
@@ -3048,9 +3041,6 @@ export class IfcGeometryExtraction {
     return curve
   }
 
-   
-
-   
   /**
    *
    * @param from
@@ -3951,8 +3941,8 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from array of IfcConnectedFaceSet
-   * @param isRelVoid is from a relative void (default false)
    * @param parentLocalID parent element local ID
+   * @param isRelVoid is from a relative void (default false)
    */
   extractConnectedFaceSets(from: IfcConnectedFaceSet[],
       parentLocalID: number,
@@ -4844,7 +4834,6 @@ export class IfcGeometryExtraction {
    * @param extractOnly {true} Only extract, don't memoize and add to the scene
    * @return {ParamsAxis1Placement3D} The extracted placement.
    */
-   
   extractAxis1Placement3D(
     from: IfcAxis1Placement,
     parentLocalId: number,
@@ -4904,7 +4893,6 @@ export class IfcGeometryExtraction {
         axis1PlacementTransform.getValues(),
         axis1PlacementTransform)
   }
-
   /**
    * Extract a placement, adding it to the scene.
    *
@@ -5138,17 +5126,16 @@ export class IfcGeometryExtraction {
     }
   }
 
+
   /**
    *
    * @param from
    * @param relVoidMeshVector
-   * @param flattenedGeometry
-   * @param relVoidLocalID
-   * @param geometryCount
    * @param owningElementLocalID
    * @param relVoidLocalIDs
    * @param materialOverrideId
    * @param isSpace
+   * @return {void}
    */
   applyRelVoidToRepresentation(
       from: IfcRepresentationItem,
@@ -5249,6 +5236,7 @@ export class IfcGeometryExtraction {
       // relVoidMeshVector_.delete()
     }
   }
+
   /**
    *
    * @param from
@@ -5553,7 +5541,7 @@ export class IfcGeometryExtraction {
    * @return {number | null}
    */
   convertPrefix(prefix: IfcSIPrefix): number | null {
-    /* eslint-disable no-magic-numbers */
+     
     switch (prefix) {
       case IfcSIPrefix.EXA:
         return 1e18
@@ -5595,7 +5583,6 @@ export class IfcGeometryExtraction {
 
   /**
    *
-   * @param from
    * @param outputFilePath
    * @param geometry
    */
@@ -5612,8 +5599,6 @@ export class IfcGeometryExtraction {
   /**
    * Extract the geometry data from the IFC
    *
-   * @param model - Input IfcStepModel to extract geometry data from
-   * @param logTime boolean - print execution time (default no)
    * @return {[ExtractResult, IfcSceneBuilder]} - Enum indicating extraction result
    * + Geometry array
    */

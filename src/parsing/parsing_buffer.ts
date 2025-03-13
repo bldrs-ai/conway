@@ -162,7 +162,6 @@ export default class ParsingBuffer {
   /**
    * Move the cursor forwards while a particular char isn't found.
    *
-   * @param char
    * @param chars
    */
   public whileNot = ( chars: ByteBitSet ): void => {
@@ -424,8 +423,7 @@ export default class ParsingBuffer {
   /**
    * Match against any one of the chars in a token and return the index in the token.
    *
-   * @param value A char in the ascii range that's been encoded into a number.
-   * @param encoded
+   * @param encoded The encoded token to match against
    * @return {number | undefined} True if the match was successful.
    */
   public indexof = ( encoded: EncodedToken ): number | undefined => {

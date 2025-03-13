@@ -141,13 +141,18 @@ export default class Logger {
   }
 
   /**
+   * Create the statistics for a model ID.
    *
-   * @param modelID
+   * @param modelID The model ID to create statistics for
+   * 
+   * @return {Statistics} The created statistics object.
    */
-  public static createStatistics(modelID: number): void {
+  public static createStatistics(modelID: number): Statistics {
     const statistics: Statistics = new Statistics()
 
     this.statistics.set(modelID, statistics)
+
+    return statistics
   }
 
   /**

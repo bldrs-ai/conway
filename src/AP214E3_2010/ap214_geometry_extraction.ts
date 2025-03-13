@@ -477,7 +477,6 @@ export class AP214GeometryExtraction {
 
   /**
    *
-   * @param initialSize number - initial size of the vector (optional)
    * @return {NativeVectorGlmVec3} - a native std::vector<glm::vec3> from the wasm module
    */
   nativeVectorVectorGlmdVec3(): StdVector<NativeVectorGlmVec3> {
@@ -529,15 +528,14 @@ export class AP214GeometryExtraction {
    * Create a native 32bit uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @param initialize
    * @return {NativeUintVector} - a native std::vector<uint32_t> from the wasm module
    */
-  nativeUintVector(initialize?: number): NativeUintVector {
+  nativeUintVector(initialSize?: number): NativeUintVector {
     const nativeUintVector_ = (new (this.wasmModule.UintVector)()) as NativeUintVector
 
-    if (initialize) {
+    if (initialSize) {
       // resize has a required second parameter to set default values
-      nativeUintVector_.resize(initialize, 0)
+      nativeUintVector_.resize(initialSize, 0)
     }
 
     return nativeUintVector_
@@ -547,15 +545,14 @@ export class AP214GeometryExtraction {
    * Create a native 32bit size_t vector.
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @param initialize
    * @return {NativeULongVector} - a native std::vector<size_t> from the wasm module
    */
-  nativeULongVector(initialize?: number): NativeULongVector {
+  nativeULongVector(initialSize?: number): NativeULongVector {
     const nativeULongVector_ = new (this.wasmModule.ULongVector)() as NativeULongVector
 
-    if (initialize) {
+    if (initialSize) {
       // resize has a required second parameter to set default values
-      nativeULongVector_.resize(initialize, 0)
+      nativeULongVector_.resize(initialSize, 0)
     }
 
     return nativeULongVector_
@@ -589,10 +586,9 @@ export class AP214GeometryExtraction {
    * Create a native vector of indexed polygonal faces uint vector.
    *
    * @param initialSize number - initial size of the vector (optional)
-   * @param initialize
    * @return {NativeVectorIndexedPolygonalFace} - a native object from the wasm module
    */
-  nativeIndexedPolygonalFaceVector(initialize?: number): NativeVectorIndexedPolygonalFace {
+  nativeIndexedPolygonalFaceVector(initialSize?: number): NativeVectorIndexedPolygonalFace {
     let nativeVectorIndexedPolygonalFace: NativeVectorIndexedPolygonalFace
 
     if (this.freeVectorPolygonalFaces_.length > 0) {
@@ -608,9 +604,9 @@ export class AP214GeometryExtraction {
         (this.wasmModule.VectorIndexedPolygonalFace)() as NativeVectorIndexedPolygonalFace
     }
 
-    if (initialize) {
+    if (initialSize) {
       // resize has a required second parameter to set default values
-      nativeVectorIndexedPolygonalFace.resize(initialize)
+      nativeVectorIndexedPolygonalFace.resize(initialSize)
     }
 
     return nativeVectorIndexedPolygonalFace
@@ -1051,8 +1047,7 @@ export class AP214GeometryExtraction {
 
     if (material === void 0) {
 
-      const readDoubleSided = from.side === surface_side.BOTH ||
-        from.side === surface_side.POSITIVE
+      const readDoubleSided = from.side === surface_side.BOTH
 
       const newMaterial: Mutable<CanonicalMaterial> = {
         name: `#${from.expressID}`,
@@ -2098,7 +2093,6 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from array of AP214ConnectedFaceSet
-   * @param isRelVoid is from a relative void (default false)
    * @param parentLocalID parent element local ID
    */
   extractConnectedFaceSets(
@@ -2128,7 +2122,6 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @param isRelVoid
    */
   extractAP214FaceBasedSurfaceModel(from: face_based_surface_model) {
     const fbsmFaces = from.fbsm_faces
@@ -2174,7 +2167,6 @@ export class AP214GeometryExtraction {
    * @param from
    * @param parentLocalID
    * @param geometry_
-   * @param isRelVoid
    * @param temporary
    * @return {GeometryObject}
    */
@@ -2889,7 +2881,8 @@ export class AP214GeometryExtraction {
    *  which can be either uniform or non-uniform.
    * @return {any} The resulting transformation operator parameters.
    */
-  extractCartesianTransformOperator2D( from: cartesian_transformation_operator_2d ): any {
+  extractCartesianTransformOperator2D( from: cartesian_transformation_operator_2d ):
+    NativeTransform3x3 {
     let scale1: number = 1.0
     let scale2: number = 1.0
 
@@ -3361,7 +3354,6 @@ export class AP214GeometryExtraction {
   /**
    * Extract the geometry data from the AP214
    *
-   * @param model - Input AP214StepModel to extract geometry data from
    * @param logTime boolean - print execution time (default no)
    * @return {[ExtractResult, AP214SceneBuilder]} - Enum indicating extraction result
    * + Geometry array

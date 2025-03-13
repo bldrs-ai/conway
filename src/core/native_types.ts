@@ -26,4 +26,5 @@ export type NativeVectorMaterial = StdVector<MaterialObject>
 export type NativeVectorProfile = StdVector<ProfileObject>
 export type NativeVectorCurve = StdVector<CurveObject>
 export type NativeVectorBound3D = StdVector<Bound3DObject>
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WasmModule = any

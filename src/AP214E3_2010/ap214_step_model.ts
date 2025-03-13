@@ -7,6 +7,7 @@ import {MultiIndexSet} from '../indexing/multi_index_set'
 import { AP214ModelGeometry } from './ap214_model_geometry'
 import { AP214ModelProfile } from './ap214_model_profile'
 import AP214StepExternalMapping from './ap214_step_external_mapping'
+import { AP214MaterialCache } from './ap214_material_cache'
 
 
 const indexerInstance = new StepTypeIndexer< EntityTypesAP214 >( EntityTypesAP214Count )
@@ -19,6 +20,7 @@ export default class AP214StepModel extends StepModelBase< EntityTypesAP214 > {
   public readonly typeIndex: MultiIndexSet< EntityTypesAP214 >
   public readonly externalMappingType = AP214StepExternalMapping
   public readonly geometry = new AP214ModelGeometry()
+  public readonly materials = new AP214MaterialCache()
   public readonly profiles = new AP214ModelProfile()
 
   /**

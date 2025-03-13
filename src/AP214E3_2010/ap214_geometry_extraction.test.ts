@@ -12,9 +12,12 @@ let conwayTubeModel:AP214GeometryExtraction
 let conwayGearModel:AP214GeometryExtraction
 
 /**
+ * Initialise geometry extraction
  *
+ * @return {Promise< ExtractResult | boolean | void >} A promise with the result.
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor():
+ Promise< ExtractResult | boolean | void > {
   const parser = IfcStepParser.Instance
   const tubeBuffer: Buffer =
     fs.readFileSync('data/create-a-tube.step')

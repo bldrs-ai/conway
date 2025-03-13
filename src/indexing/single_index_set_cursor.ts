@@ -75,8 +75,7 @@ export class SingleIndexSetCursor implements IIndexSetCursor {
    * @return {SingleIndexSetCursor} The allocated cursor.
    */
   public static allocate(
-      buffer: Uint32Array,
-       
+      buffer: Uint32Array,       
       currentIndex: number = 0, // note, ? is default undefined
       end?: number ): SingleIndexSetCursor {
     end ??= buffer.length >>> 1

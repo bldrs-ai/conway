@@ -9,7 +9,6 @@ export class TriangleElementMap {
   private map_: Uint32Array
   private size_: number
 
-  // eslint-disable-next-line no-magic-numbers
   public static readonly NO_ELEMENT = 0xFFFFFFFF
 
   private currentSection_?: ReadonlyUint32Array
@@ -59,8 +58,7 @@ export class TriangleElementMap {
    *
    * @param beginTriangleIndex The beginning triangle index (inclusive)
    * @param endTriangleIndex The ending triangle index (exclusive)
-   * @param elementIndex The element index to fill in.
-   * @param elementLocalIndex
+   * @param elementLocalIndex The element index to fill in.
    */
   public addMappingRange(
       beginTriangleIndex: number,

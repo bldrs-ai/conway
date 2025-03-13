@@ -2,13 +2,14 @@ import {describe, expect, test} from '@jest/globals'
 import { SingleIndexSet } from './single_index_set'
 import { cursorIterator } from './cursor_utilities'
 
-
+// Test file is number heavy - CS
 /* eslint-disable no-magic-numbers */
+
 const ID_SET = [
   9, 17, 31, 102, 103, 1042, 1045, 1046,
   63212, 68993, 68994, ( 1 << 24 ) + 1023, ( 1 << 24 ) + 1024,
 ]
-/* eslint-enable no-magic-numbers */
+ 
 
 const PERMUTE_CONSTANT = 237
 

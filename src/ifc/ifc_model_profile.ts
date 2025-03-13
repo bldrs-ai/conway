@@ -51,7 +51,7 @@ export class IfcModelProfile implements ModelProfile {
   /**
    * Iterate through the profiles in this.
    *
-   * @return {IterableIterator<CanonicalProfile>}
+   * @return {IterableIterator}
    */
   public [Symbol.iterator](): IterableIterator<CanonicalProfile> {
     return this.profiles_.values()
@@ -80,6 +80,5 @@ export class IfcModelProfile implements ModelProfile {
 
       yield [profileItem, objFileContents]
     }
-
   }
 }

@@ -44,7 +44,6 @@ export class SingleIndexSet {
   /**
    * Does the set have a particular index for a particular type.
    *
-   * @param indexType The index type to check for.
    * @param denseIndex The dense index in the set to check.
    * @return {boolean} True if it has the type.
    */
@@ -53,10 +52,9 @@ export class SingleIndexSet {
   }
 
   /**
-   * Get a cursor that lets you iterate over the union of the sets of multiple indices.
+   * Get a cursor that lets you iterate over the items in this set.
    *
-   * @param indexTypes The list of types to build a cursor out of.
-   * @return {IIndexSetCursor} The cursor for the list of types.
+   * @return {IIndexSetCursor} The returned cursor.
    */
   public cursor(): IIndexSetCursor {
 
