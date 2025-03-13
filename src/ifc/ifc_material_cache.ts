@@ -95,7 +95,6 @@ export class IfcMaterialCache implements ModelMaterials {
    * Get the material matching a geometry node.
    *
    * @param node The geometry node to match a material for.
-   *
    * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
    */
   public getMaterialFromGeometryNode( node: SceneNodeGeometry ): CanonicalMaterial | undefined {
