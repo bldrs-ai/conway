@@ -280,10 +280,8 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
-   *
-   * @param {from} local ID array
-   * @param from
-   * @return {Uint32Array} express ID array
+   * @param from Local ID array
+   * @return express ID array
    */
   public mapLocalIDsToExpressIDs( from: ReadonlyUint32Array ): Uint32Array {
 
