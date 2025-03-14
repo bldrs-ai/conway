@@ -388,8 +388,10 @@ function validateModel(model_: IfcStepModel, query_: ParsedQuery) {
     let pass: boolean
     try {
       const expression = `${leftSide} ${operator} ${rightSide}`
-      // eslint-disable-next-line no-eval
-      pass = eval(expression)
+      // Syntactic hack to hoist eval into global scope
+      // See https://esbuild.github.io/content-types/#direct-eval
+      const evalGlobal = eval
+      pass = evalGlobal(expression)
     } catch (err) {
       fails.push({ id, propVal, reason: `eval error: ${err}` })
       failCount++
