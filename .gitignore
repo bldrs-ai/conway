@@ -37,5 +37,7 @@ scripts/*/
 benchmarks/*private
 
 #external
+/external/IFC-gen/
+/external/IFC-gen/*
 /external/IFC-gen-internal/
 /external/IFC-gen-internal/*
