@@ -154,7 +154,6 @@ class SceneEventSink implements SceneListener {
   private nonSpaceCount_: number = 0
 
   private firstAbsolutePoint_?: Vector4
-  private reificationOffset_?: ConwayVector3
 
   private positionNormalization_?: Matrix4
 
@@ -376,9 +375,23 @@ class SceneEventSink implements SceneListener {
       const conwayGeometry = this.scene.conwayGeometry
       const fromGeometry   = from.geometry
 
-      if ( this.reificationOffset_ !== void 0 ) {
+      const readFirstPoint = from.geometry.getPoint( 0 )
+      const maxAbsComponent =
+        Math.max(
+            Math.abs( readFirstPoint.x ),
+            Math.abs( readFirstPoint.y ),
+            Math.abs( readFirstPoint.z ) )
 
-        fromGeometry.reify( this.reificationOffset_ )
+      let reificationOffset: ConwayVector3 | undefined
+      let reificationOffsetMatrix: Matrix4 | undefined
+      
+      if ( maxAbsComponent > COMPONENT_TRANSLATION_THRESHOLD ) {
+
+        reificationOffset = readFirstPoint
+
+        fromGeometry.reify( reificationOffset )
+
+        reificationOffsetMatrix = new Matrix4().makeTranslation( readFirstPoint.x, readFirstPoint.y, readFirstPoint.z )
       }
 
       const vertexBuffer =
@@ -404,7 +417,8 @@ class SceneEventSink implements SceneListener {
            
           new InterleavedBufferAttribute( interleavedBuffer, 3, 3, true ) )
 
-      cacheItem = new MeshCacheItem( from, geometry )
+
+      cacheItem = new MeshCacheItem( from, geometry, reificationOffset, reificationOffsetMatrix )
 
       this.meshes_.set( from, cacheItem )
     }
@@ -481,7 +495,6 @@ class SceneEventSink implements SceneListener {
     const mesh = model.getMeshFromGeometryNode( node )
     const materialFromNode = model.getMaterialFromGeometryNode( node )
     const material = materialFromNode ?? defaultCanonicalMaterial
-
     const transformTuple = (transform?.absoluteTransform as Matrix4Tuple)
 
     let transformMatrix =
@@ -489,7 +502,7 @@ class SceneEventSink implements SceneListener {
         new Matrix4(...transformTuple)
             .transpose()
             .premultiply( invertNormalizeMat ) :
-        invertNormalizeMat
+        invertNormalizeMat.clone()
 
     if ( this.firstAbsolutePoint_ === void 0 && mesh !== void 0 ) {
 
@@ -498,18 +511,6 @@ class SceneEventSink implements SceneListener {
       if ( hasVertices ) {
 
         const readFirstPoint = mesh.geometry.getPoint( 0 )
-
-        const maxAbsComponent =
-          Math.max(
-              Math.abs( readFirstPoint.x ),
-              Math.abs( readFirstPoint.y ),
-              Math.abs( readFirstPoint.z ) )
-
-        if ( maxAbsComponent > COMPONENT_TRANSLATION_THRESHOLD ) {
-
-          console.log( 'First read point is out of safe float range, offseting' )
-          this.reificationOffset_ = readFirstPoint
-        }
 
         const firstPointThree =
           new Vector4( readFirstPoint.x, readFirstPoint.y, readFirstPoint.z, 1 )
@@ -521,30 +522,11 @@ class SceneEventSink implements SceneListener {
 
         this.firstAbsolutePoint_ = firstPointThree
 
-        if ( this.reificationOffset_ === void 0 ) {
-          this.positionNormalization_ =
-            new Matrix4().makeTranslation(
-              -firstPointThree.x,
-              -firstPointThree.y,
-              -firstPointThree.z )
-
-        } else if ( transformMatrix !== void 0 ) {
-
-          const zeroPoint =
-            new Vector4( 0, 0, 0, 1 )
-
-          zeroPoint.applyMatrix4( transformMatrix )
-
-          this.positionNormalization_ =
-            new Matrix4().makeTranslation(
-              -zeroPoint.x,
-              -zeroPoint.y,
-              -zeroPoint.z )
-
-        } else {
-
-          this.positionNormalization_ = identity
-        }
+        this.positionNormalization_ =
+          new Matrix4().makeTranslation(
+            -firstPointThree.x,
+            -firstPointThree.y,
+            -firstPointThree.z )
       }
     }
 
@@ -552,7 +534,7 @@ class SceneEventSink implements SceneListener {
 
       if ( transformMatrix === void 0 ) {
 
-        transformMatrix = this.positionNormalization_
+        transformMatrix = this.positionNormalization_.clone()
 
       } else {
 
@@ -566,9 +548,13 @@ class SceneEventSink implements SceneListener {
 
     if ( instance === void 0 ) {
 
-      instance = new GeometryInstance( node, transformMatrix ?? identity, void 0, void 0 )
+      instance = new GeometryInstance( node, transformMatrix ?? identity.clone(), void 0, void 0 )
 
       instances.set( node, instance )
+
+    } else {
+
+      instance.transform = transformMatrix ?? identity.clone()
     }
 
     const instanceMaterial = instance.material
@@ -644,6 +630,27 @@ class SceneEventSink implements SceneListener {
 
       if ( mesh !== void 0 ) {
         instance.geometry = this.getMeshItem( mesh )
+
+        const reificationOffsetMatrix = instance.geometry.reificationOffsetMatrix
+
+        if ( reificationOffsetMatrix !== void 0 ) {
+      
+          transformMatrix =
+            transformTuple !== void 0 ?
+              new Matrix4(...transformTuple)
+                  .transpose()
+                  .premultiply( invertNormalizeMat ) :
+              invertNormalizeMat.clone()
+
+          if ( this.positionNormalization_ !== void 0 ) {
+            transformMatrix.premultiply( this.positionNormalization_ )
+          }
+
+          transformMatrix.multiply( reificationOffsetMatrix )
+
+          instance.transform = transformMatrix
+        }
+
       } else {
 
         instance.geometry = void 0
@@ -725,11 +732,6 @@ class SceneEventSink implements SceneListener {
 
         let batchGeometry: BatchGeometry | undefined =
           instance.batched ?? batch.geometryMap.get( mesh )
-
-        if ( this.reificationOffset_ !== void 0 ) {
-
-          mesh.geometry.reify( this.reificationOffset_ )
-        }
 
         const vertexCount = ( mesh.geometry.GetVertexDataSize() / 6 ) | 0
         const indexCount = ( mesh.geometry.GetIndexDataSize() ) | 0
@@ -921,16 +923,19 @@ class MaterialMeshBatch {
 class MeshCacheItem {
 
   public readonly batches = new Set< MaterialMeshBatch >()
-
+  
   /**
    *
    * @param mesh The mesh for this cache item.
    * @param geometry The geometry for this cache item
+   * @param reificationOffset The reification offset for this cache item.
+   * @param reificationOffsetMatrix The reification offset matrix for this cache item.
    */
   constructor(
     public readonly mesh: CanonicalMesh,
-    public readonly geometry: BufferGeometry ) {}
-
+    public readonly geometry: BufferGeometry,
+    public reificationOffset?: ConwayVector3,
+    public reificationOffsetMatrix?: Matrix4 ) {}
 }
 
 /**
