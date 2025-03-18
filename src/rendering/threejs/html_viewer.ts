@@ -59,7 +59,7 @@ export function dropHandler( scene: SimpleViewerScene, event: DragEvent ): void 
  * 
  * @return {void}
  */
-export function initViewer(): void {
+export function initViewer(): SimpleViewerScene {
 
   const simpleViewerScene = SimpleViewerScene.createSceneAttachedToElement( document.body )
 
@@ -73,4 +73,6 @@ export function initViewer(): void {
   document.addEventListener( 'dragenter', ( e ) => e.preventDefault() )
   document.addEventListener( 'dragleave', ( e ) => e.preventDefault() )
   document.addEventListener( 'drop', ( e ) => dropHandler( simpleViewerScene, e ) )
+
+  return simpleViewerScene
 }

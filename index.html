@@ -10,22 +10,32 @@
     {
         "imports": {
             "three": "/node_modules/three/build/three.module.js",
-            "three/addons/": "/node_modules/three/examples/jsm/"
+            "three/": "/node_modules/three/"
         }
     }
   </script>
 
 		<script type="module">
+
+      // Note, the below is an example of how to get the viewer
+      // working in an emmulated non-browser environment.
+      //globalThis.process = { env: { PLATFORM: 'web' } }
+
       import {dropHandler,initViewer} from '/compiled/src/rendering/threejs/html_viewer.js'
       import {setModulePrefix} from '/compiled/dependencies/conway-geom/interface/conway_geometry.js'
 
-      globalThis.process = { env: { PLATFORM: 'web' } }
-
-      setModulePrefix( '/dependencies/conway-geom/Dist/' )
+      // Note, the below is an exmaple of how to set the module prefix
+      // for the conway-geom package when using a non-default
+      // location for the wasm distributions.
+      // setModulePrefix( '/dependencies/conway-geom/Dist/' )
 
       window.onload = () => {
 
-        initViewer()
+        // Note - here you can choose to receive the scene 
+        // from the initViewer function if you want to interact with
+        // the scene directly.
+        /*const scene = */initViewer()
+
         console.log( 'Viewer initialised' )
       }
     </script>

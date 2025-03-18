@@ -41,3 +41,4 @@ benchmarks/*private
 /external/IFC-gen/*
 /external/IFC-gen-internal/
 /external/IFC-gen-internal/*
+.parcel-cache

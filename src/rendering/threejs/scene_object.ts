@@ -385,13 +385,19 @@ class SceneEventSink implements SceneListener {
       let reificationOffset: ConwayVector3 | undefined
       let reificationOffsetMatrix: Matrix4 | undefined
       
+      // If the first point is far from the origin, reify the geometry
+
       if ( maxAbsComponent > COMPONENT_TRANSLATION_THRESHOLD ) {
 
         reificationOffset = readFirstPoint
 
         fromGeometry.reify( reificationOffset )
 
-        reificationOffsetMatrix = new Matrix4().makeTranslation( readFirstPoint.x, readFirstPoint.y, readFirstPoint.z )
+        reificationOffsetMatrix =
+          new Matrix4().makeTranslation(
+            readFirstPoint.x,
+            readFirstPoint.y,
+            readFirstPoint.z )
       }
 
       const vertexBuffer =

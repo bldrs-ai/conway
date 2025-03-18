@@ -2,7 +2,7 @@
 import * as THREE from 'three'
 import SceneObject from './scene_object'
 import { ConwayModelLoader } from '../../loaders/conway_model_loader'
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import Logger from '../../logging/logger'
 
 // This file is obvious numbers heavy composing a scene - CS
@@ -64,7 +64,7 @@ const defaultOptions: SimpleViewerSceneOptions = {
 
   shadowQuality: ShadowQuality.HIGH,
 
-  variantShadowMap: false,
+  variantShadowMap: false
 }
 
 let modelID = 0
@@ -89,6 +89,7 @@ export class SimpleViewerScene {
     new THREE.HemisphereLight( 0xAAAAAD, 0x111111, 0.5 * Math.PI )
 
   private lightDir_: THREE.Vector3 = new THREE.Vector3( 1, 1, 1 )
+
 
   /**
    * Set the current light direction.
