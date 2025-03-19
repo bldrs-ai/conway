@@ -6,6 +6,10 @@ import {
 } from '../../dependencies/conway-geom'
 
 
+// This file contains lots of colours etc - CS
+/* eslint-disable no-magic-numbers */
+
+
 export type ColorRGBA = [number, number, number, number]
 
 const ROUGNESS_CONVERSION_FACTOR = 2.0
@@ -28,9 +32,8 @@ export function exponentToRoughness(shininess: number): number {
  *
  * Uses the conversion from - http://simonstechblog.blogspot.com/2011/12/microfacet-brdf.html
  *
- * @param shininess The shinyness exponent/𝛼 to convert to roughness
- * @param roughness
- * @return {number} The resultant roughness.
+ * @param roughness The roughness to convert to shinyness/exponent
+ * @return {number} The resultant shinyness.
  */
 export function roughnessToExponent(roughness: number): number {
   return ( ROUGNESS_CONVERSION_FACTOR /
@@ -174,6 +177,19 @@ export function dumpMTL( from: CanonicalMaterial ): string {
   return result
 }
 
+ 
+export const defaultCanonicalMaterial: CanonicalMaterial = {
+
+  name: 'Default Conway Material',
+  blend: BlendMode.OPAQUE,
+  baseColor: [0.7, 0.7, 0.9, 1],
+  doubleSided: false,
+  legacyColor: [0.7, 0.7, 0.9, 1],
+  metalness: 0,
+  roughness: 1,
+  ior: 1.5,
+}
+
 
 /**
  * Convert a canonical material to a native material
@@ -196,8 +212,7 @@ export function toNativeMaterial(
       w: from.baseColor[3],
     },
     doubleSided: from.doubleSided,
-    /* eslint-disable no-magic-numbers */
-    ior: from.ior ?? 1.4,
+    ior: from.ior ?? 1.5,
     metallic: from.metalness ?? 1.0,
     roughness: from.roughness ?? 1.0,
     specular: from.specular !== void 0 ? {
@@ -212,6 +227,6 @@ export function toNativeMaterial(
       w: 1,
     },
   }
-  /* eslint-enable no-magic-numbers */
+   
   return native
 }

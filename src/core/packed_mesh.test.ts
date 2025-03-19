@@ -15,8 +15,11 @@ let conwayModel:IfcGeometryExtraction
 
 /**
  * Initialize the geometry extractor with index IFC.
+ *
+ * @return {Promise< ExtractResult | boolean | void >}
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor(): 
+  Promise< ExtractResult | boolean | void > {
   const parser = IfcStepParser.Instance
   const indexIfcBuffer: Buffer = fs.readFileSync('data/index.ifc')
   const bufferInput = new ParsingBuffer(indexIfcBuffer)

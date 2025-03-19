@@ -21,7 +21,6 @@ export default class GeometryConvertor {
   constructor( private readonly wasmModule: ConwayGeometry ) {}
 
   /**
-   * @param modelId - model ID
    * @param geometry - GeometryObject to convert to OBJ
    * @return {string} - Obj string or blank string
    */

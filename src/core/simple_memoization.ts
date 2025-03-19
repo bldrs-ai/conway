@@ -14,9 +14,8 @@ export default class SimpleMemoization< T > {
    * to add idempotency to memoized objects where needed, such as cloning them
    * or locking them.
    *
-   * @param cachePassthrough_ A function that is called to transform or clone
+   * @param cachePassthrough A function that is called to transform or clone
    * a memoized object when it is added.
-   * @param cachePassthrough
    */
   constructor( cachePassthrough?: ( from: T ) => T ) {
     this.cachePassthrough_ = cachePassthrough ?? ( ( from : T ) => from )

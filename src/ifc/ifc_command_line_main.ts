@@ -19,6 +19,7 @@ import Environment from '../utilities/environment'
 import Memory from '../memory/memory'
 import { ExtractResult } from '../core/shared_constants'
 import path from 'path'
+import { parseFileHeader } from '../loaders/loading_utilities'
 
 // create a model ID
 const modelID: number = 0
@@ -135,7 +136,7 @@ function doWork() {
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
-          } catch (ex) {
+          } catch (_ex) {
             Logger.error(
                 'Couldn\'t read file, check that it is accessible at the specified path.')
             exit()
@@ -287,6 +288,7 @@ function doWork() {
                       if (current === 'type') {
                         result = elementTypeID
                       } else {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         result = ((element as { [key: string]: any })[current])
 
                         if (result === null) {
@@ -297,7 +299,7 @@ function doWork() {
                           result = `#${result}`
                         }
                       }
-                    } catch (ex) {
+                    } catch (_ex) {
                       result = 'err'
                     }
 
@@ -365,39 +367,6 @@ function doWork() {
           Logger.printStatistics(modelID)
         })
         .help().argv
-}
-
-/**
- *
- * @param input - FILE_HEADER from step header
- * @return {string[]} array of fields in FILE_NAME
- */
-function parseFileHeader(input: string): string[] {
-  const result: string[] = []
-  let currentSegment = ''
-  let parenthesesCount = 0
-
-  for (const char of input) {
-    if (char === '(') {
-      parenthesesCount++
-    } else if (char === ')') {
-      parenthesesCount--
-    }
-
-    if (char === ',' && parenthesesCount === 0) {
-      result.push(currentSegment.trim())
-      currentSegment = ''
-    } else {
-      currentSegment += char
-    }
-  }
-
-  // Add the last segment if it's not empty
-  if (currentSegment.trim() !== '') {
-    result.push(currentSegment.trim())
-  }
-
-  return result
 }
 
 
@@ -637,9 +606,10 @@ function geometryExtraction(model: IfcStepModel):
   const statistics = Logger.getStatistics(0)
   statistics?.setGeometryTime(executionTimeInMs)
 
-
-  // eslint-disable-next-line no-magic-numbers
-  statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (1024 * 1024))
+  const ONE_KB = 1024
+  const ONE_MB = ONE_KB * ONE_KB
+   
+  statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
 
   const ifcProjectName = conwayModel.getIfcProjectName()
