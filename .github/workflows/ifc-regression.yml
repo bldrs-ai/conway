@@ -80,16 +80,11 @@ jobs:
           echo "EMSDK=$EMSDK" >> $GITHUB_ENV
           echo "EMSCRIPTEN=$EMSCRIPTEN" >> $GITHUB_ENV
 
-      # Clear cypress out to preclude the possiblity of a cached older version
-      #  leading to breakage
-      - name: Clear Cypress Cache
-        run: npx cypress cache prune
-
       # --- Build Conway Project ---
       - name: Install Dependencies and Build
         run: |
           yarn setup
-          yarn install --frozen-lockfile
+          yarn install
           yarn build-GHA-MT
 
       # --- Test Models Checkout & Regression ---
