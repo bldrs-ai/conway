@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.17.864",
+  "version": "0.17.876",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -24,6 +24,19 @@
     "./dependencies/conway-geom": "./dependencies/conway-geom/index.js",
     "./package.json": "./package.json"
   },
+  "imports": {
+    "#three": "/node_modules/three/build/three.module.js",
+    "#three/addons/": "/node_modules/three/examples/jsm/"
+  },
+  "targets": {
+    "types": false,
+    "main": false,
+    "modern": {
+      "engines": {
+        "browsers": ">= 50%"
+      }
+    }
+  },
   "scripts": {
     "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies",
     "clean": "run-script-os",
@@ -36,6 +49,8 @@
     "build-node": "yarn clean && yarn update-version && yarn build-all-release-node",
     "build-web-MT": "yarn clean && yarn update-version && yarn build-all-release-web-MT",
     "build-node-MT": "yarn clean && yarn update-version && yarn build-all-release-node-MT",
+    "build-and-serve": "yarn build-incremental && yarn build-conway_geom-web && yarn build-conway_geom-web-MT && yarn serve",
+    "serve": "yarn parcel index.html",
     "build-GHA-MT": "cd dependencies/conway-geom && chmod +x ../../bin/linux/genie && ../../bin/linux/genie gmake && cd gmake && make config=releaseemscripten ConwayGeomWasmNodeMT && cd .. && mkdir -p Dist && cp ./bin/release/* Dist/ && cp ConwayGeomWasm.d.ts Dist/ && mkdir -p ../../compiled/dependencies/conway-geom/Dist && cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist && cd ../../ && yarn build-incremental",
     "bundle": "yarn esbuild --bundle --format=esm --platform=node",
     "bundle-examples": "yarn bundle-browser && yarn bundle-validator && shx chmod +x ./compiled/examples/*-bundled.js",
@@ -43,7 +58,7 @@
     "bundle-validator": "yarn bundle compiled/examples/validator.js --outfile=compiled/examples/validator-bundled.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "generate-flamegraph": "node ./scripts/generate_flame_graph.cjs",
-    "cli-profile": "FORCE_SINGLE_THREAD='true' node --experimental-wasm-threads --prof --logfile=flamegraph.log --no-logfile-per-isolate --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js -g -n",
+    "cli-profile": "cross-env FORCE_SINGLE_THREAD='true' node --experimental-wasm-threads --prof --logfile=flamegraph.log --no-logfile-per-isolate --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js -g -n",
     "cli": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js",
     "browser": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/examples/browser.js",
     "validator": "node --experimental-wasm-threads --experimental-specifier-resolution=node ./compiled/examples/validator.js",
@@ -67,7 +82,7 @@
     "build-conway_geom-web-MT": "run-script-os",
     "build-conway_geom-web-MT:darwin": "cd ./dependencies/conway-geom/ && ./build_osx.sh release wasmWebMT && mkdir -p Dist && cp ./bin/release/* Dist/ && cp ConwayGeomWasm.d.ts Dist/ && mkdir -p ../../compiled/dependencies/conway-geom/Dist && cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist",
     "build-conway_geom-web-MT:win32": "cd .\\dependencies\\conway-geom\\ && call .\\build_win.bat release wasmWebMT && (if not exist Dist (mkdir Dist)) && xcopy .\\bin\\release\\* Dist\\ /Y/r && copy /Y ConwayGeomWasm.d.ts Dist\\ && (if not exist ..\\..\\compiled\\dependencies\\conway-geom\\Dist (mkdir ..\\..\\compiled\\dependencies\\conway-geom\\Dist)) && xcopy .\\bin\\release\\* ..\\..\\compiled\\dependencies\\conway-geom\\Dist\\ /Y/r",
-    "build-incremental": "tsc --build",
+    "build-incremental": "tsc --build && yarn ts-add-js-extension --dir=compiled",
     "build-profile-conway_geom-node": "run-script-os",
     "build-profile-conway_geom-node:darwin": "cd ./dependencies/conway-geom/ && ./build_osx.sh release wasmNode profile && mkdir -p Dist && cp ./bin/release/* Dist/ && cp ConwayGeomWasm.d.ts Dist/ && mkdir -p ../../compiled/dependencies/conway-geom/Dist && cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist",
     "build-profile-conway_geom-node:win32": "cd .\\dependencies\\conway-geom\\ && call .\\build_win.bat release wasmNode profile && (if not exist Dist (mkdir Dist)) && xcopy .\\bin\\release\\* Dist\\ /Y/r && copy /Y ConwayGeomWasm.d.ts Dist\\ && (if not exist ..\\..\\compiled\\dependencies\\conway-geom\\Dist (mkdir ..\\..\\compiled\\dependencies\\conway-geom\\Dist)) && xcopy .\\bin\\release\\* ..\\..\\compiled\\dependencies\\conway-geom\\Dist\\ /Y/r",
@@ -104,6 +119,9 @@
     "gl-matrix": "3.4.3",
     "seedrandom": "3.0.5",
     "smart-buffer": "4.2.0",
+    "three": "^0.173.0",
+    "ts-add-js-extension": "^1.6.5",
+    "vite": "^6.1.1",
     "yargs": "17.7.1"
   },
   "devDependencies": {
@@ -113,8 +131,10 @@
     "@eslint/js": "^9.21.0",
     "@types/node": "18.11.9",
     "@types/seedrandom": "3.0.5",
+    "@types/three": "^0.173.0",
     "babel-jest": "28.1.3",
     "concurrently": "7.5.0",
+    "cross-env": "^7.0.3",
     "esbuild": "0.25.0",
     "eslint": "9.21.0",
     "eslint-config-google": "0.14.0",
@@ -126,12 +146,15 @@
     "eslint-plugin-node": "11.1.0",
     "eslint-plugin-react": "7.37.4",
     "eslint-plugin-react-hooks": "5.2.0",
+    "express": "^4.21.2",
     "globals": "^16.0.0",
     "husky": "8.0.3",
     "install": "0.13.0",
     "jest": "29.6.2",
     "node-notifier": "10.0.1",
     "nodemon": "2.0.20",
+    "parcel": "^2.13.3",
+    "process": "^0.11.10",
     "rimraf": "3.0.2",
     "run-script-os": "1.1.6",
     "shx": "^0.3.4",

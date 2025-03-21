@@ -16,6 +16,7 @@ import {
 } from './AP214E3_2010_gen'
 import EntityTypesIfc from './AP214E3_2010_gen/entity_types_ap214.gen'
 
+
 /**
  * Make an array from an array.
  *
@@ -58,18 +59,18 @@ export function make_array_of_array< T >(
  * @param lower The lower bound (inclusive)
  * @param upper The upper bound (exclusive)
  * @template T The inner type of the array
- * @return {T[]} The sliced array.
+ * @return The sliced array.
  */
 export function list_to_array< T >(list: T[], lower: number, upper: number): T[] {
   return list.slice(lower, upper)
 }
 
-// eslint-disable-next-line jsdoc/require-returns-check
+ 
 /**
  *
  *
  * @param name The unit name
- * @return {dimensional_exponents} The matching exponents
+ * @return The matching exponents
  */
 export function dimensions_for_si_unit(name: si_unit_name): dimensional_exponents {
   throw new Error('Function not implemented.')
@@ -80,7 +81,7 @@ export function dimensions_for_si_unit(name: si_unit_name): dimensional_exponent
  * @param orientation
  * @param items
  * @template T The inner type of the array
- * @return {T[]} The conditionally reversed array
+ * @return The conditionally reversed array
  */
 export function conditional_reverse< T >(orientation: boolean, items: T[]): T[] {
   return orientation ? items : [...items].reverse()
@@ -101,7 +102,7 @@ export function get_basis_surface(arg0: curve): surface[] {
  * @param fromTrue
  * @param fromFalse
  * @template T The inner type of the array
- * @return {T} The chosen value
+ * @return The chosen value
  */
 export function boolean_choose< T >(orientation: boolean, fromTrue: T, fromFalse: T): T {
   return orientation ? fromTrue : fromFalse
@@ -160,7 +161,7 @@ export function get_name_value(arg0: StepEntityBase< EntityTypesIfc >): string {
  * Get the express ID of a particular entity
  *
  * @param arg0 The element to extract the express ID from
- * @return {string} The express id or "inline" for inline elements
+ * @return The express id or "inline" for inline elements
  */
 export function get_id_value(arg0: StepEntityBase< EntityTypesIfc >): string {
   return arg0.expressID?.toString() ?? 'inline'

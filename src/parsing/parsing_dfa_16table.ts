@@ -96,7 +96,7 @@ export default abstract class ParsingDfa16Table {
    *
    * @param value The byte value to lookup.
    * @param state The state to get the value for.
-   * @return {number}
+   * @return {number} The table value given a state and input byte
    */
   protected get( value: number, state: number ): number {
 

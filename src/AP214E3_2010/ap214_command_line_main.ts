@@ -205,6 +205,7 @@ async function doWork() {
                       if (current === 'type') {
                         result = elementTypeID
                       } else {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         result = ((element as { [key: string]: any })[current])
                         if (result === null) {
                           result = 'null'
@@ -237,10 +238,10 @@ async function doWork() {
 /**
  * Serialize the geometry.
  *
- * @param scene
- * @param fileNameNoExtension
- * @param maxGeometrySize
- * @param includeSpaces
+ * @param scene The scene to serialize
+ * @param fileNameNoExtension The file name of the AP214 file sans extension.
+ * @param maxGeometrySize The max geometry size per segment.
+ * @param includeSpaces Should spaces be included when walking this.
  */
 function serializeGeometry(
     scene: AP214SceneBuilder,
@@ -259,7 +260,6 @@ function serializeGeometry(
     console.log('No Geometry Found')
     return
   }
-
 
   const convertor = new GeometryConvertor( conwaywasm )
 
@@ -449,7 +449,7 @@ function serializeGeometry(
 /**
  * Function to extract Geometry from an IfcStepModel
  *
- * @param model
+ * @param model The model to extract from.
  * @return {AP214SceneBuilder | undefined} The scene or undefined on error.
  */
 function geometryExtraction(model: AP214StepModel):

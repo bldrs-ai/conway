@@ -324,8 +324,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    *
-   * @param {buffer} string buffer
-   * @param {cursor} current cursor
    * @param buffer
    * @param cursor
    * @return {{ data: string, length: number }} string and length
@@ -346,13 +344,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    
   /**
    *
-   * @param {buffer} value array
-   * @param {cursor} current cursor
-   * // eslint-disable-next-line jsdoc/no-undefined-types
-   * @param {t} ifc token type
    * @param buffer
    * @param cursor
-   * @param t
+   * @param t ifc token type
    * @return {any} ifc token
    */
   readValue(buffer: Uint8Array, cursor: number, t: IfcTokenType) {
@@ -421,16 +415,17 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   }
 
   /**
+   * Extract a flat array of references
    *
    * @param offset offset in ifc line
-   * @param rank number array rank
    * @return {Array<any>} array of values
    */
-  public extractArray(offset: number): Array<any> {
+  public extractArray(offset: number): Array< StepEntityBase< EntityTypeIDs > | undefined > {
 
-    const arrayObjects: Array<any> = this.extractLambda(offset, (buffer, cursor, endCursor) => {
+    const arrayObjects: Array< StepEntityBase< EntityTypeIDs > | undefined > =
+      this.extractLambda(offset, (buffer, cursor, endCursor) => {
 
-      const value: Array<any> = []
+      const value: Array< StepEntityBase< EntityTypeIDs > | undefined > = []
 
       for (const address of stepExtractArray(buffer, cursor, endCursor)) {
 
@@ -693,7 +688,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Extract a parse buffer at a particular vtable offset.
    *
    * @param offset
-   * @param buffer
    * @param result
    * @param module
    * @param optional

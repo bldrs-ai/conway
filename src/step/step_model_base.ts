@@ -7,10 +7,14 @@ import { IIndexSetCursor } from '../core/i_index_set_cursor'
 import { extractOneHotLow } from '../indexing/bit_operations'
 import { MultiIndexSet } from '../indexing/multi_index_set'
 import StepEntityConstructor, { StepEntityConstructorAbstract } from './step_entity_constructor'
-import { Model } from '../core/model'
+import { Model, ModelGeometry } from '../core/model'
 import { ReadonlyUint32Array } from '../core/readonly_typed_array'
 import { TriangleElementMap } from '../core/triangle_element_map'
 import InterpolationSearchTable32 from '../indexing/interpolation_search_table_32'
+import { CanonicalMaterial } from '../core/canonical_material'
+import { SceneNodeGeometry } from '../core/scene_node'
+import { CanonicalMesh } from '../core/canonical_mesh'
+import { ModelMaterials } from '../core/model_materials'
 
 
 /**
@@ -43,6 +47,10 @@ implements Iterable<BaseEntity>, Model {
    * error, and the field is optional, return null instead of throwing an exception.
    */
   public nullOnErrors: boolean = true
+
+  public abstract readonly materials?: ModelMaterials
+
+  public abstract readonly geometry?: ModelGeometry
 
   /**
    * Construct this step model with its matching schema, a buffer to read from and an element index.
@@ -220,7 +228,7 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
-   * Get the number of elements/entities in this model.
+   * Get the size in bytes of the backing buffer for this.
    *
    * @return {number} The number of elements.
    */
@@ -238,13 +246,11 @@ implements Iterable<BaseEntity>, Model {
     return this.elementIndex_.length
   }
 
-
   /**
-   * Get an inline element by its address within a data-block.
+   * Get an inline element by address.
    *
-   * @param address The addres to get the element from
-   * @return {object | undefined} The element if one exsists at
-   * that adddress, otherwise undefined.
+   * @param address
+   * @return {BaseEntity | undefined} The number of elements.
    */
   public getInlineElementByAddress(address: number | undefined): BaseEntity | undefined {
     if (address === void 0) {
@@ -259,7 +265,6 @@ implements Iterable<BaseEntity>, Model {
 
     return this.getElementByLocalID(localID)
   }
-
 
   /**
    * Given an express ID, return the matching element if one exists.
@@ -278,8 +283,9 @@ implements Iterable<BaseEntity>, Model {
     return this.getElementByLocalID(localID)
   }
 
-
   /**
+   * Map an array of local IDs to their matching express IDs.
+   *
    * @param from Local ID array
    * @return express ID array
    */
@@ -289,7 +295,6 @@ implements Iterable<BaseEntity>, Model {
 
     return from.map( (value) => index[ value ]?.expressID ?? TriangleElementMap.NO_ELEMENT )
   }
-
 
   /**
    * Given an express ID, return the matching element if one exists.
@@ -304,7 +309,6 @@ implements Iterable<BaseEntity>, Model {
 
     return index[ localID ]?.expressID
   }
-
 
   /**
    * Given a local ID (i.e. dense index/reference), return the matching element if one
@@ -335,7 +339,7 @@ implements Iterable<BaseEntity>, Model {
           this.externalMappingType
 
       if (constructorRead !== void 0) {
-         
+
         entity = new constructorRead(localID, element, this) as BaseEntity
 
         if ( this.elementMemoization ) {
@@ -481,5 +485,33 @@ implements Iterable<BaseEntity>, Model {
         yield foundElement
       }
     }
+  }
+
+
+  /**
+   * Get the material matching a geometry node.
+   *
+   * Geometry must have been extracted first.
+   *
+   * @param node The geometry node to match a material for.
+   * @return {CanonicalMaterial | undefined} A material, or undefined if it is not found.
+   */
+  public getMaterialFromGeometryNode( node: SceneNodeGeometry ):
+    CanonicalMaterial | undefined {
+
+    return this.materials?.getMaterialFromGeometryNode( node )
+  }
+
+  /**
+   * Get the mesh matching a geometry node.
+   *
+   * Geometry must have been extracted first.
+   *
+   * @param node The geometry node to match a material for.
+   * @return {CanonicalMesh | undefined} A mesh, or undefined if it is not found.
+   */
+  public getMeshFromGeometryNode( node: SceneNodeGeometry ): CanonicalMesh | undefined {
+
+    return this.geometry?.getByLocalID( node.localID )
   }
 }
