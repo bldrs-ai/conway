@@ -116,8 +116,10 @@ Conway has a test application for parsing IFC step files to see the performance 
 Use an incremental or full build to compile this file from typescript and then it can be run with:
 
 ```
-node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js [ifc file path]
-node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js -g [ifc file path]
+yarn cli [ifc file path]
+# To output geometry
+yarn cli -g [ifc file path]
+# Use -m 1024 for larger files and see CLI help for full options
 ```
 
 The included index.ifc in the repo is recommended for testing.
