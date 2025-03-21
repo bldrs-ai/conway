@@ -53,7 +53,6 @@ export function pop32( x: number ): number {
  *
  * stateBuffer needs at least 2 elements at stateBufferOffset.
  *
- * @param buffer
  * @param value
  * @param stateBuffer
  * @param stateBufferOffset

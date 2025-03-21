@@ -17,8 +17,10 @@ const conwayGeometry = new ConwayGeometry()
 
 /**
  * Intialize conway geom.
+ *
+ * @return {Promise< void >}
  */
-async function initializeConwayGeom() {
+async function initializeConwayGeom(): Promise< void > {
 
   await conwayGeometry.initialize()
 }
@@ -26,8 +28,11 @@ async function initializeConwayGeom() {
 
 /**
  * Initialize the geometry extractor with index IFC.
+ *
+ * @return {Promise< ExtractResult | boolean | void >}
  */
-async function initializeGeometryExtractor() {
+async function initializeGeometryExtractor():
+  Promise< ExtractResult | boolean | void > {
 
   await initializeConwayGeom()
 

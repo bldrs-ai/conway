@@ -310,7 +310,6 @@ export function stepExtractArrayBegin(
 /**
  * Extract a STEP an array (iterable set of indices to array values to extract)
  *
- * @param isInitial Is this the initial element?
  * @param buffer The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
@@ -543,8 +542,7 @@ const MINIMUM_REFERENCE_LENGTH = 2
  * Match an unsigned integer and return the updated cursor position or
  * undefined if no match is found
  *
- * @param buffer The buffer to extract it from.
- * @param input
+ * @param input The buffer to extract it from.
  * @param cursor The position in the buffer to try and extract it from.
  * @param endCursor The last position accessible for this read in the buffer.
  * @return {number | undefined} The reference express ID of the start of the inline element, or

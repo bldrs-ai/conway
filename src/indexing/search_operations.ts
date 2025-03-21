@@ -45,12 +45,11 @@ export function indexSetSearch32(
  * @param buffer The index set to search in.
  * @param offset The offset to the start of the range to search
  * @param end The end of the buffer.
- * @return {number} The closest found location.
+ * @return {boolean} True if the item is in the set.
  */
 export function indexSetPointQuery32(
     searchValue: number,
     buffer: Uint32Array,
-     
     offset: number = 0,
     end?: number ): boolean {
   const newOffset = indexSetSearch32( searchValue, buffer, offset, end )

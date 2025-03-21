@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<title>Conway viewer example (drag and drop).</title>
+		<style>
+			body { margin: 0; }
+		</style>
+  <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.module.js",
+            "three/": "/node_modules/three/"
+        }
+    }
+  </script>
+
+		<script type="module">
+
+      // Note, the below is an example of how to get the viewer
+      // working in an emmulated non-browser environment.
+      //globalThis.process = { env: { PLATFORM: 'web' } }
+
+      import {dropHandler,initViewer} from '/compiled/src/rendering/threejs/html_viewer.js'
+      import {setModulePrefix} from '/compiled/dependencies/conway-geom/interface/conway_geometry.js'
+
+      // Note, the below is an exmaple of how to set the module prefix
+      // for the conway-geom package when using a non-default
+      // location for the wasm distributions.
+      // setModulePrefix( '/dependencies/conway-geom/Dist/' )
+
+      window.onload = () => {
+
+        // Note - here you can choose to receive the scene 
+        // from the initViewer function if you want to interact with
+        // the scene directly.
+        /*const scene = */initViewer()
+
+        console.log( 'Viewer initialised' )
+      }
+    </script>
+	</head>
+	<body>
+	</body>
+</html>

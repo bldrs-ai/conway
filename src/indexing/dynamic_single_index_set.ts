@@ -213,8 +213,7 @@ export default class DynamicSingleIndexSet {
   /**
    * Delete a local ID from this.
    *
-   * @param key the key to delete.
-   * @param localID
+   * @param localID The local ID of the item to delete.
    * @return {boolean} True if the item existed to be deleted.
    */
   public delete( localID: number ): boolean {
@@ -281,10 +280,9 @@ export default class DynamicSingleIndexSet {
   }
 
   /**
-   * Get a cursor that lets you iterate over the union of the sets of multiple indices.
+   * Get a cursor that lets you iterate over the current set.
    *
-   * @param indexTypes The list of types to build a cursor out of.
-   * @return {IIndexSetCursor} The cursor for the list of types.
+   * @return {IIndexSetCursor} The cursor for the items currently in the set.
    */
   public cursor(): DynamicSingleIndexSetCursor {
 
