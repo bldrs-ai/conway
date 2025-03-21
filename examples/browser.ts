@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import fs from 'fs'
 import { exit } from 'process'
 import { stdin as input, stdout as output } from 'node:process'
