@@ -311,11 +311,15 @@ class SceneEventSink implements SceneListener {
             batch.indexCount,
             batch.threeMaterial )
 
+      batchMesh.perObjectFrustumCulled = false
+
       this.group.add( batchMesh )
 
       if ( batch.material.blend === BlendMode.OPAQUE && batch.material.baseColor[ 3 ] === 1 ) {
 
         batchMesh.castShadow = true
+        batchMesh.sortObjects = false
+
       }
 
       batchMesh.receiveShadow = true
@@ -671,8 +675,6 @@ class SceneEventSink implements SceneListener {
 
       if ( batch === void 0 ) {
 
-        console.log( 'batch created' )
-
         const threeMaterial = new MeshPhysicalMaterial()
 
         threeMaterial.metalness = material.metalness ?? threeMaterial.metalness
@@ -685,13 +687,17 @@ class SceneEventSink implements SceneListener {
         const materialAlpha = baseColor[ 3 ]
 
         threeMaterial.side = material.doubleSided ? DoubleSide : FrontSide
+        
+        const ALPHA_GAMMA = 2.2
+
+        const deGammaAlpha = Math.pow( materialAlpha, ALPHA_GAMMA )
 
         if ( material.blend !== BlendMode.OPAQUE && materialAlpha < 1.0 ) {
 
           threeMaterial.transparent        = true
-          threeMaterial.opacity            = materialAlpha
-          threeMaterial.premultipliedAlpha = true
-          threeMaterial.depthWrite         = false
+          threeMaterial.thickness          = 0.01
+          threeMaterial.transmission       = 1.0 - deGammaAlpha
+          threeMaterial.depthWrite         = true
           threeMaterial.side               = DoubleSide
         }
 
@@ -717,10 +723,23 @@ class SceneEventSink implements SceneListener {
               LinearSRGBColorSpace )
         }
 
+        let r = baseColor[ 0 ] / deGammaAlpha
+        let g = baseColor[ 1 ] / deGammaAlpha
+        let b = baseColor[ 2 ] / deGammaAlpha
+
+        const maxComponent = Math.max( r, g, b )
+
+        if ( maxComponent > 1 ) {
+
+          r /= maxComponent
+          g /= maxComponent
+          b /= maxComponent
+        }
+
         threeMaterial.color.setRGB(
-            baseColor[ 0 ] / baseColor[ 3 ],
-            baseColor[ 1 ] / baseColor[ 3 ],
-            baseColor[ 2 ] / baseColor[ 3 ],
+            r,
+            g,
+            b,
             LinearSRGBColorSpace )
 
         batch = new MaterialMeshBatch( material, threeMaterial )
@@ -769,6 +788,8 @@ class SceneEventSink implements SceneListener {
 
                 indexCount,
                 batch.threeMaterial )
+
+          batchMesh.perObjectFrustumCulled = false
 
           if ( batch.material.baseColor[ 3 ] < 1 ) {
 
