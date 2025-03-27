@@ -13,6 +13,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 
+
 // This file is obvious numbers heavy composing a scene - CS
 /* eslint-disable no-magic-numbers */
 
@@ -163,11 +164,21 @@ export class SimpleViewerScene {
 
   public onload?: ( scene: SimpleViewerScene, object: SceneObject ) => void
 
+  /**
+   * Is ambient occlusion enabled?
+   *
+   * @return {boolean} True if ambient occlusion is enabled. 
+   */
   public get ambientOcclusion(): boolean {
     
     return this.ambientOclussion_
   }
 
+  /**
+   * Set if ambient occlusion is enabled.
+   *
+   * @param value True if ambient occlusion is enabled. 
+   */
   public set ambientOcclusion( value: boolean ) { 
   
     this.ambientOclussion_ = value
@@ -218,8 +229,6 @@ export class SimpleViewerScene {
 
     const rgbeLoader = this.rgbeLoader_!
 
-    console.log( url )
-    
     const texture = await rgbeLoader.loadAsync( url )
     
     if ( this.premGenerator_ === void 0 ) {
@@ -322,6 +331,7 @@ export class SimpleViewerScene {
   public render(): void {
         
     const [width, height] = this.dimensionsFunction()
+
     const camera = this.camera
 
     if ( camera instanceof THREE.PerspectiveCamera ) {
@@ -336,10 +346,10 @@ export class SimpleViewerScene {
     renderer.setSize( width, height )
 
     if ( this.ambientOclussion_ ) {
-    
+
       if ( !this.composer_ ) {
 
-        this.setupAO()
+        this.setupAO( width, height, renderer.getPixelRatio())
       }
 
       const composer = this.composer_!
@@ -501,28 +511,47 @@ export class SimpleViewerScene {
     }
   }
 
-  private setupAO(): void {
+  /**
+   * Sets up ambient occlusion for the scene.
+   *
+   * @param width The width of the scene.
+   * @param height The height of the scene.
+   * @param pixelRatio The pixel ratio of the scene.
+   */
+  private setupAO( width: number, height: number, pixelRatio: number ): void {
 
     const renderer = this.renderer
 
     const composer = new EffectComposer( renderer )
 
+    composer.setSize( width, height )
+    composer.setPixelRatio( pixelRatio )
+
     this.composer_ = composer
 
     const renderPass = new RenderPass( this.scene, this.camera )
+    
+    renderPass.setSize( width, height )
+
     composer.addPass( renderPass )
   
     const gtaoPass = new GTAOPass( this.scene, this.camera )
 
+    gtaoPass.setSize( width, height )
+
     gtaoPass.blendIntensity = 0.5
 
-    composer.addPass( gtaoPass )
-  
+    composer.addPass( gtaoPass )    
+
     const outputPass = new OutputPass()
     
+    outputPass.setSize( width, height )
+
     composer.addPass( outputPass )
 
     const fxaaPass = new ShaderPass( FXAAShader )
+
+    fxaaPass.setSize( width, height )
 
     composer.addPass( fxaaPass )
   }
@@ -683,7 +712,20 @@ export class SimpleViewerScene {
         DEFAULT_FAR )
 
     renderer.sortObjects = true
-    renderer.setPixelRatio( window.devicePixelRatio )
+
+    let pixelRatio = window.devicePixelRatio
+
+    let worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+
+    while ( worstCaseTextureSize > renderer.capabilities.maxTextureSize && pixelRatio > 1) {
+
+      pixelRatio /= 2
+      pixelRatio  = Math.min( pixelRatio, 1 )
+
+      worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+    }
+
+    renderer.setPixelRatio( pixelRatio )
     renderer.setSize( startingWidth, startingHeight )
 
     element.appendChild( renderer.domElement )
