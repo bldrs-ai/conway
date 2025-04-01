@@ -29,14 +29,28 @@
       // location for the wasm distributions.
       // setModulePrefix( '/dependencies/conway-geom/Dist/' )
 
-      window.onload = () => {
+      window.onload = async () => {
 
         // Note - here you can choose to receive the scene 
         // from the initViewer function if you want to interact with
         // the scene directly.
-        /*const scene = */initViewer()
+        const scene = initViewer()
+
+        scene.hasAmbientLight = true
 
         console.log( 'Viewer initialised' )
+
+        scene.onload = async () => {
+
+          // Load a HDR environment map background
+          await scene.loadEquirectangularEnvironmentMapHDR( 'data/quarry_cloudy_2k.hdr' )
+
+          console.log( 'HDR environment map loaded' )
+
+          scene.hasAmbientLight = false
+          scene.onload = void 0 // Remove the onload listener
+        }
+
       }
     </script>
 	</head>

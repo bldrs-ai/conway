@@ -3,7 +3,16 @@ import * as THREE from 'three'
 import SceneObject from './scene_object'
 import { ConwayModelLoader } from '../../loaders/conway_model_loader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Logger from '../../logging/logger'
+
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
+
 
 // This file is obvious numbers heavy composing a scene - CS
 /* eslint-disable no-magic-numbers */
@@ -32,19 +41,67 @@ export const enum ShadowQuality {
  */
 export interface SimpleViewerSceneOptions {
 
+  /**
+   * Are shadows enabled? (defualt true)
+   */
   shadows?: boolean
 
+  /**
+   * Is the directional light enabled? (default true)
+   */
   directionalLight?: boolean
 
+  /**
+   * Should we setup an orbit control? (default true)
+   */
   orbitControl?: boolean
 
+  /**
+   * Should we add an ambient light? (default true)
+   *
+   * Set to false if you load an environment map and don't want
+   * an extra ambient light, as the environment map itself acts as an 
+   * ambient light. 
+   */
   ambientLight?: boolean
 
+  /**
+   * Should we initialise the camera to the model? (default true)
+   */
   initialiseCameraToModel?: boolean
 
+  /**
+   * The shadow quality to use. (default ShadowQuality.HIGH)
+   */
   shadowQuality?: ShadowQuality
 
+  /**
+   * Should we use variant shadow mapping? (default false)
+   */
   variantShadowMap?: boolean
+
+  /**
+   * Should we enable HDR tone mapping? (default true)
+   */
+  enableHDRToneMap?: boolean
+
+  /**
+   * Should we use the filmic tone mapping? (default true)
+   *
+   * Enables using ACES filmic tone tapping,
+   * otherwise neutral tonemapping will be used.
+   */
+  filmicTonMap?: boolean
+
+  /**
+   * The exposure for the tonemapping. (default 0.25)
+   */
+  toneMapExposure?: number
+
+  /**
+   * Is ambient occlusion enabled? (default true)
+   */
+  ao?: boolean
 }
 
 /**
@@ -64,7 +121,15 @@ const defaultOptions: SimpleViewerSceneOptions = {
 
   shadowQuality: ShadowQuality.HIGH,
 
-  variantShadowMap: false
+  variantShadowMap: false,
+
+  enableHDRToneMap: true,
+  
+  filmicTonMap: true,
+
+  ao: true,
+
+  toneMapExposure: 0.5
 }
 
 let modelID = 0
@@ -90,6 +155,97 @@ export class SimpleViewerScene {
 
   private lightDir_: THREE.Vector3 = new THREE.Vector3( 1, 1, 1 )
 
+  private rgbeLoader_? : RGBELoader
+  private premGenerator_?: THREE.PMREMGenerator
+  
+  private composer_?: EffectComposer
+
+  private ambientOclussion_: boolean
+
+  public onload?: ( scene: SimpleViewerScene, object: SceneObject ) => void
+
+  /**
+   * Is ambient occlusion enabled?
+   *
+   * @return {boolean} True if ambient occlusion is enabled. 
+   */
+  public get ambientOcclusion(): boolean {
+    
+    return this.ambientOclussion_
+  }
+
+  /**
+   * Set if ambient occlusion is enabled.
+   *
+   * @param value True if ambient occlusion is enabled. 
+   */
+  public set ambientOcclusion( value: boolean ) { 
+  
+    this.ambientOclussion_ = value
+  }
+
+  /**
+   * Does this scene have an ambient light in it?
+   *
+   * @return {boolean} True if the scene has an ambient light. 
+   */
+  public get hasAmbientLight(): boolean {
+
+    return this.scene.children.includes( this.ambient )
+  }
+  
+  /**
+   * Set if this scene has an ambient light.
+   *
+   * @param value True if the scene has an ambient light.
+   */
+  public set hasAmbientLight( value: boolean ) {
+  
+    if ( value !== this.hasAmbientLight ) {
+
+      if ( value ) {
+      
+        this.scene.add( this.ambient )
+        
+      } else {
+        
+        this.scene.remove( this.ambient )
+      }
+    }
+  }
+
+  /**
+   * Load an equirectangular environment map in HDR format.
+   * 
+   * @param url The URL to the HDR file.
+   * @return {Promise< void >} A promise to await on for loading.
+   */
+  public async loadEquirectangularEnvironmentMapHDR( url: string ): Promise< void > {
+  
+    if ( this.rgbeLoader_ === void 0 ) {
+
+      this.rgbeLoader_ = new RGBELoader()
+    }
+
+    const rgbeLoader = this.rgbeLoader_!
+
+    const texture = await rgbeLoader.loadAsync( url )
+    
+    if ( this.premGenerator_ === void 0 ) {
+      
+      this.premGenerator_ = new THREE.PMREMGenerator( this.renderer )
+    }
+
+    texture.mapping = THREE.EquirectangularReflectionMapping
+
+    this.scene.background = texture
+
+    const premGenerator = this.premGenerator_!
+
+    const premTexture = premGenerator.fromEquirectangular( texture)
+
+    this.scene.environment = premTexture.texture
+  } 
 
   /**
    * Set the current light direction.
@@ -170,6 +326,57 @@ export class SimpleViewerScene {
 
     light.shadow.needsUpdate = true
 
+  }
+
+  public render(): void {
+        
+    const [width, height] = this.dimensionsFunction()
+
+    const camera = this.camera
+
+    if ( camera instanceof THREE.PerspectiveCamera ) {
+      camera.aspect = width / height
+    }
+
+    camera.updateProjectionMatrix()
+
+    const renderer = this.renderer
+    const scene = this.scene
+
+    renderer.setSize( width, height )
+
+    if ( this.ambientOclussion_ ) {
+
+      if ( !this.composer_ ) {
+
+        this.setupAO( width, height, renderer.getPixelRatio())
+      }
+
+      const composer = this.composer_!
+
+      composer.setSize( width, height )
+
+      composer.passes.forEach( ( pass ) => { 
+        pass.setSize( width, height )
+
+        if ( pass instanceof ShaderPass ) {
+    
+          const pixelRatio = renderer.getPixelRatio()
+
+          const resolution = pass.material.uniforms[ 'resolution' ].value
+
+          resolution.x = 1 / ( width * pixelRatio )
+          resolution.y = 1 / ( height * pixelRatio )      
+        }        
+
+      } )
+
+      composer.render()
+    
+    } else {
+
+      renderer.render( scene, camera )
+    }
   }
 
   /**
@@ -258,7 +465,9 @@ export class SimpleViewerScene {
     public readonly scene: THREE.Scene,
     public readonly camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
     public readonly dimensionsFunction: () => [number, number],
-    private readonly options: SimpleViewerSceneOptions = defaultOptions ) {
+    private readonly options: SimpleViewerSceneOptions = defaultOptions ) {   
+
+    this.ambientOclussion_ = options.ao ?? !!defaultOptions.ao
 
     if ( options.ambientLight ?? defaultOptions.ambientLight ) {
 
@@ -289,6 +498,62 @@ export class SimpleViewerScene {
             options.variantShadowMap ?? defaultOptions.variantShadowMap! )
       }
     }
+
+    if ( options.enableHDRToneMap ?? !!defaultOptions.enableHDRToneMap ) {
+        
+      renderer.toneMapping         = 
+        options.filmicTonMap ?? !!defaultOptions.filmicTonMap ?
+          THREE.ACESFilmicToneMapping :
+          THREE.NeutralToneMapping
+
+      renderer.toneMappingExposure =
+        options.toneMapExposure ?? defaultOptions.toneMapExposure!
+    }
+  }
+
+  /**
+   * Sets up ambient occlusion for the scene.
+   *
+   * @param width The width of the scene.
+   * @param height The height of the scene.
+   * @param pixelRatio The pixel ratio of the scene.
+   */
+  private setupAO( width: number, height: number, pixelRatio: number ): void {
+
+    const renderer = this.renderer
+
+    const composer = new EffectComposer( renderer )
+
+    composer.setSize( width, height )
+    composer.setPixelRatio( pixelRatio )
+
+    this.composer_ = composer
+
+    const renderPass = new RenderPass( this.scene, this.camera )
+    
+    renderPass.setSize( width, height )
+
+    composer.addPass( renderPass )
+  
+    const gtaoPass = new GTAOPass( this.scene, this.camera )
+
+    gtaoPass.setSize( width, height )
+
+    gtaoPass.blendIntensity = 0.5
+
+    composer.addPass( gtaoPass )    
+
+    const outputPass = new OutputPass()
+    
+    outputPass.setSize( width, height )
+
+    composer.addPass( outputPass )
+
+    const fxaaPass = new ShaderPass( FXAAShader )
+
+    fxaaPass.setSize( width, height )
+
+    composer.addPass( fxaaPass )
   }
 
   /**
@@ -396,6 +661,11 @@ export class SimpleViewerScene {
         this.orbitControls.update()
       }
 
+      if ( this.onload !== void 0 ) {
+
+        this.onload( this, conwaySceneObject )
+      }
+
     } catch ( e ) {
 
       Logger.error(
@@ -433,7 +703,7 @@ export class SimpleViewerScene {
 
     const [startingWidth, startingHeight] = dimensionsFunction()
 
-    const renderer = new THREE.WebGLRenderer( { antialias: true } )
+    const renderer = new THREE.WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true } )
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(
         CAMERA_FOV,
@@ -442,7 +712,20 @@ export class SimpleViewerScene {
         DEFAULT_FAR )
 
     renderer.sortObjects = true
-    renderer.setPixelRatio( window.devicePixelRatio )
+
+    let pixelRatio = window.devicePixelRatio
+
+    let worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+
+    while ( worstCaseTextureSize > renderer.capabilities.maxTextureSize && pixelRatio > 1) {
+
+      pixelRatio /= 2
+      pixelRatio  = Math.min( pixelRatio, 1 )
+
+      worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+    }
+
+    renderer.setPixelRatio( pixelRatio )
     renderer.setSize( startingWidth, startingHeight )
 
     element.appendChild( renderer.domElement )
@@ -465,18 +748,13 @@ export class SimpleViewerScene {
       } )
     }
 
+    const result = new SimpleViewerScene( renderer, scene, camera, dimensionsFunction, options )
+
     renderer.setAnimationLoop( () => {
 
-      const [width, height] = dimensionsFunction()
-
-      camera.aspect = width / height
-
-      camera.updateProjectionMatrix()
-
-      renderer.setSize( width, height )
-      renderer.render( scene, camera )
+      result.render()
     })
 
-    return new SimpleViewerScene( renderer, scene, camera, dimensionsFunction, options )
+    return result
   }
 }
