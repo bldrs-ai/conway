@@ -370,6 +370,8 @@ function validateModel(model_: IfcStepModel, query_: ParsedQuery) {
   console.log(`\nValidation Report for Query: ${className}${expressID !==
     undefined ? `[#${  expressID  }]` : ''}.${property} ${operator} ${value}`)
 
+  const operation = new Function( 'a', 'b', `return ( ( a ) ${operator} ( b ) )` )
+
   for (const e of entities) {
     const id = (e as any).expressID
     const propVal = getPropertyValue(e, property)
@@ -381,14 +383,9 @@ function validateModel(model_: IfcStepModel, query_: ParsedQuery) {
       continue
     }
 
-    const leftSide = JSON.stringify(propVal)
-    const rightSide = value
-
     let pass: boolean
     try {
-      const expression = `${leftSide} ${operator} ${rightSide}`
-      // eslint-disable-next-line no-eval
-      pass = eval(expression)
+      pass = operation( propVal, value )
     } catch (err) {
       fails.push({ id, propVal, reason: `eval error: ${err}` })
       failCount++

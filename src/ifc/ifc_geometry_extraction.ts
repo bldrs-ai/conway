@@ -1574,7 +1574,6 @@ export class IfcGeometryExtraction {
             case IfcReflectanceMethodEnum.BLINN: {
 
               newMaterial.metalness = 0.0
-              newMaterial.roughness ??= 1
               newMaterial.ior ??= 1.4
               break
             }
@@ -1656,8 +1655,8 @@ export class IfcGeometryExtraction {
       const isTransparent = newMaterial.baseColor[3] < 1.0
 
       newMaterial.metalness ??= 0
-      newMaterial.roughness ??= 0
-      newMaterial.ior ??= 1.4
+      newMaterial.roughness ??= isTransparent ? 0.05 : 0.9
+      newMaterial.ior ??= isTransparent ? 1.52 : 1.4
       newMaterial.doubleSided = isTransparent || newMaterial.doubleSided
       newMaterial.blend = isTransparent ? BlendMode.BLEND : BlendMode.OPAQUE
 
@@ -1665,6 +1664,7 @@ export class IfcGeometryExtraction {
     }
 
   }
+  /* eslint-enable no-magic-numbers */
    
 
   /**
@@ -5534,7 +5534,9 @@ export class IfcGeometryExtraction {
       }
     }
   }
+ 
 
+  /* eslint-disable no-magic-numbers */ // No magic numbers disabled
   /**
    *
    * @param prefix
@@ -5580,6 +5582,7 @@ export class IfcGeometryExtraction {
     }
 
   }
+  /* eslint-enable no-magic-numbers */ // No magic numbers disabled
 
   /**
    *
@@ -5617,6 +5620,7 @@ export class IfcGeometryExtraction {
 
       // 256 meg limit for memoization - smaller models get a big
       // win from memoization, but much larger models it uses far too much heap.
+      // eslint-disable-next-line no-magic-numbers
       const MEMOIZATION_THRESHOLD = 256 * 1024 * 1024
 
       if ( this.lowMemoryMode || this.model.bufferBytesize > MEMOIZATION_THRESHOLD ) {
