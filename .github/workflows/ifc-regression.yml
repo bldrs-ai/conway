@@ -172,7 +172,7 @@ jobs:
       - name: Create NPM Package
         id: npm_pack
         run: |
-          PACKAGE_TGZ=$(npm pack)
+          PACKAGE_TGZ=$(npm pack 2>&1 | grep "filename:" | sed 's/.*filename: //')
           echo "PACKAGE_TGZ=${PACKAGE_TGZ}" >> $GITHUB_ENV
           echo "package_tgz=${PACKAGE_TGZ}" >> $GITHUB_OUTPUT
 
