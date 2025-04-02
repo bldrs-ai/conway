@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import fs from 'fs'
 import { exit } from 'process'
 import { EntityFieldDescription } from '../src/core/entity_field_description'
