@@ -51,6 +51,7 @@
     "build-node-MT": "yarn clean && yarn update-version && yarn build-all-release-node-MT",
     "build-and-serve": "yarn build-incremental && yarn build-conway_geom-web && yarn build-conway_geom-web-MT && yarn serve",
     "serve": "yarn parcel index.html",
+    "build-GHA-all": "cd dependencies/conway-geom && chmod +x ../../bin/linux/genie && ../../bin/linux/genie gmake && cd gmake && make config=releaseemscripten ConwayGeomWasmNode ConwayGeomWasmNodeMT ConwayGeomWasmWeb ConwayGeomWasmWebMT && cd .. && mkdir -p Dist && cp ./bin/release/* Dist/ && cp ConwayGeomWasm.d.ts Dist/ && mkdir -p ../../compiled/dependencies/conway-geom/Dist && cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist && cd ../../ && yarn build-incremental",
     "build-GHA-MT": "cd dependencies/conway-geom && chmod +x ../../bin/linux/genie && ../../bin/linux/genie gmake && cd gmake && make config=releaseemscripten ConwayGeomWasmNodeMT && cd .. && mkdir -p Dist && cp ./bin/release/* Dist/ && cp ConwayGeomWasm.d.ts Dist/ && mkdir -p ../../compiled/dependencies/conway-geom/Dist && cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist && cd ../../ && yarn build-incremental",
     "bundle": "yarn esbuild --bundle --format=esm --platform=node",
     "bundle-examples": "yarn bundle-browser && yarn bundle-validator && shx chmod +x ./compiled/examples/*-bundled.js",
