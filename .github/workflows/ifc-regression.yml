@@ -168,15 +168,19 @@ jobs:
           echo "$ERRORS_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
-      # --- Create and Upload NPM Package Artifact ---
+      # --- Create NPM Package and capture filename ---
       - name: Create NPM Package
-        run: npm pack
+        id: npm_pack
+        run: |
+          PACKAGE_TGZ=$(npm pack)
+          echo "PACKAGE_TGZ=${PACKAGE_TGZ}" >> $GITHUB_ENV
+          echo "package_tgz=${PACKAGE_TGZ}" >> $GITHUB_OUTPUT
 
       - name: Upload NPM Package Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: npm-package
-          path: '*.tgz'
+          name: ${{ steps.npm_pack.outputs.package_tgz }}
+          path: ${{ steps.npm_pack.outputs.package_tgz }}
 
       # --- Comment on Pull Request with Regression Results and Artifact Link ---
       - name: Comment on Pull Request with Regression Results and NPM Package Artifact
@@ -187,14 +191,16 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             ## IFC Regression Results
-      
+
             **Failed.csv:**
             ${{ steps.regression_results.outputs.failed_output }}
-      
+
             **Errors.csv:**
             ${{ steps.regression_results.outputs.errors_output }}
 
             **NPM Package Artifact:**
-            Download the package [here](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) (look for artifact "npm-package").
+            The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.
+            Download it from [this run’s artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) 
+            (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
       
     
