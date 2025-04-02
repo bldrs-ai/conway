@@ -177,7 +177,7 @@ jobs:
           echo "package_tgz=${PACKAGE_TGZ}" >> $GITHUB_OUTPUT
 
       - name: Upload NPM Package Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.npm_pack.outputs.package_tgz }}
           path: ${{ steps.npm_pack.outputs.package_tgz }}
