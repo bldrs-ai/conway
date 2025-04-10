@@ -194,6 +194,10 @@ import IfcModelCurves from './ifc_model_curves'
 import { CsgMemoization, CsgOperationType } from '../core/csg_operations'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 
+/**
+ * Limit the depth of nested CSG operations where we memoizae the results.
+ */
+const MAXIMUM_CSG_MEMOIZATION_DEPTH = 20
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 
@@ -355,6 +359,8 @@ export class IfcGeometryExtraction {
   private identity3DNativeMatrix: NativeTransform4x4
 
   private csgMemoization: boolean = true
+
+  private csgDepth: number = 0
 
   /**
    * Construct a geometry extraction from an IFC step model and conway model
@@ -1151,167 +1157,176 @@ export class IfcGeometryExtraction {
       }
     }
 
-    this.csgOperations.add(
-        from.localID,
-        {
-          type: CsgOperationType.DIFFERENCE,
-          operand1ID: from.FirstOperand.localID,
-          operand2ID: from.SecondOperand.localID,
-        },
-        true )
+    ++this.csgDepth
 
-    if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
-      from.FirstOperand instanceof IfcPolygonalFaceSet ||
-      from.FirstOperand instanceof IfcBooleanClippingResult ||
-      from.FirstOperand instanceof IfcBooleanResult ||
-      from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
-      from.FirstOperand instanceof IfcHalfSpaceSolid ||
-      from.FirstOperand instanceof IfcFacetedBrep) {
-      this.extractBooleanOperand(from.FirstOperand, isRelVoid, from, isRelVoid)
-    }
+    try {
 
-    if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
-      from.SecondOperand instanceof IfcPolygonalFaceSet ||
-      from.SecondOperand instanceof IfcBooleanClippingResult ||
-      from.SecondOperand instanceof IfcBooleanResult ||
-      from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
-      from.SecondOperand instanceof IfcHalfSpaceSolid ||
-      from.SecondOperand instanceof IfcFacetedBrep) {
-      this.extractBooleanOperand(from.SecondOperand, isRelVoid, undefined, true )
-    }
+      this.csgOperations.add(
+          from.localID,
+          {
+            type: CsgOperationType.DIFFERENCE,
+            operand1ID: from.FirstOperand.localID,
+            operand2ID: from.SecondOperand.localID,
+          },
+          true )
 
-    // get geometry TODO(nickcastel50): eventually support flattening meshes
-    let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-    let firstMesh: CanonicalMesh | undefined
-    const flatFirstMeshVectorFromParts: boolean = false
-
-    if (isRelVoid) {
-      firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
-    } else {
-      firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
-    }
-
-    if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-
-      /* const _testEntity = this.model.getElementByLocalID(firstMesh.localID)!
-      const outputFilePath_ =
-      `${_testEntity.expressID}_${EntityTypesIfc[_testEntity.type]}FIRST_MESH.obj`
-
-      this.dumpGeometry(outputFilePath_, firstMesh.geometry) */
-
-      // const geometryParts = firstMesh.geometry.getParts()
-
-      // if (geometryParts.size() > 0) {
-      //   /* for (let geometryPartIndex = 0;
-      //     geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
-      //     flatFirstMeshVector.push_back(geometryParts.get(geometryPartIndex))
-      //   }*/
-      //   flatFirstMeshVector = geometryParts
-      //   flatFirstMeshVectorFromParts = true
-      // } else {
-      flatFirstMeshVector = this.nativeVectorGeometry()
-      flatFirstMeshVector.push_back(firstMesh.geometry)
-      // }
-    } else {
-      Logger.error(
-          `Error extracting firstOperand geometry for expressID: 
-        ${from.FirstOperand.expressID} - type: 
-        ${EntityTypesIfc[from.FirstOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
-      return
-    }
-
-    let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-    const flatSecondMeshVectorFromParts: boolean = false
-    let secondMesh: CanonicalMesh | undefined
-
-    if (isRelVoid) {
-      secondMesh = this.model.voidGeometry.getByLocalID(from.SecondOperand.localID)
-    } else {
-      secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
-    }
-    if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-
-      flatSecondMeshVector = this.nativeVectorGeometry()
-      flatSecondMeshVector.push_back(secondMesh.geometry)
-    } else {
-      Logger.error(
-          `Error extracting secondOperand geometry for expressID: 
-        ${from.SecondOperand.localID} - type:
-         ${EntityTypesIfc[from.SecondOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
-      return
-    }
-
-    const parameters = this.paramsGetBooleanResultPool!.acquire()
-
-    parameters.flatFirstMesh = flatFirstMeshVector
-    parameters.flatSecondMesh = flatSecondMeshVector
-    parameters.operatorType = from.Operator.valueOf()
-    parameters.isSubtractOperand = isRelVoid
-
-    const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
-
-
-    // const outputFilePath =
-    // `${from.expressID}_${EntityTypesIfc[from.type]}_post_subtract_test.obj`
-
-    // this.dumpGeometry(outputFilePath, booleanGeometryObject)
-
-    if (firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY &&
-        secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-
-      const canonicalMesh: CanonicalMesh = {
-        type: CanonicalMeshType.BUFFER_GEOMETRY,
-        geometry: booleanGeometryObject,
-        localID: from.localID,
-        model: this.model,
-        temporary: false,
+      if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
+        from.FirstOperand instanceof IfcPolygonalFaceSet ||
+        from.FirstOperand instanceof IfcBooleanClippingResult ||
+        from.FirstOperand instanceof IfcBooleanResult ||
+        from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
+        from.FirstOperand instanceof IfcHalfSpaceSolid ||
+        from.FirstOperand instanceof IfcFacetedBrep) {
+        this.extractBooleanOperand(from.FirstOperand, isRelVoid, from, isRelVoid)
       }
 
-      const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
-      if (styledItemLocalID_ !== undefined) {
-        const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
-        this.extractStyledItem(styledItem_)
+      if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
+        from.SecondOperand instanceof IfcPolygonalFaceSet ||
+        from.SecondOperand instanceof IfcBooleanClippingResult ||
+        from.SecondOperand instanceof IfcBooleanResult ||
+        from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
+        from.SecondOperand instanceof IfcHalfSpaceSolid ||
+        from.SecondOperand instanceof IfcFacetedBrep) {
+        this.extractBooleanOperand(from.SecondOperand, isRelVoid, undefined, true )
+      }
+
+      // get geometry TODO(nickcastel50): eventually support flattening meshes
+      let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
+      let firstMesh: CanonicalMesh | undefined
+      const flatFirstMeshVectorFromParts: boolean = false
+
+      if (isRelVoid) {
+        firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
       } else {
-        // get material from first operand
-        const firstOperandStyledItemLocalID_ =
-        this.materials.styledItemMap.get(from.FirstOperand.localID)
-        if (firstOperandStyledItemLocalID_ !== undefined) {
-          const firstOperandStyledItem =
-          this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
-          this.extractStyledItem(firstOperandStyledItem, from)
-        }
+        firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
       }
 
-      // add mesh to the list of mesh objects
-      if (!isRelVoid) {
-        if ( !this.csgMemoization &&
-          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
-          this.dropNonSceneGeometry(firstMesh.localID)
-          this.dropNonSceneGeometry(secondMesh.localID)
-        }
+      if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-        this.model.geometry.add(canonicalMesh)
+        /* const _testEntity = this.model.getElementByLocalID(firstMesh.localID)!
+        const outputFilePath_ =
+        `${_testEntity.expressID}_${EntityTypesIfc[_testEntity.type]}FIRST_MESH.obj`
+
+        this.dumpGeometry(outputFilePath_, firstMesh.geometry) */
+
+        // const geometryParts = firstMesh.geometry.getParts()
+
+        // if (geometryParts.size() > 0) {
+        //   /* for (let geometryPartIndex = 0;
+        //     geometryPartIndex < geometryParts.size(); ++geometryPartIndex) {
+        //     flatFirstMeshVector.push_back(geometryParts.get(geometryPartIndex))
+        //   }*/
+        //   flatFirstMeshVector = geometryParts
+        //   flatFirstMeshVectorFromParts = true
+        // } else {
+        flatFirstMeshVector = this.nativeVectorGeometry()
+        flatFirstMeshVector.push_back(firstMesh.geometry)
+        // }
       } else {
+        Logger.error(
+            `Error extracting firstOperand geometry for expressID: 
+          ${from.FirstOperand.expressID} - type: 
+          ${EntityTypesIfc[from.FirstOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
+        return
+      }
 
-        if ( !this.csgMemoization &&
-          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
-          this.model.voidGeometry.delete(firstMesh.localID)
-          this.model.voidGeometry.delete(secondMesh.localID)
+      let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
+      const flatSecondMeshVectorFromParts: boolean = false
+      let secondMesh: CanonicalMesh | undefined
+
+      if (isRelVoid) {
+        secondMesh = this.model.voidGeometry.getByLocalID(from.SecondOperand.localID)
+      } else {
+        secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
+      }
+      if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+
+        flatSecondMeshVector = this.nativeVectorGeometry()
+        flatSecondMeshVector.push_back(secondMesh.geometry)
+      } else {
+        Logger.error(
+            `Error extracting secondOperand geometry for expressID: 
+          ${from.SecondOperand.localID} - type:
+          ${EntityTypesIfc[from.SecondOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
+        return
+      }
+
+      const parameters = this.paramsGetBooleanResultPool!.acquire()
+
+      parameters.flatFirstMesh = flatFirstMeshVector
+      parameters.flatSecondMesh = flatSecondMeshVector
+      parameters.operatorType = from.Operator.valueOf()
+      parameters.isSubtractOperand = isRelVoid
+
+      const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
+
+
+      // const outputFilePath =
+      // `${from.expressID}_${EntityTypesIfc[from.type]}_post_subtract_test.obj`
+
+      // this.dumpGeometry(outputFilePath, booleanGeometryObject)
+
+      if (firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY &&
+          secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+
+        const canonicalMesh: CanonicalMesh = {
+          type: CanonicalMeshType.BUFFER_GEOMETRY,
+          geometry: booleanGeometryObject,
+          localID: from.localID,
+          model: this.model,
+          temporary: false,
         }
 
-        this.model.voidGeometry.add(canonicalMesh)
+        const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
+        if (styledItemLocalID_ !== undefined) {
+          const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
+          this.extractStyledItem(styledItem_)
+        } else {
+          // get material from first operand
+          const firstOperandStyledItemLocalID_ =
+          this.materials.styledItemMap.get(from.FirstOperand.localID)
+          if (firstOperandStyledItemLocalID_ !== undefined) {
+            const firstOperandStyledItem =
+            this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
+            this.extractStyledItem(firstOperandStyledItem, from)
+          }
+        }
+
+        // add mesh to the list of mesh objects
+        if (!isRelVoid) {
+          if ( ( !this.csgMemoization &&
+            RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ) {
+            this.dropNonSceneGeometry(firstMesh.localID)
+            this.dropNonSceneGeometry(secondMesh.localID)
+          }
+
+          this.model.geometry.add(canonicalMesh)
+        } else {
+
+          if ( !this.csgMemoization &&
+            RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+            this.model.voidGeometry.delete(firstMesh.localID)
+            this.model.voidGeometry.delete(secondMesh.localID)
+          }
+
+          this.model.voidGeometry.add(canonicalMesh)
+        }
       }
-    }
 
-    if (!flatFirstMeshVectorFromParts) {
-      flatFirstMeshVector.delete()
-    }
+      if (!flatFirstMeshVectorFromParts) {
+        flatFirstMeshVector.delete()
+      }
 
-    if (!flatSecondMeshVectorFromParts) {
-      flatSecondMeshVector.delete()
-    }
+      if (!flatSecondMeshVectorFromParts) {
+        flatSecondMeshVector.delete()
+      }
 
-    this.paramsGetBooleanResultPool!.release(parameters)
+      this.paramsGetBooleanResultPool!.release(parameters)
+
+    } finally {
+
+      --this.csgDepth
+    }
   }
 
    
@@ -1366,133 +1381,142 @@ export class IfcGeometryExtraction {
       this.extractIfcFacetedBrep(from, true, isRelVoid)
     } else if (from instanceof IfcBooleanResult) {
 
-      if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
-        from.FirstOperand instanceof IfcPolygonalFaceSet ||
-        from.FirstOperand instanceof IfcBooleanClippingResult ||
-        from.FirstOperand instanceof IfcBooleanResult ||
-        from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
-        from.FirstOperand instanceof IfcHalfSpaceSolid ||
-        from.FirstOperand instanceof IfcFacetedBrep) {
+      ++this.csgDepth
 
-        this.extractBooleanOperand(
-            from.FirstOperand, isRelVoid, representationItem, isSecondOperand)
-      }
+      try {
 
-      if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
-        from.SecondOperand instanceof IfcPolygonalFaceSet ||
-        from.SecondOperand instanceof IfcBooleanClippingResult ||
-        from.SecondOperand instanceof IfcBooleanResult ||
-        from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
-        from.SecondOperand instanceof IfcHalfSpaceSolid ||
-        from.SecondOperand instanceof IfcFacetedBrep) {
-        this.extractBooleanOperand(from.SecondOperand, isRelVoid, void 0, true )
-      }
+        if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
+          from.FirstOperand instanceof IfcPolygonalFaceSet ||
+          from.FirstOperand instanceof IfcBooleanClippingResult ||
+          from.FirstOperand instanceof IfcBooleanResult ||
+          from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
+          from.FirstOperand instanceof IfcHalfSpaceSolid ||
+          from.FirstOperand instanceof IfcFacetedBrep) {
 
-      // get geometry TODO(nickcastel50): eventually support flattening meshes
-      let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      const flatFirstMeshVectorFromParts: boolean = false
-      let firstMesh: CanonicalMesh | undefined
-
-      if (isRelVoid) {
-        firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
-      } else {
-        firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
-      }
-      if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-
-        flatFirstMeshVector = this.nativeVectorGeometry()
-        flatFirstMeshVector.push_back(firstMesh.geometry)
-      } else {
-        Logger.error(
-            `(Operand) Error extracting firstOperand geometry for expressID: 
-          ${from.FirstOperand.expressID} - type: 
-          ${EntityTypesIfc[from.FirstOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
-        return
-      }
-
-      let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      const flatSecondMeshVectorFromParts: boolean = false
-      let secondMesh: CanonicalMesh | undefined
-
-      if (isRelVoid) {
-        secondMesh = this.model.voidGeometry.getByLocalID(from.SecondOperand.localID)
-      } else {
-        secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
-      }
-      if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-
-        flatSecondMeshVector = this.nativeVectorGeometry()
-        flatSecondMeshVector.push_back(secondMesh.geometry)
-      } else {
-        Logger.error(
-            `(Operand) Error extracting secondOperand geometry for expressID: 
-          ${from.SecondOperand.expressID} - type:
-           ${EntityTypesIfc[from.SecondOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
-        return
-      }
-
-      const parameters = this.paramsGetBooleanResultPool!.acquire()
-
-      parameters.flatFirstMesh = flatFirstMeshVector
-      parameters.flatSecondMesh = flatSecondMeshVector
-      parameters.operatorType = from.Operator.valueOf()
-      parameters.isSubtractOperand = isSecondOperand
-
-      const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
-
-      const canonicalMesh: CanonicalMesh = {
-        type: CanonicalMeshType.BUFFER_GEOMETRY,
-        geometry: booleanGeometryObject,
-        localID: from.localID,
-        model: this.model,
-        temporary: true,
-      }
-
-      const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
-      if (styledItemLocalID_ !== undefined) {
-        const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
-        this.extractStyledItem(styledItem_)
-      } else {
-        // get material from first operand
-        const firstOperandStyledItemLocalID_ =
-        this.materials.styledItemMap.get(from.FirstOperand.localID)
-        if (firstOperandStyledItemLocalID_ !== undefined) {
-          const firstOperandStyledItem =
-          this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
-          this.extractStyledItem(firstOperandStyledItem, representationItem)
-        }
-      }
-
-      // add mesh to the list of mesh objects
-      if (!isRelVoid) {
-
-        if ( !this.csgMemoization &&
-          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
-          this.dropNonSceneGeometry(firstMesh.localID)
-          this.dropNonSceneGeometry(secondMesh.localID)
+          this.extractBooleanOperand(
+              from.FirstOperand, isRelVoid, representationItem, isSecondOperand)
         }
 
-        this.model.geometry.add(canonicalMesh)
-      } else {
-
-        if ( !this.csgMemoization &&
-          RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
-          this.model.voidGeometry.delete(firstMesh.localID)
-          this.model.voidGeometry.delete(secondMesh.localID)
+        if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
+          from.SecondOperand instanceof IfcPolygonalFaceSet ||
+          from.SecondOperand instanceof IfcBooleanClippingResult ||
+          from.SecondOperand instanceof IfcBooleanResult ||
+          from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
+          from.SecondOperand instanceof IfcHalfSpaceSolid ||
+          from.SecondOperand instanceof IfcFacetedBrep) {
+          this.extractBooleanOperand(from.SecondOperand, isRelVoid, void 0, true )
         }
 
-        this.model.voidGeometry.add(canonicalMesh)
-      }
+        // get geometry TODO(nickcastel50): eventually support flattening meshes
+        let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
+        const flatFirstMeshVectorFromParts: boolean = false
+        let firstMesh: CanonicalMesh | undefined
 
-      if (!flatFirstMeshVectorFromParts) {
-        flatFirstMeshVector.delete()
-      }
+        if (isRelVoid) {
+          firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
+        } else {
+          firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
+        }
+        if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
-      if (!flatSecondMeshVectorFromParts) {
-        flatSecondMeshVector.delete()
-      }
+          flatFirstMeshVector = this.nativeVectorGeometry()
+          flatFirstMeshVector.push_back(firstMesh.geometry)
+        } else {
+          Logger.error(
+              `(Operand) Error extracting firstOperand geometry for expressID: 
+            ${from.FirstOperand.expressID} - type: 
+            ${EntityTypesIfc[from.FirstOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
+          return
+        }
 
-      this.paramsGetBooleanResultPool!.release(parameters)
+        let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
+        const flatSecondMeshVectorFromParts: boolean = false
+        let secondMesh: CanonicalMesh | undefined
+
+        if (isRelVoid) {
+          secondMesh = this.model.voidGeometry.getByLocalID(from.SecondOperand.localID)
+        } else {
+          secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
+        }
+        if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+
+          flatSecondMeshVector = this.nativeVectorGeometry()
+          flatSecondMeshVector.push_back(secondMesh.geometry)
+        } else {
+          Logger.error(
+              `(Operand) Error extracting secondOperand geometry for expressID: 
+            ${from.SecondOperand.expressID} - type:
+            ${EntityTypesIfc[from.SecondOperand.type]} - isRelVoid: ${isRelVoid ? 'True' : 'False'}`)
+          return
+        }
+
+        const parameters = this.paramsGetBooleanResultPool!.acquire()
+
+        parameters.flatFirstMesh = flatFirstMeshVector
+        parameters.flatSecondMesh = flatSecondMeshVector
+        parameters.operatorType = from.Operator.valueOf()
+        parameters.isSubtractOperand = isSecondOperand
+
+        const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
+
+        const canonicalMesh: CanonicalMesh = {
+          type: CanonicalMeshType.BUFFER_GEOMETRY,
+          geometry: booleanGeometryObject,
+          localID: from.localID,
+          model: this.model,
+          temporary: true,
+        }
+
+        const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
+        if (styledItemLocalID_ !== undefined) {
+          const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
+          this.extractStyledItem(styledItem_)
+        } else {
+          // get material from first operand
+          const firstOperandStyledItemLocalID_ =
+          this.materials.styledItemMap.get(from.FirstOperand.localID)
+          if (firstOperandStyledItemLocalID_ !== undefined) {
+            const firstOperandStyledItem =
+            this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
+            this.extractStyledItem(firstOperandStyledItem, representationItem)
+          }
+        }
+
+        // add mesh to the list of mesh objects
+        if (!isRelVoid) {
+
+          if ( ( !this.csgMemoization &&
+            RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
+            this.csgDepth > MAXIMUM_CSG_MEMOIZATION_DEPTH ) {
+            this.dropNonSceneGeometry(firstMesh.localID)
+            this.dropNonSceneGeometry(secondMesh.localID)
+          }
+
+          this.model.geometry.add(canonicalMesh)
+        } else {
+
+          if ( ( !this.csgMemoization &&
+            RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
+            this.csgDepth > MAXIMUM_CSG_MEMOIZATION_DEPTH ) {
+            this.model.voidGeometry.delete(firstMesh.localID)
+            this.model.voidGeometry.delete(secondMesh.localID)
+          }
+
+          this.model.voidGeometry.add(canonicalMesh)
+        }
+
+        if (!flatFirstMeshVectorFromParts) {
+          flatFirstMeshVector.delete()
+        }
+
+        if (!flatSecondMeshVectorFromParts) {
+          flatSecondMeshVector.delete()
+        }
+
+        this.paramsGetBooleanResultPool!.release(parameters)
+      } finally {
+        --this.csgDepth
+      }
     }
   }
    

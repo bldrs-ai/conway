@@ -22,6 +22,7 @@ import { CanonicalMesh, CanonicalMeshBuffer } from '../../core/canonical_mesh'
 import { CanonicalMaterial, defaultCanonicalMaterial } from '../../core/canonical_material'
 import Logger from '../../logging/logger'
 import { BlendMode, Vector3 as ConwayVector3 } from '../../../dependencies/conway-geom'
+import { ILocalIdSet } from '../../core/i_local_id_set'
 
 
 const COMPONENT_TRANSLATION_THRESHOLD = 1024
@@ -39,7 +40,31 @@ export default class SceneObject extends Group {
   private readonly sink_: SceneEventSink
 
   /**
+   * Set the visibility set for the elements in this scene object.
+   * Note it is a set of of the local IDs of the related elements
+   * (i.e. IfcProducts) that are used to control visibility.
+   *
+   * @return {ILocalIdSet | Set< number > | null} The visibility set to use, or null for all items.
+   */
+  public get visibilitySet(): ILocalIdSet | Set< number > | null {
+    return this.sink_.visibilitySet
+  }
+
+  /**
+   * Set the visibility set for the elements in this scene object.
+   * Note it is a set of of the local IDs of the related elements
+   * (i.e. IfcProducts) that are used to control visibility.
+   * 
+   * @param value The visibility set to use, or null for all items.
+   */
+  public set visibilitySet( value: ILocalIdSet | Set< number > | null ) {
+    this.sink_.visibilitySet = value
+  }
+
+  /**
    * Does this have instances that aren't spaces?
+   *
+   * @return {boolean} Does this have non spzces?
    */
   public get hasNonSpaces(): boolean {
 
@@ -160,12 +185,41 @@ class SceneEventSink implements SceneListener {
   private showSpaces_: boolean = false
   private hideNonSpaces_: boolean = false
 
+  private visibilitySet_: ILocalIdSet | Set< number > | null = null
+
+  /**
+   * Set the visibility set for this object.
+   *
+   * @param value The visibility set to use, or null for all items
+   * to be default visibile (exception spaces).
+   */
+  public set visibilitySet( value: ILocalIdSet | Set< number > | null ) {
+
+    if ( this.visibilitySet_ !== value ) {
+
+      this.visibilitySet_ = value
+
+      this.reconcileVisibility()
+    }
+  }
+
+  /**
+   * Get the visibility set for this object.
+   *
+   * @return {ILocalIdSet | Set< number > | null} The visibility set.
+   */
+  public get visibilitySet(): ILocalIdSet | Set< number > | null {
+    return this.visibilitySet_
+  }
+
   /**
    * Reconcile space visibility.
    */
-  private reconcileSpaces(): void {
+  private reconcileVisibility(): void {
 
     const onlySpaces = this.nonSpaceCount_ === 0
+
+    const visibilitySet = this.visibilitySet_
 
     for ( const [node, instance] of this.instances_.entries() ) {
 
@@ -184,8 +238,11 @@ class SceneEventSink implements SceneListener {
       const batchMesh = batch.mesh!
 
       const isVisible =
-        ( !node.isSpace && !this.hideNonSpaces_ ) ||
-        ( node.isSpace && ( onlySpaces || this.showSpaces_ ) )
+        ( ( !node.isSpace && !this.hideNonSpaces_ ) ||
+          ( node.isSpace && ( onlySpaces || this.showSpaces_ ) ) ) &&
+        ( visibilitySet === null || (
+          instance.node.relatedElementLocalId !== void 0 &&
+          visibilitySet.has( instance.node.relatedElementLocalId ) ) )
 
       batchMesh.setVisibleAt( instance.instanceID!, isVisible )
     }
@@ -193,6 +250,8 @@ class SceneEventSink implements SceneListener {
 
   /**
    * Does this have instances that aren't spaces?
+   *
+   * @return {boolean}  
    */
   public get hasNonSpaces(): boolean {
 
@@ -219,7 +278,7 @@ class SceneEventSink implements SceneListener {
     if ( this.showSpaces_ !== value ) {
 
       this.showSpaces_ = value
-      this.reconcileSpaces()
+      this.reconcileVisibility()
     }
   }
   
@@ -243,7 +302,7 @@ class SceneEventSink implements SceneListener {
     if ( this.hideNonSpaces_ !== value ) {
 
       this.hideNonSpaces_ = value
-      this.reconcileSpaces()
+      this.reconcileVisibility()
     }
   }
 
@@ -339,6 +398,8 @@ class SceneEventSink implements SceneListener {
       }
     }
 
+    const visibilitySet = this.visibilitySet_
+
     for ( const [node, instance] of this.instances_.entries() ) {
 
       const batch = instance.batch
@@ -354,8 +415,11 @@ class SceneEventSink implements SceneListener {
       instance.instanceID = batchMesh.addInstance( batched.geometryID! )
 
       const isVisible =
-        ( !node.isSpace && !this.hideNonSpaces_ ) ||
-        ( node.isSpace && ( onlySpaces || this.showSpaces_ ) )
+        ( ( !node.isSpace && !this.hideNonSpaces_ ) ||
+          ( node.isSpace && ( onlySpaces || this.showSpaces_ ) ) ) &&
+        ( visibilitySet === null || (
+          instance.node.relatedElementLocalId !== void 0 &&
+          visibilitySet.has( instance.node.relatedElementLocalId ) ) )
 
       batchMesh.setVisibleAt( instance.instanceID, isVisible )
       batchMesh.setMatrixAt( instance.instanceID, instance.transform )
@@ -496,7 +560,7 @@ class SceneEventSink implements SceneListener {
 
       if ( ( this.nonSpaceCount_++ ) === 0 && !this.cork_ ) {
 
-        this.reconcileSpaces()
+        this.reconcileVisibility()
       }
     }
 
@@ -857,17 +921,19 @@ class SceneEventSink implements SceneListener {
         ++batch.instanceCount
 
         // Geometry id must exist if the batch is uncorked.
-        const instanceID = batchMesh.addInstance( batchGeometry.geometryID! )
-
-        const onlySpaces = this.nonSpaceCount_ === 0
-        const isVisible =
-          ( !node.isSpace && !this.hideNonSpaces_ ) ||
-          ( node.isSpace && ( onlySpaces || this.showSpaces_ ) )
+        const instanceID    = batchMesh.addInstance( batchGeometry.geometryID! )
+        const visibilitySet = this.visibilitySet_
+        const onlySpaces    = this.nonSpaceCount_ === 0
+        const isVisible     =
+          ( ( !node.isSpace && !this.hideNonSpaces_ ) ||
+            ( node.isSpace && ( onlySpaces || this.showSpaces_ ) ) ) &&
+          ( visibilitySet === null || (
+            instance.node.relatedElementLocalId !== void 0 &&
+            visibilitySet.has( instance.node.relatedElementLocalId ) ) )
 
         batchMesh.setVisibleAt( instanceID, isVisible )
 
         instance.instanceID = instanceID
-
       }
     }
 

@@ -16,7 +16,6 @@ const MASK_TOPBITS    = IndexSetConstants.MASK_TOPBITS
 export function indexSetSearch32(
     searchValue: number,
     buffer: Uint32Array,
-     
     offset: number = 0,
     end?: number ): number {
   let right = end ?? buffer.length
