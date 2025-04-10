@@ -1,9 +1,11 @@
 import { IIndexSetCursor } from '../core/i_index_set_cursor'
+import { ILocalIdSet, ILocalIDSetWithCursor } from '../core/i_local_id_set'
 import { ReadonlyUint32Array } from '../core/readonly_typed_array'
 import {
   addCompactedElement32State,
   addCompactedElementCount32State,
-  initCountCompactedElements32State } from './bit_operations'
+  initCountCompactedElements32State, 
+  pop32} from './bit_operations'
 import { indexSetPointQuery32 } from './search_operations'
 import { SingleIndexSetCursor } from './single_index_set_cursor'
 
@@ -13,7 +15,7 @@ const localState = new Int32Array( 2 )
 /**
  * A single set of indices
  */
-export class SingleIndexSet {
+export class SingleIndexSet implements ILocalIDSetWithCursor {
    
   /**
    * Construct this with a matching elements table.
@@ -33,6 +35,27 @@ export class SingleIndexSet {
    
 
   /**
+   * The size of the set.
+   *
+   * @return {number} The size of the set.
+   */
+  public get size(): number {
+
+    const end = this.end_ << 1
+    const start = this.start_
+    const buffer = this.buffer
+
+    let result = 0
+
+    for ( let where = start + 1; where < end; where += 2 ) {
+
+      result += pop32( buffer[ where ] )
+    }
+
+    return result
+  }
+
+  /**
    * Get the buffer elements from this (treat as immutable)
    *
    * @return {ReadonlyUint32Array} The buffer elements.
@@ -44,11 +67,11 @@ export class SingleIndexSet {
   /**
    * Does the set have a particular index for a particular type.
    *
-   * @param denseIndex The dense index in the set to check.
+   * @param localID The dense index in the set to check.
    * @return {boolean} True if it has the type.
    */
-  public has( denseIndex: number ): boolean {
-    return indexSetPointQuery32( denseIndex, this.elements_, this.start_, this.end_ << 1 )
+  public has( localID: number ): boolean {
+    return indexSetPointQuery32( localID, this.elements_, this.start_, this.end_ << 1 )
   }
 
   /**

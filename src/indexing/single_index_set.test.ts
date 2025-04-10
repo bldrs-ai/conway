@@ -43,6 +43,16 @@ function buildAndTestSingleSet(): boolean {
   return true
 }
 
+/**
+ * Test the size property of a SingleIndexSet initialized with ID_SET.
+ *
+ * @return {boolean} True if the test passes.
+ */
+function testSizeProperty(): boolean {
+  const singleIndexSet = SingleIndexSet.createFromLocalIds( ID_SET )
+  return singleIndexSet.size === ID_SET.length
+}
+
 
 describe( 'Single Index Set Test', () => {
   test( 'buildAndTestSingleSet()', () => {
@@ -51,5 +61,8 @@ describe( 'Single Index Set Test', () => {
 
   } )
 
-})
+  test( 'testSizeProperty()', () => {
+    expect( testSizeProperty() ).toBe( true )
+  } )
 
+})

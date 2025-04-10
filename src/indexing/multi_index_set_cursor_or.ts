@@ -1,5 +1,6 @@
 import IndexSetConstants from './index_set_constants'
 import { IIndexSetCursor } from '../core/i_index_set_cursor'
+import { indexSetPointQuery32 } from './search_operations'
 
 
 const pool: MultiIndexSetCursorOr[] = []
@@ -47,6 +48,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
     return this.low_
   }
 
+  
   /**
    * Step this cursor to the next high (and matching set of lows)
    *
@@ -54,13 +56,12 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
    * false otherwise.
    */
   public step(): boolean {
-    let lowestHigh = 0xFFFFFFFF
-    const cursorSet  = this.cursorSet_
-    const setEnd     = this.currentOpCount_ << 1
-    const buffer     = this.buffer_ as Uint32Array
+    let lowestHigh  = 0xFFFFFFFF
+    const cursorSet = this.cursorSet_
+    const setEnd    = this.currentOpCount_ << 1
+    const buffer    = this.buffer_ as Uint32Array
 
     let result = false
-
      
     for ( let where = 0; where < setEnd; where += 2 ) {
       const opPosition = cursorSet[ where ]
@@ -82,7 +83,6 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
     }
 
     let currentLow = 0
-
      
     for ( let where = 0; where < setEnd; where += 2 ) {
       const opPosition = cursorSet[ where ]
@@ -116,7 +116,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
     let result: MultiIndexSetCursorOr
 
     if ( pool.length > 0 ) {
-      result = pool.pop() as MultiIndexSetCursorOr
+      result = pool.pop()!
     } else {
       result = new MultiIndexSetCursorOr()
     }
@@ -134,6 +134,7 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
    * @param to The end of the range (not inclusive)
    */
   public addRange( from: number, to: number ): void {
+
     if ( ( this.cursorSet_.length >>> 1 ) <= this.currentOpCount_ ) {
        
       const newLength = this.currentOpCount_ * 4
@@ -144,7 +145,6 @@ export class MultiIndexSetCursorOr implements IIndexSetCursor {
 
       this.cursorSet_ = newCursorSet
     }
-
      
     const opIndex = this.currentOpCount_ * 2
 

@@ -49,10 +49,10 @@ export class MultiIndexSet< IndexType extends number > {
    * Does the set have a particular index for a particular type.
    *
    * @param indexType The index type to check for.
-   * @param denseIndex The dense index in the set to check.
+   * @param localID The dense index in the set to check.
    * @return {boolean} True if it has the type.
    */
-  public has( indexType: IndexType, denseIndex: number ): boolean {
+  public has( indexType: IndexType, localID: number ): boolean {
     if ( indexType >= this.prefixSumTable_.length - 1 ) {
       return false
     }
@@ -63,7 +63,7 @@ export class MultiIndexSet< IndexType extends number > {
      
     const indexEnd    = prefixSum[ indexType + 1 ] * 2
 
-    return indexSetPointQuery32( denseIndex, this.elements_, indexOffset, indexEnd )
+    return indexSetPointQuery32( localID, this.elements_, indexOffset, indexEnd )
   }
 
   /**
