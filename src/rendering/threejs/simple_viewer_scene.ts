@@ -103,6 +103,19 @@ export interface SimpleViewerSceneOptions {
    * Is ambient occlusion enabled? (default true)
    */
   ao?: boolean
+
+  /**
+   * Should we limit the CSG depth? (default false)
+   *
+   * This is used to limit the depth of the CSG operations
+   * to avoid very deep recursions.
+   */
+  limitCSGDepth?: boolean
+
+  /**
+   * The maximum CSG depth to use. (default 20)
+   */
+  maxCSGDepth?: number
 }
 
 /**
@@ -130,7 +143,11 @@ const defaultOptions: SimpleViewerSceneOptions = {
 
   ao: true,
 
-  toneMapExposure: 0.5
+  toneMapExposure: 0.5,
+
+  limitCSGDepth: false,
+
+  maxCSGDepth: 20,
 }
 
 let modelID = 0
@@ -163,6 +180,17 @@ export class SimpleViewerScene {
   private composer_?: EffectComposer
 
   private ambientOclussion_: boolean
+
+  /**
+   * Should we limit the CSG depth? Othwerwise we will only limit the depth
+   * of memoization.
+   */
+  public limitCSGDepth: boolean = false
+
+  /**
+   * The limit for CSG recursion depth (or memoization depth).
+   */
+  public maxCSGDepth: number = 20
 
   public onload?: ( scene: SimpleViewerScene, object: SceneObject ) => void
 
@@ -489,6 +517,9 @@ export class SimpleViewerScene {
     public readonly dimensionsFunction: () => [number, number],
     private readonly options: SimpleViewerSceneOptions = defaultOptions ) {   
 
+    this.limitCSGDepth = options.limitCSGDepth ?? !!defaultOptions.limitCSGDepth
+    this.maxCSGDepth = options.maxCSGDepth ?? defaultOptions.maxCSGDepth ?? this.maxCSGDepth
+
     this.ambientOclussion_ = options.ao ?? !!defaultOptions.ao
 
     if ( options.ambientLight ?? defaultOptions.ambientLight ) {
@@ -590,7 +621,11 @@ export class SimpleViewerScene {
     try {
 
       const loadResult =
-        await ConwayModelLoader.loadModelWithScene( new Uint8Array( buffer ), modelID++ )
+        await ConwayModelLoader.loadModelWithScene(
+          new Uint8Array( buffer ),
+          this.limitCSGDepth,
+          this.maxCSGDepth,
+          modelID++ )
 
       const model = loadResult[ 0 ]
       const modelScene = loadResult[ 1 ]
