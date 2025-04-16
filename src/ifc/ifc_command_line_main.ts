@@ -90,6 +90,16 @@ function doWork() {
             type: 'boolean',
             alias: 'n',
           })
+          yargs2.option('limitcsg', {
+            describe: 'Limit the CSG depth.',
+            type: 'boolean',
+            alias: 'l',
+          })
+          yargs2.option('csgdepth', {
+            describe: 'The maximum CSG (for recursion if limited, memoization otherwise).',
+            type: 'number',
+            alias: 'd',
+          })
           yargs2.option('properties', {
             describe: 'Output PropertySets',
             type: 'boolean',
@@ -133,6 +143,8 @@ function doWork() {
           const strict = (argv['strict'] as boolean | undefined) ?? false
           const includeSpace = (argv['spaces'] as boolean | undefined)
           const noOutput = (argv['nooutput'] as boolean | undefined)
+          const limitCSG = (argv['limitcsg'] as boolean | undefined)
+          const maxCSGDepth = (argv['csgdepth'] as number | undefined)
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
@@ -155,7 +167,6 @@ function doWork() {
           const bufferInput = new ParsingBuffer(indexIfcBuffer)
 
           const headerDataTimeStart = Date.now()
-
 
           const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
@@ -236,7 +247,7 @@ function doWork() {
                   path.dirname( ifcFile ),
                   path.basename( ifcFile, path.extname( ifcFile) ) )
 
-            const result = geometryExtraction(model)
+            const result = geometryExtraction(model, limitCSG, maxCSGDepth)
             if (result !== void 0) {
               const scene = result
 
@@ -589,12 +600,22 @@ function propertyExtraction(model: IfcStepModel) {
  * Function to extract Geometry from an IfcStepModel
  *
  * @param model
+ * @param limitCSGDepth
+ * @param maxCSGDepth
  * @return {IfcSceneBuilder | undefined} The scene or undefined on error.
  */
-function geometryExtraction(model: IfcStepModel):
+function geometryExtraction(
+  model: IfcStepModel,
+  limitCSGDepth: boolean = false,
+  maxCSGDepth: number = 0):
   IfcSceneBuilder | undefined {
 
-  const conwayModel = new IfcGeometryExtraction(conwaywasm, model)
+  const conwayModel =
+    new IfcGeometryExtraction(
+      conwaywasm,
+      model,
+      limitCSGDepth,
+      maxCSGDepth)
 
   // parse + extract data model + geometry data
   const startTime = Date.now()

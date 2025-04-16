@@ -194,10 +194,6 @@ import IfcModelCurves from './ifc_model_curves'
 import { CsgMemoization, CsgOperationType } from '../core/csg_operations'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 
-/**
- * Limit the depth of nested CSG operations where we memoizae the results.
- */
-const MAXIMUM_CSG_MEMOIZATION_DEPTH = 20
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 
@@ -365,13 +361,18 @@ export class IfcGeometryExtraction {
   /**
    * Construct a geometry extraction from an IFC step model and conway model
    *
-   * @param conwayModel
-   * @param model
-   * @param lowMemoryMode
+   * @param conwayModel The ConwayGeometry instance to use for geometry operations.
+   * @param model The IfcStepModel instance representing the IFC model.
+   * @param limitCSGDepth Whether to limit the depth of CSG operations.
+   * @param csgDepthLimit The maximum depth for CSG operations when limit CSG depth is used,
+   * or the maximum level for CSG memoization if it is not.
+   * @param lowMemoryMode Whether to enable low memory mode for geometry extraction.
    */
   constructor(
     private readonly conwayModel: ConwayGeometry,
     public readonly model: IfcStepModel,
+    private readonly limitCSGDepth: boolean = false,
+    private readonly csgDepthLimit: number = 20,
     private readonly lowMemoryMode: boolean = false ) {
 
     this.csgMemoization = !this.lowMemoryMode
@@ -1385,6 +1386,8 @@ export class IfcGeometryExtraction {
 
       try {
 
+        const maximumCsgMemoizationDepth = this.csgDepthLimit
+
         if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
           from.FirstOperand instanceof IfcPolygonalFaceSet ||
           from.FirstOperand instanceof IfcBooleanClippingResult ||
@@ -1395,6 +1398,68 @@ export class IfcGeometryExtraction {
 
           this.extractBooleanOperand(
               from.FirstOperand, isRelVoid, representationItem, isSecondOperand)
+        }
+
+        if ( this.limitCSGDepth && this.csgDepth >= maximumCsgMemoizationDepth ) {
+ 
+          let firstMesh: CanonicalMesh | undefined
+    
+          if (isRelVoid) {
+            firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
+          } else {
+            firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
+          }
+
+          if ( firstMesh === void 0 ) {
+
+            return
+          }
+
+          const canonicalMesh: CanonicalMesh = {
+            type: CanonicalMeshType.BUFFER_GEOMETRY,
+            geometry: firstMesh.geometry.clone(),
+            localID: from.localID,
+            model: this.model,
+            temporary: true,
+          }
+
+          if (!isRelVoid) {
+
+            if ( ( !this.csgMemoization &&
+              RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
+              this.csgDepth > maximumCsgMemoizationDepth ) {
+              this.dropNonSceneGeometry(firstMesh.localID)
+            }
+  
+            this.model.geometry.add(canonicalMesh)
+          } else {
+  
+            if ( ( !this.csgMemoization &&
+              RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
+              this.csgDepth > maximumCsgMemoizationDepth ) {
+              this.model.voidGeometry.delete(firstMesh.localID)
+            }
+  
+            this.model.voidGeometry.add(canonicalMesh)
+          }
+
+          const styledItemLocalID_ = this.materials.styledItemMap.get(from.localID)
+
+          if (styledItemLocalID_ !== undefined) {
+            const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
+            this.extractStyledItem(styledItem_)
+          } else {
+            // get material from first operand
+            const firstOperandStyledItemLocalID_ =
+            this.materials.styledItemMap.get(from.FirstOperand.localID)
+            if (firstOperandStyledItemLocalID_ !== undefined) {
+              const firstOperandStyledItem =
+              this.model.getElementByLocalID(firstOperandStyledItemLocalID_) as IfcStyledItem
+              this.extractStyledItem(firstOperandStyledItem, representationItem)
+            }
+          }
+          
+          return
         }
 
         if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
@@ -1409,7 +1474,6 @@ export class IfcGeometryExtraction {
 
         // get geometry TODO(nickcastel50): eventually support flattening meshes
         let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-        const flatFirstMeshVectorFromParts: boolean = false
         let firstMesh: CanonicalMesh | undefined
 
         if (isRelVoid) {
@@ -1429,8 +1493,7 @@ export class IfcGeometryExtraction {
           return
         }
 
-        let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-        const flatSecondMeshVectorFromParts: boolean = false
+        let flatSecondMeshVector: StdVector<GeometryObject>
         let secondMesh: CanonicalMesh | undefined
 
         if (isRelVoid) {
@@ -1487,7 +1550,7 @@ export class IfcGeometryExtraction {
 
           if ( ( !this.csgMemoization &&
             RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
-            this.csgDepth > MAXIMUM_CSG_MEMOIZATION_DEPTH ) {
+            this.csgDepth > maximumCsgMemoizationDepth ) {
             this.dropNonSceneGeometry(firstMesh.localID)
             this.dropNonSceneGeometry(secondMesh.localID)
           }
@@ -1497,7 +1560,7 @@ export class IfcGeometryExtraction {
 
           if ( ( !this.csgMemoization &&
             RegressionCaptureState.memoization !== MemoizationCapture.FULL ) ||
-            this.csgDepth > MAXIMUM_CSG_MEMOIZATION_DEPTH ) {
+            this.csgDepth > maximumCsgMemoizationDepth ) {
             this.model.voidGeometry.delete(firstMesh.localID)
             this.model.voidGeometry.delete(secondMesh.localID)
           }
@@ -1505,13 +1568,8 @@ export class IfcGeometryExtraction {
           this.model.voidGeometry.add(canonicalMesh)
         }
 
-        if (!flatFirstMeshVectorFromParts) {
-          flatFirstMeshVector.delete()
-        }
-
-        if (!flatSecondMeshVectorFromParts) {
-          flatSecondMeshVector.delete()
-        }
+        flatFirstMeshVector.delete()
+        flatSecondMeshVector.delete()
 
         this.paramsGetBooleanResultPool!.release(parameters)
       } finally {
