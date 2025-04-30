@@ -1400,7 +1400,6 @@ export class IfcGeometryExtraction {
 
         if ( this.limitCSGDepth && this.csgDepth >= maximumCsgMemoizationDepth ) {
  
-
           if ( firstMesh === void 0 ) {
 
             return
@@ -1452,6 +1451,7 @@ export class IfcGeometryExtraction {
           
           return
         }
+
         let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
 
         if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {

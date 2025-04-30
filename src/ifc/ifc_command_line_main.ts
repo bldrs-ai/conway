@@ -143,7 +143,7 @@ function doWork() {
           const strict = (argv['strict'] as boolean | undefined) ?? false
           const includeSpace = (argv['spaces'] as boolean | undefined)
           const noOutput = (argv['nooutput'] as boolean | undefined)
-          const limitCSG = (argv['limitcsg'] as boolean | undefined)
+          const limitCSG = !(argv['limitcsg'] as boolean | undefined)
           const maxCSGDepth = (argv['csgdepth'] as number | undefined)
 
           try {
@@ -607,7 +607,7 @@ function propertyExtraction(model: IfcStepModel) {
 function geometryExtraction(
   model: IfcStepModel,
   limitCSGDepth: boolean = true,
-  maxCSGDepth: number = 0):
+  maxCSGDepth: number = 20):
   IfcSceneBuilder | undefined {
 
   const conwayModel =
