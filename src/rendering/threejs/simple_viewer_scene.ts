@@ -145,7 +145,7 @@ const defaultOptions: SimpleViewerSceneOptions = {
 
   toneMapExposure: 0.5,
 
-  limitCSGDepth: false,
+  limitCSGDepth: true,
 
   maxCSGDepth: 20,
 }
@@ -185,7 +185,7 @@ export class SimpleViewerScene {
    * Should we limit the CSG depth? Othwerwise we will only limit the depth
    * of memoization.
    */
-  public limitCSGDepth: boolean = false
+  public limitCSGDepth: boolean = true
 
   /**
    * The limit for CSG recursion depth (or memoization depth).

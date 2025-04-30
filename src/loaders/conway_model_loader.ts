@@ -34,7 +34,7 @@ export class ConwayModelLoader {
    */
   public static async loadModelWithScene(
       data: Uint8Array,
-      limitCSGDepth: boolean = false,
+      limitCSGDepth: boolean = true,
       maximumCSGDepth: number = 20,
       modelID: number = 0 ): Promise<[Model, Scene]> {
 

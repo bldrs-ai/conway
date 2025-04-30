@@ -91,7 +91,7 @@ function doWork() {
             alias: 'n',
           })
           yargs2.option('limitcsg', {
-            describe: 'Limit the CSG depth.',
+            describe: 'Don\'t limit the CSG recursion depth.',
             type: 'boolean',
             alias: 'l',
           })
@@ -606,7 +606,7 @@ function propertyExtraction(model: IfcStepModel) {
  */
 function geometryExtraction(
   model: IfcStepModel,
-  limitCSGDepth: boolean = false,
+  limitCSGDepth: boolean = true,
   maxCSGDepth: number = 0):
   IfcSceneBuilder | undefined {
 

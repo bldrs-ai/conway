@@ -180,6 +180,9 @@ import {
   IfcEllipse,
   IfcMaterialLayerSet,
   IfcSweptDiskSolid,
+  IfcCsgPrimitive3D,
+  IfcSolidModel,
+  IfcTessellatedFaceSet,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -371,7 +374,7 @@ export class IfcGeometryExtraction {
   constructor(
     private readonly conwayModel: ConwayGeometry,
     public readonly model: IfcStepModel,
-    private readonly limitCSGDepth: boolean = false,
+    private readonly limitCSGDepth: boolean = true,
     private readonly csgDepthLimit: number = 20,
     private readonly lowMemoryMode: boolean = false ) {
 
@@ -1139,6 +1142,48 @@ export class IfcGeometryExtraction {
     }
   }
 
+  getOperandGeometry( from:
+    IfcBooleanResult |
+    IfcCsgPrimitive3D |
+    IfcHalfSpaceSolid |
+    IfcSolidModel |
+    IfcTessellatedFaceSet,
+    isSecondOperand: boolean,
+    isRelVoid: boolean = false ): CanonicalMesh | undefined {
+
+    if (from instanceof IfcExtrudedAreaSolid ||
+      from instanceof IfcPolygonalFaceSet ||
+      from instanceof IfcBooleanClippingResult ||
+      from instanceof IfcBooleanResult ||
+      from instanceof IfcPolygonalBoundedHalfSpace ||
+      from instanceof IfcHalfSpaceSolid ||
+      from instanceof IfcFacetedBrep) {
+      this.extractBooleanOperand(from, isRelVoid, undefined, isSecondOperand )
+    }
+
+    let geometry: CanonicalMesh | undefined
+
+    if ( isRelVoid ) {
+      return this.model.voidGeometry.getByLocalID(from.localID)
+    }
+
+    return this.model.geometry.getByLocalID(from.localID)
+  }
+
+  getFirstBoolenOperandGeometry( 
+    from: IfcBooleanResult,
+    isRelVoid: boolean = false ): CanonicalMesh | undefined {
+
+    return this.getOperandGeometry( from.FirstOperand, false, isRelVoid )
+  }
+
+  getSecondBoolenOperandGeometry( 
+    from: IfcBooleanResult,
+    isRelVoid: boolean = false ): CanonicalMesh | undefined {
+
+    return this.getOperandGeometry( from.SecondOperand, true, isRelVoid )
+  }
+
   /**
    * Accepts IfcBooleanResult and IfcBooleanClippingResult
    *
@@ -1171,36 +1216,9 @@ export class IfcGeometryExtraction {
           },
           true )
 
-      if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
-        from.FirstOperand instanceof IfcPolygonalFaceSet ||
-        from.FirstOperand instanceof IfcBooleanClippingResult ||
-        from.FirstOperand instanceof IfcBooleanResult ||
-        from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
-        from.FirstOperand instanceof IfcHalfSpaceSolid ||
-        from.FirstOperand instanceof IfcFacetedBrep) {
-        this.extractBooleanOperand(from.FirstOperand, isRelVoid, from, isRelVoid)
-      }
-
-      if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
-        from.SecondOperand instanceof IfcPolygonalFaceSet ||
-        from.SecondOperand instanceof IfcBooleanClippingResult ||
-        from.SecondOperand instanceof IfcBooleanResult ||
-        from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
-        from.SecondOperand instanceof IfcHalfSpaceSolid ||
-        from.SecondOperand instanceof IfcFacetedBrep) {
-        this.extractBooleanOperand(from.SecondOperand, isRelVoid, undefined, true )
-      }
-
       // get geometry TODO(nickcastel50): eventually support flattening meshes
       let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      let firstMesh: CanonicalMesh | undefined
-      const flatFirstMeshVectorFromParts: boolean = false
-
-      if (isRelVoid) {
-        firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
-      } else {
-        firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
-      }
+      const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid)
 
       if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -1232,14 +1250,9 @@ export class IfcGeometryExtraction {
       }
 
       let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      const flatSecondMeshVectorFromParts: boolean = false
-      let secondMesh: CanonicalMesh | undefined
 
-      if (isRelVoid) {
-        secondMesh = this.model.voidGeometry.getByLocalID(from.SecondOperand.localID)
-      } else {
-        secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
-      }
+      const secondMesh = this.getSecondBoolenOperandGeometry(from, isRelVoid)
+      
       if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
         flatSecondMeshVector = this.nativeVectorGeometry()
@@ -1314,13 +1327,8 @@ export class IfcGeometryExtraction {
         }
       }
 
-      if (!flatFirstMeshVectorFromParts) {
-        flatFirstMeshVector.delete()
-      }
-
-      if (!flatSecondMeshVectorFromParts) {
-        flatSecondMeshVector.delete()
-      }
+      flatFirstMeshVector.delete()
+      flatSecondMeshVector.delete()
 
       this.paramsGetBooleanResultPool!.release(parameters)
 
@@ -1388,27 +1396,10 @@ export class IfcGeometryExtraction {
 
         const maximumCsgMemoizationDepth = this.csgDepthLimit
 
-        if (from.FirstOperand instanceof IfcExtrudedAreaSolid ||
-          from.FirstOperand instanceof IfcPolygonalFaceSet ||
-          from.FirstOperand instanceof IfcBooleanClippingResult ||
-          from.FirstOperand instanceof IfcBooleanResult ||
-          from.FirstOperand instanceof IfcPolygonalBoundedHalfSpace ||
-          from.FirstOperand instanceof IfcHalfSpaceSolid ||
-          from.FirstOperand instanceof IfcFacetedBrep) {
-
-          this.extractBooleanOperand(
-              from.FirstOperand, isRelVoid, representationItem, isSecondOperand)
-        }
+        const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid)
 
         if ( this.limitCSGDepth && this.csgDepth >= maximumCsgMemoizationDepth ) {
  
-          let firstMesh: CanonicalMesh | undefined
-    
-          if (isRelVoid) {
-            firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
-          } else {
-            firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
-          }
 
           if ( firstMesh === void 0 ) {
 
@@ -1461,26 +1452,8 @@ export class IfcGeometryExtraction {
           
           return
         }
-
-        if (from.SecondOperand instanceof IfcExtrudedAreaSolid ||
-          from.SecondOperand instanceof IfcPolygonalFaceSet ||
-          from.SecondOperand instanceof IfcBooleanClippingResult ||
-          from.SecondOperand instanceof IfcBooleanResult ||
-          from.SecondOperand instanceof IfcPolygonalBoundedHalfSpace ||
-          from.SecondOperand instanceof IfcHalfSpaceSolid ||
-          from.SecondOperand instanceof IfcFacetedBrep) {
-          this.extractBooleanOperand(from.SecondOperand, isRelVoid, void 0, true )
-        }
-
-        // get geometry TODO(nickcastel50): eventually support flattening meshes
         let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-        let firstMesh: CanonicalMesh | undefined
 
-        if (isRelVoid) {
-          firstMesh = this.model.voidGeometry.getByLocalID(from.FirstOperand.localID)
-        } else {
-          firstMesh = this.model.geometry.getByLocalID(from.FirstOperand.localID)
-        }
         if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
           flatFirstMeshVector = this.nativeVectorGeometry()
@@ -1494,13 +1467,8 @@ export class IfcGeometryExtraction {
         }
 
         let flatSecondMeshVector: StdVector<GeometryObject>
-        let secondMesh: CanonicalMesh | undefined
+        const secondMesh = this.getSecondBoolenOperandGeometry(from, isRelVoid)
 
-        if (isRelVoid) {
-          secondMesh = this.model.voidGeometry.getByLocalID(from.SecondOperand.localID)
-        } else {
-          secondMesh = this.model.geometry.getByLocalID(from.SecondOperand.localID)
-        }
         if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
           flatSecondMeshVector = this.nativeVectorGeometry()
