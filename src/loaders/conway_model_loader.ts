@@ -27,11 +27,15 @@ export class ConwayModelLoader {
    * Load a model using the format detector
    *
    * @param data The buffer to load from.
+   * @param limitCSGDepth Whether to limit CSG depth during geometry extraction.
+   * @param maximumCSGDepth The maximum CSG depth allowed during geometry extraction.
    * @param modelID The model id to use for statistics (or 0 if none is provided)
    * @return {Promise<[Model, Scene]>} A promise to return the loaded model and scene.
    */
   public static async loadModelWithScene(
       data: Uint8Array,
+      limitCSGDepth: boolean = true,
+      maximumCSGDepth: number = 20,
       modelID: number = 0 ): Promise<[Model, Scene]> {
 
     const allTimeStart = Date.now()
@@ -306,7 +310,11 @@ export class ConwayModelLoader {
             throw Error( 'Unable to parse model' )
           }
 
-          const conwayModel = new IfcGeometryExtraction(conwayWasm, model)
+          const conwayModel = new IfcGeometryExtraction(
+            conwayWasm,
+            model,
+            limitCSGDepth,
+            maximumCSGDepth)
 
           // parse + extract data model + geometry data
           const startTime = Date.now()
