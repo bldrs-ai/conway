@@ -12,6 +12,7 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
+import { Model } from '../../core/model'
 
 
 // This file is obvious numbers heavy composing a scene - CS
@@ -102,6 +103,19 @@ export interface SimpleViewerSceneOptions {
    * Is ambient occlusion enabled? (default true)
    */
   ao?: boolean
+
+  /**
+   * Should we limit the CSG depth? (default false)
+   *
+   * This is used to limit the depth of the CSG operations
+   * to avoid very deep recursions.
+   */
+  limitCSGDepth?: boolean
+
+  /**
+   * The maximum CSG depth to use. (default 20)
+   */
+  maxCSGDepth?: number
 }
 
 /**
@@ -129,7 +143,11 @@ const defaultOptions: SimpleViewerSceneOptions = {
 
   ao: true,
 
-  toneMapExposure: 0.5
+  toneMapExposure: 0.5,
+
+  limitCSGDepth: true,
+
+  maxCSGDepth: 20,
 }
 
 let modelID = 0
@@ -139,7 +157,8 @@ let modelID = 0
  */
 export class SimpleViewerScene {
 
-  private currentModel_?: SceneObject
+  private currentModelSceneObject_?: SceneObject
+  private currentModel_?: Model
 
   private currentRadius_: number = 1
 
@@ -162,7 +181,38 @@ export class SimpleViewerScene {
 
   private ambientOclussion_: boolean
 
+  /**
+   * Should we limit the CSG depth? Othwerwise we will only limit the depth
+   * of memoization.
+   */
+  public limitCSGDepth: boolean = true
+
+  /**
+   * The limit for CSG recursion depth (or memoization depth).
+   */
+  public maxCSGDepth: number = 20
+
   public onload?: ( scene: SimpleViewerScene, object: SceneObject ) => void
+
+  /**
+   * Get the current model scene object.
+   *
+   * @return {SceneObject | undefined} The current model scene object.
+   */
+  public get currentModelSceneObject(): SceneObject | undefined {
+
+    return this.currentModelSceneObject_
+  }
+
+  /** 
+   * Get the current model.
+   *
+   * @return {Model | undefined} The current model.
+   */
+  public get currentModel(): Model | undefined {
+
+    return this.currentModel_
+  }
 
   /**
    * Is ambient occlusion enabled?
@@ -467,6 +517,9 @@ export class SimpleViewerScene {
     public readonly dimensionsFunction: () => [number, number],
     private readonly options: SimpleViewerSceneOptions = defaultOptions ) {   
 
+    this.limitCSGDepth = options.limitCSGDepth ?? !!defaultOptions.limitCSGDepth
+    this.maxCSGDepth = options.maxCSGDepth ?? defaultOptions.maxCSGDepth ?? this.maxCSGDepth
+
     this.ambientOclussion_ = options.ao ?? !!defaultOptions.ao
 
     if ( options.ambientLight ?? defaultOptions.ambientLight ) {
@@ -568,17 +621,23 @@ export class SimpleViewerScene {
     try {
 
       const loadResult =
-        await ConwayModelLoader.loadModelWithScene( new Uint8Array( buffer ), modelID++ )
+        await ConwayModelLoader.loadModelWithScene(
+          new Uint8Array( buffer ),
+          this.limitCSGDepth,
+          this.maxCSGDepth,
+          modelID++ )
 
+      const model = loadResult[ 0 ]
       const modelScene = loadResult[ 1 ]
 
       const scene = this.scene
 
-      const currentModel = this.currentModel_
+      const currentModelSceneObject = this.currentModelSceneObject_
 
-      if ( currentModel !== void 0 ) {
+      if ( currentModelSceneObject !== void 0 ) {
 
-        scene.remove( currentModel )
+        scene.remove( currentModelSceneObject )
+        this.currentModelSceneObject_ = void 0
         this.currentModel_ = void 0
       }
 
@@ -589,7 +648,8 @@ export class SimpleViewerScene {
       conwaySceneObject.castShadow = true
       conwaySceneObject.receiveShadow = true
 
-      this.currentModel_ = conwaySceneObject
+      this.currentModelSceneObject_ = conwaySceneObject
+      this.currentModel_ = model
 
       const currentBoundingBox = new THREE.Box3().setFromObject( conwaySceneObject )
 

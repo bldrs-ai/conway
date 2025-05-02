@@ -17,7 +17,7 @@ export interface EntityFieldsDescription< EntityTypeIDs extends number > {
 }
 
 /**
- * Refletion description for a particular entity type.
+ * Reflection description for a particular entity type.
  */
 export interface EntityDescription< EntityTypeIDs extends number > {
   fields: EntityFieldsDescription< EntityTypeIDs >

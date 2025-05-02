@@ -4,6 +4,7 @@ import { DynamicSingleIndexSetCursor } from './dynamic_single_index_set_cursor'
 import { indexSetSearch32 } from './search_operations'
 import { extractOneHotLow } from './bit_operations'
 import { SingleIndexSet } from './single_index_set'
+import { ILocalIDSetWithCursor } from '../core/i_local_id_set'
 
 
 const MASK_BOTTOMBITS = IndexSetConstants.MASK_BOTTOMBITS
@@ -20,7 +21,7 @@ const mergeCursor = new Uint32Array( MAX_NODE_STACK )
 /**
  * A single set of indices
  */
-export default class DynamicSingleIndexSet {
+export default class DynamicSingleIndexSet implements ILocalIDSetWithCursor {
 
   private stack_: Uint32Array[] = []
   private populated_: number = 0
