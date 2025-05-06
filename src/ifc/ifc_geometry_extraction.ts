@@ -1149,7 +1149,8 @@ export class IfcGeometryExtraction {
     IfcSolidModel |
     IfcTessellatedFaceSet,
     isSecondOperand: boolean,
-    isRelVoid: boolean = false ): CanonicalMesh | undefined {
+    isRelVoid: boolean = false,
+    representationItem?: IfcRepresentationItem ): CanonicalMesh | undefined {
 
     if (from instanceof IfcExtrudedAreaSolid ||
       from instanceof IfcPolygonalFaceSet ||
@@ -1158,7 +1159,7 @@ export class IfcGeometryExtraction {
       from instanceof IfcPolygonalBoundedHalfSpace ||
       from instanceof IfcHalfSpaceSolid ||
       from instanceof IfcFacetedBrep) {
-      this.extractBooleanOperand(from, isRelVoid, undefined, isSecondOperand )
+      this.extractBooleanOperand(from, isRelVoid, representationItem, isSecondOperand )
     }
 
     let geometry: CanonicalMesh | undefined
@@ -1172,16 +1173,17 @@ export class IfcGeometryExtraction {
 
   getFirstBoolenOperandGeometry( 
     from: IfcBooleanResult,
-    isRelVoid: boolean = false ): CanonicalMesh | undefined {
+    isRelVoid: boolean = false,
+    representationItem?:IfcRepresentationItem ): CanonicalMesh | undefined {
 
-    return this.getOperandGeometry( from.FirstOperand, false, isRelVoid )
+    return this.getOperandGeometry( from.FirstOperand, false, isRelVoid, representationItem )
   }
 
   getSecondBoolenOperandGeometry( 
     from: IfcBooleanResult,
     isRelVoid: boolean = false ): CanonicalMesh | undefined {
 
-    return this.getOperandGeometry( from.SecondOperand, true, isRelVoid )
+    return this.getOperandGeometry( from.SecondOperand, true, isRelVoid, undefined )
   }
 
   /**
@@ -1218,7 +1220,7 @@ export class IfcGeometryExtraction {
 
       // get geometry TODO(nickcastel50): eventually support flattening meshes
       let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid)
+      const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid, from)
 
       if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -1396,7 +1398,7 @@ export class IfcGeometryExtraction {
 
         const maximumCsgMemoizationDepth = this.csgDepthLimit
 
-        const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid)
+        const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid, representationItem)
 
         if ( this.limitCSGDepth && this.csgDepth >= maximumCsgMemoizationDepth ) {
  
