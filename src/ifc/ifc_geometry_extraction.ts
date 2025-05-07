@@ -2756,9 +2756,9 @@ export class IfcGeometryExtraction {
 
       if (ifcCurve !== void 0) {
 
-        if (!ifcCurve.isCCW()) {
-          ifcCurve.invert()
-        }
+        // if (!ifcCurve.isCCW()) {
+        //   ifcCurve.invert()
+        // }
       }
 
     } else if (from instanceof IfcPolyline) {
@@ -2767,8 +2767,8 @@ export class IfcGeometryExtraction {
 
       if (ifcCurve !== void 0) {
 
-        if (trimmingArguments?.exist || !ifcCurve.isCCW() ) {
-          ifcCurve.invert()
+        if (trimmingArguments?.exist ) {
+           ifcCurve.invert()
         }
       }
 
@@ -2776,27 +2776,27 @@ export class IfcGeometryExtraction {
       ifcCurve = this.extractIndexedPolyCurve(from)
 
       if (ifcCurve !== void 0) {
-        if (!ifcCurve.isCCW()) {
-          ifcCurve.invert()
-        }
+        // if (!ifcCurve.isCCW()) {
+        //   ifcCurve.invert()
+        // }
       }
     } else if (from instanceof IfcCircle) {
 
       ifcCurve = this.extractIfcCircle(from, parentSense)
 
       if (ifcCurve !== void 0) {
-        if (!ifcCurve.isCCW()) {
-          ifcCurve.invert()
-        }
+        // if (!ifcCurve.isCCW()) {
+        //   ifcCurve.invert()
+        // }
       }
     } else if (from instanceof IfcCompositeCurve) {
 
       ifcCurve = this.extractCompositeCurve(from, parentSense)
 
       if (ifcCurve !== void 0) {
-        if (!ifcCurve.isCCW()) {
-          ifcCurve.invert()
-        }
+        // if (!ifcCurve.isCCW()) {
+        //   ifcCurve.invert()
+        // }
       }
     }
 
