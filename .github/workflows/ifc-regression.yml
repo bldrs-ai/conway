@@ -86,6 +86,7 @@ jobs:
           yarn setup
           yarn install
           yarn build-GHA-all
+          yarn bundle-examples
 
       # --- Test Models Checkout & Regression ---
       - name: Restore Test Models Cache
