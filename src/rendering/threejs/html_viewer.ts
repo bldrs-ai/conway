@@ -76,3 +76,18 @@ export function initViewer(): SimpleViewerScene {
 
   return simpleViewerScene
 }
+
+/**
+ * Initialise the viewer with a GL context.
+ *
+ * @param {WebGLRenderingContext} context The GL context to use.
+ * @param width
+ * @param height
+ * @return {void}
+ */
+export function initViewerWithGLContext(context:WebGLRenderingContext, width:number, height:number): SimpleViewerScene {
+
+  const simpleViewerScene = SimpleViewerScene.createSceneWithGLContext( context, width, height )
+
+  return simpleViewerScene
+}

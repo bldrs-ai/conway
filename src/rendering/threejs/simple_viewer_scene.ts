@@ -817,4 +817,68 @@ export class SimpleViewerScene {
 
     return result
   }
+
+    /**
+     * Create a simple viewer scene, including the required
+     * threejs artefacts and attach it to a DOM element.
+     *
+     * @param element The element to attach to.
+     * @param useElementDimensions If true use the width and height of the element,
+     * if false use the window dimensions.
+     * @param height
+     * @param width
+     * @param context
+     * @param options The scene viewer options for attaching this element.
+     * @return {SimpleViewerScene} The created scene.
+     */
+    public static createSceneWithGLContext(
+      context: WebGLRenderingContext,
+      width: number = 1024,
+      height: number = 768,
+      options: SimpleViewerSceneOptions = defaultOptions ): SimpleViewerScene {
+
+    const dimensionsFunction: () => [number, number] =
+        () => {
+
+          return [width, height]
+        }
+
+    const [startingWidth, startingHeight] = dimensionsFunction()
+
+    const renderer = new THREE.WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true, context: context } )
+    const scene = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(
+        CAMERA_FOV,
+        startingWidth / startingHeight,
+        DEFAULT_NEAR,
+        DEFAULT_FAR )
+
+    renderer.sortObjects = true
+
+    let pixelRatio = window.devicePixelRatio
+
+    let worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+
+    while ( worstCaseTextureSize > renderer.capabilities.maxTextureSize && pixelRatio > 1) {
+
+      pixelRatio /= 2
+      pixelRatio  = Math.min( pixelRatio, 1 )
+
+      worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+    }
+
+    renderer.setPixelRatio( pixelRatio )
+    renderer.setSize( startingWidth, startingHeight )
+
+    renderer.setClearColor( THREE.Color.NAMES.cornflowerblue )
+
+    const result = new SimpleViewerScene( renderer, scene, camera, dimensionsFunction, options )
+
+    renderer.setAnimationLoop( () => {
+
+      result.render()
+    })
+
+    return result
+  }
 }
