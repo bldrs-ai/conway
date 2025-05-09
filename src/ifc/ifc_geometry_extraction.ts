@@ -1162,8 +1162,6 @@ export class IfcGeometryExtraction {
       this.extractBooleanOperand(from, isRelVoid, representationItem, isSecondOperand )
     }
 
-    let geometry: CanonicalMesh | undefined
-
     if ( isRelVoid ) {
       return this.model.voidGeometry.getByLocalID(from.localID)
     }
@@ -2125,9 +2123,7 @@ export class IfcGeometryExtraction {
       const curveObject = this.extractEllipseProfileCurve(from)
 
       if (curveObject !== void 0) {
-        if (!curveObject.isCCW()) {
-          curveObject.invert()
-        }
+ 
         const holesArray: NativeVectorCurve = this.nativeVectorCurve()
         profile = {
           localID: from.localID,
@@ -2140,9 +2136,7 @@ export class IfcGeometryExtraction {
       const curveObject = this.extractCircleCurve(from)
 
       if (curveObject !== void 0) {
-        if (!curveObject.isCCW()) {
-          curveObject.invert()
-        }
+    
         const holesArray: NativeVectorCurve = this.nativeVectorCurve()
 
         if (from instanceof IfcCircleHollowProfileDef) {
@@ -2756,12 +2750,6 @@ export class IfcGeometryExtraction {
 
       ifcCurve = this.extractIfcTrimmedCurve(from, parentSense)
 
-      if (ifcCurve !== void 0) {
-
-        // if (!ifcCurve.isCCW()) {
-        //   ifcCurve.invert()
-        // }
-      }
 
     } else if (from instanceof IfcPolyline) {
 
@@ -2777,29 +2765,13 @@ export class IfcGeometryExtraction {
     } else if (from instanceof IfcIndexedPolyCurve) {
       ifcCurve = this.extractIndexedPolyCurve(from)
 
-      if (ifcCurve !== void 0) {
-        // if (!ifcCurve.isCCW()) {
-        //   ifcCurve.invert()
-        // }
-      }
     } else if (from instanceof IfcCircle) {
 
       ifcCurve = this.extractIfcCircle(from, parentSense)
 
-      if (ifcCurve !== void 0) {
-        // if (!ifcCurve.isCCW()) {
-        //   ifcCurve.invert()
-        // }
-      }
     } else if (from instanceof IfcCompositeCurve) {
 
       ifcCurve = this.extractCompositeCurve(from, parentSense)
-
-      if (ifcCurve !== void 0) {
-        // if (!ifcCurve.isCCW()) {
-        //   ifcCurve.invert()
-        // }
-      }
     }
 
     if ( ifcCurve === void 0 ) {
