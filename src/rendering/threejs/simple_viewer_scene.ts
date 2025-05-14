@@ -613,6 +613,105 @@ export class SimpleViewerScene {
    * Load a new model, replacing any current model in the scene,
    * uses promises/exceptions for error handling
    *
+   * @param model The model to add to the scene
+   */
+  public addModelToScene( model:SceneObject ) {
+    try {
+
+      const scene = this.scene
+
+      const currentModelSceneObject = this.currentModelSceneObject_
+
+      if ( currentModelSceneObject !== void 0 ) {
+
+        scene.remove( currentModelSceneObject )
+        this.currentModelSceneObject_ = void 0
+        this.currentModel_ = void 0
+      }
+
+      model.castShadow = true
+      model.receiveShadow = true
+
+      this.currentModelSceneObject_ = model
+
+      const currentBoundingBox = new THREE.Box3().setFromObject( model )
+
+      const currentBoundingSphere =
+        currentBoundingBox
+            .getBoundingSphere( new THREE.Sphere() )
+
+      const sphereRadius = currentBoundingSphere.radius
+
+      model.position.copy( currentBoundingSphere.center.clone().negate() )
+      
+      scene.add( model )
+
+      // Add this to the scene to see the bounding box.
+      // const conwaySceneObjectHelper = new THREE.BoxHelper( conwaySceneObject )
+
+      // scene.add( conwaySceneObjectHelper )
+
+      const light = this.light
+
+      this.currentRadius_ = sphereRadius
+
+      light.position.copy( this.lightDir_ ).normalize().multiplyScalar( sphereRadius )
+
+      light.shadow.camera.near = 0.1 * sphereRadius
+      light.shadow.camera.far = ( 2.1 * sphereRadius )
+      light.shadow.camera.top = sphereRadius
+      light.shadow.camera.bottom = -sphereRadius
+      light.shadow.camera.left = -sphereRadius
+      light.shadow.camera.right = sphereRadius
+
+      light.shadow.camera.updateProjectionMatrix()
+      light.updateMatrix()
+
+      light.shadow.autoUpdate = false
+      light.shadow.needsUpdate = true
+
+      this.renderer.shadowMap.needsUpdate = true
+
+      // Enable this to see the shadow frustum
+      // const shadowHelper = new THREE.CameraHelper( light.shadow.camera )
+
+      // scene.add( shadowHelper )
+
+      if ( this.options.initialiseCameraToModel ?? defaultOptions.initialiseCameraToModel ) {
+
+        const camera = this.camera
+
+        camera.position.set( 0, sphereRadius * 0.25, sphereRadius )
+
+        const near = sphereRadius * NEAR_RATIO
+        const cameraZ = sphereRadius + near
+
+        camera.near       = near
+        camera.far        = cameraZ * 4
+
+        const [width, height] = this.dimensionsFunction()
+
+        if ( camera instanceof THREE.PerspectiveCamera ) {
+          camera.aspect = width / height
+        }
+
+        camera.lookAt( new THREE.Vector3( 0, 0, -sphereRadius * 0.25 ) )
+
+      }
+
+    } catch ( e ) {
+
+      Logger.error(
+        `Error adding model to scene: ${(e as Error | undefined)?.message ?? '<unknown>'} `)
+
+      throw e
+    }
+  }
+
+  /**
+   * Load a new model, replacing any current model in the scene,
+   * uses promises/exceptions for error handling
+   *
    * @param buffer The buffer to load the model from
    * @return {Promise< void >} A promise to await on for loading.
    */
@@ -807,6 +906,70 @@ export class SimpleViewerScene {
         renderer.setSize( window.innerWidth, window.innerHeight )
       } )
     }
+
+    const result = new SimpleViewerScene( renderer, scene, camera, dimensionsFunction, options )
+
+    renderer.setAnimationLoop( () => {
+
+      result.render()
+    })
+
+    return result
+  }
+
+    /**
+     * Create a simple viewer scene, including the required
+     * threejs artefacts and attach it to a DOM element.
+     *
+     * @param element The element to attach to.
+     * @param useElementDimensions If true use the width and height of the element,
+     * if false use the window dimensions.
+     * @param height
+     * @param width
+     * @param context
+     * @param options The scene viewer options for attaching this element.
+     * @return {SimpleViewerScene} The created scene.
+     */
+    public static createSceneWithGLContext(
+      context: WebGLRenderingContext,
+      width: number = 1024,
+      height: number = 768,
+      options: SimpleViewerSceneOptions = defaultOptions ): SimpleViewerScene {
+
+    const dimensionsFunction: () => [number, number] =
+        () => {
+
+          return [width, height]
+        }
+
+    const [startingWidth, startingHeight] = dimensionsFunction()
+
+    const renderer = new THREE.WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true, context: context } )
+    const scene = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(
+        CAMERA_FOV,
+        startingWidth / startingHeight,
+        DEFAULT_NEAR,
+        DEFAULT_FAR )
+
+    renderer.sortObjects = true
+
+    let pixelRatio = window.devicePixelRatio
+
+    let worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+
+    while ( worstCaseTextureSize > renderer.capabilities.maxTextureSize && pixelRatio > 1) {
+
+      pixelRatio /= 2
+      pixelRatio  = Math.min( pixelRatio, 1 )
+
+      worstCaseTextureSize = Math.max( window.innerWidth, window.innerHeight ) * pixelRatio
+    }
+
+    renderer.setPixelRatio( pixelRatio )
+    renderer.setSize( startingWidth, startingHeight )
+
+    renderer.setClearColor( THREE.Color.NAMES.cornflowerblue )
 
     const result = new SimpleViewerScene( renderer, scene, camera, dimensionsFunction, options )
 
