@@ -1169,7 +1169,7 @@ export class IfcGeometryExtraction {
     return this.model.geometry.getByLocalID(from.localID)
   }
 
-  getFirstBoolenOperandGeometry( 
+  getFirstBooleanOperandGeometry( 
     from: IfcBooleanResult,
     isRelVoid: boolean = false,
     representationItem?:IfcRepresentationItem ): CanonicalMesh | undefined {
@@ -1177,7 +1177,7 @@ export class IfcGeometryExtraction {
     return this.getOperandGeometry( from.FirstOperand, false, isRelVoid, representationItem )
   }
 
-  getSecondBoolenOperandGeometry( 
+  getSecondBooleanOperandGeometry( 
     from: IfcBooleanResult,
     isRelVoid: boolean = false ): CanonicalMesh | undefined {
 
@@ -1218,7 +1218,7 @@ export class IfcGeometryExtraction {
 
       // get geometry TODO(nickcastel50): eventually support flattening meshes
       let flatFirstMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
-      const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid, from)
+      const firstMesh = this.getFirstBooleanOperandGeometry(from, isRelVoid, from)
 
       if (firstMesh !== void 0 && firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -1251,7 +1251,7 @@ export class IfcGeometryExtraction {
 
       let flatSecondMeshVector: StdVector<GeometryObject>// = this.nativeVectorGeometry()
 
-      const secondMesh = this.getSecondBoolenOperandGeometry(from, isRelVoid)
+      const secondMesh = this.getSecondBooleanOperandGeometry(from, isRelVoid)
       
       if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -1396,7 +1396,7 @@ export class IfcGeometryExtraction {
 
         const maximumCsgMemoizationDepth = this.csgDepthLimit
 
-        const firstMesh = this.getFirstBoolenOperandGeometry(from, isRelVoid, representationItem)
+        const firstMesh = this.getFirstBooleanOperandGeometry(from, isRelVoid, representationItem)
 
         if ( this.limitCSGDepth && this.csgDepth >= maximumCsgMemoizationDepth ) {
  
@@ -1467,7 +1467,7 @@ export class IfcGeometryExtraction {
         }
 
         let flatSecondMeshVector: StdVector<GeometryObject>
-        const secondMesh = this.getSecondBoolenOperandGeometry(from, isRelVoid)
+        const secondMesh = this.getSecondBooleanOperandGeometry(from, isRelVoid)
 
         if (secondMesh !== void 0 && secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -2733,42 +2733,81 @@ export class IfcGeometryExtraction {
 
       ifcCurve = this.extractBSplineCurve(from, parentSense, isEdge)
 
-      if (trimmingArguments !== void 0) {
-        // invert curve
-        Logger.info('inverting curve')
-        ifcCurve.invert()
-      }
-
-      // Logger.info(`Curve type: ${EntityTypesIfc[from.type]} - express ID: ${from.expressID}`)
-      /* for (let i = 0; i < ifcCurve.getPointsSize(); ++i) {
-        if (from.Degree === 2) {
-          const pt_ = ifcCurve.get2d(i)
-          Logger.info(`Point ${i}: x: ${pt_.x}, y: ${pt_.y}, z: ${pt_.z}`)
-        }
-      }*/
     } else if (from instanceof IfcTrimmedCurve) {
 
-      ifcCurve = this.extractIfcTrimmedCurve(from, parentSense)
+      ifcCurve = this.extractIfcTrimmedCurve(from, parentSense, isEdge)     
 
 
     } else if (from instanceof IfcPolyline) {
 
       ifcCurve = this.extractIfcPolyline(from, parentSense, isEdge)
 
-      if (ifcCurve !== void 0) {
-
-        if (trimmingArguments?.exist ) {
-           ifcCurve.invert()
-        }
-      }
-
     } else if (from instanceof IfcIndexedPolyCurve) {
       ifcCurve = this.extractIndexedPolyCurve(from)
 
     } else if (from instanceof IfcCircle) {
 
-      ifcCurve = this.extractIfcCircle(from, parentSense)
+      let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+      
+      if ( trimmingArguments?.exist ) {
+        paramsGetIfcTrimmedCurve = {
+          masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
+          dimensions: 3,
+          senseAgreement: parentSense,
+          trim1Cartesian2D: trimmingArguments.start?.pos,
+          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Double: trimmingArguments.start?.param ?? 0,
+          trim2Cartesian2D:  trimmingArguments.end?.pos,
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Double:  trimmingArguments.end?.param ?? 0,
+          trimExists: true
+        }
+      }
 
+      ifcCurve = this.extractIfcCircle(from, parentSense, paramsGetIfcTrimmedCurve)
+
+    } else if (from instanceof IfcEllipse) {
+
+      let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+      
+      if ( trimmingArguments?.exist ) {
+        paramsGetIfcTrimmedCurve = {
+          masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
+          dimensions: 3,
+          senseAgreement: parentSense,
+          trim1Cartesian2D: trimmingArguments.start?.pos,
+          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Double: trimmingArguments.start?.param ?? 0,
+          trim2Cartesian2D:  trimmingArguments.end?.pos,
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Double:  trimmingArguments.end?.param ?? 0,
+          trimExists: true
+        }
+      }
+
+      ifcCurve = this.extractIfcEllipse(from, parentSense, paramsGetIfcTrimmedCurve)
+      
+    } else if (from instanceof IfcLine) {
+
+        let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+        
+        if ( trimmingArguments?.exist ) {
+          paramsGetIfcTrimmedCurve = {
+            masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
+            dimensions: 3,
+            senseAgreement: parentSense,
+            trim1Cartesian2D: trimmingArguments.start?.pos,
+            trim1Cartesian3D: trimmingArguments.start?.pos3D,
+            trim1Double: trimmingArguments.start?.param ?? 0,
+            trim2Cartesian2D:  trimmingArguments.end?.pos,
+            trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+            trim2Double:  trimmingArguments.end?.param ?? 0,
+            trimExists: true
+          }
+        }
+  
+        ifcCurve = this.extractIfcLine(from, parentSense, isEdge, paramsGetIfcTrimmedCurve)
+  
     } else if (from instanceof IfcCompositeCurve) {
 
       ifcCurve = this.extractCompositeCurve(from, parentSense)
