@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+chmod +x ../emsdk/emsdk_env.sh
+source ../emsdk/emsdk_env.sh
+
 cd "$(dirname "$0")/../dependencies/conway-geom"
 
 chmod +x linux_genie/genie
