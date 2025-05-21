@@ -7,6 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../dependencies/conway-geom"
 
 chmod +x linux_genie/genie
+linux_genie/genie gmake
 
 cd gmake
 make config=releaseemscripten "$@"
