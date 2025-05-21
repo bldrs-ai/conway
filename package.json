@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.19.914",
+  "version": "0.22.921",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -40,6 +40,7 @@
   },
   "scripts": {
     "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies",
+    "codex-setup-emsdk": "bash ./scripts/setup-emsdk.sh",
     "clean": "run-script-os",
     "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",
     "clean:darwin": "rm -rf compiled && rm -rf dependencies/conway-geom/bin/release && rm -rf dependencies/conway-geom/Dist/*.{map,js} && yarn clean-conway_geom",
