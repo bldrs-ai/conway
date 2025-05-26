@@ -180,6 +180,7 @@ import {
   IfcEllipse,
   IfcMaterialLayerSet,
   IfcSweptDiskSolid,
+  IfcBlock,
   IfcCsgPrimitive3D,
   IfcSolidModel,
   IfcTessellatedFaceSet,
@@ -1158,7 +1159,8 @@ export class IfcGeometryExtraction {
       from instanceof IfcBooleanResult ||
       from instanceof IfcPolygonalBoundedHalfSpace ||
       from instanceof IfcHalfSpaceSolid ||
-      from instanceof IfcFacetedBrep) {
+      from instanceof IfcFacetedBrep ||
+      from instanceof IfcBlock) {
       this.extractBooleanOperand(from, isRelVoid, representationItem, isSecondOperand )
     }
 
@@ -1353,7 +1355,8 @@ export class IfcGeometryExtraction {
     IfcBooleanResult |
     IfcHalfSpaceSolid |
     IfcBooleanClippingResult |
-    IfcFacetedBrep,
+    IfcFacetedBrep |
+    IfcBlock,
   isRelVoid: boolean = false,
   representationItem?:IfcRepresentationItem,
   isSecondOperand: boolean = false ) {
@@ -1386,6 +1389,8 @@ export class IfcGeometryExtraction {
       this.extractHalfspaceSolid(from, true, isRelVoid)
     } else if (from instanceof IfcSweptDiskSolid) {
       this.extractSweptDiskSolid(from, true, isRelVoid)
+    } else if (from instanceof IfcBlock) {
+      this.extractBlock(from, true, isRelVoid)
     } else if (from instanceof IfcFacetedBrep) {
       this.extractIfcFacetedBrep(from, true, isRelVoid)
     } else if (from instanceof IfcBooleanResult) {
@@ -1864,6 +1869,79 @@ export class IfcGeometryExtraction {
       } else {
         this.model.voidGeometry.add(canonicalMesh)
       }
+    }
+  }
+
+  /**
+   * Extract geometry for an IfcBlock primitive by constructing a rectangular
+   * extruded solid.
+   *
+   * @param from The IfcBlock instance to extract.
+   * @param temporary Whether the geometry is temporary.
+   * @param isRelVoid Is the geometry part of a relative void subtraction?
+   */
+  extractBlock(from: IfcBlock,
+      temporary: boolean = false,
+      isRelVoid: boolean = false) {
+
+    let axis2PlacementTransform: any | undefined
+
+    if (from.Position !== null) {
+      const paramsAxis2Placement3D: ParamsAxis2Placement3D =
+          this.extractAxis2Placement3D(from.Position, from.localID, true)
+      axis2PlacementTransform =
+        this.conwayModel.getAxis2Placement3D(paramsAxis2Placement3D)
+    }
+
+    const paramsRectangle: ParamsGetRectangleProfileCurve = {
+      xDim: from.XLength,
+      yDim: from.YLength,
+      hasPlacement: false,
+      matrix: new (this.wasmModule.Glmdmat3)() as NativeTransform3x3,
+      thickness: -1,
+    }
+
+    const rectCurve: CurveObject =
+        this.conwayModel.getRectangleProfileCurve(paramsRectangle)
+    paramsRectangle.matrix.delete()
+
+    const holesArray: NativeVectorCurve = this.nativeVectorCurve()
+
+    const profileParams: ParamsCreateNativeIfcProfile = {
+      curve: rectCurve,
+      holes: holesArray,
+      isConvex: false,
+      isComposite: false,
+      profiles: this.nativeVectorProfile(),
+    }
+
+    const nativeProfile = this.conwayModel.createNativeIfcProfile(profileParams)
+
+    const parameters: ParamsGetExtrudedAreaSolid = {
+      depth: from.ZLength,
+      dir: { x: 0, y: 0, z: 1 },
+      profile: nativeProfile,
+    }
+
+    const geometry: GeometryObject =
+        this.conwayModel.getExtrudedAreaSolid(parameters)
+
+    if (axis2PlacementTransform !== void 0) {
+      geometry.applyTransform(axis2PlacementTransform)
+    }
+
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry,
+      localID: from.localID,
+      model: this.model,
+      temporary,
+    }
+
+    if (!isRelVoid) {
+      this.model.geometry.add(canonicalMesh)
+    } else {
+      this.model.voidGeometry.add(canonicalMesh)
     }
   }
 
@@ -3960,6 +4038,8 @@ export class IfcGeometryExtraction {
 
     } else if (from instanceof IfcSweptDiskSolid) {
       this.extractSweptDiskSolid(from, false, isRelVoid)
+    } else if (from instanceof IfcBlock) {
+      this.extractBlock(from, false, isRelVoid)
     } else if (from instanceof IfcFacetedBrep) {
 
       this.extractIfcFacetedBrep(from, false, isRelVoid)
