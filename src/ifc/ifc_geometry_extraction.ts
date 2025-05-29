@@ -184,6 +184,7 @@ import {
   IfcCsgPrimitive3D,
   IfcSolidModel,
   IfcTessellatedFaceSet,
+  IfcRoundedRectangleProfileDef,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -197,6 +198,7 @@ import { REFLECTANCE_METHOD_PERMISSIVE,
 import IfcModelCurves from './ifc_model_curves'
 import { CsgMemoization, CsgOperationType } from '../core/csg_operations'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
+import { ParamsGetBlock } from '../../dependencies/conway-geom/interface/parameters/params_get_block'
 
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
@@ -1276,12 +1278,6 @@ export class IfcGeometryExtraction {
 
       const booleanGeometryObject: GeometryObject = this.conwayModel.getBooleanResult(parameters)
 
-
-      // const outputFilePath =
-      // `${from.expressID}_${EntityTypesIfc[from.type]}_post_subtract_test.obj`
-
-      // this.dumpGeometry(outputFilePath, booleanGeometryObject)
-
       if (firstMesh.type === CanonicalMeshType.BUFFER_GEOMETRY &&
           secondMesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -1884,6 +1880,16 @@ export class IfcGeometryExtraction {
       temporary: boolean = false,
       isRelVoid: boolean = false) {
 
+    const XLength = from.XLength 
+    const YLength = from.YLength
+    const ZLength = from.ZLength
+
+    /* ---- 1. Sanity check -------------------------------------- */
+    if (XLength == null || YLength == null || ZLength == null) {
+      console.warn(`IfcBlock ${from.localID} has invalid dimensions – skipped.`)
+      return
+    }
+
     let axis2PlacementTransform: any | undefined
 
     if (from.Position !== null) {
@@ -1893,42 +1899,14 @@ export class IfcGeometryExtraction {
         this.conwayModel.getAxis2Placement3D(paramsAxis2Placement3D)
     }
 
-    const paramsRectangle: ParamsGetRectangleProfileCurve = {
-      xDim: from.XLength,
-      yDim: from.YLength,
-      hasPlacement: false,
-      matrix: new (this.wasmModule.Glmdmat3)() as NativeTransform3x3,
-      thickness: -1,
+    const parameters: ParamsGetBlock = {
+      xLength: XLength,
+      yLength: YLength,
+      zLength: ZLength,
+      placement: axis2PlacementTransform,
     }
 
-    const rectCurve: CurveObject =
-        this.conwayModel.getRectangleProfileCurve(paramsRectangle)
-    paramsRectangle.matrix.delete()
-
-    const holesArray: NativeVectorCurve = this.nativeVectorCurve()
-
-    const profileParams: ParamsCreateNativeIfcProfile = {
-      curve: rectCurve,
-      holes: holesArray,
-      isConvex: false,
-      isComposite: false,
-      profiles: this.nativeVectorProfile(),
-    }
-
-    const nativeProfile = this.conwayModel.createNativeIfcProfile(profileParams)
-
-    const parameters: ParamsGetExtrudedAreaSolid = {
-      depth: from.ZLength,
-      dir: { x: 0, y: 0, z: 1 },
-      profile: nativeProfile,
-    }
-
-    const geometry: GeometryObject =
-        this.conwayModel.getExtrudedAreaSolid(parameters)
-
-    if (axis2PlacementTransform !== void 0) {
-      geometry.applyTransform(axis2PlacementTransform)
-    }
+    const geometry: GeometryObject = this.conwayModel.getBlock(parameters)
 
     const canonicalMesh: CanonicalMesh = {
       type: CanonicalMeshType.BUFFER_GEOMETRY,
@@ -2024,7 +2002,7 @@ export class IfcGeometryExtraction {
 
     if (position !== null) {
       const paramsAxis2Placement3D: ParamsAxis2Placement3D =
-        this.extractAxis2Placement3D(position, position.localID, true)
+        this.extractAxis2Placement3D(position, from.localID, true)
       axis2PlacementTransform = this.conwayModel
           .getAxis2Placement3D(paramsAxis2Placement3D)
     }
@@ -3550,8 +3528,11 @@ export class IfcGeometryExtraction {
         xDim: from.XDim,
         yDim: from.YDim,
         hasPlacement: true,
+        hasRoundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? true : false,
+        roundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? from.RoundingRadius : -1,
         matrix: placement2D,
         thickness: (from instanceof IfcRectangleHollowProfileDef) ? from.WallThickness : -1,
+        circleSegments: this.circleSegments,
       }
 
       const ifcCurve: CurveObject = this.conwayModel.getRectangleProfileCurve(paramsGetCircleCurve)
@@ -3562,8 +3543,11 @@ export class IfcGeometryExtraction {
         xDim: from.XDim,
         yDim: from.YDim,
         hasPlacement: false,
+        hasRoundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? true : false,
+        roundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? from.RoundingRadius : -1,
         matrix: (new (this.wasmModule.Glmdmat3)),
         thickness: (from instanceof IfcRectangleHollowProfileDef) ? from.WallThickness : -1,
+        circleSegments: this.circleSegments,
       }
 
       const ifcCurve: CurveObject = this.conwayModel.getRectangleProfileCurve(paramsGetCircleCurve)
@@ -3586,8 +3570,11 @@ export class IfcGeometryExtraction {
         xDim: from.XDim,
         yDim: from.YDim,
         hasPlacement: true,
+        hasRoundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? true : false,
+        roundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? from.RoundingRadius : -1,
         matrix: placement2D,
         thickness: from.WallThickness,
+        circleSegments: this.circleSegments,
       }
 
       const ifcCurve: CurveObject =
@@ -3599,8 +3586,11 @@ export class IfcGeometryExtraction {
         xDim: from.XDim,
         yDim: from.YDim,
         hasPlacement: false,
+        hasRoundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? true : false,
+        roundingRadius: (from instanceof IfcRoundedRectangleProfileDef) ? from.RoundingRadius : -1,
         matrix: (new (this.wasmModule.Glmdmat3)),
         thickness: from.WallThickness,
+        circleSegments: this.circleSegments,
       }
 
       const ifcCurve: CurveObject =
@@ -5734,12 +5724,12 @@ export class IfcGeometryExtraction {
    */
   dumpGeometry(outputFilePath:string, geometry:GeometryObject) {
     // Construct the full OBJ content
-    if (Environment.environmentType === EnvironmentType.NODE) {
-      // const objContent = this.conwayModel.toObj(geometry)
+    /* if (Environment.environmentType === EnvironmentType.NODE) {
+       const objContent = this.conwayModel.toObj(geometry)
 
       // Write to the output file
-      // fs.writeFileSync(outputFilePath, objContent, 'utf8')
-    }
+       fs.writeFileSync(outputFilePath, objContent, 'utf8')
+    } */
   }
 
   /**
