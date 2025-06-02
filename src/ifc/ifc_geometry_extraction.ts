@@ -185,6 +185,8 @@ import {
   IfcSolidModel,
   IfcTessellatedFaceSet,
   IfcRoundedRectangleProfileDef,
+  IfcMaterialProfileSetUsage,
+  IfcCompositeCurveSegment,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -2867,6 +2869,10 @@ export class IfcGeometryExtraction {
     } else if (from instanceof IfcCompositeCurve) {
 
       ifcCurve = this.extractCompositeCurve(from, parentSense)
+    } else if (from instanceof IfcCompositeCurveSegment) {
+      const parentCurve = from.ParentCurve
+      const sameSense = from.SameSense === parentSense
+      ifcCurve = this.extractCurve(parentCurve, sameSense)
     }
 
     if ( ifcCurve === void 0 ) {
@@ -5450,9 +5456,19 @@ export class IfcGeometryExtraction {
       IfcMaterialConstituent |
       IfcMaterialLayerSetUsage |
       IfcMaterialLayerSet |
-      IfcMaterialConstituentSet): number | undefined {
+      IfcMaterialConstituentSet | 
+      IfcMaterialProfileSetUsage): number | undefined {
     if (from instanceof IfcMaterial) {
       return this.materials.materialDefinitionsMap.get(from.localID)
+    } else if (from instanceof IfcMaterialProfileSetUsage) { 
+      for (const profile of from.ForProfileSet.MaterialProfiles) {
+        if (profile.Material) {
+          const styledItemID = this.extractMaterial(profile.Material)
+          if (styledItemID !== void 0 ) {
+            return styledItemID
+          }
+        }
+      }
     } else if (from instanceof IfcMaterialLayerSetUsage) {
       for (const layer of from.ForLayerSet.MaterialLayers) {
         if (layer.Material) {
