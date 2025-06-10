@@ -14,6 +14,7 @@ import {
   ParamsGetCircleCurve,
   ParamsCreateNativeIfcProfile,
   ParamsGetExtrudedAreaSolid,
+  ParamsGetRevolvedAreaSolid,
   ParamsGetBooleanResult,
   BlendMode,
   Vector2,
@@ -187,6 +188,7 @@ import {
   IfcRoundedRectangleProfileDef,
   IfcMaterialProfileSetUsage,
   IfcCompositeCurveSegment,
+  IfcRevolvedAreaSolid,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -1372,6 +1374,9 @@ export class IfcGeometryExtraction {
     if (from instanceof IfcExtrudedAreaSolid) {
       // mark as temporary
       this.extractExtrudedAreaSolid(from, true, isRelVoid)
+    } else if (from instanceof IfcRevolvedAreaSolid) {
+      // mark as temporary
+      this.extractRevolvedAreaSolid(from, true, isRelVoid)
     } else if (from instanceof IfcPolygonalFaceSet) {
       // mark as temporary
       const faceSetResult: ExtractResult =
@@ -1985,6 +1990,85 @@ export class IfcGeometryExtraction {
       this.model.geometry.add(canonicalMesh)
     } else {
       this.model.voidGeometry.add(canonicalMesh)
+    }
+  }
+
+  /**
+   * 
+   * @param from 
+   * @param temporary 
+   * @param isRelVoid 
+   */
+  extractRevolvedAreaSolid(
+      from: IfcRevolvedAreaSolid,
+      temporary: boolean = false,
+      isRelVoid: boolean = false) {
+
+    let axis2PlacementTransform: any | undefined = (void 0)
+
+    const angle = from.Angle
+    const axis = from.Axis
+
+     const axisPosition = {
+      x: axis.Location.Coordinates[0],
+      y: axis.Location.Coordinates[1],
+      z: axis.Location.Coordinates[2],
+    }
+
+    const axisNative = {
+      x: axis.Axis?.DirectionRatios[0] ?? 0,
+      y: axis.Axis?.DirectionRatios[1] ?? 0,
+      z: axis.Axis?.DirectionRatios[2] ?? 1,
+    }
+    
+    
+
+    const position = from.Position
+    if (position !== null) {
+      const paramsAxis2Placement3D: ParamsAxis2Placement3D =
+        this.extractAxis2Placement3D(position, from.localID, true)
+      axis2PlacementTransform = this.conwayModel
+          .getAxis2Placement3D(paramsAxis2Placement3D) 
+    }
+
+    const profile: CanonicalProfile | undefined = this.extractProfile(from.SweptArea)
+
+    if (profile !== void 0 && profile.nativeProfile !== void 0) {
+      // get geometry
+      const parameters: ParamsGetRevolvedAreaSolid = {
+        angle: angle,
+        axis: axisNative,
+        axisPosition: axisPosition,
+        placement: axis2PlacementTransform,
+        profile: profile.nativeProfile,
+        scalingFactor: this.linearScalingFactor,
+        circleSegments: this.circleSegments,
+      }
+
+      const geometry: GeometryObject = this.conwayModel.getRevolvedAreaSolid(parameters)
+
+      // apply transform
+      if (axis2PlacementTransform !== void 0) {
+        geometry.applyTransform(axis2PlacementTransform)
+      }
+
+      // const _outputFilePath = `${from.expressID}_${EntityTypesIfc[from.type]}.obj`
+      // this.dumpGeometry(_outputFilePath, geometry)
+
+      const canonicalMesh: CanonicalMesh = {
+        type: CanonicalMeshType.BUFFER_GEOMETRY,
+        geometry: geometry,
+        localID: from.localID,
+        model: this.model,
+        temporary: temporary,
+      }
+
+      // add mesh to the list of mesh objects
+      if (!isRelVoid) {
+        this.model.geometry.add(canonicalMesh)
+      } else {
+        this.model.voidGeometry.add(canonicalMesh)
+      }
     }
   }
 
@@ -4024,6 +4108,9 @@ export class IfcGeometryExtraction {
 
       this.extractExtrudedAreaSolid(from, false, isRelVoid)
 
+    } else if (from instanceof IfcRevolvedAreaSolid) {
+      
+      this.extractRevolvedAreaSolid(from, false, isRelVoid)
     } else if (from instanceof IfcPolygonalBoundedHalfSpace) {
 
       this.extractPolygonalBoundedHalfSpace(from, false, isRelVoid)
