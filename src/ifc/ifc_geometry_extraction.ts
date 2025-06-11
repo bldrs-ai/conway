@@ -189,6 +189,7 @@ import {
   IfcMaterialProfileSetUsage,
   IfcCompositeCurveSegment,
   IfcRevolvedAreaSolid,
+  IfcFaceSurface,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -4272,7 +4273,7 @@ export class IfcGeometryExtraction {
 
     for (const face of from) {
 
-      if (face instanceof IfcAdvancedFace) {
+      if ( face instanceof IfcFaceSurface ) {
 
         this.extractAdvancedFace(face, geometry_)
 
@@ -4502,7 +4503,7 @@ export class IfcGeometryExtraction {
    * @param from
    * @param geometry
    */
-  extractAdvancedFace(from: IfcAdvancedFace, geometry: GeometryObject) {
+  extractAdvancedFace(from: IfcFaceSurface | IfcAdvancedFace, geometry: GeometryObject) {
 
     if (from.Bounds.length > 0) {
 
@@ -4553,7 +4554,6 @@ export class IfcGeometryExtraction {
 
                 const startPoint = edgeStart.VertexGeometry
 
-                 
                 if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
 
                   const startCoords = startPoint.Coordinates
@@ -4719,7 +4719,6 @@ export class IfcGeometryExtraction {
       const nativeSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
 
       this.extractSurface(surface, nativeSurface)
-
 
       const parameters: ParamsAddFaceToGeometry = {
         boundsArray: bound3DVector,
