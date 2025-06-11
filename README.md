@@ -8,6 +8,9 @@ Conway includes two major subcomponents:
 
 ## Getting Started
 
+### Codex Setup
+1. Ignore the below and refer to AGENTS.md.
+
 ### Windows Setup
 1. [Install MinGW-64](https://github.com/msys2/msys2-installer/releases/download/2022-06-03/msys2-x86_64-20220603.exe) and add ```g++.exe``` location to your PATH variable.
 
