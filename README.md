@@ -116,12 +116,21 @@ git push origin HEAD
 # IFC Parser Console Test Application
 
 Conway has a test application for parsing IFC step files to see the performance and included entity types at src/core/ifc/ifc_command_line_main.ts. 
-Use an incremental or full build to compile this file from typescript and then it can be run with:
+
+You can set up an alias to reference the latest package or build from source and use yarn cli:
 
 ```
-yarn cli [ifc file path]
+alias conway='yarn cli'
+OR
+alias conway='npx --package=@bldrs-ai/conway@latest exec cli'
+```
+
+It can be run with:
+
+```
+conway [ifc file path]
 # To output geometry
-yarn cli -g [ifc file path]
+conway -g [ifc file path]
 # Use -m 1024 for larger files
 ```
 
@@ -130,41 +139,41 @@ yarn cli -g [ifc file path]
 You can now output various geometry formats using the CLI:
 
 ```bash
-yarn cli [ifc file path] [options]
+conway [ifc file path] [options]
 ```
 
 **Examples:**
 - Output all geometry (default GLTF + GLB):
   ```bash
-  yarn cli index.ifc --geometry
+  conway index.ifc --geometry
   ```
 - Output only GLTF:
   ```bash
-  yarn cli index.ifc --geometry --gltf
+  conway index.ifc --geometry --gltf
   ```
 - Output only GLB:
   ```bash
-  yarn cli index.ifc --geometry --glb
+  conway index.ifc --geometry --glb
   ```
 - Output GLTF with Draco compression:
   ```bash
-  yarn cli index.ifc --geometry --gltf-draco
+  conway index.ifc --geometry --gltf-draco
   ```
 - Output GLB with Draco compression:
   ```bash
-  yarn cli index.ifc --geometry --glb-draco
+  conway index.ifc --geometry --glb-draco
   ```
 - Run geometry processing without saving output files:
   ```bash
-  yarn cli index.ifc --geometry --nooutput
+  conway index.ifc --geometry --nooutput
   ```
 
 You can also combine flags as needed. For example:
 ```bash
-yarn cli index.ifc --geometry --gltf-draco --glb-draco
+conway index.ifc --geometry --gltf-draco --glb-draco
 ```
 
-Run `yarn cli --help` for the full list of available flags and options.
+Run `conway --help` for the full list of available flags and options.
 
 The included index.ifc in the repo is recommended for testing.
 
