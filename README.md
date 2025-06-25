@@ -122,8 +122,49 @@ Use an incremental or full build to compile this file from typescript and then i
 yarn cli [ifc file path]
 # To output geometry
 yarn cli -g [ifc file path]
-# Use -m 1024 for larger files and see CLI help for full options
+# Use -m 1024 for larger files
 ```
+
+### CLI Geometry Output Options
+
+You can now output various geometry formats using the CLI:
+
+```bash
+yarn cli [ifc file path] [options]
+```
+
+**Examples:**
+- Output all geometry (default GLTF + GLB):
+  ```bash
+  yarn cli index.ifc --geometry
+  ```
+- Output only GLTF:
+  ```bash
+  yarn cli index.ifc --geometry --gltf
+  ```
+- Output only GLB:
+  ```bash
+  yarn cli index.ifc --geometry --glb
+  ```
+- Output GLTF with Draco compression:
+  ```bash
+  yarn cli index.ifc --geometry --gltf-draco
+  ```
+- Output GLB with Draco compression:
+  ```bash
+  yarn cli index.ifc --geometry --glb-draco
+  ```
+- Run geometry processing without saving output files:
+  ```bash
+  yarn cli index.ifc --geometry --nooutput
+  ```
+
+You can also combine flags as needed. For example:
+```bash
+yarn cli index.ifc --geometry --gltf-draco --glb-draco
+```
+
+Run `yarn cli --help` for the full list of available flags and options.
 
 The included index.ifc in the repo is recommended for testing.
 
