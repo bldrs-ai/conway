@@ -116,14 +116,64 @@ git push origin HEAD
 # IFC Parser Console Test Application
 
 Conway has a test application for parsing IFC step files to see the performance and included entity types at src/core/ifc/ifc_command_line_main.ts. 
-Use an incremental or full build to compile this file from typescript and then it can be run with:
+
+You can set up an alias to reference the latest package or build from source and use yarn cli:
 
 ```
-yarn cli [ifc file path]
-# To output geometry
-yarn cli -g [ifc file path]
-# Use -m 1024 for larger files and see CLI help for full options
+alias conway='yarn cli'
+OR
+alias conway='npx --package=@bldrs-ai/conway@latest exec cli'
 ```
+
+It can be run with:
+
+```
+conway [ifc file path]
+# To output geometry
+conway -g [ifc file path]
+# Use -m 1024 for larger files
+```
+
+### CLI Geometry Output Options
+
+You can now output various geometry formats using the CLI:
+
+```bash
+conway [ifc file path] [options]
+```
+
+**Examples:**
+- Output all geometry (default GLTF + GLB):
+  ```bash
+  conway index.ifc --geometry
+  ```
+- Output only GLTF:
+  ```bash
+  conway index.ifc --geometry --gltf
+  ```
+- Output only GLB:
+  ```bash
+  conway index.ifc --geometry --glb
+  ```
+- Output GLTF with Draco compression:
+  ```bash
+  conway index.ifc --geometry --gltf-draco
+  ```
+- Output GLB with Draco compression:
+  ```bash
+  conway index.ifc --geometry --glb-draco
+  ```
+- Run geometry processing without saving output files:
+  ```bash
+  conway index.ifc --geometry --nooutput
+  ```
+
+You can also combine flags as needed. For example:
+```bash
+conway index.ifc --geometry --gltf-draco --glb-draco
+```
+
+Run `conway --help` for the full list of available flags and options.
 
 The included index.ifc in the repo is recommended for testing.
 
