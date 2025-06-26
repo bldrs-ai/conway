@@ -61,7 +61,7 @@ function doWork() {
   const SKIP_PARAMS = 2
 
   const args =  
-    yargs(process.argv.slice(SKIP_PARAMS))
+        yargs(process.argv.slice(SKIP_PARAMS))
         .command('$0 <filename>', 'Query file', (yargs2) => {
           yargs2.option('express_ids', {
             describe: 'A list of express IDs',
@@ -91,19 +91,19 @@ function doWork() {
             alias: "gltf",
           })
           yargs2.option("glb", {
-              describe: "Output GLB format",
-              type: "boolean",
-              alias: "glb",
+            describe: "Output GLB format",
+            type: "boolean",
+            alias: "glb",
           })
           yargs2.option("gltf-draco", {
-              describe: "Output GLTF format with Draco compression",
-              type: "boolean",
-              alias: "gltf-draco",
+            describe: "Output GLTF format with Draco compression",
+            type: "boolean",
+            alias: "gltf-draco",
           })
           yargs2.option("glb-draco", {
-              describe: "Output GLB format with Draco compression",
-              type: "boolean",
-              alias: "glb-draco",
+            describe: "Output GLB format with Draco compression",
+            type: "boolean",
+            alias: "glb-draco",
           })
           yargs2.option('nooutput', {
             describe: 'Run geometry processing but do not output files.',
@@ -126,14 +126,12 @@ function doWork() {
             alias: 'p',
           })
           yargs2.option('maxchunk', {
-           
             describe: 'Maximum chunk size in megabytes (note, this is the allocation size, not the output size)',
             type: 'number',
             alias: 'm',
-            default: 128,
+            default: 1024,
           })
           yargs2.option('strict', {
-           
             describe: 'Makes parser/reference errors on nullable fields return null instead of an error',
             type: 'boolean',
             alias: 's',
@@ -144,7 +142,6 @@ function doWork() {
             type: 'boolean',
             alias: 'r',
           })
-
           yargs2.positional('filename', { describe: 'IFC File Paths', type: 'string' })
         }, (argv) => {
           const ifcFile = argv['filename'] as string
