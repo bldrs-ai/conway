@@ -54,8 +54,10 @@ import {
   WasmModule,
 } from '../core/native_types'
 import { ExtractResult } from '../core/shared_constants'
+import Logger from '../logging/logger'
 import {
-  advanced_face, axis1_placement,
+  advanced_brep_shape_representation,
+  advanced_face, annotation_occurrence, annotation_plane, axis1_placement,
   axis2_placement_2d,
   axis2_placement_3d,
   b_spline_curve,
@@ -73,6 +75,7 @@ import {
   curve,
   cylindrical_surface,
   direction,
+  draughting_model,
   edge_curve,
   edge_loop,
   ellipse,
@@ -80,6 +83,7 @@ import {
   face,
   face_based_surface_model,
   faceted_brep,
+  geometrically_bounded_2d_wireframe_representation,
   half_space_solid,
   line,
   loop,
@@ -90,12 +94,16 @@ import {
   placement, plane,
   poly_loop,
   polyline,
+  presentation_layer_assignment,
   product,
+  product_definition,
+  product_definition_shape,
   ratio_measure,
   rational_b_spline_curve,
   rational_b_spline_surface,
   representation_item,
   shape_definition_representation,
+  shape_representation,
   shell_based_surface_model,
   si_prefix,
   styled_item,
@@ -108,9 +116,11 @@ import {
   trimmed_curve,
   trimming_preference,
   vertex_point,
+  view_volume,
 } from './AP214E3_2010_gen'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
 import { AP214MaterialCache } from './ap214_material_cache'
+import { AP214ProductShapeMap } from './ap214_product_shape_map'
 import { AP214SceneBuilder, AP214SceneTransform } from './ap214_scene_builder'
 import AP214StepModel from './ap214_step_model'
 
@@ -187,6 +197,8 @@ export class AP214GeometryExtraction {
 
   public readonly materials: AP214MaterialCache
 
+  public readonly productShapeMap: AP214ProductShapeMap
+
   private linearScalingFactor: number
 
   private circleSegments: number = 12
@@ -213,6 +225,7 @@ export class AP214GeometryExtraction {
 
     this.materials = new AP214MaterialCache()
     this.scene = new AP214SceneBuilder(model, conwayModel, this.materials)
+    this.productShapeMap = new AP214ProductShapeMap()
 
     this.linearScalingFactor = 1
     this.wasmModule = conwayModel.wasmModule
@@ -2071,6 +2084,15 @@ export class AP214GeometryExtraction {
       this.extractManifoldSolidBrep(from)
       this.scene.addGeometry(from.localID, owningElementLocalID)
 
+    } else if (
+      from instanceof draughting_model || 
+      from instanceof geometrically_bounded_2d_wireframe_representation ||
+      from instanceof annotation_occurrence ||
+      from instanceof presentation_layer_assignment ||
+      from instanceof view_volume ) {
+      
+        return // skip these types, not 3D geometry
+
     } else {
 
       console.log(`Unsupported type: ${EntityTypesAP214[from.type]} 
@@ -3359,7 +3381,7 @@ export class AP214GeometryExtraction {
    * + Geometry array
    */
   extractAP214GeometryData(logTime: boolean = false):
-    [ExtractResult, AP214SceneBuilder] {
+    [ExtractResult, AP214SceneBuilder, AP214ProductShapeMap] {
 
     let result: ExtractResult = ExtractResult.INCOMPLETE
 
@@ -3375,42 +3397,86 @@ export class AP214GeometryExtraction {
 
       this.model.elementMemoization = false
 
+      const productShapeMap  = this.productShapeMap
       const shapeDefinitions = this.model.types(shape_definition_representation)
 
-      for ( const shapeDefinition of shapeDefinitions ) {
+      for ( const shapeDefinitionRepresentation of shapeDefinitions ) {
 
         this.scene.clearParentStack()
 
-        const representation = shapeDefinition.used_representation
-        const representationItems = representation.items
+        const shapeRepresentation = shapeDefinitionRepresentation.used_representation
+
+        if ( !( shapeRepresentation instanceof shape_representation ) ) {
+          continue
+        }
+
+        const definition = shapeDefinitionRepresentation.definition
+
+        let owningElementLocalID = shapeRepresentation.localID
+
+        if ( definition instanceof product_definition_shape ) {
+
+          const productDefinition = definition.definition
+
+          if ( productDefinition instanceof product_definition ) {
+
+            owningElementLocalID = productDefinition.localID
+
+            const product = productDefinition.formation.of_product
+
+            productShapeMap.addProductShapePair( product.localID, owningElementLocalID, shapeRepresentation.localID )
+          }
+        }
+        
+        const representationItems = shapeRepresentation.items
 
         const objectPlacement =
           representationItems.find(
               ( where ) => where instanceof placement ) as placement | undefined
 
+        let hasPlacement = false
+
         if ( objectPlacement !== void 0 ) {
 
           this.extractPlacement( objectPlacement )
+          hasPlacement = true
         }
 
         for ( const item of representationItems ) {
 
-          if ( item instanceof placement ) {
-            continue
+          try {
+
+            if ( item instanceof placement ) {
+              continue
+            }
+
+            this.extractRepresentationItem( item, owningElementLocalID )
+
+            const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+
+            if ( styledItemLocalID !== void 0 ) {
+
+              const styledItem =
+                this.model.getElementByLocalID( styledItemLocalID ) as styled_item
+
+              this.extractStyledItem( styledItem )
+
+            }
+          } catch ( ex ) {
+
+            if (ex instanceof Error) {
+
+              Logger.error( `Error processing representation item expressID: ${item.expressID}\n\t${ex.name}\n\t${ex.message}` )
+
+           } else {
+
+              Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
+            }
           }
+        }
 
-          this.extractRepresentationItem( item, shapeDefinition.localID )
-
-          const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-
-          if ( styledItemLocalID !== void 0 ) {
-
-            const styledItem =
-              this.model.getElementByLocalID( styledItemLocalID ) as styled_item
-
-            this.extractStyledItem( styledItem )
-
-          }
+        if ( hasPlacement ) {
+          this.scene.popTransform()
         }
       }
 
@@ -3423,7 +3489,8 @@ export class AP214GeometryExtraction {
         console.log(`Geometry Extraction took ${executionTimeInMs} milliseconds to execute.`)
       }
 
-      return [result, this.scene]
+      return [result, this.scene, this.productShapeMap]
+
     } finally {
       this.model.elementMemoization = previousMemoizationState
     }
