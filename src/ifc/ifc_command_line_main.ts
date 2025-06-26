@@ -287,7 +287,12 @@ function doWork() {
 
               console.log(outputGlb, outputGltf, outputGlbDraco, outputGltfDraco)
               if (noOutput === undefined || !noOutput) {
-                serializeGeometry(scene, fileName, maxGeometrySize, outputGltf, outputGlb, outputGltfDraco, outputGlbDraco, includeSpace)
+                if (outputGltf === undefined && outputGlb === undefined &&
+                    outputGltfDraco === undefined && outputGlbDraco === undefined) { 
+                      serializeGeometry(scene, fileName, maxGeometrySize, true, true, true, true, includeSpace)
+                    } else {
+                  serializeGeometry(scene, fileName, maxGeometrySize, outputGltf, outputGlb, outputGltfDraco, outputGlbDraco, includeSpace) 
+                }
               }
             }
 
