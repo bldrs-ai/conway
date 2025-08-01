@@ -16,7 +16,7 @@ export  class surface_style_reflectance_ambient extends StepEntityBase< EntityTy
 
   public get ambient_reflectance() : number {
     if ( this.ambient_reflectance_ === void 0 ) {
-      this.ambient_reflectance_ = this.extractNumber( 0, false )
+      this.ambient_reflectance_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.ambient_reflectance_ as number
@@ -24,8 +24,26 @@ export  class surface_style_reflectance_ambient extends StepEntityBase< EntityTy
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_style_reflectance_ambient.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_style_reflectance_ambient" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

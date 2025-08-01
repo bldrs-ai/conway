@@ -18,7 +18,7 @@ export  class IfcStructuralCurveConnection extends IfcStructuralConnection {
 
   public get Axis() : IfcDirection {
     if ( this.Axis_ === void 0 ) {
-      this.Axis_ = this.extractElement( 8, false, IfcDirection )
+      this.Axis_ = this.extractElement( 8, 8, 6, false, IfcDirection )
     }
 
     return this.Axis_ as IfcDirection
@@ -26,7 +26,9 @@ export  class IfcStructuralCurveConnection extends IfcStructuralConnection {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

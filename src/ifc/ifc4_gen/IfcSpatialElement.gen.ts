@@ -18,7 +18,7 @@ export abstract class IfcSpatialElement extends IfcProduct {
 
   public get LongName() : string | null {
     if ( this.LongName_ === void 0 ) {
-      this.LongName_ = this.extractString( 7, true )
+      this.LongName_ = this.extractString( 7, 7, 4, true )
     }
 
     return this.LongName_ as string | null
@@ -29,7 +29,9 @@ export abstract class IfcSpatialElement extends IfcProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

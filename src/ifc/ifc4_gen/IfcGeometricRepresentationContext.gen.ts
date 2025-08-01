@@ -25,7 +25,7 @@ export  class IfcGeometricRepresentationContext extends IfcRepresentationContext
 
   public get CoordinateSpaceDimension() : number {
     if ( this.CoordinateSpaceDimension_ === void 0 ) {
-      this.CoordinateSpaceDimension_ = this.extractNumber( 2, false )
+      this.CoordinateSpaceDimension_ = this.extractNumber( 2, 2, 1, false )
     }
 
     return this.CoordinateSpaceDimension_ as number
@@ -33,7 +33,7 @@ export  class IfcGeometricRepresentationContext extends IfcRepresentationContext
 
   public get Precision() : number | null {
     if ( this.Precision_ === void 0 ) {
-      this.Precision_ = this.extractNumber( 3, true )
+      this.Precision_ = this.extractNumber( 3, 2, 1, true )
     }
 
     return this.Precision_ as number | null
@@ -43,7 +43,7 @@ export  class IfcGeometricRepresentationContext extends IfcRepresentationContext
     if ( this.WorldCoordinateSystem_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 4, false )
+        this.extractReference( 4, 2, 1, false )
 
       if ( !( value instanceof IfcAxis2Placement2D ) && !( value instanceof IfcAxis2Placement3D ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -58,7 +58,7 @@ export  class IfcGeometricRepresentationContext extends IfcRepresentationContext
 
   public get TrueNorth() : IfcDirection | null {
     if ( this.TrueNorth_ === void 0 ) {
-      this.TrueNorth_ = this.extractElement( 5, true, IfcDirection )
+      this.TrueNorth_ = this.extractElement( 5, 2, 1, true, IfcDirection )
     }
 
     return this.TrueNorth_ as IfcDirection | null
@@ -68,7 +68,9 @@ export  class IfcGeometricRepresentationContext extends IfcRepresentationContext
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class modified_geometric_tolerance extends geometric_tolerance {
 
   public get modifier() : limit_condition {
     if ( this.modifier_ === void 0 ) {
-      this.modifier_ = this.extractLambda( 4, limit_conditionDeserializeStep, false )
+      this.modifier_ = this.extractLambda( 4, 4, 1, limit_conditionDeserializeStep, false )
     }
 
     return this.modifier_ as limit_condition
@@ -26,8 +26,26 @@ export  class modified_geometric_tolerance extends geometric_tolerance {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === modified_geometric_tolerance.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for modified_geometric_tolerance" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

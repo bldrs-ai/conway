@@ -23,7 +23,7 @@ export  class gear_pair extends kinematic_pair {
 
   public get radius_first_link() : number {
     if ( this.radius_first_link_ === void 0 ) {
-      this.radius_first_link_ = this.extractNumber( 5, false )
+      this.radius_first_link_ = this.extractNumber( 5, 5, 2, false )
     }
 
     return this.radius_first_link_ as number
@@ -31,7 +31,7 @@ export  class gear_pair extends kinematic_pair {
 
   public get radius_second_link() : number {
     if ( this.radius_second_link_ === void 0 ) {
-      this.radius_second_link_ = this.extractNumber( 6, false )
+      this.radius_second_link_ = this.extractNumber( 6, 5, 2, false )
     }
 
     return this.radius_second_link_ as number
@@ -39,7 +39,7 @@ export  class gear_pair extends kinematic_pair {
 
   public get bevel() : number {
     if ( this.bevel_ === void 0 ) {
-      this.bevel_ = this.extractNumber( 7, false )
+      this.bevel_ = this.extractNumber( 7, 5, 2, false )
     }
 
     return this.bevel_ as number
@@ -47,7 +47,7 @@ export  class gear_pair extends kinematic_pair {
 
   public get helical_angle() : number {
     if ( this.helical_angle_ === void 0 ) {
-      this.helical_angle_ = this.extractNumber( 8, false )
+      this.helical_angle_ = this.extractNumber( 8, 5, 2, false )
     }
 
     return this.helical_angle_ as number
@@ -55,7 +55,7 @@ export  class gear_pair extends kinematic_pair {
 
   public get gear_ratio() : number {
     if ( this.gear_ratio_ === void 0 ) {
-      this.gear_ratio_ = this.extractNumber( 9, false )
+      this.gear_ratio_ = this.extractNumber( 9, 5, 2, false )
     }
 
     return this.gear_ratio_ as number
@@ -63,8 +63,26 @@ export  class gear_pair extends kinematic_pair {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === gear_pair.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for gear_pair" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

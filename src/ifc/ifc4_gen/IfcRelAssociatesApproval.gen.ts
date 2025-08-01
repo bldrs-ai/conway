@@ -18,7 +18,7 @@ export  class IfcRelAssociatesApproval extends IfcRelAssociates {
 
   public get RelatingApproval() : IfcApproval {
     if ( this.RelatingApproval_ === void 0 ) {
-      this.RelatingApproval_ = this.extractElement( 5, false, IfcApproval )
+      this.RelatingApproval_ = this.extractElement( 5, 5, 3, false, IfcApproval )
     }
 
     return this.RelatingApproval_ as IfcApproval
@@ -26,7 +26,9 @@ export  class IfcRelAssociatesApproval extends IfcRelAssociates {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

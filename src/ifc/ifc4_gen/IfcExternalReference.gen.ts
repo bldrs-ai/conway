@@ -21,7 +21,7 @@ export abstract class IfcExternalReference extends StepEntityBase< EntityTypesIf
 
   public get Location() : string | null {
     if ( this.Location_ === void 0 ) {
-      this.Location_ = this.extractString( 0, true )
+      this.Location_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.Location_ as string | null
@@ -29,7 +29,7 @@ export abstract class IfcExternalReference extends StepEntityBase< EntityTypesIf
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 1, true )
+      this.Identification_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Identification_ as string | null
@@ -37,7 +37,7 @@ export abstract class IfcExternalReference extends StepEntityBase< EntityTypesIf
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 2, true )
+      this.Name_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Name_ as string | null
@@ -46,7 +46,9 @@ export abstract class IfcExternalReference extends StepEntityBase< EntityTypesIf
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

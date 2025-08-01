@@ -33,7 +33,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get internal_location() : string | null {
     if ( this.internal_location_ === void 0 ) {
-      this.internal_location_ = this.extractString( 0, true )
+      this.internal_location_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.internal_location_ as string | null
@@ -41,7 +41,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get street_number() : string | null {
     if ( this.street_number_ === void 0 ) {
-      this.street_number_ = this.extractString( 1, true )
+      this.street_number_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.street_number_ as string | null
@@ -49,7 +49,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get street() : string | null {
     if ( this.street_ === void 0 ) {
-      this.street_ = this.extractString( 2, true )
+      this.street_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.street_ as string | null
@@ -57,7 +57,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get postal_box() : string | null {
     if ( this.postal_box_ === void 0 ) {
-      this.postal_box_ = this.extractString( 3, true )
+      this.postal_box_ = this.extractString( 3, 0, 0, true )
     }
 
     return this.postal_box_ as string | null
@@ -65,7 +65,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get town() : string | null {
     if ( this.town_ === void 0 ) {
-      this.town_ = this.extractString( 4, true )
+      this.town_ = this.extractString( 4, 0, 0, true )
     }
 
     return this.town_ as string | null
@@ -73,7 +73,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get region() : string | null {
     if ( this.region_ === void 0 ) {
-      this.region_ = this.extractString( 5, true )
+      this.region_ = this.extractString( 5, 0, 0, true )
     }
 
     return this.region_ as string | null
@@ -81,7 +81,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get postal_code() : string | null {
     if ( this.postal_code_ === void 0 ) {
-      this.postal_code_ = this.extractString( 6, true )
+      this.postal_code_ = this.extractString( 6, 0, 0, true )
     }
 
     return this.postal_code_ as string | null
@@ -89,7 +89,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get country() : string | null {
     if ( this.country_ === void 0 ) {
-      this.country_ = this.extractString( 7, true )
+      this.country_ = this.extractString( 7, 0, 0, true )
     }
 
     return this.country_ as string | null
@@ -97,7 +97,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get facsimile_number() : string | null {
     if ( this.facsimile_number_ === void 0 ) {
-      this.facsimile_number_ = this.extractString( 8, true )
+      this.facsimile_number_ = this.extractString( 8, 0, 0, true )
     }
 
     return this.facsimile_number_ as string | null
@@ -105,7 +105,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get telephone_number() : string | null {
     if ( this.telephone_number_ === void 0 ) {
-      this.telephone_number_ = this.extractString( 9, true )
+      this.telephone_number_ = this.extractString( 9, 0, 0, true )
     }
 
     return this.telephone_number_ as string | null
@@ -113,7 +113,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get electronic_mail_address() : string | null {
     if ( this.electronic_mail_address_ === void 0 ) {
-      this.electronic_mail_address_ = this.extractString( 10, true )
+      this.electronic_mail_address_ = this.extractString( 10, 0, 0, true )
     }
 
     return this.electronic_mail_address_ as string | null
@@ -121,7 +121,7 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
 
   public get telex_number() : string | null {
     if ( this.telex_number_ === void 0 ) {
-      this.telex_number_ = this.extractString( 11, true )
+      this.telex_number_ = this.extractString( 11, 0, 0, true )
     }
 
     return this.telex_number_ as string | null
@@ -137,8 +137,26 @@ export  class address extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === address.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for address" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

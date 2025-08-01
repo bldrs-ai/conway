@@ -20,7 +20,7 @@ export  class IfcPolygonalBoundedHalfSpace extends IfcHalfSpaceSolid {
 
   public get Position() : IfcAxis2Placement3D {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractElement( 2, false, IfcAxis2Placement3D )
+      this.Position_ = this.extractElement( 2, 2, 3, false, IfcAxis2Placement3D )
     }
 
     return this.Position_ as IfcAxis2Placement3D
@@ -28,7 +28,7 @@ export  class IfcPolygonalBoundedHalfSpace extends IfcHalfSpaceSolid {
 
   public get PolygonalBoundary() : IfcBoundedCurve {
     if ( this.PolygonalBoundary_ === void 0 ) {
-      this.PolygonalBoundary_ = this.extractElement( 3, false, IfcBoundedCurve )
+      this.PolygonalBoundary_ = this.extractElement( 3, 2, 3, false, IfcBoundedCurve )
     }
 
     return this.PolygonalBoundary_ as IfcBoundedCurve
@@ -36,7 +36,9 @@ export  class IfcPolygonalBoundedHalfSpace extends IfcHalfSpaceSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

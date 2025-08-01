@@ -29,7 +29,7 @@ export  class IfcIndexedPolyCurve extends IfcBoundedCurve {
 
   public get Points() : IfcCartesianPointList {
     if ( this.Points_ === void 0 ) {
-      this.Points_ = this.extractElement( 0, false, IfcCartesianPointList )
+      this.Points_ = this.extractElement( 0, 0, 4, false, IfcCartesianPointList )
     }
 
     return this.Points_ as IfcCartesianPointList
@@ -38,7 +38,7 @@ export  class IfcIndexedPolyCurve extends IfcBoundedCurve {
   public get Segments() : Array<IfcArcIndex | IfcLineIndex> | null {
     if ( this.Segments_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -77,7 +77,7 @@ export  class IfcIndexedPolyCurve extends IfcBoundedCurve {
 
   public get SelfIntersect() : boolean | null {
     if ( this.SelfIntersect_ === void 0 ) {
-      this.SelfIntersect_ = this.extractBoolean( 2, true )
+      this.SelfIntersect_ = this.extractBoolean( 2, 0, 4, true )
     }
 
     return this.SelfIntersect_ as boolean | null
@@ -85,7 +85,9 @@ export  class IfcIndexedPolyCurve extends IfcBoundedCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -21,7 +21,7 @@ export  class revolved_face_solid extends swept_face_solid {
 
   public get axis() : axis1_placement {
     if ( this.axis_ === void 0 ) {
-      this.axis_ = this.extractElement( 2, false, axis1_placement )
+      this.axis_ = this.extractElement( 2, 2, 4, false, axis1_placement )
     }
 
     return this.axis_ as axis1_placement
@@ -29,7 +29,7 @@ export  class revolved_face_solid extends swept_face_solid {
 
   public get angle() : number {
     if ( this.angle_ === void 0 ) {
-      this.angle_ = this.extractNumber( 3, false )
+      this.angle_ = this.extractNumber( 3, 2, 4, false )
     }
 
     return this.angle_ as number
@@ -38,8 +38,26 @@ export  class revolved_face_solid extends swept_face_solid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === revolved_face_solid.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for revolved_face_solid" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -22,7 +22,7 @@ export  class surface_curve_swept_area_solid extends swept_area_solid {
 
   public get directrix() : curve {
     if ( this.directrix_ === void 0 ) {
-      this.directrix_ = this.extractElement( 2, false, curve )
+      this.directrix_ = this.extractElement( 2, 2, 4, false, curve )
     }
 
     return this.directrix_ as curve
@@ -30,7 +30,7 @@ export  class surface_curve_swept_area_solid extends swept_area_solid {
 
   public get start_param() : number {
     if ( this.start_param_ === void 0 ) {
-      this.start_param_ = this.extractNumber( 3, false )
+      this.start_param_ = this.extractNumber( 3, 2, 4, false )
     }
 
     return this.start_param_ as number
@@ -38,7 +38,7 @@ export  class surface_curve_swept_area_solid extends swept_area_solid {
 
   public get end_param() : number {
     if ( this.end_param_ === void 0 ) {
-      this.end_param_ = this.extractNumber( 4, false )
+      this.end_param_ = this.extractNumber( 4, 2, 4, false )
     }
 
     return this.end_param_ as number
@@ -46,7 +46,7 @@ export  class surface_curve_swept_area_solid extends swept_area_solid {
 
   public get reference_surface() : surface {
     if ( this.reference_surface_ === void 0 ) {
-      this.reference_surface_ = this.extractElement( 5, false, surface )
+      this.reference_surface_ = this.extractElement( 5, 2, 4, false, surface )
     }
 
     return this.reference_surface_ as surface
@@ -54,8 +54,26 @@ export  class surface_curve_swept_area_solid extends swept_area_solid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_curve_swept_area_solid.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_curve_swept_area_solid" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

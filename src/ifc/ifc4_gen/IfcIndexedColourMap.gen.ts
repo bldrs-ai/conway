@@ -31,7 +31,7 @@ export  class IfcIndexedColourMap extends IfcPresentationItem {
 
   public get MappedTo() : IfcTessellatedFaceSet {
     if ( this.MappedTo_ === void 0 ) {
-      this.MappedTo_ = this.extractElement( 0, false, IfcTessellatedFaceSet )
+      this.MappedTo_ = this.extractElement( 0, 0, 1, false, IfcTessellatedFaceSet )
     }
 
     return this.MappedTo_ as IfcTessellatedFaceSet
@@ -39,7 +39,7 @@ export  class IfcIndexedColourMap extends IfcPresentationItem {
 
   public get Opacity() : number | null {
     if ( this.Opacity_ === void 0 ) {
-      this.Opacity_ = this.extractNumber( 1, true )
+      this.Opacity_ = this.extractNumber( 1, 0, 1, true )
     }
 
     return this.Opacity_ as number | null
@@ -47,7 +47,7 @@ export  class IfcIndexedColourMap extends IfcPresentationItem {
 
   public get Colours() : IfcColourRgbList {
     if ( this.Colours_ === void 0 ) {
-      this.Colours_ = this.extractElement( 2, false, IfcColourRgbList )
+      this.Colours_ = this.extractElement( 2, 0, 1, false, IfcColourRgbList )
     }
 
     return this.Colours_ as IfcColourRgbList
@@ -56,7 +56,7 @@ export  class IfcIndexedColourMap extends IfcPresentationItem {
   public get ColourIndex() : Array< number > {
     if ( this.ColourIndex_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -89,7 +89,9 @@ export  class IfcIndexedColourMap extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

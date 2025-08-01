@@ -18,7 +18,7 @@ export  class IfcVertexLoop extends IfcLoop {
 
   public get LoopVertex() : IfcVertex {
     if ( this.LoopVertex_ === void 0 ) {
-      this.LoopVertex_ = this.extractElement( 0, false, IfcVertex )
+      this.LoopVertex_ = this.extractElement( 0, 0, 3, false, IfcVertex )
     }
 
     return this.LoopVertex_ as IfcVertex
@@ -26,7 +26,9 @@ export  class IfcVertexLoop extends IfcLoop {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class IfcBoxedHalfSpace extends IfcHalfSpaceSolid {
 
   public get Enclosure() : IfcBoundingBox {
     if ( this.Enclosure_ === void 0 ) {
-      this.Enclosure_ = this.extractElement( 2, false, IfcBoundingBox )
+      this.Enclosure_ = this.extractElement( 2, 2, 3, false, IfcBoundingBox )
     }
 
     return this.Enclosure_ as IfcBoundingBox
@@ -26,7 +26,9 @@ export  class IfcBoxedHalfSpace extends IfcHalfSpaceSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

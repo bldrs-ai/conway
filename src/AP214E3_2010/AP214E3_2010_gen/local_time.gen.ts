@@ -23,7 +23,7 @@ export  class local_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get hour_component() : number {
     if ( this.hour_component_ === void 0 ) {
-      this.hour_component_ = this.extractNumber( 0, false )
+      this.hour_component_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.hour_component_ as number
@@ -31,7 +31,7 @@ export  class local_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get minute_component() : number | null {
     if ( this.minute_component_ === void 0 ) {
-      this.minute_component_ = this.extractNumber( 1, true )
+      this.minute_component_ = this.extractNumber( 1, 0, 0, true )
     }
 
     return this.minute_component_ as number | null
@@ -39,7 +39,7 @@ export  class local_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get second_component() : number | null {
     if ( this.second_component_ === void 0 ) {
-      this.second_component_ = this.extractNumber( 2, true )
+      this.second_component_ = this.extractNumber( 2, 0, 0, true )
     }
 
     return this.second_component_ as number | null
@@ -47,7 +47,7 @@ export  class local_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get zone() : coordinated_universal_time_offset {
     if ( this.zone_ === void 0 ) {
-      this.zone_ = this.extractElement( 3, false, coordinated_universal_time_offset )
+      this.zone_ = this.extractElement( 3, 0, 0, false, coordinated_universal_time_offset )
     }
 
     return this.zone_ as coordinated_universal_time_offset
@@ -55,8 +55,26 @@ export  class local_time extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === local_time.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for local_time" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

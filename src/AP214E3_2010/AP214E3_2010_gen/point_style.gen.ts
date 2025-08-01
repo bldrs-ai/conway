@@ -27,7 +27,7 @@ export  class point_style extends founded_item {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 1, false )
     }
 
     return this.name_ as string
@@ -37,9 +37,9 @@ export  class point_style extends founded_item {
     if ( this.marker_ === void 0 ) {
       
       const enumValue : marker_type | null =
-        this.extractLambda( 1, marker_typeDeserializeStep, true )
+        this.extractLambda( 1, 0, 1, marker_typeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | marker_type = enumValue ?? 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 1, false )
 
       if ( enumValue === null && !( value instanceof pre_defined_marker ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -56,7 +56,7 @@ export  class point_style extends founded_item {
     if ( this.marker_size_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 0, 1, false )
 
       if ( !( value instanceof positive_length_measure ) && !( value instanceof measure_with_unit ) && !( value instanceof descriptive_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -71,7 +71,7 @@ export  class point_style extends founded_item {
 
   public get marker_colour() : colour {
     if ( this.marker_colour_ === void 0 ) {
-      this.marker_colour_ = this.extractElement( 3, false, colour )
+      this.marker_colour_ = this.extractElement( 3, 0, 1, false, colour )
     }
 
     return this.marker_colour_ as colour
@@ -79,8 +79,26 @@ export  class point_style extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === point_style.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for point_style" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

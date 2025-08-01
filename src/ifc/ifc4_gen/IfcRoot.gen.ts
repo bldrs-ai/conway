@@ -23,7 +23,7 @@ export abstract class IfcRoot extends StepEntityBase< EntityTypesIfc > {
 
   public get GlobalId() : string {
     if ( this.GlobalId_ === void 0 ) {
-      this.GlobalId_ = this.extractString( 0, false )
+      this.GlobalId_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.GlobalId_ as string
@@ -31,7 +31,7 @@ export abstract class IfcRoot extends StepEntityBase< EntityTypesIfc > {
 
   public get OwnerHistory() : IfcOwnerHistory | null {
     if ( this.OwnerHistory_ === void 0 ) {
-      this.OwnerHistory_ = this.extractElement( 1, true, IfcOwnerHistory )
+      this.OwnerHistory_ = this.extractElement( 1, 0, 0, true, IfcOwnerHistory )
     }
 
     return this.OwnerHistory_ as IfcOwnerHistory | null
@@ -39,7 +39,7 @@ export abstract class IfcRoot extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 2, true )
+      this.Name_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Name_ as string | null
@@ -47,7 +47,7 @@ export abstract class IfcRoot extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 3, true )
+      this.Description_ = this.extractString( 3, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -55,7 +55,9 @@ export abstract class IfcRoot extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

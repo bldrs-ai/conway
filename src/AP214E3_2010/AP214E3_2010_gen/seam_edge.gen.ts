@@ -18,7 +18,7 @@ export  class seam_edge extends oriented_edge {
 
   public get pcurve_reference() : pcurve {
     if ( this.pcurve_reference_ === void 0 ) {
-      this.pcurve_reference_ = this.extractElement( 5, false, pcurve )
+      this.pcurve_reference_ = this.extractElement( 5, 5, 4, false, pcurve )
     }
 
     return this.pcurve_reference_ as pcurve
@@ -26,8 +26,26 @@ export  class seam_edge extends oriented_edge {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === seam_edge.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for seam_edge" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

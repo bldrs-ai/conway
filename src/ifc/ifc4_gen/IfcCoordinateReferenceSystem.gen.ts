@@ -22,7 +22,7 @@ export abstract class IfcCoordinateReferenceSystem extends StepEntityBase< Entit
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, false )
+      this.Name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Name_ as string
@@ -30,7 +30,7 @@ export abstract class IfcCoordinateReferenceSystem extends StepEntityBase< Entit
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -38,7 +38,7 @@ export abstract class IfcCoordinateReferenceSystem extends StepEntityBase< Entit
 
   public get GeodeticDatum() : string | null {
     if ( this.GeodeticDatum_ === void 0 ) {
-      this.GeodeticDatum_ = this.extractString( 2, true )
+      this.GeodeticDatum_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.GeodeticDatum_ as string | null
@@ -46,7 +46,7 @@ export abstract class IfcCoordinateReferenceSystem extends StepEntityBase< Entit
 
   public get VerticalDatum() : string | null {
     if ( this.VerticalDatum_ === void 0 ) {
-      this.VerticalDatum_ = this.extractString( 3, true )
+      this.VerticalDatum_ = this.extractString( 3, 0, 0, true )
     }
 
     return this.VerticalDatum_ as string | null
@@ -55,7 +55,9 @@ export abstract class IfcCoordinateReferenceSystem extends StepEntityBase< Entit
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -36,7 +36,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ScheduleWork() : string | null {
     if ( this.ScheduleWork_ === void 0 ) {
-      this.ScheduleWork_ = this.extractString( 3, true )
+      this.ScheduleWork_ = this.extractString( 3, 3, 1, true )
     }
 
     return this.ScheduleWork_ as string | null
@@ -44,7 +44,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ScheduleUsage() : number | null {
     if ( this.ScheduleUsage_ === void 0 ) {
-      this.ScheduleUsage_ = this.extractNumber( 4, true )
+      this.ScheduleUsage_ = this.extractNumber( 4, 3, 1, true )
     }
 
     return this.ScheduleUsage_ as number | null
@@ -52,7 +52,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ScheduleStart() : string | null {
     if ( this.ScheduleStart_ === void 0 ) {
-      this.ScheduleStart_ = this.extractString( 5, true )
+      this.ScheduleStart_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.ScheduleStart_ as string | null
@@ -60,7 +60,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ScheduleFinish() : string | null {
     if ( this.ScheduleFinish_ === void 0 ) {
-      this.ScheduleFinish_ = this.extractString( 6, true )
+      this.ScheduleFinish_ = this.extractString( 6, 3, 1, true )
     }
 
     return this.ScheduleFinish_ as string | null
@@ -68,7 +68,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ScheduleContour() : string | null {
     if ( this.ScheduleContour_ === void 0 ) {
-      this.ScheduleContour_ = this.extractString( 7, true )
+      this.ScheduleContour_ = this.extractString( 7, 3, 1, true )
     }
 
     return this.ScheduleContour_ as string | null
@@ -76,7 +76,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get LevelingDelay() : string | null {
     if ( this.LevelingDelay_ === void 0 ) {
-      this.LevelingDelay_ = this.extractString( 8, true )
+      this.LevelingDelay_ = this.extractString( 8, 3, 1, true )
     }
 
     return this.LevelingDelay_ as string | null
@@ -84,7 +84,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get IsOverAllocated() : boolean | null {
     if ( this.IsOverAllocated_ === void 0 ) {
-      this.IsOverAllocated_ = this.extractBoolean( 9, true )
+      this.IsOverAllocated_ = this.extractBoolean( 9, 3, 1, true )
     }
 
     return this.IsOverAllocated_ as boolean | null
@@ -92,7 +92,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get StatusTime() : string | null {
     if ( this.StatusTime_ === void 0 ) {
-      this.StatusTime_ = this.extractString( 10, true )
+      this.StatusTime_ = this.extractString( 10, 3, 1, true )
     }
 
     return this.StatusTime_ as string | null
@@ -100,7 +100,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ActualWork() : string | null {
     if ( this.ActualWork_ === void 0 ) {
-      this.ActualWork_ = this.extractString( 11, true )
+      this.ActualWork_ = this.extractString( 11, 3, 1, true )
     }
 
     return this.ActualWork_ as string | null
@@ -108,7 +108,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ActualUsage() : number | null {
     if ( this.ActualUsage_ === void 0 ) {
-      this.ActualUsage_ = this.extractNumber( 12, true )
+      this.ActualUsage_ = this.extractNumber( 12, 3, 1, true )
     }
 
     return this.ActualUsage_ as number | null
@@ -116,7 +116,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ActualStart() : string | null {
     if ( this.ActualStart_ === void 0 ) {
-      this.ActualStart_ = this.extractString( 13, true )
+      this.ActualStart_ = this.extractString( 13, 3, 1, true )
     }
 
     return this.ActualStart_ as string | null
@@ -124,7 +124,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get ActualFinish() : string | null {
     if ( this.ActualFinish_ === void 0 ) {
-      this.ActualFinish_ = this.extractString( 14, true )
+      this.ActualFinish_ = this.extractString( 14, 3, 1, true )
     }
 
     return this.ActualFinish_ as string | null
@@ -132,7 +132,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get RemainingWork() : string | null {
     if ( this.RemainingWork_ === void 0 ) {
-      this.RemainingWork_ = this.extractString( 15, true )
+      this.RemainingWork_ = this.extractString( 15, 3, 1, true )
     }
 
     return this.RemainingWork_ as string | null
@@ -140,7 +140,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get RemainingUsage() : number | null {
     if ( this.RemainingUsage_ === void 0 ) {
-      this.RemainingUsage_ = this.extractNumber( 16, true )
+      this.RemainingUsage_ = this.extractNumber( 16, 3, 1, true )
     }
 
     return this.RemainingUsage_ as number | null
@@ -148,7 +148,7 @@ export  class IfcResourceTime extends IfcSchedulingTime {
 
   public get Completion() : number | null {
     if ( this.Completion_ === void 0 ) {
-      this.Completion_ = this.extractNumber( 17, true )
+      this.Completion_ = this.extractNumber( 17, 3, 1, true )
     }
 
     return this.Completion_ as number | null
@@ -156,7 +156,9 @@ export  class IfcResourceTime extends IfcSchedulingTime {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

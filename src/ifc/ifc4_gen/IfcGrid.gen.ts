@@ -29,7 +29,7 @@ export  class IfcGrid extends IfcProduct {
   public get UAxes() : Array<IfcGridAxis> {
     if ( this.UAxes_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -62,7 +62,7 @@ export  class IfcGrid extends IfcProduct {
   public get VAxes() : Array<IfcGridAxis> {
     if ( this.VAxes_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -95,7 +95,7 @@ export  class IfcGrid extends IfcProduct {
   public get WAxes() : Array<IfcGridAxis> | null {
     if ( this.WAxes_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 9 )
+      let   cursor    = this.getOffsetCursor( 9, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -127,7 +127,7 @@ export  class IfcGrid extends IfcProduct {
 
   public get PredefinedType() : IfcGridTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 10, IfcGridTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 10, 7, 4, IfcGridTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcGridTypeEnum | null
@@ -136,7 +136,9 @@ export  class IfcGrid extends IfcProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

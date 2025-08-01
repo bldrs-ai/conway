@@ -39,7 +39,7 @@ export  class IfcTextStyleFontModel extends IfcPreDefinedTextFont {
   public get FontFamily() : Array< string > {
     if ( this.FontFamily_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -71,7 +71,7 @@ export  class IfcTextStyleFontModel extends IfcPreDefinedTextFont {
 
   public get FontStyle() : string | null {
     if ( this.FontStyle_ === void 0 ) {
-      this.FontStyle_ = this.extractString( 2, true )
+      this.FontStyle_ = this.extractString( 2, 1, 3, true )
     }
 
     return this.FontStyle_ as string | null
@@ -79,7 +79,7 @@ export  class IfcTextStyleFontModel extends IfcPreDefinedTextFont {
 
   public get FontVariant() : string | null {
     if ( this.FontVariant_ === void 0 ) {
-      this.FontVariant_ = this.extractString( 3, true )
+      this.FontVariant_ = this.extractString( 3, 1, 3, true )
     }
 
     return this.FontVariant_ as string | null
@@ -87,7 +87,7 @@ export  class IfcTextStyleFontModel extends IfcPreDefinedTextFont {
 
   public get FontWeight() : string | null {
     if ( this.FontWeight_ === void 0 ) {
-      this.FontWeight_ = this.extractString( 4, true )
+      this.FontWeight_ = this.extractString( 4, 1, 3, true )
     }
 
     return this.FontWeight_ as string | null
@@ -97,7 +97,7 @@ export  class IfcTextStyleFontModel extends IfcPreDefinedTextFont {
     if ( this.FontSize_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 5, false )
+        this.extractReference( 5, 1, 3, false )
 
       if ( !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -112,7 +112,9 @@ export  class IfcTextStyleFontModel extends IfcPreDefinedTextFont {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

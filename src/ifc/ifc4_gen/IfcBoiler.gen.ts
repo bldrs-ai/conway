@@ -18,7 +18,7 @@ export  class IfcBoiler extends IfcEnergyConversionDevice {
 
   public get PredefinedType() : IfcBoilerTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcBoilerTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcBoilerTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcBoilerTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcBoiler extends IfcEnergyConversionDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class qualitative_uncertainty extends uncertainty_qualifier {
 
   public get uncertainty_value() : string {
     if ( this.uncertainty_value_ === void 0 ) {
-      this.uncertainty_value_ = this.extractString( 2, false )
+      this.uncertainty_value_ = this.extractString( 2, 2, 1, false )
     }
 
     return this.uncertainty_value_ as string
@@ -26,8 +26,26 @@ export  class qualitative_uncertainty extends uncertainty_qualifier {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === qualitative_uncertainty.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for qualitative_uncertainty" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

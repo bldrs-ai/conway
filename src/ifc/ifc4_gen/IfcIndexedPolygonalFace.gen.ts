@@ -26,7 +26,7 @@ export  class IfcIndexedPolygonalFace extends IfcTessellatedItem {
   public get CoordIndex() : Array< number > {
     if ( this.CoordIndex_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -60,7 +60,9 @@ export  class IfcIndexedPolygonalFace extends IfcTessellatedItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

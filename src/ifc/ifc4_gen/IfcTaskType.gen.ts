@@ -20,7 +20,7 @@ export  class IfcTaskType extends IfcTypeProcess {
 
   public get PredefinedType() : IfcTaskTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcTaskTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 4, IfcTaskTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcTaskTypeEnum
@@ -28,7 +28,7 @@ export  class IfcTaskType extends IfcTypeProcess {
 
   public get WorkMethod() : string | null {
     if ( this.WorkMethod_ === void 0 ) {
-      this.WorkMethod_ = this.extractString( 10, true )
+      this.WorkMethod_ = this.extractString( 10, 9, 4, true )
     }
 
     return this.WorkMethod_ as string | null
@@ -36,7 +36,9 @@ export  class IfcTaskType extends IfcTypeProcess {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

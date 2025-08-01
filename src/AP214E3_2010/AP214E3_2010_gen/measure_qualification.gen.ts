@@ -31,7 +31,7 @@ export  class measure_qualification extends StepEntityBase< EntityTypesAP214 > {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -39,7 +39,7 @@ export  class measure_qualification extends StepEntityBase< EntityTypesAP214 > {
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -47,7 +47,7 @@ export  class measure_qualification extends StepEntityBase< EntityTypesAP214 > {
 
   public get qualified_measure() : measure_with_unit {
     if ( this.qualified_measure_ === void 0 ) {
-      this.qualified_measure_ = this.extractElement( 2, false, measure_with_unit )
+      this.qualified_measure_ = this.extractElement( 2, 0, 0, false, measure_with_unit )
     }
 
     return this.qualified_measure_ as measure_with_unit
@@ -56,7 +56,7 @@ export  class measure_qualification extends StepEntityBase< EntityTypesAP214 > {
   public get qualifiers() : Array<precision_qualifier | type_qualifier | uncertainty_qualifier> {
     if ( this.qualifiers_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -95,8 +95,26 @@ export  class measure_qualification extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === measure_qualification.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for measure_qualification" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

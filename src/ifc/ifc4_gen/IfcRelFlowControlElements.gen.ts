@@ -27,7 +27,7 @@ export  class IfcRelFlowControlElements extends IfcRelConnects {
   public get RelatedControlElements() : Array<IfcDistributionControlElement> {
     if ( this.RelatedControlElements_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class IfcRelFlowControlElements extends IfcRelConnects {
 
   public get RelatingFlowElement() : IfcDistributionFlowElement {
     if ( this.RelatingFlowElement_ === void 0 ) {
-      this.RelatingFlowElement_ = this.extractElement( 5, false, IfcDistributionFlowElement )
+      this.RelatingFlowElement_ = this.extractElement( 5, 4, 3, false, IfcDistributionFlowElement )
     }
 
     return this.RelatingFlowElement_ as IfcDistributionFlowElement
@@ -67,7 +67,9 @@ export  class IfcRelFlowControlElements extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

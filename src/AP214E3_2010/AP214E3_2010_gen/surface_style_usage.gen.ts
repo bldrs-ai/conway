@@ -20,7 +20,7 @@ export  class surface_style_usage extends founded_item {
 
   public get side() : surface_side {
     if ( this.side_ === void 0 ) {
-      this.side_ = this.extractLambda( 0, surface_sideDeserializeStep, false )
+      this.side_ = this.extractLambda( 0, 0, 1, surface_sideDeserializeStep, false )
     }
 
     return this.side_ as surface_side
@@ -30,7 +30,7 @@ export  class surface_style_usage extends founded_item {
     if ( this.style_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 1, false )
 
       if ( !( value instanceof surface_side_style ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -45,8 +45,26 @@ export  class surface_style_usage extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_style_usage.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_style_usage" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

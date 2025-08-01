@@ -18,7 +18,7 @@ export  class IfcUnitaryControlElementType extends IfcDistributionControlElement
 
   public get PredefinedType() : IfcUnitaryControlElementTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcUnitaryControlElementTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcUnitaryControlElementTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcUnitaryControlElementTypeEnum
@@ -26,7 +26,9 @@ export  class IfcUnitaryControlElementType extends IfcDistributionControlElement
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

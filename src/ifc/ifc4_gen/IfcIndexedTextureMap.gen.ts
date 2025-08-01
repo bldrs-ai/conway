@@ -20,7 +20,7 @@ export abstract class IfcIndexedTextureMap extends IfcTextureCoordinate {
 
   public get MappedTo() : IfcTessellatedFaceSet {
     if ( this.MappedTo_ === void 0 ) {
-      this.MappedTo_ = this.extractElement( 1, false, IfcTessellatedFaceSet )
+      this.MappedTo_ = this.extractElement( 1, 1, 2, false, IfcTessellatedFaceSet )
     }
 
     return this.MappedTo_ as IfcTessellatedFaceSet
@@ -28,7 +28,7 @@ export abstract class IfcIndexedTextureMap extends IfcTextureCoordinate {
 
   public get TexCoords() : IfcTextureVertexList {
     if ( this.TexCoords_ === void 0 ) {
-      this.TexCoords_ = this.extractElement( 2, false, IfcTextureVertexList )
+      this.TexCoords_ = this.extractElement( 2, 1, 2, false, IfcTextureVertexList )
     }
 
     return this.TexCoords_ as IfcTextureVertexList
@@ -36,7 +36,9 @@ export abstract class IfcIndexedTextureMap extends IfcTextureCoordinate {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

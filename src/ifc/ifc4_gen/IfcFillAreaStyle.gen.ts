@@ -31,7 +31,7 @@ export  class IfcFillAreaStyle extends IfcPresentationStyle {
   public get FillStyles() : Array<IfcColourSpecification | IfcPreDefinedColour | IfcExternallyDefinedHatchStyle | IfcFillAreaStyleHatching | IfcFillAreaStyleTiles> {
     if ( this.FillStyles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -70,7 +70,7 @@ export  class IfcFillAreaStyle extends IfcPresentationStyle {
 
   public get ModelorDraughting() : boolean | null {
     if ( this.ModelorDraughting_ === void 0 ) {
-      this.ModelorDraughting_ = this.extractBoolean( 2, true )
+      this.ModelorDraughting_ = this.extractBoolean( 2, 1, 1, true )
     }
 
     return this.ModelorDraughting_ as boolean | null
@@ -78,7 +78,9 @@ export  class IfcFillAreaStyle extends IfcPresentationStyle {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

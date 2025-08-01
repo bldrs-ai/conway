@@ -18,7 +18,7 @@ export  class IfcRamp extends IfcBuildingElement {
 
   public get PredefinedType() : IfcRampTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcRampTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcRampTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcRampTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcRamp extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

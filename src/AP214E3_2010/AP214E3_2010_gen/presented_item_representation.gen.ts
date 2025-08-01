@@ -22,7 +22,7 @@ export  class presented_item_representation extends StepEntityBase< EntityTypesA
     if ( this.presentation_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 0, false )
 
       if ( !( value instanceof presentation_representation ) && !( value instanceof presentation_set ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -37,7 +37,7 @@ export  class presented_item_representation extends StepEntityBase< EntityTypesA
 
   public get item() : presented_item {
     if ( this.item_ === void 0 ) {
-      this.item_ = this.extractElement( 1, false, presented_item )
+      this.item_ = this.extractElement( 1, 0, 0, false, presented_item )
     }
 
     return this.item_ as presented_item
@@ -45,8 +45,26 @@ export  class presented_item_representation extends StepEntityBase< EntityTypesA
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === presented_item_representation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for presented_item_representation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

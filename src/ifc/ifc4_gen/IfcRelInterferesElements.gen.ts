@@ -24,7 +24,7 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
 
   public get RelatingElement() : IfcElement {
     if ( this.RelatingElement_ === void 0 ) {
-      this.RelatingElement_ = this.extractElement( 4, false, IfcElement )
+      this.RelatingElement_ = this.extractElement( 4, 4, 3, false, IfcElement )
     }
 
     return this.RelatingElement_ as IfcElement
@@ -32,7 +32,7 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
 
   public get RelatedElement() : IfcElement {
     if ( this.RelatedElement_ === void 0 ) {
-      this.RelatedElement_ = this.extractElement( 5, false, IfcElement )
+      this.RelatedElement_ = this.extractElement( 5, 4, 3, false, IfcElement )
     }
 
     return this.RelatedElement_ as IfcElement
@@ -40,7 +40,7 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
 
   public get InterferenceGeometry() : IfcConnectionGeometry | null {
     if ( this.InterferenceGeometry_ === void 0 ) {
-      this.InterferenceGeometry_ = this.extractElement( 6, true, IfcConnectionGeometry )
+      this.InterferenceGeometry_ = this.extractElement( 6, 4, 3, true, IfcConnectionGeometry )
     }
 
     return this.InterferenceGeometry_ as IfcConnectionGeometry | null
@@ -48,7 +48,7 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
 
   public get InterferenceType() : string | null {
     if ( this.InterferenceType_ === void 0 ) {
-      this.InterferenceType_ = this.extractString( 7, true )
+      this.InterferenceType_ = this.extractString( 7, 4, 3, true )
     }
 
     return this.InterferenceType_ as string | null
@@ -56,7 +56,7 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
 
   public get ImpliedOrder() : boolean {
     if ( this.ImpliedOrder_ === void 0 ) {
-      this.ImpliedOrder_ = this.extractBoolean( 8, false )
+      this.ImpliedOrder_ = this.extractBoolean( 8, 4, 3, false )
     }
 
     return this.ImpliedOrder_ as boolean
@@ -64,7 +64,9 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

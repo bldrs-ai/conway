@@ -22,7 +22,7 @@ export  class IfcStructuralResultGroup extends IfcGroup {
 
   public get TheoryType() : IfcAnalysisTheoryTypeEnum {
     if ( this.TheoryType_ === void 0 ) {
-      this.TheoryType_ = this.extractLambda( 5, IfcAnalysisTheoryTypeEnumDeserializeStep, false )
+      this.TheoryType_ = this.extractLambda( 5, 5, 4, IfcAnalysisTheoryTypeEnumDeserializeStep, false )
     }
 
     return this.TheoryType_ as IfcAnalysisTheoryTypeEnum
@@ -30,7 +30,7 @@ export  class IfcStructuralResultGroup extends IfcGroup {
 
   public get ResultForLoadGroup() : IfcStructuralLoadGroup | null {
     if ( this.ResultForLoadGroup_ === void 0 ) {
-      this.ResultForLoadGroup_ = this.extractElement( 6, true, IfcStructuralLoadGroup )
+      this.ResultForLoadGroup_ = this.extractElement( 6, 5, 4, true, IfcStructuralLoadGroup )
     }
 
     return this.ResultForLoadGroup_ as IfcStructuralLoadGroup | null
@@ -38,7 +38,7 @@ export  class IfcStructuralResultGroup extends IfcGroup {
 
   public get IsLinear() : boolean {
     if ( this.IsLinear_ === void 0 ) {
-      this.IsLinear_ = this.extractBoolean( 7, false )
+      this.IsLinear_ = this.extractBoolean( 7, 5, 4, false )
     }
 
     return this.IsLinear_ as boolean
@@ -47,7 +47,9 @@ export  class IfcStructuralResultGroup extends IfcGroup {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

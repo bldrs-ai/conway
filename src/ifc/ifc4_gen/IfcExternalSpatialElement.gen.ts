@@ -18,7 +18,7 @@ export  class IfcExternalSpatialElement extends IfcExternalSpatialStructureEleme
 
   public get PredefinedType() : IfcExternalSpatialElementTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcExternalSpatialElementTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcExternalSpatialElementTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcExternalSpatialElementTypeEnum | null
@@ -27,7 +27,9 @@ export  class IfcExternalSpatialElement extends IfcExternalSpatialStructureEleme
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

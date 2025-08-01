@@ -36,7 +36,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
 
   public get RecurrenceType() : IfcRecurrenceTypeEnum {
     if ( this.RecurrenceType_ === void 0 ) {
-      this.RecurrenceType_ = this.extractLambda( 0, IfcRecurrenceTypeEnumDeserializeStep, false )
+      this.RecurrenceType_ = this.extractLambda( 0, 0, 0, IfcRecurrenceTypeEnumDeserializeStep, false )
     }
 
     return this.RecurrenceType_ as IfcRecurrenceTypeEnum
@@ -45,7 +45,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
   public get DayComponent() : Array< number > | null {
     if ( this.DayComponent_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -79,7 +79,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
   public get WeekdayComponent() : Array< number > | null {
     if ( this.WeekdayComponent_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -113,7 +113,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
   public get MonthComponent() : Array< number > | null {
     if ( this.MonthComponent_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -146,7 +146,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
 
   public get Position() : number | null {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractNumber( 4, true )
+      this.Position_ = this.extractNumber( 4, 0, 0, true )
     }
 
     return this.Position_ as number | null
@@ -154,7 +154,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
 
   public get Interval() : number | null {
     if ( this.Interval_ === void 0 ) {
-      this.Interval_ = this.extractNumber( 5, true )
+      this.Interval_ = this.extractNumber( 5, 0, 0, true )
     }
 
     return this.Interval_ as number | null
@@ -162,7 +162,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
 
   public get Occurrences() : number | null {
     if ( this.Occurrences_ === void 0 ) {
-      this.Occurrences_ = this.extractNumber( 6, true )
+      this.Occurrences_ = this.extractNumber( 6, 0, 0, true )
     }
 
     return this.Occurrences_ as number | null
@@ -171,7 +171,7 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
   public get TimePeriods() : Array<IfcTimePeriod> | null {
     if ( this.TimePeriods_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -203,7 +203,9 @@ export  class IfcRecurrencePattern extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

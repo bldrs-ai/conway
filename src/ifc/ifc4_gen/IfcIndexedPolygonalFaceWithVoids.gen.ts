@@ -26,7 +26,7 @@ export  class IfcIndexedPolygonalFaceWithVoids extends IfcIndexedPolygonalFace {
   public get InnerCoordIndices() : Array< Array< number > > {
     if ( this.InnerCoordIndices_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -69,7 +69,9 @@ export  class IfcIndexedPolygonalFaceWithVoids extends IfcIndexedPolygonalFace {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

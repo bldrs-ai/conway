@@ -19,7 +19,7 @@ export abstract class IfcPlacement extends IfcGeometricRepresentationItem {
 
   public get Location() : IfcCartesianPoint {
     if ( this.Location_ === void 0 ) {
-      this.Location_ = this.extractElement( 0, false, IfcCartesianPoint )
+      this.Location_ = this.extractElement( 0, 0, 2, false, IfcCartesianPoint )
     }
 
     return this.Location_ as IfcCartesianPoint
@@ -31,7 +31,9 @@ export abstract class IfcPlacement extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

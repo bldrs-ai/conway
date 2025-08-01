@@ -18,7 +18,7 @@ export abstract class IfcControl extends IfcObject {
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 5, true )
+      this.Identification_ = this.extractString( 5, 5, 3, true )
     }
 
     return this.Identification_ as string | null
@@ -27,7 +27,9 @@ export abstract class IfcControl extends IfcObject {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

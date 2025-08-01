@@ -359,7 +359,6 @@ export class IfcGeometryExtraction {
 
   private paramsGetPolyCurvePool: ObjectPool<ParamsGetPolyCurve> | undefined
 
-
   public pointBuffer: FlattenedPointsResult | null = null
 
   private identity2DNativeMatrix: NativeTransform3x3
@@ -862,13 +861,13 @@ export class IfcGeometryExtraction {
     const faceParseBuffer  = conwayModel.nativeParseBuffer()
 
     if ( !entity.Coordinates.extractParseBuffer(
-        0, coordParseBuffer, this.wasmModule, true ) ) {
+        0, 0, 0, coordParseBuffer, this.wasmModule, true ) ) {
 
       coordParseBuffer.resize( 0 )
     }
 
     if ( !entity.extractParseBuffer(
-        3, faceParseBuffer, this.wasmModule, true ) ) {
+        3, 0, 0, faceParseBuffer, this.wasmModule, true ) ) {
 
       faceParseBuffer.resize( 0 )
     }
@@ -968,6 +967,8 @@ export class IfcGeometryExtraction {
     const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
     if ( !entity.Coordinates.extractParseBuffer(
+        0,
+        0,
         0,
         pointsParseBuffer,
         this.wasmModule,
@@ -2859,7 +2860,8 @@ export class IfcGeometryExtraction {
    * @param trimmingArguments
    * @return {CurveObject | undefined}
    */
-  extractCurve(from: IfcCurve,
+  extractCurve(
+      from: IfcCurve,
       parentSense:boolean = true,
       isEdge:boolean = false,
       trimmingArguments: TrimmingArguments | undefined = void 0): CurveObject | undefined {
@@ -2879,7 +2881,6 @@ export class IfcGeometryExtraction {
     } else if (from instanceof IfcTrimmedCurve) {
 
       ifcCurve = this.extractIfcTrimmedCurve(from, parentSense, isEdge)     
-
 
     } else if (from instanceof IfcPolyline) {
 
@@ -2978,9 +2979,10 @@ export class IfcGeometryExtraction {
    * @param isEdge
    * @return {CurveObject} The constructed curve object.
    */
-  extractBSplineCurve(from: IfcBSplineCurve,
-      parentSense:boolean = true,
-      isEdge:boolean = false,
+  extractBSplineCurve(
+    from: IfcBSplineCurve,
+    parentSense:boolean = true,
+    isEdge:boolean = false,
   ): CurveObject {
 
     // Logger.info(`express ID: ${from.expressID} degree === ${from.Degree}`)
@@ -3019,7 +3021,6 @@ export class IfcGeometryExtraction {
       const outputPoints = params.points3
       // Logger.info(`express ID: ${from.expressID} controlPointsList: ${from.ControlPointsList}`)
       for (const point of from.ControlPointsList) {
-
          
         if (point.Dim !== 3) {
           continue
@@ -3122,6 +3123,7 @@ export class IfcGeometryExtraction {
       parentSense:boolean = true,
       isEdge:boolean = false,
       parametersTrimmedCurve?: ParamsGetIfcTrimmedCurve ): CurveObject | undefined {
+
     parametersTrimmedCurve ??= {
       masterRepresentation: 0,
       dimensions: 0,
@@ -3144,7 +3146,6 @@ export class IfcGeometryExtraction {
     let vectorOrientation: Vector3 = { x: 0, y: 0, z: 0 }
 
     const cartesianPointArray =  from.Pnt.Coordinates
-
 
     if (from.Dim === this.TWO_DIMENSIONS) {
       cartesianPoint2D = {
@@ -3169,7 +3170,7 @@ export class IfcGeometryExtraction {
 
     const vectorMagnitude = from.Dir.Magnitude
 
-    const parametersIfcCircle: ParamsGetIfcLine = {
+    const parametersIfcLine: ParamsGetIfcLine = {
       dimensions: from.Dim,
       cartesianPoint2D: cartesianPoint2D,
       cartesianPoint3D: cartesianPoint3D,
@@ -3179,13 +3180,12 @@ export class IfcGeometryExtraction {
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
     }
 
-
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
     parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
     parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
     parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
 
-    const curve: CurveObject = this.conwayModel.getIfcLine(parametersIfcCircle)
+    const curve: CurveObject = this.conwayModel.getIfcLine(parametersIfcLine)
 
     return curve
   }
@@ -3219,15 +3219,16 @@ export class IfcGeometryExtraction {
     // specific to this single curve. - CS
     parametersTrimmedCurve.senseAgreement = parametersTrimmedCurve.senseAgreement === parentSense
 
-    let axis2Placement2D: any = void 0 // glmdmat3
-    let axis2Placement3D: any = void 0 // glmdmat4
+    let axis2Placement2D: NativeTransform3x3 | undefined = void 0 // glmdmat3
+    let axis2Placement3D: NativeTransform4x4 | undefined = void 0 // glmdmat4
+
     if (from.Position instanceof IfcAxis2Placement2D) {
       axis2Placement2D = this.extractAxis2Placement2D(from.Position)
-      axis2Placement3D = (new (this.wasmModule.Glmdmat4)) as any
+      axis2Placement3D = (new (this.wasmModule.Glmdmat4)) as NativeTransform4x4
     } else {
       axis2Placement3D = this.conwayModel.getAxis2Placement3D(
           this.extractAxis2Placement3D(from.Position, from.localID, true) )
-      axis2Placement2D = (new (this.wasmModule.Glmdmat3)) as any
+      axis2Placement2D = (new (this.wasmModule.Glmdmat3)) as NativeTransform3x3
     }
 
     const radius = from.Radius
@@ -3239,7 +3240,6 @@ export class IfcGeometryExtraction {
       radius2: radius,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
     }
-
 
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
     parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
@@ -3279,15 +3279,14 @@ export class IfcGeometryExtraction {
     // specific to this single curve. - CS
     parametersTrimmedCurve.senseAgreement = parametersTrimmedCurve.senseAgreement === parentSense
 
-    let axis2Placement2D: any = void 0 // glmdmat3
-    let axis2Placement3D: any = void 0 // glmdmat4
+    let axis2Placement2D: NativeTransform3x3 = this.identity2DNativeMatrix // glmdmat3
+    let axis2Placement3D: NativeTransform4x4 = this.identity3DNativeMatrix // glmdmat4
+
     if (from.Position instanceof IfcAxis2Placement2D) {
       axis2Placement2D = this.extractAxis2Placement2D(from.Position)
-      axis2Placement3D = (new (this.wasmModule.Glmdmat4)) as any
     } else {
       axis2Placement3D = this.conwayModel.getAxis2Placement3D(
           this.extractAxis2Placement3D(from.Position, from.localID, true) )
-      axis2Placement2D = (new (this.wasmModule.Glmdmat3)) as any
     }
 
     const parametersIfcCircle: ParamsGetIfcCircle = {
@@ -3298,7 +3297,6 @@ export class IfcGeometryExtraction {
       radius2: from.SemiAxis2,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
     }
-
 
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
     parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
@@ -3319,9 +3317,10 @@ export class IfcGeometryExtraction {
    * @param isEdge
    * @return {CurveObject | undefined}
    */
-  extractIfcTrimmedCurve(from: IfcTrimmedCurve,
-      parentSense:boolean = true,
-      isEdge:boolean = false,
+  extractIfcTrimmedCurve(
+    from: IfcTrimmedCurve,
+    parentSense:boolean = true,
+    isEdge:boolean = false,
   ): CurveObject | undefined {
 
     let trim1Cartesian2D: Vector2 = { x: 0, y: 0 }
@@ -3332,10 +3331,14 @@ export class IfcGeometryExtraction {
     let trim2Double: number = 0
 
     // use Cartesian if unspecified
-    if (from.MasterRepresentation === IfcTrimmingPreference.CARTESIAN ||
+    if (
+      from.MasterRepresentation === IfcTrimmingPreference.CARTESIAN ||
       from.MasterRepresentation === IfcTrimmingPreference.UNSPECIFIED) {
+
       for (let trimIndex = 0; trimIndex < from.Trim1.length; trimIndex++) {
+
         const trim1 = from.Trim1[trimIndex]
+        
         if (trim1 instanceof IfcCartesianPoint) {
 
           if (from.Dim === this.TWO_DIMENSIONS) {
@@ -3819,7 +3822,7 @@ export class IfcGeometryExtraction {
 
         try {
 
-          if ( !localSegment.extractParseBuffer( 0, parseBuffer, this.wasmModule, true ) ) {
+          if ( !localSegment.extractParseBuffer( 0, 0, 0, parseBuffer, this.wasmModule, true ) ) {
 
             parseBuffer.resize( 0 )
           }
@@ -3855,7 +3858,7 @@ export class IfcGeometryExtraction {
 
     try {
 
-      if ( !fromPoints.extractParseBuffer( 0, parseBuffer, this.wasmModule, true ) ) {
+      if ( !fromPoints.extractParseBuffer( 0, 0, 0, parseBuffer, this.wasmModule, true ) ) {
 
         parseBuffer.resize( 0 )
       }
@@ -4182,21 +4185,6 @@ export class IfcGeometryExtraction {
 
       geometry = this.extractFaces(faceSet.CfsFaces, faceSet.localID, geometry, isRelVoid)
     }
-
-    const canonicalMesh: CanonicalMesh = {
-      type: CanonicalMeshType.BUFFER_GEOMETRY,
-      geometry: geometry,
-      localID: parentLocalID,
-      model: this.model,
-      temporary: false,
-    }
-
-    // add mesh to the list of mesh objects
-    if (!isRelVoid) {
-      this.model.geometry.add(canonicalMesh)
-    } else {
-      this.model.voidGeometry.add(canonicalMesh)
-    }
   }
 
 
@@ -4259,7 +4247,8 @@ export class IfcGeometryExtraction {
    * @param isRelVoid
    * @return {GeometryObject}
    */
-  extractFaces(from: IfcFace[],
+  extractFaces(
+      from: IfcFace[],
       parentLocalID: number,
       geometry_?: GeometryObject | undefined,
       temporary: boolean = false,
@@ -4505,232 +4494,196 @@ export class IfcGeometryExtraction {
    */
   extractAdvancedFace(from: IfcFaceSurface | IfcAdvancedFace, geometry: GeometryObject) {
 
-    if (from.Bounds.length > 0) {
+    const bounds = from.Bounds
 
-      const bound3DVector = this.nativeBound3DVector()
+    if ( bounds.length === 0 ) {
+      return
+    }
 
-      const conwayModel      = this.conwayModel
+    const bound3DVector = this.nativeBound3DVector()
 
-      for (const bound of from.Bounds) {
-        let vec3Array: StdVector< Vector3 >
+    const conwayModel = this.conwayModel
 
-        const innerBound = bound.Bound
-        const nativeEdgeCurves = this.nativeVectorCurve()
+    for ( const bound of bounds ) {
+      let vec3Array: StdVector< Vector3 >
 
-        if (innerBound instanceof IfcPolyLoop) {
+      const innerBound = bound.Bound
+      const nativeEdgeCurves = this.nativeVectorCurve()
 
-          // let prevLocalID: number = -1
-          const coordParseBuffer = conwayModel.nativeParseBuffer()
+      if (innerBound instanceof IfcPolyLoop) {
 
-          if ( !innerBound.extractParseBuffer(
-              0, coordParseBuffer, this.wasmModule, true ) ) {
+        // let prevLocalID: number = -1
+        const coordParseBuffer = conwayModel.nativeParseBuffer()
 
-            coordParseBuffer.resize( 0 )
-          }
+        if ( !innerBound.extractParseBuffer(
+            0, 0, 0, coordParseBuffer, this.wasmModule, true ) ) {
 
-          vec3Array = this.wasmModule.parseVertexVector( coordParseBuffer )
+          coordParseBuffer.resize( 0 )
+        }
 
-          conwayModel.freeParseBuffer( coordParseBuffer )
-        } else if (innerBound instanceof IfcEdgeLoop) {
+        vec3Array = this.wasmModule.parseVertexVector( coordParseBuffer )
 
-          vec3Array = this.nativeVectorGlmdVec3()
-          // Logger.info("innerBound Ne: " + innerBound.Ne)
-          for (const edge of innerBound.EdgeList) {
-            // //  Logger.info("IfcOrientedEdge expressID: " + edge.expressID)
-            if (edge.EdgeElement instanceof IfcEdgeCurve) {
+        conwayModel.freeParseBuffer( coordParseBuffer )
 
-              const edgeCurve = edge.EdgeElement.EdgeGeometry
+      } else if (innerBound instanceof IfcEdgeLoop) {
 
-              //  Logger.info("curve type: " +
-              // EntityTypesIfc[edgeCurve.type] + " express ID: " + edgeCurve.expressID)
+        vec3Array = this.nativeVectorGlmdVec3()
+        // Logger.info("innerBound Ne: " + innerBound.Ne)
+        for (const edge of innerBound.EdgeList) {
 
-              const edgeStart = edge.EdgeElement.EdgeStart
-              const edgeEnd = edge.EdgeElement.EdgeEnd
+          const edgeElement = edge.EdgeElement
 
-              let trimmingStart: TrimmingSelect | undefined
-              let trimmingEnd: TrimmingSelect | undefined
+          // //  Logger.info("IfcOrientedEdge expressID: " + edge.expressID)
+          if ( edgeElement instanceof IfcEdgeCurve) {
 
-              if (edgeStart instanceof IfcVertexPoint) {
+            const edgeCurve = edgeElement.EdgeGeometry
 
-                const startPoint = edgeStart.VertexGeometry
+            //  Logger.info("curve type: " +
+            // EntityTypesIfc[edgeCurve.type] + " express ID: " + edgeCurve.expressID)
 
-                if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
+            const edgeStart = edgeElement.EdgeStart
+            const edgeEnd = edgeElement.EdgeEnd
 
-                  const startCoords = startPoint.Coordinates
+            let trimmingStart: TrimmingSelect | undefined
+            let trimmingEnd: TrimmingSelect | undefined
 
-                  trimmingStart = {
-                    hasParam: false,
-                    hasPos: true,
-                    hasLength: false,
-                    param: 0.0,
-                    pos: void 0,
-                    pos3D: {
-                      x: startCoords[0],
-                      y: startCoords[1],
-                      z: startCoords[2],
-                    },
-                  }
-                }
-              }
+            if (edgeStart instanceof IfcVertexPoint) {
 
-              if (edgeEnd instanceof IfcVertexPoint) {
+              const startPoint = edgeStart.VertexGeometry
 
-                const endPoint = edgeEnd.VertexGeometry
+              if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
 
-                 
-                if (endPoint instanceof IfcCartesianPoint && endPoint.Dim === 3) {
+                const startCoords = startPoint.Coordinates
 
-                  const endCoords = endPoint.Coordinates
-
-                  trimmingEnd = {
-                    hasParam: false,
-                    hasPos: true,
-                    hasLength: false,
-                    param: 0.0,
-                    pos: void 0,
-                    pos3D: {
-                      x: endCoords[0],
-                      y: endCoords[1],
-                      z: endCoords[2],
-                    },
-                  }
-                }
-              }
-
-              const trimmingArguments: TrimmingArguments = {
-                exist: !!((trimmingStart !== void 0 && trimmingEnd !== void 0)),
-                start: trimmingStart,
-                end: trimmingEnd,
-              }
-
-              let curve = this.extractCurve(edgeCurve, true, true, trimmingArguments)
-
-              if (curve !== void 0) {
-
-                if (edge.Orientation) {
-                  // reverse curve
-                  // Logger.info("edge orientation == true, inverting curve")
-                  curve = curve.clone()
-
-                  curve.invert()
-                }
-
-                // Logger.info("curve points size: " + curve.getPointsSize())
-                /* for (let i = 0; i < curve.getPointsSize(); ++i) {
-                  if (edgeCurve.Dim === this.TWO_DIMENSIONS) {
-                    const pt__ = curve.get2d(i)
-
-                    //    Logger.info(`[${EntityTypesIfc[edge.type]}]:
-                     Point ${i}: x: ${pt__.x}, y: ${pt__.y}`)
-                  } else if (edgeCurve.Dim === this.TWO_DIMENSIONS) {
-                    const pt__ = curve.get3d(i)
-
-                    //    Logger.info(`[${EntityTypesIfc[edge.type]}]:
-                     Point ${i}: x: ${pt__.x}, y: ${pt__.y}, z: ${pt__.z}`)
-                  }
-                }*/
-
-                nativeEdgeCurves.push_back(curve)
-                // Logger.info("nativeEdgeCurves size: " + nativeEdgeCurves.size())
-
-                // Important not to repeat the last point otherwise triangulation fails
-                // if the list has zero points this is initial, no repetition is possible,
-                // otherwise we must check
-                /* if (vec3Array.size() === 0) {
-                   for (
-                     let where = 0, pointCount = curve.getPointsSize();
-                     where < pointCount;
-                     ++where) {
-
-                     vec3Array.push_back(curve.get3d(where))
-                   }
-                 } else {
-                   for (
-                     let where = 0, pointCount = curve.getPointsSize();
-                     where < pointCount;
-                     ++where) {
-
-                     const pt3d = curve.get3d(where)
-                     if (this.notPresent(pt3d, vec3Array)) {
-                       vec3Array.push_back(pt3d)
-                     }
-                   }
-                 }*/
-
-              } else {
-                Logger.error(`curve === undefined, type: ${EntityTypesIfc[edgeCurve.type]}`)
-              }
-
-            } else {
-
-              //  Logger.info("curve === null")
-              const start = edge.EdgeStart
-
-              if (start instanceof IfcVertexPoint) {
-
-                const startPoint = start.VertexGeometry
-
-                 
-                if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
-
-                  const startCoords = startPoint.Coordinates
-
-                  vec3Array.push_back({
+                trimmingStart = {
+                  hasParam: false,
+                  hasPos: true,
+                  hasLength: false,
+                  param: 0.0,
+                  pos: void 0,
+                  pos3D: {
                     x: startCoords[0],
                     y: startCoords[1],
                     z: startCoords[2],
-                  })
+                  },
                 }
               }
             }
+
+            if (edgeEnd instanceof IfcVertexPoint) {
+
+              const endPoint = edgeEnd.VertexGeometry
+                
+              if (endPoint instanceof IfcCartesianPoint && endPoint.Dim === 3) {
+
+                const endCoords = endPoint.Coordinates
+
+                trimmingEnd = {
+                  hasParam: false,
+                  hasPos: true,
+                  hasLength: false,
+                  param: 0.0,
+                  pos: void 0,
+                  pos3D: {
+                    x: endCoords[0],
+                    y: endCoords[1],
+                    z: endCoords[2],
+                  },
+                }
+              }
+            }
+
+            const trimmingArguments: TrimmingArguments = {
+              exist: !!((trimmingStart !== void 0 && trimmingEnd !== void 0)),
+              start: trimmingStart,
+              end: trimmingEnd,
+            }
+
+            let curve = this.extractCurve(edgeCurve, true, true, trimmingArguments)
+
+            if (curve !== void 0) {
+
+              if ( edge.Orientation ) {
+                // reverse curve
+                // Logger.info("edge orientation == true, inverting curve")
+                curve = curve.clone()
+
+                curve.invert()
+              }
+
+              nativeEdgeCurves.push_back(curve)
+
+            } else {
+              Logger.error(`curve === undefined, type: ${EntityTypesIfc[edgeCurve.type]}`)
+            }
+
+          } else {
+
+            const start = edge.EdgeStart
+
+            if (start instanceof IfcVertexPoint) {
+
+              const startPoint = start.VertexGeometry
+                
+              if (startPoint instanceof IfcCartesianPoint && startPoint.Dim === 3) {
+
+                const startCoords = startPoint.Coordinates
+
+                vec3Array.push_back({
+                  x: startCoords[0],
+                  y: startCoords[1],
+                  z: startCoords[2],
+                })
+              }
+            }
           }
-
-        } else {
-          Logger.warning(`Unsupported bound ${bound.Bound}`)
-          return
         }
 
-        // get curve
-        const parameters: ParamsGetLoop = {
-          points: vec3Array,
-          edges: nativeEdgeCurves,
-        }
-
-        // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
-        const curve: CurveObject = this.conwayModel.getLoop(parameters)
-
-        // create bound vector
-        const parametersCreateBounds3D: ParamsCreateBound3D = {
-          curve: curve,
-          orientation: bound.Orientation,
-          type: (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1,
-        }
-
-        const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
-
-        bound3DVector.push_back(bound3D)
-        vec3Array.delete()
-        nativeEdgeCurves.delete()
+      } else {
+        Logger.warning(`Unsupported bound ${bound.Bound}`)
+        return
       }
 
-      const surface = from.FaceSurface
-
-      // add face to geometry
-      const nativeSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
-
-      this.extractSurface(surface, nativeSurface)
-
-      const parameters: ParamsAddFaceToGeometry = {
-        boundsArray: bound3DVector,
-        advancedBrep: true,
-        surface: nativeSurface,
-        scaling: this.getLinearScalingFactor(),
+      // get curve
+      const parameters: ParamsGetLoop = {
+        points: vec3Array,
+        edges: nativeEdgeCurves,
       }
 
-      this.conwayModel.addFaceToGeometry(parameters, geometry)
+      // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
+      const curve: CurveObject = this.conwayModel.getLoop(parameters)
 
-      bound3DVector.delete()
+      // create bound vector
+      const parametersCreateBounds3D: ParamsCreateBound3D = {
+        curve: curve,
+        orientation: bound.Orientation,
+        type: (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1,
+      }
+
+      const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
+
+      bound3DVector.push_back(bound3D)
+      vec3Array.delete()
+      nativeEdgeCurves.delete()
     }
+
+    const surface = from.FaceSurface
+
+    // add face to geometry
+    const nativeSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
+
+    this.extractSurface(surface, nativeSurface)
+
+    const parameters: ParamsAddFaceToGeometry = {
+      boundsArray: bound3DVector,
+      advancedBrep: true,
+      surface: nativeSurface,
+      scaling: this.getLinearScalingFactor(),
+    }
+
+    this.conwayModel.addFaceToGeometry(parameters, geometry)
+
+    bound3DVector.delete()
   }
 
   /**
@@ -4886,14 +4839,18 @@ export class IfcGeometryExtraction {
    * @param geometry
    */
   extractFace(from: IfcFace, geometry: GeometryObject) {
-    if (from.Bounds.length > 0) {
+
+    const bounds = from.Bounds
+
+    if ( bounds.length > 0 ) {
 
       const bound3DVector = this.nativeBound3DVector()
 
       // let pointsPtrs:any[]
 
-      for (let boundIndex = 0; boundIndex < from.Bounds.length; ++boundIndex) {
-        const bound = from.Bounds[boundIndex]
+      for (let boundIndex = 0; boundIndex < bounds.length; ++boundIndex) {
+        
+        const bound = bounds[ boundIndex ]
         const innerBound = bound.Bound
 
         if (innerBound instanceof IfcPolyLoop) {
@@ -4910,13 +4867,13 @@ export class IfcGeometryExtraction {
           // `result.length` is how many Float64 coords are valid.
           // `result.capacity` is how many Float64 coords that pointer can hold.
            
-          const { pointer, length, capacity } = result
+          const { pointer, length } = result
 
           // Use them in your WASM call
           const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
-              pointer,
-              length,
-              bound.Orientation,
+            pointer,
+            length,
+            bound.Orientation,
             bound.type === EntityTypesIfc.IFCFACEOUTERBOUND ? 0 : 1,
           )
 
@@ -4946,7 +4903,7 @@ export class IfcGeometryExtraction {
    * @param from The axis 2 placement to extract.
    * @return {any} The native placement transform.
    */
-  extractAxis2Placement2D(from: IfcAxis2Placement2D): any {
+  extractAxis2Placement2D(from: IfcAxis2Placement2D): NativeTransform3x3 {
 
     let normalizeX: boolean = false
 

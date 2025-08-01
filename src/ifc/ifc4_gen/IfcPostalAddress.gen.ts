@@ -31,7 +31,7 @@ export  class IfcPostalAddress extends IfcAddress {
 
   public get InternalLocation() : string | null {
     if ( this.InternalLocation_ === void 0 ) {
-      this.InternalLocation_ = this.extractString( 3, true )
+      this.InternalLocation_ = this.extractString( 3, 3, 1, true )
     }
 
     return this.InternalLocation_ as string | null
@@ -40,7 +40,7 @@ export  class IfcPostalAddress extends IfcAddress {
   public get AddressLines() : Array< string > | null {
     if ( this.AddressLines_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 3, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -72,7 +72,7 @@ export  class IfcPostalAddress extends IfcAddress {
 
   public get PostalBox() : string | null {
     if ( this.PostalBox_ === void 0 ) {
-      this.PostalBox_ = this.extractString( 5, true )
+      this.PostalBox_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.PostalBox_ as string | null
@@ -80,7 +80,7 @@ export  class IfcPostalAddress extends IfcAddress {
 
   public get Town() : string | null {
     if ( this.Town_ === void 0 ) {
-      this.Town_ = this.extractString( 6, true )
+      this.Town_ = this.extractString( 6, 3, 1, true )
     }
 
     return this.Town_ as string | null
@@ -88,7 +88,7 @@ export  class IfcPostalAddress extends IfcAddress {
 
   public get Region() : string | null {
     if ( this.Region_ === void 0 ) {
-      this.Region_ = this.extractString( 7, true )
+      this.Region_ = this.extractString( 7, 3, 1, true )
     }
 
     return this.Region_ as string | null
@@ -96,7 +96,7 @@ export  class IfcPostalAddress extends IfcAddress {
 
   public get PostalCode() : string | null {
     if ( this.PostalCode_ === void 0 ) {
-      this.PostalCode_ = this.extractString( 8, true )
+      this.PostalCode_ = this.extractString( 8, 3, 1, true )
     }
 
     return this.PostalCode_ as string | null
@@ -104,7 +104,7 @@ export  class IfcPostalAddress extends IfcAddress {
 
   public get Country() : string | null {
     if ( this.Country_ === void 0 ) {
-      this.Country_ = this.extractString( 9, true )
+      this.Country_ = this.extractString( 9, 3, 1, true )
     }
 
     return this.Country_ as string | null
@@ -112,7 +112,9 @@ export  class IfcPostalAddress extends IfcAddress {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

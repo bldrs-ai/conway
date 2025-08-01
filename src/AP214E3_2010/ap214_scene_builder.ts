@@ -77,13 +77,15 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
    * @param index
    * @param relatedElementLocalId
    * @param parentIndex
+   * @param materialOverideLocalID
    */
   constructor(
     public readonly model: Model,
     public readonly localID: number,
     public readonly index: number,
     public readonly relatedElementLocalId?: number,
-    public readonly parentIndex?: number ) { }
+    public readonly parentIndex?: number,
+    public readonly materialOverideLocalID?: number ) { }
    
 }
 
@@ -293,7 +295,6 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
     const primitives: [GeometryObject, number | undefined][] = []
     const triangleMaps: TriangleElementMap[] = []
     const elementMap = new Map<number, number[]>()
-
      
     for (const [_, nativeTransform, geometry, material, entity] of this.walk()) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY) {
@@ -483,11 +484,13 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
    *
    * @param localID
    * @param owningElementLocalID
+   * @param materialOverridLocalID
    * @return {AP214SceneGeometry}
    */
   public addGeometry(
       localID: number,
-      owningElementLocalID?: number ): AP214SceneGeometry {
+      owningElementLocalID?: number,
+      materialOverridLocalID?: number ): AP214SceneGeometry {
 
     const nodeIndex = this.scene_.length
 
@@ -511,7 +514,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
           localID,
           nodeIndex,
           owningElementLocalID,
-          parentIndex )
+          parentIndex,
+          materialOverridLocalID )
 
     this.scene_.push(result)
 
@@ -543,12 +547,14 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
    * @param localID
    * @param transform
    * @param nativeTransform
+   * @param mappedItem
    * @return {AP214SceneTransform}
    */
   public addTransform(
       localID: number,
       transform: ReadonlyArray<number>,
-      nativeTransform: NativeTransform4x4): AP214SceneTransform {
+      nativeTransform: NativeTransform4x4,
+      mappedItem: boolean = false ): AP214SceneTransform {
 
     if (this.sceneLocalIdMap_.has(localID)) {
       const transform_ = this.getTransform(localID)
@@ -598,7 +604,9 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
     this.scene_.push(result)
 
-    this.sceneLocalIdMap_.set(localID, nodeIndex)
+    if ( !mappedItem ) { 
+      this.sceneLocalIdMap_.set(localID, nodeIndex)
+    }
 
     const transformListeners = this.transformListeners_
 

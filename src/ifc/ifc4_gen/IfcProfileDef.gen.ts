@@ -19,7 +19,7 @@ export  class IfcProfileDef extends StepEntityBase< EntityTypesIfc > {
 
   public get ProfileType() : IfcProfileTypeEnum {
     if ( this.ProfileType_ === void 0 ) {
-      this.ProfileType_ = this.extractLambda( 0, IfcProfileTypeEnumDeserializeStep, false )
+      this.ProfileType_ = this.extractLambda( 0, 0, 0, IfcProfileTypeEnumDeserializeStep, false )
     }
 
     return this.ProfileType_ as IfcProfileTypeEnum
@@ -27,7 +27,7 @@ export  class IfcProfileDef extends StepEntityBase< EntityTypesIfc > {
 
   public get ProfileName() : string | null {
     if ( this.ProfileName_ === void 0 ) {
-      this.ProfileName_ = this.extractString( 1, true )
+      this.ProfileName_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.ProfileName_ as string | null
@@ -37,7 +37,9 @@ export  class IfcProfileDef extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

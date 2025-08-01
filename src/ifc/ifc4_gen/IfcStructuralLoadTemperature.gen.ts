@@ -20,7 +20,7 @@ export  class IfcStructuralLoadTemperature extends IfcStructuralLoadStatic {
 
   public get DeltaTConstant() : number | null {
     if ( this.DeltaTConstant_ === void 0 ) {
-      this.DeltaTConstant_ = this.extractNumber( 1, true )
+      this.DeltaTConstant_ = this.extractNumber( 1, 1, 3, true )
     }
 
     return this.DeltaTConstant_ as number | null
@@ -28,7 +28,7 @@ export  class IfcStructuralLoadTemperature extends IfcStructuralLoadStatic {
 
   public get DeltaTY() : number | null {
     if ( this.DeltaTY_ === void 0 ) {
-      this.DeltaTY_ = this.extractNumber( 2, true )
+      this.DeltaTY_ = this.extractNumber( 2, 1, 3, true )
     }
 
     return this.DeltaTY_ as number | null
@@ -36,7 +36,7 @@ export  class IfcStructuralLoadTemperature extends IfcStructuralLoadStatic {
 
   public get DeltaTZ() : number | null {
     if ( this.DeltaTZ_ === void 0 ) {
-      this.DeltaTZ_ = this.extractNumber( 3, true )
+      this.DeltaTZ_ = this.extractNumber( 3, 1, 3, true )
     }
 
     return this.DeltaTZ_ as number | null
@@ -44,7 +44,9 @@ export  class IfcStructuralLoadTemperature extends IfcStructuralLoadStatic {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

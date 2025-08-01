@@ -34,7 +34,7 @@ export  class IfcInventory extends IfcGroup {
 
   public get PredefinedType() : IfcInventoryTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 5, IfcInventoryTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 5, 5, 4, IfcInventoryTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcInventoryTypeEnum | null
@@ -44,7 +44,7 @@ export  class IfcInventory extends IfcGroup {
     if ( this.Jurisdiction_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 6, true )
+        this.extractReference( 6, 5, 4, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -60,7 +60,7 @@ export  class IfcInventory extends IfcGroup {
   public get ResponsiblePersons() : Array<IfcPerson> | null {
     if ( this.ResponsiblePersons_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 5, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -92,7 +92,7 @@ export  class IfcInventory extends IfcGroup {
 
   public get LastUpdateDate() : string | null {
     if ( this.LastUpdateDate_ === void 0 ) {
-      this.LastUpdateDate_ = this.extractString( 8, true )
+      this.LastUpdateDate_ = this.extractString( 8, 5, 4, true )
     }
 
     return this.LastUpdateDate_ as string | null
@@ -100,7 +100,7 @@ export  class IfcInventory extends IfcGroup {
 
   public get CurrentValue() : IfcCostValue | null {
     if ( this.CurrentValue_ === void 0 ) {
-      this.CurrentValue_ = this.extractElement( 9, true, IfcCostValue )
+      this.CurrentValue_ = this.extractElement( 9, 5, 4, true, IfcCostValue )
     }
 
     return this.CurrentValue_ as IfcCostValue | null
@@ -108,7 +108,7 @@ export  class IfcInventory extends IfcGroup {
 
   public get OriginalValue() : IfcCostValue | null {
     if ( this.OriginalValue_ === void 0 ) {
-      this.OriginalValue_ = this.extractElement( 10, true, IfcCostValue )
+      this.OriginalValue_ = this.extractElement( 10, 5, 4, true, IfcCostValue )
     }
 
     return this.OriginalValue_ as IfcCostValue | null
@@ -116,7 +116,9 @@ export  class IfcInventory extends IfcGroup {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

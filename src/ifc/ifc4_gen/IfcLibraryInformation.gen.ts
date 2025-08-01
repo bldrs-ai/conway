@@ -29,7 +29,7 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, false )
+      this.Name_ = this.extractString( 0, 0, 1, false )
     }
 
     return this.Name_ as string
@@ -37,7 +37,7 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
 
   public get Version() : string | null {
     if ( this.Version_ === void 0 ) {
-      this.Version_ = this.extractString( 1, true )
+      this.Version_ = this.extractString( 1, 0, 1, true )
     }
 
     return this.Version_ as string | null
@@ -47,7 +47,7 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
     if ( this.Publisher_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 2, true )
+        this.extractReference( 2, 0, 1, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -62,7 +62,7 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
 
   public get VersionDate() : string | null {
     if ( this.VersionDate_ === void 0 ) {
-      this.VersionDate_ = this.extractString( 3, true )
+      this.VersionDate_ = this.extractString( 3, 0, 1, true )
     }
 
     return this.VersionDate_ as string | null
@@ -70,7 +70,7 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
 
   public get Location() : string | null {
     if ( this.Location_ === void 0 ) {
-      this.Location_ = this.extractString( 4, true )
+      this.Location_ = this.extractString( 4, 0, 1, true )
     }
 
     return this.Location_ as string | null
@@ -78,7 +78,7 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 5, true )
+      this.Description_ = this.extractString( 5, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -88,7 +88,9 @@ export  class IfcLibraryInformation extends IfcExternalInformation {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -19,7 +19,7 @@ export  class IfcPcurve extends IfcCurve {
 
   public get BasisSurface() : IfcSurface {
     if ( this.BasisSurface_ === void 0 ) {
-      this.BasisSurface_ = this.extractElement( 0, false, IfcSurface )
+      this.BasisSurface_ = this.extractElement( 0, 0, 3, false, IfcSurface )
     }
 
     return this.BasisSurface_ as IfcSurface
@@ -27,7 +27,7 @@ export  class IfcPcurve extends IfcCurve {
 
   public get ReferenceCurve() : IfcCurve {
     if ( this.ReferenceCurve_ === void 0 ) {
-      this.ReferenceCurve_ = this.extractElement( 1, false, IfcCurve )
+      this.ReferenceCurve_ = this.extractElement( 1, 0, 3, false, IfcCurve )
     }
 
     return this.ReferenceCurve_ as IfcCurve
@@ -35,7 +35,9 @@ export  class IfcPcurve extends IfcCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

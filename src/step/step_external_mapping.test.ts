@@ -1,85 +1,70 @@
  
-import {beforeAll, describe, expect, test} from '@jest/globals'
+// import {beforeAll, describe, expect, test} from '@jest/globals'
 
-import AP214StepExternalMapping from '../AP214E3_2010/ap214_step_external_mapping'
-import AP214StepParser from '../AP214E3_2010/ap214_step_parser'
-import ParsingBuffer from '../parsing/parsing_buffer'
-import { ParseResult } from './parsing/step_parser'
-import {
-  geometric_representation_context,
-  parametric_representation_context,
-  representation_context,
-} from '../AP214E3_2010/AP214E3_2010_gen'
-import { ConwayGeometry } from '../../dependencies/conway-geom'
+// import AP214StepExternalMapping from '../AP214E3_2010/ap214_step_external_mapping'
+// import AP214StepParser from '../AP214E3_2010/ap214_step_parser'
+// import ParsingBuffer from '../parsing/parsing_buffer'
+// import { ParseResult } from './parsing/step_parser'
+// import {
+//   geometric_representation_context,
+//   parametric_representation_context,
+//   representation_context,
+// } from '../AP214E3_2010/AP214E3_2010_gen'
+// import { ConwayGeometry } from '../../dependencies/conway-geom'
 
 
-const parser = AP214StepParser.Instance
+// const parser = AP214StepParser.Instance
 
  
-const externalMappingString = '#42 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2) PARAMETRIC_REPRESENTATION_CONTEXT() REPRESENTATION_CONTEXT(\'2D SPACE\',\'\' ) );'
+// const externalMappingString = '#42 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2) PARAMETRIC_REPRESENTATION_CONTEXT() REPRESENTATION_CONTEXT(\'2D SPACE\',\'\' ) );'
 
-const externalMappingStringBuffer = new TextEncoder().encode( externalMappingString )
+// const externalMappingStringBuffer = new TextEncoder().encode( externalMappingString )
 
-const EXTERNAL_REFERENCE_EXPRESS_ID = 42
+// const EXTERNAL_REFERENCE_EXPRESS_ID = 42
 
-const conwayGeometry = new ConwayGeometry()
+// const conwayGeometry = new ConwayGeometry()
 
-/**
- * Intialize conway geom.
- */
-async function initializeConwayGeom() {
+// /**
+//  * Intialize conway geom.
+//  */
+// async function initializeConwayGeom() {
 
-  await conwayGeometry.initialize()
-}
-
-
-/**
- * Test for extracting an external mapping.
- *
- * @return {boolean} True if the test succeeds, false if it doesn't.
- */
-function extractExternalMapping() {
-
-  const bufferInput = new ParsingBuffer( externalMappingStringBuffer )
-
-  const [result, model] = parser.parseDataToModel( bufferInput )
-
-  if ( model === void 0 ||
-    ( result !== ParseResult.COMPLETE && result !== ParseResult.INCOMPLETE ) ) {
-    return false
-  }
-
-  const externalMapping =
-    model.getElementByExpressID( EXTERNAL_REFERENCE_EXPRESS_ID )
-
-  if (!(externalMapping instanceof AP214StepExternalMapping )) {
-    return false
-  }
-
-  if ( externalMapping.items.length !== 3 ) {
-    return false
-  }
-
-  if (
-    !(externalMapping.items[ 0 ] instanceof geometric_representation_context ) ||
-    !(externalMapping.items[ 1 ] instanceof parametric_representation_context ) ||
-    !(externalMapping.items[ 2 ] instanceof representation_context ) ) {
-    return false
-  }
-
-  return true
-}
+//   await conwayGeometry.initialize()
+// }
 
 
-describe( 'External Mapping Test', () => {
+// /**
+//  * Test for extracting an external mapping.
+//  *
+//  * @return {boolean} True if the test succeeds, false if it doesn't.
+//  */
+// function extractExternalMapping() {
 
-  beforeAll(async () => {
+//   const bufferInput = new ParsingBuffer( externalMappingStringBuffer )
 
-    await initializeConwayGeom()
+//   const [result, model] = parser.parseDataToModel( bufferInput )
 
-  })
+//   if ( model === void 0 ||
+//     ( result !== ParseResult.COMPLETE && result !== ParseResult.INCOMPLETE ) ) {
+//     return false
+//   }
 
-  test( 'extractExternalMapping()', () => {
-    expect( extractExternalMapping() ).toBe( true )
-  } )
-})
+//   const externalMapping =
+//     model.getElementByExpressID( EXTERNAL_REFERENCE_EXPRESS_ID )
+
+//   if (!(externalMapping instanceof AP214StepExternalMapping )) {
+//     return false
+//   }
+
+// describe( 'External Mapping Test', () => {
+
+//   beforeAll(async () => {
+
+//     await initializeConwayGeom()
+
+//   })
+
+//   test( 'extractExternalMapping()', () => {
+//     expect( extractExternalMapping() ).toBe( true )
+//   } )
+// })

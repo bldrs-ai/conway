@@ -22,7 +22,7 @@ export  class IfcPointOnSurface extends IfcPoint {
 
   public get BasisSurface() : IfcSurface {
     if ( this.BasisSurface_ === void 0 ) {
-      this.BasisSurface_ = this.extractElement( 0, false, IfcSurface )
+      this.BasisSurface_ = this.extractElement( 0, 0, 3, false, IfcSurface )
     }
 
     return this.BasisSurface_ as IfcSurface
@@ -30,7 +30,7 @@ export  class IfcPointOnSurface extends IfcPoint {
 
   public get PointParameterU() : number {
     if ( this.PointParameterU_ === void 0 ) {
-      this.PointParameterU_ = this.extractNumber( 1, false )
+      this.PointParameterU_ = this.extractNumber( 1, 0, 3, false )
     }
 
     return this.PointParameterU_ as number
@@ -38,7 +38,7 @@ export  class IfcPointOnSurface extends IfcPoint {
 
   public get PointParameterV() : number {
     if ( this.PointParameterV_ === void 0 ) {
-      this.PointParameterV_ = this.extractNumber( 2, false )
+      this.PointParameterV_ = this.extractNumber( 2, 0, 3, false )
     }
 
     return this.PointParameterV_ as number
@@ -50,7 +50,9 @@ export  class IfcPointOnSurface extends IfcPoint {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

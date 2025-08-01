@@ -20,7 +20,7 @@ export  class IfcQuantityLength extends IfcPhysicalSimpleQuantity {
 
   public get LengthValue() : number {
     if ( this.LengthValue_ === void 0 ) {
-      this.LengthValue_ = this.extractNumber( 3, false )
+      this.LengthValue_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.LengthValue_ as number
@@ -28,7 +28,7 @@ export  class IfcQuantityLength extends IfcPhysicalSimpleQuantity {
 
   public get Formula() : string | null {
     if ( this.Formula_ === void 0 ) {
-      this.Formula_ = this.extractString( 4, true )
+      this.Formula_ = this.extractString( 4, 3, 2, true )
     }
 
     return this.Formula_ as string | null
@@ -36,7 +36,9 @@ export  class IfcQuantityLength extends IfcPhysicalSimpleQuantity {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

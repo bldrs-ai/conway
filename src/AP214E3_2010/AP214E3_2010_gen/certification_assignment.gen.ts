@@ -21,7 +21,7 @@ export abstract class certification_assignment extends StepEntityBase< EntityTyp
 
   public get assigned_certification() : certification {
     if ( this.assigned_certification_ === void 0 ) {
-      this.assigned_certification_ = this.extractElement( 0, false, certification )
+      this.assigned_certification_ = this.extractElement( 0, 0, 0, false, certification )
     }
 
     return this.assigned_certification_ as certification
@@ -33,8 +33,26 @@ export abstract class certification_assignment extends StepEntityBase< EntityTyp
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === certification_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for certification_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query: EntityTypesAP214[] = 

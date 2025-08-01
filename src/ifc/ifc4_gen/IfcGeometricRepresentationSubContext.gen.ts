@@ -31,7 +31,7 @@ export  class IfcGeometricRepresentationSubContext extends IfcGeometricRepresent
 
   public get ParentContext() : IfcGeometricRepresentationContext {
     if ( this.ParentContext_ === void 0 ) {
-      this.ParentContext_ = this.extractElement( 6, false, IfcGeometricRepresentationContext )
+      this.ParentContext_ = this.extractElement( 6, 6, 2, false, IfcGeometricRepresentationContext )
     }
 
     return this.ParentContext_ as IfcGeometricRepresentationContext
@@ -39,7 +39,7 @@ export  class IfcGeometricRepresentationSubContext extends IfcGeometricRepresent
 
   public get TargetScale() : number | null {
     if ( this.TargetScale_ === void 0 ) {
-      this.TargetScale_ = this.extractNumber( 7, true )
+      this.TargetScale_ = this.extractNumber( 7, 6, 2, true )
     }
 
     return this.TargetScale_ as number | null
@@ -47,7 +47,7 @@ export  class IfcGeometricRepresentationSubContext extends IfcGeometricRepresent
 
   public get TargetView() : IfcGeometricProjectionEnum {
     if ( this.TargetView_ === void 0 ) {
-      this.TargetView_ = this.extractLambda( 8, IfcGeometricProjectionEnumDeserializeStep, false )
+      this.TargetView_ = this.extractLambda( 8, 6, 2, IfcGeometricProjectionEnumDeserializeStep, false )
     }
 
     return this.TargetView_ as IfcGeometricProjectionEnum
@@ -55,7 +55,7 @@ export  class IfcGeometricRepresentationSubContext extends IfcGeometricRepresent
 
   public get UserDefinedTargetView() : string | null {
     if ( this.UserDefinedTargetView_ === void 0 ) {
-      this.UserDefinedTargetView_ = this.extractString( 9, true )
+      this.UserDefinedTargetView_ = this.extractString( 9, 6, 2, true )
     }
 
     return this.UserDefinedTargetView_ as string | null
@@ -76,7 +76,9 @@ export  class IfcGeometricRepresentationSubContext extends IfcGeometricRepresent
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

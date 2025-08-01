@@ -21,7 +21,7 @@ export abstract class contract_assignment extends StepEntityBase< EntityTypesAP2
 
   public get assigned_contract() : contract {
     if ( this.assigned_contract_ === void 0 ) {
-      this.assigned_contract_ = this.extractElement( 0, false, contract )
+      this.assigned_contract_ = this.extractElement( 0, 0, 0, false, contract )
     }
 
     return this.assigned_contract_ as contract
@@ -33,8 +33,26 @@ export abstract class contract_assignment extends StepEntityBase< EntityTypesAP2
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === contract_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for contract_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query: EntityTypesAP214[] = 

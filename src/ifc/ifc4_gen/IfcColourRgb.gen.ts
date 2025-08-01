@@ -20,7 +20,7 @@ export  class IfcColourRgb extends IfcColourSpecification {
 
   public get Red() : number {
     if ( this.Red_ === void 0 ) {
-      this.Red_ = this.extractNumber( 1, false )
+      this.Red_ = this.extractNumber( 1, 1, 2, false )
     }
 
     return this.Red_ as number
@@ -28,7 +28,7 @@ export  class IfcColourRgb extends IfcColourSpecification {
 
   public get Green() : number {
     if ( this.Green_ === void 0 ) {
-      this.Green_ = this.extractNumber( 2, false )
+      this.Green_ = this.extractNumber( 2, 1, 2, false )
     }
 
     return this.Green_ as number
@@ -36,7 +36,7 @@ export  class IfcColourRgb extends IfcColourSpecification {
 
   public get Blue() : number {
     if ( this.Blue_ === void 0 ) {
-      this.Blue_ = this.extractNumber( 3, false )
+      this.Blue_ = this.extractNumber( 3, 1, 2, false )
     }
 
     return this.Blue_ as number
@@ -44,7 +44,9 @@ export  class IfcColourRgb extends IfcColourSpecification {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

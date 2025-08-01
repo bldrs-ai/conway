@@ -27,7 +27,7 @@ export  class IfcComplexPropertyTemplate extends IfcPropertyTemplate {
 
   public get UsageName() : string | null {
     if ( this.UsageName_ === void 0 ) {
-      this.UsageName_ = this.extractString( 4, true )
+      this.UsageName_ = this.extractString( 4, 4, 4, true )
     }
 
     return this.UsageName_ as string | null
@@ -35,7 +35,7 @@ export  class IfcComplexPropertyTemplate extends IfcPropertyTemplate {
 
   public get TemplateType() : IfcComplexPropertyTemplateTypeEnum | null {
     if ( this.TemplateType_ === void 0 ) {
-      this.TemplateType_ = this.extractLambda( 5, IfcComplexPropertyTemplateTypeEnumDeserializeStep, true )
+      this.TemplateType_ = this.extractLambda( 5, 4, 4, IfcComplexPropertyTemplateTypeEnumDeserializeStep, true )
     }
 
     return this.TemplateType_ as IfcComplexPropertyTemplateTypeEnum | null
@@ -44,7 +44,7 @@ export  class IfcComplexPropertyTemplate extends IfcPropertyTemplate {
   public get HasPropertyTemplates() : Array<IfcPropertyTemplate> | null {
     if ( this.HasPropertyTemplates_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 4, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -76,7 +76,9 @@ export  class IfcComplexPropertyTemplate extends IfcPropertyTemplate {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

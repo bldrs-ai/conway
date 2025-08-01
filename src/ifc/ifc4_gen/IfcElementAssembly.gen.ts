@@ -20,7 +20,7 @@ export  class IfcElementAssembly extends IfcElement {
 
   public get AssemblyPlace() : IfcAssemblyPlaceEnum | null {
     if ( this.AssemblyPlace_ === void 0 ) {
-      this.AssemblyPlace_ = this.extractLambda( 8, IfcAssemblyPlaceEnumDeserializeStep, true )
+      this.AssemblyPlace_ = this.extractLambda( 8, 8, 5, IfcAssemblyPlaceEnumDeserializeStep, true )
     }
 
     return this.AssemblyPlace_ as IfcAssemblyPlaceEnum | null
@@ -28,7 +28,7 @@ export  class IfcElementAssembly extends IfcElement {
 
   public get PredefinedType() : IfcElementAssemblyTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcElementAssemblyTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 9, 8, 5, IfcElementAssemblyTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcElementAssemblyTypeEnum | null
@@ -36,7 +36,9 @@ export  class IfcElementAssembly extends IfcElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

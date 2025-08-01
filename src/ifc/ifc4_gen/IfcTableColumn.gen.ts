@@ -27,7 +27,7 @@ export  class IfcTableColumn extends StepEntityBase< EntityTypesIfc > {
 
   public get Identifier() : string | null {
     if ( this.Identifier_ === void 0 ) {
-      this.Identifier_ = this.extractString( 0, true )
+      this.Identifier_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.Identifier_ as string | null
@@ -35,7 +35,7 @@ export  class IfcTableColumn extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 1, true )
+      this.Name_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Name_ as string | null
@@ -43,7 +43,7 @@ export  class IfcTableColumn extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 2, true )
+      this.Description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -53,7 +53,7 @@ export  class IfcTableColumn extends StepEntityBase< EntityTypesIfc > {
     if ( this.Unit_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 0, 0, true )
 
       if ( !( value instanceof IfcDerivedUnit ) && !( value instanceof IfcMonetaryUnit ) && !( value instanceof IfcNamedUnit ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -68,7 +68,7 @@ export  class IfcTableColumn extends StepEntityBase< EntityTypesIfc > {
 
   public get ReferencePath() : IfcReference | null {
     if ( this.ReferencePath_ === void 0 ) {
-      this.ReferencePath_ = this.extractElement( 4, true, IfcReference )
+      this.ReferencePath_ = this.extractElement( 4, 0, 0, true, IfcReference )
     }
 
     return this.ReferencePath_ as IfcReference | null
@@ -76,7 +76,9 @@ export  class IfcTableColumn extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

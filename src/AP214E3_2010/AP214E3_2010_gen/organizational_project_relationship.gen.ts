@@ -22,7 +22,7 @@ export  class organizational_project_relationship extends StepEntityBase< Entity
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -30,7 +30,7 @@ export  class organizational_project_relationship extends StepEntityBase< Entity
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -38,7 +38,7 @@ export  class organizational_project_relationship extends StepEntityBase< Entity
 
   public get relating_organizational_project() : organizational_project {
     if ( this.relating_organizational_project_ === void 0 ) {
-      this.relating_organizational_project_ = this.extractElement( 2, false, organizational_project )
+      this.relating_organizational_project_ = this.extractElement( 2, 0, 0, false, organizational_project )
     }
 
     return this.relating_organizational_project_ as organizational_project
@@ -46,7 +46,7 @@ export  class organizational_project_relationship extends StepEntityBase< Entity
 
   public get related_organizational_project() : organizational_project {
     if ( this.related_organizational_project_ === void 0 ) {
-      this.related_organizational_project_ = this.extractElement( 3, false, organizational_project )
+      this.related_organizational_project_ = this.extractElement( 3, 0, 0, false, organizational_project )
     }
 
     return this.related_organizational_project_ as organizational_project
@@ -54,8 +54,26 @@ export  class organizational_project_relationship extends StepEntityBase< Entity
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === organizational_project_relationship.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for organizational_project_relationship" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

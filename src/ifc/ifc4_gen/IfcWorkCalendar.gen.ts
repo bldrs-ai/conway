@@ -28,7 +28,7 @@ export  class IfcWorkCalendar extends IfcControl {
   public get WorkingTimes() : Array<IfcWorkTime> | null {
     if ( this.WorkingTimes_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 6, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -61,7 +61,7 @@ export  class IfcWorkCalendar extends IfcControl {
   public get ExceptionTimes() : Array<IfcWorkTime> | null {
     if ( this.ExceptionTimes_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 6, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -93,7 +93,7 @@ export  class IfcWorkCalendar extends IfcControl {
 
   public get PredefinedType() : IfcWorkCalendarTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcWorkCalendarTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 6, 4, IfcWorkCalendarTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcWorkCalendarTypeEnum | null
@@ -101,7 +101,9 @@ export  class IfcWorkCalendar extends IfcControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

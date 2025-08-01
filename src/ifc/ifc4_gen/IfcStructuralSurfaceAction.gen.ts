@@ -20,7 +20,7 @@ export  class IfcStructuralSurfaceAction extends IfcStructuralAction {
 
   public get ProjectedOrTrue() : IfcProjectedOrTrueLengthEnum | null {
     if ( this.ProjectedOrTrue_ === void 0 ) {
-      this.ProjectedOrTrue_ = this.extractLambda( 10, IfcProjectedOrTrueLengthEnumDeserializeStep, true )
+      this.ProjectedOrTrue_ = this.extractLambda( 10, 10, 6, IfcProjectedOrTrueLengthEnumDeserializeStep, true )
     }
 
     return this.ProjectedOrTrue_ as IfcProjectedOrTrueLengthEnum | null
@@ -28,7 +28,7 @@ export  class IfcStructuralSurfaceAction extends IfcStructuralAction {
 
   public get PredefinedType() : IfcStructuralSurfaceActivityTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 11, IfcStructuralSurfaceActivityTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 11, 10, 6, IfcStructuralSurfaceActivityTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcStructuralSurfaceActivityTypeEnum
@@ -36,7 +36,9 @@ export  class IfcStructuralSurfaceAction extends IfcStructuralAction {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -25,7 +25,7 @@ export  class IfcReinforcingBar extends IfcReinforcingElement {
 
   public get NominalDiameter() : number | null {
     if ( this.NominalDiameter_ === void 0 ) {
-      this.NominalDiameter_ = this.extractNumber( 9, true )
+      this.NominalDiameter_ = this.extractNumber( 9, 9, 7, true )
     }
 
     return this.NominalDiameter_ as number | null
@@ -33,7 +33,7 @@ export  class IfcReinforcingBar extends IfcReinforcingElement {
 
   public get CrossSectionArea() : number | null {
     if ( this.CrossSectionArea_ === void 0 ) {
-      this.CrossSectionArea_ = this.extractNumber( 10, true )
+      this.CrossSectionArea_ = this.extractNumber( 10, 9, 7, true )
     }
 
     return this.CrossSectionArea_ as number | null
@@ -41,7 +41,7 @@ export  class IfcReinforcingBar extends IfcReinforcingElement {
 
   public get BarLength() : number | null {
     if ( this.BarLength_ === void 0 ) {
-      this.BarLength_ = this.extractNumber( 11, true )
+      this.BarLength_ = this.extractNumber( 11, 9, 7, true )
     }
 
     return this.BarLength_ as number | null
@@ -49,7 +49,7 @@ export  class IfcReinforcingBar extends IfcReinforcingElement {
 
   public get PredefinedType() : IfcReinforcingBarTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 12, IfcReinforcingBarTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 12, 9, 7, IfcReinforcingBarTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcReinforcingBarTypeEnum | null
@@ -57,7 +57,7 @@ export  class IfcReinforcingBar extends IfcReinforcingElement {
 
   public get BarSurface() : IfcReinforcingBarSurfaceEnum | null {
     if ( this.BarSurface_ === void 0 ) {
-      this.BarSurface_ = this.extractLambda( 13, IfcReinforcingBarSurfaceEnumDeserializeStep, true )
+      this.BarSurface_ = this.extractLambda( 13, 9, 7, IfcReinforcingBarSurfaceEnumDeserializeStep, true )
     }
 
     return this.BarSurface_ as IfcReinforcingBarSurfaceEnum | null
@@ -65,7 +65,9 @@ export  class IfcReinforcingBar extends IfcReinforcingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

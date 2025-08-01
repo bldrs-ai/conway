@@ -27,7 +27,7 @@ export  class IfcMaterialClassificationRelationship extends StepEntityBase< Enti
   public get MaterialClassifications() : Array<IfcClassification | IfcClassificationReference> {
     if ( this.MaterialClassifications_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,7 +66,7 @@ export  class IfcMaterialClassificationRelationship extends StepEntityBase< Enti
 
   public get ClassifiedMaterial() : IfcMaterial {
     if ( this.ClassifiedMaterial_ === void 0 ) {
-      this.ClassifiedMaterial_ = this.extractElement( 1, false, IfcMaterial )
+      this.ClassifiedMaterial_ = this.extractElement( 1, 0, 0, false, IfcMaterial )
     }
 
     return this.ClassifiedMaterial_ as IfcMaterial
@@ -74,7 +74,9 @@ export  class IfcMaterialClassificationRelationship extends StepEntityBase< Enti
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

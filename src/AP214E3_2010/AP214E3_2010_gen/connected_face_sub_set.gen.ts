@@ -17,7 +17,7 @@ export  class connected_face_sub_set extends connected_face_set {
 
   public get parent_face_set() : connected_face_set {
     if ( this.parent_face_set_ === void 0 ) {
-      this.parent_face_set_ = this.extractElement( 2, false, connected_face_set )
+      this.parent_face_set_ = this.extractElement( 2, 2, 3, false, connected_face_set )
     }
 
     return this.parent_face_set_ as connected_face_set
@@ -25,8 +25,26 @@ export  class connected_face_sub_set extends connected_face_set {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === connected_face_sub_set.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for connected_face_sub_set" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

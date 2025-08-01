@@ -18,7 +18,7 @@ export  class IfcGeographicElementType extends IfcElementType {
 
   public get PredefinedType() : IfcGeographicElementTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcGeographicElementTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 5, IfcGeographicElementTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcGeographicElementTypeEnum
@@ -26,7 +26,9 @@ export  class IfcGeographicElementType extends IfcElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

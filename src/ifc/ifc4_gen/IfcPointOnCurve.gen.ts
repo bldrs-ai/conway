@@ -21,7 +21,7 @@ export  class IfcPointOnCurve extends IfcPoint {
 
   public get BasisCurve() : IfcCurve {
     if ( this.BasisCurve_ === void 0 ) {
-      this.BasisCurve_ = this.extractElement( 0, false, IfcCurve )
+      this.BasisCurve_ = this.extractElement( 0, 0, 3, false, IfcCurve )
     }
 
     return this.BasisCurve_ as IfcCurve
@@ -29,7 +29,7 @@ export  class IfcPointOnCurve extends IfcPoint {
 
   public get PointParameter() : number {
     if ( this.PointParameter_ === void 0 ) {
-      this.PointParameter_ = this.extractNumber( 1, false )
+      this.PointParameter_ = this.extractNumber( 1, 0, 3, false )
     }
 
     return this.PointParameter_ as number
@@ -41,7 +41,9 @@ export  class IfcPointOnCurve extends IfcPoint {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

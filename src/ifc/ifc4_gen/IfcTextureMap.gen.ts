@@ -27,7 +27,7 @@ export  class IfcTextureMap extends IfcTextureCoordinate {
   public get Vertices() : Array<IfcTextureVertex> {
     if ( this.Vertices_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class IfcTextureMap extends IfcTextureCoordinate {
 
   public get MappedTo() : IfcFace {
     if ( this.MappedTo_ === void 0 ) {
-      this.MappedTo_ = this.extractElement( 2, false, IfcFace )
+      this.MappedTo_ = this.extractElement( 2, 1, 2, false, IfcFace )
     }
 
     return this.MappedTo_ as IfcFace
@@ -67,7 +67,9 @@ export  class IfcTextureMap extends IfcTextureCoordinate {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

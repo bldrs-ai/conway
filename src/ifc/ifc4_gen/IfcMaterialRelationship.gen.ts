@@ -27,7 +27,7 @@ export  class IfcMaterialRelationship extends IfcResourceLevelRelationship {
 
   public get RelatingMaterial() : IfcMaterial {
     if ( this.RelatingMaterial_ === void 0 ) {
-      this.RelatingMaterial_ = this.extractElement( 2, false, IfcMaterial )
+      this.RelatingMaterial_ = this.extractElement( 2, 2, 1, false, IfcMaterial )
     }
 
     return this.RelatingMaterial_ as IfcMaterial
@@ -36,7 +36,7 @@ export  class IfcMaterialRelationship extends IfcResourceLevelRelationship {
   public get RelatedMaterials() : Array<IfcMaterial> {
     if ( this.RelatedMaterials_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -68,7 +68,7 @@ export  class IfcMaterialRelationship extends IfcResourceLevelRelationship {
 
   public get Expression() : string | null {
     if ( this.Expression_ === void 0 ) {
-      this.Expression_ = this.extractString( 4, true )
+      this.Expression_ = this.extractString( 4, 2, 1, true )
     }
 
     return this.Expression_ as string | null
@@ -76,7 +76,9 @@ export  class IfcMaterialRelationship extends IfcResourceLevelRelationship {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

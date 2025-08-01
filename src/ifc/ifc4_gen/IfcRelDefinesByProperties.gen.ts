@@ -28,7 +28,7 @@ export  class IfcRelDefinesByProperties extends IfcRelDefines {
   public get RelatedObjects() : Array<IfcObjectDefinition> {
     if ( this.RelatedObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -62,7 +62,7 @@ export  class IfcRelDefinesByProperties extends IfcRelDefines {
     if ( this.RelatingPropertyDefinition_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 5, false )
+        this.extractReference( 5, 4, 3, false )
 
       if ( !( value instanceof IfcPropertySetDefinition ) && !( value instanceof IfcPropertySetDefinitionSet ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -77,7 +77,9 @@ export  class IfcRelDefinesByProperties extends IfcRelDefines {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

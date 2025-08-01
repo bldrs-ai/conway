@@ -26,7 +26,7 @@ export  class IfcStructuralLoadCase extends IfcStructuralLoadGroup {
   public get SelfWeightCoefficients() : Array< number > | null {
     if ( this.SelfWeightCoefficients_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 10 )
+      let   cursor    = this.getOffsetCursor( 10, 10, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,9 @@ export  class IfcStructuralLoadCase extends IfcStructuralLoadGroup {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

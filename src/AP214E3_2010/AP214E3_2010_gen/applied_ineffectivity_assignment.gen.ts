@@ -59,7 +59,7 @@ export  class applied_ineffectivity_assignment extends effectivity_assignment {
   public get items() : Array<action | action_method | action_method_relationship | action_property | action_relationship | assembly_component_usage_substitute | class_ | class_system | configuration_design | configuration_item | configured_effectivity_assignment | document_file | draughting_model | drawing_revision | general_property | material_designation | mechanical_design_geometric_presentation_representation | presentation_area | product | product_concept | product_concept_feature | product_concept_feature_association | product_concept_feature_category | product_concept_feature_category_usage | product_definition | product_definition_formation | product_definition_formation_relationship | product_definition_relationship | product_definition_substitute | property_definition | requirement_for_action_resource | resource_property | security_classification | shape_aspect | shape_representation> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -98,8 +98,26 @@ export  class applied_ineffectivity_assignment extends effectivity_assignment {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === applied_ineffectivity_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for applied_ineffectivity_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

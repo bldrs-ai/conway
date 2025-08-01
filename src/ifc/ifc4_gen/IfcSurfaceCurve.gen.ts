@@ -31,7 +31,7 @@ export  class IfcSurfaceCurve extends IfcCurve {
 
   public get Curve3D() : IfcCurve {
     if ( this.Curve3D_ === void 0 ) {
-      this.Curve3D_ = this.extractElement( 0, false, IfcCurve )
+      this.Curve3D_ = this.extractElement( 0, 0, 3, false, IfcCurve )
     }
 
     return this.Curve3D_ as IfcCurve
@@ -40,7 +40,7 @@ export  class IfcSurfaceCurve extends IfcCurve {
   public get AssociatedGeometry() : Array<IfcPcurve> {
     if ( this.AssociatedGeometry_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -72,7 +72,7 @@ export  class IfcSurfaceCurve extends IfcCurve {
 
   public get MasterRepresentation() : IfcPreferredSurfaceCurveRepresentation {
     if ( this.MasterRepresentation_ === void 0 ) {
-      this.MasterRepresentation_ = this.extractLambda( 2, IfcPreferredSurfaceCurveRepresentationDeserializeStep, false )
+      this.MasterRepresentation_ = this.extractLambda( 2, 0, 3, IfcPreferredSurfaceCurveRepresentationDeserializeStep, false )
     }
 
     return this.MasterRepresentation_ as IfcPreferredSurfaceCurveRepresentation
@@ -84,7 +84,9 @@ export  class IfcSurfaceCurve extends IfcCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -17,7 +17,7 @@ export  class IfcRelSpaceBoundary1stLevel extends IfcRelSpaceBoundary {
 
   public get ParentBoundary() : IfcRelSpaceBoundary1stLevel | null {
     if ( this.ParentBoundary_ === void 0 ) {
-      this.ParentBoundary_ = this.extractElement( 9, true, IfcRelSpaceBoundary1stLevel )
+      this.ParentBoundary_ = this.extractElement( 9, 9, 4, true, IfcRelSpaceBoundary1stLevel )
     }
 
     return this.ParentBoundary_ as IfcRelSpaceBoundary1stLevel | null
@@ -26,7 +26,9 @@ export  class IfcRelSpaceBoundary1stLevel extends IfcRelSpaceBoundary {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

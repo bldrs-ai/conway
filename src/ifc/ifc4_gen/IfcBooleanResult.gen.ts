@@ -25,7 +25,7 @@ export  class IfcBooleanResult extends IfcGeometricRepresentationItem {
 
   public get Operator() : IfcBooleanOperator {
     if ( this.Operator_ === void 0 ) {
-      this.Operator_ = this.extractLambda( 0, IfcBooleanOperatorDeserializeStep, false )
+      this.Operator_ = this.extractLambda( 0, 0, 2, IfcBooleanOperatorDeserializeStep, false )
     }
 
     return this.Operator_ as IfcBooleanOperator
@@ -35,7 +35,7 @@ export  class IfcBooleanResult extends IfcGeometricRepresentationItem {
     if ( this.FirstOperand_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 2, false )
 
       if ( !( value instanceof IfcBooleanResult ) && !( value instanceof IfcCsgPrimitive3D ) && !( value instanceof IfcHalfSpaceSolid ) && !( value instanceof IfcSolidModel ) && !( value instanceof IfcTessellatedFaceSet ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -52,7 +52,7 @@ export  class IfcBooleanResult extends IfcGeometricRepresentationItem {
     if ( this.SecondOperand_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 0, 2, false )
 
       if ( !( value instanceof IfcBooleanResult ) && !( value instanceof IfcCsgPrimitive3D ) && !( value instanceof IfcHalfSpaceSolid ) && !( value instanceof IfcSolidModel ) && !( value instanceof IfcTessellatedFaceSet ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -71,7 +71,9 @@ export  class IfcBooleanResult extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

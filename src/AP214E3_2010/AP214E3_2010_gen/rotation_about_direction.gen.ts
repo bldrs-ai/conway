@@ -19,7 +19,7 @@ export  class rotation_about_direction extends StepEntityBase< EntityTypesAP214 
 
   public get direction_of_axis() : direction {
     if ( this.direction_of_axis_ === void 0 ) {
-      this.direction_of_axis_ = this.extractElement( 0, false, direction )
+      this.direction_of_axis_ = this.extractElement( 0, 0, 0, false, direction )
     }
 
     return this.direction_of_axis_ as direction
@@ -27,7 +27,7 @@ export  class rotation_about_direction extends StepEntityBase< EntityTypesAP214 
 
   public get rotation_angle() : number {
     if ( this.rotation_angle_ === void 0 ) {
-      this.rotation_angle_ = this.extractNumber( 1, false )
+      this.rotation_angle_ = this.extractNumber( 1, 0, 0, false )
     }
 
     return this.rotation_angle_ as number
@@ -35,8 +35,26 @@ export  class rotation_about_direction extends StepEntityBase< EntityTypesAP214 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === rotation_about_direction.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for rotation_about_direction" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

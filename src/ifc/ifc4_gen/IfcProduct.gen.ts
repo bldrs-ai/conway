@@ -20,7 +20,7 @@ export abstract class IfcProduct extends IfcObject {
 
   public get ObjectPlacement() : IfcObjectPlacement | null {
     if ( this.ObjectPlacement_ === void 0 ) {
-      this.ObjectPlacement_ = this.extractElement( 5, true, IfcObjectPlacement )
+      this.ObjectPlacement_ = this.extractElement( 5, 5, 3, true, IfcObjectPlacement )
     }
 
     return this.ObjectPlacement_ as IfcObjectPlacement | null
@@ -28,7 +28,7 @@ export abstract class IfcProduct extends IfcObject {
 
   public get Representation() : IfcProductRepresentation | null {
     if ( this.Representation_ === void 0 ) {
-      this.Representation_ = this.extractElement( 6, true, IfcProductRepresentation )
+      this.Representation_ = this.extractElement( 6, 5, 3, true, IfcProductRepresentation )
     }
 
     return this.Representation_ as IfcProductRepresentation | null
@@ -37,7 +37,9 @@ export abstract class IfcProduct extends IfcObject {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

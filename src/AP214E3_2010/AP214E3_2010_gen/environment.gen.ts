@@ -19,7 +19,7 @@ export  class environment extends StepEntityBase< EntityTypesAP214 > {
 
   public get syntactic_representation() : generic_variable {
     if ( this.syntactic_representation_ === void 0 ) {
-      this.syntactic_representation_ = this.extractElement( 0, false, generic_variable )
+      this.syntactic_representation_ = this.extractElement( 0, 0, 0, false, generic_variable )
     }
 
     return this.syntactic_representation_ as generic_variable
@@ -27,7 +27,7 @@ export  class environment extends StepEntityBase< EntityTypesAP214 > {
 
   public get semantics() : variable_semantics {
     if ( this.semantics_ === void 0 ) {
-      this.semantics_ = this.extractElement( 1, false, variable_semantics )
+      this.semantics_ = this.extractElement( 1, 0, 0, false, variable_semantics )
     }
 
     return this.semantics_ as variable_semantics
@@ -35,8 +35,26 @@ export  class environment extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === environment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for environment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

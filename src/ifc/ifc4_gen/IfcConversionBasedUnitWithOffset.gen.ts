@@ -18,7 +18,7 @@ export  class IfcConversionBasedUnitWithOffset extends IfcConversionBasedUnit {
 
   public get ConversionOffset() : number {
     if ( this.ConversionOffset_ === void 0 ) {
-      this.ConversionOffset_ = this.extractNumber( 4, false )
+      this.ConversionOffset_ = this.extractNumber( 4, 4, 2, false )
     }
 
     return this.ConversionOffset_ as number
@@ -26,7 +26,9 @@ export  class IfcConversionBasedUnitWithOffset extends IfcConversionBasedUnit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

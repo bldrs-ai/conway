@@ -18,7 +18,7 @@ export  class IfcSanitaryTerminalType extends IfcFlowTerminalType {
 
   public get PredefinedType() : IfcSanitaryTerminalTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcSanitaryTerminalTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcSanitaryTerminalTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcSanitaryTerminalTypeEnum
@@ -26,7 +26,9 @@ export  class IfcSanitaryTerminalType extends IfcFlowTerminalType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

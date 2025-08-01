@@ -18,7 +18,7 @@ export  class IfcRelAssignsToControl extends IfcRelAssigns {
 
   public get RelatingControl() : IfcControl {
     if ( this.RelatingControl_ === void 0 ) {
-      this.RelatingControl_ = this.extractElement( 6, false, IfcControl )
+      this.RelatingControl_ = this.extractElement( 6, 6, 3, false, IfcControl )
     }
 
     return this.RelatingControl_ as IfcControl
@@ -26,7 +26,9 @@ export  class IfcRelAssignsToControl extends IfcRelAssigns {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

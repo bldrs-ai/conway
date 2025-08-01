@@ -18,7 +18,7 @@ export  class IfcProtectiveDeviceTrippingUnitType extends IfcDistributionControl
 
   public get PredefinedType() : IfcProtectiveDeviceTrippingUnitTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcProtectiveDeviceTrippingUnitTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcProtectiveDeviceTrippingUnitTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcProtectiveDeviceTrippingUnitTypeEnum
@@ -26,7 +26,9 @@ export  class IfcProtectiveDeviceTrippingUnitType extends IfcDistributionControl
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

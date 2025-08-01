@@ -18,7 +18,7 @@ export  class placement extends geometric_representation_item {
 
   public get location() : cartesian_point {
     if ( this.location_ === void 0 ) {
-      this.location_ = this.extractElement( 1, false, cartesian_point )
+      this.location_ = this.extractElement( 1, 1, 2, false, cartesian_point )
     }
 
     return this.location_ as cartesian_point
@@ -26,8 +26,26 @@ export  class placement extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === placement.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for placement" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

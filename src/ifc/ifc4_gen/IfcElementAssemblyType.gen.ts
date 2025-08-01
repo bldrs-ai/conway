@@ -18,7 +18,7 @@ export  class IfcElementAssemblyType extends IfcElementType {
 
   public get PredefinedType() : IfcElementAssemblyTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcElementAssemblyTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 5, IfcElementAssemblyTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcElementAssemblyTypeEnum
@@ -26,7 +26,9 @@ export  class IfcElementAssemblyType extends IfcElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

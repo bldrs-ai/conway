@@ -19,7 +19,7 @@ export  class IfcEllipse extends IfcConic {
 
   public get SemiAxis1() : number {
     if ( this.SemiAxis1_ === void 0 ) {
-      this.SemiAxis1_ = this.extractNumber( 1, false )
+      this.SemiAxis1_ = this.extractNumber( 1, 1, 4, false )
     }
 
     return this.SemiAxis1_ as number
@@ -27,7 +27,7 @@ export  class IfcEllipse extends IfcConic {
 
   public get SemiAxis2() : number {
     if ( this.SemiAxis2_ === void 0 ) {
-      this.SemiAxis2_ = this.extractNumber( 2, false )
+      this.SemiAxis2_ = this.extractNumber( 2, 1, 4, false )
     }
 
     return this.SemiAxis2_ as number
@@ -35,7 +35,9 @@ export  class IfcEllipse extends IfcConic {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -23,7 +23,7 @@ export  class IfcSurfaceCurveSweptAreaSolid extends IfcSweptAreaSolid {
 
   public get Directrix() : IfcCurve {
     if ( this.Directrix_ === void 0 ) {
-      this.Directrix_ = this.extractElement( 2, false, IfcCurve )
+      this.Directrix_ = this.extractElement( 2, 2, 4, false, IfcCurve )
     }
 
     return this.Directrix_ as IfcCurve
@@ -31,7 +31,7 @@ export  class IfcSurfaceCurveSweptAreaSolid extends IfcSweptAreaSolid {
 
   public get StartParam() : number | null {
     if ( this.StartParam_ === void 0 ) {
-      this.StartParam_ = this.extractNumber( 3, true )
+      this.StartParam_ = this.extractNumber( 3, 2, 4, true )
     }
 
     return this.StartParam_ as number | null
@@ -39,7 +39,7 @@ export  class IfcSurfaceCurveSweptAreaSolid extends IfcSweptAreaSolid {
 
   public get EndParam() : number | null {
     if ( this.EndParam_ === void 0 ) {
-      this.EndParam_ = this.extractNumber( 4, true )
+      this.EndParam_ = this.extractNumber( 4, 2, 4, true )
     }
 
     return this.EndParam_ as number | null
@@ -47,7 +47,7 @@ export  class IfcSurfaceCurveSweptAreaSolid extends IfcSweptAreaSolid {
 
   public get ReferenceSurface() : IfcSurface {
     if ( this.ReferenceSurface_ === void 0 ) {
-      this.ReferenceSurface_ = this.extractElement( 5, false, IfcSurface )
+      this.ReferenceSurface_ = this.extractElement( 5, 2, 4, false, IfcSurface )
     }
 
     return this.ReferenceSurface_ as IfcSurface
@@ -55,7 +55,9 @@ export  class IfcSurfaceCurveSweptAreaSolid extends IfcSweptAreaSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

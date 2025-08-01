@@ -30,7 +30,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get PredefinedType() : IfcTendonTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcTendonTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcTendonTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcTendonTypeEnum | null
@@ -38,7 +38,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get NominalDiameter() : number | null {
     if ( this.NominalDiameter_ === void 0 ) {
-      this.NominalDiameter_ = this.extractNumber( 10, true )
+      this.NominalDiameter_ = this.extractNumber( 10, 9, 7, true )
     }
 
     return this.NominalDiameter_ as number | null
@@ -46,7 +46,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get CrossSectionArea() : number | null {
     if ( this.CrossSectionArea_ === void 0 ) {
-      this.CrossSectionArea_ = this.extractNumber( 11, true )
+      this.CrossSectionArea_ = this.extractNumber( 11, 9, 7, true )
     }
 
     return this.CrossSectionArea_ as number | null
@@ -54,7 +54,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get TensionForce() : number | null {
     if ( this.TensionForce_ === void 0 ) {
-      this.TensionForce_ = this.extractNumber( 12, true )
+      this.TensionForce_ = this.extractNumber( 12, 9, 7, true )
     }
 
     return this.TensionForce_ as number | null
@@ -62,7 +62,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get PreStress() : number | null {
     if ( this.PreStress_ === void 0 ) {
-      this.PreStress_ = this.extractNumber( 13, true )
+      this.PreStress_ = this.extractNumber( 13, 9, 7, true )
     }
 
     return this.PreStress_ as number | null
@@ -70,7 +70,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get FrictionCoefficient() : number | null {
     if ( this.FrictionCoefficient_ === void 0 ) {
-      this.FrictionCoefficient_ = this.extractNumber( 14, true )
+      this.FrictionCoefficient_ = this.extractNumber( 14, 9, 7, true )
     }
 
     return this.FrictionCoefficient_ as number | null
@@ -78,7 +78,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get AnchorageSlip() : number | null {
     if ( this.AnchorageSlip_ === void 0 ) {
-      this.AnchorageSlip_ = this.extractNumber( 15, true )
+      this.AnchorageSlip_ = this.extractNumber( 15, 9, 7, true )
     }
 
     return this.AnchorageSlip_ as number | null
@@ -86,7 +86,7 @@ export  class IfcTendon extends IfcReinforcingElement {
 
   public get MinCurvatureRadius() : number | null {
     if ( this.MinCurvatureRadius_ === void 0 ) {
-      this.MinCurvatureRadius_ = this.extractNumber( 16, true )
+      this.MinCurvatureRadius_ = this.extractNumber( 16, 9, 7, true )
     }
 
     return this.MinCurvatureRadius_ as number | null
@@ -94,7 +94,9 @@ export  class IfcTendon extends IfcReinforcingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

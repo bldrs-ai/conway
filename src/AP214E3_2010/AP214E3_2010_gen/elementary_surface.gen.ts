@@ -18,7 +18,7 @@ export  class elementary_surface extends surface {
 
   public get position() : axis2_placement_3d {
     if ( this.position_ === void 0 ) {
-      this.position_ = this.extractElement( 1, false, axis2_placement_3d )
+      this.position_ = this.extractElement( 1, 1, 3, false, axis2_placement_3d )
     }
 
     return this.position_ as axis2_placement_3d
@@ -26,8 +26,26 @@ export  class elementary_surface extends surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === elementary_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for elementary_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -13,7 +13,15 @@ import GeometryAggregator from '../core/geometry_aggregator'
 import GeometryConvertor from '../core/geometry_convertor'
 import { AP214GeometryExtraction } from './ap214_geometry_extraction'
 import { ExtractResult } from '../core/shared_constants'
+import Environment from '../utilities/environment'
+import Logger from '../logging/logger'
+import path from 'path'
+import { parseFileHeader } from '../loaders/loading_utilities'
+import Memory from '../memory/memory'
 
+
+// create a model ID
+const modelID: number = 0
 
 const conwaywasm = new ConwayGeometry()
 
@@ -25,6 +33,10 @@ main()
 async function main() {
   try {
     await conwaywasm.initialize()
+
+    Environment.checkEnvironment()
+    Logger.initializeWasmCallbacks()
+
     await doWork()
   } catch (error) {
     console.error('An error occurred:', error)
@@ -35,8 +47,9 @@ async function main() {
  * Actual execution function.
  */
 async function doWork() {
+  const allTimeStart = Date.now()
   const SKIP_PARAMS = 2
-
+  
   await yargs(process.argv.slice(SKIP_PARAMS))
     .command('$0 <filename>', 'Query file', (yargs2) => {
       yargs2.option('express_ids', {
@@ -61,10 +74,20 @@ async function doWork() {
         type: 'boolean',
         alias: 'g',
       })
-      yargs2.option('properties', {
-        describe: 'Output PropertySets',
+      yargs2.option('nooutput', {
+        describe: 'Run geometry processing but do not output files.',
         type: 'boolean',
-        alias: 'p',
+        alias: 'n',
+      })
+      yargs2.option('limitcsg', {
+        describe: 'Don\'t limit the CSG recursion depth.',
+        type: 'boolean',
+        alias: 'l',
+      })
+      yargs2.option('csgdepth', {
+        describe: 'The maximum CSG (for recursion if limited, memoization otherwise).',
+        type: 'number',
+        alias: 'd',
       })
       yargs2.option('maxchunk', {
         describe: 'Maximum chunk size in megabytes (note, this is the allocation size, not the output size)',
@@ -80,7 +103,7 @@ async function doWork() {
       })
       yargs2.positional('filename', { describe: 'AP214 STEP-File Paths', type: 'string' })
     }, (argv) => {
-      const ifcFile = argv['filename'] as string
+      const ap214File = argv['filename'] as string
 
       let indexAP214Buffer: Buffer | undefined
 
@@ -92,9 +115,12 @@ async function doWork() {
             ['expressID', 'type', 'localID']
       const geometry = (argv['geometry'] as boolean | undefined)
       const strict = (argv['strict'] as boolean | undefined) ?? false
+      const noOutput = (argv['nooutput'] as boolean | undefined)
+      const limitCSG = !(argv['limitcsg'] as boolean | undefined)
+      const maxCSGDepth = (argv['csgdepth'] as number | undefined)
 
       try {
-        indexAP214Buffer = fs.readFileSync(ifcFile)
+        indexAP214Buffer = fs.readFileSync(ap214File)
       } catch {
         console.log(
           'Error: couldn\'t read file, check that it is accessible at the specified path.')
@@ -107,10 +133,13 @@ async function doWork() {
         exit()
       }
 
+      // create a statistics object
+      Logger.createStatistics(modelID)
+
       const parser = AP214StepParser.Instance
       const bufferInput = new ParsingBuffer(indexAP214Buffer)
       const headerDataTimeStart = Date.now()
-      const result0 = parser.parseHeader(bufferInput)[1]
+      const [stepHeader, result0] = parser.parseHeader(bufferInput)
       const headerDataTimeEnd = Date.now()
 
       switch (result0) {
@@ -155,12 +184,13 @@ async function doWork() {
       if (geometry) {
 
         console.log(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)
-        // Get the filename with extension
-        const fileNameWithExtension = ifcFile.split('/').pop()!
-        // Get the filename without extension
-        const fileName = fileNameWithExtension.split('.')[0]
 
-        const result = geometryExtraction(model)
+        const fileName =
+          path.join(
+              path.dirname( ap214File ),
+              path.basename( ap214File, path.extname( ap214File ) ) )
+
+        const result = geometryExtraction(model, limitCSG, maxCSGDepth)
 
         if (result !== void 0) {
           const scene = result
@@ -170,7 +200,9 @@ async function doWork() {
           const maxChunk = (argv['maxchunk'] as number | undefined) ?? DEFAULT_CHUNK
           const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
 
-          serializeGeometry(scene, fileName, maxGeometrySize)
+          if (noOutput === undefined || !noOutput) {
+            serializeGeometry(scene, fileName, maxGeometrySize)
+          } 
         }
       } else {
 
@@ -225,11 +257,56 @@ async function doWork() {
                 ++rowCount
               }
 
-        console.log('\n')
-        console.log(`Row Count: ${rowCount}`)
-        console.log(`Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms`)
-        console.log(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)
+        console.log('\n')  
+        Logger.info(`Row Count: ${rowCount}`)
+        Logger.info(`Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms`)
+        Logger.info(`Data parse time ${parseDataTimeEnd - parseDataTimeStart} ms`)   
       }
+
+      const allTimeEnd = Date.now()
+
+      const allTime = allTimeEnd - allTimeStart
+
+      const statistics = Logger.getStatistics(modelID)
+
+      if (statistics !== void 0) {
+        const dataParseTime = parseDataTimeEnd - parseDataTimeStart
+
+        statistics.setLoadStatus('OK')
+        statistics.setParseTime(dataParseTime)
+        statistics.setTotalTime(allTime)
+
+        let FILE_NAME = stepHeader.headers.get('FILE_NAME')
+
+        if (FILE_NAME !== void 0) {
+          // strip start / end parenthesis
+          FILE_NAME = FILE_NAME.substring(1, FILE_NAME.length - 1)
+        }
+        const version = stepHeader.headers.get('FILE_SCHEMA')
+
+        if (version !== void 0) {
+          statistics.setVersion(version)
+        }
+
+        if (FILE_NAME !== void 0) {
+          const fileNameSplit: string[] = parseFileHeader(FILE_NAME)
+
+            
+          if (fileNameSplit.length > 6) {
+            const preprocessorVersion = fileNameSplit[5]
+            const originatingSystem = fileNameSplit[6]
+
+            statistics.setPreprocessorVersion(preprocessorVersion)
+            statistics.setOriginatingSystem(originatingSystem)
+          }
+        }
+
+        statistics.setMemoryStatistics(Memory.checkMemoryUsage())
+      }
+
+      Logger.displayLogs()
+      Logger.printStatistics(modelID)
+   
     })
     .help().argv
 }
@@ -246,22 +323,22 @@ async function doWork() {
 function serializeGeometry(
     scene: AP214SceneBuilder,
     fileNameNoExtension: string,
-    maxGeometrySize: number,
-    includeSpaces?: boolean  ) {
+    maxGeometrySize: number  ) {
+
   const geometryAggregator =
     new GeometryAggregator(
-        conwaywasm, { maxGeometrySize: maxGeometrySize, outputSpaces: includeSpaces } )
+        conwaywasm, { maxGeometrySize: maxGeometrySize } )
 
-  geometryAggregator.append( scene )
+  geometryAggregator.append(scene)
 
   const aggregatedGeometry = geometryAggregator.aggregateNative()
 
-  if ( aggregatedGeometry.geometry.size() === 0) {
-    console.log('No Geometry Found')
+  if (aggregatedGeometry.geometry.size() === 0) {
+    Logger.warning('No Geometry Found')
     return
   }
 
-  const convertor = new GeometryConvertor( conwaywasm )
+  const convertor = new GeometryConvertor(conwaywasm)
 
   const startTimeGlb = Date.now()
   const glbResults =
@@ -269,13 +346,13 @@ function serializeGeometry(
         aggregatedGeometry,
         true,
         false,
-        `${fileNameNoExtension}_test` )
+        `${fileNameNoExtension}_test`)
 
-  for ( const glbResult of glbResults ) {
+  for (const glbResult of glbResults) {
     if (glbResult.success) {
 
       if (glbResult.buffers.size() !== glbResult.bufferUris.size()) {
-        console.log('Error! Buffer size != Buffer URI size!\n')
+        Logger.error('Buffer size != Buffer URI size!\n')
         return
       }
 
@@ -288,13 +365,12 @@ function serializeGeometry(
 
         try {
           fs.writeFileSync(uri, managedBuffer)
-          // console.log(`Data written to file: ${uri}`)
         } catch (err) {
-          console.error('Error writing to file:', err)
+          Logger.error(`Error writing to file: ${err}`)
         }
       }
     } else {
-      console.error('GLB generation unsuccessful')
+      Logger.error('GLB generation unsuccessful')
     }
 
     glbResult.bufferUris?.delete()
@@ -311,14 +387,14 @@ function serializeGeometry(
         aggregatedGeometry,
         true,
         true,
-        `${fileNameNoExtension}_test_draco` )
+        `${fileNameNoExtension}_test_draco`)
 
-  for ( const glbDracoResult of glbDracoResults ) {
+  for (const glbDracoResult of glbDracoResults) {
 
     if (glbDracoResult.success) {
 
       if (glbDracoResult.buffers.size() !== glbDracoResult.bufferUris.size()) {
-        console.log('Error! Buffer size != Buffer URI size!\n')
+        Logger.error('Buffer size != Buffer URI size!\n')
         return
       }
 
@@ -331,9 +407,8 @@ function serializeGeometry(
 
         try {
           fs.writeFileSync(uri, managedBuffer)
-          // console.log(`Data written to file: ${uri}`)
         } catch (err) {
-          console.error('Error writing to file:', err)
+          Logger.error(`Error writing to file: ${err}`)
         }
       }
     } else {
@@ -353,14 +428,14 @@ function serializeGeometry(
         aggregatedGeometry,
         false,
         false,
-        `${fileNameNoExtension}` )
+        `${fileNameNoExtension}`)
 
-  for ( const gltfResult of gltfResults ) {
+  for (const gltfResult of gltfResults) {
 
     if (gltfResult.success) {
 
       if (gltfResult.buffers.size() !== gltfResult.bufferUris.size()) {
-        console.log('Error! Buffer size !== Buffer URI size!\n')
+        Logger.error('Buffer size !== Buffer URI size!\n')
         return
       }
 
@@ -374,13 +449,12 @@ function serializeGeometry(
 
         try {
           fs.writeFileSync(uri, managedBuffer)
-          // console.log(`Data written to file: ${uri}`)
         } catch (err) {
-          console.error('Error writing to file:', err)
+          Logger.error(`Error writing to file: ${err}`)
         }
       }
     } else {
-      console.error('GLTF generation unsuccessful')
+      Logger.error('GLTF generation unsuccessful')
     }
 
     gltfResult.bufferUris?.delete()
@@ -396,14 +470,14 @@ function serializeGeometry(
         aggregatedGeometry,
         false,
         true,
-        `${fileNameNoExtension}_draco` )
+        `${fileNameNoExtension}_draco`)
 
-  for ( const gltfResultDraco of gltfResultsDraco ) {
+  for (const gltfResultDraco of gltfResultsDraco) {
 
     if (gltfResultDraco.success) {
 
       if (gltfResultDraco.buffers.size() !== gltfResultDraco.bufferUris.size()) {
-        console.log('Error! Buffer size !== Buffer URI size!\n')
+        Logger.error('Buffer size !== Buffer URI size!\n')
         return
       }
 
@@ -417,13 +491,12 @@ function serializeGeometry(
 
         try {
           fs.writeFileSync(uri, managedBuffer)
-          // console.log(`Data written to file: ${uri}`)
         } catch (err) {
-          console.error('Error writing to file:', err)
+          Logger.error(`Error writing to file: ${err}`)
         }
       }
     } else {
-      console.error('Draco GLTF generation unsuccessful')
+      Logger.error('Draco GLTF generation unsuccessful')
     }
 
     gltfResultDraco.bufferUris?.delete()
@@ -437,47 +510,59 @@ function serializeGeometry(
   aggregatedGeometry.geometry.delete()
   aggregatedGeometry.materials.delete()
 
-  console.log( `There were ${aggregatedGeometry.chunks.length} geometry chunks`)
-  // console.log(`OBJ Generation took ${executionTimeInMsObj} milliseconds to execute.`)
-  console.log(`GLB Generation took ${executionTimeInMsGlb} milliseconds to execute.`)
-  console.log(`GLTF Generation took ${executionTimeInMsGltf} milliseconds to execute.`)
-  console.log(`GLB Draco Generation took ${executionTimeInMsGlbDraco} milliseconds to execute.`)
-  console.log(`GLTF Draco Generation took ${executionTimeInMsGltfDraco} milliseconds to execute.`)
+  Logger.info(`There were ${aggregatedGeometry.chunks.length} geometry chunks`)
+  Logger.info(`GLB Generation took ${executionTimeInMsGlb} milliseconds to execute.`)
+  Logger.info(`GLTF Generation took ${executionTimeInMsGltf} milliseconds to execute.`)
+  Logger.info(`GLB Draco Generation took ${executionTimeInMsGlbDraco} milliseconds to execute.`)
+  Logger.info(`GLTF Draco Generation took ${executionTimeInMsGltfDraco} milliseconds to execute.`)
 }
 
 
 /**
  * Function to extract Geometry from an IfcStepModel
  *
- * @param model The model to extract from.
+ * @param model
+ * @param limitCSGDepth
+ * @param maxCSGDepth
  * @return {AP214SceneBuilder | undefined} The scene or undefined on error.
  */
-function geometryExtraction(model: AP214StepModel):
+function geometryExtraction(
+  model: AP214StepModel,
+  limitCSGDepth: boolean = true,
+  maxCSGDepth: number = 20 ):
   AP214SceneBuilder | undefined {
 
-  const conwayModel = new AP214GeometryExtraction(conwaywasm, model)
+  const conwayModel = new AP214GeometryExtraction(
+    conwaywasm,
+    model,
+    limitCSGDepth,
+    maxCSGDepth)
 
-  try {
-    // parse + extract data model + geometry data
-    const [extractionResult, scene] =
-      conwayModel.extractAP214GeometryData(true)
+  // parse + extract data model + geometry data
+  const startTime = Date.now()
 
-    model.invalidate( true )
+  // parse + extract data model + geometry data
+  const [extractionResult, scene] =
+    conwayModel.extractAP214GeometryData(true)
 
-    if (extractionResult !== ExtractResult.COMPLETE) {
-      console.error('Could not extract geometry, exiting...')
-      return void 0
-    }
+  const endTime = Date.now()
+  const executionTimeInMs = endTime - startTime
 
-    return scene
-  } catch ( ex ) {
+  const statistics = Logger.getStatistics(modelID)
+  statistics?.setGeometryTime(executionTimeInMs)
 
-    console.log( ex )
+  const ONE_KB = 1024
+  const ONE_MB = ONE_KB * ONE_KB
+  
+  statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
-    if ( ex instanceof Error ) {
-      console.log( ex.stack )
-    }
-    throw ex
+  model.invalidate( true )
+
+  if (extractionResult !== ExtractResult.COMPLETE) {
+    console.error('Could not extract geometry, exiting...')
+    return void 0
   }
+
+  return scene
 }
 

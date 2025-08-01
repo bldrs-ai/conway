@@ -18,7 +18,7 @@ export class IfcLogical extends StepEntityBase< EntityTypesIfc > {
 
   public get Value() : boolean {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractBoolean( 0, false )
+      this.Value_ = this.extractBoolean( 0, 0, 0, false )
     }
 
     return this.Value_ as boolean
@@ -27,7 +27,8 @@ export class IfcLogical extends StepEntityBase< EntityTypesIfc > {
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesIfc >,
-      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+      multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
      super( localID, internalReference, model )
   }
 

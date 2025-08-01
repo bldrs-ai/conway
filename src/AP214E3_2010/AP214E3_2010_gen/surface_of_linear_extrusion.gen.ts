@@ -18,7 +18,7 @@ export  class surface_of_linear_extrusion extends swept_surface {
 
   public get extrusion_axis() : vector {
     if ( this.extrusion_axis_ === void 0 ) {
-      this.extrusion_axis_ = this.extractElement( 2, false, vector )
+      this.extrusion_axis_ = this.extractElement( 2, 2, 4, false, vector )
     }
 
     return this.extrusion_axis_ as vector
@@ -26,8 +26,26 @@ export  class surface_of_linear_extrusion extends swept_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_of_linear_extrusion.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_of_linear_extrusion" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

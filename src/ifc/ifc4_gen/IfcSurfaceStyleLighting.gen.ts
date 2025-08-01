@@ -21,7 +21,7 @@ export  class IfcSurfaceStyleLighting extends IfcPresentationItem {
 
   public get DiffuseTransmissionColour() : IfcColourRgb {
     if ( this.DiffuseTransmissionColour_ === void 0 ) {
-      this.DiffuseTransmissionColour_ = this.extractElement( 0, false, IfcColourRgb )
+      this.DiffuseTransmissionColour_ = this.extractElement( 0, 0, 1, false, IfcColourRgb )
     }
 
     return this.DiffuseTransmissionColour_ as IfcColourRgb
@@ -29,7 +29,7 @@ export  class IfcSurfaceStyleLighting extends IfcPresentationItem {
 
   public get DiffuseReflectionColour() : IfcColourRgb {
     if ( this.DiffuseReflectionColour_ === void 0 ) {
-      this.DiffuseReflectionColour_ = this.extractElement( 1, false, IfcColourRgb )
+      this.DiffuseReflectionColour_ = this.extractElement( 1, 0, 1, false, IfcColourRgb )
     }
 
     return this.DiffuseReflectionColour_ as IfcColourRgb
@@ -37,7 +37,7 @@ export  class IfcSurfaceStyleLighting extends IfcPresentationItem {
 
   public get TransmissionColour() : IfcColourRgb {
     if ( this.TransmissionColour_ === void 0 ) {
-      this.TransmissionColour_ = this.extractElement( 2, false, IfcColourRgb )
+      this.TransmissionColour_ = this.extractElement( 2, 0, 1, false, IfcColourRgb )
     }
 
     return this.TransmissionColour_ as IfcColourRgb
@@ -45,7 +45,7 @@ export  class IfcSurfaceStyleLighting extends IfcPresentationItem {
 
   public get ReflectanceColour() : IfcColourRgb {
     if ( this.ReflectanceColour_ === void 0 ) {
-      this.ReflectanceColour_ = this.extractElement( 3, false, IfcColourRgb )
+      this.ReflectanceColour_ = this.extractElement( 3, 0, 1, false, IfcColourRgb )
     }
 
     return this.ReflectanceColour_ as IfcColourRgb
@@ -53,7 +53,9 @@ export  class IfcSurfaceStyleLighting extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

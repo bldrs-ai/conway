@@ -19,7 +19,7 @@ export abstract class IfcNamedUnit extends StepEntityBase< EntityTypesIfc > {
 
   public get Dimensions() : IfcDimensionalExponents {
     if ( this.Dimensions_ === void 0 ) {
-      this.Dimensions_ = this.extractElement( 0, false, IfcDimensionalExponents )
+      this.Dimensions_ = this.extractElement( 0, 0, 0, false, IfcDimensionalExponents )
     }
 
     return this.Dimensions_ as IfcDimensionalExponents
@@ -27,7 +27,7 @@ export abstract class IfcNamedUnit extends StepEntityBase< EntityTypesIfc > {
 
   public get UnitType() : IfcUnitEnum {
     if ( this.UnitType_ === void 0 ) {
-      this.UnitType_ = this.extractLambda( 1, IfcUnitEnumDeserializeStep, false )
+      this.UnitType_ = this.extractLambda( 1, 0, 0, IfcUnitEnumDeserializeStep, false )
     }
 
     return this.UnitType_ as IfcUnitEnum
@@ -35,7 +35,9 @@ export abstract class IfcNamedUnit extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

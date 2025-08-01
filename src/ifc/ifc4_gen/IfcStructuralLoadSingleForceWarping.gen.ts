@@ -18,7 +18,7 @@ export  class IfcStructuralLoadSingleForceWarping extends IfcStructuralLoadSingl
 
   public get WarpingMoment() : number | null {
     if ( this.WarpingMoment_ === void 0 ) {
-      this.WarpingMoment_ = this.extractNumber( 7, true )
+      this.WarpingMoment_ = this.extractNumber( 7, 7, 4, true )
     }
 
     return this.WarpingMoment_ as number | null
@@ -26,7 +26,9 @@ export  class IfcStructuralLoadSingleForceWarping extends IfcStructuralLoadSingl
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

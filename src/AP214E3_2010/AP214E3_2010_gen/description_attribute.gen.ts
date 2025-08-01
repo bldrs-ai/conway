@@ -32,7 +32,7 @@ export  class description_attribute extends StepEntityBase< EntityTypesAP214 > {
 
   public get attribute_value() : string {
     if ( this.attribute_value_ === void 0 ) {
-      this.attribute_value_ = this.extractString( 0, false )
+      this.attribute_value_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.attribute_value_ as string
@@ -42,7 +42,7 @@ export  class description_attribute extends StepEntityBase< EntityTypesAP214 > {
     if ( this.described_item_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 0, false )
 
       if ( !( value instanceof action_request_solution ) && !( value instanceof application_context ) && !( value instanceof approval_role ) && !( value instanceof configuration_design ) && !( value instanceof date_role ) && !( value instanceof date_time_role ) && !( value instanceof context_dependent_shape_representation ) && !( value instanceof effectivity ) && !( value instanceof external_source ) && !( value instanceof organization_role ) && !( value instanceof person_and_organization_role ) && !( value instanceof person_and_organization ) && !( value instanceof property_definition_representation ) && !( value instanceof representation ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -57,8 +57,26 @@ export  class description_attribute extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === description_attribute.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for description_attribute" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

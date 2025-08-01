@@ -18,7 +18,7 @@ export  class IfcSensorType extends IfcDistributionControlElementType {
 
   public get PredefinedType() : IfcSensorTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcSensorTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcSensorTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcSensorTypeEnum
@@ -26,7 +26,9 @@ export  class IfcSensorType extends IfcDistributionControlElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

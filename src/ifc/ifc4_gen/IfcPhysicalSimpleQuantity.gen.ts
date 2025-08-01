@@ -18,7 +18,7 @@ export abstract class IfcPhysicalSimpleQuantity extends IfcPhysicalQuantity {
 
   public get Unit() : IfcNamedUnit | null {
     if ( this.Unit_ === void 0 ) {
-      this.Unit_ = this.extractElement( 2, true, IfcNamedUnit )
+      this.Unit_ = this.extractElement( 2, 2, 1, true, IfcNamedUnit )
     }
 
     return this.Unit_ as IfcNamedUnit | null
@@ -26,7 +26,9 @@ export abstract class IfcPhysicalSimpleQuantity extends IfcPhysicalQuantity {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

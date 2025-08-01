@@ -21,7 +21,7 @@ export  class IfcActorRole extends StepEntityBase< EntityTypesIfc > {
 
   public get Role() : IfcRoleEnum {
     if ( this.Role_ === void 0 ) {
-      this.Role_ = this.extractLambda( 0, IfcRoleEnumDeserializeStep, false )
+      this.Role_ = this.extractLambda( 0, 0, 0, IfcRoleEnumDeserializeStep, false )
     }
 
     return this.Role_ as IfcRoleEnum
@@ -29,7 +29,7 @@ export  class IfcActorRole extends StepEntityBase< EntityTypesIfc > {
 
   public get UserDefinedRole() : string | null {
     if ( this.UserDefinedRole_ === void 0 ) {
-      this.UserDefinedRole_ = this.extractString( 1, true )
+      this.UserDefinedRole_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.UserDefinedRole_ as string | null
@@ -37,7 +37,7 @@ export  class IfcActorRole extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 2, true )
+      this.Description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -46,7 +46,9 @@ export  class IfcActorRole extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

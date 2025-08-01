@@ -19,7 +19,7 @@ export  class specified_higher_usage_occurrence extends assembly_component_usage
 
   public get upper_usage() : assembly_component_usage {
     if ( this.upper_usage_ === void 0 ) {
-      this.upper_usage_ = this.extractElement( 6, false, assembly_component_usage )
+      this.upper_usage_ = this.extractElement( 6, 6, 3, false, assembly_component_usage )
     }
 
     return this.upper_usage_ as assembly_component_usage
@@ -27,7 +27,7 @@ export  class specified_higher_usage_occurrence extends assembly_component_usage
 
   public get next_usage() : next_assembly_usage_occurrence {
     if ( this.next_usage_ === void 0 ) {
-      this.next_usage_ = this.extractElement( 7, false, next_assembly_usage_occurrence )
+      this.next_usage_ = this.extractElement( 7, 6, 3, false, next_assembly_usage_occurrence )
     }
 
     return this.next_usage_ as next_assembly_usage_occurrence
@@ -35,8 +35,26 @@ export  class specified_higher_usage_occurrence extends assembly_component_usage
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === specified_higher_usage_occurrence.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for specified_higher_usage_occurrence" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

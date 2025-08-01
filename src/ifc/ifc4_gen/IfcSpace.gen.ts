@@ -20,7 +20,7 @@ export  class IfcSpace extends IfcSpatialStructureElement {
 
   public get PredefinedType() : IfcSpaceTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcSpaceTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcSpaceTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcSpaceTypeEnum | null
@@ -28,7 +28,7 @@ export  class IfcSpace extends IfcSpatialStructureElement {
 
   public get ElevationWithFlooring() : number | null {
     if ( this.ElevationWithFlooring_ === void 0 ) {
-      this.ElevationWithFlooring_ = this.extractNumber( 10, true )
+      this.ElevationWithFlooring_ = this.extractNumber( 10, 9, 6, true )
     }
 
     return this.ElevationWithFlooring_ as number | null
@@ -38,7 +38,9 @@ export  class IfcSpace extends IfcSpatialStructureElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

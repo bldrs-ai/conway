@@ -18,7 +18,7 @@ export  class IfcStairFlightType extends IfcBuildingElementType {
 
   public get PredefinedType() : IfcStairFlightTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcStairFlightTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcStairFlightTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcStairFlightTypeEnum
@@ -26,7 +26,9 @@ export  class IfcStairFlightType extends IfcBuildingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

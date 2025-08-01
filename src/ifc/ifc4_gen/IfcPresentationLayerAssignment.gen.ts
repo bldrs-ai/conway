@@ -30,7 +30,7 @@ export  class IfcPresentationLayerAssignment extends StepEntityBase< EntityTypes
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, false )
+      this.Name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Name_ as string
@@ -38,7 +38,7 @@ export  class IfcPresentationLayerAssignment extends StepEntityBase< EntityTypes
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -47,7 +47,7 @@ export  class IfcPresentationLayerAssignment extends StepEntityBase< EntityTypes
   public get AssignedItems() : Array<IfcRepresentation | IfcRepresentationItem> {
     if ( this.AssignedItems_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -86,7 +86,7 @@ export  class IfcPresentationLayerAssignment extends StepEntityBase< EntityTypes
 
   public get Identifier() : string | null {
     if ( this.Identifier_ === void 0 ) {
-      this.Identifier_ = this.extractString( 3, true )
+      this.Identifier_ = this.extractString( 3, 0, 0, true )
     }
 
     return this.Identifier_ as string | null
@@ -94,7 +94,9 @@ export  class IfcPresentationLayerAssignment extends StepEntityBase< EntityTypes
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

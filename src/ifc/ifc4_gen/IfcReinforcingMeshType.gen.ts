@@ -39,7 +39,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get PredefinedType() : IfcReinforcingMeshTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcReinforcingMeshTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcReinforcingMeshTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcReinforcingMeshTypeEnum
@@ -47,7 +47,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get MeshLength() : number | null {
     if ( this.MeshLength_ === void 0 ) {
-      this.MeshLength_ = this.extractNumber( 10, true )
+      this.MeshLength_ = this.extractNumber( 10, 9, 7, true )
     }
 
     return this.MeshLength_ as number | null
@@ -55,7 +55,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get MeshWidth() : number | null {
     if ( this.MeshWidth_ === void 0 ) {
-      this.MeshWidth_ = this.extractNumber( 11, true )
+      this.MeshWidth_ = this.extractNumber( 11, 9, 7, true )
     }
 
     return this.MeshWidth_ as number | null
@@ -63,7 +63,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get LongitudinalBarNominalDiameter() : number | null {
     if ( this.LongitudinalBarNominalDiameter_ === void 0 ) {
-      this.LongitudinalBarNominalDiameter_ = this.extractNumber( 12, true )
+      this.LongitudinalBarNominalDiameter_ = this.extractNumber( 12, 9, 7, true )
     }
 
     return this.LongitudinalBarNominalDiameter_ as number | null
@@ -71,7 +71,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get TransverseBarNominalDiameter() : number | null {
     if ( this.TransverseBarNominalDiameter_ === void 0 ) {
-      this.TransverseBarNominalDiameter_ = this.extractNumber( 13, true )
+      this.TransverseBarNominalDiameter_ = this.extractNumber( 13, 9, 7, true )
     }
 
     return this.TransverseBarNominalDiameter_ as number | null
@@ -79,7 +79,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get LongitudinalBarCrossSectionArea() : number | null {
     if ( this.LongitudinalBarCrossSectionArea_ === void 0 ) {
-      this.LongitudinalBarCrossSectionArea_ = this.extractNumber( 14, true )
+      this.LongitudinalBarCrossSectionArea_ = this.extractNumber( 14, 9, 7, true )
     }
 
     return this.LongitudinalBarCrossSectionArea_ as number | null
@@ -87,7 +87,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get TransverseBarCrossSectionArea() : number | null {
     if ( this.TransverseBarCrossSectionArea_ === void 0 ) {
-      this.TransverseBarCrossSectionArea_ = this.extractNumber( 15, true )
+      this.TransverseBarCrossSectionArea_ = this.extractNumber( 15, 9, 7, true )
     }
 
     return this.TransverseBarCrossSectionArea_ as number | null
@@ -95,7 +95,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get LongitudinalBarSpacing() : number | null {
     if ( this.LongitudinalBarSpacing_ === void 0 ) {
-      this.LongitudinalBarSpacing_ = this.extractNumber( 16, true )
+      this.LongitudinalBarSpacing_ = this.extractNumber( 16, 9, 7, true )
     }
 
     return this.LongitudinalBarSpacing_ as number | null
@@ -103,7 +103,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get TransverseBarSpacing() : number | null {
     if ( this.TransverseBarSpacing_ === void 0 ) {
-      this.TransverseBarSpacing_ = this.extractNumber( 17, true )
+      this.TransverseBarSpacing_ = this.extractNumber( 17, 9, 7, true )
     }
 
     return this.TransverseBarSpacing_ as number | null
@@ -111,7 +111,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
 
   public get BendingShapeCode() : string | null {
     if ( this.BendingShapeCode_ === void 0 ) {
-      this.BendingShapeCode_ = this.extractString( 18, true )
+      this.BendingShapeCode_ = this.extractString( 18, 9, 7, true )
     }
 
     return this.BendingShapeCode_ as string | null
@@ -120,7 +120,7 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
   public get BendingParameters() : Array<IfcLengthMeasure | IfcPlaneAngleMeasure> | null {
     if ( this.BendingParameters_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 19 )
+      let   cursor    = this.getOffsetCursor( 19, 9, 7 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -159,7 +159,9 @@ export  class IfcReinforcingMeshType extends IfcReinforcingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -19,7 +19,7 @@ export  class IfcPlanarExtent extends IfcGeometricRepresentationItem {
 
   public get SizeInX() : number {
     if ( this.SizeInX_ === void 0 ) {
-      this.SizeInX_ = this.extractNumber( 0, false )
+      this.SizeInX_ = this.extractNumber( 0, 0, 2, false )
     }
 
     return this.SizeInX_ as number
@@ -27,7 +27,7 @@ export  class IfcPlanarExtent extends IfcGeometricRepresentationItem {
 
   public get SizeInY() : number {
     if ( this.SizeInY_ === void 0 ) {
-      this.SizeInY_ = this.extractNumber( 1, false )
+      this.SizeInY_ = this.extractNumber( 1, 0, 2, false )
     }
 
     return this.SizeInY_ as number
@@ -35,7 +35,9 @@ export  class IfcPlanarExtent extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -40,7 +40,7 @@ export  class IfcExternalReferenceRelationship extends IfcResourceLevelRelations
 
   public get RelatingReference() : IfcExternalReference {
     if ( this.RelatingReference_ === void 0 ) {
-      this.RelatingReference_ = this.extractElement( 2, false, IfcExternalReference )
+      this.RelatingReference_ = this.extractElement( 2, 2, 1, false, IfcExternalReference )
     }
 
     return this.RelatingReference_ as IfcExternalReference
@@ -49,7 +49,7 @@ export  class IfcExternalReferenceRelationship extends IfcResourceLevelRelations
   public get RelatedResourceObjects() : Array<IfcActorRole | IfcAppliedValue | IfcApproval | IfcConstraint | IfcContextDependentUnit | IfcConversionBasedUnit | IfcExternalInformation | IfcExternalReference | IfcMaterialDefinition | IfcOrganization | IfcPerson | IfcPersonAndOrganization | IfcPhysicalQuantity | IfcProfileDef | IfcPropertyAbstraction | IfcTimeSeries> {
     if ( this.RelatedResourceObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -88,7 +88,9 @@ export  class IfcExternalReferenceRelationship extends IfcResourceLevelRelations
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

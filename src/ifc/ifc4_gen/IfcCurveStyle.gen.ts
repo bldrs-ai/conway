@@ -34,7 +34,7 @@ export  class IfcCurveStyle extends IfcPresentationStyle {
     if ( this.CurveFont_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 1, true )
+        this.extractReference( 1, 1, 1, true )
 
       if ( !( value instanceof IfcCurveStyleFontAndScaling ) && !( value instanceof IfcCurveStyleFont ) && !( value instanceof IfcPreDefinedCurveFont ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -51,7 +51,7 @@ export  class IfcCurveStyle extends IfcPresentationStyle {
     if ( this.CurveWidth_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 2, true )
+        this.extractReference( 2, 1, 1, true )
 
       if ( !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -68,7 +68,7 @@ export  class IfcCurveStyle extends IfcPresentationStyle {
     if ( this.CurveColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 1, 1, true )
 
       if ( !( value instanceof IfcColourSpecification ) && !( value instanceof IfcPreDefinedColour ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -83,7 +83,7 @@ export  class IfcCurveStyle extends IfcPresentationStyle {
 
   public get ModelOrDraughting() : boolean | null {
     if ( this.ModelOrDraughting_ === void 0 ) {
-      this.ModelOrDraughting_ = this.extractBoolean( 4, true )
+      this.ModelOrDraughting_ = this.extractBoolean( 4, 1, 1, true )
     }
 
     return this.ModelOrDraughting_ as boolean | null
@@ -91,7 +91,9 @@ export  class IfcCurveStyle extends IfcPresentationStyle {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -27,7 +27,7 @@ export  class IfcRelDefinesByTemplate extends IfcRelDefines {
   public get RelatedPropertySets() : Array<IfcPropertySetDefinition> {
     if ( this.RelatedPropertySets_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class IfcRelDefinesByTemplate extends IfcRelDefines {
 
   public get RelatingTemplate() : IfcPropertySetTemplate {
     if ( this.RelatingTemplate_ === void 0 ) {
-      this.RelatingTemplate_ = this.extractElement( 5, false, IfcPropertySetTemplate )
+      this.RelatingTemplate_ = this.extractElement( 5, 4, 3, false, IfcPropertySetTemplate )
     }
 
     return this.RelatingTemplate_ as IfcPropertySetTemplate
@@ -67,7 +67,9 @@ export  class IfcRelDefinesByTemplate extends IfcRelDefines {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

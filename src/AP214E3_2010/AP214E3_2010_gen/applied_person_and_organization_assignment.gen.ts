@@ -76,7 +76,7 @@ export  class applied_person_and_organization_assignment extends person_and_orga
   public get items() : Array<action | action_directive | action_method | action_property | action_relationship | action_request_solution | alternate_product_relationship | applied_action_assignment | applied_classification_assignment | applied_organization_assignment | applied_person_and_organization_assignment | approval_status | assembly_component_usage_substitute | certification | class_ | class_system | configuration_design | configuration_effectivity | configuration_item | configured_effectivity_assignment | contract | document_file | document_type | draughting_model | drawing_revision | event_occurrence | executed_action | general_property | material_designation | mechanical_design_geometric_presentation_representation | organization | organization_relationship | organizational_project | person_and_organization | presentation_area | product | product_concept | product_concept_feature | product_concept_feature_association | product_concept_feature_category | product_concept_feature_category_usage | product_definition | product_definition_formation | product_definition_formation_relationship | product_definition_relationship | product_definition_substitute | property_definition | requirement_for_action_resource | resource_property | security_classification | security_classification_level | shape_representation | versioned_action_request> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -115,8 +115,26 @@ export  class applied_person_and_organization_assignment extends person_and_orga
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === applied_person_and_organization_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for applied_person_and_organization_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

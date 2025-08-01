@@ -32,7 +32,7 @@ export  class IfcTrimmedCurve extends IfcBoundedCurve {
 
   public get BasisCurve() : IfcCurve {
     if ( this.BasisCurve_ === void 0 ) {
-      this.BasisCurve_ = this.extractElement( 0, false, IfcCurve )
+      this.BasisCurve_ = this.extractElement( 0, 0, 4, false, IfcCurve )
     }
 
     return this.BasisCurve_ as IfcCurve
@@ -41,7 +41,7 @@ export  class IfcTrimmedCurve extends IfcBoundedCurve {
   public get Trim1() : Array<IfcCartesianPoint | IfcParameterValue> {
     if ( this.Trim1_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -81,7 +81,7 @@ export  class IfcTrimmedCurve extends IfcBoundedCurve {
   public get Trim2() : Array<IfcCartesianPoint | IfcParameterValue> {
     if ( this.Trim2_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -120,7 +120,7 @@ export  class IfcTrimmedCurve extends IfcBoundedCurve {
 
   public get SenseAgreement() : boolean {
     if ( this.SenseAgreement_ === void 0 ) {
-      this.SenseAgreement_ = this.extractBoolean( 3, false )
+      this.SenseAgreement_ = this.extractBoolean( 3, 0, 4, false )
     }
 
     return this.SenseAgreement_ as boolean
@@ -128,7 +128,7 @@ export  class IfcTrimmedCurve extends IfcBoundedCurve {
 
   public get MasterRepresentation() : IfcTrimmingPreference {
     if ( this.MasterRepresentation_ === void 0 ) {
-      this.MasterRepresentation_ = this.extractLambda( 4, IfcTrimmingPreferenceDeserializeStep, false )
+      this.MasterRepresentation_ = this.extractLambda( 4, 0, 4, IfcTrimmingPreferenceDeserializeStep, false )
     }
 
     return this.MasterRepresentation_ as IfcTrimmingPreference
@@ -136,7 +136,9 @@ export  class IfcTrimmedCurve extends IfcBoundedCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export  class IfcConversionBasedUnit extends IfcNamedUnit {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 2, false )
+      this.Name_ = this.extractString( 2, 2, 1, false )
     }
 
     return this.Name_ as string
@@ -28,7 +28,7 @@ export  class IfcConversionBasedUnit extends IfcNamedUnit {
 
   public get ConversionFactor() : IfcMeasureWithUnit {
     if ( this.ConversionFactor_ === void 0 ) {
-      this.ConversionFactor_ = this.extractElement( 3, false, IfcMeasureWithUnit )
+      this.ConversionFactor_ = this.extractElement( 3, 2, 1, false, IfcMeasureWithUnit )
     }
 
     return this.ConversionFactor_ as IfcMeasureWithUnit
@@ -37,7 +37,9 @@ export  class IfcConversionBasedUnit extends IfcNamedUnit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

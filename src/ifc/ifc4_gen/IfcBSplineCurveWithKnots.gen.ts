@@ -31,7 +31,7 @@ export  class IfcBSplineCurveWithKnots extends IfcBSplineCurve {
   public get KnotMultiplicities() : Array< number > {
     if ( this.KnotMultiplicities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 5, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -65,7 +65,7 @@ export  class IfcBSplineCurveWithKnots extends IfcBSplineCurve {
   public get Knots() : Array< number > {
     if ( this.Knots_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 5, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -98,7 +98,7 @@ export  class IfcBSplineCurveWithKnots extends IfcBSplineCurve {
 
   public get KnotSpec() : IfcKnotType {
     if ( this.KnotSpec_ === void 0 ) {
-      this.KnotSpec_ = this.extractLambda( 7, IfcKnotTypeDeserializeStep, false )
+      this.KnotSpec_ = this.extractLambda( 7, 5, 5, IfcKnotTypeDeserializeStep, false )
     }
 
     return this.KnotSpec_ as IfcKnotType
@@ -110,7 +110,9 @@ export  class IfcBSplineCurveWithKnots extends IfcBSplineCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

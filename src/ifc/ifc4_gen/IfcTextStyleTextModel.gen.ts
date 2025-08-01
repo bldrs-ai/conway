@@ -34,7 +34,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
     if ( this.TextIndent_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 0, true )
+        this.extractReference( 0, 0, 1, true )
 
       if ( !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -49,7 +49,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
 
   public get TextAlign() : string | null {
     if ( this.TextAlign_ === void 0 ) {
-      this.TextAlign_ = this.extractString( 1, true )
+      this.TextAlign_ = this.extractString( 1, 0, 1, true )
     }
 
     return this.TextAlign_ as string | null
@@ -57,7 +57,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
 
   public get TextDecoration() : string | null {
     if ( this.TextDecoration_ === void 0 ) {
-      this.TextDecoration_ = this.extractString( 2, true )
+      this.TextDecoration_ = this.extractString( 2, 0, 1, true )
     }
 
     return this.TextDecoration_ as string | null
@@ -67,7 +67,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
     if ( this.LetterSpacing_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 0, 1, true )
 
       if ( !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -84,7 +84,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
     if ( this.WordSpacing_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 4, true )
+        this.extractReference( 4, 0, 1, true )
 
       if ( !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -99,7 +99,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
 
   public get TextTransform() : string | null {
     if ( this.TextTransform_ === void 0 ) {
-      this.TextTransform_ = this.extractString( 5, true )
+      this.TextTransform_ = this.extractString( 5, 0, 1, true )
     }
 
     return this.TextTransform_ as string | null
@@ -109,7 +109,7 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
     if ( this.LineHeight_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 6, true )
+        this.extractReference( 6, 0, 1, true )
 
       if ( !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -124,7 +124,9 @@ export  class IfcTextStyleTextModel extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

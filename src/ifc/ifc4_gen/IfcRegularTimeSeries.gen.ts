@@ -26,7 +26,7 @@ export  class IfcRegularTimeSeries extends IfcTimeSeries {
 
   public get TimeStep() : number {
     if ( this.TimeStep_ === void 0 ) {
-      this.TimeStep_ = this.extractNumber( 8, false )
+      this.TimeStep_ = this.extractNumber( 8, 8, 1, false )
     }
 
     return this.TimeStep_ as number
@@ -35,7 +35,7 @@ export  class IfcRegularTimeSeries extends IfcTimeSeries {
   public get Values() : Array<IfcTimeSeriesValue> {
     if ( this.Values_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 9 )
+      let   cursor    = this.getOffsetCursor( 9, 8, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,9 @@ export  class IfcRegularTimeSeries extends IfcTimeSeries {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

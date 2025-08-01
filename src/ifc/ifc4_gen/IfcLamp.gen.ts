@@ -18,7 +18,7 @@ export  class IfcLamp extends IfcFlowTerminal {
 
   public get PredefinedType() : IfcLampTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcLampTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcLampTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcLampTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcLamp extends IfcFlowTerminal {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

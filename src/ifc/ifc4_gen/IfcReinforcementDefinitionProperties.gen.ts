@@ -26,7 +26,7 @@ export  class IfcReinforcementDefinitionProperties extends IfcPreDefinedProperty
 
   public get DefinitionType() : string | null {
     if ( this.DefinitionType_ === void 0 ) {
-      this.DefinitionType_ = this.extractString( 4, true )
+      this.DefinitionType_ = this.extractString( 4, 4, 4, true )
     }
 
     return this.DefinitionType_ as string | null
@@ -35,7 +35,7 @@ export  class IfcReinforcementDefinitionProperties extends IfcPreDefinedProperty
   public get ReinforcementSectionDefinitions() : Array<IfcSectionReinforcementProperties> {
     if ( this.ReinforcementSectionDefinitions_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,9 @@ export  class IfcReinforcementDefinitionProperties extends IfcPreDefinedProperty
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

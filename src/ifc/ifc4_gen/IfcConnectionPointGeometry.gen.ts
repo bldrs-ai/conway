@@ -22,7 +22,7 @@ export  class IfcConnectionPointGeometry extends IfcConnectionGeometry {
     if ( this.PointOnRelatingElement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 1, false )
 
       if ( !( value instanceof IfcPoint ) && !( value instanceof IfcVertexPoint ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -39,7 +39,7 @@ export  class IfcConnectionPointGeometry extends IfcConnectionGeometry {
     if ( this.PointOnRelatedElement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 1, true )
+        this.extractReference( 1, 0, 1, true )
 
       if ( !( value instanceof IfcPoint ) && !( value instanceof IfcVertexPoint ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -54,7 +54,9 @@ export  class IfcConnectionPointGeometry extends IfcConnectionGeometry {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -134,7 +134,7 @@ export  class IfcMetric extends IfcConstraint {
 
   public get Benchmark() : IfcBenchmarkEnum {
     if ( this.Benchmark_ === void 0 ) {
-      this.Benchmark_ = this.extractLambda( 7, IfcBenchmarkEnumDeserializeStep, false )
+      this.Benchmark_ = this.extractLambda( 7, 7, 1, IfcBenchmarkEnumDeserializeStep, false )
     }
 
     return this.Benchmark_ as IfcBenchmarkEnum
@@ -142,7 +142,7 @@ export  class IfcMetric extends IfcConstraint {
 
   public get ValueSource() : string | null {
     if ( this.ValueSource_ === void 0 ) {
-      this.ValueSource_ = this.extractString( 8, true )
+      this.ValueSource_ = this.extractString( 8, 7, 1, true )
     }
 
     return this.ValueSource_ as string | null
@@ -152,7 +152,7 @@ export  class IfcMetric extends IfcConstraint {
     if ( this.DataValue_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 9, true )
+        this.extractReference( 9, 7, 1, true )
 
       if ( !( value instanceof IfcAppliedValue ) && !( value instanceof IfcMeasureWithUnit ) && !( value instanceof IfcReference ) && !( value instanceof IfcTable ) && !( value instanceof IfcTimeSeries ) && !( value instanceof IfcAbsorbedDoseMeasure ) && !( value instanceof IfcAccelerationMeasure ) && !( value instanceof IfcAngularVelocityMeasure ) && !( value instanceof IfcAreaDensityMeasure ) && !( value instanceof IfcCompoundPlaneAngleMeasure ) && !( value instanceof IfcCurvatureMeasure ) && !( value instanceof IfcDoseEquivalentMeasure ) && !( value instanceof IfcDynamicViscosityMeasure ) && !( value instanceof IfcElectricCapacitanceMeasure ) && !( value instanceof IfcElectricChargeMeasure ) && !( value instanceof IfcElectricConductanceMeasure ) && !( value instanceof IfcElectricResistanceMeasure ) && !( value instanceof IfcElectricVoltageMeasure ) && !( value instanceof IfcEnergyMeasure ) && !( value instanceof IfcForceMeasure ) && !( value instanceof IfcFrequencyMeasure ) && !( value instanceof IfcHeatFluxDensityMeasure ) && !( value instanceof IfcHeatingValueMeasure ) && !( value instanceof IfcIlluminanceMeasure ) && !( value instanceof IfcInductanceMeasure ) && !( value instanceof IfcIntegerCountRateMeasure ) && !( value instanceof IfcIonConcentrationMeasure ) && !( value instanceof IfcIsothermalMoistureCapacityMeasure ) && !( value instanceof IfcKinematicViscosityMeasure ) && !( value instanceof IfcLinearForceMeasure ) && !( value instanceof IfcLinearMomentMeasure ) && !( value instanceof IfcLinearStiffnessMeasure ) && !( value instanceof IfcLinearVelocityMeasure ) && !( value instanceof IfcLuminousFluxMeasure ) && !( value instanceof IfcLuminousIntensityDistributionMeasure ) && !( value instanceof IfcMagneticFluxDensityMeasure ) && !( value instanceof IfcMagneticFluxMeasure ) && !( value instanceof IfcMassDensityMeasure ) && !( value instanceof IfcMassFlowRateMeasure ) && !( value instanceof IfcMassPerLengthMeasure ) && !( value instanceof IfcModulusOfElasticityMeasure ) && !( value instanceof IfcModulusOfLinearSubgradeReactionMeasure ) && !( value instanceof IfcModulusOfRotationalSubgradeReactionMeasure ) && !( value instanceof IfcModulusOfSubgradeReactionMeasure ) && !( value instanceof IfcMoistureDiffusivityMeasure ) && !( value instanceof IfcMolecularWeightMeasure ) && !( value instanceof IfcMomentOfInertiaMeasure ) && !( value instanceof IfcMonetaryMeasure ) && !( value instanceof IfcPHMeasure ) && !( value instanceof IfcPlanarForceMeasure ) && !( value instanceof IfcPowerMeasure ) && !( value instanceof IfcPressureMeasure ) && !( value instanceof IfcRadioActivityMeasure ) && !( value instanceof IfcRotationalFrequencyMeasure ) && !( value instanceof IfcRotationalMassMeasure ) && !( value instanceof IfcRotationalStiffnessMeasure ) && !( value instanceof IfcSectionModulusMeasure ) && !( value instanceof IfcSectionalAreaIntegralMeasure ) && !( value instanceof IfcShearModulusMeasure ) && !( value instanceof IfcSoundPowerLevelMeasure ) && !( value instanceof IfcSoundPowerMeasure ) && !( value instanceof IfcSoundPressureLevelMeasure ) && !( value instanceof IfcSoundPressureMeasure ) && !( value instanceof IfcSpecificHeatCapacityMeasure ) && !( value instanceof IfcTemperatureGradientMeasure ) && !( value instanceof IfcTemperatureRateOfChangeMeasure ) && !( value instanceof IfcThermalAdmittanceMeasure ) && !( value instanceof IfcThermalConductivityMeasure ) && !( value instanceof IfcThermalExpansionCoefficientMeasure ) && !( value instanceof IfcThermalResistanceMeasure ) && !( value instanceof IfcThermalTransmittanceMeasure ) && !( value instanceof IfcTorqueMeasure ) && !( value instanceof IfcVaporPermeabilityMeasure ) && !( value instanceof IfcVolumetricFlowRateMeasure ) && !( value instanceof IfcWarpingConstantMeasure ) && !( value instanceof IfcWarpingMomentMeasure ) && !( value instanceof IfcAmountOfSubstanceMeasure ) && !( value instanceof IfcAreaMeasure ) && !( value instanceof IfcComplexNumber ) && !( value instanceof IfcContextDependentMeasure ) && !( value instanceof IfcCountMeasure ) && !( value instanceof IfcDescriptiveMeasure ) && !( value instanceof IfcElectricCurrentMeasure ) && !( value instanceof IfcLengthMeasure ) && !( value instanceof IfcLuminousIntensityMeasure ) && !( value instanceof IfcMassMeasure ) && !( value instanceof IfcNonNegativeLengthMeasure ) && !( value instanceof IfcNormalisedRatioMeasure ) && !( value instanceof IfcNumericMeasure ) && !( value instanceof IfcParameterValue ) && !( value instanceof IfcPlaneAngleMeasure ) && !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcPositivePlaneAngleMeasure ) && !( value instanceof IfcPositiveRatioMeasure ) && !( value instanceof IfcRatioMeasure ) && !( value instanceof IfcSolidAngleMeasure ) && !( value instanceof IfcThermodynamicTemperatureMeasure ) && !( value instanceof IfcTimeMeasure ) && !( value instanceof IfcVolumeMeasure ) && !( value instanceof IfcBinary ) && !( value instanceof IfcBoolean ) && !( value instanceof IfcDate ) && !( value instanceof IfcDateTime ) && !( value instanceof IfcDuration ) && !( value instanceof IfcIdentifier ) && !( value instanceof IfcInteger ) && !( value instanceof IfcLabel ) && !( value instanceof IfcLogical ) && !( value instanceof IfcPositiveInteger ) && !( value instanceof IfcReal ) && !( value instanceof IfcText ) && !( value instanceof IfcTime ) && !( value instanceof IfcTimeStamp ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -167,7 +167,7 @@ export  class IfcMetric extends IfcConstraint {
 
   public get ReferencePath() : IfcReference | null {
     if ( this.ReferencePath_ === void 0 ) {
-      this.ReferencePath_ = this.extractElement( 10, true, IfcReference )
+      this.ReferencePath_ = this.extractElement( 10, 7, 1, true, IfcReference )
     }
 
     return this.ReferencePath_ as IfcReference | null
@@ -175,7 +175,9 @@ export  class IfcMetric extends IfcConstraint {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

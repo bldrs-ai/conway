@@ -25,7 +25,7 @@ export  class IfcLightIntensityDistribution extends StepEntityBase< EntityTypesI
 
   public get LightDistributionCurve() : IfcLightDistributionCurveEnum {
     if ( this.LightDistributionCurve_ === void 0 ) {
-      this.LightDistributionCurve_ = this.extractLambda( 0, IfcLightDistributionCurveEnumDeserializeStep, false )
+      this.LightDistributionCurve_ = this.extractLambda( 0, 0, 0, IfcLightDistributionCurveEnumDeserializeStep, false )
     }
 
     return this.LightDistributionCurve_ as IfcLightDistributionCurveEnum
@@ -34,7 +34,7 @@ export  class IfcLightIntensityDistribution extends StepEntityBase< EntityTypesI
   public get DistributionData() : Array<IfcLightDistributionData> {
     if ( this.DistributionData_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,7 +66,9 @@ export  class IfcLightIntensityDistribution extends StepEntityBase< EntityTypesI
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

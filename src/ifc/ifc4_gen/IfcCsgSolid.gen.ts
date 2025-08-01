@@ -21,7 +21,7 @@ export  class IfcCsgSolid extends IfcSolidModel {
     if ( this.TreeRootExpression_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 3, false )
 
       if ( !( value instanceof IfcBooleanResult ) && !( value instanceof IfcCsgPrimitive3D ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,7 +36,9 @@ export  class IfcCsgSolid extends IfcSolidModel {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

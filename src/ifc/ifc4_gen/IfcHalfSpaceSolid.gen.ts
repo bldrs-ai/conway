@@ -21,7 +21,7 @@ export  class IfcHalfSpaceSolid extends IfcGeometricRepresentationItem {
 
   public get BaseSurface() : IfcSurface {
     if ( this.BaseSurface_ === void 0 ) {
-      this.BaseSurface_ = this.extractElement( 0, false, IfcSurface )
+      this.BaseSurface_ = this.extractElement( 0, 0, 2, false, IfcSurface )
     }
 
     return this.BaseSurface_ as IfcSurface
@@ -29,7 +29,7 @@ export  class IfcHalfSpaceSolid extends IfcGeometricRepresentationItem {
 
   public get AgreementFlag() : boolean {
     if ( this.AgreementFlag_ === void 0 ) {
-      this.AgreementFlag_ = this.extractBoolean( 1, false )
+      this.AgreementFlag_ = this.extractBoolean( 1, 0, 2, false )
     }
 
     return this.AgreementFlag_ as boolean
@@ -41,7 +41,9 @@ export  class IfcHalfSpaceSolid extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

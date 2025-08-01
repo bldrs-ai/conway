@@ -46,6 +46,25 @@ export class AP214ModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Delete the temporaries from this.
+   */
+  public deleteTemporaries(): void {
+
+    for ( const [key, value] of this.meshes_ ) {
+
+      if ( value.temporary ) {
+
+        this.meshes_.delete( key )
+
+        if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+
+          value.geometry.delete()
+        }
+      }
+    }
+  }
+
+  /**
    *
    * @param localID
    * @return {CanonicalMesh | undefined}

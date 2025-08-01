@@ -23,7 +23,7 @@ export  class sliding_surface_pair_value extends pair_value {
 
   public get actual_point_on_surface_1() : point_on_surface {
     if ( this.actual_point_on_surface_1_ === void 0 ) {
-      this.actual_point_on_surface_1_ = this.extractElement( 2, false, point_on_surface )
+      this.actual_point_on_surface_1_ = this.extractElement( 2, 1, 1, false, point_on_surface )
     }
 
     return this.actual_point_on_surface_1_ as point_on_surface
@@ -31,7 +31,7 @@ export  class sliding_surface_pair_value extends pair_value {
 
   public get actual_point_on_surface_2() : point_on_surface {
     if ( this.actual_point_on_surface_2_ === void 0 ) {
-      this.actual_point_on_surface_2_ = this.extractElement( 3, false, point_on_surface )
+      this.actual_point_on_surface_2_ = this.extractElement( 3, 1, 1, false, point_on_surface )
     }
 
     return this.actual_point_on_surface_2_ as point_on_surface
@@ -39,7 +39,7 @@ export  class sliding_surface_pair_value extends pair_value {
 
   public get actual_rotation() : number {
     if ( this.actual_rotation_ === void 0 ) {
-      this.actual_rotation_ = this.extractNumber( 4, false )
+      this.actual_rotation_ = this.extractNumber( 4, 1, 1, false )
     }
 
     return this.actual_rotation_ as number
@@ -47,8 +47,26 @@ export  class sliding_surface_pair_value extends pair_value {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === sliding_surface_pair_value.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for sliding_surface_pair_value" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

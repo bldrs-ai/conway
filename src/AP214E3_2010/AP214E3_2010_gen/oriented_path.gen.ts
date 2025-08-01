@@ -22,7 +22,7 @@ export  class oriented_path extends path {
 
   public get path_element() : path {
     if ( this.path_element_ === void 0 ) {
-      this.path_element_ = this.extractElement( 2, false, path )
+      this.path_element_ = this.extractElement( 2, 2, 3, false, path )
     }
 
     return this.path_element_ as path
@@ -30,7 +30,7 @@ export  class oriented_path extends path {
 
   public get orientation() : boolean {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractBoolean( 3, false )
+      this.orientation_ = this.extractBoolean( 3, 2, 3, false )
     }
 
     return this.orientation_ as boolean
@@ -42,8 +42,26 @@ export  class oriented_path extends path {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === oriented_path.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for oriented_path" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

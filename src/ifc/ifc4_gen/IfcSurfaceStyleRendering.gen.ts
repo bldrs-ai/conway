@@ -30,7 +30,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
     if ( this.DiffuseColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 2, true )
+        this.extractReference( 2, 2, 2, true )
 
       if ( !( value instanceof IfcColourRgb ) && !( value instanceof IfcNormalisedRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -47,7 +47,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
     if ( this.TransmissionColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 2, 2, true )
 
       if ( !( value instanceof IfcColourRgb ) && !( value instanceof IfcNormalisedRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -64,7 +64,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
     if ( this.DiffuseTransmissionColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 4, true )
+        this.extractReference( 4, 2, 2, true )
 
       if ( !( value instanceof IfcColourRgb ) && !( value instanceof IfcNormalisedRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -81,7 +81,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
     if ( this.ReflectionColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 5, true )
+        this.extractReference( 5, 2, 2, true )
 
       if ( !( value instanceof IfcColourRgb ) && !( value instanceof IfcNormalisedRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -98,7 +98,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
     if ( this.SpecularColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 6, true )
+        this.extractReference( 6, 2, 2, true )
 
       if ( !( value instanceof IfcColourRgb ) && !( value instanceof IfcNormalisedRatioMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -115,7 +115,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
     if ( this.SpecularHighlight_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 7, true )
+        this.extractReference( 7, 2, 2, true )
 
       if ( !( value instanceof IfcSpecularExponent ) && !( value instanceof IfcSpecularRoughness ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -130,7 +130,7 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
 
   public get ReflectanceMethod() : IfcReflectanceMethodEnum {
     if ( this.ReflectanceMethod_ === void 0 ) {
-      this.ReflectanceMethod_ = this.extractLambda( 8, IfcReflectanceMethodEnumDeserializeStep, false )
+      this.ReflectanceMethod_ = this.extractLambda( 8, 2, 2, IfcReflectanceMethodEnumDeserializeStep, false )
     }
 
     return this.ReflectanceMethod_ as IfcReflectanceMethodEnum
@@ -138,7 +138,9 @@ export  class IfcSurfaceStyleRendering extends IfcSurfaceStyleShading {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

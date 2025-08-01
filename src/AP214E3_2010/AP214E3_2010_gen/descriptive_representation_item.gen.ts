@@ -18,7 +18,7 @@ export  class descriptive_representation_item extends representation_item {
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 1, 1, false )
     }
 
     return this.description_ as string
@@ -26,8 +26,26 @@ export  class descriptive_representation_item extends representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === descriptive_representation_item.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for descriptive_representation_item" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

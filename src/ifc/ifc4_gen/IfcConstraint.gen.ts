@@ -29,7 +29,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, false )
+      this.Name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Name_ as string
@@ -37,7 +37,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -45,7 +45,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
 
   public get ConstraintGrade() : IfcConstraintEnum {
     if ( this.ConstraintGrade_ === void 0 ) {
-      this.ConstraintGrade_ = this.extractLambda( 2, IfcConstraintEnumDeserializeStep, false )
+      this.ConstraintGrade_ = this.extractLambda( 2, 0, 0, IfcConstraintEnumDeserializeStep, false )
     }
 
     return this.ConstraintGrade_ as IfcConstraintEnum
@@ -53,7 +53,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
 
   public get ConstraintSource() : string | null {
     if ( this.ConstraintSource_ === void 0 ) {
-      this.ConstraintSource_ = this.extractString( 3, true )
+      this.ConstraintSource_ = this.extractString( 3, 0, 0, true )
     }
 
     return this.ConstraintSource_ as string | null
@@ -63,7 +63,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
     if ( this.CreatingActor_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 4, true )
+        this.extractReference( 4, 0, 0, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -78,7 +78,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
 
   public get CreationTime() : string | null {
     if ( this.CreationTime_ === void 0 ) {
-      this.CreationTime_ = this.extractString( 5, true )
+      this.CreationTime_ = this.extractString( 5, 0, 0, true )
     }
 
     return this.CreationTime_ as string | null
@@ -86,7 +86,7 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
 
   public get UserDefinedGrade() : string | null {
     if ( this.UserDefinedGrade_ === void 0 ) {
-      this.UserDefinedGrade_ = this.extractString( 6, true )
+      this.UserDefinedGrade_ = this.extractString( 6, 0, 0, true )
     }
 
     return this.UserDefinedGrade_ as string | null
@@ -96,7 +96,9 @@ export abstract class IfcConstraint extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

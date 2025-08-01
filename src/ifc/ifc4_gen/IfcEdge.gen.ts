@@ -19,7 +19,7 @@ export  class IfcEdge extends IfcTopologicalRepresentationItem {
 
   public get EdgeStart() : IfcVertex {
     if ( this.EdgeStart_ === void 0 ) {
-      this.EdgeStart_ = this.extractElement( 0, false, IfcVertex )
+      this.EdgeStart_ = this.extractElement( 0, 0, 2, false, IfcVertex )
     }
 
     return this.EdgeStart_ as IfcVertex
@@ -27,7 +27,7 @@ export  class IfcEdge extends IfcTopologicalRepresentationItem {
 
   public get EdgeEnd() : IfcVertex {
     if ( this.EdgeEnd_ === void 0 ) {
-      this.EdgeEnd_ = this.extractElement( 1, false, IfcVertex )
+      this.EdgeEnd_ = this.extractElement( 1, 0, 2, false, IfcVertex )
     }
 
     return this.EdgeEnd_ as IfcVertex
@@ -35,7 +35,9 @@ export  class IfcEdge extends IfcTopologicalRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

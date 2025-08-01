@@ -22,7 +22,7 @@ export  class annotation_occurrence_relationship extends StepEntityBase< EntityT
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -30,7 +30,7 @@ export  class annotation_occurrence_relationship extends StepEntityBase< EntityT
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -38,7 +38,7 @@ export  class annotation_occurrence_relationship extends StepEntityBase< EntityT
 
   public get relating_annotation_occurrence() : annotation_occurrence {
     if ( this.relating_annotation_occurrence_ === void 0 ) {
-      this.relating_annotation_occurrence_ = this.extractElement( 2, false, annotation_occurrence )
+      this.relating_annotation_occurrence_ = this.extractElement( 2, 0, 0, false, annotation_occurrence )
     }
 
     return this.relating_annotation_occurrence_ as annotation_occurrence
@@ -46,7 +46,7 @@ export  class annotation_occurrence_relationship extends StepEntityBase< EntityT
 
   public get related_annotation_occurrence() : annotation_occurrence {
     if ( this.related_annotation_occurrence_ === void 0 ) {
-      this.related_annotation_occurrence_ = this.extractElement( 3, false, annotation_occurrence )
+      this.related_annotation_occurrence_ = this.extractElement( 3, 0, 0, false, annotation_occurrence )
     }
 
     return this.related_annotation_occurrence_ as annotation_occurrence
@@ -54,8 +54,26 @@ export  class annotation_occurrence_relationship extends StepEntityBase< EntityT
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === annotation_occurrence_relationship.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for annotation_occurrence_relationship" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

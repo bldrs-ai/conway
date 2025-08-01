@@ -20,7 +20,7 @@ export  class IfcBuildingSystem extends IfcSystem {
 
   public get PredefinedType() : IfcBuildingSystemTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 5, IfcBuildingSystemTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 5, 5, 5, IfcBuildingSystemTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcBuildingSystemTypeEnum | null
@@ -28,7 +28,7 @@ export  class IfcBuildingSystem extends IfcSystem {
 
   public get LongName() : string | null {
     if ( this.LongName_ === void 0 ) {
-      this.LongName_ = this.extractString( 6, true )
+      this.LongName_ = this.extractString( 6, 5, 5, true )
     }
 
     return this.LongName_ as string | null
@@ -36,7 +36,9 @@ export  class IfcBuildingSystem extends IfcSystem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

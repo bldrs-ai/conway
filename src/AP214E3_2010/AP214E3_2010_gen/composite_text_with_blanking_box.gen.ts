@@ -18,7 +18,7 @@ export  class composite_text_with_blanking_box extends composite_text {
 
   public get blanking() : planar_box {
     if ( this.blanking_ === void 0 ) {
-      this.blanking_ = this.extractElement( 2, false, planar_box )
+      this.blanking_ = this.extractElement( 2, 2, 3, false, planar_box )
     }
 
     return this.blanking_ as planar_box
@@ -26,8 +26,26 @@ export  class composite_text_with_blanking_box extends composite_text {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === composite_text_with_blanking_box.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for composite_text_with_blanking_box" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

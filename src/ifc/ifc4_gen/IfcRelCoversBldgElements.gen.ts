@@ -26,7 +26,7 @@ export  class IfcRelCoversBldgElements extends IfcRelConnects {
 
   public get RelatingBuildingElement() : IfcElement {
     if ( this.RelatingBuildingElement_ === void 0 ) {
-      this.RelatingBuildingElement_ = this.extractElement( 4, false, IfcElement )
+      this.RelatingBuildingElement_ = this.extractElement( 4, 4, 3, false, IfcElement )
     }
 
     return this.RelatingBuildingElement_ as IfcElement
@@ -35,7 +35,7 @@ export  class IfcRelCoversBldgElements extends IfcRelConnects {
   public get RelatedCoverings() : Array<IfcCovering> {
     if ( this.RelatedCoverings_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,9 @@ export  class IfcRelCoversBldgElements extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

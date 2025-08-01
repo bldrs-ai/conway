@@ -33,7 +33,7 @@ export  class b_spline_curve extends bounded_curve {
 
   public get degree() : number {
     if ( this.degree_ === void 0 ) {
-      this.degree_ = this.extractNumber( 1, false )
+      this.degree_ = this.extractNumber( 1, 1, 4, false )
     }
 
     return this.degree_ as number
@@ -42,7 +42,7 @@ export  class b_spline_curve extends bounded_curve {
   public get control_points_list() : Array<cartesian_point> {
     if ( this.control_points_list_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -74,7 +74,7 @@ export  class b_spline_curve extends bounded_curve {
 
   public get curve_form() : b_spline_curve_form {
     if ( this.curve_form_ === void 0 ) {
-      this.curve_form_ = this.extractLambda( 3, b_spline_curve_formDeserializeStep, false )
+      this.curve_form_ = this.extractLambda( 3, 1, 4, b_spline_curve_formDeserializeStep, false )
     }
 
     return this.curve_form_ as b_spline_curve_form
@@ -82,7 +82,7 @@ export  class b_spline_curve extends bounded_curve {
 
   public get closed_curve() : boolean {
     if ( this.closed_curve_ === void 0 ) {
-      this.closed_curve_ = this.extractBoolean( 4, false )
+      this.closed_curve_ = this.extractBoolean( 4, 1, 4, false )
     }
 
     return this.closed_curve_ as boolean
@@ -90,7 +90,7 @@ export  class b_spline_curve extends bounded_curve {
 
   public get self_intersect() : boolean {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 5, false )
+      this.self_intersect_ = this.extractBoolean( 5, 1, 4, false )
     }
 
     return this.self_intersect_ as boolean
@@ -106,8 +106,26 @@ export  class b_spline_curve extends bounded_curve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === b_spline_curve.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for b_spline_curve" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

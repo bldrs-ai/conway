@@ -23,7 +23,7 @@ export  class swept_disk_solid extends solid_model {
 
   public get directrix() : curve {
     if ( this.directrix_ === void 0 ) {
-      this.directrix_ = this.extractElement( 1, false, curve )
+      this.directrix_ = this.extractElement( 1, 1, 3, false, curve )
     }
 
     return this.directrix_ as curve
@@ -31,7 +31,7 @@ export  class swept_disk_solid extends solid_model {
 
   public get radius() : number {
     if ( this.radius_ === void 0 ) {
-      this.radius_ = this.extractNumber( 2, false )
+      this.radius_ = this.extractNumber( 2, 1, 3, false )
     }
 
     return this.radius_ as number
@@ -39,7 +39,7 @@ export  class swept_disk_solid extends solid_model {
 
   public get inner_radius() : number | null {
     if ( this.inner_radius_ === void 0 ) {
-      this.inner_radius_ = this.extractNumber( 3, true )
+      this.inner_radius_ = this.extractNumber( 3, 1, 3, true )
     }
 
     return this.inner_radius_ as number | null
@@ -47,7 +47,7 @@ export  class swept_disk_solid extends solid_model {
 
   public get start_param() : number {
     if ( this.start_param_ === void 0 ) {
-      this.start_param_ = this.extractNumber( 4, false )
+      this.start_param_ = this.extractNumber( 4, 1, 3, false )
     }
 
     return this.start_param_ as number
@@ -55,7 +55,7 @@ export  class swept_disk_solid extends solid_model {
 
   public get end_param() : number {
     if ( this.end_param_ === void 0 ) {
-      this.end_param_ = this.extractNumber( 5, false )
+      this.end_param_ = this.extractNumber( 5, 1, 3, false )
     }
 
     return this.end_param_ as number
@@ -63,8 +63,26 @@ export  class swept_disk_solid extends solid_model {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === swept_disk_solid.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for swept_disk_solid" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

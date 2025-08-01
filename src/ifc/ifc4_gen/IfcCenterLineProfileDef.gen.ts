@@ -18,7 +18,7 @@ export  class IfcCenterLineProfileDef extends IfcArbitraryOpenProfileDef {
 
   public get Thickness() : number {
     if ( this.Thickness_ === void 0 ) {
-      this.Thickness_ = this.extractNumber( 3, false )
+      this.Thickness_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.Thickness_ as number
@@ -26,7 +26,9 @@ export  class IfcCenterLineProfileDef extends IfcArbitraryOpenProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

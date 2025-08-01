@@ -26,7 +26,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get OverallWidth() : number {
     if ( this.OverallWidth_ === void 0 ) {
-      this.OverallWidth_ = this.extractNumber( 3, false )
+      this.OverallWidth_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.OverallWidth_ as number
@@ -34,7 +34,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get OverallDepth() : number {
     if ( this.OverallDepth_ === void 0 ) {
-      this.OverallDepth_ = this.extractNumber( 4, false )
+      this.OverallDepth_ = this.extractNumber( 4, 3, 2, false )
     }
 
     return this.OverallDepth_ as number
@@ -42,7 +42,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get WebThickness() : number {
     if ( this.WebThickness_ === void 0 ) {
-      this.WebThickness_ = this.extractNumber( 5, false )
+      this.WebThickness_ = this.extractNumber( 5, 3, 2, false )
     }
 
     return this.WebThickness_ as number
@@ -50,7 +50,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get FlangeThickness() : number {
     if ( this.FlangeThickness_ === void 0 ) {
-      this.FlangeThickness_ = this.extractNumber( 6, false )
+      this.FlangeThickness_ = this.extractNumber( 6, 3, 2, false )
     }
 
     return this.FlangeThickness_ as number
@@ -58,7 +58,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get FilletRadius() : number | null {
     if ( this.FilletRadius_ === void 0 ) {
-      this.FilletRadius_ = this.extractNumber( 7, true )
+      this.FilletRadius_ = this.extractNumber( 7, 3, 2, true )
     }
 
     return this.FilletRadius_ as number | null
@@ -66,7 +66,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get FlangeEdgeRadius() : number | null {
     if ( this.FlangeEdgeRadius_ === void 0 ) {
-      this.FlangeEdgeRadius_ = this.extractNumber( 8, true )
+      this.FlangeEdgeRadius_ = this.extractNumber( 8, 3, 2, true )
     }
 
     return this.FlangeEdgeRadius_ as number | null
@@ -74,7 +74,7 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get FlangeSlope() : number | null {
     if ( this.FlangeSlope_ === void 0 ) {
-      this.FlangeSlope_ = this.extractNumber( 9, true )
+      this.FlangeSlope_ = this.extractNumber( 9, 3, 2, true )
     }
 
     return this.FlangeSlope_ as number | null
@@ -82,7 +82,9 @@ export  class IfcIShapeProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

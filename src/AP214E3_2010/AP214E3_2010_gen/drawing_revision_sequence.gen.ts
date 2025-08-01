@@ -18,7 +18,7 @@ export  class drawing_revision_sequence extends StepEntityBase< EntityTypesAP214
 
   public get predecessor() : drawing_revision {
     if ( this.predecessor_ === void 0 ) {
-      this.predecessor_ = this.extractElement( 0, false, drawing_revision )
+      this.predecessor_ = this.extractElement( 0, 0, 0, false, drawing_revision )
     }
 
     return this.predecessor_ as drawing_revision
@@ -26,7 +26,7 @@ export  class drawing_revision_sequence extends StepEntityBase< EntityTypesAP214
 
   public get successor() : drawing_revision {
     if ( this.successor_ === void 0 ) {
-      this.successor_ = this.extractElement( 1, false, drawing_revision )
+      this.successor_ = this.extractElement( 1, 0, 0, false, drawing_revision )
     }
 
     return this.successor_ as drawing_revision
@@ -34,8 +34,26 @@ export  class drawing_revision_sequence extends StepEntityBase< EntityTypesAP214
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === drawing_revision_sequence.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for drawing_revision_sequence" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

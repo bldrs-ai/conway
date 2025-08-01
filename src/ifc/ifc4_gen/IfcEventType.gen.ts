@@ -22,7 +22,7 @@ export  class IfcEventType extends IfcTypeProcess {
 
   public get PredefinedType() : IfcEventTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcEventTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 4, IfcEventTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcEventTypeEnum
@@ -30,7 +30,7 @@ export  class IfcEventType extends IfcTypeProcess {
 
   public get EventTriggerType() : IfcEventTriggerTypeEnum {
     if ( this.EventTriggerType_ === void 0 ) {
-      this.EventTriggerType_ = this.extractLambda( 10, IfcEventTriggerTypeEnumDeserializeStep, false )
+      this.EventTriggerType_ = this.extractLambda( 10, 9, 4, IfcEventTriggerTypeEnumDeserializeStep, false )
     }
 
     return this.EventTriggerType_ as IfcEventTriggerTypeEnum
@@ -38,7 +38,7 @@ export  class IfcEventType extends IfcTypeProcess {
 
   public get UserDefinedEventTriggerType() : string | null {
     if ( this.UserDefinedEventTriggerType_ === void 0 ) {
-      this.UserDefinedEventTriggerType_ = this.extractString( 11, true )
+      this.UserDefinedEventTriggerType_ = this.extractString( 11, 9, 4, true )
     }
 
     return this.UserDefinedEventTriggerType_ as string | null
@@ -46,7 +46,9 @@ export  class IfcEventType extends IfcTypeProcess {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class IfcHeatExchanger extends IfcEnergyConversionDevice {
 
   public get PredefinedType() : IfcHeatExchangerTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcHeatExchangerTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcHeatExchangerTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcHeatExchangerTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcHeatExchanger extends IfcEnergyConversionDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

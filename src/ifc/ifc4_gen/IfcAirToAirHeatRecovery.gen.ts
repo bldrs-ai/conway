@@ -18,7 +18,7 @@ export  class IfcAirToAirHeatRecovery extends IfcEnergyConversionDevice {
 
   public get PredefinedType() : IfcAirToAirHeatRecoveryTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcAirToAirHeatRecoveryTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcAirToAirHeatRecoveryTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcAirToAirHeatRecoveryTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcAirToAirHeatRecovery extends IfcEnergyConversionDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

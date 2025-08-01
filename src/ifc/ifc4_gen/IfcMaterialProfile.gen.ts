@@ -27,7 +27,7 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, true )
+      this.Name_ = this.extractString( 0, 0, 1, true )
     }
 
     return this.Name_ as string | null
@@ -35,7 +35,7 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -43,7 +43,7 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
 
   public get Material() : IfcMaterial | null {
     if ( this.Material_ === void 0 ) {
-      this.Material_ = this.extractElement( 2, true, IfcMaterial )
+      this.Material_ = this.extractElement( 2, 0, 1, true, IfcMaterial )
     }
 
     return this.Material_ as IfcMaterial | null
@@ -51,7 +51,7 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
 
   public get Profile() : IfcProfileDef {
     if ( this.Profile_ === void 0 ) {
-      this.Profile_ = this.extractElement( 3, false, IfcProfileDef )
+      this.Profile_ = this.extractElement( 3, 0, 1, false, IfcProfileDef )
     }
 
     return this.Profile_ as IfcProfileDef
@@ -59,7 +59,7 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
 
   public get Priority() : number | null {
     if ( this.Priority_ === void 0 ) {
-      this.Priority_ = this.extractNumber( 4, true )
+      this.Priority_ = this.extractNumber( 4, 0, 1, true )
     }
 
     return this.Priority_ as number | null
@@ -67,7 +67,7 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
 
   public get Category() : string | null {
     if ( this.Category_ === void 0 ) {
-      this.Category_ = this.extractString( 5, true )
+      this.Category_ = this.extractString( 5, 0, 1, true )
     }
 
     return this.Category_ as string | null
@@ -76,7 +76,9 @@ export  class IfcMaterialProfile extends IfcMaterialDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

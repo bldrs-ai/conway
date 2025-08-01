@@ -26,7 +26,7 @@ export  class IfcRelDefinesByObject extends IfcRelDefines {
   public get RelatedObjects() : Array<IfcObject> {
     if ( this.RelatedObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -58,7 +58,7 @@ export  class IfcRelDefinesByObject extends IfcRelDefines {
 
   public get RelatingObject() : IfcObject {
     if ( this.RelatingObject_ === void 0 ) {
-      this.RelatingObject_ = this.extractElement( 5, false, IfcObject )
+      this.RelatingObject_ = this.extractElement( 5, 4, 3, false, IfcObject )
     }
 
     return this.RelatingObject_ as IfcObject
@@ -66,7 +66,9 @@ export  class IfcRelDefinesByObject extends IfcRelDefines {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

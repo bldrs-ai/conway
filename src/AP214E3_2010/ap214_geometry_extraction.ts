@@ -35,10 +35,15 @@ import {
   ParamsCreateNativeIfcProfile,
   NativeTransform3x3,
   NativeTransform4x4,
+  FlattenedPointsResult,
+  ParamsAddFaceToGeometrySimple,
+  ParamsGetIfcLine,
+  ParamsLocalPlacement,
 } from '../../dependencies/conway-geom'
 import { CanonicalMaterial, ColorRGBA } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { CanonicalProfile } from '../core/canonical_profile'
+import { CsgMemoization } from '../core/csg_operations'
 import { ObjectPool } from '../core/native_pool'
 import {
   NativeULongVector,
@@ -53,11 +58,14 @@ import {
   NativeVectorSegment,
   WasmModule,
 } from '../core/native_types'
+import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
 import {
-  advanced_brep_shape_representation,
-  advanced_face, annotation_occurrence, annotation_plane, axis1_placement,
+  advanced_face,
+  annotation_occurrence,
+  assembly_component_usage,
+  axis1_placement,
   axis2_placement_2d,
   axis2_placement_3d,
   b_spline_curve,
@@ -71,7 +79,10 @@ import {
   circle,
   colour_rgb,
   composite_curve,
+  composite_curve_segment,
+  conical_surface,
   connected_face_set,
+  context_dependent_shape_representation,
   curve,
   cylindrical_surface,
   direction,
@@ -83,12 +94,15 @@ import {
   face,
   face_based_surface_model,
   faceted_brep,
+  fill_area_style_colour,
   geometrically_bounded_2d_wireframe_representation,
   half_space_solid,
+  item_defined_transformation,
   line,
   loop,
   manifold_solid_brep,
   mapped_item,
+  next_assembly_usage_occurrence,
   parameter_value,
   pcurve,
   placement, plane,
@@ -102,26 +116,35 @@ import {
   rational_b_spline_curve,
   rational_b_spline_surface,
   representation_item,
+  representation_relationship_with_transformation,
+  seam_curve,
   shape_definition_representation,
   shape_representation,
   shell_based_surface_model,
   si_prefix,
+  source,
+  spherical_surface,
   styled_item,
+  surface,
   surface_curve,
   surface_of_linear_extrusion,
   surface_of_revolution,
   surface_side,
+  surface_style_fill_area,
   surface_style_rendering,
   surface_style_usage,
+  toroidal_surface,
   trimmed_curve,
   trimming_preference,
+  vertex,
   vertex_point,
   view_volume,
 } from './AP214E3_2010_gen'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
 import { AP214MaterialCache } from './ap214_material_cache'
+import AP214ModelCurves from './ap214_model_curves'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
-import { AP214SceneBuilder, AP214SceneTransform } from './ap214_scene_builder'
+import { AP214SceneBuilder, AP214SceneNode, AP214SceneTransform } from './ap214_scene_builder'
 import AP214StepModel from './ap214_step_model'
 
 
@@ -199,6 +222,8 @@ export class AP214GeometryExtraction {
 
   public readonly productShapeMap: AP214ProductShapeMap
 
+ // private readonly 
+
   private linearScalingFactor: number
 
   private circleSegments: number = 12
@@ -210,18 +235,37 @@ export class AP214GeometryExtraction {
 
   private paramsGetPolyCurvePool:ObjectPool<ParamsGetPolyCurve> | undefined
 
-  private identity2DNativeMatrix: any
-  private identity3DNativeMatrix: any
+  public pointBuffer: FlattenedPointsResult | null = null
+
+  private identity2DNativeMatrix: NativeTransform3x3
+  private identity3DNativeMatrix: NativeTransform4x4
+  
+  private csgMemoization: boolean = true
+
+  private csgDepth: number = 0
+
+  public readonly curves: AP214ModelCurves
+
+  public readonly csgOperations: CsgMemoization
 
   /**
    * Construct a geometry extraction from an AP214 step model and conway model
    *
    * @param conwayModel
    * @param model
+   * @param limitCSGDepth Whether to limit the depth of CSG operations.
+   * @param csgDepthLimit The maximum depth for CSG operations when limit CSG depth is used,
+   * or the maximum level for CSG memoization if it is not.
+   * @param lowMemoryMode Whether to enable low memory mode for geometry extraction.
    */
   constructor(
     private readonly conwayModel: ConwayGeometry,
-    public readonly model: AP214StepModel) {
+    public readonly model: AP214StepModel,
+    private readonly limitCSGDepth: boolean = true,
+    private readonly csgDepthLimit: number = 20,
+    private readonly lowMemoryMode: boolean = false ) {
+
+    this.csgMemoization = !this.lowMemoryMode
 
     this.materials = new AP214MaterialCache()
     this.scene = new AP214SceneBuilder(model, conwayModel, this.materials)
@@ -229,8 +273,13 @@ export class AP214GeometryExtraction {
 
     this.linearScalingFactor = 1
     this.wasmModule = conwayModel.wasmModule
-    this.getIdentityMatrices()
+
+    this.identity2DNativeMatrix = this.wasmModule.getIdentity2DMatrix()
+    this.identity3DNativeMatrix = this.wasmModule.getIdentity3DMatrix()
+
     this.initializeMemoryPools()
+    this.curves = model.curves
+    this.csgOperations = model.csgOperations
   }
 
   /**
@@ -317,14 +366,6 @@ export class AP214GeometryExtraction {
     }
   }
 
-  /**
-   * Retrieves and stores identity matrices from the WebAssembly module.
-   */
-  getIdentityMatrices() {
-    this.identity2DNativeMatrix = this.wasmModule.getIdentity2DMatrix()
-    this.identity3DNativeMatrix = this.wasmModule.getIdentity3DMatrix()
-  }
-
 
   /**
    *
@@ -378,44 +419,6 @@ export class AP214GeometryExtraction {
   }
 
   /**
-   * Create a native material from a canonical one.
-   *
-   * @param from The material to create the native material from
-   * @return {MaterialObject} The created canonical material.
-   */
-  nativeMaterial(from: CanonicalMaterial): MaterialObject {
-    /**
-      - Glass: ~1.5
-      - Water: ~1.33
-      - Plastics (like acrylic): ~1.3 - 1.5
-      - Most common materials fall within the range of 1.3 to 1.5.
-     */
-    const IOR_PLASTIC = 1.4
-    const native: MaterialObject = {
-
-      alphaCutoff: 0,
-      alphaMode: toAlphaMode(this.wasmModule, from.blend),
-      base: {
-        x: from.baseColor[0],
-        y: from.baseColor[1],
-        z: from.baseColor[2],
-        w: from.baseColor[3],
-      },
-      doubleSided: from.doubleSided,
-      ior: from.ior ?? IOR_PLASTIC,
-      metallic: from.metalness ?? 1.0,
-      roughness: from.roughness ?? 1.0,
-      specular: from.specular !== void 0 ? {
-        x: from.specular[0],
-        y: from.specular[1],
-        z: from.specular[2],
-        w: from.specular[3],
-      } : void 0,
-    }
-    return native
-  }
-
-  /**
    *
    * @param initialSize number - initial size of the vector (optional)
    * @return {NativeVectorGlmVec2} - a native std::vector<glm::vec2> from the wasm module
@@ -444,7 +447,7 @@ export class AP214GeometryExtraction {
 
     if (initialSize) {
       // resize has a required second parameter to set default values
-      const defaultProfile = new (this.wasmModule.AP214Profile as any)
+      const defaultProfile = new (this.wasmModule.IfcProfile as any)
       nativeVectorProfile_.resize(initialSize, defaultProfile)
     }
 
@@ -463,7 +466,7 @@ export class AP214GeometryExtraction {
 
     if (initialSize) {
       // resize has a required second parameter to set default values
-      const defaultCurve = new (this.wasmModule.AP214Curve as any)
+      const defaultCurve = new (this.wasmModule.IfcCurve as any)
       nativeVectorCurve_.resize(initialSize, defaultCurve)
     }
 
@@ -1080,9 +1083,34 @@ export class AP214GeometryExtraction {
 
           const surfaceColor = extractColorRGBPremultiplied(style.surface_colour, 1)
 
+          newMaterial.baseColor = surfaceColor
           newMaterial.legacyColor = surfaceColor
           newMaterial.roughness = 1
 
+        } else if ( style instanceof surface_style_fill_area ) {
+
+          const fillAreaStyles = style.fill_area.fill_styles
+
+          const fillAreaColor =
+            fillAreaStyles.find(
+              ( value => value instanceof fill_area_style_colour ) ) as fill_area_style_colour |
+              undefined
+
+          if ( fillAreaColor !== void 0 ) {
+
+            const fillColor = fillAreaColor.fill_colour
+
+            if ( !(fillColor instanceof colour_rgb ) ) {
+
+              continue
+            }
+
+            const surfaceColor = extractColorRGBPremultiplied(fillColor, 1)
+
+            newMaterial.baseColor = surfaceColor
+            newMaterial.legacyColor = surfaceColor
+            newMaterial.roughness = 1            
+          }
         }
 
         /* TODO - other surface styles */
@@ -1287,46 +1315,8 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
-   * @return {CurveObject | undefined}
-   */
-  extractCompositeCurve( from: composite_curve ): CurveObject | undefined {
-
-    let compositeCurve: CurveObject | undefined
-
-    for (let i = 0; i < from.segments.length; i++) {
-      const parentCurve = from.segments[i].parent_curve
-
-      let currentCurveObject: CurveObject | undefined = void 0
-
-      if ( parentCurve instanceof composite_curve ) {
-
-        currentCurveObject = this.extractCompositeCurve(parentCurve)
-
-      } else {
-
-        currentCurveObject = this.extractCurve(from.segments[i].parent_curve)
-
-      }
-
-      if ( currentCurveObject !== void 0 ) {
-        if (i === 0) {
-          compositeCurve = currentCurveObject
-        } else {
-
-          // Note, copying 3D points is fine here because 2D points are just 3D points with Z = 0
-          for (let j = 0; j < currentCurveObject.getPointsSize(); ++j) {
-            compositeCurve!.add3d(currentCurveObject.get3d(j))
-          }
-        }
-      }
-    }
-
-    return compositeCurve
-  }
-
-  /**
-   *
-   * @param from
+   * @param parentSense
+   * @param isEdge
    * @param trimmingArguments
    * @return {CurveObject | undefined}
    */
@@ -1339,54 +1329,183 @@ export class AP214GeometryExtraction {
       b_spline_curve_with_knots |
       rational_b_spline_curve |
       line,
+      parentSense:boolean = true,
+      isEdge:boolean = false,
       trimmingArguments: TrimmingArguments | undefined = void 0) :
     CurveObject | undefined {
 
-    // console.log("[extractCurve]: curve express ID: "
+    let stepCurve: CurveObject | undefined
+
+    stepCurve = this.curves.get( from.localID )
+
+    if ( stepCurve !== void 0 ) {
+      
+      return stepCurve
+    }
+
+      // console.log("[extractCurve]: curve express ID: "
     // + from.expressID + " type: " + EntityTypesAP214[from.type])
 
     if ( from instanceof b_spline_curve ) {
 
-      const bsplineCurve = this.extractBSplineCurve(from)
+      stepCurve = this.extractBSplineCurve( from, parentSense, isEdge )
+    
+    } else if ( from instanceof trimmed_curve ) {
 
-      return bsplineCurve
+      stepCurve = this.extractAP214TrimmedCurve(from, parentSense, isEdge)
+
+    } else if ( from instanceof polyline ) {
+
+      stepCurve = this.extractPolyline(from, parentSense, isEdge)
+
+    } else  if ( from instanceof circle ) {
+
+      let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+      
+      if ( trimmingArguments?.exist ) {
+        paramsGetIfcTrimmedCurve = {
+          masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
+          dimensions: 3,
+          senseAgreement: parentSense,
+          trim1Cartesian2D: trimmingArguments.start?.pos,
+          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Double: trimmingArguments.start?.param ?? 0,
+          trim2Cartesian2D:  trimmingArguments.end?.pos,
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Double:  trimmingArguments.end?.param ?? 0,
+          trimExists: true
+        }
+      }
+
+      stepCurve = this.extractAP214Circle(from, parentSense, paramsGetIfcTrimmedCurve)
+
+    } else if ( from instanceof ellipse ) {
+
+      let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+      
+      if ( trimmingArguments?.exist ) {
+        paramsGetIfcTrimmedCurve = {
+          masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
+          dimensions: 3,
+          senseAgreement: parentSense,
+          trim1Cartesian2D: trimmingArguments.start?.pos,
+          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Double: trimmingArguments.start?.param ?? 0,
+          trim2Cartesian2D:  trimmingArguments.end?.pos,
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Double:  trimmingArguments.end?.param ?? 0,
+          trimExists: true
+        }
+      }
+
+      stepCurve = this.extractAP214Ellipse(from, parentSense, paramsGetIfcTrimmedCurve)
+
+    } else if ( from instanceof surface_curve ) {
+
+      stepCurve = this.extractCurve(from.curve_3d, parentSense, isEdge, trimmingArguments)
+
+    } else if ( from instanceof line ) {
+
+      let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+      
+      if ( trimmingArguments?.exist ) {
+        paramsGetIfcTrimmedCurve = {
+          masterRepresentation: ( trimmingArguments.start?.hasPos ) ? 0 : 1,
+          dimensions: 3,
+          senseAgreement: parentSense,
+          trim1Cartesian2D: trimmingArguments.start?.pos,
+          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Double: trimmingArguments.start?.param ?? 0,
+          trim2Cartesian2D:  trimmingArguments.end?.pos,
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Double:  trimmingArguments.end?.param ?? 0,
+          trimExists: true
+        }
+      }  
+
+      stepCurve = this.extractLine( from, parentSense, isEdge, paramsGetIfcTrimmedCurve)
+ 
+    } else if ( from instanceof composite_curve ) {
+
+      stepCurve = this.extractCompositeCurve( from, parentSense )
+
+    } else if ( from instanceof composite_curve_segment ) {
+
+      const parentCurve = from.parent_curve
+      const sameSense = from.same_sense === parentSense
+
+      stepCurve = this.extractCurve( parentCurve, sameSense, isEdge )
+
+    } else if ( from instanceof pcurve ) {
+
+      stepCurve = this.extractPScurve1(from)
+
+    } 
+    
+    if ( stepCurve === void 0 ) {
+ 
+      Logger.warning(`Unsupported Curve! Type: ${EntityTypesAP214[from.type]}`)
+      return
     }
 
-    if ( from instanceof trimmed_curve ) {
+    this.curves.add( from.localID, stepCurve )
 
-      const trimmedCurve = this.extractAP214TrimmedCurve(from)
-
-      return trimmedCurve
-    }
-
-    if (from instanceof polyline) {
-
-      const polyCurve = this.extractPolyline(from)
-
-      return polyCurve
-    }
-
-    if ( from instanceof circle ) {
-
-      const circleCurve = this.extractAP214Circle(from)
-
-      return circleCurve
-    }
-
-    if ( from instanceof surface_curve ) {
-
-      return this.extractCurve(from.curve_3d, trimmingArguments)
-    }
-
-    if ( from instanceof line ) {
-
-      const lineCurve = this.extractLine( from, trimmingArguments )
-
-      return lineCurve
-    }
-
-    console.log(`Unsupported Curve! Type: ${EntityTypesAP214[from.type]}`)
+    return stepCurve
   }
+
+
+  /**
+   *
+   * @param from
+   * @param parentSense
+   * @param close
+   * @return {CurveObject | undefined}
+   */
+  extractCompositeCurve(from: composite_curve,
+      parentSense:boolean = true,
+      close:boolean = false,
+  ): CurveObject | undefined {
+    let compositeCurve: CurveObject | undefined
+    for (let i = 0; i < from.segments.length; i++) {
+      const parentCurve = from.segments[i].parent_curve
+      let currentCurveObject
+
+      const sameSense = from.segments[i].same_sense === parentSense
+
+      if (parentCurve instanceof composite_curve) {
+        currentCurveObject = this.extractCompositeCurve(parentCurve, true)
+      } else {
+        currentCurveObject = this.extractCurve(from.segments[i].parent_curve, true)
+      }
+
+      if (currentCurveObject !== undefined) {
+
+        if ( !sameSense ) {
+
+          currentCurveObject = currentCurveObject.clone()
+          currentCurveObject.invert()
+        }
+
+        if (i === 0) {
+          compositeCurve = currentCurveObject
+        } else if (from.segments[i].Dim === this.TWO_DIMENSIONS) {
+          for (let j = 0; j < currentCurveObject.getPointsSize(); ++j) {
+            compositeCurve!.add2d(currentCurveObject.get2d(j))
+          }
+        } else if (from.segments[i].Dim === this.THREE_DIMENSIONS) {
+          for (let j = 0; j < currentCurveObject.getPointsSize(); ++j) {
+            compositeCurve!.add3d(currentCurveObject.get3d(j))
+          }
+        }
+      }
+    }
+
+    if ( close ) {
+      compositeCurve?.add3d( compositeCurve.get3d( 0 ) )
+    }
+
+    return compositeCurve
+  }  
 
   /**
    *
@@ -1403,7 +1522,6 @@ export class AP214GeometryExtraction {
     }
 
     const point = surface.position.location.coordinates
-
 
     const dim   = point.length
 
@@ -1447,82 +1565,94 @@ export class AP214GeometryExtraction {
    *
    * @param from The line to extract.
    * @param trimmingArguments
+   * @param parentSense
+   * @param isEdge
+   * @param parametersTrimmedCurve
    * @return {CurveObject | undefined} The curve object for the line.
    */
-  extractLine( from: line, trimmingArguments?: TrimmingArguments ): CurveObject | undefined {
+  extractLine(
+      from: line,
+      parentSense:boolean = true,
+      isEdge:boolean = false,
+      parametersTrimmedCurve?: ParamsGetIfcTrimmedCurve ): CurveObject | undefined {
 
-    if ( trimmingArguments === void 0 ) {
-      const point = from.pnt.coordinates
-
-
-      const dim   = point.length
-
-      const pointsFlattened = new Float32Array( dim * 1 )
-
-      pointsFlattened[ 0 ] = point[ 0 ]
-      pointsFlattened[ 1 ] = point[ 1 ]
-
-       
-      if ( dim > 2 ) {
-
-        pointsFlattened[ 2 ] = point[ 2 ]
-
-      }
-
-      const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
-
-      const parameters = this.paramsGetPolyCurvePool!.acquire()
-
-      parameters.points = pointsPtr
-      parameters.pointsLength = 1
-      parameters.dimensions = dim
-
-      const curve_ = this.conwayModel.getPolyCurve(parameters)
-
-      this.paramsGetPolyCurvePool!.release(parameters)
-
-      this.wasmModule._free(pointsPtr)
-
-      return curve_
-
-    } else {
-
-       
-      const pointsFlattened = new Float32Array( 6 )
-
-      pointsFlattened[ 0 ] = trimmingArguments.start?.pos3D?.x ?? 0
-      pointsFlattened[ 1 ] = trimmingArguments.start?.pos3D?.y ?? 0
-      pointsFlattened[ 2 ] = trimmingArguments.start?.pos3D?.z ?? 0
-      pointsFlattened[ 3 ] = trimmingArguments.end?.pos3D?.x ?? 0
-      pointsFlattened[ 4 ] = trimmingArguments.end?.pos3D?.y ?? 0
-      pointsFlattened[ 5 ] = trimmingArguments.end?.pos3D?.z ?? 0
-
-      const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
-
-      const parameters = this.paramsGetPolyCurvePool!.acquire()
-
-      parameters.points = pointsPtr
-      parameters.pointsLength = 2
-      parameters.dimensions = 3
-
-      const curve_ = this.conwayModel.getPolyCurve(parameters)
-
-      this.paramsGetPolyCurvePool!.release(parameters)
-
-      this.wasmModule._free(pointsPtr)
-
-      return curve_
-
+    parametersTrimmedCurve ??= {
+      masterRepresentation: 0,
+      dimensions: 0,
+      senseAgreement: true,
+      trim1Cartesian2D: undefined,
+      trim1Cartesian3D: undefined,
+      trim1Double: 0,
+      trim2Cartesian2D: undefined,
+      trim2Cartesian3D: undefined,
+      trim2Double: 0,
+      trimExists: false,
     }
+    // This potentially mutates a paremeter, but the trimming parameters should always be
+    // specific to this single curve. - CS
+    parametersTrimmedCurve.senseAgreement = parametersTrimmedCurve.senseAgreement === parentSense
+
+    let cartesianPoint2D: Vector2 = { x: 0, y: 0 }
+    let cartesianPoint3D: Vector3 = { x: 0, y: 0, z: 0 }
+    let vectorOrientation: Vector3 = { x: 0, y: 0, z: 0 }
+
+    const cartesianPointArray =  from.pnt.coordinates
+
+    if ( cartesianPointArray.length === this.TWO_DIMENSIONS) {
+      cartesianPoint2D = {
+        x: cartesianPointArray[0],
+        y: cartesianPointArray[1],
+      }
+    } else if ( cartesianPointArray.length === this.THREE_DIMENSIONS) {
+      cartesianPoint3D = {
+        x: cartesianPointArray[0],
+        y: cartesianPointArray[1],
+        z: cartesianPointArray[2],
+      }
+    }
+
+    const vectorDirectionRatios = from.dir.orientation.direction_ratios
+
+    vectorOrientation = {
+      x: vectorDirectionRatios[0],
+      y: vectorDirectionRatios[1],
+      z: vectorDirectionRatios[2] ?? 0,
+    }
+
+    const vectorMagnitude = from.dir.magnitude
+
+    const parametersIfcLine: ParamsGetIfcLine = {
+      dimensions: vectorDirectionRatios.length,
+      cartesianPoint2D: cartesianPoint2D,
+      cartesianPoint3D: cartesianPoint3D,
+      vectorOrientation: vectorOrientation,
+      vectorMagnitude: vectorMagnitude,
+      isEdge: isEdge,
+      paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+    }
+
+    parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
+    parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
+
+    const curve: CurveObject = this.conwayModel.getIfcLine(parametersIfcLine)
+
+    return curve
   }
 
   /**
    * Exctact a BSpline Curve
    *
    * @param from The bspline curve, potentially with knots/rational.
+   * @param parentSense
+   * @param isEdge
    * @return {CurveObject} The constructed curve object.
    */
-  extractBSplineCurve(from: b_spline_curve): CurveObject {
+  extractBSplineCurve(
+    from: b_spline_curve,
+    parentSense: boolean = true,
+    isEdge: boolean = false ): CurveObject {
 
     // degree is NOT dimensions (NC)
     let dimensions: number = 3
@@ -1539,11 +1669,10 @@ export class AP214GeometryExtraction {
       points3: this.nativeVectorGlmdVec3(),
       knots: this.conwayModel.nativeVectorDouble(),
       weights: this.conwayModel.nativeVectorDouble(),
-      senseAgreement: true,
-      isEdge: false,
+      senseAgreement: parentSense,
+      isEdge: isEdge,
     }
 
-     
     if (dimensions === 2) {
 
       const outputPoints = params.points2
@@ -1559,8 +1688,7 @@ export class AP214GeometryExtraction {
 
       const outputPoints = params.points3
 
-      for (const point of from.control_points_list) {
-
+      for ( const point of from.control_points_list ) {
          
         if (point.coordinates.length !== 3) {
           continue
@@ -1575,44 +1703,52 @@ export class AP214GeometryExtraction {
 
     }
 
-    if (from instanceof rational_b_spline_curve) {
+    const rational = from.findVariant( rational_b_spline_curve )
+    const knotsCurve = from.findVariant( b_spline_curve_with_knots )
+
+    // TODO - handle multiple inheritence case - CS
+
+    if ( rational !== void 0 ) {
 
       const outputWeights = params.weights
 
-      for (const weight of from.weights_data) {
+      for (const weight of rational.weights_data) {
 
-        outputWeights.push_back(weight)
+        outputWeights.push_back( weight )
       }
-    } else {
+
+    } else  {
       // create default weights
       const outputWeights = params.weights
 
-      if (dimensions === this.TWO_DIMENSIONS) {
+      if ( dimensions === this.TWO_DIMENSIONS ) {
         for (let weightIndex = 0; weightIndex < params.points2.size(); ++weightIndex) {
           outputWeights.push_back(1.0)
         }
-      } else if (dimensions === this.THREE_DIMENSIONS) {
+      } else if ( dimensions === this.THREE_DIMENSIONS ) {
         for (let weightIndex = 0; weightIndex < params.points3.size(); ++weightIndex) {
           outputWeights.push_back(1.0)
         }
       }
     }
 
-    if (from instanceof b_spline_curve_with_knots) {
-      const knots = params.knots
+    if ( knotsCurve !== void 0 ) {
 
-      for (let knotIndex = 0; knotIndex < from.knots.length; ++knotIndex) {
-        const knot = from.knots[knotIndex]
+      const knots = params.knots
+      const knotsValues = knotsCurve.knots
+      const knotMultiplicities = knotsCurve.knot_multiplicities
+
+      for (let knotIndex = 0; knotIndex < knotsValues.length; ++knotIndex) {
+        const knot = knotsValues[knotIndex]
 
         for (let knotMultiplicityIndex = 0;
-          knotMultiplicityIndex < from.knot_multiplicities[knotIndex]; ++knotMultiplicityIndex) {
+          knotMultiplicityIndex < knotMultiplicities[knotIndex]; ++knotMultiplicityIndex) {
           knots.push_back(knot)
         }
       }
 
     } else {
-      // This is just a AP214BsplineCurve, build default parameter lists
-       
+
       if (dimensions === this.TWO_DIMENSIONS) {
         // build default knots
         const outputKnots = params.knots
@@ -1621,12 +1757,6 @@ export class AP214GeometryExtraction {
           outputKnots.push_back(pointIndex)
         }
 
-        const outputWeights = params.weights
-
-        for (let pointIndex = 0; pointIndex < params.points2.size(); ++pointIndex) {
-
-          outputWeights.push_back(1.0)
-        }
       } else if (dimensions === this.THREE_DIMENSIONS) {
         // build default knots
         const outputKnots = params.knots
@@ -1634,16 +1764,9 @@ export class AP214GeometryExtraction {
           pointIndex < params.points3.size() + params.degree + 1; ++pointIndex) {
           outputKnots.push_back(pointIndex)
         }
-
-        const outputWeights = params.weights
-
-        for (let pointIndex = 0; pointIndex < params.points3.size(); ++pointIndex) {
-
-          outputWeights.push_back(1.0)
-        }
       }
     }
-
+       
     return this.conwayModel.getBSplineCurve(params)
   }
 
@@ -1651,10 +1774,14 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param parentSense
    * @param parametersTrimmedCurve
    * @return {CurveObject | undefined}
    */
-  extractAP214Circle( from: circle, parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
+  extractAP214Circle(
+    from: circle, 
+    parentSense:boolean = true,
+    parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
     masterRepresentation: 0,
     dimensions: 0,
     senseAgreement: true,
@@ -1667,28 +1794,25 @@ export class AP214GeometryExtraction {
     trimExists: false,
   }): CurveObject | undefined {
 
-    let axis2Placement2D: any = void 0 // glmdmat3
-    let axis2Placement3D: any = void 0 // glmdmat4
+    let axis2Placement2D: NativeTransform3x3 = this.identity2DNativeMatrix // glmdmat3
+    let axis2Placement3D: NativeTransform4x4 = this.identity3DNativeMatrix // glmdmat4
     let dimension: number
+
+    // This potentially mutates a paremeter, but the trimming parameters should always be
+    // specific to this single curve. - CS
+    parametersTrimmedCurve.senseAgreement = parametersTrimmedCurve.senseAgreement === parentSense
 
     if ( from.position instanceof axis2_placement_2d ) {
 
       axis2Placement2D = this.extractAxis2Placement2D(from.position)
-      axis2Placement3D = (new (this.wasmModule.Glmdmat4)) as any
       dimension = this.TWO_DIMENSIONS
 
     } else {
 
       axis2Placement3D = this.conwayModel.getAxis2Placement3D(
           this.extractAxis2Placement3D(from.position, from.localID, true) )
-      axis2Placement2D = (new (this.wasmModule.Glmdmat3)) as any
       dimension = this.THREE_DIMENSIONS
     }
-
-    parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
-    parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
-    parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
-    parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
 
     const radius = from.radius
 
@@ -1699,7 +1823,77 @@ export class AP214GeometryExtraction {
       radius: radius,
       radius2: radius,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+    }   
+    
+    parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
+    parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
+
+    return this.conwayModel.getIfcCircle(parametersCircle)
+  }
+
+  
+
+  /**
+   *
+   * @param from
+   * @param parentSense
+   * @param parametersTrimmedCurve
+   * @return {CurveObject | undefined}
+   */
+  extractAP214Ellipse(
+    from: ellipse, 
+    parentSense:boolean = true,
+    parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
+    masterRepresentation: 0,
+    dimensions: 0,
+    senseAgreement: true,
+    trim1Cartesian2D: undefined,
+    trim1Cartesian3D: undefined,
+    trim1Double: 0,
+    trim2Cartesian2D: undefined,
+    trim2Cartesian3D: undefined,
+    trim2Double: 0,
+    trimExists: false,
+  }): CurveObject | undefined {
+
+    let axis2Placement2D: NativeTransform3x3 = this.identity2DNativeMatrix // glmdmat3
+    let axis2Placement3D: NativeTransform4x4 = this.identity3DNativeMatrix // glmdmat4
+    let dimension: number
+
+    // This potentially mutates a paremeter, but the trimming parameters should always be
+    // specific to this single curve. - CS
+    parametersTrimmedCurve.senseAgreement = parametersTrimmedCurve.senseAgreement === parentSense
+
+    if ( from.position instanceof axis2_placement_2d ) {
+
+      axis2Placement2D = this.extractAxis2Placement2D(from.position)
+      dimension = this.TWO_DIMENSIONS
+
+    } else {
+
+      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      dimension = this.THREE_DIMENSIONS
     }
+
+    const radius0 = from.semi_axis_1
+    const radius1 = from.semi_axis_2
+
+    const parametersCircle: ParamsGetIfcCircle = {
+      dimensions: dimension,
+      axis2Placement2D: axis2Placement2D,
+      axis2Placement3D: axis2Placement3D,
+      radius: radius0,
+      radius2: radius1,
+      paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+    }   
+    
+    parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
+    parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
 
     return this.conwayModel.getIfcCircle(parametersCircle)
   }
@@ -1707,9 +1901,14 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param parentSense
+   * @param isEdge
    * @return {CurveObject | undefined}
    */
-  extractAP214TrimmedCurve(from: trimmed_curve): CurveObject | undefined {
+  extractAP214TrimmedCurve(
+    from: trimmed_curve,
+    parentSense:boolean = true,
+    isEdge:boolean = false ): CurveObject | undefined {
 
     let trim1Cartesian2D: Vector2 = { x: 0, y: 0 }
     let trim1Cartesian3D: Vector3 = { x: 0, y: 0, z: 0 }
@@ -1752,7 +1951,7 @@ export class AP214GeometryExtraction {
 
       for (let trimIndex = 0; trimIndex < from.trim_2.length; trimIndex++) {
 
-        const trim2 = from.trim_2[trimIndex]
+        const trim2 = from.trim_2[ trimIndex ]
 
         if ( trim2 instanceof cartesian_point ) {
 
@@ -1807,16 +2006,35 @@ export class AP214GeometryExtraction {
       trimExists: true,
     }
 
-    if ( from.basis_curve instanceof circle) {
+    const basisCurve = from.basis_curve
 
-      const curveObject = this.extractAP214Circle( from.basis_curve, paramsGetAP214TrimmedCurve)
+    if ( basisCurve instanceof circle) {
+
+      const curveObject = this.extractAP214Circle( basisCurve, parentSense, paramsGetAP214TrimmedCurve )
 
       if (curveObject !== void 0) {
         return curveObject
       }
+
+    } else if ( basisCurve instanceof line ) {
+
+      const curveObject = this.extractLine( basisCurve, parentSense, isEdge, paramsGetAP214TrimmedCurve )
+
+      if (curveObject !== void 0) {
+        return curveObject
+      }
+    } else if ( basisCurve instanceof ellipse ) {
+      const curveObject =
+        this.extractAP214Ellipse(basisCurve, parentSense, paramsGetAP214TrimmedCurve)
+
+      if (curveObject !== void 0) {
+        return curveObject
+      }
+    } else {
+      Logger.warning(`Unsupported basis curve type: ${  EntityTypesAP214[basisCurve.type]}`)
     }
 
-    return undefined
+    return void 0
   }
 
   /**
@@ -1845,9 +2063,14 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param parentSense
+   * @param isEdge
    * @return {CurveObject | undefined }
    */
-  extractPolyline( from: polyline ): CurveObject | undefined {
+  extractPolyline(
+    from: polyline,
+    parentSense: boolean = true,
+    isEdge: boolean = false ): CurveObject | undefined {
 
     const points = from.points
     const pointsLength = points.length
@@ -1864,6 +2087,8 @@ export class AP214GeometryExtraction {
       parameters.points = pointsPtr
       parameters.pointsLength = pointsLength
       parameters.dimensions = dim
+      parameters.senseAgreement = parentSense
+      parameters.isEdge = isEdge
 
       const curve_ = this.conwayModel.getPolyCurve(parameters)
 
@@ -1875,47 +2100,6 @@ export class AP214GeometryExtraction {
     }
   }
 
-
-  /**
-   * Extract a curve object from a circle profile.
-   *
-   * @param from The circle definition to extract from.
-   * @return {CurveObject | undefined} The extracted circle curve,
-   * or undefined if one cannot be extracted.
-   */
-  extractCircleCurve( from: circle ): CurveObject | undefined {
-
-    const position = from.position
-
-    if ( position !== null) {
-
-      // if ( position instanceof axis2_placement_2d ) {
-
-      const placement2D = this.extractAxis2Placement2D( position as axis2_placement_2d )
-
-      const paramsGetCircleCurve: ParamsGetCircleCurve = {
-        radius: from.radius,
-        hasPlacement: true,
-        placement: placement2D,
-        thickness: -1,
-      }
-
-      // Note - we may need to handle the 3D case for STEP that we don't for IFC
-
-      return this.conwayModel.getCircleCurve(paramsGetCircleCurve)
-
-    } else {
-
-      const paramsGetCircleCurve: ParamsGetCircleCurve = {
-        radius: from.radius,
-        hasPlacement: false,
-        placement: this.identity2DNativeMatrix,
-        thickness: -1,
-      }
-
-      return this.conwayModel.getCircleCurve(paramsGetCircleCurve)
-    }
-  }
 
   /**
    * Extracts the curve for an ellipse from an AP214 ellipse profile definition.
@@ -1965,10 +2149,12 @@ export class AP214GeometryExtraction {
    *
    * @param from The mapped item to extract.
    * @param owningElementLocalID
+   * @param parents The parent mapped items, if any.
    */
   extractMappedItem(
       from: mapped_item,
-      owningElementLocalID?: number ) {
+      owningElementLocalID?: number,
+      parents: mapped_item[] | undefined = void 0 ) {
 
     const representationMap = from.mapping_source
     const mappingTarget = from.mapping_target
@@ -1983,34 +2169,67 @@ export class AP214GeometryExtraction {
       this.scene.addTransform(
           from.localID,
           nativeCartesianTransform.getValues(),
-          nativeCartesianTransform)
+          nativeCartesianTransform,
+          true)
 
       popTransform = true
     }
 
     for ( const representationItem of representationMap.mapped_representation.items ) {
 
-      this.extractRepresentationItem( representationItem, owningElementLocalID )
+      if ( representationItem instanceof mapped_item ) {
 
-      const styledItemLocalID_ = this.materials.styledItemMap.get(representationItem.localID)
-
-      if ( styledItemLocalID_ !== void 0 ) {
-
-        const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as styled_item
-        this.extractStyledItem(styledItem_)
+        // if this is a mapped item, we need to extract it recursively
+        // and add the transform to the scene
+        this.extractMappedItem(
+          representationItem,
+          owningElementLocalID,
+          parents !== void 0 ? [from, ...parents] : [ from ] )
 
       } else {
 
-        // get material from parent
-        const styledItemParentLocalID = this.materials.styledItemMap.get( from.localID )
+        this.extractRepresentationItem( representationItem, owningElementLocalID )
 
-        if ( styledItemParentLocalID !== void 0 ) {
+        const styledItemLocalID_ = this.materials.styledItemMap.get( representationItem.localID )
 
-          const styledItemParent =
-            this.model.getElementByLocalID(styledItemParentLocalID) as styled_item
+        let materialOverrideID: number | undefined = void 0
 
-          this.extractStyledItem( styledItemParent, representationItem )
+        if ( styledItemLocalID_ !== void 0 ) {
+
+          const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as styled_item
+          this.extractStyledItem(styledItem_)
+
+        } else {
+
+          // get material from parent
+          let styledItemParentLocalID = this.materials.styledItemMap.get( from.localID )
+          let styleParent = from
+
+          if ( parents !== void 0 ) {
+            for ( const parent of parents ) {
+              if ( styledItemParentLocalID !== void 0 ) {
+                break
+              }
+
+              styledItemParentLocalID = this.materials.styledItemMap.get( parent.localID )
+              styleParent = parent
+            }
+          }
+
+          if ( styledItemParentLocalID !== void 0 ) {
+
+            const styledItemParent =
+              this.model.getElementByLocalID(styledItemParentLocalID) as styled_item
+
+            this.extractStyledItem( styledItemParent, representationItem )
+            materialOverrideID = styleParent.localID
+          }
         }
+
+        this.scene.addGeometry(
+          representationItem.localID,
+          owningElementLocalID,
+          materialOverrideID )
       }
     }
 
@@ -2028,63 +2247,65 @@ export class AP214GeometryExtraction {
    *
    * @param from The representation to extract from.
    * @param owningElementLocalID
+   * @param isMappedItem Whether this is a mapped item.
    */
   extractRepresentationItem(
       from: representation_item,
-      owningElementLocalID?: number) {
+      owningElementLocalID?: number,
+      isMappedItem: boolean = false) {
 
     const foundGeometry = this.model.geometry.getByLocalID(from.localID)
 
     if ( foundGeometry !== void 0 ) {
 
-      this.scene.addGeometry( from.localID, owningElementLocalID )
+      if ( foundGeometry.temporary ) {
+
+        foundGeometry.temporary = false
+      }
+
+      if ( !isMappedItem ) {
+
+        this.scene.addGeometry(from.localID, owningElementLocalID)
+      }
+
       return
     }
 
-    if ( from instanceof boolean_result ) {
+    if ( from instanceof mapped_item ) {
+
+      return
+
+    } else if ( from instanceof boolean_result ) {
 
       // also handles AP214BooleanClippingResult
       this.extractBooleanResult( from )
-      this.scene.addGeometry( from.localID, owningElementLocalID )
 
     } else if ( from instanceof extruded_area_solid ) {
 
       this.extractExtrudedAreaSolid(from, false)
-      this.scene.addGeometry( from.localID, owningElementLocalID )
 
     } else if ( from instanceof half_space_solid ) {
 
       this.extractHalfspaceSolid( from, false )
-      this.scene.addGeometry( from.localID, owningElementLocalID )
 
-    } else if ( from instanceof mapped_item ) {
-
-      this.extractMappedItem( from, owningElementLocalID )
-
-    } else if ( from instanceof polyline ) {
-      // web-AP214 ignores AP214Polylines as meshes
-      // //console.log(`AP214POLYLINE, expressID: ${from.expressID}`)
     } else if ( from instanceof faceted_brep ) {
 
       this.extractAP214FacetedBrep(from, false)
-      this.scene.addGeometry(from.localID, owningElementLocalID)
 
-    } else if (from instanceof shell_based_surface_model ) {
+    } else if ( from instanceof shell_based_surface_model ) {
 
       this.extractAP214ShellBasedSurfaceModel(from, owningElementLocalID)
-      this.scene.addGeometry(from.localID, owningElementLocalID)
 
     } else if ( from instanceof face_based_surface_model ) {
 
       this.extractAP214FaceBasedSurfaceModel(from)
-      this.scene.addGeometry(from.localID, owningElementLocalID)
 
     } else if ( from instanceof manifold_solid_brep ) {
 
       this.extractManifoldSolidBrep(from)
-      this.scene.addGeometry(from.localID, owningElementLocalID)
 
     } else if (
+      from instanceof polyline ||
       from instanceof draughting_model || 
       from instanceof geometrically_bounded_2d_wireframe_representation ||
       from instanceof annotation_occurrence ||
@@ -2095,8 +2316,12 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      console.log(`Unsupported type: ${EntityTypesAP214[from.type]} 
-      expressID: ${from.expressID}`)
+      Logger.warning( `Unsupported type: ${EntityTypesAP214[from.type]} ` +
+      `expressID: ${from.expressID}`)
+    }
+    
+    if ( !isMappedItem) {
+      this.scene.addGeometry( from.localID, owningElementLocalID )
     }
   }
 
@@ -2126,18 +2351,8 @@ export class AP214GeometryExtraction {
     for (let faceSetIndex = 0; faceSetIndex < from.length; ++faceSetIndex) {
       const faceSet: connected_face_set = from[faceSetIndex]
 
-      geometry = this.extractFaces( faceSet.cfs_faces, faceSet.localID, geometry )
+      geometry = this.extractFaces( faceSet.cfs_faces, parentLocalID, geometry )
     }
-
-    const canonicalMesh: CanonicalMesh = {
-      type: CanonicalMeshType.BUFFER_GEOMETRY,
-      geometry: geometry,
-      localID: parentLocalID,
-      model: this.model,
-      temporary: false,
-    }
-
-    this.model.geometry.add(canonicalMesh)
   }
 
 
@@ -2199,6 +2414,7 @@ export class AP214GeometryExtraction {
       temporary: boolean = false): GeometryObject {
 
     let passedGeometry: boolean = true
+
     if (geometry_ === void 0) {
       passedGeometry = false
       geometry_ = (new (this.wasmModule.IfcGeometry)) as GeometryObject
@@ -2206,14 +2422,27 @@ export class AP214GeometryExtraction {
 
     for (const face_ of from) {
 
-      // console.log(`face express ID: ${face.expressID} - type: ${EntityTypesAP214[face.type]}`)
-      if ( face_ instanceof advanced_face ) {
+      try {
+        // console.log(`face express ID: ${face.expressID} - type: ${EntityTypesAP214[face.type]}`)
+        if ( face_ instanceof advanced_face ) {
 
-        this.extractAdvancedFace( face_, geometry_ )
+          this.extractAdvancedFace( face_, geometry_ )
 
-      } else {
+        } else {
 
-        this.extractFace( face_, geometry_ )
+          this.extractFace( face_, geometry_ )
+        }
+      } catch (error) {
+
+        if ( error instanceof Error ) {
+          Logger.error(
+            `Error extracting face ${EntityTypesAP214[face_.type]} - ${
+              error.message}\t\n${error.stack} - expressID: ${face_.expressID}`)
+        } else {
+          Logger.error(
+            `Error extracting face ${EntityTypesAP214[face_.type]} - ${
+              error} - expressID: ${face_.expressID}`)
+        }
       }
     }
 
@@ -2293,33 +2522,6 @@ export class AP214GeometryExtraction {
    * Extract a bspline surface
    *
    * @param from The bspline surface to extract
-   * @return {BSplineSurface}
-   */
-  extractBSplineSurface( from: b_spline_surface ): BSplineSurface {
-
-    const bsplineSurface: BSplineSurface = {
-      active: true,
-      uDegree: from.u_degree,
-      vDegree: from.v_degree,
-      closedU: from.u_closed ?? false,
-      closedV: from.v_closed ?? false,
-      controlPoints: this.nativeVectorVectorGlmdVec3(),
-      uMultiplicity: this.conwayModel.nativeVectorDouble(),
-      vMultiplicity: this.conwayModel.nativeVectorDouble(),
-      uKnots: this.conwayModel.nativeVectorDouble(),
-      vKnots: this.conwayModel.nativeVectorDouble(),
-      weightPoints: this.conwayModel.nativeVectorVectorDouble(),
-    }
-
-    this.extractPointListList3D( from.control_points_list, bsplineSurface.controlPoints )
-
-    return bsplineSurface
-  }
-
-  /**
-   * Extract a bspline surface
-   *
-   * @param from The bspline surface to extract
    * @param to The surface to extract to
    * @param start
    * @param end
@@ -2347,7 +2549,7 @@ export class AP214GeometryExtraction {
       from: Array< Array < number > >,
       to: StdVector< StdVector< number > >): void {
 
-    to.resize( from.length )
+    to.resize( from.length, this.conwayModel.nativeVectorDouble() )
 
     for (let where = 0, end = from.length; where < end; ++where) {
 
@@ -2360,46 +2562,43 @@ export class AP214GeometryExtraction {
    * Extract a bspline surface
    *
    * @param from The bspline surface to extract
-   * @return {BSplineSurface}
-   */
-  extractBSplineSurfaceWithKnots( from: b_spline_surface_with_knots ): BSplineSurface {
-
-    const result = this.extractBSplineSurface(from)
-
-    // console.log(`selfIntersect: ${from.SelfIntersect}` ? 'True' : 'False')
-    /* from.UDegree // UDegree (0)
-    from.VDegree // VDegree (1)
-    from.ControlPoints //ControlPoints (2)
-    from.SurfaceForm //curve type, unused (3)
-    from.UClosed //closedU (4)
-    from.VClosed //closedV (5)
-    from.SelfIntersect //selfIntersect (6)
-    from.UMultiplicities //knotSetU (7)
-    from.VMultiplicities //knotSetV (8)
-    from.UKnots //indexesSetU (9)
-    from.VKnots //indexesSetV (10)*/
-
-
-    this.extractToDoubleVector( from.u_multiplicities, result.uMultiplicity )
-    this.extractToDoubleVector( from.v_multiplicities, result.vMultiplicity )
-    this.extractToDoubleVector( from.u_knots, result.uKnots )
-    this.extractToDoubleVector( from.v_knots, result.vKnots )
-
-    return result
-  }
-
-  /**
-   * Extract a bspline surface
-   *
-   * @param from The bspline surface to extract
    * @return {BSplineSurface} The extracted surface
    */
-  extractRationalBSplineSurface(
-      from: rational_b_spline_surface ): BSplineSurface {
+  extractBSplineSurface(
+      from: b_spline_surface ): BSplineSurface {
 
-    const result = this.extractBSplineSurface(from)
+  //  console.log( from )
 
-    this.extractToDoubleVectorVector( from.weights_data, result.weightPoints )
+    const result: BSplineSurface = {
+      active: true,
+      uDegree: from.u_degree,
+      vDegree: from.v_degree,
+      closedU: from.u_closed ?? false,
+      closedV: from.v_closed ?? false,
+      controlPoints: this.nativeVectorVectorGlmdVec3(),
+      uMultiplicity: this.conwayModel.nativeVectorDouble(),
+      vMultiplicity: this.conwayModel.nativeVectorDouble(),
+      uKnots: this.conwayModel.nativeVectorDouble(),
+      vKnots: this.conwayModel.nativeVectorDouble(),
+      weightPoints: this.conwayModel.nativeVectorVectorDouble(),
+    }
+
+    this.extractPointListList3D( from.control_points_list, result.controlPoints )
+
+    const knots = from.findVariant( b_spline_surface_with_knots )
+    const rational = from.findVariant( rational_b_spline_surface )
+
+    if ( rational !== void 0 ) {
+      this.extractToDoubleVectorVector( rational.weights_data, result.weightPoints )
+    }
+
+    if ( knots !== void 0 ) {
+        
+      this.extractToDoubleVector( knots.u_multiplicities, result.uMultiplicity)
+      this.extractToDoubleVector( knots.v_multiplicities, result.vMultiplicity)
+      this.extractToDoubleVector( knots.u_knots, result.uKnots)
+      this.extractToDoubleVector( knots.v_knots, result.vKnots)
+    }
 
     return result
   }
@@ -2431,8 +2630,6 @@ export class AP214GeometryExtraction {
   extractLoop(from: loop, points: StdVector< Vector3 >, curves: StdVector< CurveObject > ) {
 
     if ( from instanceof poly_loop ) {
-
-      console.log( 'poly _loop' )
 
       let prevLocalID: number = -1
 
@@ -2472,7 +2669,6 @@ export class AP214GeometryExtraction {
           if (edgeStart instanceof vertex_point) {
 
             const startPoint = edgeStart.vertex_geometry
-
              
             if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
 
@@ -2523,11 +2719,11 @@ export class AP214GeometryExtraction {
             end: trimmingEnd,
           }
 
-          const curveValue = this.extractCurve(edgeCurve, trimmingArguments)
+          const curveValue = this.extractCurve(edgeCurve, true, true, trimmingArguments)
 
           if (curveValue !== void 0) {
 
-            if ( !edge.orientation ) {
+            if ( edge.orientation ) {
               // reverse curve
               curveValue.invert()
             }
@@ -2535,12 +2731,10 @@ export class AP214GeometryExtraction {
             curves.push_back(curveValue)
 
           } else {
-            console.log(`curve === undefined, type: ${EntityTypesAP214[edgeCurve.type]}`)
+            Logger.warning(`curve === undefined, type: ${EntityTypesAP214[edgeCurve.type]}`)
           }
 
         } else {
-
-          console.log( 'oriented_edge case' )
 
           //  console.log("curve === null")
           const start = edge.edge_start
@@ -2564,7 +2758,7 @@ export class AP214GeometryExtraction {
         }
       }
     } else {
-      console.log(`Unsupported bound ${loop}`)
+      Logger.warning(`Unsupported bound ${loop}`)
     }
   }
 
@@ -2576,116 +2770,272 @@ export class AP214GeometryExtraction {
    */
   extractAdvancedFace(from: advanced_face, geometry: GeometryObject) {
 
-    if ( from.bounds.length > 0 ) {
+    const bounds = from.bounds
+    
+    if ( from.bounds.length === 0 ) {
+    
+      return
+    }
+    
+   const conwayModel = this.conwayModel
 
-      const bound3DVector = this.nativeBound3DVector()
+   const bound3DVector = this.nativeBound3DVector()
 
-      for ( const bound of from.bounds ) {
-        const vec3Array = this.nativeVectorGlmdVec3()
+   for ( const bound of bounds ) {
 
-        const innerBound = bound.bound
-        const nativeEdgeCurves = this.nativeVectorCurve()
-        // console.log("innerBound type: " + EntityTypesAP214[innerBound.type])
+      let vec3Array: StdVector< Vector3 >
 
-        this.extractLoop( innerBound, vec3Array, nativeEdgeCurves )
+      const innerBound = bound.bound
+      const nativeEdgeCurves = this.nativeVectorCurve()
 
-        // get curve
-        const parameters: ParamsGetLoop = {
-          points: vec3Array,
-          edges: nativeEdgeCurves,
+      if ( innerBound instanceof poly_loop ) {
+
+       const coordParseBuffer = conwayModel.nativeParseBuffer()
+
+        if ( !innerBound.extractParseBuffer(
+            0, 0, 0, coordParseBuffer, this.wasmModule, true ) ) {
+
+          coordParseBuffer.resize( 0 )
         }
 
-        // console.log("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
-        const curve_: CurveObject = this.conwayModel.getLoop(parameters)
+        vec3Array = this.wasmModule.parseVertexVector( coordParseBuffer )
 
-        // create bound vector
-        const parametersCreateBounds3D: ParamsCreateBound3D = {
-          curve: curve_,
-          orientation: bound.orientation,
-          type: (bound.type === EntityTypesAP214.FACE_OUTER_BOUND) ? 0 : 1,
+        conwayModel.freeParseBuffer( coordParseBuffer )
+
+      }  else if ( innerBound instanceof edge_loop ) {
+
+        vec3Array = this.nativeVectorGlmdVec3()
+        
+        for ( const edge of innerBound.edge_list ) {
+
+          const edgeElement = edge.edge_element
+
+          if ( edgeElement instanceof edge_curve ) {
+
+            const edgeCurve = edgeElement.edge_geometry
+
+            //Logger.info("curve type: " + EntityTypesAP214[edgeCurve.type] +
+            //  " express ID: " + edgeCurve.expressID)
+
+            const edgeStart = edgeElement.edge_start
+            const edgeEnd   = edgeElement.edge_end
+
+            let trimmingStart: TrimmingSelect | undefined
+            let trimmingEnd: TrimmingSelect | undefined
+
+            if ( edgeStart instanceof vertex_point ) {
+
+              const startPoint = edgeStart.vertex_geometry
+
+              if ( startPoint instanceof cartesian_point && startPoint.coordinates.length === 3 ) {
+
+                const startCoords = startPoint.coordinates
+
+                trimmingStart = {
+                  hasParam: false,
+                  hasPos: true,
+                  hasLength: false,
+                  param: 0.0,
+                  pos: void 0,
+                  pos3D: {
+                    x: startCoords[0],
+                    y: startCoords[1],
+                    z: startCoords[2],
+                  },
+                }
+              }
+            }
+
+            if ( edgeEnd instanceof vertex_point ) {
+
+              const endPoint = edgeEnd.vertex_geometry
+                
+              if (endPoint instanceof cartesian_point && endPoint.coordinates.length === 3) {
+
+                const endCoords = endPoint.coordinates
+
+                trimmingEnd = {
+                  hasParam: false,
+                  hasPos: true,
+                  hasLength: false,
+                  param: 0.0,
+                  pos: void 0,
+                  pos3D: {
+                    x: endCoords[0],
+                    y: endCoords[1],
+                    z: endCoords[2],
+                  },
+                }
+              }
+            }
+
+            const trimmingArguments: TrimmingArguments = {
+              exist: !!((trimmingStart !== void 0 && trimmingEnd !== void 0)),
+              start: trimmingStart,
+              end: trimmingEnd,
+            }
+
+            let curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
+
+            if (curve !== void 0) {
+
+              if ( edge.orientation ) {
+                // reverse curve
+                // Logger.info("edge orientation == true, inverting curve")
+                curve = curve.clone()
+
+                curve.invert()
+              }
+
+              nativeEdgeCurves.push_back(curve)
+
+            } else {
+              Logger.error(`curve === undefined, type: ${EntityTypesAP214[edgeCurve.type]}`)
+            }
+
+          } else {
+
+            const start = edge.edge_start
+
+            if (start instanceof vertex_point) {
+
+              const startPoint = start.vertex_geometry
+                
+              if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
+
+                const startCoords = startPoint.coordinates
+
+                vec3Array.push_back({
+                  x: startCoords[0],
+                  y: startCoords[1],
+                  z: startCoords[2],
+                })
+              }
+            }
+          }
         }
-
-        const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
-
-        bound3DVector.push_back(bound3D)
-        vec3Array.delete()
-        nativeEdgeCurves.delete()
-      }
-
-      const surface = from.face_geometry
-
-      // add face to geometry
-      const nativeSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
-
-      if ( surface instanceof plane ) {
-
-        nativeSurface.transformation = this.extractPlane(surface)
-
-      } else if (surface instanceof rational_b_spline_surface) {
-
-        nativeSurface.bspline = this.extractRationalBSplineSurface(surface)
-
-        if ( !nativeSurface.bspline.active ) {
-          return
-        }
-
-      } else if ( surface instanceof b_spline_surface_with_knots ) {
-
-        nativeSurface.bspline = this.extractBSplineSurfaceWithKnots(surface)
-
-        if ( !nativeSurface.bspline.active ) {
-          return
-        }
-
-      } else if ( surface instanceof b_spline_surface ) {
-
-        nativeSurface.bspline = this.extractBSplineSurface( surface )
-
-        if (!nativeSurface.bspline.active) {
-          return
-        }
-
-      } else if ( surface instanceof cylindrical_surface ) {
-
-        this.extractCylindricalSurface( surface, nativeSurface )
-
-        if ( !nativeSurface.cylinder.active ) {
-          return
-        }
-
-      } else if ( surface instanceof surface_of_revolution ) {
-
-        this.extractSurfaceOfRevolution( surface, nativeSurface )
-
-        if ( !nativeSurface.revolution.active ) {
-          return
-        }
-
-      } else if ( surface instanceof surface_of_linear_extrusion ) {
-
-        this.extractSurfaceOfLinearExtrusion( surface, nativeSurface )
-
-        if (!nativeSurface.extrusion.active) {
-          return
-        }
-
       } else {
-
-        console.log(`Unknown surface type: ${surface}`)
+          Logger.warning(`Unsupported bound ${bound.bound}`)
+          return
       }
 
-      const parameters: ParamsAddFaceToGeometry = {
-        boundsArray: bound3DVector,
-        advancedBrep: true,
-        surface: nativeSurface,
-        scaling: this.getLinearScalingFactor(),
+      const parameters: ParamsGetLoop = {
+        points: vec3Array,
+        edges: nativeEdgeCurves,
       }
 
-      this.conwayModel.addFaceToGeometry(parameters, geometry)
+      // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
+      const curve: CurveObject = this.conwayModel.getLoop(parameters)
 
-      bound3DVector.delete()
+      // create bound vector
+      const parametersCreateBounds3D: ParamsCreateBound3D = {
+        curve: curve,
+        orientation: bound.orientation,
+        type: (bound.type === EntityTypesAP214.FACE_OUTER_BOUND) ? 0 : 1,
+      }
+
+      const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
+
+      bound3DVector.push_back(bound3D)
+      vec3Array.delete()
+      nativeEdgeCurves.delete()
+    }
+
+    const surface = from.face_geometry
+
+    // add face to geometry
+    const nativeSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
+    
+    this.extractSurface(surface, nativeSurface)
+
+    const parameters: ParamsAddFaceToGeometry = {
+      boundsArray: bound3DVector,
+      advancedBrep: true,
+      surface: nativeSurface,
+      scaling: this.getLinearScalingFactor(),
+    }
+
+    this.conwayModel.addFaceToGeometry(parameters, geometry)
+
+    bound3DVector.delete()
+  }
+
+
+  /**
+   * Extract a surface
+   *
+   * @param from
+   * @param nativeSurface
+   */
+  extractSurface( from: surface, nativeSurface:SurfaceObject) {
+      
+    if ( from instanceof plane ) {
+
+      nativeSurface.transformation = this.extractPlane(from)
+
+    } else if ( from instanceof b_spline_surface ) {
+
+      //console.log( `Extracting b-spline surface, express ID: ${from.expressID}`)
+      nativeSurface.bspline = this.extractBSplineSurface(from)
+
+      if (!nativeSurface.bspline.active) {
+        return
+      }
+
+    } else if ( from instanceof cylindrical_surface ) {
+
+      this.extractCylindricalSurface( from, nativeSurface )
+
+      if ( !nativeSurface.cylinder.active ) {
+        return
+      }
+
+    } else if ( from instanceof spherical_surface ) {
+      
+      this.extractSphericalSurface( from, nativeSurface )
+
+      if ( !nativeSurface.sphere.active ) {
+        return
+      }
+
+    } else if ( from instanceof toroidal_surface ) {
+      
+      this.extractToroidalSurface( from, nativeSurface )
+
+      if ( !nativeSurface.torus.active ) {
+        return
+      }
+
+    } else if ( from instanceof conical_surface ) {
+
+      this.extractConicalSurface( from, nativeSurface )
+
+      if ( !nativeSurface.cone.active ) {
+        return
+      }
+
+    } else if ( from instanceof surface_of_revolution ) {
+
+      this.extractSurfaceOfRevolution( from, nativeSurface )
+
+      if ( !nativeSurface.revolution.active ) {
+        return
+      }
+
+    } else if ( from instanceof surface_of_linear_extrusion ) {
+
+      this.extractSurfaceOfLinearExtrusion( from, nativeSurface )
+
+      if (!nativeSurface.extrusion.active) {
+        return
+      }
+
+    } else {
+
+      Logger.warning(`Unknown surface express id: ${from}, type: ${EntityTypesAP214[from.type]}`)
     }
   }
+
 
   /**
    * Extract a linear extrusion/sweep surface
@@ -2699,7 +3049,7 @@ export class AP214GeometryExtraction {
 
     if (profile?.nativeProfile === void 0) {
 
-      console.log('Couldn\'t get curve profile for linear extrusion surface')
+      Logger.warning('Couldn\'t get curve profile for linear extrusion surface')
       return
     }
 
@@ -2741,10 +3091,10 @@ export class AP214GeometryExtraction {
     const parameters: ParamsCreateNativeIfcProfile = {
       curve: nativeCurve,
       // TODO(nickcastel50): support profiles with holes (out of scope at the moment)
-      holes: void 0,
+      holes: this.nativeVectorCurve(),
       isConvex: false,
       isComposite: false,
-      profiles: void 0,
+      profiles: this.nativeVectorProfile(),
     }
 
     const nativeProfile = this.conwayModel.createNativeIfcProfile(parameters)
@@ -2774,75 +3124,193 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Extract a cylindrical surface.
+   *
+   * @param from The AP214 object to extract from.
+   * @param nativeSurface The native surface representation.
+   */
+  extractSphericalSurface(from: spherical_surface, nativeSurface: SurfaceObject) {
+
+    const location = from.position
+
+    const transform =
+      this.extractAxis2Placement3D(location, from.localID, true)
+
+    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.sphere = { active: true, radius: from.radius }
+  }
+
+  
+  /**
+   * Extract a cylindrical surface.
+   *
+   * @param from The AP214 object to extract from.
+   * @param nativeSurface The native surface representation.
+   */
+  extractConicalSurface(from: conical_surface, nativeSurface: SurfaceObject) {
+
+    const location = from.position
+
+    const transform =
+      this.extractAxis2Placement3D(location, from.localID, true)
+
+    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.cone = { active: true, radius: from.radius, semiAngle: from.semi_angle }
+  }
+
+  /**
+   * Extract a cylindrical surface.
+   *
+   * @param from The AP214 object to extract from.
+   * @param nativeSurface The native surface representation.
+   */
+  extractToroidalSurface(from: toroidal_surface, nativeSurface: SurfaceObject) {
+
+    const location = from.position
+
+    const transform =
+      this.extractAxis2Placement3D(location, from.localID, true)
+
+    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.torus = {
+      active: true,
+      majorRadius: from.major_radius,
+      minorRadius: from.minor_radius }
+  }
+
+
+  /**
+   * Flatten the points into WASM memory (skipping consecutive duplicates).
+   * Reuses an existing WASM buffer if provided and large enough.
+   *
+   * @param points - Array of IfcCartesianPoint
+   * @param dimensions - Number of coordinates per point (e.g. 3 for x,y,z)
+   * @param existingPtr - (Optional) Pointer to an existing WASM buffer
+   * @param existingCapacity - (Optional) Capacity of that buffer in Float64 elements
+   * @return {FlattenedPointsResult} pointer, length used, total capacity
+   */
+  flattenCartesianPointsToWasmFiltered(
+      points: cartesian_point[],
+      dimensions: number,
+      existingPtr?: number,
+      existingCapacity?: number,
+  ): FlattenedPointsResult {
+
+    // The maximum we might need if we do NOT skip duplicates
+    const maxPossibleFloats = points.length * dimensions
+    const bytesPerElement = 8 // Float64
+
+    // 1) Allocate or reuse memory in WASM
+    let pointer: number = existingPtr ?? 0
+    let capacity: number = existingCapacity ?? 0
+
+    // If we have no existing buffer OR it's too small, allocate a new one
+    if (!pointer || capacity < maxPossibleFloats) {
+    // Free the old buffer if it exists and is too small
+      if (pointer) {
+        this.wasmModule._free(pointer)
+      }
+
+      const numBytes = maxPossibleFloats * bytesPerElement
+
+      pointer = this.wasmModule._malloc(numBytes)
+      capacity = maxPossibleFloats
+    }
+
+    // 2) Create a Float64Array view into WASM memory
+    // We only need to create a subarray up to the capacity
+    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
+        pointer / bytesPerElement,
+         
+        pointer / bytesPerElement + capacity,
+    )
+
+    // 3) Single pass to skip consecutive duplicates, fill up the wasm array
+    let offset = 0
+    let prevLocalID = -1
+    
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i]
+      if (i === 0 || point.localID !== prevLocalID) {
+      // Copy 'dimensions' values for the current point
+        wasmFloat64View.set( point.coordinates, offset )
+        offset += dimensions
+        prevLocalID = point.localID
+      }
+    }
+
+    // 4) Return the pointer, the actual usage, and the capacity
+    return {
+      pointer,
+      length: offset,  // how many Float64 values were used
+      capacity,
+    }
+  }
+
+  /**
    *
    * @param from
    * @param geometry
    */
-  extractFace(from: face, geometry: GeometryObject) {
-    if (from.bounds.length > 0) {
+  extractFace(from: face, geometry: GeometryObject ) {
+
+    const bounds = from.bounds
+
+     if ( bounds.length > 0 ) {
 
       const bound3DVector = this.nativeBound3DVector()
 
-      for (let boundIndex = 0; boundIndex < from.bounds.length; ++boundIndex) {
-        const vec3Array = this.nativeVectorGlmdVec3()
-        const bound = from.bounds[boundIndex]
+      // let pointsPtrs:any[]
 
-        if (bound.bound instanceof poly_loop) {
+      const bounds = from.bounds
 
-          let prevLocalID: number = -1
+      for (let boundIndex = 0; boundIndex < bounds.length; ++boundIndex) {
+        
+        const bound = from.bounds[ boundIndex ]
+        const innerBound = bound.bound
 
-          for (let pointIndex = 0; pointIndex < bound.bound.polygon.length; ++pointIndex) {
-            const vec3 = {
-              x: bound.bound.polygon[pointIndex].coordinates[0],
-              y: bound.bound.polygon[pointIndex].coordinates[1],
-              z: bound.bound.polygon[pointIndex].coordinates[2],
-            }
+        if ( innerBound instanceof poly_loop ) {
 
-            const currentLocalID: number = bound.bound.polygon[pointIndex].localID
+          // Attempt to reuse the pointer/capacity from `pointBuffer`
+          const result = this.flattenCartesianPointsToWasmFiltered(
+              innerBound.polygon,
+              this.THREE_DIMENSIONS,
+              this.pointBuffer?.pointer,
+              this.pointBuffer?.capacity,
+          )
 
-            if (currentLocalID !== prevLocalID) {
-              vec3Array.push_back(vec3)
-              prevLocalID = currentLocalID
-            }
-          }
+          // Now `result.pointer` is your up-to-date pointer (maybe a new allocation).
+          // `result.length` is how many Float64 coords are valid.
+          // `result.capacity` is how many Float64 coords that pointer can hold.
+           
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { pointer, length, capacity } = result
+
+          // Use them in your WASM call
+          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
+            pointer,
+            length,
+            bound.orientation,
+            bound.type === EntityTypesAP214.FACE_OUTER_BOUND ? 0 : 1,
+          )
+
+          // Push your result somewhere
+          bound3DVector.push_back(bound3D)
+
+          // Save the buffer for reuse in the next iteration
+          this.pointBuffer = result
         }
-
-        const edgesDummy: StdVector<CurveObject> = this.nativeVectorCurve()
-        // get curve
-        const parameters: ParamsGetLoop = {
-          points: vec3Array,
-          edges: edgesDummy,
-        }
-
-        const curve_: CurveObject = this.conwayModel.getLoop(parameters)
-
-        // create bound vector
-        const parametersCreateBounds3D: ParamsCreateBound3D = {
-          curve: curve_,
-          orientation: bound.orientation,
-          type: (bound.type === EntityTypesAP214.FACE_OUTER_BOUND) ? 0 : 1,
-        }
-
-        const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
-
-        bound3DVector.push_back(bound3D)
-        vec3Array.delete()
-        edgesDummy.delete()
       }
 
       // add face to geometry
-      const defaultSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
-      const parameters: ParamsAddFaceToGeometry = {
+      const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
-        advancedBrep: false,
-        surface: defaultSurface,
         scaling: this.getLinearScalingFactor(),
       }
 
-      this.conwayModel.addFaceToGeometry(parameters, geometry)
+      this.conwayModel.addFaceToGeometrySimple(parameters, geometry)
 
       bound3DVector.delete()
-      defaultSurface.delete()
     }
   }
 
@@ -2866,7 +3334,6 @@ export class AP214GeometryExtraction {
       x: from.location.coordinates[0],
       y: from.location.coordinates[1],
     }
-
 
     const xAxisRef = refDirection !== null ? {
       x: refDirection.direction_ratios[0],
@@ -3025,7 +3492,7 @@ export class AP214GeometryExtraction {
    * @param parentLocalId The parent's local ID.
    * @return {void}
    */
-  extractAxis2Placement3D(from: axis2_placement_3d, parentLocalId: number): void
+  extractAxis2Placement3D(from: axis2_placement_3d, parentLocalId: number, extractOnly: false, mappedItem?: boolean): AP214SceneTransform
   /**
    * Extract a placement (no memoization/scene creation)
    *
@@ -3038,16 +3505,14 @@ export class AP214GeometryExtraction {
   extractAxis2Placement3D(
     from: axis2_placement_3d,
     parentLocalId: number,
-    extractOnly: true): ParamsAxis2Placement3D
+    extractOnly: true,
+    mappedItem?: boolean): ParamsAxis2Placement3D
    
   extractAxis2Placement3D(
       from: axis2_placement_3d,
       parentLocalId: number,
-      extractOnly: boolean = false): void | ParamsAxis2Placement3D {
-
-    if (from === null) {
-      return
-    }
+      extractOnly: boolean = false,
+      mappedItem: boolean = false): AP214SceneTransform | ParamsAxis2Placement3D | undefined {
 
     const result = this.scene.getTransform(parentLocalId)
 
@@ -3055,7 +3520,7 @@ export class AP214GeometryExtraction {
 
       this.scene.pushTransform(result)
 
-      return
+      return result
     }
 
     let normalizeZ: boolean = false
@@ -3102,18 +3567,20 @@ export class AP214GeometryExtraction {
     const axis2PlacementTransform = this.conwayModel
         .getAxis2Placement3D(axis2Placement3DParameters)
 
-    this.scene.addTransform(
+    return this.scene.addTransform(
         parentLocalId,
         axis2PlacementTransform.getValues(),
-        axis2PlacementTransform)
+        axis2PlacementTransform,
+        mappedItem)
   }
 
 
   /**
    *
    * @param from
+   * @param mappedItem
    */
-  extractPlacement(from: placement) {
+  extractPlacement(from: placement, mappedItem: boolean = false ): AP214SceneTransform | undefined {
 
     const result: AP214SceneTransform | undefined =
       this.scene.getTransform(from.localID)
@@ -3121,14 +3588,28 @@ export class AP214GeometryExtraction {
     if (result !== void 0) {
 
       this.scene.pushTransform(result)
-      return
+      return result
     }
 
     if (from instanceof axis2_placement_3d) {
 
-      this.extractAxis2Placement3D(from, from.localID)
+      return this.extractAxis2Placement3D(from, from.localID, false, mappedItem)
 
     }
+
+    return
+  }
+
+  extractRawPlacement(from: placement ): NativeTransform4x4 | undefined {
+
+    if (from instanceof axis2_placement_3d) {
+
+      const parameters = this.extractAxis2Placement3D(from, from.localID, true )
+
+      return this.conwayModel.getAxis2Placement3D(parameters)
+    }
+
+    return
   }
 
   /**
@@ -3393,16 +3874,110 @@ export class AP214GeometryExtraction {
     // populate relMaterialsMap
     // const relAssociatesMaterials = this.model.types(AP214RelAssociatesMaterial)
 
+    const model = this.model
+
+
     try {
 
-      this.model.elementMemoization = false
+      this.scene.clearParentStack()
 
-      const productShapeMap  = this.productShapeMap
-      const shapeDefinitions = this.model.types(shape_definition_representation)
+      // 256 meg limit for memoization - smaller models get a big
+      // win from memoization, but much larger models it uses far too much heap.
+       
+      const MEMOIZATION_THRESHOLD = 256 * 1024 * 1024
 
+      if ( this.lowMemoryMode || model.bufferBytesize > MEMOIZATION_THRESHOLD ) {
+        this.model.elementMemoization = false
+      }
+
+      this.populateStyledItemsMap()
+
+      const contextDependentShapeRepresentations =
+        [...model.types(context_dependent_shape_representation)]
+
+
+      type MappedSceneNode = {
+        children?: [number, number, NativeTransform4x4?][];
+        parents?: number;
+        thunk?: ( owningLocalID?: number, transform?: NativeTransform4x4 ) => void;
+        node?: AP214SceneTransform;
+      }
+
+      const treeMap = new Map<number, MappedSceneNode>() 
+
+      for ( const contextDependentShapeRepresentation of 
+        contextDependentShapeRepresentations ) {
+
+        const assembly = contextDependentShapeRepresentation.represented_product_relation
+        const owningLocalID = assembly.localID
+
+        const shapeRelationship = contextDependentShapeRepresentation.representation_relation
+
+        const sourceShape = shapeRelationship.rep_1
+        const targetShape = shapeRelationship.rep_2
+        
+        const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
+      
+        let transform: NativeTransform4x4 | undefined = void 0
+
+        if( transformInstance !== void 0 ) {
+
+          const transformOperator = transformInstance.transformation_operator
+
+          if( !(transformOperator instanceof item_defined_transformation ) ) {
+            continue
+          }
+
+          const placement1 = transformOperator.transform_item_1
+
+          if( !(placement1 instanceof placement) ) {
+            continue
+          }
+          
+          const placement2 = transformOperator.transform_item_2
+
+          if( !(placement2 instanceof placement) ) {
+            continue
+          }
+
+          const sourceTransform = this.extractRawPlacement( placement1 ) ?? this.identity3DNativeMatrix
+          const targetTransform = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+
+          const localPlacementParameters: ParamsLocalPlacement = {
+            useRelPlacement: true,
+            axis2Placement: sourceTransform,
+            relPlacement: targetTransform,
+          }
+    
+          transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+        }
+
+        const sourceID = sourceShape.localID
+        const targetID = targetShape.localID
+        const sourceNode = treeMap.get( sourceID )
+
+        if ( sourceNode === void 0 ) {
+          treeMap.set( sourceID, { parents: 1 } )
+        } else {
+          sourceNode.parents ??= 0
+          ++sourceNode.parents
+        }
+
+        let targetNode = treeMap.get( targetID )       
+
+        if ( targetNode === void 0 ) {
+          targetNode = { children: [[sourceID, owningLocalID, transform]] }
+          treeMap.set( targetID, targetNode )
+           
+        } else {
+          targetNode.children ??= []
+          targetNode.children.push( [sourceID, owningLocalID, transform] )
+        }
+      }
+
+      const shapeDefinitions = model.types(shape_definition_representation)
+      
       for ( const shapeDefinitionRepresentation of shapeDefinitions ) {
-
-        this.scene.clearParentStack()
 
         const shapeRepresentation = shapeDefinitionRepresentation.used_representation
 
@@ -3410,85 +3985,128 @@ export class AP214GeometryExtraction {
           continue
         }
 
+        this.scene.clearParentStack()
+
         const definition = shapeDefinitionRepresentation.definition
+        const owningElementLocalID = definition.localID
 
-        let owningElementLocalID = shapeRepresentation.localID
-
-        if ( definition instanceof product_definition_shape ) {
-
-          const productDefinition = definition.definition
-
-          if ( productDefinition instanceof product_definition ) {
-
-            owningElementLocalID = productDefinition.localID
-
-            const product = productDefinition.formation.of_product
-
-            productShapeMap.addProductShapePair( product.localID, owningElementLocalID, shapeRepresentation.localID )
-          }
-        }
-        
-        const representationItems = shapeRepresentation.items
-
+        const representationItems = shapeRepresentation.items       
         const objectPlacement =
           representationItems.find(
               ( where ) => where instanceof placement ) as placement | undefined
 
         let hasPlacement = false
 
-        if ( objectPlacement !== void 0 ) {
+        const mappedTreeNode = treeMap.get( shapeRepresentation.localID )
 
-          this.extractPlacement( objectPlacement )
-          hasPlacement = true
-        }
+        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {         
 
-        for ( const item of representationItems ) {
+          owningLocalID ??= owningElementLocalID
 
-          try {
+          const mappedItem = mappedTreeNode !== void 0 
 
-            if ( item instanceof placement ) {
-              continue
+          if ( transform !== void 0 ) {
+
+            this.scene.addTransform(
+              shapeDefinitionRepresentation.localID,
+              transform.getValues(),
+              transform,
+              true )
+            hasPlacement = true
+
+          } else if ( objectPlacement !== void 0 ) {
+
+            this.extractPlacement( objectPlacement, mappedItem )
+            hasPlacement = true
+          }
+          
+          if ( mappedItem && mappedTreeNode.children !== void 0 ) {
+
+            for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
+
+              const mappedChild = treeMap.get( childLocalID )!
+
+              mappedChild.thunk!( childOwningLocalID, childTransform )
             }
+          }
 
-            this.extractRepresentationItem( item, owningElementLocalID )
+          for ( const item of representationItems ) {
 
-            const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+            try {
 
-            if ( styledItemLocalID !== void 0 ) {
+              if ( item instanceof placement ) {
+                continue
+              }
 
-              const styledItem =
-                this.model.getElementByLocalID( styledItemLocalID ) as styled_item
+              if ( item instanceof mapped_item ) {
 
-              this.extractStyledItem( styledItem )
+                this.extractMappedItem( item, owningLocalID )
 
-            }
-          } catch ( ex ) {
+              } else {
+
+                this.extractRepresentationItem( item, owningLocalID )
+
+                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+
+                if ( styledItemLocalID !== void 0 ) {
+
+                  const styledItem =
+                    model.getElementByLocalID( styledItemLocalID ) as styled_item
+
+                  this.extractStyledItem( styledItem )
+
+                }
+              }
+            } catch ( ex ) {
 
             if (ex instanceof Error) {
 
-              Logger.error( `Error processing representation item expressID: ${item.expressID}\n\t${ex.name}\n\t${ex.message}` )
+                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: ${item.expressID}` )
 
-           } else {
+            } else {
 
-              Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
+                Logger.error(`Unknown exception processing representation item (${ex}) expressID: ${item.expressID}`)
+              }
             }
+          }
+
+          if ( hasPlacement ) {
+            this.scene.popTransform()
           }
         }
 
-        if ( hasPlacement ) {
-          this.scene.popTransform()
+        if ( mappedTreeNode === void 0 ) {
+
+          // not an assembly mapped item, just extract the representation
+          thunk()
+          continue
+
         }
+
+        mappedTreeNode.thunk = thunk
+      }
+
+      // All thunks are set, now we can execute the full
+      // assembly tree.
+      for ( const mappedNode of treeMap.values() ) {
+
+        if ( ( mappedNode.parents ?? 0 ) === 0 ) {
+
+          mappedNode.thunk!()
+        }
+      }
+
+      if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+        this.model.geometry.deleteTemporaries()
       }
 
       result = ExtractResult.COMPLETE
 
-      const endTime = Date.now()
-      const executionTimeInMs = endTime - startTime
-
-      if (logTime) {
-        console.log(`Geometry Extraction took ${executionTimeInMs} milliseconds to execute.`)
+      // free buffer at the end if you don't need it anymore
+      if (this.pointBuffer?.pointer) {
+        this.wasmModule._free(this.pointBuffer.pointer)
+        this.pointBuffer = null
       }
-
       return [result, this.scene, this.productShapeMap]
 
     } finally {

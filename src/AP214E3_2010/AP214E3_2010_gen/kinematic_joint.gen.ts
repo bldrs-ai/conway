@@ -18,7 +18,7 @@ export  class kinematic_joint extends StepEntityBase< EntityTypesAP214 > {
 
   public get first_link() : kinematic_link {
     if ( this.first_link_ === void 0 ) {
-      this.first_link_ = this.extractElement( 0, false, kinematic_link )
+      this.first_link_ = this.extractElement( 0, 0, 0, false, kinematic_link )
     }
 
     return this.first_link_ as kinematic_link
@@ -26,7 +26,7 @@ export  class kinematic_joint extends StepEntityBase< EntityTypesAP214 > {
 
   public get second_link() : kinematic_link {
     if ( this.second_link_ === void 0 ) {
-      this.second_link_ = this.extractElement( 1, false, kinematic_link )
+      this.second_link_ = this.extractElement( 1, 0, 0, false, kinematic_link )
     }
 
     return this.second_link_ as kinematic_link
@@ -35,8 +35,26 @@ export  class kinematic_joint extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === kinematic_joint.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for kinematic_joint" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -21,7 +21,7 @@ export  class composite_curve_segment extends founded_item {
 
   public get transition() : transition_code {
     if ( this.transition_ === void 0 ) {
-      this.transition_ = this.extractLambda( 0, transition_codeDeserializeStep, false )
+      this.transition_ = this.extractLambda( 0, 0, 1, transition_codeDeserializeStep, false )
     }
 
     return this.transition_ as transition_code
@@ -29,7 +29,7 @@ export  class composite_curve_segment extends founded_item {
 
   public get same_sense() : boolean {
     if ( this.same_sense_ === void 0 ) {
-      this.same_sense_ = this.extractBoolean( 1, false )
+      this.same_sense_ = this.extractBoolean( 1, 0, 1, false )
     }
 
     return this.same_sense_ as boolean
@@ -37,7 +37,7 @@ export  class composite_curve_segment extends founded_item {
 
   public get parent_curve() : curve {
     if ( this.parent_curve_ === void 0 ) {
-      this.parent_curve_ = this.extractElement( 2, false, curve )
+      this.parent_curve_ = this.extractElement( 2, 0, 1, false, curve )
     }
 
     return this.parent_curve_ as curve
@@ -46,8 +46,26 @@ export  class composite_curve_segment extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === composite_curve_segment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for composite_curve_segment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

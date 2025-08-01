@@ -29,7 +29,7 @@ export  class IfcFillAreaStyleTiles extends IfcGeometricRepresentationItem {
   public get TilingPattern() : Array<IfcVector> {
     if ( this.TilingPattern_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -62,7 +62,7 @@ export  class IfcFillAreaStyleTiles extends IfcGeometricRepresentationItem {
   public get Tiles() : Array<IfcStyledItem> {
     if ( this.Tiles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -94,7 +94,7 @@ export  class IfcFillAreaStyleTiles extends IfcGeometricRepresentationItem {
 
   public get TilingScale() : number {
     if ( this.TilingScale_ === void 0 ) {
-      this.TilingScale_ = this.extractNumber( 2, false )
+      this.TilingScale_ = this.extractNumber( 2, 0, 2, false )
     }
 
     return this.TilingScale_ as number
@@ -102,7 +102,9 @@ export  class IfcFillAreaStyleTiles extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

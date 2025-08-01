@@ -23,7 +23,7 @@ export  class IfcRelAssignsToProcess extends IfcRelAssigns {
     if ( this.RelatingProcess_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 6, false )
+        this.extractReference( 6, 6, 3, false )
 
       if ( !( value instanceof IfcProcess ) && !( value instanceof IfcTypeProcess ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -38,7 +38,7 @@ export  class IfcRelAssignsToProcess extends IfcRelAssigns {
 
   public get QuantityInProcess() : IfcMeasureWithUnit | null {
     if ( this.QuantityInProcess_ === void 0 ) {
-      this.QuantityInProcess_ = this.extractElement( 7, true, IfcMeasureWithUnit )
+      this.QuantityInProcess_ = this.extractElement( 7, 6, 3, true, IfcMeasureWithUnit )
     }
 
     return this.QuantityInProcess_ as IfcMeasureWithUnit | null
@@ -46,7 +46,9 @@ export  class IfcRelAssignsToProcess extends IfcRelAssigns {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

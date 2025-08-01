@@ -18,7 +18,7 @@ export  class IfcRelAssignsToGroupByFactor extends IfcRelAssignsToGroup {
 
   public get Factor() : number {
     if ( this.Factor_ === void 0 ) {
-      this.Factor_ = this.extractNumber( 7, false )
+      this.Factor_ = this.extractNumber( 7, 7, 4, false )
     }
 
     return this.Factor_ as number
@@ -26,7 +26,9 @@ export  class IfcRelAssignsToGroupByFactor extends IfcRelAssignsToGroup {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

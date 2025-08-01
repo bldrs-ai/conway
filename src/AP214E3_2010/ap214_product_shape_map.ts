@@ -21,6 +21,7 @@ export class AP214ProductShapeMap {
 
   /**
    * Adds a product-shape pair. Idempotent: does not add duplicates.
+   *
    * @param productId Product numerical id
    * @param shapeId Shape numerical id
    * 
@@ -93,6 +94,7 @@ export class AP214ProductShapeMap {
 
   /**
    * Gets the set of shape ids for a given product id.
+   *
    * @param productId Product numerical id
    * 
    * @return {Set<number> | undefined} A set of shape ids associated with the product, or undefined if no shapes are associated.
@@ -103,6 +105,7 @@ export class AP214ProductShapeMap {
 
   /**
    * Gets the set of product ids for a given shape id.
+   *
    * @param shapeId Shape numerical id
    * 
    * @return {Set<number> | undefined} A set of product ids associated with the shape, or undefined if no products are associated.
@@ -117,7 +120,7 @@ export class AP214ProductShapeMap {
    * @param shapeId The local ID of the shape.
    * @return {Set< number > | undefined} The local IDs of the product definition associated with the
    * shape, or undefined if no product definition is associated with the shape.
-   **/
+   */
   public getProductDefForShapeId(shapeId: number): Set< number > | undefined {
 
     const productDefs = this.shapesToProductDefs_.get(shapeId)

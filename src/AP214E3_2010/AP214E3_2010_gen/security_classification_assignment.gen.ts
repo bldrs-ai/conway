@@ -21,7 +21,7 @@ export abstract class security_classification_assignment extends StepEntityBase<
 
   public get assigned_security_classification() : security_classification {
     if ( this.assigned_security_classification_ === void 0 ) {
-      this.assigned_security_classification_ = this.extractElement( 0, false, security_classification )
+      this.assigned_security_classification_ = this.extractElement( 0, 0, 0, false, security_classification )
     }
 
     return this.assigned_security_classification_ as security_classification
@@ -33,8 +33,26 @@ export abstract class security_classification_assignment extends StepEntityBase<
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === security_classification_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for security_classification_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query: EntityTypesAP214[] = 

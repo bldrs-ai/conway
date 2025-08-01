@@ -27,7 +27,7 @@ export  class product_definition extends StepEntityBase< EntityTypesAP214 > {
 
   public get id() : string {
     if ( this.id_ === void 0 ) {
-      this.id_ = this.extractString( 0, false )
+      this.id_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.id_ as string
@@ -35,7 +35,7 @@ export  class product_definition extends StepEntityBase< EntityTypesAP214 > {
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -43,7 +43,7 @@ export  class product_definition extends StepEntityBase< EntityTypesAP214 > {
 
   public get formation() : product_definition_formation {
     if ( this.formation_ === void 0 ) {
-      this.formation_ = this.extractElement( 2, false, product_definition_formation )
+      this.formation_ = this.extractElement( 2, 0, 0, false, product_definition_formation )
     }
 
     return this.formation_ as product_definition_formation
@@ -51,7 +51,7 @@ export  class product_definition extends StepEntityBase< EntityTypesAP214 > {
 
   public get frame_of_reference() : product_definition_context {
     if ( this.frame_of_reference_ === void 0 ) {
-      this.frame_of_reference_ = this.extractElement( 3, false, product_definition_context )
+      this.frame_of_reference_ = this.extractElement( 3, 0, 0, false, product_definition_context )
     }
 
     return this.frame_of_reference_ as product_definition_context
@@ -63,8 +63,26 @@ export  class product_definition extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === product_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for product_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

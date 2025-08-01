@@ -18,7 +18,7 @@ export abstract class IfcSpatialStructureElement extends IfcSpatialElement {
 
   public get CompositionType() : IfcElementCompositionEnum | null {
     if ( this.CompositionType_ === void 0 ) {
-      this.CompositionType_ = this.extractLambda( 8, IfcElementCompositionEnumDeserializeStep, true )
+      this.CompositionType_ = this.extractLambda( 8, 8, 5, IfcElementCompositionEnumDeserializeStep, true )
     }
 
     return this.CompositionType_ as IfcElementCompositionEnum | null
@@ -26,7 +26,9 @@ export abstract class IfcSpatialStructureElement extends IfcSpatialElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

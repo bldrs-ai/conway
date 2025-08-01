@@ -18,7 +18,7 @@ export  class IfcAlarm extends IfcDistributionControlElement {
 
   public get PredefinedType() : IfcAlarmTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcAlarmTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 7, IfcAlarmTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcAlarmTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcAlarm extends IfcDistributionControlElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

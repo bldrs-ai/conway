@@ -18,7 +18,7 @@ export  class boxed_half_space extends half_space_solid {
 
   public get enclosure() : box_domain {
     if ( this.enclosure_ === void 0 ) {
-      this.enclosure_ = this.extractElement( 3, false, box_domain )
+      this.enclosure_ = this.extractElement( 3, 3, 3, false, box_domain )
     }
 
     return this.enclosure_ as box_domain
@@ -26,8 +26,26 @@ export  class boxed_half_space extends half_space_solid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === boxed_half_space.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for boxed_half_space" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

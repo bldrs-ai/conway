@@ -18,7 +18,7 @@ export  class referenced_modified_datum extends datum_reference {
 
   public get modifier() : limit_condition {
     if ( this.modifier_ === void 0 ) {
-      this.modifier_ = this.extractLambda( 2, limit_conditionDeserializeStep, false )
+      this.modifier_ = this.extractLambda( 2, 2, 1, limit_conditionDeserializeStep, false )
     }
 
     return this.modifier_ as limit_condition
@@ -26,8 +26,26 @@ export  class referenced_modified_datum extends datum_reference {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === referenced_modified_datum.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for referenced_modified_datum" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

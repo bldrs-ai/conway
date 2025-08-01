@@ -18,7 +18,7 @@ export class IfcText extends StepEntityBase< EntityTypesIfc > {
 
   public get Value() : string {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractString( 0, false )
+      this.Value_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Value_ as string
@@ -27,7 +27,8 @@ export class IfcText extends StepEntityBase< EntityTypesIfc > {
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesIfc >,
-      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+      multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
      super( localID, internalReference, model )
   }
 

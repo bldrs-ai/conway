@@ -20,7 +20,7 @@ export  class IfcFurnitureType extends IfcFurnishingElementType {
 
   public get AssemblyPlace() : IfcAssemblyPlaceEnum {
     if ( this.AssemblyPlace_ === void 0 ) {
-      this.AssemblyPlace_ = this.extractLambda( 9, IfcAssemblyPlaceEnumDeserializeStep, false )
+      this.AssemblyPlace_ = this.extractLambda( 9, 9, 6, IfcAssemblyPlaceEnumDeserializeStep, false )
     }
 
     return this.AssemblyPlace_ as IfcAssemblyPlaceEnum
@@ -28,7 +28,7 @@ export  class IfcFurnitureType extends IfcFurnishingElementType {
 
   public get PredefinedType() : IfcFurnitureTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 10, IfcFurnitureTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 10, 9, 6, IfcFurnitureTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcFurnitureTypeEnum | null
@@ -36,7 +36,9 @@ export  class IfcFurnitureType extends IfcFurnishingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

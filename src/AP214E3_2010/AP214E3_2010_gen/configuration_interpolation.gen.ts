@@ -20,7 +20,7 @@ export  class configuration_interpolation extends StepEntityBase< EntityTypesAP2
 
   public get previous_configuration_definition() : configuration_definition {
     if ( this.previous_configuration_definition_ === void 0 ) {
-      this.previous_configuration_definition_ = this.extractElement( 0, false, configuration_definition )
+      this.previous_configuration_definition_ = this.extractElement( 0, 0, 0, false, configuration_definition )
     }
 
     return this.previous_configuration_definition_ as configuration_definition
@@ -28,7 +28,7 @@ export  class configuration_interpolation extends StepEntityBase< EntityTypesAP2
 
   public get next_configuration_definition() : configuration_definition {
     if ( this.next_configuration_definition_ === void 0 ) {
-      this.next_configuration_definition_ = this.extractElement( 1, false, configuration_definition )
+      this.next_configuration_definition_ = this.extractElement( 1, 0, 0, false, configuration_definition )
     }
 
     return this.next_configuration_definition_ as configuration_definition
@@ -36,7 +36,7 @@ export  class configuration_interpolation extends StepEntityBase< EntityTypesAP2
 
   public get interpolation() : interpolation_type {
     if ( this.interpolation_ === void 0 ) {
-      this.interpolation_ = this.extractLambda( 2, interpolation_typeDeserializeStep, false )
+      this.interpolation_ = this.extractLambda( 2, 0, 0, interpolation_typeDeserializeStep, false )
     }
 
     return this.interpolation_ as interpolation_type
@@ -44,8 +44,26 @@ export  class configuration_interpolation extends StepEntityBase< EntityTypesAP2
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === configuration_interpolation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for configuration_interpolation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

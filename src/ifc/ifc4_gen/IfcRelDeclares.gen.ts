@@ -27,7 +27,7 @@ export  class IfcRelDeclares extends IfcRelationship {
 
   public get RelatingContext() : IfcContext {
     if ( this.RelatingContext_ === void 0 ) {
-      this.RelatingContext_ = this.extractElement( 4, false, IfcContext )
+      this.RelatingContext_ = this.extractElement( 4, 4, 2, false, IfcContext )
     }
 
     return this.RelatingContext_ as IfcContext
@@ -36,7 +36,7 @@ export  class IfcRelDeclares extends IfcRelationship {
   public get RelatedDefinitions() : Array<IfcObjectDefinition | IfcPropertyDefinition> {
     if ( this.RelatedDefinitions_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -75,7 +75,9 @@ export  class IfcRelDeclares extends IfcRelationship {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

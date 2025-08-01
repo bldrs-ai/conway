@@ -30,7 +30,7 @@ export  class IfcObjective extends IfcConstraint {
   public get BenchmarkValues() : Array<IfcConstraint> | null {
     if ( this.BenchmarkValues_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 7, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -62,7 +62,7 @@ export  class IfcObjective extends IfcConstraint {
 
   public get LogicalAggregator() : IfcLogicalOperatorEnum | null {
     if ( this.LogicalAggregator_ === void 0 ) {
-      this.LogicalAggregator_ = this.extractLambda( 8, IfcLogicalOperatorEnumDeserializeStep, true )
+      this.LogicalAggregator_ = this.extractLambda( 8, 7, 1, IfcLogicalOperatorEnumDeserializeStep, true )
     }
 
     return this.LogicalAggregator_ as IfcLogicalOperatorEnum | null
@@ -70,7 +70,7 @@ export  class IfcObjective extends IfcConstraint {
 
   public get ObjectiveQualifier() : IfcObjectiveEnum {
     if ( this.ObjectiveQualifier_ === void 0 ) {
-      this.ObjectiveQualifier_ = this.extractLambda( 9, IfcObjectiveEnumDeserializeStep, false )
+      this.ObjectiveQualifier_ = this.extractLambda( 9, 7, 1, IfcObjectiveEnumDeserializeStep, false )
     }
 
     return this.ObjectiveQualifier_ as IfcObjectiveEnum
@@ -78,7 +78,7 @@ export  class IfcObjective extends IfcConstraint {
 
   public get UserDefinedQualifier() : string | null {
     if ( this.UserDefinedQualifier_ === void 0 ) {
-      this.UserDefinedQualifier_ = this.extractString( 10, true )
+      this.UserDefinedQualifier_ = this.extractString( 10, 7, 1, true )
     }
 
     return this.UserDefinedQualifier_ as string | null
@@ -86,7 +86,9 @@ export  class IfcObjective extends IfcConstraint {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export abstract class IfcProcess extends IfcObject {
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 5, true )
+      this.Identification_ = this.extractString( 5, 5, 3, true )
     }
 
     return this.Identification_ as string | null
@@ -28,7 +28,7 @@ export abstract class IfcProcess extends IfcObject {
 
   public get LongDescription() : string | null {
     if ( this.LongDescription_ === void 0 ) {
-      this.LongDescription_ = this.extractString( 6, true )
+      this.LongDescription_ = this.extractString( 6, 5, 3, true )
     }
 
     return this.LongDescription_ as string | null
@@ -39,7 +39,9 @@ export abstract class IfcProcess extends IfcObject {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

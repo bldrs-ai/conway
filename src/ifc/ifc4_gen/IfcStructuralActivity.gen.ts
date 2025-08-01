@@ -20,7 +20,7 @@ export abstract class IfcStructuralActivity extends IfcProduct {
 
   public get AppliedLoad() : IfcStructuralLoad {
     if ( this.AppliedLoad_ === void 0 ) {
-      this.AppliedLoad_ = this.extractElement( 7, false, IfcStructuralLoad )
+      this.AppliedLoad_ = this.extractElement( 7, 7, 4, false, IfcStructuralLoad )
     }
 
     return this.AppliedLoad_ as IfcStructuralLoad
@@ -28,7 +28,7 @@ export abstract class IfcStructuralActivity extends IfcProduct {
 
   public get GlobalOrLocal() : IfcGlobalOrLocalEnum {
     if ( this.GlobalOrLocal_ === void 0 ) {
-      this.GlobalOrLocal_ = this.extractLambda( 8, IfcGlobalOrLocalEnumDeserializeStep, false )
+      this.GlobalOrLocal_ = this.extractLambda( 8, 7, 4, IfcGlobalOrLocalEnumDeserializeStep, false )
     }
 
     return this.GlobalOrLocal_ as IfcGlobalOrLocalEnum
@@ -37,7 +37,9 @@ export abstract class IfcStructuralActivity extends IfcProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

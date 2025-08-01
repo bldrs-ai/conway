@@ -18,7 +18,7 @@ export  class IfcLightFixtureType extends IfcFlowTerminalType {
 
   public get PredefinedType() : IfcLightFixtureTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcLightFixtureTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcLightFixtureTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcLightFixtureTypeEnum
@@ -26,7 +26,9 @@ export  class IfcLightFixtureType extends IfcFlowTerminalType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

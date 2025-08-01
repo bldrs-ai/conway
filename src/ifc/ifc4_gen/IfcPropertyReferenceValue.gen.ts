@@ -28,7 +28,7 @@ export  class IfcPropertyReferenceValue extends IfcSimpleProperty {
 
   public get UsageName() : string | null {
     if ( this.UsageName_ === void 0 ) {
-      this.UsageName_ = this.extractString( 2, true )
+      this.UsageName_ = this.extractString( 2, 2, 3, true )
     }
 
     return this.UsageName_ as string | null
@@ -38,7 +38,7 @@ export  class IfcPropertyReferenceValue extends IfcSimpleProperty {
     if ( this.PropertyReference_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 2, 3, true )
 
       if ( !( value instanceof IfcAddress ) && !( value instanceof IfcAppliedValue ) && !( value instanceof IfcExternalReference ) && !( value instanceof IfcMaterialDefinition ) && !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && !( value instanceof IfcTable ) && !( value instanceof IfcTimeSeries ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -53,7 +53,9 @@ export  class IfcPropertyReferenceValue extends IfcSimpleProperty {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

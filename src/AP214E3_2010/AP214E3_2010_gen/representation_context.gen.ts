@@ -19,7 +19,7 @@ export  class representation_context extends StepEntityBase< EntityTypesAP214 > 
 
   public get context_identifier() : string {
     if ( this.context_identifier_ === void 0 ) {
-      this.context_identifier_ = this.extractString( 0, false )
+      this.context_identifier_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.context_identifier_ as string
@@ -27,7 +27,7 @@ export  class representation_context extends StepEntityBase< EntityTypesAP214 > 
 
   public get context_type() : string {
     if ( this.context_type_ === void 0 ) {
-      this.context_type_ = this.extractString( 1, false )
+      this.context_type_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.context_type_ as string
@@ -36,8 +36,26 @@ export  class representation_context extends StepEntityBase< EntityTypesAP214 > 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === representation_context.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for representation_context" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

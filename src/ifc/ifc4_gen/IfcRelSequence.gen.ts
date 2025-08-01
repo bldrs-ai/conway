@@ -25,7 +25,7 @@ export  class IfcRelSequence extends IfcRelConnects {
 
   public get RelatingProcess() : IfcProcess {
     if ( this.RelatingProcess_ === void 0 ) {
-      this.RelatingProcess_ = this.extractElement( 4, false, IfcProcess )
+      this.RelatingProcess_ = this.extractElement( 4, 4, 3, false, IfcProcess )
     }
 
     return this.RelatingProcess_ as IfcProcess
@@ -33,7 +33,7 @@ export  class IfcRelSequence extends IfcRelConnects {
 
   public get RelatedProcess() : IfcProcess {
     if ( this.RelatedProcess_ === void 0 ) {
-      this.RelatedProcess_ = this.extractElement( 5, false, IfcProcess )
+      this.RelatedProcess_ = this.extractElement( 5, 4, 3, false, IfcProcess )
     }
 
     return this.RelatedProcess_ as IfcProcess
@@ -41,7 +41,7 @@ export  class IfcRelSequence extends IfcRelConnects {
 
   public get TimeLag() : IfcLagTime | null {
     if ( this.TimeLag_ === void 0 ) {
-      this.TimeLag_ = this.extractElement( 6, true, IfcLagTime )
+      this.TimeLag_ = this.extractElement( 6, 4, 3, true, IfcLagTime )
     }
 
     return this.TimeLag_ as IfcLagTime | null
@@ -49,7 +49,7 @@ export  class IfcRelSequence extends IfcRelConnects {
 
   public get SequenceType() : IfcSequenceEnum | null {
     if ( this.SequenceType_ === void 0 ) {
-      this.SequenceType_ = this.extractLambda( 7, IfcSequenceEnumDeserializeStep, true )
+      this.SequenceType_ = this.extractLambda( 7, 4, 3, IfcSequenceEnumDeserializeStep, true )
     }
 
     return this.SequenceType_ as IfcSequenceEnum | null
@@ -57,7 +57,7 @@ export  class IfcRelSequence extends IfcRelConnects {
 
   public get UserDefinedSequenceType() : string | null {
     if ( this.UserDefinedSequenceType_ === void 0 ) {
-      this.UserDefinedSequenceType_ = this.extractString( 8, true )
+      this.UserDefinedSequenceType_ = this.extractString( 8, 4, 3, true )
     }
 
     return this.UserDefinedSequenceType_ as string | null
@@ -65,7 +65,9 @@ export  class IfcRelSequence extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

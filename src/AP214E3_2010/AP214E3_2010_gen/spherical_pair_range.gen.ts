@@ -28,9 +28,9 @@ export  class spherical_pair_range extends simple_pair_range {
     if ( this.lower_limit_yaw_ === void 0 ) {
       
       const enumValue : unlimited_range | null =
-        this.extractLambda( 2, unlimited_rangeDeserializeStep, true )
+        this.extractLambda( 2, 1, 1, unlimited_rangeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | unlimited_range = enumValue ?? 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 1, 1, false )
 
       if ( enumValue === null && !( value instanceof plane_angle_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -47,9 +47,9 @@ export  class spherical_pair_range extends simple_pair_range {
     if ( this.upper_limit_yaw_ === void 0 ) {
       
       const enumValue : unlimited_range | null =
-        this.extractLambda( 3, unlimited_rangeDeserializeStep, true )
+        this.extractLambda( 3, 1, 1, unlimited_rangeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | unlimited_range = enumValue ?? 
-        this.extractReference( 3, false )
+        this.extractReference( 3, 1, 1, false )
 
       if ( enumValue === null && !( value instanceof plane_angle_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -66,9 +66,9 @@ export  class spherical_pair_range extends simple_pair_range {
     if ( this.lower_limit_pitch_ === void 0 ) {
       
       const enumValue : unlimited_range | null =
-        this.extractLambda( 4, unlimited_rangeDeserializeStep, true )
+        this.extractLambda( 4, 1, 1, unlimited_rangeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | unlimited_range = enumValue ?? 
-        this.extractReference( 4, false )
+        this.extractReference( 4, 1, 1, false )
 
       if ( enumValue === null && !( value instanceof plane_angle_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -85,9 +85,9 @@ export  class spherical_pair_range extends simple_pair_range {
     if ( this.upper_limit_pitch_ === void 0 ) {
       
       const enumValue : unlimited_range | null =
-        this.extractLambda( 5, unlimited_rangeDeserializeStep, true )
+        this.extractLambda( 5, 1, 1, unlimited_rangeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | unlimited_range = enumValue ?? 
-        this.extractReference( 5, false )
+        this.extractReference( 5, 1, 1, false )
 
       if ( enumValue === null && !( value instanceof plane_angle_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -104,9 +104,9 @@ export  class spherical_pair_range extends simple_pair_range {
     if ( this.lower_limit_roll_ === void 0 ) {
       
       const enumValue : unlimited_range | null =
-        this.extractLambda( 6, unlimited_rangeDeserializeStep, true )
+        this.extractLambda( 6, 1, 1, unlimited_rangeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | unlimited_range = enumValue ?? 
-        this.extractReference( 6, false )
+        this.extractReference( 6, 1, 1, false )
 
       if ( enumValue === null && !( value instanceof plane_angle_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -123,9 +123,9 @@ export  class spherical_pair_range extends simple_pair_range {
     if ( this.upper_limit_roll_ === void 0 ) {
       
       const enumValue : unlimited_range | null =
-        this.extractLambda( 7, unlimited_rangeDeserializeStep, true )
+        this.extractLambda( 7, 1, 1, unlimited_rangeDeserializeStep, true )
       const value : StepEntityBase< EntityTypesAP214 > | unlimited_range = enumValue ?? 
-        this.extractReference( 7, false )
+        this.extractReference( 7, 1, 1, false )
 
       if ( enumValue === null && !( value instanceof plane_angle_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -140,8 +140,26 @@ export  class spherical_pair_range extends simple_pair_range {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === spherical_pair_range.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for spherical_pair_range" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

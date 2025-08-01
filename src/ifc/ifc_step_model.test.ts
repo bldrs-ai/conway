@@ -599,7 +599,7 @@ function extractRawReference() {
   const PARENT_CONTEXT_OFFSET = 6
 
   const rawParentContext =
-    geometricSubRepresentation?.extractReference( PARENT_CONTEXT_OFFSET, false )
+    geometricSubRepresentation?.extractReference( PARENT_CONTEXT_OFFSET, 0, 0, false )
 
   // These aren't magic numbers, they match the above and this is an expected
   // equality test.

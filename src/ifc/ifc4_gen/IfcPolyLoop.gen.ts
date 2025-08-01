@@ -25,7 +25,7 @@ export  class IfcPolyLoop extends IfcLoop {
   public get Polygon() : Array<IfcCartesianPoint> {
     if ( this.Polygon_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -57,7 +57,9 @@ export  class IfcPolyLoop extends IfcLoop {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

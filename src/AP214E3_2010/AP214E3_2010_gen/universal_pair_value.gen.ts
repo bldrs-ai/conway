@@ -21,7 +21,7 @@ export  class universal_pair_value extends pair_value {
 
   public get first_rotation_angle() : number {
     if ( this.first_rotation_angle_ === void 0 ) {
-      this.first_rotation_angle_ = this.extractNumber( 2, false )
+      this.first_rotation_angle_ = this.extractNumber( 2, 1, 1, false )
     }
 
     return this.first_rotation_angle_ as number
@@ -29,7 +29,7 @@ export  class universal_pair_value extends pair_value {
 
   public get second_rotation_angle() : number {
     if ( this.second_rotation_angle_ === void 0 ) {
-      this.second_rotation_angle_ = this.extractNumber( 3, false )
+      this.second_rotation_angle_ = this.extractNumber( 3, 1, 1, false )
     }
 
     return this.second_rotation_angle_ as number
@@ -37,8 +37,26 @@ export  class universal_pair_value extends pair_value {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === universal_pair_value.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for universal_pair_value" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

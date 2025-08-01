@@ -26,7 +26,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get BasisSurface() : IfcSurface {
     if ( this.BasisSurface_ === void 0 ) {
-      this.BasisSurface_ = this.extractElement( 0, false, IfcSurface )
+      this.BasisSurface_ = this.extractElement( 0, 0, 4, false, IfcSurface )
     }
 
     return this.BasisSurface_ as IfcSurface
@@ -34,7 +34,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get U1() : number {
     if ( this.U1_ === void 0 ) {
-      this.U1_ = this.extractNumber( 1, false )
+      this.U1_ = this.extractNumber( 1, 0, 4, false )
     }
 
     return this.U1_ as number
@@ -42,7 +42,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get V1() : number {
     if ( this.V1_ === void 0 ) {
-      this.V1_ = this.extractNumber( 2, false )
+      this.V1_ = this.extractNumber( 2, 0, 4, false )
     }
 
     return this.V1_ as number
@@ -50,7 +50,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get U2() : number {
     if ( this.U2_ === void 0 ) {
-      this.U2_ = this.extractNumber( 3, false )
+      this.U2_ = this.extractNumber( 3, 0, 4, false )
     }
 
     return this.U2_ as number
@@ -58,7 +58,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get V2() : number {
     if ( this.V2_ === void 0 ) {
-      this.V2_ = this.extractNumber( 4, false )
+      this.V2_ = this.extractNumber( 4, 0, 4, false )
     }
 
     return this.V2_ as number
@@ -66,7 +66,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get Usense() : boolean {
     if ( this.Usense_ === void 0 ) {
-      this.Usense_ = this.extractBoolean( 5, false )
+      this.Usense_ = this.extractBoolean( 5, 0, 4, false )
     }
 
     return this.Usense_ as boolean
@@ -74,7 +74,7 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
 
   public get Vsense() : boolean {
     if ( this.Vsense_ === void 0 ) {
-      this.Vsense_ = this.extractBoolean( 6, false )
+      this.Vsense_ = this.extractBoolean( 6, 0, 4, false )
     }
 
     return this.Vsense_ as boolean
@@ -82,7 +82,9 @@ export  class IfcRectangularTrimmedSurface extends IfcBoundedSurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

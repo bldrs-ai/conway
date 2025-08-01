@@ -24,7 +24,7 @@ export  class IfcDoorType extends IfcBuildingElementType {
 
   public get PredefinedType() : IfcDoorTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcDoorTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcDoorTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcDoorTypeEnum
@@ -32,7 +32,7 @@ export  class IfcDoorType extends IfcBuildingElementType {
 
   public get OperationType() : IfcDoorTypeOperationEnum {
     if ( this.OperationType_ === void 0 ) {
-      this.OperationType_ = this.extractLambda( 10, IfcDoorTypeOperationEnumDeserializeStep, false )
+      this.OperationType_ = this.extractLambda( 10, 9, 6, IfcDoorTypeOperationEnumDeserializeStep, false )
     }
 
     return this.OperationType_ as IfcDoorTypeOperationEnum
@@ -40,7 +40,7 @@ export  class IfcDoorType extends IfcBuildingElementType {
 
   public get ParameterTakesPrecedence() : boolean | null {
     if ( this.ParameterTakesPrecedence_ === void 0 ) {
-      this.ParameterTakesPrecedence_ = this.extractBoolean( 11, true )
+      this.ParameterTakesPrecedence_ = this.extractBoolean( 11, 9, 6, true )
     }
 
     return this.ParameterTakesPrecedence_ as boolean | null
@@ -48,7 +48,7 @@ export  class IfcDoorType extends IfcBuildingElementType {
 
   public get UserDefinedOperationType() : string | null {
     if ( this.UserDefinedOperationType_ === void 0 ) {
-      this.UserDefinedOperationType_ = this.extractString( 12, true )
+      this.UserDefinedOperationType_ = this.extractString( 12, 9, 6, true )
     }
 
     return this.UserDefinedOperationType_ as string | null
@@ -56,7 +56,9 @@ export  class IfcDoorType extends IfcBuildingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

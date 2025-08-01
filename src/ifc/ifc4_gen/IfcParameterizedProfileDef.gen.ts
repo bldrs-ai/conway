@@ -18,7 +18,7 @@ export abstract class IfcParameterizedProfileDef extends IfcProfileDef {
 
   public get Position() : IfcAxis2Placement2D | null {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractElement( 2, true, IfcAxis2Placement2D )
+      this.Position_ = this.extractElement( 2, 2, 1, true, IfcAxis2Placement2D )
     }
 
     return this.Position_ as IfcAxis2Placement2D | null
@@ -26,7 +26,9 @@ export abstract class IfcParameterizedProfileDef extends IfcProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

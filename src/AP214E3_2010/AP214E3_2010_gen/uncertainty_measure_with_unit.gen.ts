@@ -20,7 +20,7 @@ export  class uncertainty_measure_with_unit extends measure_with_unit {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 2, false )
+      this.name_ = this.extractString( 2, 2, 1, false )
     }
 
     return this.name_ as string
@@ -28,7 +28,7 @@ export  class uncertainty_measure_with_unit extends measure_with_unit {
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 3, true )
+      this.description_ = this.extractString( 3, 2, 1, true )
     }
 
     return this.description_ as string | null
@@ -36,8 +36,26 @@ export  class uncertainty_measure_with_unit extends measure_with_unit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === uncertainty_measure_with_unit.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for uncertainty_measure_with_unit" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

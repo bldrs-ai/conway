@@ -18,7 +18,7 @@ export  class product_concept_context extends application_context_element {
 
   public get market_segment_type() : string {
     if ( this.market_segment_type_ === void 0 ) {
-      this.market_segment_type_ = this.extractString( 2, false )
+      this.market_segment_type_ = this.extractString( 2, 2, 1, false )
     }
 
     return this.market_segment_type_ as string
@@ -26,8 +26,26 @@ export  class product_concept_context extends application_context_element {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === product_concept_context.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for product_concept_context" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

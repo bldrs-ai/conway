@@ -31,7 +31,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get Identifier() : string | null {
     if ( this.Identifier_ === void 0 ) {
-      this.Identifier_ = this.extractString( 0, true )
+      this.Identifier_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.Identifier_ as string | null
@@ -39,7 +39,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 1, true )
+      this.Name_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Name_ as string | null
@@ -47,7 +47,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 2, true )
+      this.Description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -55,7 +55,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get TimeOfApproval() : string | null {
     if ( this.TimeOfApproval_ === void 0 ) {
-      this.TimeOfApproval_ = this.extractString( 3, true )
+      this.TimeOfApproval_ = this.extractString( 3, 0, 0, true )
     }
 
     return this.TimeOfApproval_ as string | null
@@ -63,7 +63,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get Status() : string | null {
     if ( this.Status_ === void 0 ) {
-      this.Status_ = this.extractString( 4, true )
+      this.Status_ = this.extractString( 4, 0, 0, true )
     }
 
     return this.Status_ as string | null
@@ -71,7 +71,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get Level() : string | null {
     if ( this.Level_ === void 0 ) {
-      this.Level_ = this.extractString( 5, true )
+      this.Level_ = this.extractString( 5, 0, 0, true )
     }
 
     return this.Level_ as string | null
@@ -79,7 +79,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
 
   public get Qualifier() : string | null {
     if ( this.Qualifier_ === void 0 ) {
-      this.Qualifier_ = this.extractString( 6, true )
+      this.Qualifier_ = this.extractString( 6, 0, 0, true )
     }
 
     return this.Qualifier_ as string | null
@@ -89,7 +89,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
     if ( this.RequestingApproval_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 7, true )
+        this.extractReference( 7, 0, 0, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -106,7 +106,7 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
     if ( this.GivingApproval_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 8, true )
+        this.extractReference( 8, 0, 0, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -126,7 +126,9 @@ export  class IfcApproval extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

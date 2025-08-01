@@ -20,7 +20,7 @@ export  class IfcTextLiteralWithExtent extends IfcTextLiteral {
 
   public get Extent() : IfcPlanarExtent {
     if ( this.Extent_ === void 0 ) {
-      this.Extent_ = this.extractElement( 3, false, IfcPlanarExtent )
+      this.Extent_ = this.extractElement( 3, 3, 3, false, IfcPlanarExtent )
     }
 
     return this.Extent_ as IfcPlanarExtent
@@ -28,7 +28,7 @@ export  class IfcTextLiteralWithExtent extends IfcTextLiteral {
 
   public get BoxAlignment() : string {
     if ( this.BoxAlignment_ === void 0 ) {
-      this.BoxAlignment_ = this.extractString( 4, false )
+      this.BoxAlignment_ = this.extractString( 4, 3, 3, false )
     }
 
     return this.BoxAlignment_ as string
@@ -36,7 +36,9 @@ export  class IfcTextLiteralWithExtent extends IfcTextLiteral {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

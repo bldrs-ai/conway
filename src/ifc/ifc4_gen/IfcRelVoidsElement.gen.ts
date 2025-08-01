@@ -20,7 +20,7 @@ export  class IfcRelVoidsElement extends IfcRelDecomposes {
 
   public get RelatingBuildingElement() : IfcElement {
     if ( this.RelatingBuildingElement_ === void 0 ) {
-      this.RelatingBuildingElement_ = this.extractElement( 4, false, IfcElement )
+      this.RelatingBuildingElement_ = this.extractElement( 4, 4, 3, false, IfcElement )
     }
 
     return this.RelatingBuildingElement_ as IfcElement
@@ -28,7 +28,7 @@ export  class IfcRelVoidsElement extends IfcRelDecomposes {
 
   public get RelatedOpeningElement() : IfcFeatureElementSubtraction {
     if ( this.RelatedOpeningElement_ === void 0 ) {
-      this.RelatedOpeningElement_ = this.extractElement( 5, false, IfcFeatureElementSubtraction )
+      this.RelatedOpeningElement_ = this.extractElement( 5, 4, 3, false, IfcFeatureElementSubtraction )
     }
 
     return this.RelatedOpeningElement_ as IfcFeatureElementSubtraction
@@ -36,7 +36,9 @@ export  class IfcRelVoidsElement extends IfcRelDecomposes {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

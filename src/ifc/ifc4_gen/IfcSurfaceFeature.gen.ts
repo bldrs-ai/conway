@@ -18,7 +18,7 @@ export  class IfcSurfaceFeature extends IfcFeatureElement {
 
   public get PredefinedType() : IfcSurfaceFeatureTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcSurfaceFeatureTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcSurfaceFeatureTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcSurfaceFeatureTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcSurfaceFeature extends IfcFeatureElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

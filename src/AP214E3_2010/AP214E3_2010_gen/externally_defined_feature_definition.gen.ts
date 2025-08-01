@@ -22,7 +22,7 @@ export  class externally_defined_feature_definition extends feature_definition {
     if ( this.item_id_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 2, 2, false )
 
       if ( !( value instanceof identifier ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -37,7 +37,7 @@ export  class externally_defined_feature_definition extends feature_definition {
 
   public get source() : external_source {
     if ( this.source_ === void 0 ) {
-      this.source_ = this.extractElement( 3, false, external_source )
+      this.source_ = this.extractElement( 3, 2, 2, false, external_source )
     }
 
     return this.source_ as external_source
@@ -45,8 +45,26 @@ export  class externally_defined_feature_definition extends feature_definition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === externally_defined_feature_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for externally_defined_feature_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -19,7 +19,7 @@ export  class face_bound extends topological_representation_item {
 
   public get bound() : loop {
     if ( this.bound_ === void 0 ) {
-      this.bound_ = this.extractElement( 1, false, loop )
+      this.bound_ = this.extractElement( 1, 1, 2, false, loop )
     }
 
     return this.bound_ as loop
@@ -27,7 +27,7 @@ export  class face_bound extends topological_representation_item {
 
   public get orientation() : boolean {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractBoolean( 2, false )
+      this.orientation_ = this.extractBoolean( 2, 1, 2, false )
     }
 
     return this.orientation_ as boolean
@@ -35,8 +35,26 @@ export  class face_bound extends topological_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === face_bound.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for face_bound" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

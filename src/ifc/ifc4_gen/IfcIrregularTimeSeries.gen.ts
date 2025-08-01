@@ -25,7 +25,7 @@ export  class IfcIrregularTimeSeries extends IfcTimeSeries {
   public get Values() : Array<IfcIrregularTimeSeriesValue> {
     if ( this.Values_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 8, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -57,7 +57,9 @@ export  class IfcIrregularTimeSeries extends IfcTimeSeries {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

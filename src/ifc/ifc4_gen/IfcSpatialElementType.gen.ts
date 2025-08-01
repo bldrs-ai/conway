@@ -18,7 +18,7 @@ export abstract class IfcSpatialElementType extends IfcTypeProduct {
 
   public get ElementType() : string | null {
     if ( this.ElementType_ === void 0 ) {
-      this.ElementType_ = this.extractString( 8, true )
+      this.ElementType_ = this.extractString( 8, 8, 4, true )
     }
 
     return this.ElementType_ as string | null
@@ -26,7 +26,9 @@ export abstract class IfcSpatialElementType extends IfcTypeProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

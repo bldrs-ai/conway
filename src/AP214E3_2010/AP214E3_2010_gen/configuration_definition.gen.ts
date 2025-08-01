@@ -27,7 +27,7 @@ export  class configuration_definition extends StepEntityBase< EntityTypesAP214 
   public get pair_values() : Array<pair_value> {
     if ( this.pair_values_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -61,7 +61,7 @@ export  class configuration_definition extends StepEntityBase< EntityTypesAP214 
     if ( this.t_parameter_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 0, false )
 
       if ( !( value instanceof parameter_value ) && !( value instanceof measure_with_unit ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -76,8 +76,26 @@ export  class configuration_definition extends StepEntityBase< EntityTypesAP214 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === configuration_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for configuration_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

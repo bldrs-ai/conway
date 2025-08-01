@@ -21,7 +21,7 @@ export abstract class action_request_assignment extends StepEntityBase< EntityTy
 
   public get assigned_action_request() : versioned_action_request {
     if ( this.assigned_action_request_ === void 0 ) {
-      this.assigned_action_request_ = this.extractElement( 0, false, versioned_action_request )
+      this.assigned_action_request_ = this.extractElement( 0, 0, 0, false, versioned_action_request )
     }
 
     return this.assigned_action_request_ as versioned_action_request
@@ -33,8 +33,26 @@ export abstract class action_request_assignment extends StepEntityBase< EntityTy
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === action_request_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for action_request_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query: EntityTypesAP214[] = 

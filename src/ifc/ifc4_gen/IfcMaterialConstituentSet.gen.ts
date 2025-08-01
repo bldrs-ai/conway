@@ -28,7 +28,7 @@ export  class IfcMaterialConstituentSet extends IfcMaterialDefinition {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, true )
+      this.Name_ = this.extractString( 0, 0, 1, true )
     }
 
     return this.Name_ as string | null
@@ -36,7 +36,7 @@ export  class IfcMaterialConstituentSet extends IfcMaterialDefinition {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -45,7 +45,7 @@ export  class IfcMaterialConstituentSet extends IfcMaterialDefinition {
   public get MaterialConstituents() : Array<IfcMaterialConstituent> | null {
     if ( this.MaterialConstituents_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -77,7 +77,9 @@ export  class IfcMaterialConstituentSet extends IfcMaterialDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

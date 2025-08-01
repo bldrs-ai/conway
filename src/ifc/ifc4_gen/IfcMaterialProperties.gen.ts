@@ -18,7 +18,7 @@ export  class IfcMaterialProperties extends IfcExtendedProperties {
 
   public get Material() : IfcMaterialDefinition {
     if ( this.Material_ === void 0 ) {
-      this.Material_ = this.extractElement( 3, false, IfcMaterialDefinition )
+      this.Material_ = this.extractElement( 3, 3, 2, false, IfcMaterialDefinition )
     }
 
     return this.Material_ as IfcMaterialDefinition
@@ -26,7 +26,9 @@ export  class IfcMaterialProperties extends IfcExtendedProperties {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

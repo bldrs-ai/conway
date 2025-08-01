@@ -20,7 +20,7 @@ export  class IfcProxy extends IfcProduct {
 
   public get ProxyType() : IfcObjectTypeEnum {
     if ( this.ProxyType_ === void 0 ) {
-      this.ProxyType_ = this.extractLambda( 7, IfcObjectTypeEnumDeserializeStep, false )
+      this.ProxyType_ = this.extractLambda( 7, 7, 4, IfcObjectTypeEnumDeserializeStep, false )
     }
 
     return this.ProxyType_ as IfcObjectTypeEnum
@@ -28,7 +28,7 @@ export  class IfcProxy extends IfcProduct {
 
   public get Tag() : string | null {
     if ( this.Tag_ === void 0 ) {
-      this.Tag_ = this.extractString( 8, true )
+      this.Tag_ = this.extractString( 8, 7, 4, true )
     }
 
     return this.Tag_ as string | null
@@ -36,7 +36,9 @@ export  class IfcProxy extends IfcProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

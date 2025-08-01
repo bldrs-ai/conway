@@ -18,7 +18,7 @@ export  class IfcProcedure extends IfcProcess {
 
   public get PredefinedType() : IfcProcedureTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 7, IfcProcedureTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 7, 7, 4, IfcProcedureTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcProcedureTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcProcedure extends IfcProcess {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

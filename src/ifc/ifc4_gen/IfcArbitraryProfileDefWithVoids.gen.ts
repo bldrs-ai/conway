@@ -25,7 +25,7 @@ export  class IfcArbitraryProfileDefWithVoids extends IfcArbitraryClosedProfileD
   public get InnerCurves() : Array<IfcCurve> {
     if ( this.InnerCurves_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 3, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -57,7 +57,9 @@ export  class IfcArbitraryProfileDefWithVoids extends IfcArbitraryClosedProfileD
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

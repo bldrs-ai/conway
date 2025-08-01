@@ -20,7 +20,7 @@ export  class IfcPile extends IfcBuildingElement {
 
   public get PredefinedType() : IfcPileTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcPileTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcPileTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcPileTypeEnum | null
@@ -28,7 +28,7 @@ export  class IfcPile extends IfcBuildingElement {
 
   public get ConstructionType() : IfcPileConstructionEnum | null {
     if ( this.ConstructionType_ === void 0 ) {
-      this.ConstructionType_ = this.extractLambda( 9, IfcPileConstructionEnumDeserializeStep, true )
+      this.ConstructionType_ = this.extractLambda( 9, 8, 6, IfcPileConstructionEnumDeserializeStep, true )
     }
 
     return this.ConstructionType_ as IfcPileConstructionEnum | null
@@ -36,7 +36,9 @@ export  class IfcPile extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

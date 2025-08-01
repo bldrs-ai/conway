@@ -27,7 +27,7 @@ export  class IfcTextureCoordinateGenerator extends IfcTextureCoordinate {
 
   public get Mode() : string {
     if ( this.Mode_ === void 0 ) {
-      this.Mode_ = this.extractString( 1, false )
+      this.Mode_ = this.extractString( 1, 1, 2, false )
     }
 
     return this.Mode_ as string
@@ -36,7 +36,7 @@ export  class IfcTextureCoordinateGenerator extends IfcTextureCoordinate {
   public get Parameter() : Array< number > | null {
     if ( this.Parameter_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -69,7 +69,9 @@ export  class IfcTextureCoordinateGenerator extends IfcTextureCoordinate {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

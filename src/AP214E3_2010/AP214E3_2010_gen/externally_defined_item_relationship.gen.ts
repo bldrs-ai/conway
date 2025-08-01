@@ -22,7 +22,7 @@ export  class externally_defined_item_relationship extends StepEntityBase< Entit
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -30,7 +30,7 @@ export  class externally_defined_item_relationship extends StepEntityBase< Entit
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -38,7 +38,7 @@ export  class externally_defined_item_relationship extends StepEntityBase< Entit
 
   public get relating_item() : externally_defined_item {
     if ( this.relating_item_ === void 0 ) {
-      this.relating_item_ = this.extractElement( 2, false, externally_defined_item )
+      this.relating_item_ = this.extractElement( 2, 0, 0, false, externally_defined_item )
     }
 
     return this.relating_item_ as externally_defined_item
@@ -46,7 +46,7 @@ export  class externally_defined_item_relationship extends StepEntityBase< Entit
 
   public get related_item() : externally_defined_item {
     if ( this.related_item_ === void 0 ) {
-      this.related_item_ = this.extractElement( 3, false, externally_defined_item )
+      this.related_item_ = this.extractElement( 3, 0, 0, false, externally_defined_item )
     }
 
     return this.related_item_ as externally_defined_item
@@ -54,8 +54,26 @@ export  class externally_defined_item_relationship extends StepEntityBase< Entit
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === externally_defined_item_relationship.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for externally_defined_item_relationship" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

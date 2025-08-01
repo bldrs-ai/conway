@@ -20,7 +20,7 @@ export  class IfcElectricDistributionPoint extends IfcFlowController {
 
   public get DistributionPointFunction() : IfcElectricDistributionPointFunctionEnum {
     if ( this.DistributionPointFunction_ === void 0 ) {
-      this.DistributionPointFunction_ = this.extractLambda( 8, IfcElectricDistributionPointFunctionEnumDeserializeStep, false )
+      this.DistributionPointFunction_ = this.extractLambda( 8, 8, 8, IfcElectricDistributionPointFunctionEnumDeserializeStep, false )
     }
 
     return this.DistributionPointFunction_ as IfcElectricDistributionPointFunctionEnum
@@ -28,7 +28,7 @@ export  class IfcElectricDistributionPoint extends IfcFlowController {
 
   public get UserDefinedFunction() : string | null {
     if ( this.UserDefinedFunction_ === void 0 ) {
-      this.UserDefinedFunction_ = this.extractString( 9, true )
+      this.UserDefinedFunction_ = this.extractString( 9, 8, 8, true )
     }
 
     return this.UserDefinedFunction_ as string | null
@@ -36,7 +36,9 @@ export  class IfcElectricDistributionPoint extends IfcFlowController {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

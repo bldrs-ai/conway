@@ -18,7 +18,7 @@ export  class text_literal_with_extent extends text_literal {
 
   public get extent() : planar_extent {
     if ( this.extent_ === void 0 ) {
-      this.extent_ = this.extractElement( 6, false, planar_extent )
+      this.extent_ = this.extractElement( 6, 6, 3, false, planar_extent )
     }
 
     return this.extent_ as planar_extent
@@ -26,8 +26,26 @@ export  class text_literal_with_extent extends text_literal {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === text_literal_with_extent.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for text_literal_with_extent" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

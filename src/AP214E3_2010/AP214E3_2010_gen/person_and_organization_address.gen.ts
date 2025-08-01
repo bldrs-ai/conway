@@ -26,7 +26,7 @@ export  class person_and_organization_address extends organizational_address {
   public get people() : Array<person> {
     if ( this.people_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 14 )
+      let   cursor    = this.getOffsetCursor( 14, 14, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,8 +59,26 @@ export  class person_and_organization_address extends organizational_address {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === person_and_organization_address.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for person_and_organization_address" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

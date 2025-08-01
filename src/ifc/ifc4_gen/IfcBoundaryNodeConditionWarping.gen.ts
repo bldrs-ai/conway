@@ -21,7 +21,7 @@ export  class IfcBoundaryNodeConditionWarping extends IfcBoundaryNodeCondition {
     if ( this.WarpingStiffness_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 7, true )
+        this.extractReference( 7, 7, 2, true )
 
       if ( !( value instanceof IfcBoolean ) && !( value instanceof IfcWarpingMomentMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,7 +36,9 @@ export  class IfcBoundaryNodeConditionWarping extends IfcBoundaryNodeCondition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

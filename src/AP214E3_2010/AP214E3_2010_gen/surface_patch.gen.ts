@@ -23,7 +23,7 @@ export  class surface_patch extends founded_item {
 
   public get parent_surface() : bounded_surface {
     if ( this.parent_surface_ === void 0 ) {
-      this.parent_surface_ = this.extractElement( 0, false, bounded_surface )
+      this.parent_surface_ = this.extractElement( 0, 0, 1, false, bounded_surface )
     }
 
     return this.parent_surface_ as bounded_surface
@@ -31,7 +31,7 @@ export  class surface_patch extends founded_item {
 
   public get u_transition() : transition_code {
     if ( this.u_transition_ === void 0 ) {
-      this.u_transition_ = this.extractLambda( 1, transition_codeDeserializeStep, false )
+      this.u_transition_ = this.extractLambda( 1, 0, 1, transition_codeDeserializeStep, false )
     }
 
     return this.u_transition_ as transition_code
@@ -39,7 +39,7 @@ export  class surface_patch extends founded_item {
 
   public get v_transition() : transition_code {
     if ( this.v_transition_ === void 0 ) {
-      this.v_transition_ = this.extractLambda( 2, transition_codeDeserializeStep, false )
+      this.v_transition_ = this.extractLambda( 2, 0, 1, transition_codeDeserializeStep, false )
     }
 
     return this.v_transition_ as transition_code
@@ -47,7 +47,7 @@ export  class surface_patch extends founded_item {
 
   public get u_sense() : boolean {
     if ( this.u_sense_ === void 0 ) {
-      this.u_sense_ = this.extractBoolean( 3, false )
+      this.u_sense_ = this.extractBoolean( 3, 0, 1, false )
     }
 
     return this.u_sense_ as boolean
@@ -55,7 +55,7 @@ export  class surface_patch extends founded_item {
 
   public get v_sense() : boolean {
     if ( this.v_sense_ === void 0 ) {
-      this.v_sense_ = this.extractBoolean( 4, false )
+      this.v_sense_ = this.extractBoolean( 4, 0, 1, false )
     }
 
     return this.v_sense_ as boolean
@@ -64,8 +64,26 @@ export  class surface_patch extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_patch.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_patch" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

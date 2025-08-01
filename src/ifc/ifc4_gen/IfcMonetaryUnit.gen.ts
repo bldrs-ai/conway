@@ -17,7 +17,7 @@ export  class IfcMonetaryUnit extends StepEntityBase< EntityTypesIfc > {
 
   public get Currency() : string {
     if ( this.Currency_ === void 0 ) {
-      this.Currency_ = this.extractString( 0, false )
+      this.Currency_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Currency_ as string
@@ -25,7 +25,9 @@ export  class IfcMonetaryUnit extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

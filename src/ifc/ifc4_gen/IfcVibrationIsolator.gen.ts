@@ -18,7 +18,7 @@ export  class IfcVibrationIsolator extends IfcElementComponent {
 
   public get PredefinedType() : IfcVibrationIsolatorTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcVibrationIsolatorTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcVibrationIsolatorTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcVibrationIsolatorTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcVibrationIsolator extends IfcElementComponent {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

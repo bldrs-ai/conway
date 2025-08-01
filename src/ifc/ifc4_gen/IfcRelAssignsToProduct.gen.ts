@@ -21,7 +21,7 @@ export  class IfcRelAssignsToProduct extends IfcRelAssigns {
     if ( this.RelatingProduct_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 6, false )
+        this.extractReference( 6, 6, 3, false )
 
       if ( !( value instanceof IfcProduct ) && !( value instanceof IfcTypeProduct ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,7 +36,9 @@ export  class IfcRelAssignsToProduct extends IfcRelAssigns {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 
