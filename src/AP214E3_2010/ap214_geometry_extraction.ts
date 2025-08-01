@@ -116,6 +116,7 @@ import {
   seam_curve,
   shape_definition_representation,
   shape_representation,
+  shape_representation_relationship,
   shell_based_surface_model,
   si_prefix,
   source,
@@ -3727,8 +3728,12 @@ export class AP214GeometryExtraction {
 
     for ( const styledItem of styledItems ) {
 
-      if ( styledItem.item !== null ) {
-        this.materials.styledItemMap.set( styledItem.item.localID, styledItem.localID )
+      try {
+        if ( styledItem.item !== null ) {
+          this.materials.styledItemMap.set( styledItem.item.localID, styledItem.localID )
+        }
+      } catch (error) {
+        Logger.error(`Error populating styled item map for item ${styledItem.localID}: ${error}`)
       }
     }
   }
@@ -3903,7 +3908,9 @@ export class AP214GeometryExtraction {
         node?: AP214SceneTransform;
       }
 
-      const treeMap = new Map<number, MappedSceneNode>() 
+      const treeMap = new Map<number, MappedSceneNode>()
+
+      const shapeRepresentationRelationshipsSeen = new Set<number>() 
 
       for ( const contextDependentShapeRepresentation of 
         contextDependentShapeRepresentations ) {
@@ -3912,6 +3919,8 @@ export class AP214GeometryExtraction {
         const owningLocalID = assembly.localID
 
         const shapeRelationship = contextDependentShapeRepresentation.representation_relation
+
+        shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
 
         const sourceShape = shapeRelationship.rep_1
         const targetShape = shapeRelationship.rep_2
@@ -3973,6 +3982,176 @@ export class AP214GeometryExtraction {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
         }
+      }
+
+      const shapeRelationships = model.types(shape_representation_relationship)
+
+      for ( const shapeRelationship of shapeRelationships ) {
+      
+        if ( shapeRepresentationRelationshipsSeen.has( shapeRelationship.localID ) ) {
+        
+          continue
+        }
+
+        const owningLocalID = shapeRelationship.localID
+
+        shapeRepresentationRelationshipsSeen.add( owningLocalID )
+
+        const sourceShape = shapeRelationship.rep_2
+        const targetShape = shapeRelationship.rep_1
+        
+        const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
+      
+        let transform: NativeTransform4x4 | undefined = void 0
+
+        if( transformInstance !== void 0 ) {
+
+          const transformOperator = transformInstance.transformation_operator
+
+          if( !(transformOperator instanceof item_defined_transformation ) ) {
+            continue
+          }
+
+          const placement1 = transformOperator.transform_item_1
+
+          if( !(placement1 instanceof placement) ) {
+            continue
+          }
+          
+          const placement2 = transformOperator.transform_item_2
+
+          if( !(placement2 instanceof placement) ) {
+            continue
+          }
+
+          const sourceTransform = this.extractRawPlacement( placement1 ) ?? this.identity3DNativeMatrix
+          const targetTransform = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+
+          const localPlacementParameters: ParamsLocalPlacement = {
+            useRelPlacement: true,
+            axis2Placement: sourceTransform,
+            relPlacement: targetTransform,
+          }
+    
+          transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+        }
+
+        const sourceID = sourceShape.localID
+        const targetID = targetShape.localID
+        let sourceNode = treeMap.get( sourceID )
+
+        if ( sourceNode === void 0 ) {
+
+          sourceNode = { parents: 1 }
+
+          treeMap.set( sourceID, sourceNode )
+
+        } else {
+          sourceNode.parents ??= 0
+          ++sourceNode.parents
+        }
+
+        let targetNode = treeMap.get( targetID )       
+
+        if ( targetNode === void 0 ) {
+          targetNode = { children: [[sourceID, owningLocalID, transform]] }
+          treeMap.set( targetID, targetNode )
+           
+        } else {
+          targetNode.children ??= []
+          targetNode.children.push( [sourceID, owningLocalID, transform] )
+        }
+        
+        this.scene.clearParentStack()
+
+        const owningElementLocalID = owningLocalID
+
+        const representationItems = sourceShape.items       
+        const objectPlacement =
+          representationItems.find(
+              ( where ) => where instanceof placement ) as placement | undefined
+
+        let hasPlacement = false
+
+        const mappedTreeNode = sourceNode
+
+        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {         
+
+          owningLocalID ??= owningElementLocalID
+
+          const mappedItem = mappedTreeNode !== void 0 
+
+          if ( transform !== void 0 ) {
+
+            this.scene.addTransform(
+              sourceShape.localID,
+              transform.getValues(),
+              transform,
+              true )
+            hasPlacement = true
+
+          } else if ( objectPlacement !== void 0 ) {
+
+            this.extractPlacement( objectPlacement, mappedItem )
+            hasPlacement = true
+          }
+          
+          if ( mappedItem && mappedTreeNode.children !== void 0 ) {
+
+            for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
+
+              const mappedChild = treeMap.get( childLocalID )!
+
+              mappedChild.thunk!( childOwningLocalID, childTransform )
+            }
+          }
+
+          for ( const item of representationItems ) {
+
+            try {
+
+              if ( item instanceof placement ) {
+                continue
+              }
+
+              if ( item instanceof mapped_item ) {
+
+                this.extractMappedItem( item, owningLocalID )
+
+              } else {
+
+                this.extractRepresentationItem( item, owningLocalID )
+
+                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+
+                if ( styledItemLocalID !== void 0 ) {
+
+                  const styledItem =
+                    model.getElementByLocalID( styledItemLocalID ) as styled_item
+
+                  this.extractStyledItem( styledItem, item )
+
+                }
+              }
+            } catch ( ex ) {
+
+            if (ex instanceof Error) {
+
+                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: ${item.expressID}` )
+
+            } else {
+
+                Logger.error(`Unknown exception processing representation item (${ex}) expressID: ${item.expressID}`)
+              }
+            }
+          }
+
+          if ( hasPlacement ) {
+            this.scene.popTransform()
+          }
+        }
+
+        sourceNode.thunk = thunk
       }
 
       const shapeDefinitions = model.types(shape_definition_representation)
@@ -4090,9 +4269,9 @@ export class AP214GeometryExtraction {
       // assembly tree.
       for ( const mappedNode of treeMap.values() ) {
 
-        if ( ( mappedNode.parents ?? 0 ) === 0 ) {
+        if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 ) {
 
-          mappedNode.thunk!()
+          mappedNode.thunk()
         }
       }
 
