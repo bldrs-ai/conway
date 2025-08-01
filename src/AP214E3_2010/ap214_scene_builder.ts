@@ -171,22 +171,19 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
         } else if ( node instanceof AP214SceneGeometry ) {
 
-          if ( !options.disableGeometryEvents ) {
+          const transform =
+            ( node.parentIndex !== void 0 ?
+              nodes[ node.parentIndex ] : void 0 ) as ( AP214SceneTransform | undefined )
 
-            const transform =
-              ( node.parentIndex !== void 0 ?
-                nodes[ node.parentIndex ] : void 0 ) as ( AP214SceneTransform | undefined )
+          const geometry = model.geometry?.getByLocalID( node.localID )
 
-            const geometry = model.geometry?.getByLocalID( node.localID )
-
-            if ( geometry === void 0 ) {
-              continue
-            }
-
-            listener.onGeometryAdded(
-                node,
-                transform )
+          if ( geometry === void 0 ) {
+            continue
           }
+
+          listener.onGeometryAdded(
+              node,
+              transform )
         }
       }
     }

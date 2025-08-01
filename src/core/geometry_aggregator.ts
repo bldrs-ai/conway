@@ -74,7 +74,6 @@ export default class GeometryAggregator {
     const identityTransform = conwaywasm.getIdentityTransform()
 
     const outputSpaces = scene.isAllSpaces() || (!!this.options.outputSpaces)
-
      
     for (const [_, nativeTransform, geometry, material] of scene.walk( outputSpaces )) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {

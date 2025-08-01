@@ -7,12 +7,9 @@ import {
   Vector3,
   CurveObject,
   ParamsGetAxis2Placement2D,
-  ParamsGetCircleCurve,
   ParamsGetExtrudedAreaSolid,
   ParamsGetBooleanResult,
-  MaterialObject,
   BlendMode,
-  toAlphaMode,
   Vector2,
   ParamsGetIfcCircle,
   ParamsGetIfcTrimmedCurve,
@@ -64,7 +61,6 @@ import Logger from '../logging/logger'
 import {
   advanced_face,
   annotation_occurrence,
-  assembly_component_usage,
   axis1_placement,
   axis2_placement_2d,
   axis2_placement_3d,
@@ -267,7 +263,7 @@ export class AP214GeometryExtraction {
 
     this.csgMemoization = !this.lowMemoryMode
 
-    this.materials = new AP214MaterialCache()
+    this.materials = model.materials
     this.scene = new AP214SceneBuilder(model, conwayModel, this.materials)
     this.productShapeMap = new AP214ProductShapeMap()
 
@@ -1059,6 +1055,8 @@ export class AP214GeometryExtraction {
 
     const material = materials.get(from.localID)
 
+    /* eslint-disable no-magic-numbers */
+
     const lightGrey = 0.8
 
     if (material === void 0) {
@@ -1083,7 +1081,7 @@ export class AP214GeometryExtraction {
 
           const surfaceColor = extractColorRGBPremultiplied(style.surface_colour, 1)
 
-          newMaterial.baseColor = surfaceColor
+          newMaterial.baseColor  = surfaceColor
           newMaterial.legacyColor = surfaceColor
           newMaterial.roughness = 1
 
@@ -1107,9 +1105,9 @@ export class AP214GeometryExtraction {
 
             const surfaceColor = extractColorRGBPremultiplied(fillColor, 1)
 
-            newMaterial.baseColor = surfaceColor
+            newMaterial.baseColor   = surfaceColor
             newMaterial.legacyColor = surfaceColor
-            newMaterial.roughness = 1            
+            newMaterial.roughness   = 1            
           }
         }
 
@@ -1117,13 +1115,15 @@ export class AP214GeometryExtraction {
 
       }
 
-      const isTransparent = newMaterial.baseColor[3] < 1.0
+     const isTransparent = newMaterial.baseColor[3] < 1.0
 
       newMaterial.metalness ??= 0
-      newMaterial.roughness ??= 0
-      newMaterial.ior ??= 1.4
+      newMaterial.roughness ??= isTransparent ? 0.05 : 0.9
+      newMaterial.ior       ??= isTransparent ? 1.52 : 1.4
       newMaterial.doubleSided = isTransparent || newMaterial.doubleSided
-      newMaterial.blend = isTransparent ? BlendMode.BLEND : BlendMode.OPAQUE
+      newMaterial.blend       = isTransparent ? BlendMode.BLEND : BlendMode.OPAQUE
+
+      /* eslint-enable no-magic-numbers */
 
       materials.add(from.localID, newMaterial)
     }
@@ -4053,7 +4053,7 @@ export class AP214GeometryExtraction {
                   const styledItem =
                     model.getElementByLocalID( styledItemLocalID ) as styled_item
 
-                  this.extractStyledItem( styledItem )
+                  this.extractStyledItem( styledItem, item )
 
                 }
               }
