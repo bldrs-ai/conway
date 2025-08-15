@@ -39,11 +39,19 @@ export default class ModelFormatDetector {
 
       if ( schema !== void 0 ) {
 
-        if ( schema.replaceAll( ' ', '' ).startsWith( '((\'IFC' ) ) {
+        const schemaNoSpaces = schema.replaceAll( ' ', '' )
+
+        if ( schemaNoSpaces.startsWith( '((\'IFC' ) ) {
           return ModelFormatType.IFC
         }
 
-        if ( schema.replaceAll( ' ', '' ).startsWith( '((\'AUTOMOTIVE_DESIGN{') ) {
+        
+        if ( schemaNoSpaces.startsWith( '((\'AUTOMOTIVE_DESIGN\'))' ) ) {
+        
+          return ModelFormatType.AP214
+        }
+
+        if ( schemaNoSpaces.startsWith( '((\'AUTOMOTIVE_DESIGN{') ) {
 
           const afterBrace = schema.substring( schema.indexOf( '{' ) + 1 ).trimStart()
 

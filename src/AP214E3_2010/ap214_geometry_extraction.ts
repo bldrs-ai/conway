@@ -119,7 +119,6 @@ import {
   shape_representation_relationship,
   shell_based_surface_model,
   si_prefix,
-  source,
   spherical_surface,
   styled_item,
   surface,
@@ -133,7 +132,7 @@ import {
   toroidal_surface,
   trimmed_curve,
   trimming_preference,
-  vertex,
+  vertex_loop,
   vertex_point,
   view_volume,
 } from './AP214E3_2010_gen'
@@ -141,9 +140,8 @@ import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
 import { AP214MaterialCache } from './ap214_material_cache'
 import AP214ModelCurves from './ap214_model_curves'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
-import { AP214SceneBuilder, AP214SceneNode, AP214SceneTransform } from './ap214_scene_builder'
+import { AP214SceneBuilder, AP214SceneTransform } from './ap214_scene_builder'
 import AP214StepModel from './ap214_step_model'
-
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 
@@ -449,6 +447,11 @@ export class AP214GeometryExtraction {
     }
 
     return nativeVectorProfile_
+  }
+
+  nativeCurve(): CurveObject {
+  
+    return new (this.wasmModule.IfcCurve) as CurveObject
   }
 
   /**
@@ -984,7 +987,7 @@ export class AP214GeometryExtraction {
         flatFirstMeshVector = this.nativeVectorGeometry()
         flatFirstMeshVector.push_back(firstMesh.geometry)
       } else {
-        console.log(
+        Logger.error(
             `(Operand) Error extracting firstOperand geometry for expressID: 
           ${from.first_operand.expressID} - type: 
           ${EntityTypesAP214[from.first_operand.type]}`)
@@ -1001,7 +1004,7 @@ export class AP214GeometryExtraction {
         flatSecondMeshVector = this.nativeVectorGeometry()
         flatSecondMeshVector.push_back(secondMesh.geometry)
       } else {
-        console.log(
+        Logger.error(
             `(Operand) Error extracting secondOperand geometry for expressID: 
           ${from.second_operand.expressID} - type:
            ${EntityTypesAP214[from.second_operand.type]}`)
@@ -1367,7 +1370,7 @@ export class AP214GeometryExtraction {
         paramsGetIfcTrimmedCurve = {
           masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
           dimensions: 3,
-          senseAgreement: parentSense,
+          senseAgreement: true,
           trim1Cartesian2D: trimmingArguments.start?.pos,
           trim1Cartesian3D: trimmingArguments.start?.pos3D,
           trim1Double: trimmingArguments.start?.param ?? 0,
@@ -1378,7 +1381,7 @@ export class AP214GeometryExtraction {
         }
       }
 
-      stepCurve = this.extractAP214Circle(from, parentSense, paramsGetIfcTrimmedCurve)
+      stepCurve = this.extractAP214Circle(from, isEdge, parentSense, paramsGetIfcTrimmedCurve)
 
     } else if ( from instanceof ellipse ) {
 
@@ -1388,7 +1391,7 @@ export class AP214GeometryExtraction {
         paramsGetIfcTrimmedCurve = {
           masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
           dimensions: 3,
-          senseAgreement: parentSense,
+          senseAgreement: true,
           trim1Cartesian2D: trimmingArguments.start?.pos,
           trim1Cartesian3D: trimmingArguments.start?.pos3D,
           trim1Double: trimmingArguments.start?.param ?? 0,
@@ -1399,7 +1402,7 @@ export class AP214GeometryExtraction {
         }
       }
 
-      stepCurve = this.extractAP214Ellipse(from, parentSense, paramsGetIfcTrimmedCurve)
+      stepCurve = this.extractAP214Ellipse(from, isEdge, parentSense, paramsGetIfcTrimmedCurve)
 
     } else if ( from instanceof surface_curve ) {
 
@@ -1439,7 +1442,16 @@ export class AP214GeometryExtraction {
 
     } else if ( from instanceof pcurve ) {
 
-      stepCurve = this.extractPScurve1(from)
+      const seamCurve = from.findVariant( seam_curve )
+
+      if ( seamCurve !== void 0 ) {
+
+        stepCurve = this.extractCurve( seamCurve.curve_3d, parentSense, isEdge, trimmingArguments )
+
+      } else {
+
+        stepCurve = this.extractPScurve1( from )
+      }
 
     } 
     
@@ -1775,12 +1787,14 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param isEdge
    * @param parentSense
    * @param parametersTrimmedCurve
    * @return {CurveObject | undefined}
    */
   extractAP214Circle(
     from: circle, 
+    isEdge: boolean = false,
     parentSense:boolean = true,
     parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
     masterRepresentation: 0,
@@ -1801,7 +1815,7 @@ export class AP214GeometryExtraction {
 
     // This potentially mutates a paremeter, but the trimming parameters should always be
     // specific to this single curve. - CS
-    parametersTrimmedCurve.senseAgreement = parametersTrimmedCurve.senseAgreement === parentSense
+    parametersTrimmedCurve.senseAgreement = parentSense === parametersTrimmedCurve.senseAgreement
 
     if ( from.position instanceof axis2_placement_2d ) {
 
@@ -1824,6 +1838,7 @@ export class AP214GeometryExtraction {
       radius: radius,
       radius2: radius,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+      isEdge: isEdge
     }   
     
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
@@ -1839,12 +1854,14 @@ export class AP214GeometryExtraction {
   /**
    *
    * @param from
+   * @param isEdge
    * @param parentSense
    * @param parametersTrimmedCurve
    * @return {CurveObject | undefined}
    */
   extractAP214Ellipse(
     from: ellipse, 
+    isEdge: boolean = false,
     parentSense:boolean = true,
     parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
     masterRepresentation: 0,
@@ -1889,6 +1906,7 @@ export class AP214GeometryExtraction {
       radius: radius0,
       radius2: radius1,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+      isEdge: isEdge
     }   
     
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
@@ -2011,7 +2029,7 @@ export class AP214GeometryExtraction {
 
     if ( basisCurve instanceof circle) {
 
-      const curveObject = this.extractAP214Circle( basisCurve, parentSense, paramsGetAP214TrimmedCurve )
+      const curveObject = this.extractAP214Circle( basisCurve, isEdge, parentSense, paramsGetAP214TrimmedCurve )
 
       if (curveObject !== void 0) {
         return curveObject
@@ -2026,7 +2044,7 @@ export class AP214GeometryExtraction {
       }
     } else if ( basisCurve instanceof ellipse ) {
       const curveObject =
-        this.extractAP214Ellipse(basisCurve, parentSense, paramsGetAP214TrimmedCurve)
+        this.extractAP214Ellipse(basisCurve, isEdge, parentSense, paramsGetAP214TrimmedCurve)
 
       if (curveObject !== void 0) {
         return curveObject
@@ -2424,7 +2442,6 @@ export class AP214GeometryExtraction {
     for (const face_ of from) {
 
       try {
-        // console.log(`face express ID: ${face.expressID} - type: ${EntityTypesAP214[face.type]}`)
         if ( face_ instanceof advanced_face ) {
 
           this.extractAdvancedFace( face_, geometry_ )
@@ -2568,8 +2585,6 @@ export class AP214GeometryExtraction {
   extractBSplineSurface(
       from: b_spline_surface ): BSplineSurface {
 
-  //  console.log( from )
-
     const result: BSplineSurface = {
       active: true,
       uDegree: from.u_degree,
@@ -2622,146 +2637,6 @@ export class AP214GeometryExtraction {
     return true
   }
 
-  /**
-   *
-   * @param from
-   * @param points
-   * @param curves
-   */
-  extractLoop(from: loop, points: StdVector< Vector3 >, curves: StdVector< CurveObject > ) {
-
-    if ( from instanceof poly_loop ) {
-
-      let prevLocalID: number = -1
-
-      for ( const point of from.polygon ) {
-
-        const coords = point.coordinates
-        const vec3 = {
-          x: coords[0],
-          y: coords[1],
-          z: coords[2],
-        }
-
-        const currentLocalID: number = point.localID
-
-        if ( currentLocalID !== prevLocalID ) {
-          points.push_back(vec3)
-          prevLocalID = currentLocalID
-        }
-      }
-    } else if ( from instanceof edge_loop ) {
-
-      for ( const edge of from.edge_list ) {
-
-        if (edge.edge_element instanceof edge_curve) {
-
-          const edgeCurve = edge.edge_element.edge_geometry
-
-          // console.log("curve type: " +
-          //   EntityTypesAP214[edgeCurve.type] + " express ID: " + edgeCurve.expressID)
-
-          const edgeStart = edge.edge_element.edge_start
-          const edgeEnd = edge.edge_element.edge_end
-
-          let trimmingStart: TrimmingSelect | undefined
-          let trimmingEnd: TrimmingSelect | undefined
-
-          if (edgeStart instanceof vertex_point) {
-
-            const startPoint = edgeStart.vertex_geometry
-             
-            if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
-
-              const startCoords = startPoint.coordinates
-
-              trimmingStart = {
-                hasParam: false,
-                hasPos: true,
-                hasLength: false,
-                param: 0.0,
-                pos: void 0,
-                pos3D: {
-                  x: startCoords[0],
-                  y: startCoords[1],
-                  z: startCoords[2],
-                },
-              }
-            }
-          }
-
-          if (edgeEnd instanceof vertex_point) {
-
-            const endPoint = edgeEnd.vertex_geometry
-
-             
-            if (endPoint instanceof cartesian_point && endPoint.coordinates.length === 3) {
-
-              const endCoords = endPoint.coordinates
-
-              trimmingEnd = {
-                hasParam: false,
-                hasPos: true,
-                hasLength: false,
-                param: 0.0,
-                pos: void 0,
-                pos3D: {
-                  x: endCoords[0],
-                  y: endCoords[1],
-                  z: endCoords[2],
-                },
-              }
-            }
-          }
-
-          const trimmingArguments: TrimmingArguments = {
-            exist: !!((trimmingStart !== void 0 && trimmingEnd !== void 0)),
-            start: trimmingStart,
-            end: trimmingEnd,
-          }
-
-          const curveValue = this.extractCurve(edgeCurve, true, true, trimmingArguments)
-
-          if (curveValue !== void 0) {
-
-            if ( edge.orientation ) {
-              // reverse curve
-              curveValue.invert()
-            }
-
-            curves.push_back(curveValue)
-
-          } else {
-            Logger.warning(`curve === undefined, type: ${EntityTypesAP214[edgeCurve.type]}`)
-          }
-
-        } else {
-
-          //  console.log("curve === null")
-          const start = edge.edge_start
-
-          if (start instanceof vertex_point) {
-
-            const startPoint = start.vertex_geometry
-
-             
-            if (startPoint instanceof cartesian_point && startPoint.coordinates.length === 3) {
-
-              const startCoords = startPoint.coordinates
-
-              points.push_back({
-                x: startCoords[0],
-                y: startCoords[1],
-                z: startCoords[2],
-              })
-            }
-          }
-        }
-      }
-    } else {
-      Logger.warning(`Unsupported bound ${loop}`)
-    }
-  }
 
   /**
    * Extract an advanced (NURBS) b-rep face.
@@ -2786,10 +2661,32 @@ export class AP214GeometryExtraction {
 
       let vec3Array: StdVector< Vector3 >
 
-      const innerBound = bound.bound
+      const innerBound       = bound.bound
       const nativeEdgeCurves = this.nativeVectorCurve()
 
-      if ( innerBound instanceof poly_loop ) {
+      if ( innerBound instanceof vertex_loop ) {
+
+        vec3Array = this.nativeVectorGlmdVec3()
+
+        const loopVertex = innerBound.loop_vertex
+
+        if ( loopVertex instanceof vertex_point ) {
+
+          const vertexPoint = loopVertex.vertex_geometry
+          
+          if ( vertexPoint instanceof cartesian_point && vertexPoint.coordinates.length === 3 ) {
+        
+            const coords = vertexPoint.coordinates
+            
+            vec3Array.push_back({
+              x: coords[0],
+              y: coords[1],
+              z: coords[2],
+            })
+          }
+        }
+        
+      } else if ( innerBound instanceof poly_loop ) {
 
        const coordParseBuffer = conwayModel.nativeParseBuffer()
 
@@ -2818,8 +2715,8 @@ export class AP214GeometryExtraction {
             //Logger.info("curve type: " + EntityTypesAP214[edgeCurve.type] +
             //  " express ID: " + edgeCurve.expressID)
 
-            const edgeStart = edgeElement.edge_start
-            const edgeEnd   = edgeElement.edge_end
+            const edgeStart = edge.edge_element.edge_start
+            const edgeEnd   = edge.edge_element.edge_end
 
             let trimmingStart: TrimmingSelect | undefined
             let trimmingEnd: TrimmingSelect | undefined
@@ -2898,6 +2795,8 @@ export class AP214GeometryExtraction {
 
             const start = edge.edge_start
 
+            const curve = this.nativeCurve()
+
             if (start instanceof vertex_point) {
 
               const startPoint = start.vertex_geometry
@@ -2906,13 +2805,33 @@ export class AP214GeometryExtraction {
 
                 const startCoords = startPoint.coordinates
 
-                vec3Array.push_back({
+                curve.add3d( {
                   x: startCoords[0],
                   y: startCoords[1],
                   z: startCoords[2],
                 })
               }
             }
+
+            const end = edge.edge_end
+
+            if (end instanceof vertex_point) {
+
+              const endPoint = end.vertex_geometry
+                
+              if (endPoint instanceof cartesian_point && endPoint.coordinates.length === 3) {
+
+                const endCoords = endPoint.coordinates
+
+                curve.add3d( {
+                  x: endCoords[0],
+                  y: endCoords[1],
+                  z: endCoords[2],
+                })
+              }
+            }
+
+            nativeEdgeCurves.push_back(curve)
           }
         }
       } else {
@@ -2924,9 +2843,14 @@ export class AP214GeometryExtraction {
         points: vec3Array,
         edges: nativeEdgeCurves,
       }
-
+     
       // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
       const curve: CurveObject = this.conwayModel.getLoop(parameters)
+
+      // const dumpedObj = curve.dumpToOBJ( "" )
+
+      // fs.mkdir( 'loop', { recursive: true }, (err) => {} )
+      // fs.writeFile( `loop/loop-${bound.expressID}.obj`, dumpedObj, (err) => {} )
 
       // create bound vector
       const parametersCreateBounds3D: ParamsCreateBound3D = {
@@ -2976,7 +2900,6 @@ export class AP214GeometryExtraction {
 
     } else if ( from instanceof b_spline_surface ) {
 
-      //console.log( `Extracting b-spline surface, express ID: ${from.expressID}`)
       nativeSurface.bspline = this.extractBSplineSurface(from)
 
       if (!nativeSurface.bspline.active) {

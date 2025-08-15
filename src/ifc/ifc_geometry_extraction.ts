@@ -2908,7 +2908,7 @@ export class IfcGeometryExtraction {
         }
       }
 
-      ifcCurve = this.extractIfcCircle(from, parentSense, paramsGetIfcTrimmedCurve)
+      ifcCurve = this.extractIfcCircle(from, isEdge, parentSense, paramsGetIfcTrimmedCurve)
 
     } else if (from instanceof IfcEllipse) {
 
@@ -2929,7 +2929,7 @@ export class IfcGeometryExtraction {
         }
       }
 
-      ifcCurve = this.extractIfcEllipse(from, parentSense, paramsGetIfcTrimmedCurve)
+      ifcCurve = this.extractIfcEllipse(from, isEdge, parentSense, paramsGetIfcTrimmedCurve)
       
     } else if (from instanceof IfcLine) {
 
@@ -3194,11 +3194,13 @@ export class IfcGeometryExtraction {
     /**
      *
      * @param from
+     * @param isEdge
      * @param parentSense
      * @param parametersTrimmedCurve
      * @return {CurveObject | undefined}
      */
   extractIfcCircle(from: IfcCircle,
+      isEdge:boolean = false,
       parentSense:boolean = true,
       parametersTrimmedCurve?: ParamsGetIfcTrimmedCurve ): CurveObject | undefined {
 
@@ -3239,6 +3241,7 @@ export class IfcGeometryExtraction {
       radius: radius,
       radius2: radius,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+      isEdge: isEdge,
     }
 
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
@@ -3254,11 +3257,14 @@ export class IfcGeometryExtraction {
   /**
    *
    * @param from
+   * @param isEdge
    * @param parentSense
    * @param parametersTrimmedCurve
    * @return {CurveObject | undefined}
    */
-  extractIfcEllipse(from: IfcEllipse,
+  extractIfcEllipse(
+      from: IfcEllipse,
+      isEdge:boolean = false,
       parentSense:boolean = true,
       parametersTrimmedCurve?: ParamsGetIfcTrimmedCurve ): CurveObject | undefined {
 
@@ -3296,6 +3302,7 @@ export class IfcGeometryExtraction {
       radius: from.SemiAxis1,
       radius2: from.SemiAxis2,
       paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
+      isEdge: isEdge,
     }
 
     parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
@@ -3415,7 +3422,7 @@ export class IfcGeometryExtraction {
 
     if (basisCurve instanceof IfcCircle) {
       const curveObject =
-      this.extractIfcCircle(basisCurve, parentSense, paramsGetIfcTrimmedCurve)
+      this.extractIfcCircle(basisCurve, isEdge, parentSense, paramsGetIfcTrimmedCurve)
 
       if (curveObject !== void 0) {
         return curveObject
@@ -3429,7 +3436,7 @@ export class IfcGeometryExtraction {
       }
     } else if (basisCurve instanceof IfcEllipse) {
       const curveObject =
-      this.extractIfcEllipse(basisCurve, parentSense, paramsGetIfcTrimmedCurve)
+      this.extractIfcEllipse(basisCurve, isEdge, parentSense, paramsGetIfcTrimmedCurve)
 
       if (curveObject !== void 0) {
         return curveObject
