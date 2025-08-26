@@ -1351,8 +1351,25 @@ export class AP214GeometryExtraction {
     // + from.expressID + " type: " + EntityTypesAP214[from.type])
 
     if ( from instanceof b_spline_curve ) {
+      
+      let paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve | undefined
+      
+      if ( trimmingArguments?.exist ) {
+        paramsGetIfcTrimmedCurve = {
+          masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
+          dimensions: 3,
+          senseAgreement: true,
+          trim1Cartesian2D: trimmingArguments.start?.pos,
+          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Double: trimmingArguments.start?.param ?? 0,
+          trim2Cartesian2D:  trimmingArguments.end?.pos,
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Double:  trimmingArguments.end?.param ?? 0,
+          trimExists: true
+        }
+      }
 
-      stepCurve = this.extractBSplineCurve( from, parentSense, isEdge )
+      stepCurve = this.extractBSplineCurve( from, parentSense, isEdge, paramsGetIfcTrimmedCurve )
     
     } else if ( from instanceof trimmed_curve ) {
 
@@ -1416,7 +1433,7 @@ export class AP214GeometryExtraction {
         paramsGetIfcTrimmedCurve = {
           masterRepresentation: ( trimmingArguments.start?.hasPos ) ? 0 : 1,
           dimensions: 3,
-          senseAgreement: parentSense,
+          senseAgreement: true,
           trim1Cartesian2D: trimmingArguments.start?.pos,
           trim1Cartesian3D: trimmingArguments.start?.pos3D,
           trim1Double: trimmingArguments.start?.param ?? 0,
@@ -1660,12 +1677,25 @@ export class AP214GeometryExtraction {
    * @param from The bspline curve, potentially with knots/rational.
    * @param parentSense
    * @param isEdge
+   * @param parametersTrimmedCurve
    * @return {CurveObject} The constructed curve object.
    */
   extractBSplineCurve(
     from: b_spline_curve,
     parentSense: boolean = true,
-    isEdge: boolean = false ): CurveObject {
+    isEdge: boolean = false,
+    parametersTrimmedCurve: ParamsGetIfcTrimmedCurve = {
+    masterRepresentation: 0,
+    dimensions: 0,
+    senseAgreement: true,
+    trim1Cartesian2D: undefined,
+    trim1Cartesian3D: undefined,
+    trim1Double: 0,
+    trim2Cartesian2D: undefined,
+    trim2Cartesian3D: undefined,
+    trim2Double: 0,
+    trimExists: false,
+  } ): CurveObject {
 
     // degree is NOT dimensions (NC)
     let dimensions: number = 3
@@ -1675,6 +1705,8 @@ export class AP214GeometryExtraction {
       dimensions = from.control_points_list[0].coordinates.length
     }
 
+    parametersTrimmedCurve.senseAgreement = parentSense === parametersTrimmedCurve.senseAgreement
+
     const params: ParamsGetBSplineCurve = {
       dimensions: dimensions,
       degree: from.degree,
@@ -1682,9 +1714,13 @@ export class AP214GeometryExtraction {
       points3: this.nativeVectorGlmdVec3(),
       knots: this.conwayModel.nativeVectorDouble(),
       weights: this.conwayModel.nativeVectorDouble(),
-      senseAgreement: parentSense,
+      paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
       isEdge: isEdge,
     }
+    parametersTrimmedCurve.trim1Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim1Cartesian3D ??= { x: 0, y: 0, z: 0 }
+    parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
+    parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
 
     if (dimensions === 2) {
 
@@ -2010,7 +2046,6 @@ export class AP214GeometryExtraction {
         }
       }
     }
-
 
     const paramsGetAP214TrimmedCurve: ParamsGetIfcTrimmedCurve = {
       masterRepresentation: from.master_representation.valueOf(),
@@ -2774,10 +2809,10 @@ export class AP214GeometryExtraction {
             }
 
             let curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
-
+            
             if (curve !== void 0) {
 
-              if ( edge.orientation ) {
+              if ( !edge.orientation ) {
                 // reverse curve
                 // Logger.info("edge orientation == true, inverting curve")
                 curve = curve.clone()
@@ -2793,7 +2828,15 @@ export class AP214GeometryExtraction {
 
           } else {
 
-            const start = edge.edge_start
+            let start = edge.edge_start
+            let end = edge.edge_end
+
+            if ( edge.orientation ) {
+
+              [start, end] = [end, start]
+            }
+
+           // console.log( `edge start: ${start.expressID}, end: ${end.expressID}`)
 
             const curve = this.nativeCurve()
 
@@ -2812,8 +2855,6 @@ export class AP214GeometryExtraction {
                 })
               }
             }
-
-            const end = edge.edge_end
 
             if (end instanceof vertex_point) {
 
@@ -2846,7 +2887,7 @@ export class AP214GeometryExtraction {
      
       // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
       const curve: CurveObject = this.conwayModel.getLoop(parameters)
-
+      
       // const dumpedObj = curve.dumpToOBJ( "" )
 
       // fs.mkdir( 'loop', { recursive: true }, (err) => {} )
@@ -2872,6 +2913,8 @@ export class AP214GeometryExtraction {
     const nativeSurface = (new (this.wasmModule.IfcSurface)) as SurfaceObject
     
     this.extractSurface(surface, nativeSurface)
+
+    nativeSurface.sameSense = from.same_sense
 
     const parameters: ParamsAddFaceToGeometry = {
       boundsArray: bound3DVector,

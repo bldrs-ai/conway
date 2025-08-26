@@ -2977,13 +2977,32 @@ export class IfcGeometryExtraction {
    * @param from The bspline curve, potentially with knots/rational.
    * @param parentSense
    * @param isEdge
+   * @param parametersTrimmedCurve
    * @return {CurveObject} The constructed curve object.
    */
   extractBSplineCurve(
     from: IfcBSplineCurve,
     parentSense:boolean = true,
     isEdge:boolean = false,
-  ): CurveObject {
+    parametersTrimmedCurve?: ParamsGetIfcTrimmedCurve ): CurveObject {
+
+    parametersTrimmedCurve ??= {
+      masterRepresentation: 0,
+      dimensions: 0,
+      senseAgreement: true,
+      trim1Cartesian2D: undefined,
+      trim1Cartesian3D: undefined,
+      trim1Double: 0,
+      trim2Cartesian2D: undefined,
+      trim2Cartesian3D: undefined,
+      trim2Double: 0,
+      trimExists: false,
+    }
+
+    // This potentially mutates a paremeter, but the trimming parameters should always be
+    // specific to this single curve. - CS
+    parametersTrimmedCurve.senseAgreement =
+      parametersTrimmedCurve.senseAgreement === parentSense
 
     // Logger.info(`express ID: ${from.expressID} degree === ${from.Degree}`)
 
@@ -3000,11 +3019,10 @@ export class IfcGeometryExtraction {
       points3: this.nativeVectorGlmdVec3(),
       knots: this.conwayModel.nativeVectorDouble(),
       weights: this.conwayModel.nativeVectorDouble(),
-      senseAgreement: parentSense,
+      paramsGetIfcTrimmedCurve: parametersTrimmedCurve,
       isEdge: isEdge,
     }
 
-     
     if (dimensions === 2) {
 
       const outputPoints = params.points2
@@ -3020,7 +3038,7 @@ export class IfcGeometryExtraction {
 
       const outputPoints = params.points3
       // Logger.info(`express ID: ${from.expressID} controlPointsList: ${from.ControlPointsList}`)
-      for (const point of from.ControlPointsList) {
+      for ( const point of from.ControlPointsList ) {
          
         if (point.Dim !== 3) {
           continue
@@ -4610,7 +4628,7 @@ export class IfcGeometryExtraction {
 
             if (curve !== void 0) {
 
-              if ( edge.Orientation ) {
+              if ( !edge.Orientation ) {
                 // reverse curve
                 // Logger.info("edge orientation == true, inverting curve")
                 curve = curve.clone()
