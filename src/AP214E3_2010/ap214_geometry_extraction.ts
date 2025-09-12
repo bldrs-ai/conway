@@ -99,6 +99,7 @@ import {
   manifold_solid_brep,
   mapped_item,
   next_assembly_usage_occurrence,
+  over_riding_styled_item,
   parameter_value,
   pcurve,
   placement, plane,
@@ -2479,7 +2480,7 @@ export class AP214GeometryExtraction {
       try {
         if ( face_ instanceof advanced_face ) {
 
-          this.extractAdvancedFace( face_, geometry_ )
+          this.extractAdvancedFace( face_, geometry_, parentLocalID )
 
         } else {
 
@@ -2678,11 +2679,19 @@ export class AP214GeometryExtraction {
    *
    * @param from
    * @param geometry
+   * @param parentLocalID
    */
-  extractAdvancedFace(from: advanced_face, geometry: GeometryObject) {
+  extractAdvancedFace(from: advanced_face, geometry: GeometryObject, parentLocalID?: number) {
 
     const bounds = from.bounds
+    const previousFaceGeometry = this.model.geometry.getByLocalID(from.localID)
     
+    if ( previousFaceGeometry !== void 0  ) {
+    
+      previousFaceGeometry.temporary = false
+      return
+    }
+
     if ( from.bounds.length === 0 ) {
     
       return
@@ -2887,11 +2896,6 @@ export class AP214GeometryExtraction {
      
       // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
       const curve: CurveObject = this.conwayModel.getLoop(parameters)
-      
-      // const dumpedObj = curve.dumpToOBJ( "" )
-
-      // fs.mkdir( 'loop', { recursive: true }, (err) => {} )
-      // fs.writeFile( `loop/loop-${bound.expressID}.obj`, dumpedObj, (err) => {} )
 
       // create bound vector
       const parametersCreateBounds3D: ParamsCreateBound3D = {
@@ -2923,8 +2927,34 @@ export class AP214GeometryExtraction {
       scaling: this.getLinearScalingFactor(),
     }
 
-    this.conwayModel.addFaceToGeometry(parameters, geometry)
+    const styledItemLocalID = this.materials.styledItemMap.get(from.localID)
 
+    if ( styledItemLocalID !== void 0 ) {
+
+      const styledItem =
+        this.model.getElementByLocalID( styledItemLocalID ) as styled_item
+
+      this.extractStyledItem( styledItem, from )
+
+      const faceGeometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
+
+      this.conwayModel.addFaceToGeometry(parameters, faceGeometry)
+
+      const canonicalMesh: CanonicalMesh = {
+        type: CanonicalMeshType.BUFFER_GEOMETRY,
+        geometry: faceGeometry,
+        localID: from.localID,
+        model: this.model
+      }
+
+      this.model.geometry.add( canonicalMesh, parentLocalID )
+
+    } else {
+
+      this.conwayModel.addFaceToGeometry(parameters, geometry)
+    }
+ 
+    nativeSurface.delete()
     bound3DVector.delete()
   }
 
@@ -3690,16 +3720,33 @@ export class AP214GeometryExtraction {
    */
   populateStyledItemsMap() {
 
+    const overridingStyledItems = this.model.types(over_riding_styled_item)
     const styledItems = this.model.types(styled_item)
+    const styledItemMap = this.materials.styledItemMap
 
     for ( const styledItem of styledItems ) {
 
+      if ( styledItem instanceof over_riding_styled_item ) {
+        continue
+      }
+
       try {
         if ( styledItem.item !== null ) {
-          this.materials.styledItemMap.set( styledItem.item.localID, styledItem.localID )
+          styledItemMap.set( styledItem.item.localID, styledItem.localID )
         }
       } catch (error) {
         Logger.error(`Error populating styled item map for item ${styledItem.localID}: ${error}`)
+      }
+    }
+    
+    for ( const overridingStyledItem of overridingStyledItems ) {
+
+      try {
+        if ( overridingStyledItem.item !== null ) {
+          styledItemMap.set( overridingStyledItem.item.localID, overridingStyledItem.localID )
+        }
+      } catch (error) {
+        Logger.error(`Error populating styled item map for item ${overridingStyledItem.localID}: ${error}`)
       }
     }
   }

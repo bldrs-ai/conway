@@ -51,7 +51,7 @@ export default class GeometryConvertor {
 
     if (this.wasmModule !== void 0) {
 
-      const geometryVector = geometry.geometry
+      const geometryVector  = geometry.geometry
       const materialsVector = geometry.materials
 
       let currentChunkIndex = 0

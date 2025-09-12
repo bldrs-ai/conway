@@ -8,6 +8,7 @@ import { ModelGeometry } from '../core/model'
 export class AP214ModelGeometry implements ModelGeometry {
 
   private readonly meshes_ = new Map< number, CanonicalMesh >()
+  private readonly children_ = new Map< number, number[] >()
 
   /**
    * @return {number}
@@ -17,12 +18,27 @@ export class AP214ModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Add a mesh to this geometry collection.
    *
    * @param mesh
+   * @param parentLocalID
    */
-  public add( mesh: CanonicalMesh ) {
+  public add( mesh: CanonicalMesh, parentLocalID? : number ): void {
 
     this.meshes_.set( mesh.localID, mesh )
+
+    if ( parentLocalID !== void 0 ) {
+
+      let children = this.children_.get( parentLocalID )
+
+      if ( children === void 0 ) {
+
+        children = []
+        this.children_.set( parentLocalID, children )
+      }
+
+      children.push( mesh.localID )
+    }
   }
 
   /**
@@ -62,6 +78,16 @@ export class AP214ModelGeometry implements ModelGeometry {
         }
       }
     }
+  }
+
+  /**
+   * Get the geometry children for a particular local ID.
+   * 
+   * @param localID The local ID to get children for.
+   * @return {number[] | undefined} The children local IDs, or undefined if there are none.
+   */
+  public getChildrenByLocalID(localID: number): number[] | undefined {
+    return this.children_.get(localID)
   }
 
   /**

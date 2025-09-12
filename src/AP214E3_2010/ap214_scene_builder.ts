@@ -516,6 +516,16 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
     this.scene_.push(result)
 
+    const geometryChildren = this.model.geometry?.getChildrenByLocalID(localID)
+
+    if ( geometryChildren !== void 0 ) {
+
+      for ( const childLocalID of geometryChildren ) {
+
+        this.addGeometry( childLocalID, owningElementLocalID )
+      }
+    }
+
     const geoemtryListeners = this.geometryListeners_
 
     if ( geoemtryListeners !== void 0 ) {
