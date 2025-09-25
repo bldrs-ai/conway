@@ -91,7 +91,9 @@ import {
   face_based_surface_model,
   faceted_brep,
   fill_area_style_colour,
+  geometric_curve_set,
   geometrically_bounded_2d_wireframe_representation,
+  geometrically_bounded_wireframe_shape_representation,
   half_space_solid,
   item_defined_transformation,
   line,
@@ -1883,7 +1885,7 @@ export class AP214GeometryExtraction {
     parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
     parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
 
-    return this.conwayModel.getIfcCircle(parametersCircle)
+    return this.conwayModel.getAP214Circle(parametersCircle)
   }
 
   
@@ -1951,7 +1953,7 @@ export class AP214GeometryExtraction {
     parametersTrimmedCurve.trim2Cartesian2D ??= { x: 0, y: 0 }
     parametersTrimmedCurve.trim2Cartesian3D ??= { x: 0, y: 0, z: 0 }
 
-    return this.conwayModel.getIfcCircle(parametersCircle)
+    return this.conwayModel.getAP214Circle(parametersCircle)
   }
 
   /**
@@ -2365,7 +2367,8 @@ export class AP214GeometryExtraction {
       from instanceof geometrically_bounded_2d_wireframe_representation ||
       from instanceof annotation_occurrence ||
       from instanceof presentation_layer_assignment ||
-      from instanceof view_volume ) {
+      from instanceof view_volume ||
+      from instanceof geometric_curve_set ) {
       
         return // skip these types, not 3D geometry
 
@@ -3280,8 +3283,8 @@ export class AP214GeometryExtraction {
           // `result.length` is how many Float64 coords are valid.
           // `result.capacity` is how many Float64 coords that pointer can hold.
            
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { pointer, length, capacity } = result
+           
+          const { pointer, length } = result
 
           // Use them in your WASM call
           const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
@@ -3919,6 +3922,7 @@ export class AP214GeometryExtraction {
         parents?: number;
         thunk?: ( owningLocalID?: number, transform?: NativeTransform4x4 ) => void;
         node?: AP214SceneTransform;
+        processed?: boolean;
       }
 
       const treeMap = new Map<number, MappedSceneNode>()
@@ -4005,7 +4009,7 @@ export class AP214GeometryExtraction {
         
           continue
         }
-
+        
         const owningLocalID = shapeRelationship.localID
 
         shapeRepresentationRelationshipsSeen.add( owningLocalID )
@@ -4088,7 +4092,7 @@ export class AP214GeometryExtraction {
 
         const mappedTreeNode = sourceNode
 
-        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {         
+        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {
 
           owningLocalID ??= owningElementLocalID
 
@@ -4121,7 +4125,7 @@ export class AP214GeometryExtraction {
 
           for ( const item of representationItems ) {
 
-            try {
+            try {             
 
               if ( item instanceof placement ) {
                 continue
@@ -4189,7 +4193,21 @@ export class AP214GeometryExtraction {
 
         let hasPlacement = false
 
-        const mappedTreeNode = treeMap.get( shapeRepresentation.localID )
+        let treeNode = treeMap.get( shapeRepresentation.localID )
+
+        const hasMappedNode = treeNode !== void 0
+
+        if ( treeNode === void 0 ) {
+
+          treeNode = { parents: 0 }
+          treeMap.set( shapeRepresentation.localID, treeNode )
+
+        } else {
+
+          treeNode.parents ??= 0
+        }
+
+        const mappedTreeNode = treeNode
 
         const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {         
 
@@ -4267,7 +4285,9 @@ export class AP214GeometryExtraction {
           }
         }
 
-        if ( mappedTreeNode === void 0 ) {
+        if ( !hasMappedNode ) {
+
+          mappedTreeNode.processed = true
 
           // not an assembly mapped item, just extract the representation
           thunk()
@@ -4278,11 +4298,121 @@ export class AP214GeometryExtraction {
         mappedTreeNode.thunk = thunk
       }
 
+      const shapeRepresentations = model.types(shape_representation, geometrically_bounded_wireframe_shape_representation)
+
+      for ( const shapeRepresentation of shapeRepresentations ) {
+
+        let treeNode = treeMap.get( shapeRepresentation.localID )
+
+        if ( treeNode === void 0 ) {
+
+          treeNode = { parents: 0 }
+          treeMap.set( shapeRepresentation.localID, treeNode )
+
+        }
+
+        // This is only for completely free geometry nodes.
+        if ( ( treeNode.parents ?? 0 ) !== 0 || treeNode.thunk !== void 0 || treeNode.processed === true ) {
+          continue        
+        }
+
+        const mappedTreeNode = treeNode
+
+        this.scene.clearParentStack()
+
+        const owningElementLocalID = shapeRepresentation.localID
+
+        const representationItems = shapeRepresentation.items       
+        const objectPlacement =
+          representationItems.find(
+              ( where ) => where instanceof placement ) as placement | undefined
+
+        let hasPlacement = false
+
+        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {
+
+          owningLocalID ??= owningElementLocalID
+
+          const mappedItem = mappedTreeNode !== void 0 
+
+          if ( transform !== void 0 ) {
+
+            this.scene.addTransform(
+              shapeRepresentation.localID,
+              transform.getValues(),
+              transform,
+              true )
+            hasPlacement = true
+
+          } else if ( objectPlacement !== void 0 ) {
+
+            this.extractPlacement( objectPlacement, mappedItem )
+            hasPlacement = true
+          }
+          
+          if ( mappedItem && mappedTreeNode.children !== void 0 ) {
+
+            for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
+
+              const mappedChild = treeMap.get( childLocalID )!
+
+              mappedChild.thunk!( childOwningLocalID, childTransform )
+            }
+          }
+
+          for ( const item of representationItems ) {
+
+            try {
+
+              if ( item instanceof placement ) {
+                continue
+              }
+
+              if ( item instanceof mapped_item ) {
+
+                this.extractMappedItem( item, owningLocalID )
+
+              } else {
+
+                this.extractRepresentationItem( item, owningLocalID )
+
+                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+
+                if ( styledItemLocalID !== void 0 ) {
+
+                  const styledItem =
+                    model.getElementByLocalID( styledItemLocalID ) as styled_item
+
+                  this.extractStyledItem( styledItem, item )
+
+                }
+              }
+            } catch ( ex ) {
+
+              if (ex instanceof Error) {
+
+                  Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: ${item.expressID}` )
+
+              } else {
+
+                Logger.error(`Unknown exception processing representation item (${ex}) expressID: ${item.expressID}`)
+              }
+            }
+          }
+
+          if ( hasPlacement ) {
+            this.scene.popTransform()
+          }
+        }
+
+        mappedTreeNode.thunk = thunk
+      }
+
       // All thunks are set, now we can execute the full
       // assembly tree.
       for ( const mappedNode of treeMap.values() ) {
 
-        if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 ) {
+        if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
 
           mappedNode.thunk()
         }

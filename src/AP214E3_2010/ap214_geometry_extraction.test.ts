@@ -155,7 +155,7 @@ describe('AP214 Geometry Extraction', () => {
   })
 
   test('gearGeometryArrayLength()', () => {
-    const testParameter:number = 29484
+    const testParameter:number = 48108
     expect(getGearMeshSize()).toBe(testParameter)
 
   })
