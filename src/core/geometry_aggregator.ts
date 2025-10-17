@@ -71,7 +71,7 @@ export default class GeometryAggregator {
    * @param scene
    * @return {void}
    */
-  public append< SceneEntityType >( scene: WalkableScene< SceneEntityType > ): void {
+  public append< SceneEntityType extends { expressID?: number } >( scene: WalkableScene< SceneEntityType > ): void {
 
     const conwaywasm       = this.wasmModule
     const materialGeometry = this.materialGeometry
@@ -82,7 +82,7 @@ export default class GeometryAggregator {
     const outputSpaces = scene.isAllSpaces() || (!!this.options.outputSpaces)
 
      
-    for (const [_, nativeTransform, geometry, material] of scene.walk( outputSpaces )) {
+  for (const [_, nativeTransform, geometry, material] of scene.walk( outputSpaces )) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {
 
         let geometryCollections = materialGeometry.get(material)
@@ -120,7 +120,7 @@ export default class GeometryAggregator {
    * collection is started. Materials are emitted in the same order later
    * by aggregateNativeInOrder().
    */
-  public appendInOrder< SceneEntityType >( scene: WalkableScene< SceneEntityType > ): void {
+  public appendInOrder< SceneEntityType extends { expressID?: number } >( scene: WalkableScene< SceneEntityType > ): void {
 
     const conwaywasm       = this.wasmModule
     const maxGeometrySize  = this.options.maxGeometrySize
@@ -131,10 +131,13 @@ export default class GeometryAggregator {
 
   let currentEntry = this.linearGeometry.at(-1)
 
-    for (const [_, nativeTransform, geometry, material] of scene.walk(outputSpaces)) {
+    for (const [, nativeTransform, geometry, material, entity] of scene.walk(outputSpaces)) {
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {
 
         const incomingSize = geometry.geometry.getAllocationSize()
+
+        const expressID = entity?.expressID
+        console.log(`Adding geometry for entity ${expressID} with material ${material?.name ?? 'default'}`)
 
         // Create a new collection if this is the first entry or material changed
         if (currentEntry === void 0 || currentEntry.material !== material) {
@@ -155,7 +158,9 @@ export default class GeometryAggregator {
           }
           this.linearGeometry.push(currentEntry)
         }
-
+        if (expressID !== undefined) {
+          geometry.geometry.name = String(expressID)
+        }
         currentEntry.geometry.addComponentWithTransform(
             geometry.geometry,
             nativeTransform ?? identityTransform)
