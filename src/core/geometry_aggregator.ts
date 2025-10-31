@@ -137,7 +137,6 @@ export default class GeometryAggregator {
         const incomingSize = geometry.geometry.getAllocationSize()
 
         const expressID = entity?.expressID
-        console.log(`Adding geometry for entity ${expressID} with material ${material?.name ?? 'default'}`)
 
         // Create a new collection if this is the first entry or material changed
         if (currentEntry === void 0 || currentEntry.material !== material) {
