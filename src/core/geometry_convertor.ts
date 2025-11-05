@@ -111,6 +111,7 @@ export default class GeometryConvertor {
           outputDraco,
           fileUri,
           geometryOffset,
+          1, //scale factor is 1.0
           geometryCount)
     }
 
