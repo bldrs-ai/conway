@@ -122,7 +122,9 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   }
    
-
+  public get currentParent(): AP214SceneTransform | undefined {
+    return this.currentParent_
+  }
 
   /**
    *
@@ -250,6 +252,16 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
     const sceneID = this.sceneLocalIdMap_.get(localID)
 
     return sceneID !== void 0 ? this.scene_[sceneID] : void 0
+  }
+
+  /**
+   * Get the current stack deoth.
+   * 
+   * @return {number} The current stack depth.
+   */
+  public get stackLength(): number {
+
+    return this.sceneStack_.length + ( this.currentParent_ !== void 0 ? 1 : 0 )
   }
 
   /**
@@ -451,6 +463,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   public popTransform(): void {
 
     this.currentParent_ = this.sceneStack_.pop()
+    
   }
 
   /**
@@ -563,7 +576,7 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
       nativeTransform: NativeTransform4x4,
       mappedItem: boolean = false ): AP214SceneTransform {
 
-    if (this.sceneLocalIdMap_.has(localID)) {
+    if ( !mappedItem && this.sceneLocalIdMap_.has(localID)) {
       const transform_ = this.getTransform(localID)
 
       if (transform_ !== void 0) {
@@ -588,6 +601,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
       absoluteNativeTransform = this.conwayGeometry
           .getLocalPlacement(localPlacementParameters)
+
+    //  console.log( absoluteNativeTransform.getValues() )
 
       parentIndex = this.currentParent_.index
       this.currentParent_.children.push(nodeIndex)

@@ -4210,6 +4210,16 @@ export class IfcGeometryExtraction {
 
       geometry = this.extractFaces(faceSet.CfsFaces, faceSet.localID, geometry, isRelVoid)
     }
+
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: geometry,
+      localID: parentLocalID,
+      model: this.model,
+      temporary: false,
+    }
+
+    this.model.geometry.add(canonicalMesh)
   }
 
 
@@ -4250,17 +4260,27 @@ export class IfcGeometryExtraction {
       owningElementLocalID?: number,
       isRelVoid: boolean = false,
       isSpace: boolean = false ) {
+
+    const geometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
+
     const sbsmBoundary = from.SbsmBoundary
 
     for ( const currentBoundary of sbsmBoundary ) {
       const faces = currentBoundary.CfsFaces
 
-      this.extractFaces(faces, currentBoundary.localID, undefined, false, isRelVoid)
+      this.extractFaces(faces, currentBoundary.localID, geometry, false, isRelVoid)
 
-      if (!isRelVoid) {
-        this.scene.addGeometry(currentBoundary.localID, owningElementLocalID, isSpace, from.localID)
-      }
     }
+
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: geometry,
+      localID: from.localID,
+      model: this.model,
+      temporary: false,
+    }
+
+    this.model.geometry.add(canonicalMesh)
   }
 
   /**

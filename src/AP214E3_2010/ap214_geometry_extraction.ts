@@ -1,4 +1,3 @@
- 
 import {
   ConwayGeometry,
   GeometryObject,
@@ -59,6 +58,7 @@ import { MemoizationCapture, RegressionCaptureState } from '../core/regression_c
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
 import {
+  advanced_brep_shape_representation,
   advanced_face,
   annotation_occurrence,
   axis1_placement,
@@ -79,6 +79,7 @@ import {
   conical_surface,
   connected_face_set,
   context_dependent_shape_representation,
+  conversion_based_unit,
   curve,
   cylindrical_surface,
   direction,
@@ -94,13 +95,16 @@ import {
   geometric_curve_set,
   geometrically_bounded_2d_wireframe_representation,
   geometrically_bounded_wireframe_shape_representation,
+  global_unit_assigned_context,
   half_space_solid,
   item_defined_transformation,
+  length_measure,
+  length_unit,
   line,
-  loop,
   manifold_solid_brep,
   mapped_item,
-  next_assembly_usage_occurrence,
+  mechanical_design_geometric_presentation_area,
+  mechanical_design_geometric_presentation_representation,
   over_riding_styled_item,
   parameter_value,
   pcurve,
@@ -109,8 +113,6 @@ import {
   polyline,
   presentation_layer_assignment,
   product,
-  product_definition,
-  product_definition_shape,
   ratio_measure,
   rational_b_spline_curve,
   rational_b_spline_surface,
@@ -122,6 +124,7 @@ import {
   shape_representation_relationship,
   shell_based_surface_model,
   si_prefix,
+  si_unit,
   spherical_surface,
   styled_item,
   surface,
@@ -882,7 +885,7 @@ export class AP214GeometryExtraction {
       flatFirstMeshVector = this.nativeVectorGeometry()
       flatFirstMeshVector.push_back(firstMesh.geometry)
     } else {
-      console.log(
+      Logger.error(
           `Error extracting firstOperand geometry for expressID: 
         ${from.first_operand.expressID} - type: 
         ${EntityTypesAP214[from.first_operand.type]}`)
@@ -899,7 +902,7 @@ export class AP214GeometryExtraction {
       flatSecondMeshVector = this.nativeVectorGeometry()
       flatSecondMeshVector.push_back(secondMesh.geometry)
     } else {
-      console.log(
+      Logger.error(
           `Error extracting secondOperand geometry for expressID: 
         ${from.second_operand.localID} - type:
          ${EntityTypesAP214[from.second_operand.type]}`)
@@ -1080,49 +1083,64 @@ export class AP214GeometryExtraction {
 
       for (const style of from.style.styles ) {
 
-        if ( style instanceof surface_style_rendering ) {
+        try {
+          if ( style instanceof surface_style_rendering ) {
 
-          if ( !( style.surface_colour instanceof colour_rgb ) ) {
-            continue
-          }
-
-          const surfaceColor = extractColorRGBPremultiplied(style.surface_colour, 1)
-
-          newMaterial.baseColor  = surfaceColor
-          newMaterial.legacyColor = surfaceColor
-          newMaterial.roughness = 1
-
-        } else if ( style instanceof surface_style_fill_area ) {
-
-          const fillAreaStyles = style.fill_area.fill_styles
-
-          const fillAreaColor =
-            fillAreaStyles.find(
-              ( value => value instanceof fill_area_style_colour ) ) as fill_area_style_colour |
-              undefined
-
-          if ( fillAreaColor !== void 0 ) {
-
-            const fillColor = fillAreaColor.fill_colour
-
-            if ( !(fillColor instanceof colour_rgb ) ) {
-
+            if ( !( style.surface_colour instanceof colour_rgb ) ) {
               continue
             }
 
-            const surfaceColor = extractColorRGBPremultiplied(fillColor, 1)
+            const surfaceColor = extractColorRGBPremultiplied(style.surface_colour, 1)
 
-            newMaterial.baseColor   = surfaceColor
+            newMaterial.baseColor  = surfaceColor
             newMaterial.legacyColor = surfaceColor
-            newMaterial.roughness   = 1            
+            newMaterial.roughness = 1
+
+          } else if ( style instanceof surface_style_fill_area ) {
+
+            const fillAreaStyles = style.fill_area.fill_styles
+
+            const fillAreaColor =
+              fillAreaStyles.find(
+                ( value => value instanceof fill_area_style_colour ) ) as fill_area_style_colour |
+                undefined
+
+            if ( fillAreaColor !== void 0 ) {
+
+              try {
+                const fillColor = fillAreaColor.fill_colour
+
+                if ( !(fillColor instanceof colour_rgb ) ) {
+
+                  continue
+                }
+
+                const surfaceColor = extractColorRGBPremultiplied(fillColor, 1)
+
+                newMaterial.baseColor   = surfaceColor
+                newMaterial.legacyColor = surfaceColor
+                newMaterial.roughness   = 1            
+              }
+              catch ( error ) {
+                Logger.warning(
+                    `Error extracting fill area style color for expressID: 
+                  #${from.expressID} - type: 
+                  ${EntityTypesAP214[style.type]} - error: ${error}`)
+              }
+            }
           }
+        } catch ( error ) {
+          Logger.warning(
+              `Error extracting surface style for expressID: 
+            #${from.expressID} - type: 
+            ${EntityTypesAP214[style.type]} - error: ${error}`)
         }
 
         /* TODO - other surface styles */
 
       }
 
-     const isTransparent = newMaterial.baseColor[3] < 1.0
+      const isTransparent = newMaterial.baseColor[3] < 1.0
 
       newMaterial.metalness ??= 0
       newMaterial.roughness ??= isTransparent ? 0.05 : 0.9
@@ -1178,6 +1196,43 @@ export class AP214GeometryExtraction {
     return surfaceStyleID
   }
 
+  extractStyledItemWithProcessing(
+      from: styled_item,
+      owningElementLocalID?: number ): void {
+
+    let surfaceStyleID: number | undefined = void 0
+
+    for ( const style of from.styles ) {
+
+      for ( const innerStyle of style.styles ) {
+
+        if (innerStyle instanceof surface_style_usage ) {
+
+          surfaceStyleID = innerStyle.localID
+          this.extractSurfaceStyle(innerStyle)
+          break
+        }
+      }
+    }
+
+    if (surfaceStyleID === void 0) {
+      return
+    }
+
+    if ( from.item !== null ) {
+    
+      if ( from.item instanceof mapped_item ) {
+
+        this.extractMappedItem( from.item, owningElementLocalID )
+
+      } else if ( from.item instanceof representation_item ) {
+
+        this.materials.addGeometryMapping( from.item.localID, surfaceStyleID )
+
+        this.extractRepresentationItem( from.item, owningElementLocalID )
+      }
+    }
+  }
 
   /**
    * @param from Geometry source
@@ -1284,7 +1339,7 @@ export class AP214GeometryExtraction {
       this.model.geometry.add(canonicalMesh)
 
     } else {
-      console.log(`Couldn't parse profile, 
+      Logger.error(`Couldn't parse profile, 
       expressID: ${from.swept_area.expressID} type: ${EntityTypesAP214[from.swept_area.type]}`)
     }
   }
@@ -1550,7 +1605,7 @@ export class AP214GeometryExtraction {
     const surface = from.basis_surface
 
     if ( !( surface instanceof plane ) ) {
-      console.log( 'not a plane')
+      Logger.error( 'PSCurve not a plane, other curves unsupported')
       return
     }
 
@@ -2311,6 +2366,23 @@ export class AP214GeometryExtraction {
       owningElementLocalID?: number,
       isMappedItem: boolean = false) {
 
+    if (
+      from instanceof polyline ||
+      from instanceof draughting_model || 
+      from instanceof geometrically_bounded_2d_wireframe_representation ||
+      from instanceof annotation_occurrence ||
+      from instanceof presentation_layer_assignment ||
+      from instanceof view_volume ||
+      from instanceof geometric_curve_set ||
+      from instanceof placement ||
+      from instanceof advanced_face ||
+      from instanceof face ||
+      from instanceof cartesian_point ) {
+      
+      return // skip these types, not 3D geometry or top level types
+
+    }
+
     const foundGeometry = this.model.geometry.getByLocalID(from.localID)
 
     if ( foundGeometry !== void 0 ) {
@@ -2351,7 +2423,7 @@ export class AP214GeometryExtraction {
 
     } else if ( from instanceof shell_based_surface_model ) {
 
-      this.extractAP214ShellBasedSurfaceModel(from, owningElementLocalID)
+      this.extractAP214ShellBasedSurfaceModel(from)
 
     } else if ( from instanceof face_based_surface_model ) {
 
@@ -2361,18 +2433,7 @@ export class AP214GeometryExtraction {
 
       this.extractManifoldSolidBrep(from)
 
-    } else if (
-      from instanceof polyline ||
-      from instanceof draughting_model || 
-      from instanceof geometrically_bounded_2d_wireframe_representation ||
-      from instanceof annotation_occurrence ||
-      from instanceof presentation_layer_assignment ||
-      from instanceof view_volume ||
-      from instanceof geometric_curve_set ) {
-      
-        return // skip these types, not 3D geometry
-
-    } else {
+    } else  {
 
       Logger.warning( `Unsupported type: ${EntityTypesAP214[from.type]} ` +
       `expressID: ${from.expressID}`)
@@ -2411,6 +2472,16 @@ export class AP214GeometryExtraction {
 
       geometry = this.extractFaces( faceSet.cfs_faces, parentLocalID, geometry )
     }
+  
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: geometry,
+      localID: parentLocalID,
+      model: this.model,
+      temporary: false,
+    }
+
+    this.model.geometry.add(canonicalMesh)
   }
 
 
@@ -2445,16 +2516,26 @@ export class AP214GeometryExtraction {
    * @param owningElementLocalID
    */
   extractAP214ShellBasedSurfaceModel(
-      from: shell_based_surface_model,
-      owningElementLocalID?: number ) {
+      from: shell_based_surface_model ) {
     const sbsmBoundary = from.sbsm_boundary
+    
+    let geometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
 
     for ( const currentBoundary of sbsmBoundary ) {
       const faces = currentBoundary.cfs_faces
 
-      this.extractFaces(faces, currentBoundary.localID, undefined, false )
-      this.scene.addGeometry(currentBoundary.localID, owningElementLocalID )
+      geometry = this.extractFaces(faces, from.localID, geometry, false )
     }
+    
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: geometry,
+      localID: from.localID,
+      model: this.model,
+      temporary: false,
+    }
+
+    this.model.geometry.add(canonicalMesh)
   }
 
   /**
@@ -2494,11 +2575,11 @@ export class AP214GeometryExtraction {
         if ( error instanceof Error ) {
           Logger.error(
             `Error extracting face ${EntityTypesAP214[face_.type]} - ${
-              error.message}\t\n${error.stack} - expressID: ${face_.expressID}`)
+              error.message}\t\n${error.stack} - expressID: #${face_.expressID}`)
         } else {
           Logger.error(
             `Error extracting face ${EntityTypesAP214[face_.type]} - ${
-              error} - expressID: ${face_.expressID}`)
+              error} - expressID: #${face_.expressID}`)
         }
       }
     }
@@ -2942,7 +3023,7 @@ export class AP214GeometryExtraction {
       const faceGeometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
 
       this.conwayModel.addFaceToGeometry(parameters, faceGeometry)
-
+ 
       const canonicalMesh: CanonicalMesh = {
         type: CanonicalMeshType.BUFFER_GEOMETRY,
         geometry: faceGeometry,
@@ -3439,14 +3520,16 @@ export class AP214GeometryExtraction {
       return
     }
 
-    const result = this.scene.getTransform(parentLocalId)
+    // if ( !extractOnly ) {
+    //   const result = this.scene.getTransform(parentLocalId)
 
-    if (result !== void 0) {
+    //   if (result !== void 0) {
 
-      this.scene.pushTransform(result)
+    //     this.scene.pushTransform(result)
 
-      return
-    }
+    //     return
+    //   }
+    // }
 
     let normalizeZ: boolean = false
 
@@ -3482,7 +3565,8 @@ export class AP214GeometryExtraction {
     this.scene.addTransform(
         parentLocalId,
         axis1PlacementTransform.getValues(),
-        axis1PlacementTransform)
+        axis1PlacementTransform,
+        true)
   }
 
   /**
@@ -3509,19 +3593,21 @@ export class AP214GeometryExtraction {
     mappedItem?: boolean): ParamsAxis2Placement3D
    
   extractAxis2Placement3D(
-      from: axis2_placement_3d,
-      parentLocalId: number,
-      extractOnly: boolean = false,
-      mappedItem: boolean = false): AP214SceneTransform | ParamsAxis2Placement3D | undefined {
+    from: axis2_placement_3d,
+    parentLocalId: number,
+    extractOnly: boolean = false,
+    mappedItem: boolean = false): AP214SceneTransform | ParamsAxis2Placement3D | undefined {
 
-    const result = this.scene.getTransform(parentLocalId)
+    // if ( !mappedItem && !extractOnly ) {
+      
+    //   const result = this.scene.getTransform(parentLocalId)
 
-    if (result !== void 0) {
+    //   if ( result !== void 0 ) {
+    //     this.scene.pushTransform(result)
 
-      this.scene.pushTransform(result)
-
-      return result
-    }
+    //     return result
+    //   }
+    // }
 
     let normalizeZ: boolean = false
     let normalizeX: boolean = false
@@ -3552,6 +3638,12 @@ export class AP214GeometryExtraction {
       z: from.ref_direction?.direction_ratios[2] ?? 0,
     }
 
+    if ( from.ref_direction === null && ( zAxisRef.x === 1 || zAxisRef.x === -1 ) ) {
+      xAxisRef.x = 0
+      xAxisRef.y = 1
+      xAxisRef.z = 0
+    }
+
     const axis2Placement3DParameters: ParamsAxis2Placement3D = {
       position: position,
       zAxisRef: zAxisRef,
@@ -3571,7 +3663,7 @@ export class AP214GeometryExtraction {
         parentLocalId,
         axis2PlacementTransform.getValues(),
         axis2PlacementTransform,
-        mappedItem)
+        true)
   }
 
 
@@ -3582,18 +3674,20 @@ export class AP214GeometryExtraction {
    */
   extractPlacement(from: placement, mappedItem: boolean = false ): AP214SceneTransform | undefined {
 
-    const result: AP214SceneTransform | undefined =
-      this.scene.getTransform(from.localID)
+    // if ( !mappedItem ) {
+    //   const result: AP214SceneTransform | undefined =
+    //     this.scene.getTransform(from.localID)
 
-    if (result !== void 0) {
+    //   if (result !== void 0) {
 
-      this.scene.pushTransform(result)
-      return result
-    }
+    //     this.scene.pushTransform(result)
+    //     return result
+    //   }
+    // }
 
     if (from instanceof axis2_placement_3d) {
 
-      return this.extractAxis2Placement3D(from, from.localID, false, mappedItem)
+      return this.extractAxis2Placement3D(from, from.localID, false, true)
 
     }
 
@@ -3611,112 +3705,6 @@ export class AP214GeometryExtraction {
 
     return
   }
-
-  /**
-   *
-   * @param from
-   * @return {number | undefined}
-   */
-  // extractMaterial(
-  //     from: AP214Material |
-  //     AP214MaterialList |
-  //     AP214MaterialProfile |
-  //     AP214MaterialProfileSet |
-  //     AP214MaterialConstituent |
-  //     AP214MaterialLayerSetUsage |
-  //     AP214MaterialConstituentSet): number | undefined {
-  //   if (from instanceof AP214Material) {
-  //     return this.materials.materialDefinitionsMap.get(from.localID)
-  //   } else if (from instanceof AP214MaterialLayerSetUsage) {
-  //     for (const layer of from.ForLayerSet.MaterialLayers) {
-  //       if (layer.Material) {
-  //         const styledItemID = this.extractMaterial(layer.Material)
-  //         if (styledItemID !== undefined) {
-  //           return styledItemID
-  //         }
-  //       }
-  //     }
-  //   } else if (from instanceof AP214MaterialList) {
-  //     for (const _material of from.Materials) {
-  //       if (_material instanceof AP214Material) {
-  //         const styledItemID = this.extractMaterial(_material)
-  //         if (styledItemID !== undefined) {
-  //           return styledItemID
-  //         }
-  //       }
-  //     }
-  //   } else if (from instanceof AP214MaterialProfile) {
-  //     if (from.Material !== null) {
-  //       const styledItemID = this.extractMaterial(from.Material)
-  //       if (styledItemID !== undefined) {
-  //         return styledItemID
-  //       }
-  //     } else {
-  //       console.log(`from.Material === null`)
-  //     }
-  //   } else if (from instanceof AP214MaterialProfileSet) {
-  //     for (const material of from.MaterialProfiles) {
-  //       const styledItemID = this.extractMaterial(material)
-
-  //       if (styledItemID !== undefined) {
-  //         return styledItemID
-  //       }
-  //     }
-  //   } else if (from instanceof AP214MaterialConstituent) {
-  //     const styledItemID = this.extractMaterial(from.Material)
-  //     if (styledItemID !== undefined) {
-  //       return styledItemID
-  //     }
-  //   } else if (from instanceof AP214MaterialConstituentSet) {
-  //     if (from.MaterialConstituents !== null) {
-  //       for (const materialConstituents of from.MaterialConstituents) {
-  //         const styledItemID = this.extractMaterial(materialConstituents)
-  //         if (styledItemID !== undefined) {
-  //           return styledItemID
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
-
-  /**
-   *
-   * @param from
-   * @return {number | undefined}
-   */
-  // extractMaterialStyle(from: AP214Product): number | undefined {
-  //   let styledItemID: number | undefined
-  //   const materialID = this.materials.relMaterialsMap.get(from.localID)
-  //   if ( materialID !== void 0 ) {
-  //     if (this.materials.materialDefinitionsMap.has(materialID)) {
-  //       // found material for mesh
-  //       styledItemID = this.materials.materialDefinitionsMap.get(materialID)
-  //     } else {
-  //       const material = this.model.getElementByLocalID(materialID)
-  //       if (material) {
-  //         if (material instanceof AP214Material) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else if (material instanceof AP214MaterialLayerSetUsage) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else if (material instanceof AP214MaterialList) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else if (material instanceof AP214MaterialProfile) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else if (material instanceof AP214MaterialProfileSet) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else if (material instanceof AP214MaterialConstituent) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else if (material instanceof AP214MaterialConstituentSet) {
-  //           styledItemID = this.extractMaterial(material)
-  //         } else {
-  //           console.log(`Material type not supported - type: ${EntityTypesAP214[material.type]}`)
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   return styledItemID
-  // }
 
   /**
    *
@@ -3756,85 +3744,10 @@ export class AP214GeometryExtraction {
 
   /**
    *
-   */
-  // populateMaterialDefinitionsMap() {
-  //   // populate MaterialDefinitionsMap
-  //   const materialDefinitionRepresentations =
-  //     this.model.types(AP214MaterialDefinitionRepresentation)
-
-  //   for (const materialDefinitionRep of materialDefinitionRepresentations) {
-
-  //     for (const representation of materialDefinitionRep.Representations) {
-  //       for (let itemIndex = 0; itemIndex < representation.Items.length; ++itemIndex) {
-  //         // save mapping of AP214Material --> AP214StyledItem
-  //         this.materials.materialDefinitionsMap.set(
-  //             materialDefinitionRep.RepresentedMaterial.localID,
-  //             representation.Items[itemIndex].localID)
-  //       }
-  //     }
-  //   }
-  // }
-
-  /**
-   * Extracts linear scaling factor
-   */
-  // extractLinearScalingFactor() {
-  //   const projects = this.model.types(AP214Project)
-
-  //   const projectsArray = Array.from(projects)
-
-  //   if (projectsArray.length <= 0) {
-  //     console.log('No AP214Projects found?')
-  //     return
-  //   }
-
-  //   const project = projectsArray[0]
-  //   const unitsInContext = project.UnitsInContext
-
-  //   if (unitsInContext === null) {
-  //     console.log('No units defined.')
-  //     return
-  //   }
-
-  //   // console.log(`UnitsInContext expressID: ${unitsInContext.expressID}`)
-  //   for (const unit of unitsInContext.Units) {
-  //     // console.log(`Unit type: ${EntityTypesAP214[unit.type]}, expressID: ${unit.expressID}`)
-
-  //     if (unit instanceof AP214SIUnit) {
-  //       const unitType = unit.UnitType
-  //       const unitName = unit.Name
-  //       const unitPrefix = unit.Prefix
-
-  //       if (unitPrefix === null) {
-  //         // console.log("Unit prefix not found")
-  //         continue
-  //       }
-
-  //       const unitPrefixVal = this.convertPrefix(unitPrefix)
-  //       if (unitType === AP214UnitEnum.LENGTHUNIT &&
-  //         unitName === AP214SIUnitName.METRE &&
-  //         unitPrefixVal !== null) {
-  //         this.linearScalingFactor *= unitPrefixVal
-  //         continue
-  //       } else {
-  //         // console.log("linear scaling factor not set for AP214SIUnit")
-  //       }
-  //     } else if (unit instanceof AP214ConversionBasedUnit) {
-  //       // TODO: Linear scaling factor for AP214ConversionBasedUnit
-  //       /* const unitType = unit.UnitType
-  //       unit.ConversionFactor.UnitComponent
-  //       unit.Dimensions
-  //       console.log("unit.Name: " + unit.Name)*/
-  //     }
-  //   }
-  // }
-
-  /**
-   *
    * @param prefix
    * @return {number | null}
    */
-  convertPrefix(prefix: si_prefix): number | null {
+  convertPrefix(prefix?: si_prefix | null): number {
     /* eslint-disable no-magic-numbers */
     switch (prefix) {
       case si_prefix.EXA:
@@ -3870,10 +3783,60 @@ export class AP214GeometryExtraction {
       case si_prefix.ATTO:
         return 1e-18
       default:
-        return null
+        return 1
     }
 
   }
+
+  convertToMetres( fromUnit: length_unit ): number | undefined {
+
+    const conversionUnit = fromUnit.findVariant( conversion_based_unit )
+
+    if ( conversionUnit !== void 0 ) {
+
+      const baseUnit = conversionUnit.conversion_factor.unit_component.findVariant( length_unit )
+     
+      if ( baseUnit === void 0 ) {
+      
+        return
+      }
+
+      const baseUnitMetres = this.convertToMetres( baseUnit )
+
+      if ( baseUnitMetres === void 0 ) {
+      
+        return
+      }
+
+      const factor = ( conversionUnit.conversion_factor.value_component as length_measure ).Value
+
+      return factor * baseUnitMetres
+    }
+
+    const siUnit = fromUnit.findVariant( si_unit )
+
+    if ( siUnit === void 0 ) {
+
+      return
+    }
+
+    return this.convertPrefix( siUnit.prefix )
+  }
+
+  lengthUnitConversionRatio( fromUnit: length_unit, toUnit: length_unit ): number | undefined {
+
+    const fromFactor = this.convertToMetres( fromUnit )
+    const toFactor = this.convertToMetres( toUnit )
+
+    if ( fromFactor === void 0 || toFactor === void 0 ) {
+
+      return
+    }
+
+
+    return fromFactor / toFactor
+  }
+
 
   /**
    * Extract the geometry data from the AP214
@@ -3896,7 +3859,126 @@ export class AP214GeometryExtraction {
     // const relAssociatesMaterials = this.model.types(AP214RelAssociatesMaterial)
 
     const model = this.model
+  
+    type MappedSceneNode = {
+      children?: [number, number, NativeTransform4x4?][];
+      parents?: number;
+      thunk?: ( owningLocalID?: number, transform?: NativeTransform4x4 ) => void;
+      node?: AP214SceneTransform;
+      processed?: boolean;
+    }
 
+    const treeMap = new Map<number, MappedSceneNode>()
+
+    const makeThunk = ( representation: shape_representation, owningElementLocalID?: number, mappedTreeNode?: MappedSceneNode ) => {
+
+      return ( owningLocalID?: number, parentTransform?: NativeTransform4x4 ) => {
+
+        owningLocalID ??= owningElementLocalID
+
+        const mappedItem = mappedTreeNode !== void 0 || parentTransform !== void 0 
+
+        const entryTransformDepth = this.scene.stackLength
+        const currentParent = this.scene.currentParent
+
+        if ( parentTransform !== void 0 ) {
+
+          this.scene.addTransform(
+            representation.localID,
+            parentTransform.getValues(),
+            parentTransform,
+            true )
+
+        } 
+
+        if ( mappedTreeNode?.children !== void 0 ) {
+
+          for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
+
+            const mappedChild = treeMap.get( childLocalID )!
+
+            const enterChildStackDepth = this.scene.stackLength
+            const enterChildParent = this.scene.currentParent
+
+            try {
+              mappedChild.thunk!( childOwningLocalID, childTransform )
+            } catch ( ex ) {
+
+              if ( ex instanceof Error ) {
+
+                Logger.error( `Error processing child shape_representation: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
+              } else {
+
+                Logger.error( `Unknown exception processing child shape_representation (${ex}) expressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
+              }
+            }
+                
+            while ( this.scene.stackLength > enterChildStackDepth ) {
+              this.scene.popTransform()
+            }
+
+            if( this.scene.stackLength !== enterChildStackDepth || this.scene.currentParent !== enterChildParent ) {
+              Logger.error( `Stack length mismatch after processing child shape_representation ${this.scene.currentParent} ${enterChildParent} expressID: #${representation.expressID}` )
+            }
+          }
+        }
+                
+        for ( const item of representation.items ) {
+
+          try {             
+
+            if ( item instanceof placement ) {
+          
+              this.extractPlacement( item, mappedItem )
+              continue
+            }
+
+            if ( item instanceof styled_item ) {
+
+              this.extractStyledItemWithProcessing( item, owningLocalID )
+              continue
+            }
+
+            if ( item instanceof mapped_item ) {
+
+              this.extractMappedItem( item, owningLocalID )
+
+            } else {
+
+              this.extractRepresentationItem( item, owningLocalID )
+
+              const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+
+              if ( styledItemLocalID !== void 0 ) {
+
+                const styledItem =
+                  model.getElementByLocalID( styledItemLocalID ) as styled_item
+
+                this.extractStyledItem( styledItem, item )
+              }
+            }
+          } catch ( ex ) {
+
+            if (ex instanceof Error) {
+
+                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${item.expressID}` )
+
+            } else {
+
+                Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+            }
+          }
+        }
+
+        while ( this.scene.stackLength > entryTransformDepth ) {
+          this.scene.popTransform()
+        }
+
+        if( this.scene.stackLength !== entryTransformDepth || this.scene.currentParent !== currentParent ) {
+          Logger.error( `Stack length mismatch after processing shape_representation  ${this.scene.currentParent} ${currentParent} expressID: #${representation.expressID}` )
+        }
+      }
+    }
 
     try {
 
@@ -3913,19 +3995,7 @@ export class AP214GeometryExtraction {
 
       this.populateStyledItemsMap()
 
-      const contextDependentShapeRepresentations =
-        [...model.types(context_dependent_shape_representation)]
-
-
-      type MappedSceneNode = {
-        children?: [number, number, NativeTransform4x4?][];
-        parents?: number;
-        thunk?: ( owningLocalID?: number, transform?: NativeTransform4x4 ) => void;
-        node?: AP214SceneTransform;
-        processed?: boolean;
-      }
-
-      const treeMap = new Map<number, MappedSceneNode>()
+      const contextDependentShapeRepresentations = model.types(context_dependent_shape_representation)
 
       const shapeRepresentationRelationshipsSeen = new Set<number>() 
 
@@ -3945,6 +4015,7 @@ export class AP214GeometryExtraction {
         const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
       
         let transform: NativeTransform4x4 | undefined = void 0
+        let scaleTransform : NativeTransform4x4 | undefined = void 0
 
         if( transformInstance !== void 0 ) {
 
@@ -3966,24 +4037,66 @@ export class AP214GeometryExtraction {
             continue
           }
 
-          const sourceTransform = this.extractRawPlacement( placement1 ) ?? this.identity3DNativeMatrix
-          const targetTransform = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+          const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
+          const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
 
           const localPlacementParameters: ParamsLocalPlacement = {
             useRelPlacement: true,
-            axis2Placement: sourceTransform,
-            relPlacement: targetTransform,
+            axis2Placement: from,
+            relPlacement: to,
           }
     
           transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
         }
 
+        const sourceShapeContext = 
+          sourceShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+          find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+          
+        const targetShapeContext =
+          targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+        if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
+
+          const scaleRatio = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
+
+          if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
+
+            scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio ) 
+          }
+        }
+
+        if ( scaleTransform !== void 0 ) {
+
+          if ( transform !== void 0 ) {
+              
+            const localPlacementParameters: ParamsLocalPlacement = {
+              useRelPlacement: true,
+              axis2Placement: transform,
+              relPlacement: scaleTransform,
+            }
+            
+            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+
+          } else {
+
+            transform = scaleTransform
+          }
+        }
+
         const sourceID = sourceShape.localID
         const targetID = targetShape.localID
-        const sourceNode = treeMap.get( sourceID )
+        let sourceNode = treeMap.get( sourceID )
 
         if ( sourceNode === void 0 ) {
-          treeMap.set( sourceID, { parents: 1 } )
+
+          sourceNode = { parents: 1 }
+
+          treeMap.set( sourceID, sourceNode )
+
+          sourceNode.thunk = makeThunk( sourceShape, owningLocalID, sourceNode )
+
         } else {
           sourceNode.parents ??= 0
           ++sourceNode.parents
@@ -3994,14 +4107,14 @@ export class AP214GeometryExtraction {
         if ( targetNode === void 0 ) {
           targetNode = { children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
-           
+          
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
         }
       }
 
-      const shapeRelationships = model.types(shape_representation_relationship)
+      const shapeRelationships = [...model.types(shape_representation_relationship)]     
 
       for ( const shapeRelationship of shapeRelationships ) {
       
@@ -4009,19 +4122,26 @@ export class AP214GeometryExtraction {
         
           continue
         }
-        
+
         const owningLocalID = shapeRelationship.localID
 
         shapeRepresentationRelationshipsSeen.add( owningLocalID )
 
+        /* Note, the rep_1 and rep_2 are swapped here compared to the
+         * context_dependent_shape_representation case above. This is because
+         * in a plain shape_representation_relationship, rep_1 is the
+         * source and rep_2 is the target, whereas in
+         * context_dependent_shape_representation, the relationship is inverted.
+         */
         const sourceShape = shapeRelationship.rep_2
         const targetShape = shapeRelationship.rep_1
         
         const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
       
         let transform: NativeTransform4x4 | undefined = void 0
+        let scaleTransform : NativeTransform4x4 | undefined = void 0
 
-        if( transformInstance !== void 0 ) {
+        if ( transformInstance !== void 0 ) {
 
           const transformOperator = transformInstance.transformation_operator
 
@@ -4041,16 +4161,52 @@ export class AP214GeometryExtraction {
             continue
           }
 
-          const sourceTransform = this.extractRawPlacement( placement1 ) ?? this.identity3DNativeMatrix
-          const targetTransform = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+          const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
+          const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
 
           const localPlacementParameters: ParamsLocalPlacement = {
             useRelPlacement: true,
-            axis2Placement: sourceTransform,
-            relPlacement: targetTransform,
+            axis2Placement: from,
+            relPlacement: to,
           }
     
           transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+        }        
+
+        const sourceShapeContext = 
+          sourceShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+          find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+          
+        const targetShapeContext =
+          targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+        if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
+
+          const scaleRatio = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
+
+          if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
+
+            scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio )
+          }
+        }
+
+        if ( scaleTransform !== void 0 ) {
+
+          if ( transform !== void 0 ) {
+              
+            const localPlacementParameters: ParamsLocalPlacement = {
+              useRelPlacement: true,
+              axis2Placement: transform,
+              relPlacement: scaleTransform,
+            }
+            
+            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+
+          } else {
+
+            transform = scaleTransform
+          }
         }
 
         const sourceID = sourceShape.localID
@@ -4068,130 +4224,36 @@ export class AP214GeometryExtraction {
           ++sourceNode.parents
         }
 
+        sourceNode.thunk = makeThunk( sourceShape, owningLocalID, sourceNode )
+
         let targetNode = treeMap.get( targetID )       
 
         if ( targetNode === void 0 ) {
-          targetNode = { children: [[sourceID, owningLocalID, transform]] }
+
+          targetNode = { parents: 0, children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
-           
+          
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
-        }
-        
-        this.scene.clearParentStack()
-
-        const owningElementLocalID = owningLocalID
-
-        const representationItems = sourceShape.items       
-        const objectPlacement =
-          representationItems.find(
-              ( where ) => where instanceof placement ) as placement | undefined
-
-        let hasPlacement = false
-
-        const mappedTreeNode = sourceNode
-
-        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {
-
-          owningLocalID ??= owningElementLocalID
-
-          const mappedItem = mappedTreeNode !== void 0 
-
-          if ( transform !== void 0 ) {
-
-            this.scene.addTransform(
-              sourceShape.localID,
-              transform.getValues(),
-              transform,
-              true )
-            hasPlacement = true
-
-          } else if ( objectPlacement !== void 0 ) {
-
-            this.extractPlacement( objectPlacement, mappedItem )
-            hasPlacement = true
-          }
-          
-          if ( mappedItem && mappedTreeNode.children !== void 0 ) {
-
-            for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
-
-              const mappedChild = treeMap.get( childLocalID )!
-
-              mappedChild.thunk!( childOwningLocalID, childTransform )
-            }
-          }
-
-          for ( const item of representationItems ) {
-
-            try {             
-
-              if ( item instanceof placement ) {
-                continue
-              }
-
-              if ( item instanceof mapped_item ) {
-
-                this.extractMappedItem( item, owningLocalID )
-
-              } else {
-
-                this.extractRepresentationItem( item, owningLocalID )
-
-                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-
-                if ( styledItemLocalID !== void 0 ) {
-
-                  const styledItem =
-                    model.getElementByLocalID( styledItemLocalID ) as styled_item
-
-                  this.extractStyledItem( styledItem, item )
-
-                }
-              }
-            } catch ( ex ) {
-
-            if (ex instanceof Error) {
-
-                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: ${item.expressID}` )
-
-            } else {
-
-                Logger.error(`Unknown exception processing representation item (${ex}) expressID: ${item.expressID}`)
-              }
-            }
-          }
-
-          if ( hasPlacement ) {
-            this.scene.popTransform()
-          }
-        }
-
-        sourceNode.thunk = thunk
+        }        
       }
 
-      const shapeDefinitions = model.types(shape_definition_representation)
+      const shapeDefinitions = model.types( shape_definition_representation )
       
       for ( const shapeDefinitionRepresentation of shapeDefinitions ) {
 
         const shapeRepresentation = shapeDefinitionRepresentation.used_representation
 
         if ( !( shapeRepresentation instanceof shape_representation ) ) {
+
           continue
         }
 
-        this.scene.clearParentStack()
+        //this.scene.clearParentStack()
 
         const definition = shapeDefinitionRepresentation.definition
         const owningElementLocalID = definition.localID
-
-        const representationItems = shapeRepresentation.items       
-        const objectPlacement =
-          representationItems.find(
-              ( where ) => where instanceof placement ) as placement | undefined
-
-        let hasPlacement = false
 
         let treeNode = treeMap.get( shapeRepresentation.localID )
 
@@ -4209,96 +4271,38 @@ export class AP214GeometryExtraction {
 
         const mappedTreeNode = treeNode
 
-        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {         
+        const thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
 
-          owningLocalID ??= owningElementLocalID
-
-          const mappedItem = mappedTreeNode !== void 0 
-
-          if ( transform !== void 0 ) {
-
-            this.scene.addTransform(
-              shapeDefinitionRepresentation.localID,
-              transform.getValues(),
-              transform,
-              true )
-            hasPlacement = true
-
-          } else if ( objectPlacement !== void 0 ) {
-
-            this.extractPlacement( objectPlacement, mappedItem )
-            hasPlacement = true
-          }
-          
-          if ( mappedItem && mappedTreeNode.children !== void 0 ) {
-
-            for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
-
-              const mappedChild = treeMap.get( childLocalID )!
-
-              mappedChild.thunk!( childOwningLocalID, childTransform )
-            }
-          }
-
-          for ( const item of representationItems ) {
-
-            try {
-
-              if ( item instanceof placement ) {
-                continue
-              }
-
-              if ( item instanceof mapped_item ) {
-
-                this.extractMappedItem( item, owningLocalID )
-
-              } else {
-
-                this.extractRepresentationItem( item, owningLocalID )
-
-                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-
-                if ( styledItemLocalID !== void 0 ) {
-
-                  const styledItem =
-                    model.getElementByLocalID( styledItemLocalID ) as styled_item
-
-                  this.extractStyledItem( styledItem, item )
-
-                }
-              }
-            } catch ( ex ) {
-
-            if (ex instanceof Error) {
-
-                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: ${item.expressID}` )
-
-            } else {
-
-                Logger.error(`Unknown exception processing representation item (${ex}) expressID: ${item.expressID}`)
-              }
-            }
-          }
-
-          if ( hasPlacement ) {
-            this.scene.popTransform()
-          }
-        }
+        mappedTreeNode.thunk = thunk
 
         if ( !hasMappedNode ) {
 
           mappedTreeNode.processed = true
+            
+          const sourceShapeContext = 
+            shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+          let scaleTransform : NativeTransform4x4 | undefined = void 0
+
+          if ( sourceShapeContext !== void 0 ) {
+
+            const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
+
+            scaleTransform = this.identity3DNativeMatrix.uniformScale( 1.0 / sourceUnitInM )
+          }
 
           // not an assembly mapped item, just extract the representation
-          thunk()
+          thunk( void 0, scaleTransform )
           continue
 
         }
-
-        mappedTreeNode.thunk = thunk
       }
 
-      const shapeRepresentations = model.types(shape_representation, geometrically_bounded_wireframe_shape_representation)
+      const shapeRepresentations = model.types(
+        shape_representation,
+        advanced_brep_shape_representation,
+        geometrically_bounded_wireframe_shape_representation)
 
       for ( const shapeRepresentation of shapeRepresentations ) {
 
@@ -4308,7 +4312,6 @@ export class AP214GeometryExtraction {
 
           treeNode = { parents: 0 }
           treeMap.set( shapeRepresentation.localID, treeNode )
-
         }
 
         // This is only for completely free geometry nodes.
@@ -4318,106 +4321,39 @@ export class AP214GeometryExtraction {
 
         const mappedTreeNode = treeNode
 
-        this.scene.clearParentStack()
-
         const owningElementLocalID = shapeRepresentation.localID
 
-        const representationItems = shapeRepresentation.items       
-        const objectPlacement =
-          representationItems.find(
-              ( where ) => where instanceof placement ) as placement | undefined
-
-        let hasPlacement = false
-
-        const thunk = ( owningLocalID?: number, transform?: NativeTransform4x4 ) => {
-
-          owningLocalID ??= owningElementLocalID
-
-          const mappedItem = mappedTreeNode !== void 0 
-
-          if ( transform !== void 0 ) {
-
-            this.scene.addTransform(
-              shapeRepresentation.localID,
-              transform.getValues(),
-              transform,
-              true )
-            hasPlacement = true
-
-          } else if ( objectPlacement !== void 0 ) {
-
-            this.extractPlacement( objectPlacement, mappedItem )
-            hasPlacement = true
-          }
-          
-          if ( mappedItem && mappedTreeNode.children !== void 0 ) {
-
-            for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
-
-              const mappedChild = treeMap.get( childLocalID )!
-
-              mappedChild.thunk!( childOwningLocalID, childTransform )
-            }
-          }
-
-          for ( const item of representationItems ) {
-
-            try {
-
-              if ( item instanceof placement ) {
-                continue
-              }
-
-              if ( item instanceof mapped_item ) {
-
-                this.extractMappedItem( item, owningLocalID )
-
-              } else {
-
-                this.extractRepresentationItem( item, owningLocalID )
-
-                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-
-                if ( styledItemLocalID !== void 0 ) {
-
-                  const styledItem =
-                    model.getElementByLocalID( styledItemLocalID ) as styled_item
-
-                  this.extractStyledItem( styledItem, item )
-
-                }
-              }
-            } catch ( ex ) {
-
-              if (ex instanceof Error) {
-
-                  Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: ${item.expressID}` )
-
-              } else {
-
-                Logger.error(`Unknown exception processing representation item (${ex}) expressID: ${item.expressID}`)
-              }
-            }
-          }
-
-          if ( hasPlacement ) {
-            this.scene.popTransform()
-          }
-        }
-
-        mappedTreeNode.thunk = thunk
+        mappedTreeNode.thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
       }
 
       // All thunks are set, now we can execute the full
       // assembly tree.
-      for ( const mappedNode of treeMap.values() ) {
+      for ( const [sourceID, mappedNode] of treeMap.entries() ) {
 
         if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
 
-          mappedNode.thunk()
+          //this.scene.clearParentStack()
+
+          const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
+   
+          const sourceShapeContext = 
+            shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+          let scaleTransform : NativeTransform4x4 | undefined = void 0
+
+          if ( sourceShapeContext !== void 0 ) {
+
+            const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
+
+            scaleTransform = this.identity3DNativeMatrix.uniformScale( 1.0 / sourceUnitInM )
+          }
+
+          // not an assembly mapped item, just extract the representation
+          mappedNode.thunk( void 0, scaleTransform )
         }
       }
-
+      
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
         this.model.geometry.deleteTemporaries()
       }

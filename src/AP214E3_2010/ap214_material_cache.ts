@@ -1,12 +1,14 @@
-import { CanonicalMaterial } from '../core/canonical_material'
+import { CanonicalMaterial, canonicalMaterialToString } from '../core/canonical_material'
 import { ModelMaterials } from '../core/model_materials'
 import { SceneNodeGeometry } from '../core/scene_node'
-
 
 /**
  * Cache of materials via their local ID
  */
 export class AP214MaterialCache implements ModelMaterials {
+
+  private readonly deduplicationMap_ =
+    new Map< string, CanonicalMaterial >()
 
   private readonly cache_ =
     new Map< number, CanonicalMaterial >()
@@ -52,7 +54,7 @@ export class AP214MaterialCache implements ModelMaterials {
    */
   public materials(): IterableIterator<CanonicalMaterial> {
 
-    return this.cache_.values()
+    return this.deduplicationMap_.values()
   }
 
   /**
@@ -63,7 +65,16 @@ export class AP214MaterialCache implements ModelMaterials {
    */
   public add( localID: number, material: CanonicalMaterial ) {
 
-    this.cache_.set( localID, material )
+    const materialKey = canonicalMaterialToString( material )
+    let dedupedMaterial = this.deduplicationMap_.get( materialKey )
+
+    if ( dedupedMaterial === void 0 ) {
+
+      dedupedMaterial = material
+      this.deduplicationMap_.set( materialKey, dedupedMaterial )
+    }
+
+    this.cache_.set( localID, dedupedMaterial )
   }
 
   /**

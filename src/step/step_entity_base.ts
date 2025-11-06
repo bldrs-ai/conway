@@ -103,7 +103,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     instanceType: T ):
     O | undefined {
    
-    if ( this as unknown instanceof instanceType ) {
+    if ( (this as unknown) instanceof instanceType ) {
       return ( this as unknown ) as O
     }
 
