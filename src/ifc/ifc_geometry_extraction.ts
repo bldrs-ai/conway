@@ -2780,7 +2780,6 @@ export class IfcGeometryExtraction {
       paramsGetZShapeCurve.placement.delete()
       return ifcCurve
 
-
     } else {
       const paramsGetZShapeCurve: ParamsGetZShapeCurve = {
         hasPlacement: false,
@@ -2887,6 +2886,7 @@ export class IfcGeometryExtraction {
       ifcCurve = this.extractIfcPolyline(from, parentSense, isEdge)
 
     } else if (from instanceof IfcIndexedPolyCurve) {
+
       ifcCurve = this.extractIndexedPolyCurve(from)
 
     } else if (from instanceof IfcCircle) {
@@ -2898,11 +2898,11 @@ export class IfcGeometryExtraction {
           masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
           dimensions: 3,
           senseAgreement: parentSense,
-          trim1Cartesian2D: trimmingArguments.start?.pos,
-          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Cartesian2D: trimmingArguments.start?.pos ?? { x: 0, y: 0 },
+          trim1Cartesian3D: trimmingArguments.start?.pos3D ?? { x: 0, y: 0, z: 0 },
           trim1Double: trimmingArguments.start?.param ?? 0,
-          trim2Cartesian2D:  trimmingArguments.end?.pos,
-          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Cartesian2D:  trimmingArguments.end?.pos ?? { x: 0, y: 0 },
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D ?? { x: 0, y: 0, z: 0 },
           trim2Double:  trimmingArguments.end?.param ?? 0,
           trimExists: true
         }
@@ -2919,11 +2919,11 @@ export class IfcGeometryExtraction {
           masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
           dimensions: 3,
           senseAgreement: parentSense,
-          trim1Cartesian2D: trimmingArguments.start?.pos,
-          trim1Cartesian3D: trimmingArguments.start?.pos3D,
+          trim1Cartesian2D: trimmingArguments.start?.pos ?? { x: 0, y: 0 },
+          trim1Cartesian3D: trimmingArguments.start?.pos3D ?? { x: 0, y: 0, z: 0 },
           trim1Double: trimmingArguments.start?.param ?? 0,
-          trim2Cartesian2D:  trimmingArguments.end?.pos,
-          trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+          trim2Cartesian2D:  trimmingArguments.end?.pos ?? { x: 0, y: 0 },
+          trim2Cartesian3D:  trimmingArguments.end?.pos3D ?? { x: 0, y: 0, z: 0 },
           trim2Double:  trimmingArguments.end?.param ?? 0,
           trimExists: true
         }
@@ -2940,11 +2940,11 @@ export class IfcGeometryExtraction {
             masterRepresentation: trimmingArguments.start?.hasPos ? 0 : 1,
             dimensions: 3,
             senseAgreement: parentSense,
-            trim1Cartesian2D: trimmingArguments.start?.pos,
-            trim1Cartesian3D: trimmingArguments.start?.pos3D,
+            trim1Cartesian2D: trimmingArguments.start?.pos ?? { x: 0, y: 0 },
+            trim1Cartesian3D: trimmingArguments.start?.pos3D ?? { x: 0, y: 0, z: 0 },
             trim1Double: trimmingArguments.start?.param ?? 0,
-            trim2Cartesian2D:  trimmingArguments.end?.pos,
-            trim2Cartesian3D:  trimmingArguments.end?.pos3D,
+            trim2Cartesian2D:  trimmingArguments.end?.pos ?? { x: 0, y: 0 },
+            trim2Cartesian3D:  trimmingArguments.end?.pos3D ?? { x: 0, y: 0, z: 0 },
             trim2Double:  trimmingArguments.end?.param ?? 0,
             trimExists: true
           }
@@ -2990,11 +2990,11 @@ export class IfcGeometryExtraction {
       masterRepresentation: 0,
       dimensions: 0,
       senseAgreement: true,
-      trim1Cartesian2D: undefined,
-      trim1Cartesian3D: undefined,
+      trim1Cartesian2D: { x: 0, y: 0 },
+      trim1Cartesian3D: { x: 0, y: 0, z: 0 },
       trim1Double: 0,
-      trim2Cartesian2D: undefined,
-      trim2Cartesian3D: undefined,
+      trim2Cartesian2D: { x: 0, y: 0 },
+      trim2Cartesian3D: { x: 0, y: 0, z: 0 },
       trim2Double: 0,
       trimExists: false,
     }
@@ -3028,6 +3028,10 @@ export class IfcGeometryExtraction {
       const outputPoints = params.points2
 
       for (const point of from.ControlPointsList) {
+
+        if (point.Dim !== 2) {
+          continue
+        }
 
         const coords = point.Coordinates
 
@@ -3146,11 +3150,11 @@ export class IfcGeometryExtraction {
       masterRepresentation: 0,
       dimensions: 0,
       senseAgreement: true,
-      trim1Cartesian2D: undefined,
-      trim1Cartesian3D: undefined,
+      trim1Cartesian2D: { x: 0, y: 0 },
+      trim1Cartesian3D: { x: 0, y: 0, z: 0 },
       trim1Double: 0,
-      trim2Cartesian2D: undefined,
-      trim2Cartesian3D: undefined,
+      trim2Cartesian2D: { x: 0, y: 0 },
+      trim2Cartesian3D: { x: 0, y: 0, z: 0 },
       trim2Double: 0,
       trimExists: false,
     }
@@ -3996,65 +4000,79 @@ export class IfcGeometryExtraction {
             parents !== void 0 ? [from, ...parents] : [from] )
 
       } else {
-        this.extractRepresentationItem(representationItem,
-            owningElement.localID,
-            isRelVoid,
-            isSpace,
-            true)
 
-        const styledItemLocalID =
-          this.materials.styledItemMap.get(representationItem.localID) ??
-          this.extractMaterialStyle(owningElement)
+        try {
+          this.extractRepresentationItem(representationItem,
+              owningElement.localID,
+              isRelVoid,
+              isSpace,
+              true)
 
-        let materialOverrideID: number | undefined = void 0
+          const styledItemLocalID =
+            this.materials.styledItemMap.get(representationItem.localID) ??
+            this.extractMaterialStyle(owningElement)
 
-        if (styledItemLocalID !== undefined) {
+          let materialOverrideID: number | undefined = void 0
 
-          const styledItem = this.model.getElementByLocalID(styledItemLocalID) as IfcStyledItem
+          if (styledItemLocalID !== undefined) {
 
-          this.extractStyledItem(styledItem)
+            const styledItem = this.model.getElementByLocalID(styledItemLocalID) as IfcStyledItem
 
-        } else {
-          // get material from parent
-          let styledItemParentLocalID = this.materials.styledItemMap.get(from.localID)
-          let styleParent = from
+            this.extractStyledItem(styledItem)
 
-          if ( parents !== void 0 ) {
-            for ( const parent of parents ) {
-              if ( styledItemParentLocalID !== void 0 ) {
-                break
+          } else {
+            // get material from parent
+            let styledItemParentLocalID = this.materials.styledItemMap.get(from.localID)
+            let styleParent = from
+
+            if ( parents !== void 0 ) {
+              for ( const parent of parents ) {
+                if ( styledItemParentLocalID !== void 0 ) {
+                  break
+                }
+
+                styledItemParentLocalID = this.materials.styledItemMap.get(parent.localID)
+                styleParent = parent
               }
+            }
 
-              styledItemParentLocalID = this.materials.styledItemMap.get(parent.localID)
-              styleParent = parent
+            if (styledItemParentLocalID !== void 0 ) {
+
+              const styledItemParent =
+                this.model.getElementByLocalID(styledItemParentLocalID) as IfcStyledItem
+
+              this.extractStyledItem(styledItemParent, styleParent)
+
+              materialOverrideID = styleParent.localID
             }
           }
 
-          if (styledItemParentLocalID !== void 0 ) {
-
-            const styledItemParent =
-              this.model.getElementByLocalID(styledItemParentLocalID) as IfcStyledItem
-
-            this.extractStyledItem(styledItemParent, styleParent)
-
-            materialOverrideID = styleParent.localID
+          if ( isRelVoid ) {
+            this.applyRelVoidToRepresentation(
+                representationItem,
+                relVoidsMeshVector!,
+                owningElement.localID,
+                relVoidLocalIDs!,
+                materialOverrideID,
+                isSpace)
+          } else {
+            this.scene.addGeometry(
+                representationItem.localID,
+                owningElement.localID,
+                isSpace,
+                materialOverrideID)
           }
-        }
+        } catch ( error ) {
 
-        if ( isRelVoid ) {
-          this.applyRelVoidToRepresentation(
-              representationItem,
-              relVoidsMeshVector!,
-              owningElement.localID,
-              relVoidLocalIDs!,
-              materialOverrideID,
-              isSpace)
-        } else {
-          this.scene.addGeometry(
-              representationItem.localID,
-              owningElement.localID,
-              isSpace,
-              materialOverrideID)
+          if ( error instanceof Error ) {
+
+            Logger.error( `Couldn't extract mapped representation item\n\t${error.message}\n\t Express ID #${representationItem.expressID}`)
+
+          } else {
+
+            Logger.error( `Couldn't extract mapped representation item\n\t Express ID #${representationItem.expressID}`)
+          }
+
         }
       }
     }
@@ -4103,7 +4121,6 @@ export class IfcGeometryExtraction {
       }
 
       if (addGeometry) {
-
 
         this.scene.addGeometry(from.localID, owningElementLocalID, isSpace)
       }
@@ -5235,9 +5252,9 @@ export class IfcGeometryExtraction {
     extractOnly: true): ParamsAxis2Placement3D
    
   extractAxis2Placement3DRelVoid(
-      from: IfcAxis2Placement3D,
-      parentLocalId: number,
-      extractOnly: boolean = false): void | ParamsAxis2Placement3D {
+    from: IfcAxis2Placement3D,
+    parentLocalId: number,
+    extractOnly: boolean = false): void | ParamsAxis2Placement3D {
 
     if (from === null) {
       return
@@ -5506,19 +5523,31 @@ export class IfcGeometryExtraction {
               }
 
               for (const item of representation.Items) {
-                // extract geometry here and flatten
-                this.extractRepresentationItem(item, undefined, true)
-                const mesh = this.model.voidGeometry.getByLocalID(item.localID)
-                if (mesh !== undefined && mesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
-                  const localGeometry = mesh.geometry.clone()
 
+                try {
+                  // extract geometry here and flatten
+                  this.extractRepresentationItem(item, undefined, true)
+                  const mesh = this.model.voidGeometry.getByLocalID(item.localID)
+                  if (mesh !== undefined && mesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+                    const localGeometry = mesh.geometry.clone()
 
-                  if (relVoidPlacementTransform !== void 0) {
-                    localGeometry.applyTransform(relVoidPlacementTransform.absoluteNativeTransform)
+                    if (relVoidPlacementTransform !== void 0) {
+                      localGeometry.applyTransform(relVoidPlacementTransform.absoluteNativeTransform)
+                    }
+
+                    relVoidMeshVector.push_back(localGeometry)
+                    relVoidLocalIDs.push(item.localID)
+
                   }
+                } catch ( error ) {
 
-                  relVoidMeshVector.push_back(localGeometry)
-                  relVoidLocalIDs.push(item.localID)
+                  if ( error instanceof Error ) {
+
+                    Logger.error( `Error extracting rel void representation item\n\t${error.message}\n\t Express ID: #${item.expressID}`)
+                  } else {
+
+                    Logger.error( `Unknown Error extracting rel void representation item\n\t${error}\n\t Express ID: #${item.expressID}`)
+                  }
 
                 }
               }
@@ -5975,16 +6004,29 @@ export class IfcGeometryExtraction {
 
                 } else {
 
-                  this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
+                  try {
 
-                  if (hasRelVoid) {
-                    this.applyRelVoidToRepresentation(
-                        item,
-                        relVoidsMeshVector!,
-                        product.localID,
-                        relVoidLocalIDs!,
-                        void 0,
-                        isSpace)
+                    this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
+
+                    if (hasRelVoid) {
+                      this.applyRelVoidToRepresentation(
+                          item,
+                          relVoidsMeshVector!,
+                          product.localID,
+                          relVoidLocalIDs!,
+                          void 0,
+                          isSpace)
+                    }
+                  } catch ( error ) {
+
+                    if ( error instanceof Error ) {
+
+                      Logger.error( `Error extracting representation item\n\t${error.message}\n\tExpress ID: #${item.expressID}`)
+                    } else {
+
+                      Logger.error( `Error extracting representation item\n\tExpress ID: #${item.expressID}`)
+                    }
+
                   }
                 }
 
@@ -6024,24 +6066,36 @@ export class IfcGeometryExtraction {
 
                 } else {
 
-                  this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
+                  try {
+                    this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
 
-                  if (hasRelVoid) {
+                    if (hasRelVoid) {
 
-                    this.applyRelVoidToRepresentation(
-                        item,
-                        relVoidsMeshVector!,
-                        product.localID,
-                        relVoidLocalIDs!,
-                        void 0,
-                        isSpace)
-                  }
+                      this.applyRelVoidToRepresentation(
+                          item,
+                          relVoidsMeshVector!,
+                          product.localID,
+                          relVoidLocalIDs!,
+                          void 0,
+                          isSpace)
+                    }
 
-                  const styledItemLocalID_ = this.materials.styledItemMap.get(item.localID)
-                  if (styledItemLocalID_ !== void 0) {
-                    const styledItem_ =
-                      this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
-                    this.extractStyledItem(styledItem_)
+                    const styledItemLocalID_ = this.materials.styledItemMap.get(item.localID)
+                    if (styledItemLocalID_ !== void 0) {
+                      const styledItem_ =
+                        this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
+                      this.extractStyledItem(styledItem_)
+                    }
+                  } catch ( error ) {
+
+                    if ( error instanceof Error ) {
+
+                      Logger.error( `Error extracting representation item\n\t${error.message}\n\t${error.stack}\n\tExpress ID: #${item.localID}`)
+                    } else {
+
+                      Logger.error( `Unknown error extracting representation item Express ID: #${item.localID}`)
+
+                    }
                   }
                 }
               }
@@ -6063,6 +6117,7 @@ export class IfcGeometryExtraction {
           // used this as a top level over-ride for a rel-void.
           // for all objects in the aggregate - CS
           const relatingObject = relAggregate.RelatingObject
+
           const masterRelVoids =
             relatingObject instanceof IfcProduct ?
               this.extractRelVoids( relatingObject ) :
@@ -6142,16 +6197,28 @@ export class IfcGeometryExtraction {
 
                       } else {
 
-                        this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
+                        try {
+                          this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
 
-                        if (hasRelVoid) {
-                          this.applyRelVoidToRepresentation(
-                              item,
-                              relVoidsMeshVector!,
-                              product.localID,
-                              relVoidLocalIDs!,
-                              void 0,
-                              isSpace)
+                          if (hasRelVoid) {
+                            this.applyRelVoidToRepresentation(
+                                item,
+                                relVoidsMeshVector!,
+                                product.localID,
+                                relVoidLocalIDs!,
+                                void 0,
+                                isSpace)
+                          } 
+                        } catch ( error ) {
+
+                          if ( error instanceof Error ) {
+
+                            Logger.error( `Error extracting rel aggregate representation item\n\t${error.message}\n\t${error.stack}\n\t Express ID: #${item.expressID}`)
+                          } else {
+
+                            Logger.error( `Unknown error extracting rel aggregate representation item Express ID: #${item.expressID}`)
+
+                          }
                         }
                       }
 
@@ -6173,6 +6240,7 @@ export class IfcGeometryExtraction {
                         // here we have the styled item, apply it to all geometry in this IfcProduct
                         reusableStyleID = this.extractStyledItem(styledItem, item)
                       }
+                      
                     }
                   }
                 } else {
@@ -6197,24 +6265,37 @@ export class IfcGeometryExtraction {
 
                       } else {
 
-                        this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
+                        try {
+                          this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
 
-                        if (hasRelVoid) {
-                          this.applyRelVoidToRepresentation(
-                              item,
-                              relVoidsMeshVector!,
-                              product.localID,
-                              relVoidLocalIDs!,
-                              void 0,
-                              isSpace)
-                        }
+                          if (hasRelVoid) {
+                            this.applyRelVoidToRepresentation(
+                                item,
+                                relVoidsMeshVector!,
+                                product.localID,
+                                relVoidLocalIDs!,
+                                void 0,
+                                isSpace)
+                          }
 
-                        const styledItemLocalID_ = this.materials.styledItemMap.get(item.localID)
+                          const styledItemLocalID_ = this.materials.styledItemMap.get(item.localID)
 
-                        if (styledItemLocalID_ !== void 0) {
-                          const styledItem_ =
-                            this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
-                          this.extractStyledItem(styledItem_)
+                          if (styledItemLocalID_ !== void 0) {
+                            const styledItem_ =
+                              this.model.getElementByLocalID(styledItemLocalID_) as IfcStyledItem
+                            this.extractStyledItem(styledItem_)
+                          }
+                            
+                        } catch ( error ) {
+
+                          if ( error instanceof Error ) {
+
+                            Logger.error( `Error extracting rel aggregate representation item\n\t${error.message}\n\t${error.stack}\n\t Express ID: #${item.expressID}`)
+                          } else {
+
+                            Logger.error( `Unknown error extracting rel aggregate representation item Express ID: #${item.expressID}`)
+
+                          }
                         }
                       }
                     }
@@ -6234,8 +6315,8 @@ export class IfcGeometryExtraction {
         } catch (ex) {
           if (ex instanceof Error) {
             if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
-              Logger.error('Error processing relAggregate expressID: ' +
-                `${relAggregate.expressID}, error: ${ex.message}`)
+              Logger.error('Error processing relAggregate\n\t' +
+                `error: ${ex.message}\n\t express ID: #${relAggregate.expressID}`)
             } else {
               throw ex
             }
