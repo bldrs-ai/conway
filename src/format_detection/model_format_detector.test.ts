@@ -46,7 +46,7 @@ function testGearStep(): ModelFormatType | undefined {
 }
 
 /**
- * @return {ModelFormatType} The type for model formats, should be AP214.
+ * @return {ModelFormatType} The type for model formats, should be AP203.
  */
 function testConfigControlDesignStep(): ModelFormatType | undefined {
   return ModelFormatDetector.detect( configControlDesignBufferInput )
@@ -89,7 +89,7 @@ describe('Model Format Detector', () => {
 
   test('testConfigControlDesignStep()', () => {
 
-    expect(testConfigControlDesignStep()).toBe(ModelFormatType.AP214)
+    expect(testConfigControlDesignStep()).toBe(ModelFormatType.AP203)
 
   })
 

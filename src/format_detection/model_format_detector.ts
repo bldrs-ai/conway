@@ -12,6 +12,8 @@ export enum ModelFormatType {
   IFC = 0,
    
   AP214 = 1,
+
+  AP203 = 2,
 }
 
 /**
@@ -51,7 +53,7 @@ export default class ModelFormatDetector {
           }
 
           if ( entryNoSpaces.startsWith( 'CONFIG_CONTROL_DESIGN' ) ) {
-            return ModelFormatType.AP214
+            return ModelFormatType.AP203
           }
         }
       }
