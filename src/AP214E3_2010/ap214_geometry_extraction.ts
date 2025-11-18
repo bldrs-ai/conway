@@ -4056,7 +4056,7 @@ export class AP214GeometryExtraction {
         const targetShape = shapeRelationship.rep_2
         
         const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
-      
+
         let transform: NativeTransform4x4 | undefined = void 0
         let scaleTransform : NativeTransform4x4 | undefined = void 0
 
@@ -4064,32 +4064,36 @@ export class AP214GeometryExtraction {
 
           const transformOperator = transformInstance.transformation_operator
 
-          if( !(transformOperator instanceof item_defined_transformation ) ) {
-            continue
+          if( transformOperator instanceof item_defined_transformation ) {
+
+            const placement1 = transformOperator.transform_item_1
+
+            if( !(placement1 instanceof placement) ) {
+              continue
+            }
+
+            const placement2 = transformOperator.transform_item_2
+
+            if( !(placement2 instanceof placement) ) {
+              continue
+            }
+
+            const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
+            const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+
+            const localPlacementParameters: ParamsLocalPlacement = {
+              useRelPlacement: true,
+              axis2Placement: from,
+              relPlacement: to,
+            }
+
+            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+
+          } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
+
+            transform = this.extractCartesianTransformOperator3D( transformOperator )
+
           }
-
-          const placement1 = transformOperator.transform_item_1
-
-          if( !(placement1 instanceof placement) ) {
-            continue
-          }
-          
-          const placement2 = transformOperator.transform_item_2
-
-          if( !(placement2 instanceof placement) ) {
-            continue
-          }
-
-          const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
-          const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
-
-          const localPlacementParameters: ParamsLocalPlacement = {
-            useRelPlacement: true,
-            axis2Placement: from,
-            relPlacement: to,
-          }
-    
-          transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
         }
 
         const sourceShapeContext = 
@@ -4180,7 +4184,7 @@ export class AP214GeometryExtraction {
         const targetShape = shapeRelationship.rep_1
         
         const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
-      
+
         let transform: NativeTransform4x4 | undefined = void 0
         let scaleTransform : NativeTransform4x4 | undefined = void 0
 
@@ -4188,33 +4192,37 @@ export class AP214GeometryExtraction {
 
           const transformOperator = transformInstance.transformation_operator
 
-          if( !(transformOperator instanceof item_defined_transformation ) ) {
-            continue
+          if( transformOperator instanceof item_defined_transformation ) {
+
+            const placement1 = transformOperator.transform_item_1
+
+            if( !(placement1 instanceof placement) ) {
+              continue
+            }
+
+            const placement2 = transformOperator.transform_item_2
+
+            if( !(placement2 instanceof placement) ) {
+              continue
+            }
+
+            const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
+            const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+
+            const localPlacementParameters: ParamsLocalPlacement = {
+              useRelPlacement: true,
+              axis2Placement: from,
+              relPlacement: to,
+            }
+
+            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+
+          } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
+
+            transform = this.extractCartesianTransformOperator3D( transformOperator )
+
           }
-
-          const placement1 = transformOperator.transform_item_1
-
-          if( !(placement1 instanceof placement) ) {
-            continue
-          }
-          
-          const placement2 = transformOperator.transform_item_2
-
-          if( !(placement2 instanceof placement) ) {
-            continue
-          }
-
-          const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
-          const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
-
-          const localPlacementParameters: ParamsLocalPlacement = {
-            useRelPlacement: true,
-            axis2Placement: from,
-            relPlacement: to,
-          }
-    
-          transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-        }        
+        }
 
         const sourceShapeContext = 
           sourceShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
