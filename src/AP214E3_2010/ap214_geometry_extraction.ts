@@ -2315,16 +2315,18 @@ export class AP214GeometryExtraction {
 
       if ( targetTransform !== void 0 ) {
 
-        const localPlacementParameters: ParamsLocalPlacement = {
-          useRelPlacement: true,
-          axis2Placement: originTransform?.invert() ?? this.identity3DNativeMatrix,
-          relPlacement: targetTransform,
+        if ( originTransform !== void 0 ) {
+
+          const combinedTransform = this.conwayModel
+            .multiplyNativeMatrices( targetTransform, originTransform.invert() )
+
+          pushTransform( combinedTransform )
+
+        } else {
+
+          pushTransform( targetTransform )
+
         }
-
-        const transform =
-          this.conwayModel.getLocalPlacement( localPlacementParameters )
-
-        pushTransform( transform )
       }
     }
 
