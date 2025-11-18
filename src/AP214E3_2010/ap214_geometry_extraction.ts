@@ -2289,8 +2289,22 @@ export class AP214GeometryExtraction {
 
       const nativeCartesianTransform =
         this.extractCartesianTransformOperator3D(mappingTarget)
+      const originTransform =
+        mappingOrigin instanceof placement ?
+          this.extractRawPlacement( mappingOrigin ) : void 0
 
-      pushTransform( nativeCartesianTransform )
+      if ( originTransform !== void 0 ) {
+
+        const originInverse = originTransform.invert()
+        const combinedTransform = this.conwayModel
+          .multiplyNativeMatrices( nativeCartesianTransform, originInverse )
+
+        pushTransform( combinedTransform )
+
+      } else {
+
+        pushTransform( nativeCartesianTransform )
+      }
 
     } else if ( mappingTarget instanceof placement ) {
 
