@@ -2270,21 +2270,48 @@ export class AP214GeometryExtraction {
 
     const representationMap = from.mapping_source
     const mappingTarget = from.mapping_target
+    const mappingOrigin = representationMap.mapping_origin
 
-    let popTransform = false
+    let pushedTransforms = 0
+
+    const pushTransform = ( nativeTransform: NativeTransform4x4 ) => {
+
+      this.scene.addTransform(
+          from.localID,
+          nativeTransform.getValues(),
+          nativeTransform,
+          true )
+
+      ++pushedTransforms
+    }
 
     if ( mappingTarget instanceof cartesian_transformation_operator_3d ) {
 
       const nativeCartesianTransform =
         this.extractCartesianTransformOperator3D(mappingTarget)
 
-      this.scene.addTransform(
-          from.localID,
-          nativeCartesianTransform.getValues(),
-          nativeCartesianTransform,
-          true)
+      pushTransform( nativeCartesianTransform )
 
-      popTransform = true
+    } else if ( mappingTarget instanceof placement ) {
+
+      const targetTransform = this.extractRawPlacement( mappingTarget )
+      const originTransform =
+        mappingOrigin instanceof placement ?
+          this.extractRawPlacement( mappingOrigin ) : void 0
+
+      if ( targetTransform !== void 0 ) {
+
+        const localPlacementParameters: ParamsLocalPlacement = {
+          useRelPlacement: true,
+          axis2Placement: originTransform?.invert() ?? this.identity3DNativeMatrix,
+          relPlacement: targetTransform,
+        }
+
+        const transform =
+          this.conwayModel.getLocalPlacement( localPlacementParameters )
+
+        pushTransform( transform )
+      }
     }
 
     for ( const representationItem of representationMap.mapped_representation.items ) {
@@ -2345,7 +2372,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    if ( popTransform ) {
+    for ( ; pushedTransforms > 0; --pushedTransforms ) {
 
       this.scene.popTransform()
     }
