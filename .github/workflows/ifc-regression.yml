@@ -12,7 +12,7 @@ env:
 jobs:
   run-ifc-regression:
     # Use our custom runner
-    runs-on: Larger
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
 
     steps:
       # 1. Checkout the conway repository (your main repo)
