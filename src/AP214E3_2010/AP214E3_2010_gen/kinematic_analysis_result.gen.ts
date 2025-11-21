@@ -26,7 +26,7 @@ export  class kinematic_analysis_result extends StepEntityBase< EntityTypesAP214
 
   public get analysed_mechanism() : mechanism {
     if ( this.analysed_mechanism_ === void 0 ) {
-      this.analysed_mechanism_ = this.extractElement( 0, false, mechanism )
+      this.analysed_mechanism_ = this.extractElement( 0, 0, 0, false, mechanism )
     }
 
     return this.analysed_mechanism_ as mechanism
@@ -35,7 +35,7 @@ export  class kinematic_analysis_result extends StepEntityBase< EntityTypesAP214
   public get contained_kinematic_results() : Array<interpolated_configuration_sequence | resulting_path> {
     if ( this.contained_kinematic_results_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -74,8 +74,26 @@ export  class kinematic_analysis_result extends StepEntityBase< EntityTypesAP214
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === kinematic_analysis_result.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for kinematic_analysis_result" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -18,7 +18,7 @@ export abstract class IfcStructuralConnection extends IfcStructuralItem {
 
   public get AppliedCondition() : IfcBoundaryCondition | null {
     if ( this.AppliedCondition_ === void 0 ) {
-      this.AppliedCondition_ = this.extractElement( 7, true, IfcBoundaryCondition )
+      this.AppliedCondition_ = this.extractElement( 7, 7, 5, true, IfcBoundaryCondition )
     }
 
     return this.AppliedCondition_ as IfcBoundaryCondition | null
@@ -27,7 +27,9 @@ export abstract class IfcStructuralConnection extends IfcStructuralItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

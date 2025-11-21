@@ -26,7 +26,7 @@ export  class IfcDoorPanelProperties extends IfcPreDefinedPropertySet {
 
   public get PanelDepth() : number | null {
     if ( this.PanelDepth_ === void 0 ) {
-      this.PanelDepth_ = this.extractNumber( 4, true )
+      this.PanelDepth_ = this.extractNumber( 4, 4, 4, true )
     }
 
     return this.PanelDepth_ as number | null
@@ -34,7 +34,7 @@ export  class IfcDoorPanelProperties extends IfcPreDefinedPropertySet {
 
   public get PanelOperation() : IfcDoorPanelOperationEnum {
     if ( this.PanelOperation_ === void 0 ) {
-      this.PanelOperation_ = this.extractLambda( 5, IfcDoorPanelOperationEnumDeserializeStep, false )
+      this.PanelOperation_ = this.extractLambda( 5, 4, 4, IfcDoorPanelOperationEnumDeserializeStep, false )
     }
 
     return this.PanelOperation_ as IfcDoorPanelOperationEnum
@@ -42,7 +42,7 @@ export  class IfcDoorPanelProperties extends IfcPreDefinedPropertySet {
 
   public get PanelWidth() : number | null {
     if ( this.PanelWidth_ === void 0 ) {
-      this.PanelWidth_ = this.extractNumber( 6, true )
+      this.PanelWidth_ = this.extractNumber( 6, 4, 4, true )
     }
 
     return this.PanelWidth_ as number | null
@@ -50,7 +50,7 @@ export  class IfcDoorPanelProperties extends IfcPreDefinedPropertySet {
 
   public get PanelPosition() : IfcDoorPanelPositionEnum {
     if ( this.PanelPosition_ === void 0 ) {
-      this.PanelPosition_ = this.extractLambda( 7, IfcDoorPanelPositionEnumDeserializeStep, false )
+      this.PanelPosition_ = this.extractLambda( 7, 4, 4, IfcDoorPanelPositionEnumDeserializeStep, false )
     }
 
     return this.PanelPosition_ as IfcDoorPanelPositionEnum
@@ -58,7 +58,7 @@ export  class IfcDoorPanelProperties extends IfcPreDefinedPropertySet {
 
   public get ShapeAspectStyle() : IfcShapeAspect | null {
     if ( this.ShapeAspectStyle_ === void 0 ) {
-      this.ShapeAspectStyle_ = this.extractElement( 8, true, IfcShapeAspect )
+      this.ShapeAspectStyle_ = this.extractElement( 8, 4, 4, true, IfcShapeAspect )
     }
 
     return this.ShapeAspectStyle_ as IfcShapeAspect | null
@@ -66,7 +66,9 @@ export  class IfcDoorPanelProperties extends IfcPreDefinedPropertySet {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -23,7 +23,7 @@ export  class defined_character_glyph extends geometric_representation_item {
     if ( this.definition_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 1, 2, false )
 
       if ( !( value instanceof externally_defined_character_glyph ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -40,7 +40,7 @@ export  class defined_character_glyph extends geometric_representation_item {
     if ( this.placement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 1, 2, false )
 
       if ( !( value instanceof axis2_placement_2d ) && !( value instanceof axis2_placement_3d ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -55,8 +55,26 @@ export  class defined_character_glyph extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === defined_character_glyph.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for defined_character_glyph" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

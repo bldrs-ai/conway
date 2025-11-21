@@ -18,7 +18,7 @@ export class descriptive_measure extends StepEntityBase< EntityTypesAP214 > {
 
   public get Value() : string {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractString( 0, false )
+      this.Value_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Value_ as string
@@ -27,7 +27,8 @@ export class descriptive_measure extends StepEntityBase< EntityTypesAP214 > {
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
+      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+      multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
      super( localID, internalReference, model )
   }
 

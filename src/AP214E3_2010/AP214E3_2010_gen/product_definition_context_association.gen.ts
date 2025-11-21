@@ -21,7 +21,7 @@ export  class product_definition_context_association extends StepEntityBase< Ent
 
   public get definition() : product_definition {
     if ( this.definition_ === void 0 ) {
-      this.definition_ = this.extractElement( 0, false, product_definition )
+      this.definition_ = this.extractElement( 0, 0, 0, false, product_definition )
     }
 
     return this.definition_ as product_definition
@@ -29,7 +29,7 @@ export  class product_definition_context_association extends StepEntityBase< Ent
 
   public get frame_of_reference() : product_definition_context {
     if ( this.frame_of_reference_ === void 0 ) {
-      this.frame_of_reference_ = this.extractElement( 1, false, product_definition_context )
+      this.frame_of_reference_ = this.extractElement( 1, 0, 0, false, product_definition_context )
     }
 
     return this.frame_of_reference_ as product_definition_context
@@ -37,7 +37,7 @@ export  class product_definition_context_association extends StepEntityBase< Ent
 
   public get role() : product_definition_context_role {
     if ( this.role_ === void 0 ) {
-      this.role_ = this.extractElement( 2, false, product_definition_context_role )
+      this.role_ = this.extractElement( 2, 0, 0, false, product_definition_context_role )
     }
 
     return this.role_ as product_definition_context_role
@@ -45,8 +45,26 @@ export  class product_definition_context_association extends StepEntityBase< Ent
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === product_definition_context_association.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for product_definition_context_association" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

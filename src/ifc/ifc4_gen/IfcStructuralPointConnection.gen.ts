@@ -18,7 +18,7 @@ export  class IfcStructuralPointConnection extends IfcStructuralConnection {
 
   public get ConditionCoordinateSystem() : IfcAxis2Placement3D | null {
     if ( this.ConditionCoordinateSystem_ === void 0 ) {
-      this.ConditionCoordinateSystem_ = this.extractElement( 8, true, IfcAxis2Placement3D )
+      this.ConditionCoordinateSystem_ = this.extractElement( 8, 8, 6, true, IfcAxis2Placement3D )
     }
 
     return this.ConditionCoordinateSystem_ as IfcAxis2Placement3D | null
@@ -26,7 +26,9 @@ export  class IfcStructuralPointConnection extends IfcStructuralConnection {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

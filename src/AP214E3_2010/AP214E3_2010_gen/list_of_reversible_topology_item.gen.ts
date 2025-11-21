@@ -31,7 +31,7 @@ export class list_of_reversible_topology_item extends StepEntityBase< EntityType
   public get Value() : Array<edge | path | face | face_bound | closed_shell | open_shell> {
     if ( this.Value_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -71,7 +71,8 @@ export class list_of_reversible_topology_item extends StepEntityBase< EntityType
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
+      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+      multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
      super( localID, internalReference, model )
   }
 

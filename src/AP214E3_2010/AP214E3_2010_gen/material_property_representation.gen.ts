@@ -18,7 +18,7 @@ export  class material_property_representation extends property_definition_repre
 
   public get dependent_environment() : data_environment {
     if ( this.dependent_environment_ === void 0 ) {
-      this.dependent_environment_ = this.extractElement( 2, false, data_environment )
+      this.dependent_environment_ = this.extractElement( 2, 2, 1, false, data_environment )
     }
 
     return this.dependent_environment_ as data_environment
@@ -26,8 +26,26 @@ export  class material_property_representation extends property_definition_repre
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === material_property_representation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for material_property_representation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

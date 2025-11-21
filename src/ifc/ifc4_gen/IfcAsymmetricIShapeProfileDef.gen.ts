@@ -31,7 +31,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get BottomFlangeWidth() : number {
     if ( this.BottomFlangeWidth_ === void 0 ) {
-      this.BottomFlangeWidth_ = this.extractNumber( 3, false )
+      this.BottomFlangeWidth_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.BottomFlangeWidth_ as number
@@ -39,7 +39,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get OverallDepth() : number {
     if ( this.OverallDepth_ === void 0 ) {
-      this.OverallDepth_ = this.extractNumber( 4, false )
+      this.OverallDepth_ = this.extractNumber( 4, 3, 2, false )
     }
 
     return this.OverallDepth_ as number
@@ -47,7 +47,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get WebThickness() : number {
     if ( this.WebThickness_ === void 0 ) {
-      this.WebThickness_ = this.extractNumber( 5, false )
+      this.WebThickness_ = this.extractNumber( 5, 3, 2, false )
     }
 
     return this.WebThickness_ as number
@@ -55,7 +55,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get BottomFlangeThickness() : number {
     if ( this.BottomFlangeThickness_ === void 0 ) {
-      this.BottomFlangeThickness_ = this.extractNumber( 6, false )
+      this.BottomFlangeThickness_ = this.extractNumber( 6, 3, 2, false )
     }
 
     return this.BottomFlangeThickness_ as number
@@ -63,7 +63,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get BottomFlangeFilletRadius() : number | null {
     if ( this.BottomFlangeFilletRadius_ === void 0 ) {
-      this.BottomFlangeFilletRadius_ = this.extractNumber( 7, true )
+      this.BottomFlangeFilletRadius_ = this.extractNumber( 7, 3, 2, true )
     }
 
     return this.BottomFlangeFilletRadius_ as number | null
@@ -71,7 +71,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get TopFlangeWidth() : number {
     if ( this.TopFlangeWidth_ === void 0 ) {
-      this.TopFlangeWidth_ = this.extractNumber( 8, false )
+      this.TopFlangeWidth_ = this.extractNumber( 8, 3, 2, false )
     }
 
     return this.TopFlangeWidth_ as number
@@ -79,7 +79,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get TopFlangeThickness() : number | null {
     if ( this.TopFlangeThickness_ === void 0 ) {
-      this.TopFlangeThickness_ = this.extractNumber( 9, true )
+      this.TopFlangeThickness_ = this.extractNumber( 9, 3, 2, true )
     }
 
     return this.TopFlangeThickness_ as number | null
@@ -87,7 +87,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get TopFlangeFilletRadius() : number | null {
     if ( this.TopFlangeFilletRadius_ === void 0 ) {
-      this.TopFlangeFilletRadius_ = this.extractNumber( 10, true )
+      this.TopFlangeFilletRadius_ = this.extractNumber( 10, 3, 2, true )
     }
 
     return this.TopFlangeFilletRadius_ as number | null
@@ -95,7 +95,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get BottomFlangeEdgeRadius() : number | null {
     if ( this.BottomFlangeEdgeRadius_ === void 0 ) {
-      this.BottomFlangeEdgeRadius_ = this.extractNumber( 11, true )
+      this.BottomFlangeEdgeRadius_ = this.extractNumber( 11, 3, 2, true )
     }
 
     return this.BottomFlangeEdgeRadius_ as number | null
@@ -103,7 +103,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get BottomFlangeSlope() : number | null {
     if ( this.BottomFlangeSlope_ === void 0 ) {
-      this.BottomFlangeSlope_ = this.extractNumber( 12, true )
+      this.BottomFlangeSlope_ = this.extractNumber( 12, 3, 2, true )
     }
 
     return this.BottomFlangeSlope_ as number | null
@@ -111,7 +111,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get TopFlangeEdgeRadius() : number | null {
     if ( this.TopFlangeEdgeRadius_ === void 0 ) {
-      this.TopFlangeEdgeRadius_ = this.extractNumber( 13, true )
+      this.TopFlangeEdgeRadius_ = this.extractNumber( 13, 3, 2, true )
     }
 
     return this.TopFlangeEdgeRadius_ as number | null
@@ -119,7 +119,7 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get TopFlangeSlope() : number | null {
     if ( this.TopFlangeSlope_ === void 0 ) {
-      this.TopFlangeSlope_ = this.extractNumber( 14, true )
+      this.TopFlangeSlope_ = this.extractNumber( 14, 3, 2, true )
     }
 
     return this.TopFlangeSlope_ as number | null
@@ -127,7 +127,9 @@ export  class IfcAsymmetricIShapeProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

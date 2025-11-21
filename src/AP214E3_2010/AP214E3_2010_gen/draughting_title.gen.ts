@@ -29,7 +29,7 @@ export  class draughting_title extends StepEntityBase< EntityTypesAP214 > {
   public get items() : Array<drawing_revision | drawing_sheet_revision> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -68,7 +68,7 @@ export  class draughting_title extends StepEntityBase< EntityTypesAP214 > {
 
   public get language() : string {
     if ( this.language_ === void 0 ) {
-      this.language_ = this.extractString( 1, false )
+      this.language_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.language_ as string
@@ -76,7 +76,7 @@ export  class draughting_title extends StepEntityBase< EntityTypesAP214 > {
 
   public get contents() : string {
     if ( this.contents_ === void 0 ) {
-      this.contents_ = this.extractString( 2, false )
+      this.contents_ = this.extractString( 2, 0, 0, false )
     }
 
     return this.contents_ as string
@@ -84,8 +84,26 @@ export  class draughting_title extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === draughting_title.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for draughting_title" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

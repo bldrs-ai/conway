@@ -19,7 +19,7 @@ export  class IfcToroidalSurface extends IfcElementarySurface {
 
   public get MajorRadius() : number {
     if ( this.MajorRadius_ === void 0 ) {
-      this.MajorRadius_ = this.extractNumber( 1, false )
+      this.MajorRadius_ = this.extractNumber( 1, 1, 4, false )
     }
 
     return this.MajorRadius_ as number
@@ -27,7 +27,7 @@ export  class IfcToroidalSurface extends IfcElementarySurface {
 
   public get MinorRadius() : number {
     if ( this.MinorRadius_ === void 0 ) {
-      this.MinorRadius_ = this.extractNumber( 2, false )
+      this.MinorRadius_ = this.extractNumber( 2, 1, 4, false )
     }
 
     return this.MinorRadius_ as number
@@ -35,7 +35,9 @@ export  class IfcToroidalSurface extends IfcElementarySurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -28,7 +28,7 @@ export  class presentation_layer_assignment extends StepEntityBase< EntityTypesA
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -36,7 +36,7 @@ export  class presentation_layer_assignment extends StepEntityBase< EntityTypesA
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -45,7 +45,7 @@ export  class presentation_layer_assignment extends StepEntityBase< EntityTypesA
   public get assigned_items() : Array<presentation_representation | representation_item> {
     if ( this.assigned_items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -84,8 +84,26 @@ export  class presentation_layer_assignment extends StepEntityBase< EntityTypesA
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === presentation_layer_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for presentation_layer_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

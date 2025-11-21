@@ -22,7 +22,7 @@ export  class IfcActionRequest extends IfcControl {
 
   public get PredefinedType() : IfcActionRequestTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 6, IfcActionRequestTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 6, 6, 4, IfcActionRequestTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcActionRequestTypeEnum | null
@@ -30,7 +30,7 @@ export  class IfcActionRequest extends IfcControl {
 
   public get Status() : string | null {
     if ( this.Status_ === void 0 ) {
-      this.Status_ = this.extractString( 7, true )
+      this.Status_ = this.extractString( 7, 6, 4, true )
     }
 
     return this.Status_ as string | null
@@ -38,7 +38,7 @@ export  class IfcActionRequest extends IfcControl {
 
   public get LongDescription() : string | null {
     if ( this.LongDescription_ === void 0 ) {
-      this.LongDescription_ = this.extractString( 8, true )
+      this.LongDescription_ = this.extractString( 8, 6, 4, true )
     }
 
     return this.LongDescription_ as string | null
@@ -46,7 +46,9 @@ export  class IfcActionRequest extends IfcControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -28,7 +28,7 @@ export  class IfcCurveBoundedSurface extends IfcBoundedSurface {
 
   public get BasisSurface() : IfcSurface {
     if ( this.BasisSurface_ === void 0 ) {
-      this.BasisSurface_ = this.extractElement( 0, false, IfcSurface )
+      this.BasisSurface_ = this.extractElement( 0, 0, 4, false, IfcSurface )
     }
 
     return this.BasisSurface_ as IfcSurface
@@ -37,7 +37,7 @@ export  class IfcCurveBoundedSurface extends IfcBoundedSurface {
   public get Boundaries() : Array<IfcBoundaryCurve> {
     if ( this.Boundaries_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -69,7 +69,7 @@ export  class IfcCurveBoundedSurface extends IfcBoundedSurface {
 
   public get ImplicitOuter() : boolean {
     if ( this.ImplicitOuter_ === void 0 ) {
-      this.ImplicitOuter_ = this.extractBoolean( 2, false )
+      this.ImplicitOuter_ = this.extractBoolean( 2, 0, 4, false )
     }
 
     return this.ImplicitOuter_ as boolean
@@ -77,7 +77,9 @@ export  class IfcCurveBoundedSurface extends IfcBoundedSurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

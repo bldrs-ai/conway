@@ -18,7 +18,7 @@ export  class IfcFooting extends IfcBuildingElement {
 
   public get PredefinedType() : IfcFootingTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcFootingTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcFootingTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcFootingTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcFooting extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

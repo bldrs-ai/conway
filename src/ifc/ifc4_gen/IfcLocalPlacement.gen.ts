@@ -20,7 +20,7 @@ export  class IfcLocalPlacement extends IfcObjectPlacement {
 
   public get PlacementRelTo() : IfcObjectPlacement | null {
     if ( this.PlacementRelTo_ === void 0 ) {
-      this.PlacementRelTo_ = this.extractElement( 0, true, IfcObjectPlacement )
+      this.PlacementRelTo_ = this.extractElement( 0, 0, 1, true, IfcObjectPlacement )
     }
 
     return this.PlacementRelTo_ as IfcObjectPlacement | null
@@ -30,7 +30,7 @@ export  class IfcLocalPlacement extends IfcObjectPlacement {
     if ( this.RelativePlacement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 1, false )
 
       if ( !( value instanceof IfcAxis2Placement2D ) && !( value instanceof IfcAxis2Placement3D ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -45,7 +45,9 @@ export  class IfcLocalPlacement extends IfcObjectPlacement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

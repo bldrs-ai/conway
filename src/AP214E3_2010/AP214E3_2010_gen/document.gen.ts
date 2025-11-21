@@ -23,7 +23,7 @@ export  class document extends StepEntityBase< EntityTypesAP214 > {
 
   public get id() : string {
     if ( this.id_ === void 0 ) {
-      this.id_ = this.extractString( 0, false )
+      this.id_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.id_ as string
@@ -31,7 +31,7 @@ export  class document extends StepEntityBase< EntityTypesAP214 > {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 1, false )
+      this.name_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.name_ as string
@@ -39,7 +39,7 @@ export  class document extends StepEntityBase< EntityTypesAP214 > {
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 2, true )
+      this.description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -47,7 +47,7 @@ export  class document extends StepEntityBase< EntityTypesAP214 > {
 
   public get kind() : document_type {
     if ( this.kind_ === void 0 ) {
-      this.kind_ = this.extractElement( 3, false, document_type )
+      this.kind_ = this.extractElement( 3, 0, 0, false, document_type )
     }
 
     return this.kind_ as document_type
@@ -56,8 +56,26 @@ export  class document extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === document.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for document" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

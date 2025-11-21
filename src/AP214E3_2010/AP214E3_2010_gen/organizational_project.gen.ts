@@ -31,7 +31,7 @@ export  class organizational_project extends StepEntityBase< EntityTypesAP214 > 
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -39,7 +39,7 @@ export  class organizational_project extends StepEntityBase< EntityTypesAP214 > 
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -48,7 +48,7 @@ export  class organizational_project extends StepEntityBase< EntityTypesAP214 > 
   public get responsible_organizations() : Array<organization> {
     if ( this.responsible_organizations_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -84,8 +84,26 @@ export  class organizational_project extends StepEntityBase< EntityTypesAP214 > 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === organizational_project.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for organizational_project" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

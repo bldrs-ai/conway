@@ -26,7 +26,7 @@ export abstract class IfcRelAssociates extends IfcRelationship {
   public get RelatedObjects() : Array<IfcObjectDefinition | IfcPropertyDefinition> {
     if ( this.RelatedObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -65,7 +65,9 @@ export abstract class IfcRelAssociates extends IfcRelationship {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

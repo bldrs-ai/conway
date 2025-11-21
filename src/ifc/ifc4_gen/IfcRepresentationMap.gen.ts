@@ -22,7 +22,7 @@ export  class IfcRepresentationMap extends StepEntityBase< EntityTypesIfc > {
     if ( this.MappingOrigin_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 0, false )
 
       if ( !( value instanceof IfcAxis2Placement2D ) && !( value instanceof IfcAxis2Placement3D ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -37,7 +37,7 @@ export  class IfcRepresentationMap extends StepEntityBase< EntityTypesIfc > {
 
   public get MappedRepresentation() : IfcRepresentation {
     if ( this.MappedRepresentation_ === void 0 ) {
-      this.MappedRepresentation_ = this.extractElement( 1, false, IfcRepresentation )
+      this.MappedRepresentation_ = this.extractElement( 1, 0, 0, false, IfcRepresentation )
     }
 
     return this.MappedRepresentation_ as IfcRepresentation
@@ -47,7 +47,9 @@ export  class IfcRepresentationMap extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

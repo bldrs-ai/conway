@@ -18,7 +18,7 @@ export  class IfcStructuralLoadSingleDisplacementDistortion extends IfcStructura
 
   public get Distortion() : number | null {
     if ( this.Distortion_ === void 0 ) {
-      this.Distortion_ = this.extractNumber( 7, true )
+      this.Distortion_ = this.extractNumber( 7, 7, 4, true )
     }
 
     return this.Distortion_ as number | null
@@ -26,7 +26,9 @@ export  class IfcStructuralLoadSingleDisplacementDistortion extends IfcStructura
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

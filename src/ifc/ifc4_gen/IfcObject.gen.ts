@@ -18,7 +18,7 @@ export abstract class IfcObject extends IfcObjectDefinition {
 
   public get ObjectType() : string | null {
     if ( this.ObjectType_ === void 0 ) {
-      this.ObjectType_ = this.extractString( 4, true )
+      this.ObjectType_ = this.extractString( 4, 4, 2, true )
     }
 
     return this.ObjectType_ as string | null
@@ -30,7 +30,9 @@ export abstract class IfcObject extends IfcObjectDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

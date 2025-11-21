@@ -21,7 +21,7 @@ export  class make_from_usage_option extends product_definition_usage {
 
   public get ranking() : number {
     if ( this.ranking_ === void 0 ) {
-      this.ranking_ = this.extractNumber( 5, false )
+      this.ranking_ = this.extractNumber( 5, 5, 2, false )
     }
 
     return this.ranking_ as number
@@ -29,7 +29,7 @@ export  class make_from_usage_option extends product_definition_usage {
 
   public get ranking_rationale() : string {
     if ( this.ranking_rationale_ === void 0 ) {
-      this.ranking_rationale_ = this.extractString( 6, false )
+      this.ranking_rationale_ = this.extractString( 6, 5, 2, false )
     }
 
     return this.ranking_rationale_ as string
@@ -37,7 +37,7 @@ export  class make_from_usage_option extends product_definition_usage {
 
   public get quantity() : measure_with_unit {
     if ( this.quantity_ === void 0 ) {
-      this.quantity_ = this.extractElement( 7, false, measure_with_unit )
+      this.quantity_ = this.extractElement( 7, 5, 2, false, measure_with_unit )
     }
 
     return this.quantity_ as measure_with_unit
@@ -45,8 +45,26 @@ export  class make_from_usage_option extends product_definition_usage {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === make_from_usage_option.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for make_from_usage_option" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

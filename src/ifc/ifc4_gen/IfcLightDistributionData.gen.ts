@@ -27,7 +27,7 @@ export  class IfcLightDistributionData extends StepEntityBase< EntityTypesIfc > 
 
   public get MainPlaneAngle() : number {
     if ( this.MainPlaneAngle_ === void 0 ) {
-      this.MainPlaneAngle_ = this.extractNumber( 0, false )
+      this.MainPlaneAngle_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.MainPlaneAngle_ as number
@@ -36,7 +36,7 @@ export  class IfcLightDistributionData extends StepEntityBase< EntityTypesIfc > 
   public get SecondaryPlaneAngle() : Array< number > {
     if ( this.SecondaryPlaneAngle_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -70,7 +70,7 @@ export  class IfcLightDistributionData extends StepEntityBase< EntityTypesIfc > 
   public get LuminousIntensity() : Array< number > {
     if ( this.LuminousIntensity_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -103,7 +103,9 @@ export  class IfcLightDistributionData extends StepEntityBase< EntityTypesIfc > 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

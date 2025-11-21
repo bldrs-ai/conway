@@ -27,7 +27,7 @@ export class ypr_rotation extends StepEntityBase< EntityTypesAP214 > {
   public get Value() : Array< number > {
     if ( this.Value_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -61,7 +61,8 @@ export class ypr_rotation extends StepEntityBase< EntityTypesAP214 > {
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
+      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+      multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
      super( localID, internalReference, model )
   }
 

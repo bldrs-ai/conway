@@ -18,7 +18,7 @@ export  class IfcDiscreteAccessory extends IfcElementComponent {
 
   public get PredefinedType() : IfcDiscreteAccessoryTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcDiscreteAccessoryTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcDiscreteAccessoryTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcDiscreteAccessoryTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcDiscreteAccessory extends IfcElementComponent {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

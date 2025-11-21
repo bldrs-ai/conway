@@ -50,7 +50,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Identification() : string {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 0, false )
+      this.Identification_ = this.extractString( 0, 0, 1, false )
     }
 
     return this.Identification_ as string
@@ -58,7 +58,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 1, false )
+      this.Name_ = this.extractString( 1, 0, 1, false )
     }
 
     return this.Name_ as string
@@ -66,7 +66,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 2, true )
+      this.Description_ = this.extractString( 2, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -74,7 +74,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Location() : string | null {
     if ( this.Location_ === void 0 ) {
-      this.Location_ = this.extractString( 3, true )
+      this.Location_ = this.extractString( 3, 0, 1, true )
     }
 
     return this.Location_ as string | null
@@ -82,7 +82,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Purpose() : string | null {
     if ( this.Purpose_ === void 0 ) {
-      this.Purpose_ = this.extractString( 4, true )
+      this.Purpose_ = this.extractString( 4, 0, 1, true )
     }
 
     return this.Purpose_ as string | null
@@ -90,7 +90,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get IntendedUse() : string | null {
     if ( this.IntendedUse_ === void 0 ) {
-      this.IntendedUse_ = this.extractString( 5, true )
+      this.IntendedUse_ = this.extractString( 5, 0, 1, true )
     }
 
     return this.IntendedUse_ as string | null
@@ -98,7 +98,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Scope() : string | null {
     if ( this.Scope_ === void 0 ) {
-      this.Scope_ = this.extractString( 6, true )
+      this.Scope_ = this.extractString( 6, 0, 1, true )
     }
 
     return this.Scope_ as string | null
@@ -106,7 +106,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Revision() : string | null {
     if ( this.Revision_ === void 0 ) {
-      this.Revision_ = this.extractString( 7, true )
+      this.Revision_ = this.extractString( 7, 0, 1, true )
     }
 
     return this.Revision_ as string | null
@@ -116,7 +116,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
     if ( this.DocumentOwner_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 8, true )
+        this.extractReference( 8, 0, 1, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -132,7 +132,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
   public get Editors() : Array<IfcOrganization | IfcPerson | IfcPersonAndOrganization> | null {
     if ( this.Editors_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 9 )
+      let   cursor    = this.getOffsetCursor( 9, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -171,7 +171,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get CreationTime() : string | null {
     if ( this.CreationTime_ === void 0 ) {
-      this.CreationTime_ = this.extractString( 10, true )
+      this.CreationTime_ = this.extractString( 10, 0, 1, true )
     }
 
     return this.CreationTime_ as string | null
@@ -179,7 +179,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get LastRevisionTime() : string | null {
     if ( this.LastRevisionTime_ === void 0 ) {
-      this.LastRevisionTime_ = this.extractString( 11, true )
+      this.LastRevisionTime_ = this.extractString( 11, 0, 1, true )
     }
 
     return this.LastRevisionTime_ as string | null
@@ -187,7 +187,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get ElectronicFormat() : string | null {
     if ( this.ElectronicFormat_ === void 0 ) {
-      this.ElectronicFormat_ = this.extractString( 12, true )
+      this.ElectronicFormat_ = this.extractString( 12, 0, 1, true )
     }
 
     return this.ElectronicFormat_ as string | null
@@ -195,7 +195,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get ValidFrom() : string | null {
     if ( this.ValidFrom_ === void 0 ) {
-      this.ValidFrom_ = this.extractString( 13, true )
+      this.ValidFrom_ = this.extractString( 13, 0, 1, true )
     }
 
     return this.ValidFrom_ as string | null
@@ -203,7 +203,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get ValidUntil() : string | null {
     if ( this.ValidUntil_ === void 0 ) {
-      this.ValidUntil_ = this.extractString( 14, true )
+      this.ValidUntil_ = this.extractString( 14, 0, 1, true )
     }
 
     return this.ValidUntil_ as string | null
@@ -211,7 +211,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Confidentiality() : IfcDocumentConfidentialityEnum | null {
     if ( this.Confidentiality_ === void 0 ) {
-      this.Confidentiality_ = this.extractLambda( 15, IfcDocumentConfidentialityEnumDeserializeStep, true )
+      this.Confidentiality_ = this.extractLambda( 15, 0, 1, IfcDocumentConfidentialityEnumDeserializeStep, true )
     }
 
     return this.Confidentiality_ as IfcDocumentConfidentialityEnum | null
@@ -219,7 +219,7 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
 
   public get Status() : IfcDocumentStatusEnum | null {
     if ( this.Status_ === void 0 ) {
-      this.Status_ = this.extractLambda( 16, IfcDocumentStatusEnumDeserializeStep, true )
+      this.Status_ = this.extractLambda( 16, 0, 1, IfcDocumentStatusEnumDeserializeStep, true )
     }
 
     return this.Status_ as IfcDocumentStatusEnum | null
@@ -231,7 +231,9 @@ export  class IfcDocumentInformation extends IfcExternalInformation {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

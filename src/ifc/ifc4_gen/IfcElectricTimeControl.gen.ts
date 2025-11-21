@@ -18,7 +18,7 @@ export  class IfcElectricTimeControl extends IfcFlowController {
 
   public get PredefinedType() : IfcElectricTimeControlTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcElectricTimeControlTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcElectricTimeControlTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcElectricTimeControlTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcElectricTimeControl extends IfcFlowController {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

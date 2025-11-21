@@ -28,7 +28,7 @@ export  class IfcGeometricSet extends IfcGeometricRepresentationItem {
   public get Elements() : Array<IfcCurve | IfcPoint | IfcSurface> {
     if ( this.Elements_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -71,7 +71,9 @@ export  class IfcGeometricSet extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

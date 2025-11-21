@@ -28,6 +28,7 @@ export default class IfcStepModel extends StepModelBase< EntityTypesIfc > {
   public readonly csgOperations = new CsgMemoization()
   public readonly materials = new IfcMaterialCache( this )
   public readonly voidMaterials = new IfcMaterialCache( this, true )
+  public readonly elementTypeIDs = EntityTypesIfc
 
   /**
    * Construct this model given a buffer containing the data and the parsed data index on that,

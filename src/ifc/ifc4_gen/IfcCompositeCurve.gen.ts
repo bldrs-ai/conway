@@ -29,7 +29,7 @@ export  class IfcCompositeCurve extends IfcBoundedCurve {
   public get Segments() : Array<IfcCompositeCurveSegment> {
     if ( this.Segments_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -61,7 +61,7 @@ export  class IfcCompositeCurve extends IfcBoundedCurve {
 
   public get SelfIntersect() : boolean | null {
     if ( this.SelfIntersect_ === void 0 ) {
-      this.SelfIntersect_ = this.extractLogical( 1, false )
+      this.SelfIntersect_ = this.extractLogical( 1, 0, 4, false )
     }
 
     return this.SelfIntersect_ as boolean | null
@@ -74,7 +74,9 @@ export  class IfcCompositeCurve extends IfcBoundedCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

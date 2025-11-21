@@ -18,7 +18,7 @@ export  class IfcExtrudedAreaSolidTapered extends IfcExtrudedAreaSolid {
 
   public get EndSweptArea() : IfcProfileDef {
     if ( this.EndSweptArea_ === void 0 ) {
-      this.EndSweptArea_ = this.extractElement( 4, false, IfcProfileDef )
+      this.EndSweptArea_ = this.extractElement( 4, 4, 5, false, IfcProfileDef )
     }
 
     return this.EndSweptArea_ as IfcProfileDef
@@ -26,7 +26,9 @@ export  class IfcExtrudedAreaSolidTapered extends IfcExtrudedAreaSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

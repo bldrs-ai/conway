@@ -18,7 +18,7 @@ export  class IfcTimePeriod extends StepEntityBase< EntityTypesIfc > {
 
   public get StartTime() : string {
     if ( this.StartTime_ === void 0 ) {
-      this.StartTime_ = this.extractString( 0, false )
+      this.StartTime_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.StartTime_ as string
@@ -26,7 +26,7 @@ export  class IfcTimePeriod extends StepEntityBase< EntityTypesIfc > {
 
   public get EndTime() : string {
     if ( this.EndTime_ === void 0 ) {
-      this.EndTime_ = this.extractString( 1, false )
+      this.EndTime_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.EndTime_ as string
@@ -34,7 +34,9 @@ export  class IfcTimePeriod extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

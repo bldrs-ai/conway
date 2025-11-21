@@ -18,7 +18,7 @@ export  class IfcArbitraryClosedProfileDef extends IfcProfileDef {
 
   public get OuterCurve() : IfcCurve {
     if ( this.OuterCurve_ === void 0 ) {
-      this.OuterCurve_ = this.extractElement( 2, false, IfcCurve )
+      this.OuterCurve_ = this.extractElement( 2, 2, 1, false, IfcCurve )
     }
 
     return this.OuterCurve_ as IfcCurve
@@ -26,7 +26,9 @@ export  class IfcArbitraryClosedProfileDef extends IfcProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class parabola extends conic {
 
   public get focal_dist() : number {
     if ( this.focal_dist_ === void 0 ) {
-      this.focal_dist_ = this.extractNumber( 2, false )
+      this.focal_dist_ = this.extractNumber( 2, 2, 4, false )
     }
 
     return this.focal_dist_ as number
@@ -26,8 +26,26 @@ export  class parabola extends conic {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === parabola.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for parabola" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

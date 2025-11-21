@@ -25,7 +25,7 @@ export  class IfcDoor extends IfcBuildingElement {
 
   public get OverallHeight() : number | null {
     if ( this.OverallHeight_ === void 0 ) {
-      this.OverallHeight_ = this.extractNumber( 8, true )
+      this.OverallHeight_ = this.extractNumber( 8, 8, 6, true )
     }
 
     return this.OverallHeight_ as number | null
@@ -33,7 +33,7 @@ export  class IfcDoor extends IfcBuildingElement {
 
   public get OverallWidth() : number | null {
     if ( this.OverallWidth_ === void 0 ) {
-      this.OverallWidth_ = this.extractNumber( 9, true )
+      this.OverallWidth_ = this.extractNumber( 9, 8, 6, true )
     }
 
     return this.OverallWidth_ as number | null
@@ -41,7 +41,7 @@ export  class IfcDoor extends IfcBuildingElement {
 
   public get PredefinedType() : IfcDoorTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 10, IfcDoorTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 10, 8, 6, IfcDoorTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcDoorTypeEnum | null
@@ -49,7 +49,7 @@ export  class IfcDoor extends IfcBuildingElement {
 
   public get OperationType() : IfcDoorTypeOperationEnum | null {
     if ( this.OperationType_ === void 0 ) {
-      this.OperationType_ = this.extractLambda( 11, IfcDoorTypeOperationEnumDeserializeStep, true )
+      this.OperationType_ = this.extractLambda( 11, 8, 6, IfcDoorTypeOperationEnumDeserializeStep, true )
     }
 
     return this.OperationType_ as IfcDoorTypeOperationEnum | null
@@ -57,7 +57,7 @@ export  class IfcDoor extends IfcBuildingElement {
 
   public get UserDefinedOperationType() : string | null {
     if ( this.UserDefinedOperationType_ === void 0 ) {
-      this.UserDefinedOperationType_ = this.extractString( 12, true )
+      this.UserDefinedOperationType_ = this.extractString( 12, 8, 6, true )
     }
 
     return this.UserDefinedOperationType_ as string | null
@@ -65,7 +65,9 @@ export  class IfcDoor extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

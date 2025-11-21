@@ -25,7 +25,7 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get Depth() : number {
     if ( this.Depth_ === void 0 ) {
-      this.Depth_ = this.extractNumber( 3, false )
+      this.Depth_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.Depth_ as number
@@ -33,7 +33,7 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get Width() : number | null {
     if ( this.Width_ === void 0 ) {
-      this.Width_ = this.extractNumber( 4, true )
+      this.Width_ = this.extractNumber( 4, 3, 2, true )
     }
 
     return this.Width_ as number | null
@@ -41,7 +41,7 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get Thickness() : number {
     if ( this.Thickness_ === void 0 ) {
-      this.Thickness_ = this.extractNumber( 5, false )
+      this.Thickness_ = this.extractNumber( 5, 3, 2, false )
     }
 
     return this.Thickness_ as number
@@ -49,7 +49,7 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get FilletRadius() : number | null {
     if ( this.FilletRadius_ === void 0 ) {
-      this.FilletRadius_ = this.extractNumber( 6, true )
+      this.FilletRadius_ = this.extractNumber( 6, 3, 2, true )
     }
 
     return this.FilletRadius_ as number | null
@@ -57,7 +57,7 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get EdgeRadius() : number | null {
     if ( this.EdgeRadius_ === void 0 ) {
-      this.EdgeRadius_ = this.extractNumber( 7, true )
+      this.EdgeRadius_ = this.extractNumber( 7, 3, 2, true )
     }
 
     return this.EdgeRadius_ as number | null
@@ -65,7 +65,7 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get LegSlope() : number | null {
     if ( this.LegSlope_ === void 0 ) {
-      this.LegSlope_ = this.extractNumber( 8, true )
+      this.LegSlope_ = this.extractNumber( 8, 3, 2, true )
     }
 
     return this.LegSlope_ as number | null
@@ -73,7 +73,9 @@ export  class IfcLShapeProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

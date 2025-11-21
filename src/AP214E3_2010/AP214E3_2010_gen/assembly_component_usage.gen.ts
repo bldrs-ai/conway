@@ -18,7 +18,7 @@ export  class assembly_component_usage extends product_definition_usage {
 
   public get reference_designator() : string | null {
     if ( this.reference_designator_ === void 0 ) {
-      this.reference_designator_ = this.extractString( 5, true )
+      this.reference_designator_ = this.extractString( 5, 5, 2, true )
     }
 
     return this.reference_designator_ as string | null
@@ -26,8 +26,26 @@ export  class assembly_component_usage extends product_definition_usage {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === assembly_component_usage.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for assembly_component_usage" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

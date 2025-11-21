@@ -18,7 +18,7 @@ export  class IfcRelAssignsToGroup extends IfcRelAssigns {
 
   public get RelatingGroup() : IfcGroup {
     if ( this.RelatingGroup_ === void 0 ) {
-      this.RelatingGroup_ = this.extractElement( 6, false, IfcGroup )
+      this.RelatingGroup_ = this.extractElement( 6, 6, 3, false, IfcGroup )
     }
 
     return this.RelatingGroup_ as IfcGroup
@@ -26,7 +26,9 @@ export  class IfcRelAssignsToGroup extends IfcRelAssigns {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

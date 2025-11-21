@@ -21,7 +21,7 @@ export  class planar_curve_pair_range extends simple_pair_range {
 
   public get range_on_curve_1() : trimmed_curve {
     if ( this.range_on_curve_1_ === void 0 ) {
-      this.range_on_curve_1_ = this.extractElement( 2, false, trimmed_curve )
+      this.range_on_curve_1_ = this.extractElement( 2, 1, 1, false, trimmed_curve )
     }
 
     return this.range_on_curve_1_ as trimmed_curve
@@ -29,7 +29,7 @@ export  class planar_curve_pair_range extends simple_pair_range {
 
   public get range_on_curve_2() : trimmed_curve {
     if ( this.range_on_curve_2_ === void 0 ) {
-      this.range_on_curve_2_ = this.extractElement( 3, false, trimmed_curve )
+      this.range_on_curve_2_ = this.extractElement( 3, 1, 1, false, trimmed_curve )
     }
 
     return this.range_on_curve_2_ as trimmed_curve
@@ -37,8 +37,26 @@ export  class planar_curve_pair_range extends simple_pair_range {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === planar_curve_pair_range.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for planar_curve_pair_range" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

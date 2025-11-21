@@ -25,7 +25,7 @@ export  class IfcRelAggregates extends IfcRelDecomposes {
 
   public get RelatingObject() : IfcObjectDefinition {
     if ( this.RelatingObject_ === void 0 ) {
-      this.RelatingObject_ = this.extractElement( 4, false, IfcObjectDefinition )
+      this.RelatingObject_ = this.extractElement( 4, 4, 3, false, IfcObjectDefinition )
     }
 
     return this.RelatingObject_ as IfcObjectDefinition
@@ -34,7 +34,7 @@ export  class IfcRelAggregates extends IfcRelDecomposes {
   public get RelatedObjects() : Array<IfcObjectDefinition> {
     if ( this.RelatedObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,7 +66,9 @@ export  class IfcRelAggregates extends IfcRelDecomposes {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

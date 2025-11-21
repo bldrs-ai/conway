@@ -29,7 +29,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get Material() : IfcMaterial | null {
     if ( this.Material_ === void 0 ) {
-      this.Material_ = this.extractElement( 0, true, IfcMaterial )
+      this.Material_ = this.extractElement( 0, 0, 1, true, IfcMaterial )
     }
 
     return this.Material_ as IfcMaterial | null
@@ -37,7 +37,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get LayerThickness() : number {
     if ( this.LayerThickness_ === void 0 ) {
-      this.LayerThickness_ = this.extractNumber( 1, false )
+      this.LayerThickness_ = this.extractNumber( 1, 0, 1, false )
     }
 
     return this.LayerThickness_ as number
@@ -45,7 +45,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get IsVentilated() : boolean | null {
     if ( this.IsVentilated_ === void 0 ) {
-      this.IsVentilated_ = this.extractLogical( 2, true )
+      this.IsVentilated_ = this.extractLogical( 2, 0, 1, true )
     }
 
     return this.IsVentilated_ as boolean | null
@@ -53,7 +53,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 3, true )
+      this.Name_ = this.extractString( 3, 0, 1, true )
     }
 
     return this.Name_ as string | null
@@ -61,7 +61,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 4, true )
+      this.Description_ = this.extractString( 4, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -69,7 +69,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get Category() : string | null {
     if ( this.Category_ === void 0 ) {
-      this.Category_ = this.extractString( 5, true )
+      this.Category_ = this.extractString( 5, 0, 1, true )
     }
 
     return this.Category_ as string | null
@@ -77,7 +77,7 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
 
   public get Priority() : number | null {
     if ( this.Priority_ === void 0 ) {
-      this.Priority_ = this.extractNumber( 6, true )
+      this.Priority_ = this.extractNumber( 6, 0, 1, true )
     }
 
     return this.Priority_ as number | null
@@ -86,7 +86,9 @@ export  class IfcMaterialLayer extends IfcMaterialDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

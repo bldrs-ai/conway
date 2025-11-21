@@ -21,7 +21,7 @@ export  class IfcPropertyDependencyRelationship extends IfcResourceLevelRelation
 
   public get DependingProperty() : IfcProperty {
     if ( this.DependingProperty_ === void 0 ) {
-      this.DependingProperty_ = this.extractElement( 2, false, IfcProperty )
+      this.DependingProperty_ = this.extractElement( 2, 2, 1, false, IfcProperty )
     }
 
     return this.DependingProperty_ as IfcProperty
@@ -29,7 +29,7 @@ export  class IfcPropertyDependencyRelationship extends IfcResourceLevelRelation
 
   public get DependantProperty() : IfcProperty {
     if ( this.DependantProperty_ === void 0 ) {
-      this.DependantProperty_ = this.extractElement( 3, false, IfcProperty )
+      this.DependantProperty_ = this.extractElement( 3, 2, 1, false, IfcProperty )
     }
 
     return this.DependantProperty_ as IfcProperty
@@ -37,7 +37,7 @@ export  class IfcPropertyDependencyRelationship extends IfcResourceLevelRelation
 
   public get Expression() : string | null {
     if ( this.Expression_ === void 0 ) {
-      this.Expression_ = this.extractString( 4, true )
+      this.Expression_ = this.extractString( 4, 2, 1, true )
     }
 
     return this.Expression_ as string | null
@@ -45,7 +45,9 @@ export  class IfcPropertyDependencyRelationship extends IfcResourceLevelRelation
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

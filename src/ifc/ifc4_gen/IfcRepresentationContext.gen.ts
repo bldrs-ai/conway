@@ -18,7 +18,7 @@ export abstract class IfcRepresentationContext extends StepEntityBase< EntityTyp
 
   public get ContextIdentifier() : string | null {
     if ( this.ContextIdentifier_ === void 0 ) {
-      this.ContextIdentifier_ = this.extractString( 0, true )
+      this.ContextIdentifier_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.ContextIdentifier_ as string | null
@@ -26,7 +26,7 @@ export abstract class IfcRepresentationContext extends StepEntityBase< EntityTyp
 
   public get ContextType() : string | null {
     if ( this.ContextType_ === void 0 ) {
-      this.ContextType_ = this.extractString( 1, true )
+      this.ContextType_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.ContextType_ as string | null
@@ -35,7 +35,9 @@ export abstract class IfcRepresentationContext extends StepEntityBase< EntityTyp
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

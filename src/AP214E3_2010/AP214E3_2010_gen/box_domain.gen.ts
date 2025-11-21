@@ -22,7 +22,7 @@ export  class box_domain extends founded_item {
 
   public get corner() : cartesian_point {
     if ( this.corner_ === void 0 ) {
-      this.corner_ = this.extractElement( 0, false, cartesian_point )
+      this.corner_ = this.extractElement( 0, 0, 1, false, cartesian_point )
     }
 
     return this.corner_ as cartesian_point
@@ -30,7 +30,7 @@ export  class box_domain extends founded_item {
 
   public get xlength() : number {
     if ( this.xlength_ === void 0 ) {
-      this.xlength_ = this.extractNumber( 1, false )
+      this.xlength_ = this.extractNumber( 1, 0, 1, false )
     }
 
     return this.xlength_ as number
@@ -38,7 +38,7 @@ export  class box_domain extends founded_item {
 
   public get ylength() : number {
     if ( this.ylength_ === void 0 ) {
-      this.ylength_ = this.extractNumber( 2, false )
+      this.ylength_ = this.extractNumber( 2, 0, 1, false )
     }
 
     return this.ylength_ as number
@@ -46,7 +46,7 @@ export  class box_domain extends founded_item {
 
   public get zlength() : number {
     if ( this.zlength_ === void 0 ) {
-      this.zlength_ = this.extractNumber( 3, false )
+      this.zlength_ = this.extractNumber( 3, 0, 1, false )
     }
 
     return this.zlength_ as number
@@ -54,8 +54,26 @@ export  class box_domain extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === box_domain.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for box_domain" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

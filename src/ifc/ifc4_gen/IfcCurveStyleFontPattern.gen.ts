@@ -20,7 +20,7 @@ export  class IfcCurveStyleFontPattern extends IfcPresentationItem {
 
   public get VisibleSegmentLength() : number {
     if ( this.VisibleSegmentLength_ === void 0 ) {
-      this.VisibleSegmentLength_ = this.extractNumber( 0, false )
+      this.VisibleSegmentLength_ = this.extractNumber( 0, 0, 1, false )
     }
 
     return this.VisibleSegmentLength_ as number
@@ -28,7 +28,7 @@ export  class IfcCurveStyleFontPattern extends IfcPresentationItem {
 
   public get InvisibleSegmentLength() : number {
     if ( this.InvisibleSegmentLength_ === void 0 ) {
-      this.InvisibleSegmentLength_ = this.extractNumber( 1, false )
+      this.InvisibleSegmentLength_ = this.extractNumber( 1, 0, 1, false )
     }
 
     return this.InvisibleSegmentLength_ as number
@@ -36,7 +36,9 @@ export  class IfcCurveStyleFontPattern extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

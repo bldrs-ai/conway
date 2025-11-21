@@ -21,7 +21,7 @@ export  class background_colour extends colour {
     if ( this.presentation_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 1, false )
 
       if ( !( value instanceof presentation_area ) && !( value instanceof presentation_view ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,8 +36,26 @@ export  class background_colour extends colour {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === background_colour.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for background_colour" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

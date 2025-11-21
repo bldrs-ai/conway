@@ -31,7 +31,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 5, true )
+      this.Identification_ = this.extractString( 5, 5, 4, true )
     }
 
     return this.Identification_ as string | null
@@ -39,7 +39,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get OriginalValue() : IfcCostValue | null {
     if ( this.OriginalValue_ === void 0 ) {
-      this.OriginalValue_ = this.extractElement( 6, true, IfcCostValue )
+      this.OriginalValue_ = this.extractElement( 6, 5, 4, true, IfcCostValue )
     }
 
     return this.OriginalValue_ as IfcCostValue | null
@@ -47,7 +47,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get CurrentValue() : IfcCostValue | null {
     if ( this.CurrentValue_ === void 0 ) {
-      this.CurrentValue_ = this.extractElement( 7, true, IfcCostValue )
+      this.CurrentValue_ = this.extractElement( 7, 5, 4, true, IfcCostValue )
     }
 
     return this.CurrentValue_ as IfcCostValue | null
@@ -55,7 +55,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get TotalReplacementCost() : IfcCostValue | null {
     if ( this.TotalReplacementCost_ === void 0 ) {
-      this.TotalReplacementCost_ = this.extractElement( 8, true, IfcCostValue )
+      this.TotalReplacementCost_ = this.extractElement( 8, 5, 4, true, IfcCostValue )
     }
 
     return this.TotalReplacementCost_ as IfcCostValue | null
@@ -65,7 +65,7 @@ export  class IfcAsset extends IfcGroup {
     if ( this.Owner_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 9, true )
+        this.extractReference( 9, 5, 4, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -82,7 +82,7 @@ export  class IfcAsset extends IfcGroup {
     if ( this.User_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 10, true )
+        this.extractReference( 10, 5, 4, true )
 
       if ( !( value instanceof IfcOrganization ) && !( value instanceof IfcPerson ) && !( value instanceof IfcPersonAndOrganization ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -97,7 +97,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get ResponsiblePerson() : IfcPerson | null {
     if ( this.ResponsiblePerson_ === void 0 ) {
-      this.ResponsiblePerson_ = this.extractElement( 11, true, IfcPerson )
+      this.ResponsiblePerson_ = this.extractElement( 11, 5, 4, true, IfcPerson )
     }
 
     return this.ResponsiblePerson_ as IfcPerson | null
@@ -105,7 +105,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get IncorporationDate() : string | null {
     if ( this.IncorporationDate_ === void 0 ) {
-      this.IncorporationDate_ = this.extractString( 12, true )
+      this.IncorporationDate_ = this.extractString( 12, 5, 4, true )
     }
 
     return this.IncorporationDate_ as string | null
@@ -113,7 +113,7 @@ export  class IfcAsset extends IfcGroup {
 
   public get DepreciatedValue() : IfcCostValue | null {
     if ( this.DepreciatedValue_ === void 0 ) {
-      this.DepreciatedValue_ = this.extractElement( 13, true, IfcCostValue )
+      this.DepreciatedValue_ = this.extractElement( 13, 5, 4, true, IfcCostValue )
     }
 
     return this.DepreciatedValue_ as IfcCostValue | null
@@ -121,7 +121,9 @@ export  class IfcAsset extends IfcGroup {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

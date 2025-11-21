@@ -20,7 +20,7 @@ export  class unconstrained_pair_value extends pair_value {
 
   public get actual_placement() : axis2_placement_3d {
     if ( this.actual_placement_ === void 0 ) {
-      this.actual_placement_ = this.extractElement( 2, false, axis2_placement_3d )
+      this.actual_placement_ = this.extractElement( 2, 1, 1, false, axis2_placement_3d )
     }
 
     return this.actual_placement_ as axis2_placement_3d
@@ -28,8 +28,26 @@ export  class unconstrained_pair_value extends pair_value {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === unconstrained_pair_value.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for unconstrained_pair_value" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -20,7 +20,7 @@ export  class IfcBlock extends IfcCsgPrimitive3D {
 
   public get XLength() : number {
     if ( this.XLength_ === void 0 ) {
-      this.XLength_ = this.extractNumber( 1, false )
+      this.XLength_ = this.extractNumber( 1, 1, 3, false )
     }
 
     return this.XLength_ as number
@@ -28,7 +28,7 @@ export  class IfcBlock extends IfcCsgPrimitive3D {
 
   public get YLength() : number {
     if ( this.YLength_ === void 0 ) {
-      this.YLength_ = this.extractNumber( 2, false )
+      this.YLength_ = this.extractNumber( 2, 1, 3, false )
     }
 
     return this.YLength_ as number
@@ -36,7 +36,7 @@ export  class IfcBlock extends IfcCsgPrimitive3D {
 
   public get ZLength() : number {
     if ( this.ZLength_ === void 0 ) {
-      this.ZLength_ = this.extractNumber( 3, false )
+      this.ZLength_ = this.extractNumber( 3, 1, 3, false )
     }
 
     return this.ZLength_ as number
@@ -44,7 +44,9 @@ export  class IfcBlock extends IfcCsgPrimitive3D {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

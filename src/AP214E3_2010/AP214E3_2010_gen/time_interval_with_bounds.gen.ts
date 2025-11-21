@@ -26,7 +26,7 @@ export  class time_interval_with_bounds extends time_interval {
     if ( this.primary_bound_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 3, 1, true )
 
       if ( !( value instanceof date ) && !( value instanceof date_and_time ) && !( value instanceof local_time ) && !( value instanceof event_occurrence ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -43,7 +43,7 @@ export  class time_interval_with_bounds extends time_interval {
     if ( this.secondary_bound_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 >| null = 
-        this.extractReference( 4, true )
+        this.extractReference( 4, 3, 1, true )
 
       if ( !( value instanceof date ) && !( value instanceof date_and_time ) && !( value instanceof local_time ) && !( value instanceof event_occurrence ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -58,7 +58,7 @@ export  class time_interval_with_bounds extends time_interval {
 
   public get duration() : time_measure_with_unit | null {
     if ( this.duration_ === void 0 ) {
-      this.duration_ = this.extractElement( 5, true, time_measure_with_unit )
+      this.duration_ = this.extractElement( 5, 3, 1, true, time_measure_with_unit )
     }
 
     return this.duration_ as time_measure_with_unit | null
@@ -66,8 +66,26 @@ export  class time_interval_with_bounds extends time_interval {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === time_interval_with_bounds.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for time_interval_with_bounds" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

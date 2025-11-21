@@ -18,7 +18,7 @@ export  class IfcCartesianTransformationOperator3D extends IfcCartesianTransform
 
   public get Axis3() : IfcDirection | null {
     if ( this.Axis3_ === void 0 ) {
-      this.Axis3_ = this.extractElement( 4, true, IfcDirection )
+      this.Axis3_ = this.extractElement( 4, 4, 3, true, IfcDirection )
     }
 
     return this.Axis3_ as IfcDirection | null
@@ -27,7 +27,9 @@ export  class IfcCartesianTransformationOperator3D extends IfcCartesianTransform
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

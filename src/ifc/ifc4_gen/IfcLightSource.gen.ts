@@ -23,7 +23,7 @@ export abstract class IfcLightSource extends IfcGeometricRepresentationItem {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, true )
+      this.Name_ = this.extractString( 0, 0, 2, true )
     }
 
     return this.Name_ as string | null
@@ -31,7 +31,7 @@ export abstract class IfcLightSource extends IfcGeometricRepresentationItem {
 
   public get LightColour() : IfcColourRgb {
     if ( this.LightColour_ === void 0 ) {
-      this.LightColour_ = this.extractElement( 1, false, IfcColourRgb )
+      this.LightColour_ = this.extractElement( 1, 0, 2, false, IfcColourRgb )
     }
 
     return this.LightColour_ as IfcColourRgb
@@ -39,7 +39,7 @@ export abstract class IfcLightSource extends IfcGeometricRepresentationItem {
 
   public get AmbientIntensity() : number | null {
     if ( this.AmbientIntensity_ === void 0 ) {
-      this.AmbientIntensity_ = this.extractNumber( 2, true )
+      this.AmbientIntensity_ = this.extractNumber( 2, 0, 2, true )
     }
 
     return this.AmbientIntensity_ as number | null
@@ -47,7 +47,7 @@ export abstract class IfcLightSource extends IfcGeometricRepresentationItem {
 
   public get Intensity() : number | null {
     if ( this.Intensity_ === void 0 ) {
-      this.Intensity_ = this.extractNumber( 3, true )
+      this.Intensity_ = this.extractNumber( 3, 0, 2, true )
     }
 
     return this.Intensity_ as number | null
@@ -55,7 +55,9 @@ export abstract class IfcLightSource extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

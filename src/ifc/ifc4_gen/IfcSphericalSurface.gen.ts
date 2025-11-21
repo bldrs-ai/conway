@@ -18,7 +18,7 @@ export  class IfcSphericalSurface extends IfcElementarySurface {
 
   public get Radius() : number {
     if ( this.Radius_ === void 0 ) {
-      this.Radius_ = this.extractNumber( 1, false )
+      this.Radius_ = this.extractNumber( 1, 1, 4, false )
     }
 
     return this.Radius_ as number
@@ -26,7 +26,9 @@ export  class IfcSphericalSurface extends IfcElementarySurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

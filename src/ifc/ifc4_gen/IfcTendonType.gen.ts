@@ -23,7 +23,7 @@ export  class IfcTendonType extends IfcReinforcingElementType {
 
   public get PredefinedType() : IfcTendonTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcTendonTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcTendonTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcTendonTypeEnum
@@ -31,7 +31,7 @@ export  class IfcTendonType extends IfcReinforcingElementType {
 
   public get NominalDiameter() : number | null {
     if ( this.NominalDiameter_ === void 0 ) {
-      this.NominalDiameter_ = this.extractNumber( 10, true )
+      this.NominalDiameter_ = this.extractNumber( 10, 9, 7, true )
     }
 
     return this.NominalDiameter_ as number | null
@@ -39,7 +39,7 @@ export  class IfcTendonType extends IfcReinforcingElementType {
 
   public get CrossSectionArea() : number | null {
     if ( this.CrossSectionArea_ === void 0 ) {
-      this.CrossSectionArea_ = this.extractNumber( 11, true )
+      this.CrossSectionArea_ = this.extractNumber( 11, 9, 7, true )
     }
 
     return this.CrossSectionArea_ as number | null
@@ -47,7 +47,7 @@ export  class IfcTendonType extends IfcReinforcingElementType {
 
   public get SheathDiameter() : number | null {
     if ( this.SheathDiameter_ === void 0 ) {
-      this.SheathDiameter_ = this.extractNumber( 12, true )
+      this.SheathDiameter_ = this.extractNumber( 12, 9, 7, true )
     }
 
     return this.SheathDiameter_ as number | null
@@ -55,7 +55,9 @@ export  class IfcTendonType extends IfcReinforcingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class IfcRoundedRectangleProfileDef extends IfcRectangleProfileDef {
 
   public get RoundingRadius() : number {
     if ( this.RoundingRadius_ === void 0 ) {
-      this.RoundingRadius_ = this.extractNumber( 5, false )
+      this.RoundingRadius_ = this.extractNumber( 5, 5, 3, false )
     }
 
     return this.RoundingRadius_ as number
@@ -26,7 +26,9 @@ export  class IfcRoundedRectangleProfileDef extends IfcRectangleProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

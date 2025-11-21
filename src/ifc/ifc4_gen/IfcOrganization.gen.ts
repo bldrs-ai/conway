@@ -31,7 +31,7 @@ export  class IfcOrganization extends StepEntityBase< EntityTypesIfc > {
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 0, true )
+      this.Identification_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.Identification_ as string | null
@@ -39,7 +39,7 @@ export  class IfcOrganization extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 1, false )
+      this.Name_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.Name_ as string
@@ -47,7 +47,7 @@ export  class IfcOrganization extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 2, true )
+      this.Description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -56,7 +56,7 @@ export  class IfcOrganization extends StepEntityBase< EntityTypesIfc > {
   public get Roles() : Array<IfcActorRole> | null {
     if ( this.Roles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -89,7 +89,7 @@ export  class IfcOrganization extends StepEntityBase< EntityTypesIfc > {
   public get Addresses() : Array<IfcAddress> | null {
     if ( this.Addresses_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -124,7 +124,9 @@ export  class IfcOrganization extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -17,7 +17,7 @@ export  class degenerate_toroidal_surface extends toroidal_surface {
 
   public get select_outer() : boolean {
     if ( this.select_outer_ === void 0 ) {
-      this.select_outer_ = this.extractBoolean( 4, false )
+      this.select_outer_ = this.extractBoolean( 4, 4, 5, false )
     }
 
     return this.select_outer_ as boolean
@@ -25,8 +25,26 @@ export  class degenerate_toroidal_surface extends toroidal_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === degenerate_toroidal_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for degenerate_toroidal_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

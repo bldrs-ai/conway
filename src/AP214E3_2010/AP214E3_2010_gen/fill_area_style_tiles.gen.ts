@@ -28,7 +28,7 @@ export  class fill_area_style_tiles extends geometric_representation_item {
 
   public get tiling_pattern() : two_direction_repeat_factor {
     if ( this.tiling_pattern_ === void 0 ) {
-      this.tiling_pattern_ = this.extractElement( 1, false, two_direction_repeat_factor )
+      this.tiling_pattern_ = this.extractElement( 1, 1, 2, false, two_direction_repeat_factor )
     }
 
     return this.tiling_pattern_ as two_direction_repeat_factor
@@ -37,7 +37,7 @@ export  class fill_area_style_tiles extends geometric_representation_item {
   public get tiles() : Array<fill_area_style_tile_symbol_with_style> {
     if ( this.tiles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -76,7 +76,7 @@ export  class fill_area_style_tiles extends geometric_representation_item {
 
   public get tiling_scale() : number {
     if ( this.tiling_scale_ === void 0 ) {
-      this.tiling_scale_ = this.extractNumber( 3, false )
+      this.tiling_scale_ = this.extractNumber( 3, 1, 2, false )
     }
 
     return this.tiling_scale_ as number
@@ -84,8 +84,26 @@ export  class fill_area_style_tiles extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === fill_area_style_tiles.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for fill_area_style_tiles" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

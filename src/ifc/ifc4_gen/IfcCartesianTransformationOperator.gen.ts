@@ -27,7 +27,7 @@ export abstract class IfcCartesianTransformationOperator extends IfcGeometricRep
 
   public get Axis1() : IfcDirection | null {
     if ( this.Axis1_ === void 0 ) {
-      this.Axis1_ = this.extractElement( 0, true, IfcDirection )
+      this.Axis1_ = this.extractElement( 0, 0, 2, true, IfcDirection )
     }
 
     return this.Axis1_ as IfcDirection | null
@@ -35,7 +35,7 @@ export abstract class IfcCartesianTransformationOperator extends IfcGeometricRep
 
   public get Axis2() : IfcDirection | null {
     if ( this.Axis2_ === void 0 ) {
-      this.Axis2_ = this.extractElement( 1, true, IfcDirection )
+      this.Axis2_ = this.extractElement( 1, 0, 2, true, IfcDirection )
     }
 
     return this.Axis2_ as IfcDirection | null
@@ -43,7 +43,7 @@ export abstract class IfcCartesianTransformationOperator extends IfcGeometricRep
 
   public get LocalOrigin() : IfcCartesianPoint {
     if ( this.LocalOrigin_ === void 0 ) {
-      this.LocalOrigin_ = this.extractElement( 2, false, IfcCartesianPoint )
+      this.LocalOrigin_ = this.extractElement( 2, 0, 2, false, IfcCartesianPoint )
     }
 
     return this.LocalOrigin_ as IfcCartesianPoint
@@ -51,7 +51,7 @@ export abstract class IfcCartesianTransformationOperator extends IfcGeometricRep
 
   public get Scale() : number | null {
     if ( this.Scale_ === void 0 ) {
-      this.Scale_ = this.extractNumber( 3, true )
+      this.Scale_ = this.extractNumber( 3, 0, 2, true )
     }
 
     return this.Scale_ as number | null
@@ -67,7 +67,9 @@ export abstract class IfcCartesianTransformationOperator extends IfcGeometricRep
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -19,7 +19,7 @@ export  class colour_rgb extends colour_specification {
 
   public get red() : number {
     if ( this.red_ === void 0 ) {
-      this.red_ = this.extractNumber( 1, false )
+      this.red_ = this.extractNumber( 1, 1, 2, false )
     }
 
     return this.red_ as number
@@ -27,7 +27,7 @@ export  class colour_rgb extends colour_specification {
 
   public get green() : number {
     if ( this.green_ === void 0 ) {
-      this.green_ = this.extractNumber( 2, false )
+      this.green_ = this.extractNumber( 2, 1, 2, false )
     }
 
     return this.green_ as number
@@ -35,7 +35,7 @@ export  class colour_rgb extends colour_specification {
 
   public get blue() : number {
     if ( this.blue_ === void 0 ) {
-      this.blue_ = this.extractNumber( 3, false )
+      this.blue_ = this.extractNumber( 3, 1, 2, false )
     }
 
     return this.blue_ as number
@@ -43,8 +43,26 @@ export  class colour_rgb extends colour_specification {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === colour_rgb.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for colour_rgb" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

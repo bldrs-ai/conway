@@ -18,7 +18,7 @@ export  class IfcFilterType extends IfcFlowTreatmentDeviceType {
 
   public get PredefinedType() : IfcFilterTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcFilterTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcFilterTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcFilterTypeEnum
@@ -26,7 +26,9 @@ export  class IfcFilterType extends IfcFlowTreatmentDeviceType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

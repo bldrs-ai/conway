@@ -18,7 +18,7 @@ export  class IfcHumidifierType extends IfcEnergyConversionDeviceType {
 
   public get PredefinedType() : IfcHumidifierTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcHumidifierTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcHumidifierTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcHumidifierTypeEnum
@@ -26,7 +26,9 @@ export  class IfcHumidifierType extends IfcEnergyConversionDeviceType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export  class dimension_text_associativity extends text_literal {
 
   public get mapping_source() : representation_map {
     if ( this.mapping_source_ === void 0 ) {
-      this.mapping_source_ = this.extractElement( 6, false, representation_map )
+      this.mapping_source_ = this.extractElement( 6, 6, 3, false, representation_map )
     }
 
     return this.mapping_source_ as representation_map
@@ -28,7 +28,7 @@ export  class dimension_text_associativity extends text_literal {
 
   public get mapping_target() : representation_item {
     if ( this.mapping_target_ === void 0 ) {
-      this.mapping_target_ = this.extractElement( 7, false, representation_item )
+      this.mapping_target_ = this.extractElement( 7, 6, 3, false, representation_item )
     }
 
     return this.mapping_target_ as representation_item
@@ -36,8 +36,26 @@ export  class dimension_text_associativity extends text_literal {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === dimension_text_associativity.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for dimension_text_associativity" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -29,7 +29,7 @@ export  class IfcRelSpaceBoundary extends IfcRelConnects {
     if ( this.RelatingSpace_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 4, false )
+        this.extractReference( 4, 4, 3, false )
 
       if ( !( value instanceof IfcExternalSpatialElement ) && !( value instanceof IfcSpace ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -44,7 +44,7 @@ export  class IfcRelSpaceBoundary extends IfcRelConnects {
 
   public get RelatedBuildingElement() : IfcElement {
     if ( this.RelatedBuildingElement_ === void 0 ) {
-      this.RelatedBuildingElement_ = this.extractElement( 5, false, IfcElement )
+      this.RelatedBuildingElement_ = this.extractElement( 5, 4, 3, false, IfcElement )
     }
 
     return this.RelatedBuildingElement_ as IfcElement
@@ -52,7 +52,7 @@ export  class IfcRelSpaceBoundary extends IfcRelConnects {
 
   public get ConnectionGeometry() : IfcConnectionGeometry | null {
     if ( this.ConnectionGeometry_ === void 0 ) {
-      this.ConnectionGeometry_ = this.extractElement( 6, true, IfcConnectionGeometry )
+      this.ConnectionGeometry_ = this.extractElement( 6, 4, 3, true, IfcConnectionGeometry )
     }
 
     return this.ConnectionGeometry_ as IfcConnectionGeometry | null
@@ -60,7 +60,7 @@ export  class IfcRelSpaceBoundary extends IfcRelConnects {
 
   public get PhysicalOrVirtualBoundary() : IfcPhysicalOrVirtualEnum {
     if ( this.PhysicalOrVirtualBoundary_ === void 0 ) {
-      this.PhysicalOrVirtualBoundary_ = this.extractLambda( 7, IfcPhysicalOrVirtualEnumDeserializeStep, false )
+      this.PhysicalOrVirtualBoundary_ = this.extractLambda( 7, 4, 3, IfcPhysicalOrVirtualEnumDeserializeStep, false )
     }
 
     return this.PhysicalOrVirtualBoundary_ as IfcPhysicalOrVirtualEnum
@@ -68,7 +68,7 @@ export  class IfcRelSpaceBoundary extends IfcRelConnects {
 
   public get InternalOrExternalBoundary() : IfcInternalOrExternalEnum {
     if ( this.InternalOrExternalBoundary_ === void 0 ) {
-      this.InternalOrExternalBoundary_ = this.extractLambda( 8, IfcInternalOrExternalEnumDeserializeStep, false )
+      this.InternalOrExternalBoundary_ = this.extractLambda( 8, 4, 3, IfcInternalOrExternalEnumDeserializeStep, false )
     }
 
     return this.InternalOrExternalBoundary_ as IfcInternalOrExternalEnum
@@ -76,7 +76,9 @@ export  class IfcRelSpaceBoundary extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

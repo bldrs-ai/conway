@@ -20,7 +20,7 @@ export  class IfcDocumentReference extends IfcExternalReference {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 3, true )
+      this.Description_ = this.extractString( 3, 3, 1, true )
     }
 
     return this.Description_ as string | null
@@ -28,7 +28,7 @@ export  class IfcDocumentReference extends IfcExternalReference {
 
   public get ReferencedDocument() : IfcDocumentInformation | null {
     if ( this.ReferencedDocument_ === void 0 ) {
-      this.ReferencedDocument_ = this.extractElement( 4, true, IfcDocumentInformation )
+      this.ReferencedDocument_ = this.extractElement( 4, 3, 1, true, IfcDocumentInformation )
     }
 
     return this.ReferencedDocument_ as IfcDocumentInformation | null
@@ -37,7 +37,9 @@ export  class IfcDocumentReference extends IfcExternalReference {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

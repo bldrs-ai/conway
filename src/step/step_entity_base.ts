@@ -79,6 +79,42 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   }
 
   /**
+   * Get all the variants of this entity (including this) if it is an external
+   * mapping with multiple variants. This allows the optional-mulitiple-inheritance
+   * relationanships in STEP to be represented.
+   * 
+   * @return {StepEntityBase[]} The variants of this entity.
+   */
+  public get variants(): StepEntityBase<EntityTypeIDs>[] | undefined {
+
+    const multiEntity = this.internalReference_.multiEntity
+
+    if ( multiEntity !== void 0 && multiEntity.length > 1 ) {
+      return multiEntity
+    }
+
+    return void 0
+  }
+
+  public findVariant<
+    T extends StepEntityConstructorAbstract<EntityTypeIDs>,
+    O extends InstanceType< T > & StepEntityBase< EntityTypeIDs >,
+     >(
+    instanceType: T ):
+    O | undefined {
+   
+    if ( (this as unknown) instanceof instanceType ) {
+      return ( this as unknown ) as O
+    }
+
+    const internalRef = this.internalReference_
+    const variants = internalRef.multiEntity
+
+    return variants?.find(
+      ( item ) => item instanceof instanceType ) as O | undefined
+  }
+
+  /**
    * Get the reflected fields of this.
    *
    * @return {EntityFieldsDescription}
@@ -180,18 +216,29 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
-   * @param vtableOffset The offset in the vtable to extract from
+   * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Whether this is a potentially optional field
    * @return {number | null | undefined} The extracted number.
    */
-  public extractNumber(vtableOffset: number, optional: true): number | null
-  public extractNumber(vtableOffset: number, optional: false): number
-  public extractNumber(vtableOffset: number, optional: boolean): number | null {
+  public extractNumber(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: true): number | null
+  public extractNumber(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: false): number
+  public extractNumber(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: boolean): number | null {
 
-    this.guaranteeVTable()
-
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
-    const buffer    = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const value = stepExtractNumber(buffer, cursor, endCursor)
 
@@ -221,16 +268,29 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field?
    * @return {string | null} The extracted string, or null if optional
    * and this value isn't specified.
    */
-  public extractString(offset: number, optional: true): string | null
-  public extractString(offset: number, optional: false): string
-  public extractString(offset: number, optional: boolean): string | null {
+  public extractString(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: true): string | null
+  public extractString(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: false): string
+  public extractString(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: boolean): string | null {
 
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
-    const buffer              = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const value = stepExtractString(buffer, cursor, endCursor)
 
@@ -258,15 +318,28 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field?
    * @return {boolean | null} The extracted logical or null for optionals.
    */
-  public extractLogical(offset: number, optional: true): boolean | null
-  public extractLogical(offset: number, optional: false): boolean
-  public extractLogical(offset: number, optional: boolean): boolean | null {
+  public extractLogical(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: true): boolean | null
+  public extractLogical(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: false): boolean
+  public extractLogical(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: boolean): boolean | null {
 
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
-    const buffer              = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const value = stepExtractLogical(buffer, cursor, endCursor)
 
@@ -290,14 +363,28 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Extract a reference from an offset, without type check.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field?
    * @return {StepEntityBase | undefined} Extracted entity or undefined.
    */
-  public extractReference(offset: number, optional: true): StepEntityBase<EntityTypeIDs> | null
-  public extractReference(offset: number, optional: false): StepEntityBase<EntityTypeIDs>
-  public extractReference(offset: number, optional: boolean): StepEntityBase<EntityTypeIDs> | null {
+  public extractReference(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: true ): StepEntityBase<EntityTypeIDs> | null
+  public extractReference(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: false ): StepEntityBase<EntityTypeIDs>
+  public extractReference(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: boolean): StepEntityBase<EntityTypeIDs> | null {
 
-    const cursor    = this.getOffsetCursor( offset )
+    const cursor    = this.getOffsetCursor( offset, baseOffset, depth )
     const buffer    = this.buffer
     const endCursor = buffer.length
 
@@ -417,13 +504,18 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Extract a flat array of references
    *
-   * @param offset offset in ifc line
+   * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @return {Array<any>} array of values
    */
-  public extractArray(offset: number): Array< StepEntityBase< EntityTypeIDs > | undefined > {
+  public extractArray(
+    offset: number,
+    baseOffset: number,
+    depth: number,): Array< StepEntityBase< EntityTypeIDs > | undefined > {
 
     const arrayObjects: Array< StepEntityBase< EntityTypeIDs > | undefined > =
-      this.extractLambda(offset, (buffer, cursor, endCursor) => {
+      this.extractLambda(offset, baseOffset, depth, (buffer, cursor, endCursor) => {
 
       const value: Array< StepEntityBase< EntityTypeIDs > | undefined > = []
 
@@ -449,12 +541,16 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * ExtractionType Type to be extracted
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field? (true)
    * @return {ExtractionType | null} The extracted value or null for optionals.
    */
   public extractLambda<ExtractionType>(
     offset: number,
+    baseOffset: number,
+    depth: number,
     extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
       ExtractionType | null | undefined,
     optional: true): ExtractionType | null
@@ -468,12 +564,16 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * ExtractionType Type to be extracted
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field? (false)
    * @return {ExtractionType} The extracted value or null for optionals.
    */
   public extractLambda<ExtractionType>(
     offset: number,
+    baseOffset: number,
+    depth: number,
     extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
       ExtractionType | undefined,
     optional: false): ExtractionType
@@ -485,20 +585,23 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * ExtractionType Type to be extracted
-   *
+   * 
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param extractor The function to be used for extraction.
    * @param optional Is this an optional field?
    * @return {ExtractionType | null} The extracted value or null for optionals.
    */
   public extractLambda<ExtractionType>(
-      offset: number,
-      extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
-      ExtractionType | null | undefined,
-      optional: boolean): ExtractionType | null {
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    extractor: (buffer: Uint8Array, cursor: number, endCursor: number) =>
+    ExtractionType | null | undefined,
+    optional: boolean): ExtractionType | null {
 
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
-    const buffer              = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const value = extractor(buffer, cursor, endCursor)
 
@@ -526,12 +629,16 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field? (true)
    * @return {StepEntityBase | null} The extracted element, or null if optional
    * and this value isn't specified.
    */
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
     offset: number,
+    baseOffset: number,
+    depth: number,
     optional: true,
     entityConstructor: T):
     InstanceType<T> | null
@@ -543,11 +650,15 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field? (false)
    * @return {StepEntityBase} The extracted element.
    */
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
     offset: number,
+    baseOffset: number,
+    depth: number,
     optional: false,
     entityConstructor: T):
     InstanceType<T>
@@ -559,26 +670,29 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset in the vtable to extract from
+   * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field?
    * @param entityConstructor
    * @return {StepEntityBase} The extracted element, or null if optional
    * and this value isn't specified.
    */
   public extractElement<T extends StepEntityConstructorAbstract<EntityTypeIDs>>(
-      offset: number,
-      optional: boolean,
-      entityConstructor: T):
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: boolean,
+    entityConstructor: T ):
     InstanceType<T> | null {
 
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
-    const buffer              = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
     const model               = this.model
 
     const expressID = stepExtractReference(buffer, cursor, endCursor)
     const value =
-      expressID !== void 0 ? model.getElementByExpressID(expressID) :
-        model.getInlineElementByAddress(
-            stepExtractInlineElemement(buffer, cursor, endCursor))
+      expressID !== void 0 ? model.getTypedElementByExpressID(expressID, entityConstructor) :
+        model.getTypedInlineElementByAddress(
+            stepExtractInlineElemement( buffer, cursor, endCursor ), entityConstructor )
 
     if (value === void 0) {
       if (!optional) {
@@ -590,10 +704,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       }
 
       return null
-    }
-
-    if (!(value instanceof entityConstructor)) {
-      throw new Error('Value in STEP was incorrectly typed for field')
     }
 
     return value as InstanceType<T>
@@ -624,16 +734,12 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const model     = this.model
     const expressID = stepExtractReference( buffer, cursor, endCursor )
     const value =
-      expressID !== void 0 ? model.getElementByExpressID( expressID ) :
-      model.getInlineElementByAddress(
-          stepExtractInlineElemement( buffer, cursor, endCursor ) )
+      expressID !== void 0 ? model.getTypedElementByExpressID( expressID, entityConstructor ) :
+      model.getTypedInlineElementByAddress(
+          stepExtractInlineElemement( buffer, cursor, endCursor ), entityConstructor )
 
     if ( value === void 0 ) {
       return
-    }
-
-    if ( !( value instanceof entityConstructor ) ) {
-      throw new Error( 'Value in STEP was incorrectly typed for field' )
     }
 
     return value as InstanceType< T >
@@ -646,16 +752,27 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
-   * @param vtableOffset The offset in the vtable to extract from
+   * @param offset The offset in the vtable to extract from
    * @param optional Is this an optional field?
    * @return {boolean | null} The extracted number.
    */
-  public extractBinary(vtableOffset: number, optional: true): [Uint8Array, number] | null
-  public extractBinary(vtableOffset: number, optional: false): [Uint8Array, number]
-  public extractBinary(vtableOffset: number, optional: boolean): [Uint8Array, number] | null {
+  public extractBinary(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      optional: true): [Uint8Array, number] | null
+  public extractBinary(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      optional: false): [Uint8Array, number]
+  public extractBinary(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      optional: boolean): [Uint8Array, number] | null {
 
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( vtableOffset )
-    const buffer              = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const value = stepExtractBinary(buffer, cursor, endCursor)
 
@@ -688,6 +805,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Extract a parse buffer at a particular vtable offset.
    *
    * @param offset
+   * @param baseOffset
+   * @param depth
    * @param result
    * @param module
    * @param optional
@@ -695,14 +814,15 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    */
   public extractParseBuffer(
       offset: number,
+      baseOffset: number,
+      depth: number,
       result: ParseBuffer,
       module: WasmModule,
       optional: boolean ): boolean {
+    
+    offset -= this.multiReference_ !== void 0 ? baseOffset : 0    
 
-    this.guaranteeVTable()
-
-    const internalReference =
-      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
+    const internalReference = this.guaranteeVTable( depth )
 
     if ( offset >= internalReference.vtableCount ) {
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
@@ -742,7 +862,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {boolean | null} The extracted number or null if it's
    * not supplied.
    */
-  public extractBoolean(offset: number, optional: true): boolean | null
+  public extractBoolean(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: true): boolean | null
   /**
    * Extract a number at the particular vtable offset (i.e. the position
    * in the matching step object).
@@ -754,7 +878,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param optional Is this an optional field? (false).
    * @return {boolean} The extracted number.
    */
-  public extractBoolean(offset: number, optional: false): boolean
+  public extractBoolean(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: false): boolean
   /**
    * Extract a number at the particular vtable offset (i.e. the position
    * in the matching step object).
@@ -763,14 +891,19 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * semantically correct extraction.
    *
    * @param offset The offset in the vtable to extract from
+   * @param baseOffset The base offset of the class in the v-table.
+   * @param depth The depth in the inheritence hierarchy.
    * @param optional Is this an optional field?
    * @return {boolean | null} The extracted number or null if it's
    * not supplied.
    */
-  public extractBoolean(offset: number, optional: boolean): boolean | null {
+  public extractBoolean(
+    offset: number,
+    baseOffset: number,
+    depth: number,
+    optional: boolean): boolean | null {
 
-    const [cursor, endCursor] = this.getOffsetAndEndCursor( offset )
-    const buffer              = this.buffer
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const value = stepExtractBoolean(buffer, cursor, endCursor)
 
@@ -804,42 +937,47 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Get both the buffer offset and end cursor for
    * a particular vtable offset.
    *
-   * @param vtableOffset The vtable offset to get the cursor/endcursor for.
+   * @param offset The offset in the v-table to get the cursor for.
+   * @param baseOffset The base offset of the class in the v-table.
+   * @param depth The depth in the inheritence hierarchy.
    * @return {[number,number]} The cursor and end cursor in the read buffer.
    */
-  protected getOffsetAndEndCursor( vtableOffset: number ): [number, number] {
+  protected getOffsetAndEndCursor(
+    offset: number,
+    baseOffset: number,
+    depth: number ):[number, number, Uint8Array] {
 
-    this.guaranteeVTable()
+    offset -= this.multiReference_ !== void 0 ? baseOffset : 0 
+   
+    const internalReference = this.guaranteeVTable( depth )
 
-    const internalReference =
-      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
-
-    if ( vtableOffset >= internalReference.vtableCount ) {
+    if ( internalReference === void 0 || offset >= internalReference.vtableCount ) {
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
     }
 
-    const vtableSlot = internalReference.vtableIndex + vtableOffset
+    const vtableSlot = internalReference.vtableIndex + offset
 
     return [
       internalReference.vtable[ vtableSlot ],
-      ( ( vtableOffset + 1 ) !== internalReference.vtableCount ) ?
+      ( ( offset + 1 ) !== internalReference.vtableCount ) ?
         ( internalReference.vtable[ vtableSlot + 1 ] - 1 ) :
         internalReference.endCursor,
+      internalReference.buffer
     ]
   }
 
   /**
    * Get the buffer cursor for a particular offset.
    *
-   * @param offset The offset in the v-table.
+   * @param offset The offset in the v-table to get the cursor for.
+   * @param baseOffset The base offset of the class in the v-table.
+   * @param depth The depth in the inheritence hierarchy.
    * @return {number} The cursor.
    */
-  protected getOffsetCursor( offset: number ): number {
+  protected getOffsetCursor( offset: number, baseOffset: number, depth: number ): number {
 
-    this.guaranteeVTable()
-
-    const internalReference =
-      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
+    offset -= this.multiReference_ !== void 0 ? baseOffset : 0 
+    const internalReference = this.guaranteeVTable( depth )
 
     if ( offset >= internalReference.vtableCount ) {
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
@@ -854,12 +992,12 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Get the buffer cursor for a particular offset.
    *
    * @param offset The offset in the v-table.
+   * @param internalReference The internal reference to use for the vtable.
    * @return {number} The cursor.
    */
-  protected getEndCursor( offset: number ): number {
-
-    const internalReference =
-      this.internalReference_ as Required< StepEntityInternalReference< EntityTypeIDs > >
+  protected getEndCursor(
+    offset: number,
+    internalReference: Required< StepEntityInternalReference< EntityTypeIDs > > ): number {
 
     ++offset
 
@@ -890,21 +1028,53 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * correctly. */
   constructor(
     public readonly localID: number,
-    protected readonly internalReference_: StepEntityInternalReference<EntityTypeIDs>,
-    public readonly model: StepModelBase<EntityTypeIDs>) { }
-   
+    private readonly internalReference_: StepEntityInternalReference<EntityTypeIDs>,
+    public readonly model: StepModelBase<EntityTypeIDs>,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    _multiReference?: StepEntityInternalReference<EntityTypeIDs>[]) { }
+
+  protected multiReference_?: StepEntityInternalReference<EntityTypeIDs>[]
 
   /**
    * Guarantees the VTable of this has been parsed from the model so that values can be read out.
+   * 
+   * @param {number} depth The depth in the inheritence hierarchy.
+   * @return {StepEntityInternalReference<EntityTypeIDs>} The internal reference for this.
    */
-  protected guaranteeVTable(): void {
-    if (this.internalReference_.vtableIndex === void 0) {
+  protected guaranteeVTable( depth: number ):
+    Required< StepEntityInternalReference<EntityTypeIDs> > {
+
+    const multiReference = this.multiReference_
+
+    if ( multiReference !== void 0 ) {
+
+      const classReference = multiReference[depth] 
+
+      if ( classReference.vtableIndex === void 0 ) {
+
+        const populated = this.model.populateVtableEntryRaw( classReference )
+        
+        if (!populated) {
+          throw new Error('Entity does not have matching table entry to read from model')
+        }
+
+        this.internalReference_.buffer = classReference.buffer
+      }
+
+      return classReference as Required< StepEntityInternalReference<EntityTypeIDs> >
+    }
+
+    const internalReference = this.internalReference_
+
+    if (internalReference.vtableIndex === void 0) {
       const populated = this.model.populateVtableEntry(this.localID)
 
       if (!populated) {
         throw new Error('Entity does not have matching table entry to read from model')
       }
     }
+
+    return internalReference as Required< StepEntityInternalReference<EntityTypeIDs> >
   }
 
   /**

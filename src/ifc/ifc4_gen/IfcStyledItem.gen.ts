@@ -28,7 +28,7 @@ export  class IfcStyledItem extends IfcRepresentationItem {
 
   public get Item() : IfcRepresentationItem | null {
     if ( this.Item_ === void 0 ) {
-      this.Item_ = this.extractElement( 0, true, IfcRepresentationItem )
+      this.Item_ = this.extractElement( 0, 0, 1, true, IfcRepresentationItem )
     }
 
     return this.Item_ as IfcRepresentationItem | null
@@ -37,7 +37,7 @@ export  class IfcStyledItem extends IfcRepresentationItem {
   public get Styles() : Array<IfcPresentationStyle | IfcPresentationStyleAssignment> {
     if ( this.Styles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -76,7 +76,7 @@ export  class IfcStyledItem extends IfcRepresentationItem {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 2, true )
+      this.Name_ = this.extractString( 2, 0, 1, true )
     }
 
     return this.Name_ as string | null
@@ -84,7 +84,9 @@ export  class IfcStyledItem extends IfcRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

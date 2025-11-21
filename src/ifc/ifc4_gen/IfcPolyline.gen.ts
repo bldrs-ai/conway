@@ -25,7 +25,7 @@ export  class IfcPolyline extends IfcBoundedCurve {
   public get Points() : Array<IfcCartesianPoint> {
     if ( this.Points_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -57,7 +57,9 @@ export  class IfcPolyline extends IfcBoundedCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

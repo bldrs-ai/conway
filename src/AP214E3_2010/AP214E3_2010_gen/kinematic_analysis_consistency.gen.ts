@@ -19,7 +19,7 @@ export  class kinematic_analysis_consistency extends StepEntityBase< EntityTypes
 
   public get control() : kinematic_control {
     if ( this.control_ === void 0 ) {
-      this.control_ = this.extractElement( 0, false, kinematic_control )
+      this.control_ = this.extractElement( 0, 0, 0, false, kinematic_control )
     }
 
     return this.control_ as kinematic_control
@@ -27,7 +27,7 @@ export  class kinematic_analysis_consistency extends StepEntityBase< EntityTypes
 
   public get result() : kinematic_analysis_result {
     if ( this.result_ === void 0 ) {
-      this.result_ = this.extractElement( 1, false, kinematic_analysis_result )
+      this.result_ = this.extractElement( 1, 0, 0, false, kinematic_analysis_result )
     }
 
     return this.result_ as kinematic_analysis_result
@@ -35,8 +35,26 @@ export  class kinematic_analysis_consistency extends StepEntityBase< EntityTypes
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === kinematic_analysis_consistency.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for kinematic_analysis_consistency" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

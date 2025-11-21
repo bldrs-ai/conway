@@ -18,7 +18,7 @@ export abstract class IfcElement extends IfcProduct {
 
   public get Tag() : string | null {
     if ( this.Tag_ === void 0 ) {
-      this.Tag_ = this.extractString( 7, true )
+      this.Tag_ = this.extractString( 7, 7, 4, true )
     }
 
     return this.Tag_ as string | null
@@ -38,7 +38,9 @@ export abstract class IfcElement extends IfcProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

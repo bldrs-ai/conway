@@ -21,7 +21,7 @@ export abstract class IfcAddress extends StepEntityBase< EntityTypesIfc > {
 
   public get Purpose() : IfcAddressTypeEnum | null {
     if ( this.Purpose_ === void 0 ) {
-      this.Purpose_ = this.extractLambda( 0, IfcAddressTypeEnumDeserializeStep, true )
+      this.Purpose_ = this.extractLambda( 0, 0, 0, IfcAddressTypeEnumDeserializeStep, true )
     }
 
     return this.Purpose_ as IfcAddressTypeEnum | null
@@ -29,7 +29,7 @@ export abstract class IfcAddress extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -37,7 +37,7 @@ export abstract class IfcAddress extends StepEntityBase< EntityTypesIfc > {
 
   public get UserDefinedPurpose() : string | null {
     if ( this.UserDefinedPurpose_ === void 0 ) {
-      this.UserDefinedPurpose_ = this.extractString( 2, true )
+      this.UserDefinedPurpose_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.UserDefinedPurpose_ as string | null
@@ -47,7 +47,9 @@ export abstract class IfcAddress extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

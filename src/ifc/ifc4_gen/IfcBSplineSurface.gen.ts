@@ -37,7 +37,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
 
   public get UDegree() : number {
     if ( this.UDegree_ === void 0 ) {
-      this.UDegree_ = this.extractNumber( 0, false )
+      this.UDegree_ = this.extractNumber( 0, 0, 4, false )
     }
 
     return this.UDegree_ as number
@@ -45,7 +45,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
 
   public get VDegree() : number {
     if ( this.VDegree_ === void 0 ) {
-      this.VDegree_ = this.extractNumber( 1, false )
+      this.VDegree_ = this.extractNumber( 1, 0, 4, false )
     }
 
     return this.VDegree_ as number
@@ -54,7 +54,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
   public get ControlPointsList() : Array<Array<IfcCartesianPoint>> {
     if ( this.ControlPointsList_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -96,7 +96,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
 
   public get SurfaceForm() : IfcBSplineSurfaceForm {
     if ( this.SurfaceForm_ === void 0 ) {
-      this.SurfaceForm_ = this.extractLambda( 3, IfcBSplineSurfaceFormDeserializeStep, false )
+      this.SurfaceForm_ = this.extractLambda( 3, 0, 4, IfcBSplineSurfaceFormDeserializeStep, false )
     }
 
     return this.SurfaceForm_ as IfcBSplineSurfaceForm
@@ -104,7 +104,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
 
   public get UClosed() : boolean | null {
     if ( this.UClosed_ === void 0 ) {
-      this.UClosed_ = this.extractLogical( 4, false )
+      this.UClosed_ = this.extractLogical( 4, 0, 4, false )
     }
 
     return this.UClosed_ as boolean | null
@@ -112,7 +112,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
 
   public get VClosed() : boolean | null {
     if ( this.VClosed_ === void 0 ) {
-      this.VClosed_ = this.extractLogical( 5, false )
+      this.VClosed_ = this.extractLogical( 5, 0, 4, false )
     }
 
     return this.VClosed_ as boolean | null
@@ -120,7 +120,7 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
 
   public get SelfIntersect() : boolean | null {
     if ( this.SelfIntersect_ === void 0 ) {
-      this.SelfIntersect_ = this.extractLogical( 6, false )
+      this.SelfIntersect_ = this.extractLogical( 6, 0, 4, false )
     }
 
     return this.SelfIntersect_ as boolean | null
@@ -140,7 +140,9 @@ export abstract class IfcBSplineSurface extends IfcBoundedSurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

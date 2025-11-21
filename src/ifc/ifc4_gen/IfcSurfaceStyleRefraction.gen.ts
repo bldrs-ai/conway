@@ -19,7 +19,7 @@ export  class IfcSurfaceStyleRefraction extends IfcPresentationItem {
 
   public get RefractionIndex() : number | null {
     if ( this.RefractionIndex_ === void 0 ) {
-      this.RefractionIndex_ = this.extractNumber( 0, true )
+      this.RefractionIndex_ = this.extractNumber( 0, 0, 1, true )
     }
 
     return this.RefractionIndex_ as number | null
@@ -27,7 +27,7 @@ export  class IfcSurfaceStyleRefraction extends IfcPresentationItem {
 
   public get DispersionFactor() : number | null {
     if ( this.DispersionFactor_ === void 0 ) {
-      this.DispersionFactor_ = this.extractNumber( 1, true )
+      this.DispersionFactor_ = this.extractNumber( 1, 0, 1, true )
     }
 
     return this.DispersionFactor_ as number | null
@@ -35,7 +35,9 @@ export  class IfcSurfaceStyleRefraction extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

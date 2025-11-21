@@ -24,7 +24,7 @@ export  class IfcClassificationReference extends IfcExternalReference {
     if ( this.ReferencedSource_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 3, 1, true )
 
       if ( !( value instanceof IfcClassification ) && !( value instanceof IfcClassificationReference ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -39,7 +39,7 @@ export  class IfcClassificationReference extends IfcExternalReference {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 4, true )
+      this.Description_ = this.extractString( 4, 3, 1, true )
     }
 
     return this.Description_ as string | null
@@ -47,7 +47,7 @@ export  class IfcClassificationReference extends IfcExternalReference {
 
   public get Sort() : string | null {
     if ( this.Sort_ === void 0 ) {
-      this.Sort_ = this.extractString( 5, true )
+      this.Sort_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.Sort_ as string | null
@@ -57,7 +57,9 @@ export  class IfcClassificationReference extends IfcExternalReference {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -29,7 +29,7 @@ export  class IfcTable extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, true )
+      this.Name_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.Name_ as string | null
@@ -38,7 +38,7 @@ export  class IfcTable extends StepEntityBase< EntityTypesIfc > {
   public get Rows() : Array<IfcTableRow> | null {
     if ( this.Rows_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -71,7 +71,7 @@ export  class IfcTable extends StepEntityBase< EntityTypesIfc > {
   public get Columns() : Array<IfcTableColumn> | null {
     if ( this.Columns_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -109,7 +109,9 @@ export  class IfcTable extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

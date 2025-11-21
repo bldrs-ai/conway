@@ -23,7 +23,7 @@ export  class material_designation_characterization extends StepEntityBase< Enti
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -31,7 +31,7 @@ export  class material_designation_characterization extends StepEntityBase< Enti
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -39,7 +39,7 @@ export  class material_designation_characterization extends StepEntityBase< Enti
 
   public get designation() : material_designation {
     if ( this.designation_ === void 0 ) {
-      this.designation_ = this.extractElement( 2, false, material_designation )
+      this.designation_ = this.extractElement( 2, 0, 0, false, material_designation )
     }
 
     return this.designation_ as material_designation
@@ -49,7 +49,7 @@ export  class material_designation_characterization extends StepEntityBase< Enti
     if ( this.property_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 3, false )
+        this.extractReference( 3, 0, 0, false )
 
       if ( !( value instanceof material_property_representation ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -64,8 +64,26 @@ export  class material_designation_characterization extends StepEntityBase< Enti
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === material_designation_characterization.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for material_designation_characterization" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

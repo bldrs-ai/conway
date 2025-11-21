@@ -31,7 +31,7 @@ export  class surface_curve extends curve {
 
   public get curve_3d() : curve {
     if ( this.curve_3d_ === void 0 ) {
-      this.curve_3d_ = this.extractElement( 1, false, curve )
+      this.curve_3d_ = this.extractElement( 1, 1, 3, false, curve )
     }
 
     return this.curve_3d_ as curve
@@ -40,7 +40,7 @@ export  class surface_curve extends curve {
   public get associated_geometry() : Array<pcurve | surface> {
     if ( this.associated_geometry_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -79,7 +79,7 @@ export  class surface_curve extends curve {
 
   public get master_representation() : preferred_surface_curve_representation {
     if ( this.master_representation_ === void 0 ) {
-      this.master_representation_ = this.extractLambda( 3, preferred_surface_curve_representationDeserializeStep, false )
+      this.master_representation_ = this.extractLambda( 3, 1, 3, preferred_surface_curve_representationDeserializeStep, false )
     }
 
     return this.master_representation_ as preferred_surface_curve_representation
@@ -91,8 +91,26 @@ export  class surface_curve extends curve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_curve.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_curve" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

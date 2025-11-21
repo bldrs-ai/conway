@@ -19,7 +19,7 @@ export  class document_representation_type extends StepEntityBase< EntityTypesAP
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -27,7 +27,7 @@ export  class document_representation_type extends StepEntityBase< EntityTypesAP
 
   public get represented_document() : document {
     if ( this.represented_document_ === void 0 ) {
-      this.represented_document_ = this.extractElement( 1, false, document )
+      this.represented_document_ = this.extractElement( 1, 0, 0, false, document )
     }
 
     return this.represented_document_ as document
@@ -35,8 +35,26 @@ export  class document_representation_type extends StepEntityBase< EntityTypesAP
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === document_representation_type.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for document_representation_type" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

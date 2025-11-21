@@ -18,7 +18,7 @@ export  class product_definition_formation_with_specified_source extends product
 
   public get make_or_buy() : source {
     if ( this.make_or_buy_ === void 0 ) {
-      this.make_or_buy_ = this.extractLambda( 3, sourceDeserializeStep, false )
+      this.make_or_buy_ = this.extractLambda( 3, 3, 1, sourceDeserializeStep, false )
     }
 
     return this.make_or_buy_ as source
@@ -26,8 +26,26 @@ export  class product_definition_formation_with_specified_source extends product
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === product_definition_formation_with_specified_source.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for product_definition_formation_with_specified_source" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

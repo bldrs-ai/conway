@@ -20,7 +20,7 @@ export  class IfcEdgeCurve extends IfcEdge {
 
   public get EdgeGeometry() : IfcCurve {
     if ( this.EdgeGeometry_ === void 0 ) {
-      this.EdgeGeometry_ = this.extractElement( 2, false, IfcCurve )
+      this.EdgeGeometry_ = this.extractElement( 2, 2, 3, false, IfcCurve )
     }
 
     return this.EdgeGeometry_ as IfcCurve
@@ -28,7 +28,7 @@ export  class IfcEdgeCurve extends IfcEdge {
 
   public get SameSense() : boolean {
     if ( this.SameSense_ === void 0 ) {
-      this.SameSense_ = this.extractBoolean( 3, false )
+      this.SameSense_ = this.extractBoolean( 3, 2, 3, false )
     }
 
     return this.SameSense_ as boolean
@@ -36,7 +36,9 @@ export  class IfcEdgeCurve extends IfcEdge {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

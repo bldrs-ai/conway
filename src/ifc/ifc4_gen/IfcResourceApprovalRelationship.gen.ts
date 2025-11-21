@@ -41,7 +41,7 @@ export  class IfcResourceApprovalRelationship extends IfcResourceLevelRelationsh
   public get RelatedResourceObjects() : Array<IfcActorRole | IfcAppliedValue | IfcApproval | IfcConstraint | IfcContextDependentUnit | IfcConversionBasedUnit | IfcExternalInformation | IfcExternalReference | IfcMaterialDefinition | IfcOrganization | IfcPerson | IfcPersonAndOrganization | IfcPhysicalQuantity | IfcProfileDef | IfcPropertyAbstraction | IfcTimeSeries> {
     if ( this.RelatedResourceObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -80,7 +80,7 @@ export  class IfcResourceApprovalRelationship extends IfcResourceLevelRelationsh
 
   public get RelatingApproval() : IfcApproval {
     if ( this.RelatingApproval_ === void 0 ) {
-      this.RelatingApproval_ = this.extractElement( 3, false, IfcApproval )
+      this.RelatingApproval_ = this.extractElement( 3, 2, 1, false, IfcApproval )
     }
 
     return this.RelatingApproval_ as IfcApproval
@@ -88,7 +88,9 @@ export  class IfcResourceApprovalRelationship extends IfcResourceLevelRelationsh
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class tolerance_value extends StepEntityBase< EntityTypesAP214 > {
 
   public get lower_bound() : measure_with_unit {
     if ( this.lower_bound_ === void 0 ) {
-      this.lower_bound_ = this.extractElement( 0, false, measure_with_unit )
+      this.lower_bound_ = this.extractElement( 0, 0, 0, false, measure_with_unit )
     }
 
     return this.lower_bound_ as measure_with_unit
@@ -26,7 +26,7 @@ export  class tolerance_value extends StepEntityBase< EntityTypesAP214 > {
 
   public get upper_bound() : measure_with_unit {
     if ( this.upper_bound_ === void 0 ) {
-      this.upper_bound_ = this.extractElement( 1, false, measure_with_unit )
+      this.upper_bound_ = this.extractElement( 1, 0, 0, false, measure_with_unit )
     }
 
     return this.upper_bound_ as measure_with_unit
@@ -34,8 +34,26 @@ export  class tolerance_value extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === tolerance_value.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for tolerance_value" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

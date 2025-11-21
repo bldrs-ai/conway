@@ -18,7 +18,7 @@ export  class IfcDuctSilencer extends IfcFlowTreatmentDevice {
 
   public get PredefinedType() : IfcDuctSilencerTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcDuctSilencerTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcDuctSilencerTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcDuctSilencerTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcDuctSilencer extends IfcFlowTreatmentDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

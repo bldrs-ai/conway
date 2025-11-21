@@ -21,7 +21,7 @@ export  class security_classification extends StepEntityBase< EntityTypesAP214 >
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -29,7 +29,7 @@ export  class security_classification extends StepEntityBase< EntityTypesAP214 >
 
   public get purpose() : string {
     if ( this.purpose_ === void 0 ) {
-      this.purpose_ = this.extractString( 1, false )
+      this.purpose_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.purpose_ as string
@@ -37,7 +37,7 @@ export  class security_classification extends StepEntityBase< EntityTypesAP214 >
 
   public get security_level() : security_classification_level {
     if ( this.security_level_ === void 0 ) {
-      this.security_level_ = this.extractElement( 2, false, security_classification_level )
+      this.security_level_ = this.extractElement( 2, 0, 0, false, security_classification_level )
     }
 
     return this.security_level_ as security_classification_level
@@ -45,8 +45,26 @@ export  class security_classification extends StepEntityBase< EntityTypesAP214 >
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === security_classification.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for security_classification" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

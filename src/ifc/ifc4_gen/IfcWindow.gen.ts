@@ -25,7 +25,7 @@ export  class IfcWindow extends IfcBuildingElement {
 
   public get OverallHeight() : number | null {
     if ( this.OverallHeight_ === void 0 ) {
-      this.OverallHeight_ = this.extractNumber( 8, true )
+      this.OverallHeight_ = this.extractNumber( 8, 8, 6, true )
     }
 
     return this.OverallHeight_ as number | null
@@ -33,7 +33,7 @@ export  class IfcWindow extends IfcBuildingElement {
 
   public get OverallWidth() : number | null {
     if ( this.OverallWidth_ === void 0 ) {
-      this.OverallWidth_ = this.extractNumber( 9, true )
+      this.OverallWidth_ = this.extractNumber( 9, 8, 6, true )
     }
 
     return this.OverallWidth_ as number | null
@@ -41,7 +41,7 @@ export  class IfcWindow extends IfcBuildingElement {
 
   public get PredefinedType() : IfcWindowTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 10, IfcWindowTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 10, 8, 6, IfcWindowTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcWindowTypeEnum | null
@@ -49,7 +49,7 @@ export  class IfcWindow extends IfcBuildingElement {
 
   public get PartitioningType() : IfcWindowTypePartitioningEnum | null {
     if ( this.PartitioningType_ === void 0 ) {
-      this.PartitioningType_ = this.extractLambda( 11, IfcWindowTypePartitioningEnumDeserializeStep, true )
+      this.PartitioningType_ = this.extractLambda( 11, 8, 6, IfcWindowTypePartitioningEnumDeserializeStep, true )
     }
 
     return this.PartitioningType_ as IfcWindowTypePartitioningEnum | null
@@ -57,7 +57,7 @@ export  class IfcWindow extends IfcBuildingElement {
 
   public get UserDefinedPartitioningType() : string | null {
     if ( this.UserDefinedPartitioningType_ === void 0 ) {
-      this.UserDefinedPartitioningType_ = this.extractString( 12, true )
+      this.UserDefinedPartitioningType_ = this.extractString( 12, 8, 6, true )
     }
 
     return this.UserDefinedPartitioningType_ as string | null
@@ -65,7 +65,9 @@ export  class IfcWindow extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

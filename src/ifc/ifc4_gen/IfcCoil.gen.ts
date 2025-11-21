@@ -18,7 +18,7 @@ export  class IfcCoil extends IfcEnergyConversionDevice {
 
   public get PredefinedType() : IfcCoilTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcCoilTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcCoilTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcCoilTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcCoil extends IfcEnergyConversionDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

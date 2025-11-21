@@ -22,7 +22,7 @@ export  class IfcLibraryReference extends IfcExternalReference {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 3, true )
+      this.Description_ = this.extractString( 3, 3, 1, true )
     }
 
     return this.Description_ as string | null
@@ -30,7 +30,7 @@ export  class IfcLibraryReference extends IfcExternalReference {
 
   public get Language() : string | null {
     if ( this.Language_ === void 0 ) {
-      this.Language_ = this.extractString( 4, true )
+      this.Language_ = this.extractString( 4, 3, 1, true )
     }
 
     return this.Language_ as string | null
@@ -38,7 +38,7 @@ export  class IfcLibraryReference extends IfcExternalReference {
 
   public get ReferencedLibrary() : IfcLibraryInformation | null {
     if ( this.ReferencedLibrary_ === void 0 ) {
-      this.ReferencedLibrary_ = this.extractElement( 5, true, IfcLibraryInformation )
+      this.ReferencedLibrary_ = this.extractElement( 5, 3, 1, true, IfcLibraryInformation )
     }
 
     return this.ReferencedLibrary_ as IfcLibraryInformation | null
@@ -47,7 +47,9 @@ export  class IfcLibraryReference extends IfcExternalReference {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -19,7 +19,7 @@ export abstract class event_occurrence_assignment extends StepEntityBase< Entity
 
   public get assigned_event_occurrence() : event_occurrence {
     if ( this.assigned_event_occurrence_ === void 0 ) {
-      this.assigned_event_occurrence_ = this.extractElement( 0, false, event_occurrence )
+      this.assigned_event_occurrence_ = this.extractElement( 0, 0, 0, false, event_occurrence )
     }
 
     return this.assigned_event_occurrence_ as event_occurrence
@@ -27,7 +27,7 @@ export abstract class event_occurrence_assignment extends StepEntityBase< Entity
 
   public get role() : event_occurrence_role {
     if ( this.role_ === void 0 ) {
-      this.role_ = this.extractElement( 1, false, event_occurrence_role )
+      this.role_ = this.extractElement( 1, 0, 0, false, event_occurrence_role )
     }
 
     return this.role_ as event_occurrence_role
@@ -35,8 +35,26 @@ export abstract class event_occurrence_assignment extends StepEntityBase< Entity
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === event_occurrence_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for event_occurrence_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query: EntityTypesAP214[] = 

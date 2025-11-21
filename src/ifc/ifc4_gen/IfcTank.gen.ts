@@ -18,7 +18,7 @@ export  class IfcTank extends IfcFlowStorageDevice {
 
   public get PredefinedType() : IfcTankTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcTankTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcTankTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcTankTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcTank extends IfcFlowStorageDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

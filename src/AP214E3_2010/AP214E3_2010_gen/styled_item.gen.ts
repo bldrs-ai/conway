@@ -26,7 +26,7 @@ export  class styled_item extends representation_item {
   public get styles() : Array<presentation_style_assignment> {
     if ( this.styles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -58,7 +58,7 @@ export  class styled_item extends representation_item {
 
   public get item() : representation_item {
     if ( this.item_ === void 0 ) {
-      this.item_ = this.extractElement( 2, false, representation_item )
+      this.item_ = this.extractElement( 2, 1, 1, false, representation_item )
     }
 
     return this.item_ as representation_item
@@ -66,8 +66,26 @@ export  class styled_item extends representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === styled_item.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for styled_item" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

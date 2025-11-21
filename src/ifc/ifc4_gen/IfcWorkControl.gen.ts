@@ -33,7 +33,7 @@ export abstract class IfcWorkControl extends IfcControl {
 
   public get CreationDate() : string {
     if ( this.CreationDate_ === void 0 ) {
-      this.CreationDate_ = this.extractString( 6, false )
+      this.CreationDate_ = this.extractString( 6, 6, 4, false )
     }
 
     return this.CreationDate_ as string
@@ -42,7 +42,7 @@ export abstract class IfcWorkControl extends IfcControl {
   public get Creators() : Array<IfcPerson> | null {
     if ( this.Creators_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 6, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -74,7 +74,7 @@ export abstract class IfcWorkControl extends IfcControl {
 
   public get Purpose() : string | null {
     if ( this.Purpose_ === void 0 ) {
-      this.Purpose_ = this.extractString( 8, true )
+      this.Purpose_ = this.extractString( 8, 6, 4, true )
     }
 
     return this.Purpose_ as string | null
@@ -82,7 +82,7 @@ export abstract class IfcWorkControl extends IfcControl {
 
   public get Duration() : string | null {
     if ( this.Duration_ === void 0 ) {
-      this.Duration_ = this.extractString( 9, true )
+      this.Duration_ = this.extractString( 9, 6, 4, true )
     }
 
     return this.Duration_ as string | null
@@ -90,7 +90,7 @@ export abstract class IfcWorkControl extends IfcControl {
 
   public get TotalFloat() : string | null {
     if ( this.TotalFloat_ === void 0 ) {
-      this.TotalFloat_ = this.extractString( 10, true )
+      this.TotalFloat_ = this.extractString( 10, 6, 4, true )
     }
 
     return this.TotalFloat_ as string | null
@@ -98,7 +98,7 @@ export abstract class IfcWorkControl extends IfcControl {
 
   public get StartTime() : string {
     if ( this.StartTime_ === void 0 ) {
-      this.StartTime_ = this.extractString( 11, false )
+      this.StartTime_ = this.extractString( 11, 6, 4, false )
     }
 
     return this.StartTime_ as string
@@ -106,7 +106,7 @@ export abstract class IfcWorkControl extends IfcControl {
 
   public get FinishTime() : string | null {
     if ( this.FinishTime_ === void 0 ) {
-      this.FinishTime_ = this.extractString( 12, true )
+      this.FinishTime_ = this.extractString( 12, 6, 4, true )
     }
 
     return this.FinishTime_ as string | null
@@ -114,7 +114,9 @@ export abstract class IfcWorkControl extends IfcControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

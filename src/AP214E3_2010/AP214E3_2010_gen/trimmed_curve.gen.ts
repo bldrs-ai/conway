@@ -31,7 +31,7 @@ export  class trimmed_curve extends bounded_curve {
 
   public get basis_curve() : curve {
     if ( this.basis_curve_ === void 0 ) {
-      this.basis_curve_ = this.extractElement( 1, false, curve )
+      this.basis_curve_ = this.extractElement( 1, 1, 4, false, curve )
     }
 
     return this.basis_curve_ as curve
@@ -40,7 +40,7 @@ export  class trimmed_curve extends bounded_curve {
   public get trim_1() : Array<cartesian_point | parameter_value> {
     if ( this.trim_1_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -80,7 +80,7 @@ export  class trimmed_curve extends bounded_curve {
   public get trim_2() : Array<cartesian_point | parameter_value> {
     if ( this.trim_2_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 1, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -119,7 +119,7 @@ export  class trimmed_curve extends bounded_curve {
 
   public get sense_agreement() : boolean {
     if ( this.sense_agreement_ === void 0 ) {
-      this.sense_agreement_ = this.extractBoolean( 4, false )
+      this.sense_agreement_ = this.extractBoolean( 4, 1, 4, false )
     }
 
     return this.sense_agreement_ as boolean
@@ -127,7 +127,7 @@ export  class trimmed_curve extends bounded_curve {
 
   public get master_representation() : trimming_preference {
     if ( this.master_representation_ === void 0 ) {
-      this.master_representation_ = this.extractLambda( 5, trimming_preferenceDeserializeStep, false )
+      this.master_representation_ = this.extractLambda( 5, 1, 4, trimming_preferenceDeserializeStep, false )
     }
 
     return this.master_representation_ as trimming_preference
@@ -135,8 +135,26 @@ export  class trimmed_curve extends bounded_curve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === trimmed_curve.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for trimmed_curve" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

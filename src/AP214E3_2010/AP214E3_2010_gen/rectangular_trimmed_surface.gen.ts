@@ -25,7 +25,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get basis_surface() : surface {
     if ( this.basis_surface_ === void 0 ) {
-      this.basis_surface_ = this.extractElement( 1, false, surface )
+      this.basis_surface_ = this.extractElement( 1, 1, 4, false, surface )
     }
 
     return this.basis_surface_ as surface
@@ -33,7 +33,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get u1() : number {
     if ( this.u1_ === void 0 ) {
-      this.u1_ = this.extractNumber( 2, false )
+      this.u1_ = this.extractNumber( 2, 1, 4, false )
     }
 
     return this.u1_ as number
@@ -41,7 +41,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get u2() : number {
     if ( this.u2_ === void 0 ) {
-      this.u2_ = this.extractNumber( 3, false )
+      this.u2_ = this.extractNumber( 3, 1, 4, false )
     }
 
     return this.u2_ as number
@@ -49,7 +49,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get v1() : number {
     if ( this.v1_ === void 0 ) {
-      this.v1_ = this.extractNumber( 4, false )
+      this.v1_ = this.extractNumber( 4, 1, 4, false )
     }
 
     return this.v1_ as number
@@ -57,7 +57,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get v2() : number {
     if ( this.v2_ === void 0 ) {
-      this.v2_ = this.extractNumber( 5, false )
+      this.v2_ = this.extractNumber( 5, 1, 4, false )
     }
 
     return this.v2_ as number
@@ -65,7 +65,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get usense() : boolean {
     if ( this.usense_ === void 0 ) {
-      this.usense_ = this.extractBoolean( 6, false )
+      this.usense_ = this.extractBoolean( 6, 1, 4, false )
     }
 
     return this.usense_ as boolean
@@ -73,7 +73,7 @@ export  class rectangular_trimmed_surface extends bounded_surface {
 
   public get vsense() : boolean {
     if ( this.vsense_ === void 0 ) {
-      this.vsense_ = this.extractBoolean( 7, false )
+      this.vsense_ = this.extractBoolean( 7, 1, 4, false )
     }
 
     return this.vsense_ as boolean
@@ -81,8 +81,26 @@ export  class rectangular_trimmed_surface extends bounded_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === rectangular_trimmed_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for rectangular_trimmed_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

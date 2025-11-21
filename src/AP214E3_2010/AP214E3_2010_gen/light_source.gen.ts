@@ -18,7 +18,7 @@ export  class light_source extends geometric_representation_item {
 
   public get light_colour() : colour {
     if ( this.light_colour_ === void 0 ) {
-      this.light_colour_ = this.extractElement( 1, false, colour )
+      this.light_colour_ = this.extractElement( 1, 1, 2, false, colour )
     }
 
     return this.light_colour_ as colour
@@ -26,8 +26,26 @@ export  class light_source extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === light_source.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for light_source" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

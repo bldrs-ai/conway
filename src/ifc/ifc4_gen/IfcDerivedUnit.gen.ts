@@ -32,7 +32,7 @@ export  class IfcDerivedUnit extends StepEntityBase< EntityTypesIfc > {
   public get Elements() : Array<IfcDerivedUnitElement> {
     if ( this.Elements_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -64,7 +64,7 @@ export  class IfcDerivedUnit extends StepEntityBase< EntityTypesIfc > {
 
   public get UnitType() : IfcDerivedUnitEnum {
     if ( this.UnitType_ === void 0 ) {
-      this.UnitType_ = this.extractLambda( 1, IfcDerivedUnitEnumDeserializeStep, false )
+      this.UnitType_ = this.extractLambda( 1, 0, 0, IfcDerivedUnitEnumDeserializeStep, false )
     }
 
     return this.UnitType_ as IfcDerivedUnitEnum
@@ -72,7 +72,7 @@ export  class IfcDerivedUnit extends StepEntityBase< EntityTypesIfc > {
 
   public get UserDefinedType() : string | null {
     if ( this.UserDefinedType_ === void 0 ) {
-      this.UserDefinedType_ = this.extractString( 2, true )
+      this.UserDefinedType_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.UserDefinedType_ as string | null
@@ -84,7 +84,9 @@ export  class IfcDerivedUnit extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

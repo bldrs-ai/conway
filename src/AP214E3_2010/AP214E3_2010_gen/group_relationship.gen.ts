@@ -22,7 +22,7 @@ export  class group_relationship extends StepEntityBase< EntityTypesAP214 > {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -30,7 +30,7 @@ export  class group_relationship extends StepEntityBase< EntityTypesAP214 > {
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -38,7 +38,7 @@ export  class group_relationship extends StepEntityBase< EntityTypesAP214 > {
 
   public get relating_group() : group {
     if ( this.relating_group_ === void 0 ) {
-      this.relating_group_ = this.extractElement( 2, false, group )
+      this.relating_group_ = this.extractElement( 2, 0, 0, false, group )
     }
 
     return this.relating_group_ as group
@@ -46,7 +46,7 @@ export  class group_relationship extends StepEntityBase< EntityTypesAP214 > {
 
   public get related_group() : group {
     if ( this.related_group_ === void 0 ) {
-      this.related_group_ = this.extractElement( 3, false, group )
+      this.related_group_ = this.extractElement( 3, 0, 0, false, group )
     }
 
     return this.related_group_ as group
@@ -54,8 +54,26 @@ export  class group_relationship extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === group_relationship.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for group_relationship" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

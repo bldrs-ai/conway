@@ -20,7 +20,7 @@ export  class IfcMappedItem extends IfcRepresentationItem {
 
   public get MappingSource() : IfcRepresentationMap {
     if ( this.MappingSource_ === void 0 ) {
-      this.MappingSource_ = this.extractElement( 0, false, IfcRepresentationMap )
+      this.MappingSource_ = this.extractElement( 0, 0, 1, false, IfcRepresentationMap )
     }
 
     return this.MappingSource_ as IfcRepresentationMap
@@ -28,7 +28,7 @@ export  class IfcMappedItem extends IfcRepresentationItem {
 
   public get MappingTarget() : IfcCartesianTransformationOperator {
     if ( this.MappingTarget_ === void 0 ) {
-      this.MappingTarget_ = this.extractElement( 1, false, IfcCartesianTransformationOperator )
+      this.MappingTarget_ = this.extractElement( 1, 0, 1, false, IfcCartesianTransformationOperator )
     }
 
     return this.MappingTarget_ as IfcCartesianTransformationOperator
@@ -36,7 +36,9 @@ export  class IfcMappedItem extends IfcRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -22,7 +22,7 @@ export  class coordinated_universal_time_offset extends StepEntityBase< EntityTy
 
   public get hour_offset() : number {
     if ( this.hour_offset_ === void 0 ) {
-      this.hour_offset_ = this.extractNumber( 0, false )
+      this.hour_offset_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.hour_offset_ as number
@@ -30,7 +30,7 @@ export  class coordinated_universal_time_offset extends StepEntityBase< EntityTy
 
   public get minute_offset() : number | null {
     if ( this.minute_offset_ === void 0 ) {
-      this.minute_offset_ = this.extractNumber( 1, true )
+      this.minute_offset_ = this.extractNumber( 1, 0, 0, true )
     }
 
     return this.minute_offset_ as number | null
@@ -38,7 +38,7 @@ export  class coordinated_universal_time_offset extends StepEntityBase< EntityTy
 
   public get sense() : ahead_or_behind {
     if ( this.sense_ === void 0 ) {
-      this.sense_ = this.extractLambda( 2, ahead_or_behindDeserializeStep, false )
+      this.sense_ = this.extractLambda( 2, 0, 0, ahead_or_behindDeserializeStep, false )
     }
 
     return this.sense_ as ahead_or_behind
@@ -50,8 +50,26 @@ export  class coordinated_universal_time_offset extends StepEntityBase< EntityTy
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === coordinated_universal_time_offset.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for coordinated_universal_time_offset" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

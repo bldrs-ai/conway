@@ -17,7 +17,7 @@ export  class subface extends face {
 
   public get parent_face() : face {
     if ( this.parent_face_ === void 0 ) {
-      this.parent_face_ = this.extractElement( 2, false, face )
+      this.parent_face_ = this.extractElement( 2, 2, 3, false, face )
     }
 
     return this.parent_face_ as face
@@ -25,8 +25,26 @@ export  class subface extends face {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === subface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for subface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

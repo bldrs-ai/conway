@@ -30,7 +30,7 @@ export  class IfcSurfaceStyle extends IfcPresentationStyle {
 
   public get Side() : IfcSurfaceSide {
     if ( this.Side_ === void 0 ) {
-      this.Side_ = this.extractLambda( 1, IfcSurfaceSideDeserializeStep, false )
+      this.Side_ = this.extractLambda( 1, 1, 1, IfcSurfaceSideDeserializeStep, false )
     }
 
     return this.Side_ as IfcSurfaceSide
@@ -39,7 +39,7 @@ export  class IfcSurfaceStyle extends IfcPresentationStyle {
   public get Styles() : Array<IfcExternallyDefinedSurfaceStyle | IfcSurfaceStyleLighting | IfcSurfaceStyleRefraction | IfcSurfaceStyleShading | IfcSurfaceStyleWithTextures> {
     if ( this.Styles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -78,7 +78,9 @@ export  class IfcSurfaceStyle extends IfcPresentationStyle {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

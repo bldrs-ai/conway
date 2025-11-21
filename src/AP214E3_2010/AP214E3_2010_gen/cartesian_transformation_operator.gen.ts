@@ -28,7 +28,7 @@ export  class cartesian_transformation_operator extends geometric_representation
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 1, 2, true )
     }
 
     return this.description_ as string | null
@@ -36,7 +36,7 @@ export  class cartesian_transformation_operator extends geometric_representation
 
   public get axis1() : direction | null {
     if ( this.axis1_ === void 0 ) {
-      this.axis1_ = this.extractElement( 2, true, direction )
+      this.axis1_ = this.extractElement( 2, 1, 2, true, direction )
     }
 
     return this.axis1_ as direction | null
@@ -44,7 +44,7 @@ export  class cartesian_transformation_operator extends geometric_representation
 
   public get axis2() : direction | null {
     if ( this.axis2_ === void 0 ) {
-      this.axis2_ = this.extractElement( 3, true, direction )
+      this.axis2_ = this.extractElement( 3, 1, 2, true, direction )
     }
 
     return this.axis2_ as direction | null
@@ -52,7 +52,7 @@ export  class cartesian_transformation_operator extends geometric_representation
 
   public get local_origin() : cartesian_point {
     if ( this.local_origin_ === void 0 ) {
-      this.local_origin_ = this.extractElement( 4, false, cartesian_point )
+      this.local_origin_ = this.extractElement( 4, 1, 2, false, cartesian_point )
     }
 
     return this.local_origin_ as cartesian_point
@@ -60,7 +60,7 @@ export  class cartesian_transformation_operator extends geometric_representation
 
   public get scale() : number | null {
     if ( this.scale_ === void 0 ) {
-      this.scale_ = this.extractNumber( 5, true )
+      this.scale_ = this.extractNumber( 5, 1, 2, true )
     }
 
     return this.scale_ as number | null
@@ -72,8 +72,26 @@ export  class cartesian_transformation_operator extends geometric_representation
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === cartesian_transformation_operator.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for cartesian_transformation_operator" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

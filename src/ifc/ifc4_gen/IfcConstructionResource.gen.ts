@@ -28,7 +28,7 @@ export abstract class IfcConstructionResource extends IfcResource {
 
   public get Usage() : IfcResourceTime | null {
     if ( this.Usage_ === void 0 ) {
-      this.Usage_ = this.extractElement( 7, true, IfcResourceTime )
+      this.Usage_ = this.extractElement( 7, 7, 4, true, IfcResourceTime )
     }
 
     return this.Usage_ as IfcResourceTime | null
@@ -37,7 +37,7 @@ export abstract class IfcConstructionResource extends IfcResource {
   public get BaseCosts() : Array<IfcAppliedValue> | null {
     if ( this.BaseCosts_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -69,7 +69,7 @@ export abstract class IfcConstructionResource extends IfcResource {
 
   public get BaseQuantity() : IfcPhysicalQuantity | null {
     if ( this.BaseQuantity_ === void 0 ) {
-      this.BaseQuantity_ = this.extractElement( 9, true, IfcPhysicalQuantity )
+      this.BaseQuantity_ = this.extractElement( 9, 7, 4, true, IfcPhysicalQuantity )
     }
 
     return this.BaseQuantity_ as IfcPhysicalQuantity | null
@@ -77,7 +77,9 @@ export abstract class IfcConstructionResource extends IfcResource {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

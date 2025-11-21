@@ -28,7 +28,7 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
 
   public get RelatingStructuralMember() : IfcStructuralMember {
     if ( this.RelatingStructuralMember_ === void 0 ) {
-      this.RelatingStructuralMember_ = this.extractElement( 4, false, IfcStructuralMember )
+      this.RelatingStructuralMember_ = this.extractElement( 4, 4, 3, false, IfcStructuralMember )
     }
 
     return this.RelatingStructuralMember_ as IfcStructuralMember
@@ -36,7 +36,7 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
 
   public get RelatedStructuralConnection() : IfcStructuralConnection {
     if ( this.RelatedStructuralConnection_ === void 0 ) {
-      this.RelatedStructuralConnection_ = this.extractElement( 5, false, IfcStructuralConnection )
+      this.RelatedStructuralConnection_ = this.extractElement( 5, 4, 3, false, IfcStructuralConnection )
     }
 
     return this.RelatedStructuralConnection_ as IfcStructuralConnection
@@ -44,7 +44,7 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
 
   public get AppliedCondition() : IfcBoundaryCondition | null {
     if ( this.AppliedCondition_ === void 0 ) {
-      this.AppliedCondition_ = this.extractElement( 6, true, IfcBoundaryCondition )
+      this.AppliedCondition_ = this.extractElement( 6, 4, 3, true, IfcBoundaryCondition )
     }
 
     return this.AppliedCondition_ as IfcBoundaryCondition | null
@@ -52,7 +52,7 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
 
   public get AdditionalConditions() : IfcStructuralConnectionCondition | null {
     if ( this.AdditionalConditions_ === void 0 ) {
-      this.AdditionalConditions_ = this.extractElement( 7, true, IfcStructuralConnectionCondition )
+      this.AdditionalConditions_ = this.extractElement( 7, 4, 3, true, IfcStructuralConnectionCondition )
     }
 
     return this.AdditionalConditions_ as IfcStructuralConnectionCondition | null
@@ -60,7 +60,7 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
 
   public get SupportedLength() : number | null {
     if ( this.SupportedLength_ === void 0 ) {
-      this.SupportedLength_ = this.extractNumber( 8, true )
+      this.SupportedLength_ = this.extractNumber( 8, 4, 3, true )
     }
 
     return this.SupportedLength_ as number | null
@@ -68,7 +68,7 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
 
   public get ConditionCoordinateSystem() : IfcAxis2Placement3D | null {
     if ( this.ConditionCoordinateSystem_ === void 0 ) {
-      this.ConditionCoordinateSystem_ = this.extractElement( 9, true, IfcAxis2Placement3D )
+      this.ConditionCoordinateSystem_ = this.extractElement( 9, 4, 3, true, IfcAxis2Placement3D )
     }
 
     return this.ConditionCoordinateSystem_ as IfcAxis2Placement3D | null
@@ -76,7 +76,9 @@ export  class IfcRelConnectsStructuralMember extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

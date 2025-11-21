@@ -21,7 +21,7 @@ export  class IfcBuilding extends IfcSpatialStructureElement {
 
   public get ElevationOfRefHeight() : number | null {
     if ( this.ElevationOfRefHeight_ === void 0 ) {
-      this.ElevationOfRefHeight_ = this.extractNumber( 9, true )
+      this.ElevationOfRefHeight_ = this.extractNumber( 9, 9, 6, true )
     }
 
     return this.ElevationOfRefHeight_ as number | null
@@ -29,7 +29,7 @@ export  class IfcBuilding extends IfcSpatialStructureElement {
 
   public get ElevationOfTerrain() : number | null {
     if ( this.ElevationOfTerrain_ === void 0 ) {
-      this.ElevationOfTerrain_ = this.extractNumber( 10, true )
+      this.ElevationOfTerrain_ = this.extractNumber( 10, 9, 6, true )
     }
 
     return this.ElevationOfTerrain_ as number | null
@@ -37,7 +37,7 @@ export  class IfcBuilding extends IfcSpatialStructureElement {
 
   public get BuildingAddress() : IfcPostalAddress | null {
     if ( this.BuildingAddress_ === void 0 ) {
-      this.BuildingAddress_ = this.extractElement( 11, true, IfcPostalAddress )
+      this.BuildingAddress_ = this.extractElement( 11, 9, 6, true, IfcPostalAddress )
     }
 
     return this.BuildingAddress_ as IfcPostalAddress | null
@@ -45,7 +45,9 @@ export  class IfcBuilding extends IfcSpatialStructureElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -25,7 +25,7 @@ export  class IfcCurrencyRelationship extends IfcResourceLevelRelationship {
 
   public get RelatingMonetaryUnit() : IfcMonetaryUnit {
     if ( this.RelatingMonetaryUnit_ === void 0 ) {
-      this.RelatingMonetaryUnit_ = this.extractElement( 2, false, IfcMonetaryUnit )
+      this.RelatingMonetaryUnit_ = this.extractElement( 2, 2, 1, false, IfcMonetaryUnit )
     }
 
     return this.RelatingMonetaryUnit_ as IfcMonetaryUnit
@@ -33,7 +33,7 @@ export  class IfcCurrencyRelationship extends IfcResourceLevelRelationship {
 
   public get RelatedMonetaryUnit() : IfcMonetaryUnit {
     if ( this.RelatedMonetaryUnit_ === void 0 ) {
-      this.RelatedMonetaryUnit_ = this.extractElement( 3, false, IfcMonetaryUnit )
+      this.RelatedMonetaryUnit_ = this.extractElement( 3, 2, 1, false, IfcMonetaryUnit )
     }
 
     return this.RelatedMonetaryUnit_ as IfcMonetaryUnit
@@ -41,7 +41,7 @@ export  class IfcCurrencyRelationship extends IfcResourceLevelRelationship {
 
   public get ExchangeRate() : number {
     if ( this.ExchangeRate_ === void 0 ) {
-      this.ExchangeRate_ = this.extractNumber( 4, false )
+      this.ExchangeRate_ = this.extractNumber( 4, 2, 1, false )
     }
 
     return this.ExchangeRate_ as number
@@ -49,7 +49,7 @@ export  class IfcCurrencyRelationship extends IfcResourceLevelRelationship {
 
   public get RateDateTime() : string | null {
     if ( this.RateDateTime_ === void 0 ) {
-      this.RateDateTime_ = this.extractString( 5, true )
+      this.RateDateTime_ = this.extractString( 5, 2, 1, true )
     }
 
     return this.RateDateTime_ as string | null
@@ -57,7 +57,7 @@ export  class IfcCurrencyRelationship extends IfcResourceLevelRelationship {
 
   public get RateSource() : IfcLibraryInformation | null {
     if ( this.RateSource_ === void 0 ) {
-      this.RateSource_ = this.extractElement( 6, true, IfcLibraryInformation )
+      this.RateSource_ = this.extractElement( 6, 2, 1, true, IfcLibraryInformation )
     }
 
     return this.RateSource_ as IfcLibraryInformation | null
@@ -65,7 +65,9 @@ export  class IfcCurrencyRelationship extends IfcResourceLevelRelationship {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

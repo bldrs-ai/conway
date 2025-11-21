@@ -29,7 +29,7 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
 
   public get Position() : IfcAxis2Placement3D {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractElement( 4, false, IfcAxis2Placement3D )
+      this.Position_ = this.extractElement( 4, 4, 3, false, IfcAxis2Placement3D )
     }
 
     return this.Position_ as IfcAxis2Placement3D
@@ -37,7 +37,7 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
 
   public get ColourAppearance() : IfcColourRgb | null {
     if ( this.ColourAppearance_ === void 0 ) {
-      this.ColourAppearance_ = this.extractElement( 5, true, IfcColourRgb )
+      this.ColourAppearance_ = this.extractElement( 5, 4, 3, true, IfcColourRgb )
     }
 
     return this.ColourAppearance_ as IfcColourRgb | null
@@ -45,7 +45,7 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
 
   public get ColourTemperature() : number {
     if ( this.ColourTemperature_ === void 0 ) {
-      this.ColourTemperature_ = this.extractNumber( 6, false )
+      this.ColourTemperature_ = this.extractNumber( 6, 4, 3, false )
     }
 
     return this.ColourTemperature_ as number
@@ -53,7 +53,7 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
 
   public get LuminousFlux() : number {
     if ( this.LuminousFlux_ === void 0 ) {
-      this.LuminousFlux_ = this.extractNumber( 7, false )
+      this.LuminousFlux_ = this.extractNumber( 7, 4, 3, false )
     }
 
     return this.LuminousFlux_ as number
@@ -61,7 +61,7 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
 
   public get LightEmissionSource() : IfcLightEmissionSourceEnum {
     if ( this.LightEmissionSource_ === void 0 ) {
-      this.LightEmissionSource_ = this.extractLambda( 8, IfcLightEmissionSourceEnumDeserializeStep, false )
+      this.LightEmissionSource_ = this.extractLambda( 8, 4, 3, IfcLightEmissionSourceEnumDeserializeStep, false )
     }
 
     return this.LightEmissionSource_ as IfcLightEmissionSourceEnum
@@ -71,7 +71,7 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
     if ( this.LightDistributionDataSource_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 9, false )
+        this.extractReference( 9, 4, 3, false )
 
       if ( !( value instanceof IfcExternalReference ) && !( value instanceof IfcLightIntensityDistribution ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -86,7 +86,9 @@ export  class IfcLightSourceGoniometric extends IfcLightSource {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

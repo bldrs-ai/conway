@@ -19,7 +19,7 @@ export  class surface_of_revolution extends swept_surface {
 
   public get axis_position() : axis1_placement {
     if ( this.axis_position_ === void 0 ) {
-      this.axis_position_ = this.extractElement( 2, false, axis1_placement )
+      this.axis_position_ = this.extractElement( 2, 2, 4, false, axis1_placement )
     }
 
     return this.axis_position_ as axis1_placement
@@ -28,8 +28,26 @@ export  class surface_of_revolution extends swept_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_of_revolution.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_of_revolution" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

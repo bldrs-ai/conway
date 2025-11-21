@@ -19,7 +19,7 @@ export class non_negative_length_measure extends StepEntityBase< EntityTypesAP21
 
   public get Value() : number {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractNumber( 0, false )
+      this.Value_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.Value_ as number
@@ -28,7 +28,8 @@ export class non_negative_length_measure extends StepEntityBase< EntityTypesAP21
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
+      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+      multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
      super( localID, internalReference, model )
   }
 

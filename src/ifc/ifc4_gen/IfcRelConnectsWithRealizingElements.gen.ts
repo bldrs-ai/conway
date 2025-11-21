@@ -27,7 +27,7 @@ export  class IfcRelConnectsWithRealizingElements extends IfcRelConnectsElements
   public get RealizingElements() : Array<IfcElement> {
     if ( this.RealizingElements_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class IfcRelConnectsWithRealizingElements extends IfcRelConnectsElements
 
   public get ConnectionType() : string | null {
     if ( this.ConnectionType_ === void 0 ) {
-      this.ConnectionType_ = this.extractString( 8, true )
+      this.ConnectionType_ = this.extractString( 8, 7, 4, true )
     }
 
     return this.ConnectionType_ as string | null
@@ -67,7 +67,9 @@ export  class IfcRelConnectsWithRealizingElements extends IfcRelConnectsElements
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

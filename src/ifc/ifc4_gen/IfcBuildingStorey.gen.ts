@@ -18,7 +18,7 @@ export  class IfcBuildingStorey extends IfcSpatialStructureElement {
 
   public get Elevation() : number | null {
     if ( this.Elevation_ === void 0 ) {
-      this.Elevation_ = this.extractNumber( 9, true )
+      this.Elevation_ = this.extractNumber( 9, 9, 6, true )
     }
 
     return this.Elevation_ as number | null
@@ -26,7 +26,9 @@ export  class IfcBuildingStorey extends IfcSpatialStructureElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

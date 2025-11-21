@@ -28,7 +28,7 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
 
   public get TotalCrossSectionArea() : number {
     if ( this.TotalCrossSectionArea_ === void 0 ) {
-      this.TotalCrossSectionArea_ = this.extractNumber( 0, false )
+      this.TotalCrossSectionArea_ = this.extractNumber( 0, 0, 2, false )
     }
 
     return this.TotalCrossSectionArea_ as number
@@ -36,7 +36,7 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
 
   public get SteelGrade() : string {
     if ( this.SteelGrade_ === void 0 ) {
-      this.SteelGrade_ = this.extractString( 1, false )
+      this.SteelGrade_ = this.extractString( 1, 0, 2, false )
     }
 
     return this.SteelGrade_ as string
@@ -44,7 +44,7 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
 
   public get BarSurface() : IfcReinforcingBarSurfaceEnum | null {
     if ( this.BarSurface_ === void 0 ) {
-      this.BarSurface_ = this.extractLambda( 2, IfcReinforcingBarSurfaceEnumDeserializeStep, true )
+      this.BarSurface_ = this.extractLambda( 2, 0, 2, IfcReinforcingBarSurfaceEnumDeserializeStep, true )
     }
 
     return this.BarSurface_ as IfcReinforcingBarSurfaceEnum | null
@@ -52,7 +52,7 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
 
   public get EffectiveDepth() : number | null {
     if ( this.EffectiveDepth_ === void 0 ) {
-      this.EffectiveDepth_ = this.extractNumber( 3, true )
+      this.EffectiveDepth_ = this.extractNumber( 3, 0, 2, true )
     }
 
     return this.EffectiveDepth_ as number | null
@@ -60,7 +60,7 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
 
   public get NominalBarDiameter() : number | null {
     if ( this.NominalBarDiameter_ === void 0 ) {
-      this.NominalBarDiameter_ = this.extractNumber( 4, true )
+      this.NominalBarDiameter_ = this.extractNumber( 4, 0, 2, true )
     }
 
     return this.NominalBarDiameter_ as number | null
@@ -68,7 +68,7 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
 
   public get BarCount() : number | null {
     if ( this.BarCount_ === void 0 ) {
-      this.BarCount_ = this.extractNumber( 5, true )
+      this.BarCount_ = this.extractNumber( 5, 0, 2, true )
     }
 
     return this.BarCount_ as number | null
@@ -76,7 +76,9 @@ export  class IfcReinforcementBarProperties extends IfcPreDefinedProperties {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

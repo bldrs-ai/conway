@@ -23,7 +23,7 @@ export  class IfcCShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get Depth() : number {
     if ( this.Depth_ === void 0 ) {
-      this.Depth_ = this.extractNumber( 3, false )
+      this.Depth_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.Depth_ as number
@@ -31,7 +31,7 @@ export  class IfcCShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get Width() : number {
     if ( this.Width_ === void 0 ) {
-      this.Width_ = this.extractNumber( 4, false )
+      this.Width_ = this.extractNumber( 4, 3, 2, false )
     }
 
     return this.Width_ as number
@@ -39,7 +39,7 @@ export  class IfcCShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get WallThickness() : number {
     if ( this.WallThickness_ === void 0 ) {
-      this.WallThickness_ = this.extractNumber( 5, false )
+      this.WallThickness_ = this.extractNumber( 5, 3, 2, false )
     }
 
     return this.WallThickness_ as number
@@ -47,7 +47,7 @@ export  class IfcCShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get Girth() : number {
     if ( this.Girth_ === void 0 ) {
-      this.Girth_ = this.extractNumber( 6, false )
+      this.Girth_ = this.extractNumber( 6, 3, 2, false )
     }
 
     return this.Girth_ as number
@@ -55,7 +55,7 @@ export  class IfcCShapeProfileDef extends IfcParameterizedProfileDef {
 
   public get InternalFilletRadius() : number | null {
     if ( this.InternalFilletRadius_ === void 0 ) {
-      this.InternalFilletRadius_ = this.extractNumber( 7, true )
+      this.InternalFilletRadius_ = this.extractNumber( 7, 3, 2, true )
     }
 
     return this.InternalFilletRadius_ as number | null
@@ -63,7 +63,9 @@ export  class IfcCShapeProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

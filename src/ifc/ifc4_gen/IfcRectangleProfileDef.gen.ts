@@ -19,7 +19,7 @@ export  class IfcRectangleProfileDef extends IfcParameterizedProfileDef {
 
   public get XDim() : number {
     if ( this.XDim_ === void 0 ) {
-      this.XDim_ = this.extractNumber( 3, false )
+      this.XDim_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.XDim_ as number
@@ -27,7 +27,7 @@ export  class IfcRectangleProfileDef extends IfcParameterizedProfileDef {
 
   public get YDim() : number {
     if ( this.YDim_ === void 0 ) {
-      this.YDim_ = this.extractNumber( 4, false )
+      this.YDim_ = this.extractNumber( 4, 3, 2, false )
     }
 
     return this.YDim_ as number
@@ -35,7 +35,9 @@ export  class IfcRectangleProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

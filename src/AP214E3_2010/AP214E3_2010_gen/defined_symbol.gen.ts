@@ -23,7 +23,7 @@ export  class defined_symbol extends geometric_representation_item {
     if ( this.definition_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 1, 2, false )
 
       if ( !( value instanceof pre_defined_symbol ) && !( value instanceof externally_defined_symbol ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -38,7 +38,7 @@ export  class defined_symbol extends geometric_representation_item {
 
   public get target() : symbol_target {
     if ( this.target_ === void 0 ) {
-      this.target_ = this.extractElement( 2, false, symbol_target )
+      this.target_ = this.extractElement( 2, 1, 2, false, symbol_target )
     }
 
     return this.target_ as symbol_target
@@ -46,8 +46,26 @@ export  class defined_symbol extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === defined_symbol.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for defined_symbol" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

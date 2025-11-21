@@ -53,7 +53,7 @@ export  class applied_security_classification_assignment extends security_classi
   public get items() : Array<action | action_directive | action_property | applied_action_assignment | assembly_component_usage_substitute | class_system | configuration_design | configuration_effectivity | configured_effectivity_assignment | document_file | draughting_model | drawing_revision | executed_action | general_property | material_designation | mechanical_design_geometric_presentation_representation | organizational_project | presentation_area | product | product_concept | product_concept_feature | product_concept_feature_category | product_definition | product_definition_formation | product_definition_relationship | property_definition | resource_property | shape_representation | versioned_action_request> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -92,8 +92,26 @@ export  class applied_security_classification_assignment extends security_classi
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === applied_security_classification_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for applied_security_classification_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

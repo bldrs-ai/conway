@@ -18,7 +18,7 @@ export  class IfcImageTexture extends IfcSurfaceTexture {
 
   public get URLReference() : string {
     if ( this.URLReference_ === void 0 ) {
-      this.URLReference_ = this.extractString( 5, false )
+      this.URLReference_ = this.extractString( 5, 5, 2, false )
     }
 
     return this.URLReference_ as string
@@ -26,7 +26,9 @@ export  class IfcImageTexture extends IfcSurfaceTexture {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

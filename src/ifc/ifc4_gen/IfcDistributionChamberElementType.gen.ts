@@ -18,7 +18,7 @@ export  class IfcDistributionChamberElementType extends IfcDistributionFlowEleme
 
   public get PredefinedType() : IfcDistributionChamberElementTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcDistributionChamberElementTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcDistributionChamberElementTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcDistributionChamberElementTypeEnum
@@ -26,7 +26,9 @@ export  class IfcDistributionChamberElementType extends IfcDistributionFlowEleme
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

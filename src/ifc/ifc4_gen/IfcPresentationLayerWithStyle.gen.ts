@@ -28,7 +28,7 @@ export  class IfcPresentationLayerWithStyle extends IfcPresentationLayerAssignme
 
   public get LayerOn() : boolean | null {
     if ( this.LayerOn_ === void 0 ) {
-      this.LayerOn_ = this.extractLogical( 4, false )
+      this.LayerOn_ = this.extractLogical( 4, 4, 1, false )
     }
 
     return this.LayerOn_ as boolean | null
@@ -36,7 +36,7 @@ export  class IfcPresentationLayerWithStyle extends IfcPresentationLayerAssignme
 
   public get LayerFrozen() : boolean | null {
     if ( this.LayerFrozen_ === void 0 ) {
-      this.LayerFrozen_ = this.extractLogical( 5, false )
+      this.LayerFrozen_ = this.extractLogical( 5, 4, 1, false )
     }
 
     return this.LayerFrozen_ as boolean | null
@@ -44,7 +44,7 @@ export  class IfcPresentationLayerWithStyle extends IfcPresentationLayerAssignme
 
   public get LayerBlocked() : boolean | null {
     if ( this.LayerBlocked_ === void 0 ) {
-      this.LayerBlocked_ = this.extractLogical( 6, false )
+      this.LayerBlocked_ = this.extractLogical( 6, 4, 1, false )
     }
 
     return this.LayerBlocked_ as boolean | null
@@ -53,7 +53,7 @@ export  class IfcPresentationLayerWithStyle extends IfcPresentationLayerAssignme
   public get LayerStyles() : Array<IfcPresentationStyle> {
     if ( this.LayerStyles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 4, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -85,7 +85,9 @@ export  class IfcPresentationLayerWithStyle extends IfcPresentationLayerAssignme
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

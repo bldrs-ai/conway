@@ -21,7 +21,7 @@ export  class IfcRelConnectsElements extends IfcRelConnects {
 
   public get ConnectionGeometry() : IfcConnectionGeometry | null {
     if ( this.ConnectionGeometry_ === void 0 ) {
-      this.ConnectionGeometry_ = this.extractElement( 4, true, IfcConnectionGeometry )
+      this.ConnectionGeometry_ = this.extractElement( 4, 4, 3, true, IfcConnectionGeometry )
     }
 
     return this.ConnectionGeometry_ as IfcConnectionGeometry | null
@@ -29,7 +29,7 @@ export  class IfcRelConnectsElements extends IfcRelConnects {
 
   public get RelatingElement() : IfcElement {
     if ( this.RelatingElement_ === void 0 ) {
-      this.RelatingElement_ = this.extractElement( 5, false, IfcElement )
+      this.RelatingElement_ = this.extractElement( 5, 4, 3, false, IfcElement )
     }
 
     return this.RelatingElement_ as IfcElement
@@ -37,7 +37,7 @@ export  class IfcRelConnectsElements extends IfcRelConnects {
 
   public get RelatedElement() : IfcElement {
     if ( this.RelatedElement_ === void 0 ) {
-      this.RelatedElement_ = this.extractElement( 6, false, IfcElement )
+      this.RelatedElement_ = this.extractElement( 6, 4, 3, false, IfcElement )
     }
 
     return this.RelatedElement_ as IfcElement
@@ -45,7 +45,9 @@ export  class IfcRelConnectsElements extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

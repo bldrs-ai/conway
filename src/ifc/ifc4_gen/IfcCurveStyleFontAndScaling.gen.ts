@@ -23,7 +23,7 @@ export  class IfcCurveStyleFontAndScaling extends IfcPresentationItem {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, true )
+      this.Name_ = this.extractString( 0, 0, 1, true )
     }
 
     return this.Name_ as string | null
@@ -33,7 +33,7 @@ export  class IfcCurveStyleFontAndScaling extends IfcPresentationItem {
     if ( this.CurveFont_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 1, false )
 
       if ( !( value instanceof IfcCurveStyleFont ) && !( value instanceof IfcPreDefinedCurveFont ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -48,7 +48,7 @@ export  class IfcCurveStyleFontAndScaling extends IfcPresentationItem {
 
   public get CurveFontScaling() : number {
     if ( this.CurveFontScaling_ === void 0 ) {
-      this.CurveFontScaling_ = this.extractNumber( 2, false )
+      this.CurveFontScaling_ = this.extractNumber( 2, 0, 1, false )
     }
 
     return this.CurveFontScaling_ as number
@@ -56,7 +56,9 @@ export  class IfcCurveStyleFontAndScaling extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

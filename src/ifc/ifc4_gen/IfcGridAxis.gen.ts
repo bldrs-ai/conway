@@ -21,7 +21,7 @@ export  class IfcGridAxis extends StepEntityBase< EntityTypesIfc > {
 
   public get AxisTag() : string | null {
     if ( this.AxisTag_ === void 0 ) {
-      this.AxisTag_ = this.extractString( 0, true )
+      this.AxisTag_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.AxisTag_ as string | null
@@ -29,7 +29,7 @@ export  class IfcGridAxis extends StepEntityBase< EntityTypesIfc > {
 
   public get AxisCurve() : IfcCurve {
     if ( this.AxisCurve_ === void 0 ) {
-      this.AxisCurve_ = this.extractElement( 1, false, IfcCurve )
+      this.AxisCurve_ = this.extractElement( 1, 0, 0, false, IfcCurve )
     }
 
     return this.AxisCurve_ as IfcCurve
@@ -37,7 +37,7 @@ export  class IfcGridAxis extends StepEntityBase< EntityTypesIfc > {
 
   public get SameSense() : boolean {
     if ( this.SameSense_ === void 0 ) {
-      this.SameSense_ = this.extractBoolean( 2, false )
+      this.SameSense_ = this.extractBoolean( 2, 0, 0, false )
     }
 
     return this.SameSense_ as boolean
@@ -49,7 +49,9 @@ export  class IfcGridAxis extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

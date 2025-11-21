@@ -18,7 +18,7 @@ export  class IfcElectricFlowStorageDevice extends IfcFlowStorageDevice {
 
   public get PredefinedType() : IfcElectricFlowStorageDeviceTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcElectricFlowStorageDeviceTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcElectricFlowStorageDeviceTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcElectricFlowStorageDeviceTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcElectricFlowStorageDevice extends IfcFlowStorageDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

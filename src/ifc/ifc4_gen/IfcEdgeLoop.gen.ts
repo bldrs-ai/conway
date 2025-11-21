@@ -27,7 +27,7 @@ export  class IfcEdgeLoop extends IfcLoop {
   public get EdgeList() : Array<IfcOrientedEdge> {
     if ( this.EdgeList_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -63,7 +63,9 @@ export  class IfcEdgeLoop extends IfcLoop {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

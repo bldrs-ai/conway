@@ -20,7 +20,7 @@ export  class IfcBlobTexture extends IfcSurfaceTexture {
 
   public get RasterFormat() : string {
     if ( this.RasterFormat_ === void 0 ) {
-      this.RasterFormat_ = this.extractString( 5, false )
+      this.RasterFormat_ = this.extractString( 5, 5, 2, false )
     }
 
     return this.RasterFormat_ as string
@@ -28,7 +28,7 @@ export  class IfcBlobTexture extends IfcSurfaceTexture {
 
   public get RasterCode() : [Uint8Array, number] {
     if ( this.RasterCode_ === void 0 ) {
-      this.RasterCode_ = this.extractBinary( 6, false )
+      this.RasterCode_ = this.extractBinary( 6, 5, 2, false )
     }
 
     return this.RasterCode_ as [Uint8Array, number]
@@ -36,7 +36,9 @@ export  class IfcBlobTexture extends IfcSurfaceTexture {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

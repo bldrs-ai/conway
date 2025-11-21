@@ -33,7 +33,7 @@ export  class IfcBSplineSurfaceWithKnots extends IfcBSplineSurface {
   public get UMultiplicities() : Array< number > {
     if ( this.UMultiplicities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 7, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,7 @@ export  class IfcBSplineSurfaceWithKnots extends IfcBSplineSurface {
   public get VMultiplicities() : Array< number > {
     if ( this.VMultiplicities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 7, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -101,7 +101,7 @@ export  class IfcBSplineSurfaceWithKnots extends IfcBSplineSurface {
   public get UKnots() : Array< number > {
     if ( this.UKnots_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 9 )
+      let   cursor    = this.getOffsetCursor( 9, 7, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -135,7 +135,7 @@ export  class IfcBSplineSurfaceWithKnots extends IfcBSplineSurface {
   public get VKnots() : Array< number > {
     if ( this.VKnots_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 10 )
+      let   cursor    = this.getOffsetCursor( 10, 7, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -168,7 +168,7 @@ export  class IfcBSplineSurfaceWithKnots extends IfcBSplineSurface {
 
   public get KnotSpec() : IfcKnotType {
     if ( this.KnotSpec_ === void 0 ) {
-      this.KnotSpec_ = this.extractLambda( 11, IfcKnotTypeDeserializeStep, false )
+      this.KnotSpec_ = this.extractLambda( 11, 7, 5, IfcKnotTypeDeserializeStep, false )
     }
 
     return this.KnotSpec_ as IfcKnotType
@@ -184,7 +184,9 @@ export  class IfcBSplineSurfaceWithKnots extends IfcBSplineSurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

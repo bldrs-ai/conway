@@ -20,7 +20,7 @@ export  class IfcSlippageConnectionCondition extends IfcStructuralConnectionCond
 
   public get SlippageX() : number | null {
     if ( this.SlippageX_ === void 0 ) {
-      this.SlippageX_ = this.extractNumber( 1, true )
+      this.SlippageX_ = this.extractNumber( 1, 1, 1, true )
     }
 
     return this.SlippageX_ as number | null
@@ -28,7 +28,7 @@ export  class IfcSlippageConnectionCondition extends IfcStructuralConnectionCond
 
   public get SlippageY() : number | null {
     if ( this.SlippageY_ === void 0 ) {
-      this.SlippageY_ = this.extractNumber( 2, true )
+      this.SlippageY_ = this.extractNumber( 2, 1, 1, true )
     }
 
     return this.SlippageY_ as number | null
@@ -36,7 +36,7 @@ export  class IfcSlippageConnectionCondition extends IfcStructuralConnectionCond
 
   public get SlippageZ() : number | null {
     if ( this.SlippageZ_ === void 0 ) {
-      this.SlippageZ_ = this.extractNumber( 3, true )
+      this.SlippageZ_ = this.extractNumber( 3, 1, 1, true )
     }
 
     return this.SlippageZ_ as number | null
@@ -44,7 +44,9 @@ export  class IfcSlippageConnectionCondition extends IfcStructuralConnectionCond
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

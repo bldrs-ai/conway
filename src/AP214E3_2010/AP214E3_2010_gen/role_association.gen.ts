@@ -29,7 +29,7 @@ export  class role_association extends StepEntityBase< EntityTypesAP214 > {
 
   public get role() : object_role {
     if ( this.role_ === void 0 ) {
-      this.role_ = this.extractElement( 0, false, object_role )
+      this.role_ = this.extractElement( 0, 0, 0, false, object_role )
     }
 
     return this.role_ as object_role
@@ -39,7 +39,7 @@ export  class role_association extends StepEntityBase< EntityTypesAP214 > {
     if ( this.item_with_role_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 0, false )
 
       if ( !( value instanceof action_assignment ) && !( value instanceof action_request_assignment ) && !( value instanceof approval_assignment ) && !( value instanceof approval_date_time ) && !( value instanceof certification_assignment ) && !( value instanceof contract_assignment ) && !( value instanceof document_reference ) && !( value instanceof effectivity_assignment ) && !( value instanceof group_assignment ) && !( value instanceof name_assignment ) && !( value instanceof security_classification_assignment ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -54,8 +54,26 @@ export  class role_association extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === role_association.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for role_association" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

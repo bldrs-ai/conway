@@ -208,7 +208,6 @@ export class ConwayModelLoader {
         } catch ( e ) {
 
           if ( e instanceof Error ) {
-
              
             Logger.error( `Error loading AP214 model in passthrough factory ${modelID}:\n${e.message}\n\n${e.stack}`)
           } else {

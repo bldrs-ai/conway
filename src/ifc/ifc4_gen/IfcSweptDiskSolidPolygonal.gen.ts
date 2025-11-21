@@ -18,7 +18,7 @@ export  class IfcSweptDiskSolidPolygonal extends IfcSweptDiskSolid {
 
   public get FilletRadius() : number | null {
     if ( this.FilletRadius_ === void 0 ) {
-      this.FilletRadius_ = this.extractNumber( 5, true )
+      this.FilletRadius_ = this.extractNumber( 5, 5, 4, true )
     }
 
     return this.FilletRadius_ as number | null
@@ -26,7 +26,9 @@ export  class IfcSweptDiskSolidPolygonal extends IfcSweptDiskSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

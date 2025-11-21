@@ -27,7 +27,7 @@ export  class IfcPersonAndOrganization extends StepEntityBase< EntityTypesIfc > 
 
   public get ThePerson() : IfcPerson {
     if ( this.ThePerson_ === void 0 ) {
-      this.ThePerson_ = this.extractElement( 0, false, IfcPerson )
+      this.ThePerson_ = this.extractElement( 0, 0, 0, false, IfcPerson )
     }
 
     return this.ThePerson_ as IfcPerson
@@ -35,7 +35,7 @@ export  class IfcPersonAndOrganization extends StepEntityBase< EntityTypesIfc > 
 
   public get TheOrganization() : IfcOrganization {
     if ( this.TheOrganization_ === void 0 ) {
-      this.TheOrganization_ = this.extractElement( 1, false, IfcOrganization )
+      this.TheOrganization_ = this.extractElement( 1, 0, 0, false, IfcOrganization )
     }
 
     return this.TheOrganization_ as IfcOrganization
@@ -44,7 +44,7 @@ export  class IfcPersonAndOrganization extends StepEntityBase< EntityTypesIfc > 
   public get Roles() : Array<IfcActorRole> | null {
     if ( this.Roles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -76,7 +76,9 @@ export  class IfcPersonAndOrganization extends StepEntityBase< EntityTypesIfc > 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -21,7 +21,7 @@ export  class IfcVector extends IfcGeometricRepresentationItem {
 
   public get Orientation() : IfcDirection {
     if ( this.Orientation_ === void 0 ) {
-      this.Orientation_ = this.extractElement( 0, false, IfcDirection )
+      this.Orientation_ = this.extractElement( 0, 0, 2, false, IfcDirection )
     }
 
     return this.Orientation_ as IfcDirection
@@ -29,7 +29,7 @@ export  class IfcVector extends IfcGeometricRepresentationItem {
 
   public get Magnitude() : number {
     if ( this.Magnitude_ === void 0 ) {
-      this.Magnitude_ = this.extractNumber( 1, false )
+      this.Magnitude_ = this.extractNumber( 1, 0, 2, false )
     }
 
     return this.Magnitude_ as number
@@ -41,7 +41,9 @@ export  class IfcVector extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

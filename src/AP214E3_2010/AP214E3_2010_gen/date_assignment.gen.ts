@@ -19,7 +19,7 @@ export abstract class date_assignment extends StepEntityBase< EntityTypesAP214 >
 
   public get assigned_date() : date {
     if ( this.assigned_date_ === void 0 ) {
-      this.assigned_date_ = this.extractElement( 0, false, date )
+      this.assigned_date_ = this.extractElement( 0, 0, 0, false, date )
     }
 
     return this.assigned_date_ as date
@@ -27,7 +27,7 @@ export abstract class date_assignment extends StepEntityBase< EntityTypesAP214 >
 
   public get role() : date_role {
     if ( this.role_ === void 0 ) {
-      this.role_ = this.extractElement( 1, false, date_role )
+      this.role_ = this.extractElement( 1, 0, 0, false, date_role )
     }
 
     return this.role_ as date_role
@@ -35,8 +35,26 @@ export abstract class date_assignment extends StepEntityBase< EntityTypesAP214 >
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === date_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for date_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query: EntityTypesAP214[] = 

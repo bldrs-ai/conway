@@ -13,7 +13,8 @@ export default interface StepEntityConstructor<
   new(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypeIDs >,
-    model: StepModelBase< EntityTypeIDs, BaseEntity > ) : BaseEntity;
+    model: StepModelBase< EntityTypeIDs, BaseEntity >, 
+    multiReference?: StepEntityInternalReference< EntityTypeIDs >[] ) : BaseEntity;
 
   /**
    * The query for this type (includes the sub-types related to build the query from the
@@ -36,7 +37,8 @@ type StepEntityConstructorAbstractType<
     abstract new(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypeIDs >,
-      model: StepModelBase< EntityTypeIDs, BaseEntity > ) => BaseEntity
+      model: StepModelBase< EntityTypeIDs, BaseEntity >, 
+      multiReference?: StepEntityInternalReference< EntityTypeIDs >[] ) => BaseEntity
 
 /**
  * Represents abstract and non-abstract Entity types constructors, allowing them to be used for

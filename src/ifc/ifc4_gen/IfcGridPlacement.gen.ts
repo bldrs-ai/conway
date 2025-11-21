@@ -20,7 +20,7 @@ export  class IfcGridPlacement extends IfcObjectPlacement {
 
   public get PlacementLocation() : IfcVirtualGridIntersection {
     if ( this.PlacementLocation_ === void 0 ) {
-      this.PlacementLocation_ = this.extractElement( 0, false, IfcVirtualGridIntersection )
+      this.PlacementLocation_ = this.extractElement( 0, 0, 1, false, IfcVirtualGridIntersection )
     }
 
     return this.PlacementLocation_ as IfcVirtualGridIntersection
@@ -30,7 +30,7 @@ export  class IfcGridPlacement extends IfcObjectPlacement {
     if ( this.PlacementRefDirection_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 1, true )
+        this.extractReference( 1, 0, 1, true )
 
       if ( !( value instanceof IfcDirection ) && !( value instanceof IfcVirtualGridIntersection ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -45,7 +45,9 @@ export  class IfcGridPlacement extends IfcObjectPlacement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

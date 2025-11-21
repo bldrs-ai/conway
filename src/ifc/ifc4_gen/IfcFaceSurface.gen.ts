@@ -20,7 +20,7 @@ export  class IfcFaceSurface extends IfcFace {
 
   public get FaceSurface() : IfcSurface {
     if ( this.FaceSurface_ === void 0 ) {
-      this.FaceSurface_ = this.extractElement( 1, false, IfcSurface )
+      this.FaceSurface_ = this.extractElement( 1, 1, 3, false, IfcSurface )
     }
 
     return this.FaceSurface_ as IfcSurface
@@ -28,7 +28,7 @@ export  class IfcFaceSurface extends IfcFace {
 
   public get SameSense() : boolean {
     if ( this.SameSense_ === void 0 ) {
-      this.SameSense_ = this.extractBoolean( 2, false )
+      this.SameSense_ = this.extractBoolean( 2, 1, 3, false )
     }
 
     return this.SameSense_ as boolean
@@ -36,7 +36,9 @@ export  class IfcFaceSurface extends IfcFace {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class IfcChimneyType extends IfcBuildingElementType {
 
   public get PredefinedType() : IfcChimneyTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcChimneyTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcChimneyTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcChimneyTypeEnum
@@ -26,7 +26,9 @@ export  class IfcChimneyType extends IfcBuildingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

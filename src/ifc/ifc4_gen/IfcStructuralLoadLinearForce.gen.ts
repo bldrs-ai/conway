@@ -24,7 +24,7 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
 
   public get LinearForceX() : number | null {
     if ( this.LinearForceX_ === void 0 ) {
-      this.LinearForceX_ = this.extractNumber( 1, true )
+      this.LinearForceX_ = this.extractNumber( 1, 1, 3, true )
     }
 
     return this.LinearForceX_ as number | null
@@ -32,7 +32,7 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
 
   public get LinearForceY() : number | null {
     if ( this.LinearForceY_ === void 0 ) {
-      this.LinearForceY_ = this.extractNumber( 2, true )
+      this.LinearForceY_ = this.extractNumber( 2, 1, 3, true )
     }
 
     return this.LinearForceY_ as number | null
@@ -40,7 +40,7 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
 
   public get LinearForceZ() : number | null {
     if ( this.LinearForceZ_ === void 0 ) {
-      this.LinearForceZ_ = this.extractNumber( 3, true )
+      this.LinearForceZ_ = this.extractNumber( 3, 1, 3, true )
     }
 
     return this.LinearForceZ_ as number | null
@@ -48,7 +48,7 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
 
   public get LinearMomentX() : number | null {
     if ( this.LinearMomentX_ === void 0 ) {
-      this.LinearMomentX_ = this.extractNumber( 4, true )
+      this.LinearMomentX_ = this.extractNumber( 4, 1, 3, true )
     }
 
     return this.LinearMomentX_ as number | null
@@ -56,7 +56,7 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
 
   public get LinearMomentY() : number | null {
     if ( this.LinearMomentY_ === void 0 ) {
-      this.LinearMomentY_ = this.extractNumber( 5, true )
+      this.LinearMomentY_ = this.extractNumber( 5, 1, 3, true )
     }
 
     return this.LinearMomentY_ as number | null
@@ -64,7 +64,7 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
 
   public get LinearMomentZ() : number | null {
     if ( this.LinearMomentZ_ === void 0 ) {
-      this.LinearMomentZ_ = this.extractNumber( 6, true )
+      this.LinearMomentZ_ = this.extractNumber( 6, 1, 3, true )
     }
 
     return this.LinearMomentZ_ as number | null
@@ -72,7 +72,9 @@ export  class IfcStructuralLoadLinearForce extends IfcStructuralLoadStatic {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

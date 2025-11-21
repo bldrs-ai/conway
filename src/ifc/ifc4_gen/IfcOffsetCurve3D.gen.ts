@@ -23,7 +23,7 @@ export  class IfcOffsetCurve3D extends IfcCurve {
 
   public get BasisCurve() : IfcCurve {
     if ( this.BasisCurve_ === void 0 ) {
-      this.BasisCurve_ = this.extractElement( 0, false, IfcCurve )
+      this.BasisCurve_ = this.extractElement( 0, 0, 3, false, IfcCurve )
     }
 
     return this.BasisCurve_ as IfcCurve
@@ -31,7 +31,7 @@ export  class IfcOffsetCurve3D extends IfcCurve {
 
   public get Distance() : number {
     if ( this.Distance_ === void 0 ) {
-      this.Distance_ = this.extractNumber( 1, false )
+      this.Distance_ = this.extractNumber( 1, 0, 3, false )
     }
 
     return this.Distance_ as number
@@ -39,7 +39,7 @@ export  class IfcOffsetCurve3D extends IfcCurve {
 
   public get SelfIntersect() : boolean | null {
     if ( this.SelfIntersect_ === void 0 ) {
-      this.SelfIntersect_ = this.extractLogical( 2, false )
+      this.SelfIntersect_ = this.extractLogical( 2, 0, 3, false )
     }
 
     return this.SelfIntersect_ as boolean | null
@@ -47,7 +47,7 @@ export  class IfcOffsetCurve3D extends IfcCurve {
 
   public get RefDirection() : IfcDirection {
     if ( this.RefDirection_ === void 0 ) {
-      this.RefDirection_ = this.extractElement( 3, false, IfcDirection )
+      this.RefDirection_ = this.extractElement( 3, 0, 3, false, IfcDirection )
     }
 
     return this.RefDirection_ as IfcDirection
@@ -55,7 +55,9 @@ export  class IfcOffsetCurve3D extends IfcCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

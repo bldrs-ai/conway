@@ -18,7 +18,7 @@ export  class IfcRampFlight extends IfcBuildingElement {
 
   public get PredefinedType() : IfcRampFlightTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcRampFlightTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcRampFlightTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcRampFlightTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcRampFlight extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

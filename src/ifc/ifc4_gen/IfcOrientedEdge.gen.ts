@@ -23,7 +23,7 @@ export  class IfcOrientedEdge extends IfcEdge {
 
   public get EdgeElement() : IfcEdge {
     if ( this.EdgeElement_ === void 0 ) {
-      this.EdgeElement_ = this.extractElement( 2, false, IfcEdge )
+      this.EdgeElement_ = this.extractElement( 2, 2, 3, false, IfcEdge )
     }
 
     return this.EdgeElement_ as IfcEdge
@@ -31,7 +31,7 @@ export  class IfcOrientedEdge extends IfcEdge {
 
   public get Orientation() : boolean {
     if ( this.Orientation_ === void 0 ) {
-      this.Orientation_ = this.extractBoolean( 3, false )
+      this.Orientation_ = this.extractBoolean( 3, 2, 3, false )
     }
 
     return this.Orientation_ as boolean
@@ -47,7 +47,9 @@ export  class IfcOrientedEdge extends IfcEdge {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export abstract class IfcStructuralAction extends IfcStructuralActivity {
 
   public get DestabilizingLoad() : boolean | null {
     if ( this.DestabilizingLoad_ === void 0 ) {
-      this.DestabilizingLoad_ = this.extractBoolean( 9, true )
+      this.DestabilizingLoad_ = this.extractBoolean( 9, 9, 5, true )
     }
 
     return this.DestabilizingLoad_ as boolean | null
@@ -26,7 +26,9 @@ export abstract class IfcStructuralAction extends IfcStructuralActivity {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

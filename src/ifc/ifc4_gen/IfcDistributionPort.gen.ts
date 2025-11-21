@@ -22,7 +22,7 @@ export  class IfcDistributionPort extends IfcPort {
 
   public get FlowDirection() : IfcFlowDirectionEnum | null {
     if ( this.FlowDirection_ === void 0 ) {
-      this.FlowDirection_ = this.extractLambda( 7, IfcFlowDirectionEnumDeserializeStep, true )
+      this.FlowDirection_ = this.extractLambda( 7, 7, 5, IfcFlowDirectionEnumDeserializeStep, true )
     }
 
     return this.FlowDirection_ as IfcFlowDirectionEnum | null
@@ -30,7 +30,7 @@ export  class IfcDistributionPort extends IfcPort {
 
   public get PredefinedType() : IfcDistributionPortTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcDistributionPortTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 7, 5, IfcDistributionPortTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcDistributionPortTypeEnum | null
@@ -38,7 +38,7 @@ export  class IfcDistributionPort extends IfcPort {
 
   public get SystemType() : IfcDistributionSystemEnum | null {
     if ( this.SystemType_ === void 0 ) {
-      this.SystemType_ = this.extractLambda( 9, IfcDistributionSystemEnumDeserializeStep, true )
+      this.SystemType_ = this.extractLambda( 9, 7, 5, IfcDistributionSystemEnumDeserializeStep, true )
     }
 
     return this.SystemType_ as IfcDistributionSystemEnum | null
@@ -46,7 +46,9 @@ export  class IfcDistributionPort extends IfcPort {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

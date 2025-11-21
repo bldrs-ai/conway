@@ -32,7 +32,7 @@ export  class IfcStructuralAnalysisModel extends IfcSystem {
 
   public get PredefinedType() : IfcAnalysisModelTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 5, IfcAnalysisModelTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 5, 5, 5, IfcAnalysisModelTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcAnalysisModelTypeEnum
@@ -40,7 +40,7 @@ export  class IfcStructuralAnalysisModel extends IfcSystem {
 
   public get OrientationOf2DPlane() : IfcAxis2Placement3D | null {
     if ( this.OrientationOf2DPlane_ === void 0 ) {
-      this.OrientationOf2DPlane_ = this.extractElement( 6, true, IfcAxis2Placement3D )
+      this.OrientationOf2DPlane_ = this.extractElement( 6, 5, 5, true, IfcAxis2Placement3D )
     }
 
     return this.OrientationOf2DPlane_ as IfcAxis2Placement3D | null
@@ -49,7 +49,7 @@ export  class IfcStructuralAnalysisModel extends IfcSystem {
   public get LoadedBy() : Array<IfcStructuralLoadGroup> | null {
     if ( this.LoadedBy_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 5, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -82,7 +82,7 @@ export  class IfcStructuralAnalysisModel extends IfcSystem {
   public get HasResults() : Array<IfcStructuralResultGroup> | null {
     if ( this.HasResults_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 5, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -114,7 +114,7 @@ export  class IfcStructuralAnalysisModel extends IfcSystem {
 
   public get SharedPlacement() : IfcObjectPlacement | null {
     if ( this.SharedPlacement_ === void 0 ) {
-      this.SharedPlacement_ = this.extractElement( 9, true, IfcObjectPlacement )
+      this.SharedPlacement_ = this.extractElement( 9, 5, 5, true, IfcObjectPlacement )
     }
 
     return this.SharedPlacement_ as IfcObjectPlacement | null
@@ -122,7 +122,9 @@ export  class IfcStructuralAnalysisModel extends IfcSystem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

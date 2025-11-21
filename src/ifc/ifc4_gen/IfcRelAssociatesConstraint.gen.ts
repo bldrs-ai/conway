@@ -20,7 +20,7 @@ export  class IfcRelAssociatesConstraint extends IfcRelAssociates {
 
   public get Intent() : string | null {
     if ( this.Intent_ === void 0 ) {
-      this.Intent_ = this.extractString( 5, true )
+      this.Intent_ = this.extractString( 5, 5, 3, true )
     }
 
     return this.Intent_ as string | null
@@ -28,7 +28,7 @@ export  class IfcRelAssociatesConstraint extends IfcRelAssociates {
 
   public get RelatingConstraint() : IfcConstraint {
     if ( this.RelatingConstraint_ === void 0 ) {
-      this.RelatingConstraint_ = this.extractElement( 6, false, IfcConstraint )
+      this.RelatingConstraint_ = this.extractElement( 6, 5, 3, false, IfcConstraint )
     }
 
     return this.RelatingConstraint_ as IfcConstraint
@@ -36,7 +36,9 @@ export  class IfcRelAssociatesConstraint extends IfcRelAssociates {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

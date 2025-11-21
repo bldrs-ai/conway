@@ -20,7 +20,7 @@ export  class lot_effectivity extends effectivity {
 
   public get effectivity_lot_id() : string {
     if ( this.effectivity_lot_id_ === void 0 ) {
-      this.effectivity_lot_id_ = this.extractString( 1, false )
+      this.effectivity_lot_id_ = this.extractString( 1, 1, 1, false )
     }
 
     return this.effectivity_lot_id_ as string
@@ -28,7 +28,7 @@ export  class lot_effectivity extends effectivity {
 
   public get effectivity_lot_size() : measure_with_unit {
     if ( this.effectivity_lot_size_ === void 0 ) {
-      this.effectivity_lot_size_ = this.extractElement( 2, false, measure_with_unit )
+      this.effectivity_lot_size_ = this.extractElement( 2, 1, 1, false, measure_with_unit )
     }
 
     return this.effectivity_lot_size_ as measure_with_unit
@@ -36,8 +36,26 @@ export  class lot_effectivity extends effectivity {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === lot_effectivity.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for lot_effectivity" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

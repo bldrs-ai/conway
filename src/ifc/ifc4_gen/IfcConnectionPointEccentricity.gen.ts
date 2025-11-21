@@ -20,7 +20,7 @@ export  class IfcConnectionPointEccentricity extends IfcConnectionPointGeometry 
 
   public get EccentricityInX() : number | null {
     if ( this.EccentricityInX_ === void 0 ) {
-      this.EccentricityInX_ = this.extractNumber( 2, true )
+      this.EccentricityInX_ = this.extractNumber( 2, 2, 2, true )
     }
 
     return this.EccentricityInX_ as number | null
@@ -28,7 +28,7 @@ export  class IfcConnectionPointEccentricity extends IfcConnectionPointGeometry 
 
   public get EccentricityInY() : number | null {
     if ( this.EccentricityInY_ === void 0 ) {
-      this.EccentricityInY_ = this.extractNumber( 3, true )
+      this.EccentricityInY_ = this.extractNumber( 3, 2, 2, true )
     }
 
     return this.EccentricityInY_ as number | null
@@ -36,7 +36,7 @@ export  class IfcConnectionPointEccentricity extends IfcConnectionPointGeometry 
 
   public get EccentricityInZ() : number | null {
     if ( this.EccentricityInZ_ === void 0 ) {
-      this.EccentricityInZ_ = this.extractNumber( 4, true )
+      this.EccentricityInZ_ = this.extractNumber( 4, 2, 2, true )
     }
 
     return this.EccentricityInZ_ as number | null
@@ -44,7 +44,9 @@ export  class IfcConnectionPointEccentricity extends IfcConnectionPointGeometry 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

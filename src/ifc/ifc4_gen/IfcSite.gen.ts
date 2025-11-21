@@ -33,7 +33,7 @@ export  class IfcSite extends IfcSpatialStructureElement {
   public get RefLatitude() : Array< number > | null {
     if ( this.RefLatitude_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 9 )
+      let   cursor    = this.getOffsetCursor( 9, 9, 6 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,7 @@ export  class IfcSite extends IfcSpatialStructureElement {
   public get RefLongitude() : Array< number > | null {
     if ( this.RefLongitude_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 10 )
+      let   cursor    = this.getOffsetCursor( 10, 9, 6 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -100,7 +100,7 @@ export  class IfcSite extends IfcSpatialStructureElement {
 
   public get RefElevation() : number | null {
     if ( this.RefElevation_ === void 0 ) {
-      this.RefElevation_ = this.extractNumber( 11, true )
+      this.RefElevation_ = this.extractNumber( 11, 9, 6, true )
     }
 
     return this.RefElevation_ as number | null
@@ -108,7 +108,7 @@ export  class IfcSite extends IfcSpatialStructureElement {
 
   public get LandTitleNumber() : string | null {
     if ( this.LandTitleNumber_ === void 0 ) {
-      this.LandTitleNumber_ = this.extractString( 12, true )
+      this.LandTitleNumber_ = this.extractString( 12, 9, 6, true )
     }
 
     return this.LandTitleNumber_ as string | null
@@ -116,7 +116,7 @@ export  class IfcSite extends IfcSpatialStructureElement {
 
   public get SiteAddress() : IfcPostalAddress | null {
     if ( this.SiteAddress_ === void 0 ) {
-      this.SiteAddress_ = this.extractElement( 13, true, IfcPostalAddress )
+      this.SiteAddress_ = this.extractElement( 13, 9, 6, true, IfcPostalAddress )
     }
 
     return this.SiteAddress_ as IfcPostalAddress | null
@@ -124,7 +124,9 @@ export  class IfcSite extends IfcSpatialStructureElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

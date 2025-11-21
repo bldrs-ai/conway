@@ -19,7 +19,7 @@ export abstract class IfcCsgPrimitive3D extends IfcGeometricRepresentationItem {
 
   public get Position() : IfcAxis2Placement3D {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractElement( 0, false, IfcAxis2Placement3D )
+      this.Position_ = this.extractElement( 0, 0, 2, false, IfcAxis2Placement3D )
     }
 
     return this.Position_ as IfcAxis2Placement3D
@@ -31,7 +31,9 @@ export abstract class IfcCsgPrimitive3D extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

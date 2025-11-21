@@ -18,7 +18,7 @@ export  class IfcProfileProperties extends IfcExtendedProperties {
 
   public get ProfileDefinition() : IfcProfileDef {
     if ( this.ProfileDefinition_ === void 0 ) {
-      this.ProfileDefinition_ = this.extractElement( 3, false, IfcProfileDef )
+      this.ProfileDefinition_ = this.extractElement( 3, 3, 2, false, IfcProfileDef )
     }
 
     return this.ProfileDefinition_ as IfcProfileDef
@@ -26,7 +26,9 @@ export  class IfcProfileProperties extends IfcExtendedProperties {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

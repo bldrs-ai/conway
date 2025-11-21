@@ -17,7 +17,7 @@ export  class IfcSubedge extends IfcEdge {
 
   public get ParentEdge() : IfcEdge {
     if ( this.ParentEdge_ === void 0 ) {
-      this.ParentEdge_ = this.extractElement( 2, false, IfcEdge )
+      this.ParentEdge_ = this.extractElement( 2, 2, 3, false, IfcEdge )
     }
 
     return this.ParentEdge_ as IfcEdge
@@ -25,7 +25,9 @@ export  class IfcSubedge extends IfcEdge {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

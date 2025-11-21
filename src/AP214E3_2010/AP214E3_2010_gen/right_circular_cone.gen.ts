@@ -24,7 +24,7 @@ export  class right_circular_cone extends geometric_representation_item {
 
   public get position() : axis1_placement {
     if ( this.position_ === void 0 ) {
-      this.position_ = this.extractElement( 1, false, axis1_placement )
+      this.position_ = this.extractElement( 1, 1, 2, false, axis1_placement )
     }
 
     return this.position_ as axis1_placement
@@ -32,7 +32,7 @@ export  class right_circular_cone extends geometric_representation_item {
 
   public get height() : number {
     if ( this.height_ === void 0 ) {
-      this.height_ = this.extractNumber( 2, false )
+      this.height_ = this.extractNumber( 2, 1, 2, false )
     }
 
     return this.height_ as number
@@ -40,7 +40,7 @@ export  class right_circular_cone extends geometric_representation_item {
 
   public get radius() : number {
     if ( this.radius_ === void 0 ) {
-      this.radius_ = this.extractNumber( 3, false )
+      this.radius_ = this.extractNumber( 3, 1, 2, false )
     }
 
     return this.radius_ as number
@@ -48,7 +48,7 @@ export  class right_circular_cone extends geometric_representation_item {
 
   public get semi_angle() : number {
     if ( this.semi_angle_ === void 0 ) {
-      this.semi_angle_ = this.extractNumber( 4, false )
+      this.semi_angle_ = this.extractNumber( 4, 1, 2, false )
     }
 
     return this.semi_angle_ as number
@@ -56,8 +56,26 @@ export  class right_circular_cone extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === right_circular_cone.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for right_circular_cone" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

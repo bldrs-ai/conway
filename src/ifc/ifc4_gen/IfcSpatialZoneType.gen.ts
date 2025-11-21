@@ -20,7 +20,7 @@ export  class IfcSpatialZoneType extends IfcSpatialElementType {
 
   public get PredefinedType() : IfcSpatialZoneTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcSpatialZoneTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 5, IfcSpatialZoneTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcSpatialZoneTypeEnum
@@ -28,7 +28,7 @@ export  class IfcSpatialZoneType extends IfcSpatialElementType {
 
   public get LongName() : string | null {
     if ( this.LongName_ === void 0 ) {
-      this.LongName_ = this.extractString( 10, true )
+      this.LongName_ = this.extractString( 10, 9, 5, true )
     }
 
     return this.LongName_ as string | null
@@ -36,7 +36,9 @@ export  class IfcSpatialZoneType extends IfcSpatialElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

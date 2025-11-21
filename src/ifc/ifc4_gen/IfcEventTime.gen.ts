@@ -21,7 +21,7 @@ export  class IfcEventTime extends IfcSchedulingTime {
 
   public get ActualDate() : string | null {
     if ( this.ActualDate_ === void 0 ) {
-      this.ActualDate_ = this.extractString( 3, true )
+      this.ActualDate_ = this.extractString( 3, 3, 1, true )
     }
 
     return this.ActualDate_ as string | null
@@ -29,7 +29,7 @@ export  class IfcEventTime extends IfcSchedulingTime {
 
   public get EarlyDate() : string | null {
     if ( this.EarlyDate_ === void 0 ) {
-      this.EarlyDate_ = this.extractString( 4, true )
+      this.EarlyDate_ = this.extractString( 4, 3, 1, true )
     }
 
     return this.EarlyDate_ as string | null
@@ -37,7 +37,7 @@ export  class IfcEventTime extends IfcSchedulingTime {
 
   public get LateDate() : string | null {
     if ( this.LateDate_ === void 0 ) {
-      this.LateDate_ = this.extractString( 5, true )
+      this.LateDate_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.LateDate_ as string | null
@@ -45,7 +45,7 @@ export  class IfcEventTime extends IfcSchedulingTime {
 
   public get ScheduleDate() : string | null {
     if ( this.ScheduleDate_ === void 0 ) {
-      this.ScheduleDate_ = this.extractString( 6, true )
+      this.ScheduleDate_ = this.extractString( 6, 3, 1, true )
     }
 
     return this.ScheduleDate_ as string | null
@@ -53,7 +53,9 @@ export  class IfcEventTime extends IfcSchedulingTime {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

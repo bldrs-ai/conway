@@ -21,7 +21,7 @@ export  class IfcRelAssociatesLibrary extends IfcRelAssociates {
     if ( this.RelatingLibrary_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 5, false )
+        this.extractReference( 5, 5, 3, false )
 
       if ( !( value instanceof IfcLibraryInformation ) && !( value instanceof IfcLibraryReference ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,7 +36,9 @@ export  class IfcRelAssociatesLibrary extends IfcRelAssociates {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

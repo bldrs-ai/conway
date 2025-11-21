@@ -18,7 +18,7 @@ export abstract class IfcReinforcingElement extends IfcElementComponent {
 
   public get SteelGrade() : string | null {
     if ( this.SteelGrade_ === void 0 ) {
-      this.SteelGrade_ = this.extractString( 8, true )
+      this.SteelGrade_ = this.extractString( 8, 8, 6, true )
     }
 
     return this.SteelGrade_ as string | null
@@ -26,7 +26,9 @@ export abstract class IfcReinforcingElement extends IfcElementComponent {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

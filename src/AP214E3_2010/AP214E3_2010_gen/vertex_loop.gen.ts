@@ -18,7 +18,7 @@ export  class vertex_loop extends loop {
 
   public get loop_vertex() : vertex {
     if ( this.loop_vertex_ === void 0 ) {
-      this.loop_vertex_ = this.extractElement( 1, false, vertex )
+      this.loop_vertex_ = this.extractElement( 1, 1, 3, false, vertex )
     }
 
     return this.loop_vertex_ as vertex
@@ -26,8 +26,26 @@ export  class vertex_loop extends loop {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === vertex_loop.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for vertex_loop" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

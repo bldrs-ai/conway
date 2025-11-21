@@ -30,7 +30,7 @@ export  class IfcRelConnectsPathElements extends IfcRelConnectsElements {
   public get RelatingPriorities() : Array< number > {
     if ( this.RelatingPriorities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -64,7 +64,7 @@ export  class IfcRelConnectsPathElements extends IfcRelConnectsElements {
   public get RelatedPriorities() : Array< number > {
     if ( this.RelatedPriorities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 7, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -97,7 +97,7 @@ export  class IfcRelConnectsPathElements extends IfcRelConnectsElements {
 
   public get RelatedConnectionType() : IfcConnectionTypeEnum {
     if ( this.RelatedConnectionType_ === void 0 ) {
-      this.RelatedConnectionType_ = this.extractLambda( 9, IfcConnectionTypeEnumDeserializeStep, false )
+      this.RelatedConnectionType_ = this.extractLambda( 9, 7, 4, IfcConnectionTypeEnumDeserializeStep, false )
     }
 
     return this.RelatedConnectionType_ as IfcConnectionTypeEnum
@@ -105,7 +105,7 @@ export  class IfcRelConnectsPathElements extends IfcRelConnectsElements {
 
   public get RelatingConnectionType() : IfcConnectionTypeEnum {
     if ( this.RelatingConnectionType_ === void 0 ) {
-      this.RelatingConnectionType_ = this.extractLambda( 10, IfcConnectionTypeEnumDeserializeStep, false )
+      this.RelatingConnectionType_ = this.extractLambda( 10, 7, 4, IfcConnectionTypeEnumDeserializeStep, false )
     }
 
     return this.RelatingConnectionType_ as IfcConnectionTypeEnum
@@ -113,7 +113,9 @@ export  class IfcRelConnectsPathElements extends IfcRelConnectsElements {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

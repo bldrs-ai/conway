@@ -17,7 +17,7 @@ export  class IfcRelSpaceBoundary2ndLevel extends IfcRelSpaceBoundary1stLevel {
 
   public get CorrespondingBoundary() : IfcRelSpaceBoundary2ndLevel | null {
     if ( this.CorrespondingBoundary_ === void 0 ) {
-      this.CorrespondingBoundary_ = this.extractElement( 10, true, IfcRelSpaceBoundary2ndLevel )
+      this.CorrespondingBoundary_ = this.extractElement( 10, 10, 5, true, IfcRelSpaceBoundary2ndLevel )
     }
 
     return this.CorrespondingBoundary_ as IfcRelSpaceBoundary2ndLevel | null
@@ -26,7 +26,9 @@ export  class IfcRelSpaceBoundary2ndLevel extends IfcRelSpaceBoundary1stLevel {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

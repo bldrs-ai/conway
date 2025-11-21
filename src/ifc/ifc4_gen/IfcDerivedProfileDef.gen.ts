@@ -21,7 +21,7 @@ export  class IfcDerivedProfileDef extends IfcProfileDef {
 
   public get ParentProfile() : IfcProfileDef {
     if ( this.ParentProfile_ === void 0 ) {
-      this.ParentProfile_ = this.extractElement( 2, false, IfcProfileDef )
+      this.ParentProfile_ = this.extractElement( 2, 2, 1, false, IfcProfileDef )
     }
 
     return this.ParentProfile_ as IfcProfileDef
@@ -29,7 +29,7 @@ export  class IfcDerivedProfileDef extends IfcProfileDef {
 
   public get Operator() : IfcCartesianTransformationOperator2D {
     if ( this.Operator_ === void 0 ) {
-      this.Operator_ = this.extractElement( 3, false, IfcCartesianTransformationOperator2D )
+      this.Operator_ = this.extractElement( 3, 2, 1, false, IfcCartesianTransformationOperator2D )
     }
 
     return this.Operator_ as IfcCartesianTransformationOperator2D
@@ -37,7 +37,7 @@ export  class IfcDerivedProfileDef extends IfcProfileDef {
 
   public get Label() : string | null {
     if ( this.Label_ === void 0 ) {
-      this.Label_ = this.extractString( 4, true )
+      this.Label_ = this.extractString( 4, 2, 1, true )
     }
 
     return this.Label_ as string | null
@@ -45,7 +45,9 @@ export  class IfcDerivedProfileDef extends IfcProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

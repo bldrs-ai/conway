@@ -18,7 +18,7 @@ export  class IfcCableCarrierSegmentType extends IfcFlowSegmentType {
 
   public get PredefinedType() : IfcCableCarrierSegmentTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcCableCarrierSegmentTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcCableCarrierSegmentTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcCableCarrierSegmentTypeEnum
@@ -26,7 +26,9 @@ export  class IfcCableCarrierSegmentType extends IfcFlowSegmentType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

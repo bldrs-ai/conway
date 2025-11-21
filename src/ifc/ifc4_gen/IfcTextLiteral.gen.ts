@@ -23,7 +23,7 @@ export  class IfcTextLiteral extends IfcGeometricRepresentationItem {
 
   public get Literal() : string {
     if ( this.Literal_ === void 0 ) {
-      this.Literal_ = this.extractString( 0, false )
+      this.Literal_ = this.extractString( 0, 0, 2, false )
     }
 
     return this.Literal_ as string
@@ -33,7 +33,7 @@ export  class IfcTextLiteral extends IfcGeometricRepresentationItem {
     if ( this.Placement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 2, false )
 
       if ( !( value instanceof IfcAxis2Placement2D ) && !( value instanceof IfcAxis2Placement3D ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -48,7 +48,7 @@ export  class IfcTextLiteral extends IfcGeometricRepresentationItem {
 
   public get Path() : IfcTextPath {
     if ( this.Path_ === void 0 ) {
-      this.Path_ = this.extractLambda( 2, IfcTextPathDeserializeStep, false )
+      this.Path_ = this.extractLambda( 2, 0, 2, IfcTextPathDeserializeStep, false )
     }
 
     return this.Path_ as IfcTextPath
@@ -56,7 +56,9 @@ export  class IfcTextLiteral extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

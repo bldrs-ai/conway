@@ -18,7 +18,7 @@ export abstract class IfcManifoldSolidBrep extends IfcSolidModel {
 
   public get Outer() : IfcClosedShell {
     if ( this.Outer_ === void 0 ) {
-      this.Outer_ = this.extractElement( 0, false, IfcClosedShell )
+      this.Outer_ = this.extractElement( 0, 0, 3, false, IfcClosedShell )
     }
 
     return this.Outer_ as IfcClosedShell
@@ -26,7 +26,9 @@ export abstract class IfcManifoldSolidBrep extends IfcSolidModel {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

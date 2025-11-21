@@ -21,7 +21,7 @@ export  class axis2_placement_2d extends placement {
 
   public get ref_direction() : direction | null {
     if ( this.ref_direction_ === void 0 ) {
-      this.ref_direction_ = this.extractElement( 2, true, direction )
+      this.ref_direction_ = this.extractElement( 2, 2, 3, true, direction )
     }
 
     return this.ref_direction_ as direction | null
@@ -33,8 +33,26 @@ export  class axis2_placement_2d extends placement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === axis2_placement_2d.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for axis2_placement_2d" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -23,7 +23,7 @@ export  class text_style_with_spacing extends text_style {
     if ( this.character_spacing_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 2, 2, false )
 
       if ( !( value instanceof length_measure ) && !( value instanceof ratio_measure ) && !( value instanceof measure_with_unit ) && !( value instanceof descriptive_measure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -38,8 +38,26 @@ export  class text_style_with_spacing extends text_style {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === text_style_with_spacing.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for text_style_with_spacing" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

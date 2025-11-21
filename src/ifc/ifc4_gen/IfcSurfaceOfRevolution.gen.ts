@@ -19,7 +19,7 @@ export  class IfcSurfaceOfRevolution extends IfcSweptSurface {
 
   public get AxisPosition() : IfcAxis1Placement {
     if ( this.AxisPosition_ === void 0 ) {
-      this.AxisPosition_ = this.extractElement( 2, false, IfcAxis1Placement )
+      this.AxisPosition_ = this.extractElement( 2, 2, 4, false, IfcAxis1Placement )
     }
 
     return this.AxisPosition_ as IfcAxis1Placement
@@ -28,7 +28,9 @@ export  class IfcSurfaceOfRevolution extends IfcSweptSurface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -24,7 +24,7 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
 
   public get DisplacementX() : number | null {
     if ( this.DisplacementX_ === void 0 ) {
-      this.DisplacementX_ = this.extractNumber( 1, true )
+      this.DisplacementX_ = this.extractNumber( 1, 1, 3, true )
     }
 
     return this.DisplacementX_ as number | null
@@ -32,7 +32,7 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
 
   public get DisplacementY() : number | null {
     if ( this.DisplacementY_ === void 0 ) {
-      this.DisplacementY_ = this.extractNumber( 2, true )
+      this.DisplacementY_ = this.extractNumber( 2, 1, 3, true )
     }
 
     return this.DisplacementY_ as number | null
@@ -40,7 +40,7 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
 
   public get DisplacementZ() : number | null {
     if ( this.DisplacementZ_ === void 0 ) {
-      this.DisplacementZ_ = this.extractNumber( 3, true )
+      this.DisplacementZ_ = this.extractNumber( 3, 1, 3, true )
     }
 
     return this.DisplacementZ_ as number | null
@@ -48,7 +48,7 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
 
   public get RotationalDisplacementRX() : number | null {
     if ( this.RotationalDisplacementRX_ === void 0 ) {
-      this.RotationalDisplacementRX_ = this.extractNumber( 4, true )
+      this.RotationalDisplacementRX_ = this.extractNumber( 4, 1, 3, true )
     }
 
     return this.RotationalDisplacementRX_ as number | null
@@ -56,7 +56,7 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
 
   public get RotationalDisplacementRY() : number | null {
     if ( this.RotationalDisplacementRY_ === void 0 ) {
-      this.RotationalDisplacementRY_ = this.extractNumber( 5, true )
+      this.RotationalDisplacementRY_ = this.extractNumber( 5, 1, 3, true )
     }
 
     return this.RotationalDisplacementRY_ as number | null
@@ -64,7 +64,7 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
 
   public get RotationalDisplacementRZ() : number | null {
     if ( this.RotationalDisplacementRZ_ === void 0 ) {
-      this.RotationalDisplacementRZ_ = this.extractNumber( 6, true )
+      this.RotationalDisplacementRZ_ = this.extractNumber( 6, 1, 3, true )
     }
 
     return this.RotationalDisplacementRZ_ as number | null
@@ -72,7 +72,9 @@ export  class IfcStructuralLoadSingleDisplacement extends IfcStructuralLoadStati
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

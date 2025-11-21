@@ -24,7 +24,7 @@ export  class conversion_based_unit extends named_unit {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 1, false )
+      this.name_ = this.extractString( 1, 1, 1, false )
     }
 
     return this.name_ as string
@@ -32,7 +32,7 @@ export  class conversion_based_unit extends named_unit {
 
   public get conversion_factor() : measure_with_unit {
     if ( this.conversion_factor_ === void 0 ) {
-      this.conversion_factor_ = this.extractElement( 2, false, measure_with_unit )
+      this.conversion_factor_ = this.extractElement( 2, 1, 1, false, measure_with_unit )
     }
 
     return this.conversion_factor_ as measure_with_unit
@@ -44,8 +44,26 @@ export  class conversion_based_unit extends named_unit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === conversion_based_unit.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for conversion_based_unit" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

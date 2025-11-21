@@ -18,7 +18,7 @@ export  class IfcRelConnectsWithEccentricity extends IfcRelConnectsStructuralMem
 
   public get ConnectionConstraint() : IfcConnectionGeometry {
     if ( this.ConnectionConstraint_ === void 0 ) {
-      this.ConnectionConstraint_ = this.extractElement( 10, false, IfcConnectionGeometry )
+      this.ConnectionConstraint_ = this.extractElement( 10, 10, 4, false, IfcConnectionGeometry )
     }
 
     return this.ConnectionConstraint_ as IfcConnectionGeometry
@@ -26,7 +26,9 @@ export  class IfcRelConnectsWithEccentricity extends IfcRelConnectsStructuralMem
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

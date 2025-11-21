@@ -25,7 +25,7 @@ export  class approval_person_organization extends StepEntityBase< EntityTypesAP
     if ( this.person_organization_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 0, false )
 
       if ( !( value instanceof person ) && !( value instanceof organization ) && !( value instanceof person_and_organization ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -40,7 +40,7 @@ export  class approval_person_organization extends StepEntityBase< EntityTypesAP
 
   public get authorized_approval() : approval {
     if ( this.authorized_approval_ === void 0 ) {
-      this.authorized_approval_ = this.extractElement( 1, false, approval )
+      this.authorized_approval_ = this.extractElement( 1, 0, 0, false, approval )
     }
 
     return this.authorized_approval_ as approval
@@ -48,7 +48,7 @@ export  class approval_person_organization extends StepEntityBase< EntityTypesAP
 
   public get role() : approval_role {
     if ( this.role_ === void 0 ) {
-      this.role_ = this.extractElement( 2, false, approval_role )
+      this.role_ = this.extractElement( 2, 0, 0, false, approval_role )
     }
 
     return this.role_ as approval_role
@@ -56,8 +56,26 @@ export  class approval_person_organization extends StepEntityBase< EntityTypesAP
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === approval_person_organization.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for approval_person_organization" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

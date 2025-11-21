@@ -21,7 +21,7 @@ export  class mechanism extends StepEntityBase< EntityTypesAP214 > {
 
   public get structure_definition() : kinematic_structure {
     if ( this.structure_definition_ === void 0 ) {
-      this.structure_definition_ = this.extractElement( 0, false, kinematic_structure )
+      this.structure_definition_ = this.extractElement( 0, 0, 0, false, kinematic_structure )
     }
 
     return this.structure_definition_ as kinematic_structure
@@ -29,7 +29,7 @@ export  class mechanism extends StepEntityBase< EntityTypesAP214 > {
 
   public get base() : kinematic_link {
     if ( this.base_ === void 0 ) {
-      this.base_ = this.extractElement( 1, false, kinematic_link )
+      this.base_ = this.extractElement( 1, 0, 0, false, kinematic_link )
     }
 
     return this.base_ as kinematic_link
@@ -37,7 +37,7 @@ export  class mechanism extends StepEntityBase< EntityTypesAP214 > {
 
   public get containing_property() : kinematic_property_definition {
     if ( this.containing_property_ === void 0 ) {
-      this.containing_property_ = this.extractElement( 2, false, kinematic_property_definition )
+      this.containing_property_ = this.extractElement( 2, 0, 0, false, kinematic_property_definition )
     }
 
     return this.containing_property_ as kinematic_property_definition
@@ -45,8 +45,26 @@ export  class mechanism extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === mechanism.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for mechanism" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

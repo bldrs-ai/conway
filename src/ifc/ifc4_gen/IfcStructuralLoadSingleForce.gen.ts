@@ -24,7 +24,7 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
 
   public get ForceX() : number | null {
     if ( this.ForceX_ === void 0 ) {
-      this.ForceX_ = this.extractNumber( 1, true )
+      this.ForceX_ = this.extractNumber( 1, 1, 3, true )
     }
 
     return this.ForceX_ as number | null
@@ -32,7 +32,7 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
 
   public get ForceY() : number | null {
     if ( this.ForceY_ === void 0 ) {
-      this.ForceY_ = this.extractNumber( 2, true )
+      this.ForceY_ = this.extractNumber( 2, 1, 3, true )
     }
 
     return this.ForceY_ as number | null
@@ -40,7 +40,7 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
 
   public get ForceZ() : number | null {
     if ( this.ForceZ_ === void 0 ) {
-      this.ForceZ_ = this.extractNumber( 3, true )
+      this.ForceZ_ = this.extractNumber( 3, 1, 3, true )
     }
 
     return this.ForceZ_ as number | null
@@ -48,7 +48,7 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
 
   public get MomentX() : number | null {
     if ( this.MomentX_ === void 0 ) {
-      this.MomentX_ = this.extractNumber( 4, true )
+      this.MomentX_ = this.extractNumber( 4, 1, 3, true )
     }
 
     return this.MomentX_ as number | null
@@ -56,7 +56,7 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
 
   public get MomentY() : number | null {
     if ( this.MomentY_ === void 0 ) {
-      this.MomentY_ = this.extractNumber( 5, true )
+      this.MomentY_ = this.extractNumber( 5, 1, 3, true )
     }
 
     return this.MomentY_ as number | null
@@ -64,7 +64,7 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
 
   public get MomentZ() : number | null {
     if ( this.MomentZ_ === void 0 ) {
-      this.MomentZ_ = this.extractNumber( 6, true )
+      this.MomentZ_ = this.extractNumber( 6, 1, 3, true )
     }
 
     return this.MomentZ_ as number | null
@@ -72,7 +72,9 @@ export  class IfcStructuralLoadSingleForce extends IfcStructuralLoadStatic {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export  class IfcMaterialProfileSetUsageTapering extends IfcMaterialProfileSetUs
 
   public get ForProfileEndSet() : IfcMaterialProfileSet {
     if ( this.ForProfileEndSet_ === void 0 ) {
-      this.ForProfileEndSet_ = this.extractElement( 3, false, IfcMaterialProfileSet )
+      this.ForProfileEndSet_ = this.extractElement( 3, 3, 2, false, IfcMaterialProfileSet )
     }
 
     return this.ForProfileEndSet_ as IfcMaterialProfileSet
@@ -28,7 +28,7 @@ export  class IfcMaterialProfileSetUsageTapering extends IfcMaterialProfileSetUs
 
   public get CardinalEndPoint() : number | null {
     if ( this.CardinalEndPoint_ === void 0 ) {
-      this.CardinalEndPoint_ = this.extractNumber( 4, true )
+      this.CardinalEndPoint_ = this.extractNumber( 4, 3, 2, true )
     }
 
     return this.CardinalEndPoint_ as number | null
@@ -36,7 +36,9 @@ export  class IfcMaterialProfileSetUsageTapering extends IfcMaterialProfileSetUs
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

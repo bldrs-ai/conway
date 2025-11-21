@@ -18,7 +18,7 @@ export  class swept_area_solid extends solid_model {
 
   public get swept_area() : curve_bounded_surface {
     if ( this.swept_area_ === void 0 ) {
-      this.swept_area_ = this.extractElement( 1, false, curve_bounded_surface )
+      this.swept_area_ = this.extractElement( 1, 1, 3, false, curve_bounded_surface )
     }
 
     return this.swept_area_ as curve_bounded_surface
@@ -26,8 +26,26 @@ export  class swept_area_solid extends solid_model {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === swept_area_solid.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for swept_area_solid" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

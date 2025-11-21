@@ -18,7 +18,7 @@ export  class IfcVoidingFeature extends IfcFeatureElementSubtraction {
 
   public get PredefinedType() : IfcVoidingFeatureTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcVoidingFeatureTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 7, IfcVoidingFeatureTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcVoidingFeatureTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcVoidingFeature extends IfcFeatureElementSubtraction {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

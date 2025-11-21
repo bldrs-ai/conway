@@ -22,7 +22,7 @@ export abstract class IfcTypeResource extends IfcTypeObject {
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 6, true )
+      this.Identification_ = this.extractString( 6, 6, 3, true )
     }
 
     return this.Identification_ as string | null
@@ -30,7 +30,7 @@ export abstract class IfcTypeResource extends IfcTypeObject {
 
   public get LongDescription() : string | null {
     if ( this.LongDescription_ === void 0 ) {
-      this.LongDescription_ = this.extractString( 7, true )
+      this.LongDescription_ = this.extractString( 7, 6, 3, true )
     }
 
     return this.LongDescription_ as string | null
@@ -38,7 +38,7 @@ export abstract class IfcTypeResource extends IfcTypeObject {
 
   public get ResourceType() : string | null {
     if ( this.ResourceType_ === void 0 ) {
-      this.ResourceType_ = this.extractString( 8, true )
+      this.ResourceType_ = this.extractString( 8, 6, 3, true )
     }
 
     return this.ResourceType_ as string | null
@@ -47,7 +47,9 @@ export abstract class IfcTypeResource extends IfcTypeObject {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

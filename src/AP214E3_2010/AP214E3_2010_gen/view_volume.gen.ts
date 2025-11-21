@@ -29,7 +29,7 @@ export  class view_volume extends founded_item {
 
   public get projection_type() : central_or_parallel {
     if ( this.projection_type_ === void 0 ) {
-      this.projection_type_ = this.extractLambda( 0, central_or_parallelDeserializeStep, false )
+      this.projection_type_ = this.extractLambda( 0, 0, 1, central_or_parallelDeserializeStep, false )
     }
 
     return this.projection_type_ as central_or_parallel
@@ -37,7 +37,7 @@ export  class view_volume extends founded_item {
 
   public get projection_point() : cartesian_point {
     if ( this.projection_point_ === void 0 ) {
-      this.projection_point_ = this.extractElement( 1, false, cartesian_point )
+      this.projection_point_ = this.extractElement( 1, 0, 1, false, cartesian_point )
     }
 
     return this.projection_point_ as cartesian_point
@@ -45,7 +45,7 @@ export  class view_volume extends founded_item {
 
   public get view_plane_distance() : number {
     if ( this.view_plane_distance_ === void 0 ) {
-      this.view_plane_distance_ = this.extractNumber( 2, false )
+      this.view_plane_distance_ = this.extractNumber( 2, 0, 1, false )
     }
 
     return this.view_plane_distance_ as number
@@ -53,7 +53,7 @@ export  class view_volume extends founded_item {
 
   public get front_plane_distance() : number {
     if ( this.front_plane_distance_ === void 0 ) {
-      this.front_plane_distance_ = this.extractNumber( 3, false )
+      this.front_plane_distance_ = this.extractNumber( 3, 0, 1, false )
     }
 
     return this.front_plane_distance_ as number
@@ -61,7 +61,7 @@ export  class view_volume extends founded_item {
 
   public get front_plane_clipping() : boolean {
     if ( this.front_plane_clipping_ === void 0 ) {
-      this.front_plane_clipping_ = this.extractBoolean( 4, false )
+      this.front_plane_clipping_ = this.extractBoolean( 4, 0, 1, false )
     }
 
     return this.front_plane_clipping_ as boolean
@@ -69,7 +69,7 @@ export  class view_volume extends founded_item {
 
   public get back_plane_distance() : number {
     if ( this.back_plane_distance_ === void 0 ) {
-      this.back_plane_distance_ = this.extractNumber( 5, false )
+      this.back_plane_distance_ = this.extractNumber( 5, 0, 1, false )
     }
 
     return this.back_plane_distance_ as number
@@ -77,7 +77,7 @@ export  class view_volume extends founded_item {
 
   public get back_plane_clipping() : boolean {
     if ( this.back_plane_clipping_ === void 0 ) {
-      this.back_plane_clipping_ = this.extractBoolean( 6, false )
+      this.back_plane_clipping_ = this.extractBoolean( 6, 0, 1, false )
     }
 
     return this.back_plane_clipping_ as boolean
@@ -85,7 +85,7 @@ export  class view_volume extends founded_item {
 
   public get view_volume_sides_clipping() : boolean {
     if ( this.view_volume_sides_clipping_ === void 0 ) {
-      this.view_volume_sides_clipping_ = this.extractBoolean( 7, false )
+      this.view_volume_sides_clipping_ = this.extractBoolean( 7, 0, 1, false )
     }
 
     return this.view_volume_sides_clipping_ as boolean
@@ -93,7 +93,7 @@ export  class view_volume extends founded_item {
 
   public get view_window() : planar_box {
     if ( this.view_window_ === void 0 ) {
-      this.view_window_ = this.extractElement( 8, false, planar_box )
+      this.view_window_ = this.extractElement( 8, 0, 1, false, planar_box )
     }
 
     return this.view_window_ as planar_box
@@ -101,8 +101,26 @@ export  class view_volume extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === view_volume.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for view_volume" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

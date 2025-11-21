@@ -21,7 +21,7 @@ export  class IfcRevolvedAreaSolid extends IfcSweptAreaSolid {
 
   public get Axis() : IfcAxis1Placement {
     if ( this.Axis_ === void 0 ) {
-      this.Axis_ = this.extractElement( 2, false, IfcAxis1Placement )
+      this.Axis_ = this.extractElement( 2, 2, 4, false, IfcAxis1Placement )
     }
 
     return this.Axis_ as IfcAxis1Placement
@@ -29,7 +29,7 @@ export  class IfcRevolvedAreaSolid extends IfcSweptAreaSolid {
 
   public get Angle() : number {
     if ( this.Angle_ === void 0 ) {
-      this.Angle_ = this.extractNumber( 3, false )
+      this.Angle_ = this.extractNumber( 3, 2, 4, false )
     }
 
     return this.Angle_ as number
@@ -38,7 +38,9 @@ export  class IfcRevolvedAreaSolid extends IfcSweptAreaSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

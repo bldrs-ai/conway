@@ -19,7 +19,7 @@ export  class date_and_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get date_component() : date {
     if ( this.date_component_ === void 0 ) {
-      this.date_component_ = this.extractElement( 0, false, date )
+      this.date_component_ = this.extractElement( 0, 0, 0, false, date )
     }
 
     return this.date_component_ as date
@@ -27,7 +27,7 @@ export  class date_and_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get time_component() : local_time {
     if ( this.time_component_ === void 0 ) {
-      this.time_component_ = this.extractElement( 1, false, local_time )
+      this.time_component_ = this.extractElement( 1, 0, 0, false, local_time )
     }
 
     return this.time_component_ as local_time
@@ -35,8 +35,26 @@ export  class date_and_time extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === date_and_time.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for date_and_time" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -33,7 +33,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningDepth() : number | null {
     if ( this.LiningDepth_ === void 0 ) {
-      this.LiningDepth_ = this.extractNumber( 4, true )
+      this.LiningDepth_ = this.extractNumber( 4, 4, 4, true )
     }
 
     return this.LiningDepth_ as number | null
@@ -41,7 +41,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningThickness() : number | null {
     if ( this.LiningThickness_ === void 0 ) {
-      this.LiningThickness_ = this.extractNumber( 5, true )
+      this.LiningThickness_ = this.extractNumber( 5, 4, 4, true )
     }
 
     return this.LiningThickness_ as number | null
@@ -49,7 +49,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get ThresholdDepth() : number | null {
     if ( this.ThresholdDepth_ === void 0 ) {
-      this.ThresholdDepth_ = this.extractNumber( 6, true )
+      this.ThresholdDepth_ = this.extractNumber( 6, 4, 4, true )
     }
 
     return this.ThresholdDepth_ as number | null
@@ -57,7 +57,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get ThresholdThickness() : number | null {
     if ( this.ThresholdThickness_ === void 0 ) {
-      this.ThresholdThickness_ = this.extractNumber( 7, true )
+      this.ThresholdThickness_ = this.extractNumber( 7, 4, 4, true )
     }
 
     return this.ThresholdThickness_ as number | null
@@ -65,7 +65,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get TransomThickness() : number | null {
     if ( this.TransomThickness_ === void 0 ) {
-      this.TransomThickness_ = this.extractNumber( 8, true )
+      this.TransomThickness_ = this.extractNumber( 8, 4, 4, true )
     }
 
     return this.TransomThickness_ as number | null
@@ -73,7 +73,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get TransomOffset() : number | null {
     if ( this.TransomOffset_ === void 0 ) {
-      this.TransomOffset_ = this.extractNumber( 9, true )
+      this.TransomOffset_ = this.extractNumber( 9, 4, 4, true )
     }
 
     return this.TransomOffset_ as number | null
@@ -81,7 +81,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningOffset() : number | null {
     if ( this.LiningOffset_ === void 0 ) {
-      this.LiningOffset_ = this.extractNumber( 10, true )
+      this.LiningOffset_ = this.extractNumber( 10, 4, 4, true )
     }
 
     return this.LiningOffset_ as number | null
@@ -89,7 +89,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get ThresholdOffset() : number | null {
     if ( this.ThresholdOffset_ === void 0 ) {
-      this.ThresholdOffset_ = this.extractNumber( 11, true )
+      this.ThresholdOffset_ = this.extractNumber( 11, 4, 4, true )
     }
 
     return this.ThresholdOffset_ as number | null
@@ -97,7 +97,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get CasingThickness() : number | null {
     if ( this.CasingThickness_ === void 0 ) {
-      this.CasingThickness_ = this.extractNumber( 12, true )
+      this.CasingThickness_ = this.extractNumber( 12, 4, 4, true )
     }
 
     return this.CasingThickness_ as number | null
@@ -105,7 +105,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get CasingDepth() : number | null {
     if ( this.CasingDepth_ === void 0 ) {
-      this.CasingDepth_ = this.extractNumber( 13, true )
+      this.CasingDepth_ = this.extractNumber( 13, 4, 4, true )
     }
 
     return this.CasingDepth_ as number | null
@@ -113,7 +113,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get ShapeAspectStyle() : IfcShapeAspect | null {
     if ( this.ShapeAspectStyle_ === void 0 ) {
-      this.ShapeAspectStyle_ = this.extractElement( 14, true, IfcShapeAspect )
+      this.ShapeAspectStyle_ = this.extractElement( 14, 4, 4, true, IfcShapeAspect )
     }
 
     return this.ShapeAspectStyle_ as IfcShapeAspect | null
@@ -121,7 +121,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningToPanelOffsetX() : number | null {
     if ( this.LiningToPanelOffsetX_ === void 0 ) {
-      this.LiningToPanelOffsetX_ = this.extractNumber( 15, true )
+      this.LiningToPanelOffsetX_ = this.extractNumber( 15, 4, 4, true )
     }
 
     return this.LiningToPanelOffsetX_ as number | null
@@ -129,7 +129,7 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningToPanelOffsetY() : number | null {
     if ( this.LiningToPanelOffsetY_ === void 0 ) {
-      this.LiningToPanelOffsetY_ = this.extractNumber( 16, true )
+      this.LiningToPanelOffsetY_ = this.extractNumber( 16, 4, 4, true )
     }
 
     return this.LiningToPanelOffsetY_ as number | null
@@ -137,7 +137,9 @@ export  class IfcDoorLiningProperties extends IfcPreDefinedPropertySet {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

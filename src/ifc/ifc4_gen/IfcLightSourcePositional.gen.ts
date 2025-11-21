@@ -24,7 +24,7 @@ export  class IfcLightSourcePositional extends IfcLightSource {
 
   public get Position() : IfcCartesianPoint {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractElement( 4, false, IfcCartesianPoint )
+      this.Position_ = this.extractElement( 4, 4, 3, false, IfcCartesianPoint )
     }
 
     return this.Position_ as IfcCartesianPoint
@@ -32,7 +32,7 @@ export  class IfcLightSourcePositional extends IfcLightSource {
 
   public get Radius() : number {
     if ( this.Radius_ === void 0 ) {
-      this.Radius_ = this.extractNumber( 5, false )
+      this.Radius_ = this.extractNumber( 5, 4, 3, false )
     }
 
     return this.Radius_ as number
@@ -40,7 +40,7 @@ export  class IfcLightSourcePositional extends IfcLightSource {
 
   public get ConstantAttenuation() : number {
     if ( this.ConstantAttenuation_ === void 0 ) {
-      this.ConstantAttenuation_ = this.extractNumber( 6, false )
+      this.ConstantAttenuation_ = this.extractNumber( 6, 4, 3, false )
     }
 
     return this.ConstantAttenuation_ as number
@@ -48,7 +48,7 @@ export  class IfcLightSourcePositional extends IfcLightSource {
 
   public get DistanceAttenuation() : number {
     if ( this.DistanceAttenuation_ === void 0 ) {
-      this.DistanceAttenuation_ = this.extractNumber( 7, false )
+      this.DistanceAttenuation_ = this.extractNumber( 7, 4, 3, false )
     }
 
     return this.DistanceAttenuation_ as number
@@ -56,7 +56,7 @@ export  class IfcLightSourcePositional extends IfcLightSource {
 
   public get QuadricAttenuation() : number {
     if ( this.QuadricAttenuation_ === void 0 ) {
-      this.QuadricAttenuation_ = this.extractNumber( 8, false )
+      this.QuadricAttenuation_ = this.extractNumber( 8, 4, 3, false )
     }
 
     return this.QuadricAttenuation_ as number
@@ -64,7 +64,9 @@ export  class IfcLightSourcePositional extends IfcLightSource {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

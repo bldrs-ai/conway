@@ -22,7 +22,7 @@ export  class IfcAxis2Placement3D extends IfcPlacement {
 
   public get Axis() : IfcDirection | null {
     if ( this.Axis_ === void 0 ) {
-      this.Axis_ = this.extractElement( 1, true, IfcDirection )
+      this.Axis_ = this.extractElement( 1, 1, 3, true, IfcDirection )
     }
 
     return this.Axis_ as IfcDirection | null
@@ -30,7 +30,7 @@ export  class IfcAxis2Placement3D extends IfcPlacement {
 
   public get RefDirection() : IfcDirection | null {
     if ( this.RefDirection_ === void 0 ) {
-      this.RefDirection_ = this.extractElement( 2, true, IfcDirection )
+      this.RefDirection_ = this.extractElement( 2, 1, 3, true, IfcDirection )
     }
 
     return this.RefDirection_ as IfcDirection | null
@@ -42,7 +42,9 @@ export  class IfcAxis2Placement3D extends IfcPlacement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

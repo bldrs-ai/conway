@@ -21,7 +21,7 @@ export  class IfcSectionProperties extends IfcPreDefinedProperties {
 
   public get SectionType() : IfcSectionTypeEnum {
     if ( this.SectionType_ === void 0 ) {
-      this.SectionType_ = this.extractLambda( 0, IfcSectionTypeEnumDeserializeStep, false )
+      this.SectionType_ = this.extractLambda( 0, 0, 2, IfcSectionTypeEnumDeserializeStep, false )
     }
 
     return this.SectionType_ as IfcSectionTypeEnum
@@ -29,7 +29,7 @@ export  class IfcSectionProperties extends IfcPreDefinedProperties {
 
   public get StartProfile() : IfcProfileDef {
     if ( this.StartProfile_ === void 0 ) {
-      this.StartProfile_ = this.extractElement( 1, false, IfcProfileDef )
+      this.StartProfile_ = this.extractElement( 1, 0, 2, false, IfcProfileDef )
     }
 
     return this.StartProfile_ as IfcProfileDef
@@ -37,7 +37,7 @@ export  class IfcSectionProperties extends IfcPreDefinedProperties {
 
   public get EndProfile() : IfcProfileDef | null {
     if ( this.EndProfile_ === void 0 ) {
-      this.EndProfile_ = this.extractElement( 2, true, IfcProfileDef )
+      this.EndProfile_ = this.extractElement( 2, 0, 2, true, IfcProfileDef )
     }
 
     return this.EndProfile_ as IfcProfileDef | null
@@ -45,7 +45,9 @@ export  class IfcSectionProperties extends IfcPreDefinedProperties {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

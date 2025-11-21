@@ -25,7 +25,7 @@ export  class initial_state extends StepEntityBase< EntityTypesAP214 > {
 
   public get applies_to_mechanism() : mechanism {
     if ( this.applies_to_mechanism_ === void 0 ) {
-      this.applies_to_mechanism_ = this.extractElement( 0, false, mechanism )
+      this.applies_to_mechanism_ = this.extractElement( 0, 0, 0, false, mechanism )
     }
 
     return this.applies_to_mechanism_ as mechanism
@@ -34,7 +34,7 @@ export  class initial_state extends StepEntityBase< EntityTypesAP214 > {
   public get pair_values() : Array<pair_value> {
     if ( this.pair_values_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,8 +66,26 @@ export  class initial_state extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === initial_state.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for initial_state" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

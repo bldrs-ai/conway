@@ -27,7 +27,7 @@ export  class approval_date_time extends StepEntityBase< EntityTypesAP214 > {
     if ( this.date_time_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 0, false )
 
       if ( !( value instanceof date ) && !( value instanceof date_and_time ) && !( value instanceof local_time ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -42,7 +42,7 @@ export  class approval_date_time extends StepEntityBase< EntityTypesAP214 > {
 
   public get dated_approval() : approval {
     if ( this.dated_approval_ === void 0 ) {
-      this.dated_approval_ = this.extractElement( 1, false, approval )
+      this.dated_approval_ = this.extractElement( 1, 0, 0, false, approval )
     }
 
     return this.dated_approval_ as approval
@@ -54,8 +54,26 @@ export  class approval_date_time extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === approval_date_time.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for approval_date_time" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

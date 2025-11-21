@@ -21,7 +21,7 @@ export  class product_definition_formation extends StepEntityBase< EntityTypesAP
 
   public get id() : string {
     if ( this.id_ === void 0 ) {
-      this.id_ = this.extractString( 0, false )
+      this.id_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.id_ as string
@@ -29,7 +29,7 @@ export  class product_definition_formation extends StepEntityBase< EntityTypesAP
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -37,7 +37,7 @@ export  class product_definition_formation extends StepEntityBase< EntityTypesAP
 
   public get of_product() : product {
     if ( this.of_product_ === void 0 ) {
-      this.of_product_ = this.extractElement( 2, false, product )
+      this.of_product_ = this.extractElement( 2, 0, 0, false, product )
     }
 
     return this.of_product_ as product
@@ -45,8 +45,26 @@ export  class product_definition_formation extends StepEntityBase< EntityTypesAP
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === product_definition_formation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for product_definition_formation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

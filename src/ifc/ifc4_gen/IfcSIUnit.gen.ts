@@ -24,7 +24,7 @@ export  class IfcSIUnit extends IfcNamedUnit {
 
   public get Prefix() : IfcSIPrefix | null {
     if ( this.Prefix_ === void 0 ) {
-      this.Prefix_ = this.extractLambda( 2, IfcSIPrefixDeserializeStep, true )
+      this.Prefix_ = this.extractLambda( 2, 2, 1, IfcSIPrefixDeserializeStep, true )
     }
 
     return this.Prefix_ as IfcSIPrefix | null
@@ -32,7 +32,7 @@ export  class IfcSIUnit extends IfcNamedUnit {
 
   public get Name() : IfcSIUnitName {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractLambda( 3, IfcSIUnitNameDeserializeStep, false )
+      this.Name_ = this.extractLambda( 3, 2, 1, IfcSIUnitNameDeserializeStep, false )
     }
 
     return this.Name_ as IfcSIUnitName
@@ -44,7 +44,9 @@ export  class IfcSIUnit extends IfcNamedUnit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

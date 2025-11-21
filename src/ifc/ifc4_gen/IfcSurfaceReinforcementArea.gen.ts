@@ -29,7 +29,7 @@ export  class IfcSurfaceReinforcementArea extends IfcStructuralLoadOrResult {
   public get SurfaceReinforcement1() : Array< number > | null {
     if ( this.SurfaceReinforcement1_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -63,7 +63,7 @@ export  class IfcSurfaceReinforcementArea extends IfcStructuralLoadOrResult {
   public get SurfaceReinforcement2() : Array< number > | null {
     if ( this.SurfaceReinforcement2_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -96,7 +96,7 @@ export  class IfcSurfaceReinforcementArea extends IfcStructuralLoadOrResult {
 
   public get ShearReinforcement() : number | null {
     if ( this.ShearReinforcement_ === void 0 ) {
-      this.ShearReinforcement_ = this.extractNumber( 3, true )
+      this.ShearReinforcement_ = this.extractNumber( 3, 1, 2, true )
     }
 
     return this.ShearReinforcement_ as number | null
@@ -104,7 +104,9 @@ export  class IfcSurfaceReinforcementArea extends IfcStructuralLoadOrResult {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 
