@@ -4157,6 +4157,7 @@ export class IfcGeometryExtraction {
     } else if (from instanceof IfcRevolvedAreaSolid) {
       
       this.extractRevolvedAreaSolid(from, false, isRelVoid)
+
     } else if (from instanceof IfcPolygonalBoundedHalfSpace) {
 
       this.extractPolygonalBoundedHalfSpace(from, false, isRelVoid)
@@ -4166,9 +4167,13 @@ export class IfcGeometryExtraction {
       this.extractHalfspaceSolid(from, false, isRelVoid)
 
     } else if (from instanceof IfcSweptDiskSolid) {
+    
       this.extractSweptDiskSolid(from, false, isRelVoid)
+    
     } else if (from instanceof IfcBlock) {
+    
       this.extractBlock(from, false, isRelVoid)
+    
     } else if (from instanceof IfcFacetedBrep) {
 
       this.extractIfcFacetedBrep(from, false, isRelVoid)
@@ -4178,8 +4183,10 @@ export class IfcGeometryExtraction {
       this.extractIfcShellBasedSurfaceModel(from, owningElementLocalID, isRelVoid)
 
     } else if (from instanceof IfcBoundingBox || from instanceof IfcPolyline) {
+      
       // These types aren't meshes.
       return
+
     } else if (from instanceof IfcFaceBasedSurfaceModel) {
 
       this.extractIfcFaceBasedSurfaceModel(from, isRelVoid)
@@ -6198,6 +6205,7 @@ export class IfcGeometryExtraction {
                       } else {
 
                         try {
+                          
                           this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
 
                           if (hasRelVoid) {
@@ -6266,6 +6274,7 @@ export class IfcGeometryExtraction {
                       } else {
 
                         try {
+
                           this.extractRepresentationItem(item, product.localID, hasRelVoid, isSpace)
 
                           if (hasRelVoid) {
