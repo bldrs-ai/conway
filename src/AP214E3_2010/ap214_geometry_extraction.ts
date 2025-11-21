@@ -3927,61 +3927,18 @@ export class AP214GeometryExtraction {
 
         const entryTransformDepth = this.scene.stackLength
         const currentParent = this.scene.currentParent
-
-        const isHDMI = this.isHdmiShape(representation)
-        /*
-        if (isHDMI) {
-          console.log(
-            "[HDMI] makeThunk enter",
-            "rep=", (representation as any).name,
-            "owning=", owningLocalID,
-            "mappedItem=", mappedItem,
-            "parentDepth=", entryTransformDepth,
-            "parentTransform=",
-            parentTransform ? parentTransform.getValues() : null,
-          )
-        }
-        */
         if ( parentTransform !== void 0 ) {
-          // const beforeDepth = this.scene.stackLength
-          /*const sceneTransform = */this.scene.addTransform(
+          this.scene.addTransform(
             representation.localID,
             parentTransform.getValues(),
             parentTransform,
-            true )
-          // const afterDepth = this.scene.stackLength
-          /*
-          if (isHDMI) {
-            console.log(
-              "[HDMI] makeThunk applied parentTransform",
-              "rep=",
-              (representation as any).name,
-              "depth",
-              beforeDepth,
-              "->",
-              afterDepth,
-              "sceneTransform=",
-              sceneTransform?.transform?.values ?? null,
-            )
-          }*/
+            true,
+          )
         } 
 
         if ( mappedTreeNode?.children !== void 0 ) {
-
           for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
-
             const mappedChild = treeMap.get( childLocalID )!
-
-            /*if (isHDMI) {
-              console.log(
-                "[HDMI] makeThunk child",
-                "parentRep=", (representation as any).name,
-                "childLocalID=", childLocalID,
-                "childTransform=",
-                childTransform ? childTransform.getValues() : null,
-              )
-            }*/
-
             const enterChildStackDepth = this.scene.stackLength
             const enterChildParent = this.scene.currentParent
 
@@ -4002,14 +3959,6 @@ export class AP214GeometryExtraction {
             if( this.scene.stackLength !== enterChildStackDepth || this.scene.currentParent !== enterChildParent ) {
               Logger.error( `Stack length mismatch after processing child shape_representation ${this.scene.currentParent} ${enterChildParent} expressID: #${representation.expressID}` )
             }
-/*
-            if (isHDMI) {
-              console.log(
-                "[HDMI] makeThunk exit",
-                "rep=", (representation as any).name,
-                "depth=", this.scene.stackLength,
-              )
-            }*/
           }
         }
                 
@@ -4280,22 +4229,6 @@ export class AP214GeometryExtraction {
    * @return The transform and a boolean indicating if the processing should continue inside the loop.
    */
   doTransforms(shapeRelationship: shape_representation_relationship, sourceShape: shape_representation, targetShape: shape_representation, owningLocalID: number): [NativeTransform4x4 | undefined, boolean] {
-    const isHDMI =
-      this.isHdmiShape(sourceShape) || this.isHdmiShape(targetShape)
-/*
-    if (isHDMI) {
-      console.log(
-        "[HDMI] doTransforms: relationship",
-        shapeRelationship.name,
-        "localID=",
-        shapeRelationship.localID,
-        "rep1=",
-        (sourceShape as any).name,
-        "rep2=",
-        (targetShape as any).name,
-      )
-    }
-*/
     const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
     let transform: NativeTransform4x4 | undefined = void 0
     if ( transformInstance !== void 0 ) {
@@ -4314,24 +4247,8 @@ export class AP214GeometryExtraction {
           relPlacement: to,
         }
         transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-/*        if (isHDMI) {
-          console.log(
-            "[HDMI] doTransforms item_defined",
-            "rel=", shapeRelationship.name,
-            "from=", from.getValues(),
-            "to=", to.getValues(),
-            "T=", transform.getValues()
-          )
-        }*/
       } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
         transform = this.extractCartesianTransformOperator3D( transformOperator )
-/*        if (isHDMI && transform) {
-          console.log(
-            "[HDMI] doTransforms cartesian",
-            "rel=", shapeRelationship.name,
-            "T=", transform.getValues()
-          )
-        }*/
       }
     }
 
@@ -4342,20 +4259,6 @@ export class AP214GeometryExtraction {
     const targetShapeContext =
       targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
         find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-
-    const srcM = sourceShapeContext ? this.convertToMetres(sourceShapeContext) : undefined
-    const tgtM = targetShapeContext ? this.convertToMetres(targetShapeContext) : undefined
-    let isUnitConversionNeeded = false
-    if (srcM !== tgtM) {
-      isUnitConversionNeeded = true
-      console.log(
-        "[UNIT CONVERSION NEEDED] ",
-        "srcM=", srcM,
-        "tgtM=", tgtM,
-        "srcName=",(sourceShape as any).name,
-        "tgtName=",(targetShape as any).name,
-      )
-    }
 
     let scaleTransform : NativeTransform4x4 | undefined = void 0
     let scaleRatio: number = 1.0
@@ -4371,15 +4274,7 @@ export class AP214GeometryExtraction {
 
     if ( scaleTransform !== void 0 ) {
       if ( transform !== void 0 ) {
-        /*
-        const localPlacementParameters: ParamsLocalPlacement = {
-          useRelPlacement: true,
-          axis2Placement: transform,
-          relPlacement: scaleTransform,
-        }
-        transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-        */
-
+        // See https://github.com/bldrs-ai/conway/issues/308 for the following approach.
         // Extract the matrix values
         const v = transform.getValues().slice() // clone array
 
@@ -4398,25 +4293,11 @@ export class AP214GeometryExtraction {
         v[8] *= scaleRatio; v[9] *= scaleRatio; v[10] *= scaleRatio
         transform = (new (this.wasmModule.Glmdmat4)) as NativeTransform4x4
         transform.setValues(v)
-//        console.log("scaleTransform:", scaleTransform.getValues())
       } else {
         transform = scaleTransform
       }
     }
 
     return [transform, false]
-  }
-
-
-  /**
-   * Check if a shape is an HDMI shape.
-   *
-   * @param rep The shape to check.
-   * @return True if the shape is an HDMI shape, false otherwise.
-   */
-  private isHdmiShape(rep: shape_representation): boolean {
-    const name = (rep as any).name as string | undefined
-    if (!name) return false
-    return name.includes("HDMI_socket") || name.includes("HDMI")
   }
 }
