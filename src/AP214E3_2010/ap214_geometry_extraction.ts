@@ -2293,18 +2293,24 @@ export class AP214GeometryExtraction {
         mappingOrigin instanceof placement ?
           this.extractRawPlacement( mappingOrigin ) : void 0
 
-      if ( originTransform !== void 0 ) {
+          let combinedTransform: NativeTransform4x4
 
-        const originInverse = originTransform.invert()
-        const combinedTransform = this.conwayModel
-          .multiplyNativeMatrices( nativeCartesianTransform, originInverse )
+      if (originTransform !== void 0) {
+        // Use the same semantics as doTransforms: from = origin^-1, to = target
+        const from = originTransform.invert()
+        const to   = nativeCartesianTransform
 
-        pushTransform( combinedTransform )
-
+        const params: ParamsLocalPlacement = {
+          useRelPlacement: true,
+          axis2Placement: from,
+          relPlacement: to,
+        }
+        combinedTransform = this.conwayModel.getLocalPlacement(params)
       } else {
-
-        pushTransform( nativeCartesianTransform )
+        combinedTransform = nativeCartesianTransform
       }
+
+      pushTransform(combinedTransform)
 
     } else if ( mappingTarget instanceof placement ) {
 
@@ -2314,19 +2320,23 @@ export class AP214GeometryExtraction {
           this.extractRawPlacement( mappingOrigin ) : void 0
 
       if ( targetTransform !== void 0 ) {
-
-        if ( originTransform !== void 0 ) {
-
-          const combinedTransform = this.conwayModel
-            .multiplyNativeMatrices( targetTransform, originTransform.invert() )
-
-          pushTransform( combinedTransform )
-
+        let combinedTransform: NativeTransform4x4
+        if (originTransform !== void 0) {
+          // Again, same semantics as doTransforms
+          const from = originTransform.invert()
+          const to   = targetTransform
+    
+          const params: ParamsLocalPlacement = {
+            useRelPlacement: true,
+            axis2Placement: from,
+            relPlacement: to,
+          }
+          combinedTransform = this.conwayModel.getLocalPlacement(params)
         } else {
-
-          pushTransform( targetTransform )
-
+          combinedTransform = targetTransform
         }
+    
+        pushTransform(combinedTransform)
       }
     }
 
@@ -3711,41 +3721,35 @@ export class AP214GeometryExtraction {
 
 
   /**
+   * Extract a placement, adding it to the scene.
    *
-   * @param from
-   * @param mappedItem
+   * @param from The placement to extract.
+   * @param mappedItem Whether the placement is a mapped item.
+   * @return The extracted placement or undefined if the placement is not a axis2_placement_3d.
    */
   extractPlacement(from: placement, mappedItem: boolean = false ): AP214SceneTransform | undefined {
-
-    // if ( !mappedItem ) {
-    //   const result: AP214SceneTransform | undefined =
-    //     this.scene.getTransform(from.localID)
-
-    //   if (result !== void 0) {
-
-    //     this.scene.pushTransform(result)
-    //     return result
-    //   }
-    // }
-
     if (from instanceof axis2_placement_3d) {
-
-      return this.extractAxis2Placement3D(from, from.localID, false, true)
-
+      const placementTransform = this.extractRawPlacement(from)
+      if (placementTransform) {
+        this.scene.addTransform(
+          from.localID,
+          placementTransform.getValues(),
+          placementTransform,
+          true
+        )
+      }
     }
-
-    return
+    if (from instanceof axis2_placement_3d) {
+      return this.extractAxis2Placement3D(from, from.localID, false, true)
+    }
   }
 
+
   extractRawPlacement(from: placement ): NativeTransform4x4 | undefined {
-
     if (from instanceof axis2_placement_3d) {
-
       const parameters = this.extractAxis2Placement3D(from, from.localID, true )
-
       return this.conwayModel.getAxis2Placement3D(parameters)
     }
-
     return
   }
 
@@ -3925,6 +3929,7 @@ export class AP214GeometryExtraction {
         const currentParent = this.scene.currentParent
 
         const isHDMI = this.isHdmiShape(representation)
+        /*
         if (isHDMI) {
           console.log(
             "[HDMI] makeThunk enter",
@@ -3936,15 +3941,16 @@ export class AP214GeometryExtraction {
             parentTransform ? parentTransform.getValues() : null,
           )
         }
-
+        */
         if ( parentTransform !== void 0 ) {
-          const beforeDepth = this.scene.stackLength
-          const sceneTransform = this.scene.addTransform(
+          // const beforeDepth = this.scene.stackLength
+          /*const sceneTransform = */this.scene.addTransform(
             representation.localID,
             parentTransform.getValues(),
             parentTransform,
             true )
-          const afterDepth = this.scene.stackLength
+          // const afterDepth = this.scene.stackLength
+          /*
           if (isHDMI) {
             console.log(
               "[HDMI] makeThunk applied parentTransform",
@@ -3957,7 +3963,7 @@ export class AP214GeometryExtraction {
               "sceneTransform=",
               sceneTransform?.transform?.values ?? null,
             )
-          }
+          }*/
         } 
 
         if ( mappedTreeNode?.children !== void 0 ) {
@@ -3966,7 +3972,7 @@ export class AP214GeometryExtraction {
 
             const mappedChild = treeMap.get( childLocalID )!
 
-            if (isHDMI) {
+            /*if (isHDMI) {
               console.log(
                 "[HDMI] makeThunk child",
                 "parentRep=", (representation as any).name,
@@ -3974,7 +3980,7 @@ export class AP214GeometryExtraction {
                 "childTransform=",
                 childTransform ? childTransform.getValues() : null,
               )
-            }
+            }*/
 
             const enterChildStackDepth = this.scene.stackLength
             const enterChildParent = this.scene.currentParent
@@ -3996,14 +4002,14 @@ export class AP214GeometryExtraction {
             if( this.scene.stackLength !== enterChildStackDepth || this.scene.currentParent !== enterChildParent ) {
               Logger.error( `Stack length mismatch after processing child shape_representation ${this.scene.currentParent} ${enterChildParent} expressID: #${representation.expressID}` )
             }
-
+/*
             if (isHDMI) {
               console.log(
                 "[HDMI] makeThunk exit",
                 "rep=", (representation as any).name,
                 "depth=", this.scene.stackLength,
               )
-            }
+            }*/
           }
         }
                 
@@ -4276,7 +4282,7 @@ export class AP214GeometryExtraction {
   doTransforms(shapeRelationship: shape_representation_relationship, sourceShape: shape_representation, targetShape: shape_representation, owningLocalID: number): [NativeTransform4x4 | undefined, boolean] {
     const isHDMI =
       this.isHdmiShape(sourceShape) || this.isHdmiShape(targetShape)
-
+/*
     if (isHDMI) {
       console.log(
         "[HDMI] doTransforms: relationship",
@@ -4289,10 +4295,9 @@ export class AP214GeometryExtraction {
         (targetShape as any).name,
       )
     }
-
+*/
     const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
     let transform: NativeTransform4x4 | undefined = void 0
-    let scaleTransform : NativeTransform4x4 | undefined = void 0
     if ( transformInstance !== void 0 ) {
       const transformOperator = transformInstance.transformation_operator
       if ( transformOperator instanceof item_defined_transformation ) {
@@ -4309,8 +4314,24 @@ export class AP214GeometryExtraction {
           relPlacement: to,
         }
         transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+/*        if (isHDMI) {
+          console.log(
+            "[HDMI] doTransforms item_defined",
+            "rel=", shapeRelationship.name,
+            "from=", from.getValues(),
+            "to=", to.getValues(),
+            "T=", transform.getValues()
+          )
+        }*/
       } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
         transform = this.extractCartesianTransformOperator3D( transformOperator )
+/*        if (isHDMI && transform) {
+          console.log(
+            "[HDMI] doTransforms cartesian",
+            "rel=", shapeRelationship.name,
+            "T=", transform.getValues()
+          )
+        }*/
       }
     }
 
@@ -4322,28 +4343,67 @@ export class AP214GeometryExtraction {
       targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
         find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
 
+    const srcM = sourceShapeContext ? this.convertToMetres(sourceShapeContext) : undefined
+    const tgtM = targetShapeContext ? this.convertToMetres(targetShapeContext) : undefined
+    let isUnitConversionNeeded = false
+    if (srcM !== tgtM) {
+      isUnitConversionNeeded = true
+      console.log(
+        "[UNIT CONVERSION NEEDED] ",
+        "srcM=", srcM,
+        "tgtM=", tgtM,
+        "srcName=",(sourceShape as any).name,
+        "tgtName=",(targetShape as any).name,
+      )
+    }
+
+    let scaleTransform : NativeTransform4x4 | undefined = void 0
+    let scaleRatio: number = 1.0
     if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
-      const scaleRatio = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
+      const sr = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
+      if (sr !== void 0) {
+        scaleRatio = sr
+      }
       if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
         scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio ) 
-        if (isHDMI) {
-          console.log("[HDMI] scaleRatio:", scaleRatio)
-        }
       }
     }
 
     if ( scaleTransform !== void 0 ) {
       if ( transform !== void 0 ) {
+        /*
         const localPlacementParameters: ParamsLocalPlacement = {
           useRelPlacement: true,
           axis2Placement: transform,
           relPlacement: scaleTransform,
         }
         transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+        */
+
+        // Extract the matrix values
+        const v = transform.getValues().slice() // clone array
+
+        // NOTE: adjust index pattern if your matrix is column-major;
+        // these indices assume ROW-MAJOR:
+        //
+        // [ 0  1  2  3
+        //   4  5  6  7
+        //   8  9 10 11
+        //  12 13 14 15 ]
+        //
+        // Translation lives in v[12], v[13], v[14].
+        // Only scale the 3×3 basis (v[0..2], v[4..6], v[8..10]).
+        v[0] *= scaleRatio; v[1] *= scaleRatio; v[2] *= scaleRatio
+        v[4] *= scaleRatio; v[5] *= scaleRatio; v[6] *= scaleRatio
+        v[8] *= scaleRatio; v[9] *= scaleRatio; v[10] *= scaleRatio
+        transform = (new (this.wasmModule.Glmdmat4)) as NativeTransform4x4
+        transform.setValues(v)
+//        console.log("scaleTransform:", scaleTransform.getValues())
       } else {
         transform = scaleTransform
       }
     }
+
     return [transform, false]
   }
 
