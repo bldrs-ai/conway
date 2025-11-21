@@ -18,7 +18,7 @@ export  class IfcCircleHollowProfileDef extends IfcCircleProfileDef {
 
   public get WallThickness() : number {
     if ( this.WallThickness_ === void 0 ) {
-      this.WallThickness_ = this.extractNumber( 4, false )
+      this.WallThickness_ = this.extractNumber( 4, 4, 3, false )
     }
 
     return this.WallThickness_ as number
@@ -26,7 +26,9 @@ export  class IfcCircleHollowProfileDef extends IfcCircleProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class IfcConstructionEquipmentResourceType extends IfcConstructionResour
 
   public get PredefinedType() : IfcConstructionEquipmentResourceTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 11, IfcConstructionEquipmentResourceTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 11, 11, 5, IfcConstructionEquipmentResourceTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcConstructionEquipmentResourceTypeEnum
@@ -26,7 +26,9 @@ export  class IfcConstructionEquipmentResourceType extends IfcConstructionResour
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

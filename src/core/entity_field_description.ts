@@ -18,24 +18,24 @@ export interface EntityFieldDescription< EntityTypeIDs extends number > {
   /**
    * The kind of this field.
    */
-  kind: FieldDescriptionKind
+  readonly kind: FieldDescriptionKind
   /**
    * Defined if this is an array, with the rank (how many nested arrays/dimensions are there)
    */
-  rank?: number
+  readonly rank?: number
   /**
    * Is this field optional? Note, logical fields will be treated as boolean optionals.
    */
-  optional: boolean
+  readonly optional: boolean
   /**
    * Is this field derived? i.e. generated from a function.
    */
-  derived: boolean
+  readonly derived: boolean
   /**
    * For non derived fields, this is the ordinal position of the field
    * within a positional serialization.
    */
-  offset?: number
+  readonly offset?: number
 }
 
 /**
@@ -43,7 +43,7 @@ export interface EntityFieldDescription< EntityTypeIDs extends number > {
  */
 export interface EntityFieldDescriptionRequired< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  optional: false
+  readonly optional: false
 }
 
 /**
@@ -51,7 +51,7 @@ export interface EntityFieldDescriptionRequired< EntityTypeIDs extends number > 
  */
 export interface EntityFieldDescriptionOptional< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  optional: true
+  readonly optional: true
 }
 
 /**
@@ -59,7 +59,7 @@ export interface EntityFieldDescriptionOptional< EntityTypeIDs extends number > 
  */
 export interface EntityFieldDescriptionArray< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  rank: number
+  readonly rank: number
 }
 
 /**
@@ -67,7 +67,7 @@ export interface EntityFieldDescriptionArray< EntityTypeIDs extends number > ext
  */
 export interface EntityFieldDescriptionScalar< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  rank: undefined
+  readonly rank: undefined
 }
 
 /**
@@ -75,11 +75,11 @@ export interface EntityFieldDescriptionScalar< EntityTypeIDs extends number > ex
  */
 export interface EntitySelectFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.SELECT
+  readonly kind: FieldDescriptionKind.SELECT
   /**
    * The various options that can be selected from.
    */
-  options:
+  readonly options:
     ( ( EntityReferenceFieldDescription< EntityTypeIDs > |
         EntityEnumFieldDescription< EntityTypeIDs > ) &
       EntityFieldDescriptionRequired< EntityTypeIDs > )[]
@@ -90,7 +90,7 @@ export interface EntitySelectFieldDescription< EntityTypeIDs extends number > ex
  */
 export interface EntityNumberFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.NUMBER
+  readonly kind: FieldDescriptionKind.NUMBER
 }
 
 /**
@@ -98,7 +98,7 @@ export interface EntityNumberFieldDescription< EntityTypeIDs extends number > ex
  */
 export interface EntityStringFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.STRING
+  readonly kind: FieldDescriptionKind.STRING
 }
 
 /**
@@ -106,7 +106,7 @@ export interface EntityStringFieldDescription< EntityTypeIDs extends number > ex
  */
 export interface EntityBooleanFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.BOOLEAN
+  readonly kind: FieldDescriptionKind.BOOLEAN
 }
 
 /**
@@ -120,12 +120,12 @@ export type EntityLogicalFieldDescription< EntityTypeIDs extends number > =
  */
 export interface EntityReferenceFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.STEP_REFERENCE
+  readonly kind: FieldDescriptionKind.STEP_REFERENCE
   /**
    * The type reference for this field as an ID, which can be used to look-up
    * a schema.
    */
-  type: EntityTypeIDs
+  readonly type: EntityTypeIDs
 }
 
 /**
@@ -133,11 +133,11 @@ export interface EntityReferenceFieldDescription< EntityTypeIDs extends number >
  */
 export interface EntityEnumFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.ENUM
+  readonly kind: FieldDescriptionKind.ENUM
   /**
    * The type of the enum.
    */
-  type: object
+  readonly type: object
 }
 
 /**
@@ -145,5 +145,5 @@ export interface EntityEnumFieldDescription< EntityTypeIDs extends number > exte
  */
 export interface EntityBinaryDataFieldDescription< EntityTypeIDs extends number > extends
     EntityFieldDescription< EntityTypeIDs > {
-  kind: FieldDescriptionKind.BINARY_DATA
+  readonly kind: FieldDescriptionKind.BINARY_DATA
 }

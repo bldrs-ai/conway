@@ -18,7 +18,7 @@ export  class IfcWallType extends IfcBuildingElementType {
 
   public get PredefinedType() : IfcWallTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcWallTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcWallTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcWallTypeEnum
@@ -26,7 +26,9 @@ export  class IfcWallType extends IfcBuildingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

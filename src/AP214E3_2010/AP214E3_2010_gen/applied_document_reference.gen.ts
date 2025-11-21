@@ -65,7 +65,7 @@ export  class applied_document_reference extends document_reference {
   public get items() : Array<action_directive | action_method | action_relationship | applied_action_assignment | approval | certification | class_ | class_system | configuration_design | configuration_item | contract | descriptive_representation_item | executed_action | externally_defined_dimension_definition | feature_definition | general_property | material_designation | organization | organizational_project | person | presentation_area | process_plan | product | product_concept | product_concept_feature | product_concept_feature_category | product_definition | product_definition_formation | product_definition_formation_relationship | product_definition_process | product_definition_relationship | product_definition_substitute | product_related_product_category | property_definition | representation | resource_requirement_type | retention | security_classification | shape_aspect | shape_aspect_relationship | versioned_action_request> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -104,8 +104,26 @@ export  class applied_document_reference extends document_reference {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === applied_document_reference.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for applied_document_reference" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

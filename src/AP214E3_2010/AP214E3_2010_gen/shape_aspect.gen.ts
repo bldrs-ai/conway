@@ -26,7 +26,7 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -34,7 +34,7 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, true )
+      this.description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -42,7 +42,7 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
 
   public get of_shape() : product_definition_shape {
     if ( this.of_shape_ === void 0 ) {
-      this.of_shape_ = this.extractElement( 2, false, product_definition_shape )
+      this.of_shape_ = this.extractElement( 2, 0, 0, false, product_definition_shape )
     }
 
     return this.of_shape_ as product_definition_shape
@@ -50,7 +50,7 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
 
   public get product_definitional() : boolean {
     if ( this.product_definitional_ === void 0 ) {
-      this.product_definitional_ = this.extractBoolean( 3, false )
+      this.product_definitional_ = this.extractBoolean( 3, 0, 0, false )
     }
 
     return this.product_definitional_ as boolean
@@ -62,8 +62,26 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === shape_aspect.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for shape_aspect" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -21,7 +21,7 @@ export  class IfcRelConnectsPorts extends IfcRelConnects {
 
   public get RelatingPort() : IfcPort {
     if ( this.RelatingPort_ === void 0 ) {
-      this.RelatingPort_ = this.extractElement( 4, false, IfcPort )
+      this.RelatingPort_ = this.extractElement( 4, 4, 3, false, IfcPort )
     }
 
     return this.RelatingPort_ as IfcPort
@@ -29,7 +29,7 @@ export  class IfcRelConnectsPorts extends IfcRelConnects {
 
   public get RelatedPort() : IfcPort {
     if ( this.RelatedPort_ === void 0 ) {
-      this.RelatedPort_ = this.extractElement( 5, false, IfcPort )
+      this.RelatedPort_ = this.extractElement( 5, 4, 3, false, IfcPort )
     }
 
     return this.RelatedPort_ as IfcPort
@@ -37,7 +37,7 @@ export  class IfcRelConnectsPorts extends IfcRelConnects {
 
   public get RealizingElement() : IfcElement | null {
     if ( this.RealizingElement_ === void 0 ) {
-      this.RealizingElement_ = this.extractElement( 6, true, IfcElement )
+      this.RealizingElement_ = this.extractElement( 6, 4, 3, true, IfcElement )
     }
 
     return this.RealizingElement_ as IfcElement | null
@@ -45,7 +45,9 @@ export  class IfcRelConnectsPorts extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

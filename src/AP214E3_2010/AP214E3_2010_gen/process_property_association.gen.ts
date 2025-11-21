@@ -26,7 +26,7 @@ export  class process_property_association extends StepEntityBase< EntityTypesAP
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -34,7 +34,7 @@ export  class process_property_association extends StepEntityBase< EntityTypesAP
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -42,7 +42,7 @@ export  class process_property_association extends StepEntityBase< EntityTypesAP
 
   public get process() : property_process {
     if ( this.process_ === void 0 ) {
-      this.process_ = this.extractElement( 2, false, property_process )
+      this.process_ = this.extractElement( 2, 0, 0, false, property_process )
     }
 
     return this.process_ as property_process
@@ -52,7 +52,7 @@ export  class process_property_association extends StepEntityBase< EntityTypesAP
     if ( this.property_or_shape_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 3, false )
+        this.extractReference( 3, 0, 0, false )
 
       if ( !( value instanceof property_definition ) && !( value instanceof product_definition_shape ) && !( value instanceof shape_aspect ) && !( value instanceof shape_aspect_relationship ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -67,8 +67,26 @@ export  class process_property_association extends StepEntityBase< EntityTypesAP
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === process_property_association.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for process_property_association" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

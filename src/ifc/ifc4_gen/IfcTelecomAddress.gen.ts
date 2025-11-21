@@ -32,7 +32,7 @@ export  class IfcTelecomAddress extends IfcAddress {
   public get TelephoneNumbers() : Array< string > | null {
     if ( this.TelephoneNumbers_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 3, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -65,7 +65,7 @@ export  class IfcTelecomAddress extends IfcAddress {
   public get FacsimileNumbers() : Array< string > | null {
     if ( this.FacsimileNumbers_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 3, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -97,7 +97,7 @@ export  class IfcTelecomAddress extends IfcAddress {
 
   public get PagerNumber() : string | null {
     if ( this.PagerNumber_ === void 0 ) {
-      this.PagerNumber_ = this.extractString( 5, true )
+      this.PagerNumber_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.PagerNumber_ as string | null
@@ -106,7 +106,7 @@ export  class IfcTelecomAddress extends IfcAddress {
   public get ElectronicMailAddresses() : Array< string > | null {
     if ( this.ElectronicMailAddresses_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 3, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -138,7 +138,7 @@ export  class IfcTelecomAddress extends IfcAddress {
 
   public get WWWHomePageURL() : string | null {
     if ( this.WWWHomePageURL_ === void 0 ) {
-      this.WWWHomePageURL_ = this.extractString( 7, true )
+      this.WWWHomePageURL_ = this.extractString( 7, 3, 1, true )
     }
 
     return this.WWWHomePageURL_ as string | null
@@ -147,7 +147,7 @@ export  class IfcTelecomAddress extends IfcAddress {
   public get MessagingIDs() : Array< string > | null {
     if ( this.MessagingIDs_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 3, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -179,7 +179,9 @@ export  class IfcTelecomAddress extends IfcAddress {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

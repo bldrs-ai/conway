@@ -29,7 +29,7 @@ export  class IfcPixelTexture extends IfcSurfaceTexture {
 
   public get Width() : number {
     if ( this.Width_ === void 0 ) {
-      this.Width_ = this.extractNumber( 5, false )
+      this.Width_ = this.extractNumber( 5, 5, 2, false )
     }
 
     return this.Width_ as number
@@ -37,7 +37,7 @@ export  class IfcPixelTexture extends IfcSurfaceTexture {
 
   public get Height() : number {
     if ( this.Height_ === void 0 ) {
-      this.Height_ = this.extractNumber( 6, false )
+      this.Height_ = this.extractNumber( 6, 5, 2, false )
     }
 
     return this.Height_ as number
@@ -45,7 +45,7 @@ export  class IfcPixelTexture extends IfcSurfaceTexture {
 
   public get ColourComponents() : number {
     if ( this.ColourComponents_ === void 0 ) {
-      this.ColourComponents_ = this.extractNumber( 7, false )
+      this.ColourComponents_ = this.extractNumber( 7, 5, 2, false )
     }
 
     return this.ColourComponents_ as number
@@ -54,7 +54,7 @@ export  class IfcPixelTexture extends IfcSurfaceTexture {
   public get Pixel() : Array< [Uint8Array, number] > {
     if ( this.Pixel_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 5, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -86,7 +86,9 @@ export  class IfcPixelTexture extends IfcSurfaceTexture {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

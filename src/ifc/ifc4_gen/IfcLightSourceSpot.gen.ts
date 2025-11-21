@@ -23,7 +23,7 @@ export  class IfcLightSourceSpot extends IfcLightSourcePositional {
 
   public get Orientation() : IfcDirection {
     if ( this.Orientation_ === void 0 ) {
-      this.Orientation_ = this.extractElement( 9, false, IfcDirection )
+      this.Orientation_ = this.extractElement( 9, 9, 4, false, IfcDirection )
     }
 
     return this.Orientation_ as IfcDirection
@@ -31,7 +31,7 @@ export  class IfcLightSourceSpot extends IfcLightSourcePositional {
 
   public get ConcentrationExponent() : number | null {
     if ( this.ConcentrationExponent_ === void 0 ) {
-      this.ConcentrationExponent_ = this.extractNumber( 10, true )
+      this.ConcentrationExponent_ = this.extractNumber( 10, 9, 4, true )
     }
 
     return this.ConcentrationExponent_ as number | null
@@ -39,7 +39,7 @@ export  class IfcLightSourceSpot extends IfcLightSourcePositional {
 
   public get SpreadAngle() : number {
     if ( this.SpreadAngle_ === void 0 ) {
-      this.SpreadAngle_ = this.extractNumber( 11, false )
+      this.SpreadAngle_ = this.extractNumber( 11, 9, 4, false )
     }
 
     return this.SpreadAngle_ as number
@@ -47,7 +47,7 @@ export  class IfcLightSourceSpot extends IfcLightSourcePositional {
 
   public get BeamWidthAngle() : number {
     if ( this.BeamWidthAngle_ === void 0 ) {
-      this.BeamWidthAngle_ = this.extractNumber( 12, false )
+      this.BeamWidthAngle_ = this.extractNumber( 12, 9, 4, false )
     }
 
     return this.BeamWidthAngle_ as number
@@ -55,7 +55,9 @@ export  class IfcLightSourceSpot extends IfcLightSourcePositional {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

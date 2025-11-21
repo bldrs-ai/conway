@@ -21,7 +21,7 @@ export abstract class IfcConic extends IfcCurve {
     if ( this.Position_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 3, false )
 
       if ( !( value instanceof IfcAxis2Placement2D ) && !( value instanceof IfcAxis2Placement3D ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,7 +36,9 @@ export abstract class IfcConic extends IfcCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -22,7 +22,7 @@ export  class IfcTextStyleForDefinedFont extends IfcPresentationItem {
     if ( this.Colour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 1, false )
 
       if ( !( value instanceof IfcColourSpecification ) && !( value instanceof IfcPreDefinedColour ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -39,7 +39,7 @@ export  class IfcTextStyleForDefinedFont extends IfcPresentationItem {
     if ( this.BackgroundColour_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 1, true )
+        this.extractReference( 1, 0, 1, true )
 
       if ( !( value instanceof IfcColourSpecification ) && !( value instanceof IfcPreDefinedColour ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -54,7 +54,9 @@ export  class IfcTextStyleForDefinedFont extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

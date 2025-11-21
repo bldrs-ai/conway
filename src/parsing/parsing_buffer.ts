@@ -546,7 +546,6 @@ export default class ParsingBuffer {
     if ( cursor >= end  ) {
       return
     }
-
      
     let primarySign = 1
 
@@ -619,9 +618,7 @@ export default class ParsingBuffer {
         }
       }
     }
-
-     
-
+    
     if ( absPrimary === 0 ) {
       this.cursor_ = cursor
       return absPrimary

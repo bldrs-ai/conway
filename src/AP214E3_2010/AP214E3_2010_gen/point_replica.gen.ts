@@ -19,7 +19,7 @@ export  class point_replica extends point {
 
   public get parent_pt() : point {
     if ( this.parent_pt_ === void 0 ) {
-      this.parent_pt_ = this.extractElement( 1, false, point )
+      this.parent_pt_ = this.extractElement( 1, 1, 3, false, point )
     }
 
     return this.parent_pt_ as point
@@ -27,7 +27,7 @@ export  class point_replica extends point {
 
   public get transformation() : cartesian_transformation_operator {
     if ( this.transformation_ === void 0 ) {
-      this.transformation_ = this.extractElement( 2, false, cartesian_transformation_operator )
+      this.transformation_ = this.extractElement( 2, 1, 3, false, cartesian_transformation_operator )
     }
 
     return this.transformation_ as cartesian_transformation_operator
@@ -35,8 +35,26 @@ export  class point_replica extends point {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === point_replica.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for point_replica" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

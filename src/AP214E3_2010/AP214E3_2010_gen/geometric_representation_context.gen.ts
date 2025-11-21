@@ -18,7 +18,7 @@ export  class geometric_representation_context extends representation_context {
 
   public get coordinate_space_dimension() : number {
     if ( this.coordinate_space_dimension_ === void 0 ) {
-      this.coordinate_space_dimension_ = this.extractNumber( 2, false )
+      this.coordinate_space_dimension_ = this.extractNumber( 2, 2, 1, false )
     }
 
     return this.coordinate_space_dimension_ as number
@@ -26,8 +26,26 @@ export  class geometric_representation_context extends representation_context {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === geometric_representation_context.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for geometric_representation_context" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

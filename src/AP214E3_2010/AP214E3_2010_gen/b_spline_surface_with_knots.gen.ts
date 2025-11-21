@@ -32,7 +32,7 @@ export  class b_spline_surface_with_knots extends b_spline_surface {
   public get u_multiplicities() : Array<number> {
     if ( this.u_multiplicities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 8, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,7 +66,7 @@ export  class b_spline_surface_with_knots extends b_spline_surface {
   public get v_multiplicities() : Array<number> {
     if ( this.v_multiplicities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 9 )
+      let   cursor    = this.getOffsetCursor( 9, 8, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -100,7 +100,7 @@ export  class b_spline_surface_with_knots extends b_spline_surface {
   public get u_knots() : Array< number > {
     if ( this.u_knots_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 10 )
+      let   cursor    = this.getOffsetCursor( 10, 8, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -134,7 +134,7 @@ export  class b_spline_surface_with_knots extends b_spline_surface {
   public get v_knots() : Array< number > {
     if ( this.v_knots_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 11 )
+      let   cursor    = this.getOffsetCursor( 11, 8, 5 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -167,7 +167,7 @@ export  class b_spline_surface_with_knots extends b_spline_surface {
 
   public get knot_spec() : knot_type {
     if ( this.knot_spec_ === void 0 ) {
-      this.knot_spec_ = this.extractLambda( 12, knot_typeDeserializeStep, false )
+      this.knot_spec_ = this.extractLambda( 12, 8, 5, knot_typeDeserializeStep, false )
     }
 
     return this.knot_spec_ as knot_type
@@ -183,8 +183,26 @@ export  class b_spline_surface_with_knots extends b_spline_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === b_spline_surface_with_knots.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for b_spline_surface_with_knots" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

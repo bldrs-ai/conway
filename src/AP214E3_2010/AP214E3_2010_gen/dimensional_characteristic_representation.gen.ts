@@ -22,7 +22,7 @@ export  class dimensional_characteristic_representation extends StepEntityBase< 
     if ( this.dimension_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 0, false )
 
       if ( !( value instanceof dimensional_location ) && !( value instanceof dimensional_size ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -37,7 +37,7 @@ export  class dimensional_characteristic_representation extends StepEntityBase< 
 
   public get representation() : shape_dimension_representation {
     if ( this.representation_ === void 0 ) {
-      this.representation_ = this.extractElement( 1, false, shape_dimension_representation )
+      this.representation_ = this.extractElement( 1, 0, 0, false, shape_dimension_representation )
     }
 
     return this.representation_ as shape_dimension_representation
@@ -45,8 +45,26 @@ export  class dimensional_characteristic_representation extends StepEntityBase< 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === dimensional_characteristic_representation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for dimensional_characteristic_representation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -18,7 +18,7 @@ export  class cartesian_transformation_operator_3d extends cartesian_transformat
 
   public get axis3() : direction | null {
     if ( this.axis3_ === void 0 ) {
-      this.axis3_ = this.extractElement( 5, true, direction )
+      this.axis3_ = this.extractElement( 5, 5, 3, true, direction )
     }
 
     return this.axis3_ as direction | null
@@ -27,8 +27,26 @@ export  class cartesian_transformation_operator_3d extends cartesian_transformat
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === cartesian_transformation_operator_3d.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for cartesian_transformation_operator_3d" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

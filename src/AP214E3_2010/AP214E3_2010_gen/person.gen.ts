@@ -30,7 +30,7 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
 
   public get id() : string {
     if ( this.id_ === void 0 ) {
-      this.id_ = this.extractString( 0, false )
+      this.id_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.id_ as string
@@ -38,7 +38,7 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
 
   public get last_name() : string | null {
     if ( this.last_name_ === void 0 ) {
-      this.last_name_ = this.extractString( 1, true )
+      this.last_name_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.last_name_ as string | null
@@ -46,7 +46,7 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
 
   public get first_name() : string | null {
     if ( this.first_name_ === void 0 ) {
-      this.first_name_ = this.extractString( 2, true )
+      this.first_name_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.first_name_ as string | null
@@ -55,7 +55,7 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
   public get middle_names() : Array< string > | null {
     if ( this.middle_names_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -88,7 +88,7 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
   public get prefix_titles() : Array< string > | null {
     if ( this.prefix_titles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -121,7 +121,7 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
   public get suffix_titles() : Array< string > | null {
     if ( this.suffix_titles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -153,8 +153,26 @@ export  class person extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === person.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for person" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -18,7 +18,7 @@ export  class IfcOccupant extends IfcActor {
 
   public get PredefinedType() : IfcOccupantTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 6, IfcOccupantTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 6, 6, 4, IfcOccupantTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcOccupantTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcOccupant extends IfcActor {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

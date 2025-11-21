@@ -31,7 +31,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, false )
+      this.Name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.Name_ as string
@@ -39,7 +39,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -47,7 +47,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get StartTime() : string {
     if ( this.StartTime_ === void 0 ) {
-      this.StartTime_ = this.extractString( 2, false )
+      this.StartTime_ = this.extractString( 2, 0, 0, false )
     }
 
     return this.StartTime_ as string
@@ -55,7 +55,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get EndTime() : string {
     if ( this.EndTime_ === void 0 ) {
-      this.EndTime_ = this.extractString( 3, false )
+      this.EndTime_ = this.extractString( 3, 0, 0, false )
     }
 
     return this.EndTime_ as string
@@ -63,7 +63,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get TimeSeriesDataType() : IfcTimeSeriesDataTypeEnum {
     if ( this.TimeSeriesDataType_ === void 0 ) {
-      this.TimeSeriesDataType_ = this.extractLambda( 4, IfcTimeSeriesDataTypeEnumDeserializeStep, false )
+      this.TimeSeriesDataType_ = this.extractLambda( 4, 0, 0, IfcTimeSeriesDataTypeEnumDeserializeStep, false )
     }
 
     return this.TimeSeriesDataType_ as IfcTimeSeriesDataTypeEnum
@@ -71,7 +71,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get DataOrigin() : IfcDataOriginEnum {
     if ( this.DataOrigin_ === void 0 ) {
-      this.DataOrigin_ = this.extractLambda( 5, IfcDataOriginEnumDeserializeStep, false )
+      this.DataOrigin_ = this.extractLambda( 5, 0, 0, IfcDataOriginEnumDeserializeStep, false )
     }
 
     return this.DataOrigin_ as IfcDataOriginEnum
@@ -79,7 +79,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
 
   public get UserDefinedDataOrigin() : string | null {
     if ( this.UserDefinedDataOrigin_ === void 0 ) {
-      this.UserDefinedDataOrigin_ = this.extractString( 6, true )
+      this.UserDefinedDataOrigin_ = this.extractString( 6, 0, 0, true )
     }
 
     return this.UserDefinedDataOrigin_ as string | null
@@ -89,7 +89,7 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
     if ( this.Unit_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 7, true )
+        this.extractReference( 7, 0, 0, true )
 
       if ( !( value instanceof IfcDerivedUnit ) && !( value instanceof IfcMonetaryUnit ) && !( value instanceof IfcNamedUnit ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -105,7 +105,9 @@ export abstract class IfcTimeSeries extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

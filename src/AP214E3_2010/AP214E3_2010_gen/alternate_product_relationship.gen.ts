@@ -23,7 +23,7 @@ export  class alternate_product_relationship extends StepEntityBase< EntityTypes
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -31,7 +31,7 @@ export  class alternate_product_relationship extends StepEntityBase< EntityTypes
 
   public get definition() : string | null {
     if ( this.definition_ === void 0 ) {
-      this.definition_ = this.extractString( 1, true )
+      this.definition_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.definition_ as string | null
@@ -39,7 +39,7 @@ export  class alternate_product_relationship extends StepEntityBase< EntityTypes
 
   public get alternate() : product {
     if ( this.alternate_ === void 0 ) {
-      this.alternate_ = this.extractElement( 2, false, product )
+      this.alternate_ = this.extractElement( 2, 0, 0, false, product )
     }
 
     return this.alternate_ as product
@@ -47,7 +47,7 @@ export  class alternate_product_relationship extends StepEntityBase< EntityTypes
 
   public get base() : product {
     if ( this.base_ === void 0 ) {
-      this.base_ = this.extractElement( 3, false, product )
+      this.base_ = this.extractElement( 3, 0, 0, false, product )
     }
 
     return this.base_ as product
@@ -55,7 +55,7 @@ export  class alternate_product_relationship extends StepEntityBase< EntityTypes
 
   public get basis() : string {
     if ( this.basis_ === void 0 ) {
-      this.basis_ = this.extractString( 4, false )
+      this.basis_ = this.extractString( 4, 0, 0, false )
     }
 
     return this.basis_ as string
@@ -63,8 +63,26 @@ export  class alternate_product_relationship extends StepEntityBase< EntityTypes
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === alternate_product_relationship.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for alternate_product_relationship" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -22,7 +22,7 @@ export  class IfcTrapeziumProfileDef extends IfcParameterizedProfileDef {
 
   public get BottomXDim() : number {
     if ( this.BottomXDim_ === void 0 ) {
-      this.BottomXDim_ = this.extractNumber( 3, false )
+      this.BottomXDim_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.BottomXDim_ as number
@@ -30,7 +30,7 @@ export  class IfcTrapeziumProfileDef extends IfcParameterizedProfileDef {
 
   public get TopXDim() : number {
     if ( this.TopXDim_ === void 0 ) {
-      this.TopXDim_ = this.extractNumber( 4, false )
+      this.TopXDim_ = this.extractNumber( 4, 3, 2, false )
     }
 
     return this.TopXDim_ as number
@@ -38,7 +38,7 @@ export  class IfcTrapeziumProfileDef extends IfcParameterizedProfileDef {
 
   public get YDim() : number {
     if ( this.YDim_ === void 0 ) {
-      this.YDim_ = this.extractNumber( 5, false )
+      this.YDim_ = this.extractNumber( 5, 3, 2, false )
     }
 
     return this.YDim_ as number
@@ -46,7 +46,7 @@ export  class IfcTrapeziumProfileDef extends IfcParameterizedProfileDef {
 
   public get TopXOffset() : number {
     if ( this.TopXOffset_ === void 0 ) {
-      this.TopXOffset_ = this.extractNumber( 6, false )
+      this.TopXOffset_ = this.extractNumber( 6, 3, 2, false )
     }
 
     return this.TopXOffset_ as number
@@ -54,7 +54,9 @@ export  class IfcTrapeziumProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

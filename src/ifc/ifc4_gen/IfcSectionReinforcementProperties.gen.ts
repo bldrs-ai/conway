@@ -32,7 +32,7 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
 
   public get LongitudinalStartPosition() : number {
     if ( this.LongitudinalStartPosition_ === void 0 ) {
-      this.LongitudinalStartPosition_ = this.extractNumber( 0, false )
+      this.LongitudinalStartPosition_ = this.extractNumber( 0, 0, 2, false )
     }
 
     return this.LongitudinalStartPosition_ as number
@@ -40,7 +40,7 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
 
   public get LongitudinalEndPosition() : number {
     if ( this.LongitudinalEndPosition_ === void 0 ) {
-      this.LongitudinalEndPosition_ = this.extractNumber( 1, false )
+      this.LongitudinalEndPosition_ = this.extractNumber( 1, 0, 2, false )
     }
 
     return this.LongitudinalEndPosition_ as number
@@ -48,7 +48,7 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
 
   public get TransversePosition() : number | null {
     if ( this.TransversePosition_ === void 0 ) {
-      this.TransversePosition_ = this.extractNumber( 2, true )
+      this.TransversePosition_ = this.extractNumber( 2, 0, 2, true )
     }
 
     return this.TransversePosition_ as number | null
@@ -56,7 +56,7 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
 
   public get ReinforcementRole() : IfcReinforcingBarRoleEnum {
     if ( this.ReinforcementRole_ === void 0 ) {
-      this.ReinforcementRole_ = this.extractLambda( 3, IfcReinforcingBarRoleEnumDeserializeStep, false )
+      this.ReinforcementRole_ = this.extractLambda( 3, 0, 2, IfcReinforcingBarRoleEnumDeserializeStep, false )
     }
 
     return this.ReinforcementRole_ as IfcReinforcingBarRoleEnum
@@ -64,7 +64,7 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
 
   public get SectionDefinition() : IfcSectionProperties {
     if ( this.SectionDefinition_ === void 0 ) {
-      this.SectionDefinition_ = this.extractElement( 4, false, IfcSectionProperties )
+      this.SectionDefinition_ = this.extractElement( 4, 0, 2, false, IfcSectionProperties )
     }
 
     return this.SectionDefinition_ as IfcSectionProperties
@@ -73,7 +73,7 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
   public get CrossSectionReinforcementDefinitions() : Array<IfcReinforcementBarProperties> {
     if ( this.CrossSectionReinforcementDefinitions_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -105,7 +105,9 @@ export  class IfcSectionReinforcementProperties extends IfcPreDefinedProperties 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export  class offset_surface extends surface {
 
   public get basis_surface() : surface {
     if ( this.basis_surface_ === void 0 ) {
-      this.basis_surface_ = this.extractElement( 1, false, surface )
+      this.basis_surface_ = this.extractElement( 1, 1, 3, false, surface )
     }
 
     return this.basis_surface_ as surface
@@ -28,7 +28,7 @@ export  class offset_surface extends surface {
 
   public get distance() : number {
     if ( this.distance_ === void 0 ) {
-      this.distance_ = this.extractNumber( 2, false )
+      this.distance_ = this.extractNumber( 2, 1, 3, false )
     }
 
     return this.distance_ as number
@@ -36,7 +36,7 @@ export  class offset_surface extends surface {
 
   public get self_intersect() : boolean {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 3, false )
+      this.self_intersect_ = this.extractBoolean( 3, 1, 3, false )
     }
 
     return this.self_intersect_ as boolean
@@ -44,8 +44,26 @@ export  class offset_surface extends surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === offset_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for offset_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

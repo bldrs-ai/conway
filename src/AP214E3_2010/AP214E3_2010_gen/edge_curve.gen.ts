@@ -27,7 +27,7 @@ export  class edge_curve extends edge {
 
   public get edge_geometry() : curve {
     if ( this.edge_geometry_ === void 0 ) {
-      this.edge_geometry_ = this.extractElement( 3, false, curve )
+      this.edge_geometry_ = this.extractElement( 3, 3, 3, false, curve )
     }
 
     return this.edge_geometry_ as curve
@@ -35,7 +35,7 @@ export  class edge_curve extends edge {
 
   public get same_sense() : boolean {
     if ( this.same_sense_ === void 0 ) {
-      this.same_sense_ = this.extractBoolean( 4, false )
+      this.same_sense_ = this.extractBoolean( 4, 3, 3, false )
     }
 
     return this.same_sense_ as boolean
@@ -43,8 +43,26 @@ export  class edge_curve extends edge {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === edge_curve.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for edge_curve" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

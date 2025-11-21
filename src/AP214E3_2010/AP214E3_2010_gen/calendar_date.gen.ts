@@ -20,7 +20,7 @@ export  class calendar_date extends date {
 
   public get day_component() : number {
     if ( this.day_component_ === void 0 ) {
-      this.day_component_ = this.extractNumber( 1, false )
+      this.day_component_ = this.extractNumber( 1, 1, 1, false )
     }
 
     return this.day_component_ as number
@@ -28,7 +28,7 @@ export  class calendar_date extends date {
 
   public get month_component() : number {
     if ( this.month_component_ === void 0 ) {
-      this.month_component_ = this.extractNumber( 2, false )
+      this.month_component_ = this.extractNumber( 2, 1, 1, false )
     }
 
     return this.month_component_ as number
@@ -36,8 +36,26 @@ export  class calendar_date extends date {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === calendar_date.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for calendar_date" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

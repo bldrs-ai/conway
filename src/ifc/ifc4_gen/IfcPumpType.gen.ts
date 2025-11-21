@@ -18,7 +18,7 @@ export  class IfcPumpType extends IfcFlowMovingDeviceType {
 
   public get PredefinedType() : IfcPumpTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcPumpTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcPumpTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcPumpTypeEnum
@@ -26,7 +26,9 @@ export  class IfcPumpType extends IfcFlowMovingDeviceType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

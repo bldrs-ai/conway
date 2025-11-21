@@ -26,7 +26,7 @@ export  class IfcFillAreaStyleHatching extends IfcGeometricRepresentationItem {
 
   public get HatchLineAppearance() : IfcCurveStyle {
     if ( this.HatchLineAppearance_ === void 0 ) {
-      this.HatchLineAppearance_ = this.extractElement( 0, false, IfcCurveStyle )
+      this.HatchLineAppearance_ = this.extractElement( 0, 0, 2, false, IfcCurveStyle )
     }
 
     return this.HatchLineAppearance_ as IfcCurveStyle
@@ -36,7 +36,7 @@ export  class IfcFillAreaStyleHatching extends IfcGeometricRepresentationItem {
     if ( this.StartOfNextHatchLine_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 2, false )
 
       if ( !( value instanceof IfcPositiveLengthMeasure ) && !( value instanceof IfcVector ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -51,7 +51,7 @@ export  class IfcFillAreaStyleHatching extends IfcGeometricRepresentationItem {
 
   public get PointOfReferenceHatchLine() : IfcCartesianPoint | null {
     if ( this.PointOfReferenceHatchLine_ === void 0 ) {
-      this.PointOfReferenceHatchLine_ = this.extractElement( 2, true, IfcCartesianPoint )
+      this.PointOfReferenceHatchLine_ = this.extractElement( 2, 0, 2, true, IfcCartesianPoint )
     }
 
     return this.PointOfReferenceHatchLine_ as IfcCartesianPoint | null
@@ -59,7 +59,7 @@ export  class IfcFillAreaStyleHatching extends IfcGeometricRepresentationItem {
 
   public get PatternStart() : IfcCartesianPoint | null {
     if ( this.PatternStart_ === void 0 ) {
-      this.PatternStart_ = this.extractElement( 3, true, IfcCartesianPoint )
+      this.PatternStart_ = this.extractElement( 3, 0, 2, true, IfcCartesianPoint )
     }
 
     return this.PatternStart_ as IfcCartesianPoint | null
@@ -67,7 +67,7 @@ export  class IfcFillAreaStyleHatching extends IfcGeometricRepresentationItem {
 
   public get HatchLineAngle() : number {
     if ( this.HatchLineAngle_ === void 0 ) {
-      this.HatchLineAngle_ = this.extractNumber( 4, false )
+      this.HatchLineAngle_ = this.extractNumber( 4, 0, 2, false )
     }
 
     return this.HatchLineAngle_ as number
@@ -75,7 +75,9 @@ export  class IfcFillAreaStyleHatching extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

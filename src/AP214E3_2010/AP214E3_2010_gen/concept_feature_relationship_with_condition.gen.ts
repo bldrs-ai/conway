@@ -18,7 +18,7 @@ export  class concept_feature_relationship_with_condition extends concept_featur
 
   public get conditional_operator() : concept_feature_operator {
     if ( this.conditional_operator_ === void 0 ) {
-      this.conditional_operator_ = this.extractElement( 4, false, concept_feature_operator )
+      this.conditional_operator_ = this.extractElement( 4, 4, 1, false, concept_feature_operator )
     }
 
     return this.conditional_operator_ as concept_feature_operator
@@ -26,8 +26,26 @@ export  class concept_feature_relationship_with_condition extends concept_featur
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === concept_feature_relationship_with_condition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for concept_feature_relationship_with_condition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

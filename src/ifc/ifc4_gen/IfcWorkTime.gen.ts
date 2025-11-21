@@ -21,7 +21,7 @@ export  class IfcWorkTime extends IfcSchedulingTime {
 
   public get RecurrencePattern() : IfcRecurrencePattern | null {
     if ( this.RecurrencePattern_ === void 0 ) {
-      this.RecurrencePattern_ = this.extractElement( 3, true, IfcRecurrencePattern )
+      this.RecurrencePattern_ = this.extractElement( 3, 3, 1, true, IfcRecurrencePattern )
     }
 
     return this.RecurrencePattern_ as IfcRecurrencePattern | null
@@ -29,7 +29,7 @@ export  class IfcWorkTime extends IfcSchedulingTime {
 
   public get Start() : string | null {
     if ( this.Start_ === void 0 ) {
-      this.Start_ = this.extractString( 4, true )
+      this.Start_ = this.extractString( 4, 3, 1, true )
     }
 
     return this.Start_ as string | null
@@ -37,7 +37,7 @@ export  class IfcWorkTime extends IfcSchedulingTime {
 
   public get Finish() : string | null {
     if ( this.Finish_ === void 0 ) {
-      this.Finish_ = this.extractString( 5, true )
+      this.Finish_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.Finish_ as string | null
@@ -45,7 +45,9 @@ export  class IfcWorkTime extends IfcSchedulingTime {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

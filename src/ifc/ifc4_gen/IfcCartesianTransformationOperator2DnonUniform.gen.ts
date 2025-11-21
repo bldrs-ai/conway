@@ -18,7 +18,7 @@ export  class IfcCartesianTransformationOperator2DnonUniform extends IfcCartesia
 
   public get Scale2() : number | null {
     if ( this.Scale2_ === void 0 ) {
-      this.Scale2_ = this.extractNumber( 4, true )
+      this.Scale2_ = this.extractNumber( 4, 4, 4, true )
     }
 
     return this.Scale2_ as number | null
@@ -27,7 +27,9 @@ export  class IfcCartesianTransformationOperator2DnonUniform extends IfcCartesia
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

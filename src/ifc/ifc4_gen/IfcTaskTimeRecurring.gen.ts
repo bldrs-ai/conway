@@ -18,7 +18,7 @@ export  class IfcTaskTimeRecurring extends IfcTaskTime {
 
   public get Recurrence() : IfcRecurrencePattern {
     if ( this.Recurrence_ === void 0 ) {
-      this.Recurrence_ = this.extractElement( 20, false, IfcRecurrencePattern )
+      this.Recurrence_ = this.extractElement( 20, 20, 2, false, IfcRecurrencePattern )
     }
 
     return this.Recurrence_ as IfcRecurrencePattern
@@ -26,7 +26,9 @@ export  class IfcTaskTimeRecurring extends IfcTaskTime {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -26,7 +26,7 @@ export  class IfcElementQuantity extends IfcQuantitySet {
 
   public get MethodOfMeasurement() : string | null {
     if ( this.MethodOfMeasurement_ === void 0 ) {
-      this.MethodOfMeasurement_ = this.extractString( 4, true )
+      this.MethodOfMeasurement_ = this.extractString( 4, 4, 4, true )
     }
 
     return this.MethodOfMeasurement_ as string | null
@@ -35,7 +35,7 @@ export  class IfcElementQuantity extends IfcQuantitySet {
   public get Quantities() : Array<IfcPhysicalQuantity> {
     if ( this.Quantities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,9 @@ export  class IfcElementQuantity extends IfcQuantitySet {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

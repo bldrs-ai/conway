@@ -19,7 +19,7 @@ export  class pair_actuator extends StepEntityBase< EntityTypesAP214 > {
 
   public get actuated_pair() : kinematic_pair {
     if ( this.actuated_pair_ === void 0 ) {
-      this.actuated_pair_ = this.extractElement( 0, false, kinematic_pair )
+      this.actuated_pair_ = this.extractElement( 0, 0, 0, false, kinematic_pair )
     }
 
     return this.actuated_pair_ as kinematic_pair
@@ -27,7 +27,7 @@ export  class pair_actuator extends StepEntityBase< EntityTypesAP214 > {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 1, false )
+      this.name_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.name_ as string
@@ -35,8 +35,26 @@ export  class pair_actuator extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === pair_actuator.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for pair_actuator" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

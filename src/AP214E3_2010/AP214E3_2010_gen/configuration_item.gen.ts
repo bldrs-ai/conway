@@ -24,7 +24,7 @@ export  class configuration_item extends StepEntityBase< EntityTypesAP214 > {
 
   public get id() : string {
     if ( this.id_ === void 0 ) {
-      this.id_ = this.extractString( 0, false )
+      this.id_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.id_ as string
@@ -32,7 +32,7 @@ export  class configuration_item extends StepEntityBase< EntityTypesAP214 > {
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 1, false )
+      this.name_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.name_ as string
@@ -40,7 +40,7 @@ export  class configuration_item extends StepEntityBase< EntityTypesAP214 > {
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 2, true )
+      this.description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -48,7 +48,7 @@ export  class configuration_item extends StepEntityBase< EntityTypesAP214 > {
 
   public get item_concept() : product_concept {
     if ( this.item_concept_ === void 0 ) {
-      this.item_concept_ = this.extractElement( 3, false, product_concept )
+      this.item_concept_ = this.extractElement( 3, 0, 0, false, product_concept )
     }
 
     return this.item_concept_ as product_concept
@@ -56,7 +56,7 @@ export  class configuration_item extends StepEntityBase< EntityTypesAP214 > {
 
   public get purpose() : string | null {
     if ( this.purpose_ === void 0 ) {
-      this.purpose_ = this.extractString( 4, true )
+      this.purpose_ = this.extractString( 4, 0, 0, true )
     }
 
     return this.purpose_ as string | null
@@ -64,8 +64,26 @@ export  class configuration_item extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === configuration_item.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for configuration_item" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

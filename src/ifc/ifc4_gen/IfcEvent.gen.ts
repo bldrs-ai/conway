@@ -24,7 +24,7 @@ export  class IfcEvent extends IfcProcess {
 
   public get PredefinedType() : IfcEventTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 7, IfcEventTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 7, 7, 4, IfcEventTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcEventTypeEnum | null
@@ -32,7 +32,7 @@ export  class IfcEvent extends IfcProcess {
 
   public get EventTriggerType() : IfcEventTriggerTypeEnum | null {
     if ( this.EventTriggerType_ === void 0 ) {
-      this.EventTriggerType_ = this.extractLambda( 8, IfcEventTriggerTypeEnumDeserializeStep, true )
+      this.EventTriggerType_ = this.extractLambda( 8, 7, 4, IfcEventTriggerTypeEnumDeserializeStep, true )
     }
 
     return this.EventTriggerType_ as IfcEventTriggerTypeEnum | null
@@ -40,7 +40,7 @@ export  class IfcEvent extends IfcProcess {
 
   public get UserDefinedEventTriggerType() : string | null {
     if ( this.UserDefinedEventTriggerType_ === void 0 ) {
-      this.UserDefinedEventTriggerType_ = this.extractString( 9, true )
+      this.UserDefinedEventTriggerType_ = this.extractString( 9, 7, 4, true )
     }
 
     return this.UserDefinedEventTriggerType_ as string | null
@@ -48,7 +48,7 @@ export  class IfcEvent extends IfcProcess {
 
   public get EventOccurenceTime() : IfcEventTime | null {
     if ( this.EventOccurenceTime_ === void 0 ) {
-      this.EventOccurenceTime_ = this.extractElement( 10, true, IfcEventTime )
+      this.EventOccurenceTime_ = this.extractElement( 10, 7, 4, true, IfcEventTime )
     }
 
     return this.EventOccurenceTime_ as IfcEventTime | null
@@ -56,7 +56,9 @@ export  class IfcEvent extends IfcProcess {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

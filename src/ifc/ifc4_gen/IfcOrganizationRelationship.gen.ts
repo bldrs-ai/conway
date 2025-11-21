@@ -25,7 +25,7 @@ export  class IfcOrganizationRelationship extends IfcResourceLevelRelationship {
 
   public get RelatingOrganization() : IfcOrganization {
     if ( this.RelatingOrganization_ === void 0 ) {
-      this.RelatingOrganization_ = this.extractElement( 2, false, IfcOrganization )
+      this.RelatingOrganization_ = this.extractElement( 2, 2, 1, false, IfcOrganization )
     }
 
     return this.RelatingOrganization_ as IfcOrganization
@@ -34,7 +34,7 @@ export  class IfcOrganizationRelationship extends IfcResourceLevelRelationship {
   public get RelatedOrganizations() : Array<IfcOrganization> {
     if ( this.RelatedOrganizations_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,7 +66,9 @@ export  class IfcOrganizationRelationship extends IfcResourceLevelRelationship {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

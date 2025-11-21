@@ -28,7 +28,7 @@ export  class IfcCostItem extends IfcControl {
 
   public get PredefinedType() : IfcCostItemTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 6, IfcCostItemTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 6, 6, 4, IfcCostItemTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcCostItemTypeEnum | null
@@ -37,7 +37,7 @@ export  class IfcCostItem extends IfcControl {
   public get CostValues() : Array<IfcCostValue> | null {
     if ( this.CostValues_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 6, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -70,7 +70,7 @@ export  class IfcCostItem extends IfcControl {
   public get CostQuantities() : Array<IfcPhysicalQuantity> | null {
     if ( this.CostQuantities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 6, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -102,7 +102,9 @@ export  class IfcCostItem extends IfcControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export  class IfcPerformanceHistory extends IfcControl {
 
   public get LifeCyclePhase() : string {
     if ( this.LifeCyclePhase_ === void 0 ) {
-      this.LifeCyclePhase_ = this.extractString( 6, false )
+      this.LifeCyclePhase_ = this.extractString( 6, 6, 4, false )
     }
 
     return this.LifeCyclePhase_ as string
@@ -28,7 +28,7 @@ export  class IfcPerformanceHistory extends IfcControl {
 
   public get PredefinedType() : IfcPerformanceHistoryTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 7, IfcPerformanceHistoryTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 7, 6, 4, IfcPerformanceHistoryTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcPerformanceHistoryTypeEnum | null
@@ -36,7 +36,9 @@ export  class IfcPerformanceHistory extends IfcControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

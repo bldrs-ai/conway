@@ -29,7 +29,7 @@ export  class IfcRationalBSplineSurfaceWithKnots extends IfcBSplineSurfaceWithKn
   public get WeightsData() : Array< Array< number > > {
     if ( this.WeightsData_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 12 )
+      let   cursor    = this.getOffsetCursor( 12, 12, 6 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -76,7 +76,9 @@ export  class IfcRationalBSplineSurfaceWithKnots extends IfcBSplineSurfaceWithKn
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

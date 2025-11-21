@@ -23,7 +23,7 @@ export  class IfcLagTime extends IfcSchedulingTime {
     if ( this.LagValue_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 3, false )
+        this.extractReference( 3, 3, 1, false )
 
       if ( !( value instanceof IfcDuration ) && !( value instanceof IfcRatioMeasure ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -38,7 +38,7 @@ export  class IfcLagTime extends IfcSchedulingTime {
 
   public get DurationType() : IfcTaskDurationEnum {
     if ( this.DurationType_ === void 0 ) {
-      this.DurationType_ = this.extractLambda( 4, IfcTaskDurationEnumDeserializeStep, false )
+      this.DurationType_ = this.extractLambda( 4, 3, 1, IfcTaskDurationEnumDeserializeStep, false )
     }
 
     return this.DurationType_ as IfcTaskDurationEnum
@@ -46,7 +46,9 @@ export  class IfcLagTime extends IfcSchedulingTime {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

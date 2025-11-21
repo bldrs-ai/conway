@@ -23,7 +23,7 @@ export  class action_property_representation extends StepEntityBase< EntityTypes
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -31,7 +31,7 @@ export  class action_property_representation extends StepEntityBase< EntityTypes
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -39,7 +39,7 @@ export  class action_property_representation extends StepEntityBase< EntityTypes
 
   public get property() : action_property {
     if ( this.property_ === void 0 ) {
-      this.property_ = this.extractElement( 2, false, action_property )
+      this.property_ = this.extractElement( 2, 0, 0, false, action_property )
     }
 
     return this.property_ as action_property
@@ -47,7 +47,7 @@ export  class action_property_representation extends StepEntityBase< EntityTypes
 
   public get representation() : representation {
     if ( this.representation_ === void 0 ) {
-      this.representation_ = this.extractElement( 3, false, representation )
+      this.representation_ = this.extractElement( 3, 0, 0, false, representation )
     }
 
     return this.representation_ as representation
@@ -55,8 +55,26 @@ export  class action_property_representation extends StepEntityBase< EntityTypes
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === action_property_representation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for action_property_representation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

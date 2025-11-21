@@ -21,7 +21,7 @@ export  class IfcProjectedCRS extends IfcCoordinateReferenceSystem {
 
   public get MapProjection() : string | null {
     if ( this.MapProjection_ === void 0 ) {
-      this.MapProjection_ = this.extractString( 4, true )
+      this.MapProjection_ = this.extractString( 4, 4, 1, true )
     }
 
     return this.MapProjection_ as string | null
@@ -29,7 +29,7 @@ export  class IfcProjectedCRS extends IfcCoordinateReferenceSystem {
 
   public get MapZone() : string | null {
     if ( this.MapZone_ === void 0 ) {
-      this.MapZone_ = this.extractString( 5, true )
+      this.MapZone_ = this.extractString( 5, 4, 1, true )
     }
 
     return this.MapZone_ as string | null
@@ -37,7 +37,7 @@ export  class IfcProjectedCRS extends IfcCoordinateReferenceSystem {
 
   public get MapUnit() : IfcNamedUnit | null {
     if ( this.MapUnit_ === void 0 ) {
-      this.MapUnit_ = this.extractElement( 6, true, IfcNamedUnit )
+      this.MapUnit_ = this.extractElement( 6, 4, 1, true, IfcNamedUnit )
     }
 
     return this.MapUnit_ as IfcNamedUnit | null
@@ -45,7 +45,9 @@ export  class IfcProjectedCRS extends IfcCoordinateReferenceSystem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

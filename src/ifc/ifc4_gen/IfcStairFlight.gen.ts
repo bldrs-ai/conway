@@ -24,7 +24,7 @@ export  class IfcStairFlight extends IfcBuildingElement {
 
   public get NumberOfRisers() : number | null {
     if ( this.NumberOfRisers_ === void 0 ) {
-      this.NumberOfRisers_ = this.extractNumber( 8, true )
+      this.NumberOfRisers_ = this.extractNumber( 8, 8, 6, true )
     }
 
     return this.NumberOfRisers_ as number | null
@@ -32,7 +32,7 @@ export  class IfcStairFlight extends IfcBuildingElement {
 
   public get NumberOfTreads() : number | null {
     if ( this.NumberOfTreads_ === void 0 ) {
-      this.NumberOfTreads_ = this.extractNumber( 9, true )
+      this.NumberOfTreads_ = this.extractNumber( 9, 8, 6, true )
     }
 
     return this.NumberOfTreads_ as number | null
@@ -40,7 +40,7 @@ export  class IfcStairFlight extends IfcBuildingElement {
 
   public get RiserHeight() : number | null {
     if ( this.RiserHeight_ === void 0 ) {
-      this.RiserHeight_ = this.extractNumber( 10, true )
+      this.RiserHeight_ = this.extractNumber( 10, 8, 6, true )
     }
 
     return this.RiserHeight_ as number | null
@@ -48,7 +48,7 @@ export  class IfcStairFlight extends IfcBuildingElement {
 
   public get TreadLength() : number | null {
     if ( this.TreadLength_ === void 0 ) {
-      this.TreadLength_ = this.extractNumber( 11, true )
+      this.TreadLength_ = this.extractNumber( 11, 8, 6, true )
     }
 
     return this.TreadLength_ as number | null
@@ -56,7 +56,7 @@ export  class IfcStairFlight extends IfcBuildingElement {
 
   public get PredefinedType() : IfcStairFlightTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 12, IfcStairFlightTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 12, 8, 6, IfcStairFlightTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcStairFlightTypeEnum | null
@@ -64,7 +64,9 @@ export  class IfcStairFlight extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

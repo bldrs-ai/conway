@@ -18,7 +18,7 @@ export  class IfcDamperType extends IfcFlowControllerType {
 
   public get PredefinedType() : IfcDamperTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcDamperTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcDamperTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcDamperTypeEnum
@@ -26,7 +26,9 @@ export  class IfcDamperType extends IfcFlowControllerType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

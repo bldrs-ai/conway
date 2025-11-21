@@ -22,7 +22,7 @@ export  class IfcMaterialProfileSetUsage extends IfcMaterialUsageDefinition {
 
   public get ForProfileSet() : IfcMaterialProfileSet {
     if ( this.ForProfileSet_ === void 0 ) {
-      this.ForProfileSet_ = this.extractElement( 0, false, IfcMaterialProfileSet )
+      this.ForProfileSet_ = this.extractElement( 0, 0, 1, false, IfcMaterialProfileSet )
     }
 
     return this.ForProfileSet_ as IfcMaterialProfileSet
@@ -30,7 +30,7 @@ export  class IfcMaterialProfileSetUsage extends IfcMaterialUsageDefinition {
 
   public get CardinalPoint() : number | null {
     if ( this.CardinalPoint_ === void 0 ) {
-      this.CardinalPoint_ = this.extractNumber( 1, true )
+      this.CardinalPoint_ = this.extractNumber( 1, 0, 1, true )
     }
 
     return this.CardinalPoint_ as number | null
@@ -38,7 +38,7 @@ export  class IfcMaterialProfileSetUsage extends IfcMaterialUsageDefinition {
 
   public get ReferenceExtent() : number | null {
     if ( this.ReferenceExtent_ === void 0 ) {
-      this.ReferenceExtent_ = this.extractNumber( 2, true )
+      this.ReferenceExtent_ = this.extractNumber( 2, 0, 1, true )
     }
 
     return this.ReferenceExtent_ as number | null
@@ -46,7 +46,9 @@ export  class IfcMaterialProfileSetUsage extends IfcMaterialUsageDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

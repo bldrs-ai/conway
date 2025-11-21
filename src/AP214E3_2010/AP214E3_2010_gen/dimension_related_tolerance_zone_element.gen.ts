@@ -19,7 +19,7 @@ export  class dimension_related_tolerance_zone_element extends StepEntityBase< E
 
   public get related_dimension() : dimensional_location {
     if ( this.related_dimension_ === void 0 ) {
-      this.related_dimension_ = this.extractElement( 0, false, dimensional_location )
+      this.related_dimension_ = this.extractElement( 0, 0, 0, false, dimensional_location )
     }
 
     return this.related_dimension_ as dimensional_location
@@ -27,7 +27,7 @@ export  class dimension_related_tolerance_zone_element extends StepEntityBase< E
 
   public get related_element() : tolerance_zone_definition {
     if ( this.related_element_ === void 0 ) {
-      this.related_element_ = this.extractElement( 1, false, tolerance_zone_definition )
+      this.related_element_ = this.extractElement( 1, 0, 0, false, tolerance_zone_definition )
     }
 
     return this.related_element_ as tolerance_zone_definition
@@ -35,8 +35,26 @@ export  class dimension_related_tolerance_zone_element extends StepEntityBase< E
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === dimension_related_tolerance_zone_element.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for dimension_related_tolerance_zone_element" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

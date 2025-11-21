@@ -20,7 +20,7 @@ export abstract class IfcSweptAreaSolid extends IfcSolidModel {
 
   public get SweptArea() : IfcProfileDef {
     if ( this.SweptArea_ === void 0 ) {
-      this.SweptArea_ = this.extractElement( 0, false, IfcProfileDef )
+      this.SweptArea_ = this.extractElement( 0, 0, 3, false, IfcProfileDef )
     }
 
     return this.SweptArea_ as IfcProfileDef
@@ -28,7 +28,7 @@ export abstract class IfcSweptAreaSolid extends IfcSolidModel {
 
   public get Position() : IfcAxis2Placement3D | null {
     if ( this.Position_ === void 0 ) {
-      this.Position_ = this.extractElement( 1, true, IfcAxis2Placement3D )
+      this.Position_ = this.extractElement( 1, 0, 3, true, IfcAxis2Placement3D )
     }
 
     return this.Position_ as IfcAxis2Placement3D | null
@@ -36,7 +36,9 @@ export abstract class IfcSweptAreaSolid extends IfcSolidModel {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

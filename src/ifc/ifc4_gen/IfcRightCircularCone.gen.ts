@@ -19,7 +19,7 @@ export  class IfcRightCircularCone extends IfcCsgPrimitive3D {
 
   public get Height() : number {
     if ( this.Height_ === void 0 ) {
-      this.Height_ = this.extractNumber( 1, false )
+      this.Height_ = this.extractNumber( 1, 1, 3, false )
     }
 
     return this.Height_ as number
@@ -27,7 +27,7 @@ export  class IfcRightCircularCone extends IfcCsgPrimitive3D {
 
   public get BottomRadius() : number {
     if ( this.BottomRadius_ === void 0 ) {
-      this.BottomRadius_ = this.extractNumber( 2, false )
+      this.BottomRadius_ = this.extractNumber( 2, 1, 3, false )
     }
 
     return this.BottomRadius_ as number
@@ -35,7 +35,9 @@ export  class IfcRightCircularCone extends IfcCsgPrimitive3D {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

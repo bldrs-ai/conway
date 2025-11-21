@@ -20,9 +20,10 @@ export interface EntityFieldsDescription< EntityTypeIDs extends number > {
  * Reflection description for a particular entity type.
  */
 export interface EntityDescription< EntityTypeIDs extends number > {
-  fields: EntityFieldsDescription< EntityTypeIDs >
-  typeId: EntityTypeIDs
-  isAbstract: boolean
-  superType?: EntityTypeIDs
-  subTypes?: EntityTypeIDs[]
+  readonly fields: EntityFieldsDescription< EntityTypeIDs >
+  readonly depth: number
+  readonly typeId: EntityTypeIDs
+  readonly isAbstract: boolean
+  readonly superType?: EntityTypeIDs
+  readonly subTypes?: EntityTypeIDs[]
 }

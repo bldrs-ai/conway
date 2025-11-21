@@ -20,7 +20,7 @@ export  class IfcStructuralLoadPlanarForce extends IfcStructuralLoadStatic {
 
   public get PlanarForceX() : number | null {
     if ( this.PlanarForceX_ === void 0 ) {
-      this.PlanarForceX_ = this.extractNumber( 1, true )
+      this.PlanarForceX_ = this.extractNumber( 1, 1, 3, true )
     }
 
     return this.PlanarForceX_ as number | null
@@ -28,7 +28,7 @@ export  class IfcStructuralLoadPlanarForce extends IfcStructuralLoadStatic {
 
   public get PlanarForceY() : number | null {
     if ( this.PlanarForceY_ === void 0 ) {
-      this.PlanarForceY_ = this.extractNumber( 2, true )
+      this.PlanarForceY_ = this.extractNumber( 2, 1, 3, true )
     }
 
     return this.PlanarForceY_ as number | null
@@ -36,7 +36,7 @@ export  class IfcStructuralLoadPlanarForce extends IfcStructuralLoadStatic {
 
   public get PlanarForceZ() : number | null {
     if ( this.PlanarForceZ_ === void 0 ) {
-      this.PlanarForceZ_ = this.extractNumber( 3, true )
+      this.PlanarForceZ_ = this.extractNumber( 3, 1, 3, true )
     }
 
     return this.PlanarForceZ_ as number | null
@@ -44,7 +44,9 @@ export  class IfcStructuralLoadPlanarForce extends IfcStructuralLoadStatic {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -18,7 +18,7 @@ export  class IfcVertexPoint extends IfcVertex {
 
   public get VertexGeometry() : IfcPoint {
     if ( this.VertexGeometry_ === void 0 ) {
-      this.VertexGeometry_ = this.extractElement( 0, false, IfcPoint )
+      this.VertexGeometry_ = this.extractElement( 0, 0, 3, false, IfcPoint )
     }
 
     return this.VertexGeometry_ as IfcPoint
@@ -26,7 +26,9 @@ export  class IfcVertexPoint extends IfcVertex {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

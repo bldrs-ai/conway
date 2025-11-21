@@ -29,7 +29,7 @@ export  class approximation_tolerance_deviation extends founded_item {
 
   public get tessellation_type() : approximation_method {
     if ( this.tessellation_type_ === void 0 ) {
-      this.tessellation_type_ = this.extractLambda( 0, approximation_methodDeserializeStep, false )
+      this.tessellation_type_ = this.extractLambda( 0, 0, 1, approximation_methodDeserializeStep, false )
     }
 
     return this.tessellation_type_ as approximation_method
@@ -38,7 +38,7 @@ export  class approximation_tolerance_deviation extends founded_item {
   public get tolerances() : Array<curve_tolerance_deviation | surface_tolerance_deviation> {
     if ( this.tolerances_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -77,7 +77,7 @@ export  class approximation_tolerance_deviation extends founded_item {
 
   public get definition_space() : product_or_presentation_space {
     if ( this.definition_space_ === void 0 ) {
-      this.definition_space_ = this.extractLambda( 2, product_or_presentation_spaceDeserializeStep, false )
+      this.definition_space_ = this.extractLambda( 2, 0, 1, product_or_presentation_spaceDeserializeStep, false )
     }
 
     return this.definition_space_ as product_or_presentation_space
@@ -85,8 +85,26 @@ export  class approximation_tolerance_deviation extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === approximation_tolerance_deviation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for approximation_tolerance_deviation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

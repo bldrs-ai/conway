@@ -97,8 +97,23 @@ export interface CanonicalMaterial {
      we want to keep this implementable in gltf */
 }
 
+const HASH_CHAR = 0x23
+
 /**
- * A materila name cleaned for OBJ syntax
+ * Serialize a canonical material to a stable string for hashing or comparison.
+ *
+ * @param mat The canonical material to serialize.
+ * @return {string} A pipe-delimited string representation of the material.
+ */
+export function canonicalMaterialToString( mat: CanonicalMaterial ): string {
+    
+   
+  return `"${mat.name.codePointAt( 0 ) !== HASH_CHAR ? mat.name : ''}"|${mat.baseColor.join( ',' )}|${mat.legacyColor.join( ',' )}|${mat.metalness}|${mat.roughness}|${mat.ior}|${mat.specular ? mat.specular.join( ',' ) : ''}|${mat.doubleSided ? 't' : 'f'}|${mat.blend}`
+
+}
+
+/**
+ * A material name cleaned for OBJ syntax
  *
  * @param from The material to get a clean name for
  * @return {string} The cleaned name

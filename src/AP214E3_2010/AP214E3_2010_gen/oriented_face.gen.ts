@@ -22,7 +22,7 @@ export  class oriented_face extends face {
 
   public get face_element() : face {
     if ( this.face_element_ === void 0 ) {
-      this.face_element_ = this.extractElement( 2, false, face )
+      this.face_element_ = this.extractElement( 2, 2, 3, false, face )
     }
 
     return this.face_element_ as face
@@ -30,7 +30,7 @@ export  class oriented_face extends face {
 
   public get orientation() : boolean {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractBoolean( 3, false )
+      this.orientation_ = this.extractBoolean( 3, 2, 3, false )
     }
 
     return this.orientation_ as boolean
@@ -42,8 +42,26 @@ export  class oriented_face extends face {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === oriented_face.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for oriented_face" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

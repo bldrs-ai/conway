@@ -19,7 +19,7 @@ export abstract class IfcTessellatedFaceSet extends IfcTessellatedItem {
 
   public get Coordinates() : IfcCartesianPointList3D {
     if ( this.Coordinates_ === void 0 ) {
-      this.Coordinates_ = this.extractElement( 0, false, IfcCartesianPointList3D )
+      this.Coordinates_ = this.extractElement( 0, 0, 3, false, IfcCartesianPointList3D )
     }
 
     return this.Coordinates_ as IfcCartesianPointList3D
@@ -33,7 +33,9 @@ export abstract class IfcTessellatedFaceSet extends IfcTessellatedItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -28,7 +28,7 @@ export  class IfcPhysicalComplexQuantity extends IfcPhysicalQuantity {
   public get HasQuantities() : Array<IfcPhysicalQuantity> {
     if ( this.HasQuantities_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -60,7 +60,7 @@ export  class IfcPhysicalComplexQuantity extends IfcPhysicalQuantity {
 
   public get Discrimination() : string {
     if ( this.Discrimination_ === void 0 ) {
-      this.Discrimination_ = this.extractString( 3, false )
+      this.Discrimination_ = this.extractString( 3, 2, 1, false )
     }
 
     return this.Discrimination_ as string
@@ -68,7 +68,7 @@ export  class IfcPhysicalComplexQuantity extends IfcPhysicalQuantity {
 
   public get Quality() : string | null {
     if ( this.Quality_ === void 0 ) {
-      this.Quality_ = this.extractString( 4, true )
+      this.Quality_ = this.extractString( 4, 2, 1, true )
     }
 
     return this.Quality_ as string | null
@@ -76,7 +76,7 @@ export  class IfcPhysicalComplexQuantity extends IfcPhysicalQuantity {
 
   public get Usage() : string | null {
     if ( this.Usage_ === void 0 ) {
-      this.Usage_ = this.extractString( 5, true )
+      this.Usage_ = this.extractString( 5, 2, 1, true )
     }
 
     return this.Usage_ as string | null
@@ -84,7 +84,9 @@ export  class IfcPhysicalComplexQuantity extends IfcPhysicalQuantity {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -57,7 +57,7 @@ export  class applied_identification_assignment extends identification_assignmen
   public get items() : Array<action | action_directive | action_method | action_property | applied_identification_assignment | approval_status | class_ | class_system | configuration_item | dimensional_size | document_file | document_type | draughting_model | effectivity | general_property | measure_representation_item | mechanical_design_geometric_presentation_representation | organization | organizational_project | person_and_organization | presentation_area | product | product_concept | product_concept_feature | product_concept_feature_category | product_definition | product_definition_formation | product_definition_relationship | property_definition | property_definition_relationship | security_classification_level | shape_aspect_relationship | shape_representation | versioned_action_request> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -96,8 +96,26 @@ export  class applied_identification_assignment extends identification_assignmen
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === applied_identification_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for applied_identification_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

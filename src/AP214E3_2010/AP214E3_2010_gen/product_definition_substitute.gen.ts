@@ -25,7 +25,7 @@ export  class product_definition_substitute extends StepEntityBase< EntityTypesA
 
   public get description() : string | null {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 0, true )
+      this.description_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.description_ as string | null
@@ -33,7 +33,7 @@ export  class product_definition_substitute extends StepEntityBase< EntityTypesA
 
   public get context_relationship() : product_definition_relationship {
     if ( this.context_relationship_ === void 0 ) {
-      this.context_relationship_ = this.extractElement( 1, false, product_definition_relationship )
+      this.context_relationship_ = this.extractElement( 1, 0, 0, false, product_definition_relationship )
     }
 
     return this.context_relationship_ as product_definition_relationship
@@ -41,7 +41,7 @@ export  class product_definition_substitute extends StepEntityBase< EntityTypesA
 
   public get substitute_definition() : product_definition {
     if ( this.substitute_definition_ === void 0 ) {
-      this.substitute_definition_ = this.extractElement( 2, false, product_definition )
+      this.substitute_definition_ = this.extractElement( 2, 0, 0, false, product_definition )
     }
 
     return this.substitute_definition_ as product_definition
@@ -53,8 +53,26 @@ export  class product_definition_substitute extends StepEntityBase< EntityTypesA
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === product_definition_substitute.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for product_definition_substitute" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

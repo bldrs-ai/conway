@@ -30,43 +30,13 @@ export default abstract class StepExternalMapping<
    
   constructor(
       localID: number,
-      internalReference_: StepEntityInternalReference<EntityTypeIDs>,
-      model: StepModelBase<EntityTypeIDs>) {
+      internalReference: StepEntityInternalReference<EntityTypeIDs>,
+      model: StepModelBase<EntityTypeIDs>,
+      multiReference?: StepEntityInternalReference<EntityTypeIDs>[]) {
 
-    super(localID, internalReference_, model)
+    super(localID, internalReference, model)
   }
 
-  /**
-   * Get the externally mapped elements in this.
-   *
-   * @return {StepEntityBase} The inline elements of this.
-   */
-  public get items(): StepEntityBase<EntityTypeIDs>[] {
-
-    if ( this.items_ === void 0 ) {
-
-      this.items_ = []
-
-      const inlineEntities = this.internalReference_.inlineEntities
-
-      if ( inlineEntities !== void 0 ) {
-
-        for ( const inlineItem of inlineEntities ) {
-
-          const inlineElement =
-            this.model.getInlineElementByAddress( inlineItem.address )
-
-          if ( inlineElement === void 0 ) {
-            continue
-          }
-
-          this.items_.push( inlineElement )
-        }
-      }
-    }
-
-    return this.items_
-  }
 
   public static readonly query: number[] = [0]
 

@@ -26,7 +26,7 @@ export  class IfcCartesianPointList3D extends IfcCartesianPointList {
   public get CoordList() : Array< Array< number > > {
     if ( this.CoordList_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -69,7 +69,9 @@ export  class IfcCartesianPointList3D extends IfcCartesianPointList {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

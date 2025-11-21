@@ -18,7 +18,7 @@ export  class IfcSpaceHeater extends IfcFlowTerminal {
 
   public get PredefinedType() : IfcSpaceHeaterTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcSpaceHeaterTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcSpaceHeaterTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcSpaceHeaterTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcSpaceHeater extends IfcFlowTerminal {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

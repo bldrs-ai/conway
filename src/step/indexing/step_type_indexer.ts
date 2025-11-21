@@ -39,9 +39,30 @@ export class StepTypeIndexer< TypeIDType extends number > {
     for ( let denseIndex = 0, endIndex = elements.length; denseIndex < endIndex; ++denseIndex ) {
       const element = elements[ denseIndex ]
 
-      if ( element.typeID !== void 0 ) {
-        prefixSum[ element.typeID + 1 ] =
-          addCompactedElementCount32State( denseIndex, elementCounter, element.typeID << 1 )
+      const typeID = element.typeID
+
+      if ( typeID !== void 0 ) {
+        prefixSum[ typeID + 1 ] =
+          addCompactedElementCount32State( denseIndex, elementCounter, typeID << 1 )
+      }
+
+      const multiElements = element.multiMapping
+
+      if ( multiElements !== void 0 ) {
+
+        for ( const subElement of multiElements ) {
+
+          const subTypeID = subElement.typeID
+
+          if ( subTypeID === void 0 ) {
+            continue
+          }
+
+          // This is a multi-mapping, so we need to add the element to the index as well.
+          // We can use the same denseIndex, because it is the same element.
+          prefixSum[ subTypeID + 1 ] =
+            addCompactedElementCount32State( denseIndex, elementCounter, subTypeID << 1 )
+        } 
       }
     }
 
@@ -63,13 +84,38 @@ export class StepTypeIndexer< TypeIDType extends number > {
     for ( let denseIndex = 0, endIndex = elements.length; denseIndex < endIndex; ++denseIndex ) {
       const element = elements[ denseIndex ]
 
-      if ( element.typeID !== void 0 ) {
+      const typeID = element.typeID
+
+      if ( typeID !== void 0 ) {
         addCompactedElement32State(
             denseIndex,
             elementCounter,
             indexOutput,
-            element.typeID << 1,
-            prefixSum[ element.typeID ] << 1 )
+            typeID << 1,
+            prefixSum[ typeID ] << 1 )
+      }
+
+      const multiElements = element.multiMapping
+
+      if ( multiElements !== void 0 ) {
+
+        for ( const subElement of multiElements ) {
+
+          const subTypeID = subElement.typeID
+
+          if ( subTypeID === void 0 ) {
+            continue
+          }
+
+          // This is a multi-mapping, so we need to add the element to the index as well.
+          // We can use the same denseIndex, because it is the same element.
+          addCompactedElement32State(
+            denseIndex,
+            elementCounter,
+            indexOutput,
+            subTypeID << 1,
+            prefixSum[ subTypeID ] << 1 )
+        }
       }
     }
 

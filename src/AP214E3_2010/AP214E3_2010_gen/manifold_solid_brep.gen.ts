@@ -18,7 +18,7 @@ export  class manifold_solid_brep extends solid_model {
 
   public get outer() : closed_shell {
     if ( this.outer_ === void 0 ) {
-      this.outer_ = this.extractElement( 1, false, closed_shell )
+      this.outer_ = this.extractElement( 1, 1, 3, false, closed_shell )
     }
 
     return this.outer_ as closed_shell
@@ -26,8 +26,26 @@ export  class manifold_solid_brep extends solid_model {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === manifold_solid_brep.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for manifold_solid_brep" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

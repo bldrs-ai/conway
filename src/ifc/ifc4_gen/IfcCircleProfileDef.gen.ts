@@ -18,7 +18,7 @@ export  class IfcCircleProfileDef extends IfcParameterizedProfileDef {
 
   public get Radius() : number {
     if ( this.Radius_ === void 0 ) {
-      this.Radius_ = this.extractNumber( 3, false )
+      this.Radius_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.Radius_ as number
@@ -26,7 +26,9 @@ export  class IfcCircleProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

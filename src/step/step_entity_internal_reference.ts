@@ -13,6 +13,9 @@ export default interface StepEntityInternalReference< EntityTypeIDs extends numb
   endCursor?: number
   buffer?: Uint8Array
   vtable?: Uint32Array
+  visitedMulti?: boolean
+  multiMapping?: StepEntityInternalReference<EntityTypeIDs>[]
+  multiEntity?: StepEntityBase< EntityTypeIDs >[]
 }
 
 /**
@@ -23,4 +26,6 @@ export interface StepEntityInternalReferencePrivate<
   BaseEntity extends StepEntityBase< EntityTypeIDs > > extends
   StepEntityInternalReference< EntityTypeIDs > {
   entity?: BaseEntity
+  multiEntity?: BaseEntity[]
+  multiMapping?: StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity >[]
 }

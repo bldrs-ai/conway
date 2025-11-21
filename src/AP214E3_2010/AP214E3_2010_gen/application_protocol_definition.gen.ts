@@ -22,7 +22,7 @@ export  class application_protocol_definition extends StepEntityBase< EntityType
 
   public get status() : string {
     if ( this.status_ === void 0 ) {
-      this.status_ = this.extractString( 0, false )
+      this.status_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.status_ as string
@@ -30,7 +30,7 @@ export  class application_protocol_definition extends StepEntityBase< EntityType
 
   public get application_interpreted_model_schema_name() : string {
     if ( this.application_interpreted_model_schema_name_ === void 0 ) {
-      this.application_interpreted_model_schema_name_ = this.extractString( 1, false )
+      this.application_interpreted_model_schema_name_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.application_interpreted_model_schema_name_ as string
@@ -38,7 +38,7 @@ export  class application_protocol_definition extends StepEntityBase< EntityType
 
   public get application_protocol_year() : number {
     if ( this.application_protocol_year_ === void 0 ) {
-      this.application_protocol_year_ = this.extractNumber( 2, false )
+      this.application_protocol_year_ = this.extractNumber( 2, 0, 0, false )
     }
 
     return this.application_protocol_year_ as number
@@ -46,7 +46,7 @@ export  class application_protocol_definition extends StepEntityBase< EntityType
 
   public get application() : application_context {
     if ( this.application_ === void 0 ) {
-      this.application_ = this.extractElement( 3, false, application_context )
+      this.application_ = this.extractElement( 3, 0, 0, false, application_context )
     }
 
     return this.application_ as application_context
@@ -54,8 +54,26 @@ export  class application_protocol_definition extends StepEntityBase< EntityType
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === application_protocol_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for application_protocol_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

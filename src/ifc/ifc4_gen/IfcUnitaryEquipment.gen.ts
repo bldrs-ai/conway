@@ -18,7 +18,7 @@ export  class IfcUnitaryEquipment extends IfcEnergyConversionDevice {
 
   public get PredefinedType() : IfcUnitaryEquipmentTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcUnitaryEquipmentTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcUnitaryEquipmentTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcUnitaryEquipmentTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcUnitaryEquipment extends IfcEnergyConversionDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

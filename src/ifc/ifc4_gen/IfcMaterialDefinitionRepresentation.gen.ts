@@ -18,7 +18,7 @@ export  class IfcMaterialDefinitionRepresentation extends IfcProductRepresentati
 
   public get RepresentedMaterial() : IfcMaterial {
     if ( this.RepresentedMaterial_ === void 0 ) {
-      this.RepresentedMaterial_ = this.extractElement( 3, false, IfcMaterial )
+      this.RepresentedMaterial_ = this.extractElement( 3, 3, 1, false, IfcMaterial )
     }
 
     return this.RepresentedMaterial_ as IfcMaterial
@@ -26,7 +26,9 @@ export  class IfcMaterialDefinitionRepresentation extends IfcProductRepresentati
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

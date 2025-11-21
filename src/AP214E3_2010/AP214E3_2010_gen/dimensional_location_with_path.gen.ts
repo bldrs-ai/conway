@@ -18,7 +18,7 @@ export  class dimensional_location_with_path extends dimensional_location {
 
   public get path() : shape_aspect {
     if ( this.path_ === void 0 ) {
-      this.path_ = this.extractElement( 4, false, shape_aspect )
+      this.path_ = this.extractElement( 4, 4, 2, false, shape_aspect )
     }
 
     return this.path_ as shape_aspect
@@ -26,8 +26,26 @@ export  class dimensional_location_with_path extends dimensional_location {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === dimensional_location_with_path.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for dimensional_location_with_path" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

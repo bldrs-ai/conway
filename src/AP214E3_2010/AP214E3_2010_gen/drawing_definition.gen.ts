@@ -19,7 +19,7 @@ export  class drawing_definition extends StepEntityBase< EntityTypesAP214 > {
 
   public get drawing_number() : string {
     if ( this.drawing_number_ === void 0 ) {
-      this.drawing_number_ = this.extractString( 0, false )
+      this.drawing_number_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.drawing_number_ as string
@@ -27,7 +27,7 @@ export  class drawing_definition extends StepEntityBase< EntityTypesAP214 > {
 
   public get drawing_type() : string | null {
     if ( this.drawing_type_ === void 0 ) {
-      this.drawing_type_ = this.extractString( 1, true )
+      this.drawing_type_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.drawing_type_ as string | null
@@ -35,8 +35,26 @@ export  class drawing_definition extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === drawing_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for drawing_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

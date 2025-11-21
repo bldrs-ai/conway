@@ -34,7 +34,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
 
   public get Identification() : string | null {
     if ( this.Identification_ === void 0 ) {
-      this.Identification_ = this.extractString( 0, true )
+      this.Identification_ = this.extractString( 0, 0, 0, true )
     }
 
     return this.Identification_ as string | null
@@ -42,7 +42,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
 
   public get FamilyName() : string | null {
     if ( this.FamilyName_ === void 0 ) {
-      this.FamilyName_ = this.extractString( 1, true )
+      this.FamilyName_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.FamilyName_ as string | null
@@ -50,7 +50,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
 
   public get GivenName() : string | null {
     if ( this.GivenName_ === void 0 ) {
-      this.GivenName_ = this.extractString( 2, true )
+      this.GivenName_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.GivenName_ as string | null
@@ -59,7 +59,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
   public get MiddleNames() : Array< string > | null {
     if ( this.MiddleNames_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -92,7 +92,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
   public get PrefixTitles() : Array< string > | null {
     if ( this.PrefixTitles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -125,7 +125,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
   public get SuffixTitles() : Array< string > | null {
     if ( this.SuffixTitles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -158,7 +158,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
   public get Roles() : Array<IfcActorRole> | null {
     if ( this.Roles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -191,7 +191,7 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
   public get Addresses() : Array<IfcAddress> | null {
     if ( this.Addresses_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 7 )
+      let   cursor    = this.getOffsetCursor( 7, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -224,7 +224,9 @@ export  class IfcPerson extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -20,7 +20,7 @@ export  class IfcRelAssignsToActor extends IfcRelAssigns {
 
   public get RelatingActor() : IfcActor {
     if ( this.RelatingActor_ === void 0 ) {
-      this.RelatingActor_ = this.extractElement( 6, false, IfcActor )
+      this.RelatingActor_ = this.extractElement( 6, 6, 3, false, IfcActor )
     }
 
     return this.RelatingActor_ as IfcActor
@@ -28,7 +28,7 @@ export  class IfcRelAssignsToActor extends IfcRelAssigns {
 
   public get ActingRole() : IfcActorRole | null {
     if ( this.ActingRole_ === void 0 ) {
-      this.ActingRole_ = this.extractElement( 7, true, IfcActorRole )
+      this.ActingRole_ = this.extractElement( 7, 6, 3, true, IfcActorRole )
     }
 
     return this.ActingRole_ as IfcActorRole | null
@@ -36,7 +36,9 @@ export  class IfcRelAssignsToActor extends IfcRelAssigns {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

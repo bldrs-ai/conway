@@ -23,7 +23,7 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
 
   public get TensionFailureX() : number | null {
     if ( this.TensionFailureX_ === void 0 ) {
-      this.TensionFailureX_ = this.extractNumber( 1, true )
+      this.TensionFailureX_ = this.extractNumber( 1, 1, 1, true )
     }
 
     return this.TensionFailureX_ as number | null
@@ -31,7 +31,7 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
 
   public get TensionFailureY() : number | null {
     if ( this.TensionFailureY_ === void 0 ) {
-      this.TensionFailureY_ = this.extractNumber( 2, true )
+      this.TensionFailureY_ = this.extractNumber( 2, 1, 1, true )
     }
 
     return this.TensionFailureY_ as number | null
@@ -39,7 +39,7 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
 
   public get TensionFailureZ() : number | null {
     if ( this.TensionFailureZ_ === void 0 ) {
-      this.TensionFailureZ_ = this.extractNumber( 3, true )
+      this.TensionFailureZ_ = this.extractNumber( 3, 1, 1, true )
     }
 
     return this.TensionFailureZ_ as number | null
@@ -47,7 +47,7 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
 
   public get CompressionFailureX() : number | null {
     if ( this.CompressionFailureX_ === void 0 ) {
-      this.CompressionFailureX_ = this.extractNumber( 4, true )
+      this.CompressionFailureX_ = this.extractNumber( 4, 1, 1, true )
     }
 
     return this.CompressionFailureX_ as number | null
@@ -55,7 +55,7 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
 
   public get CompressionFailureY() : number | null {
     if ( this.CompressionFailureY_ === void 0 ) {
-      this.CompressionFailureY_ = this.extractNumber( 5, true )
+      this.CompressionFailureY_ = this.extractNumber( 5, 1, 1, true )
     }
 
     return this.CompressionFailureY_ as number | null
@@ -63,7 +63,7 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
 
   public get CompressionFailureZ() : number | null {
     if ( this.CompressionFailureZ_ === void 0 ) {
-      this.CompressionFailureZ_ = this.extractNumber( 6, true )
+      this.CompressionFailureZ_ = this.extractNumber( 6, 1, 1, true )
     }
 
     return this.CompressionFailureZ_ as number | null
@@ -71,7 +71,9 @@ export  class IfcFailureConnectionCondition extends IfcStructuralConnectionCondi
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

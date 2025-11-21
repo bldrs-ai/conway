@@ -25,7 +25,7 @@ export  class tolerance_zone_definition extends StepEntityBase< EntityTypesAP214
 
   public get zone() : tolerance_zone {
     if ( this.zone_ === void 0 ) {
-      this.zone_ = this.extractElement( 0, false, tolerance_zone )
+      this.zone_ = this.extractElement( 0, 0, 0, false, tolerance_zone )
     }
 
     return this.zone_ as tolerance_zone
@@ -34,7 +34,7 @@ export  class tolerance_zone_definition extends StepEntityBase< EntityTypesAP214
   public get boundaries() : Array<shape_aspect> {
     if ( this.boundaries_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,8 +66,26 @@ export  class tolerance_zone_definition extends StepEntityBase< EntityTypesAP214
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === tolerance_zone_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for tolerance_zone_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

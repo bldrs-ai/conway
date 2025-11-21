@@ -2942,6 +2942,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
   {
     fields: {
     },
+    depth: 0,
     typeId: e.EXTERNALMAPPINGCONTAINER,
     isAbstract: false,
   },
@@ -2949,6 +2950,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ABS_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -2956,6 +2958,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.UNARY_FUNCTION_CALL,
+    depth: 4,
     isAbstract: true,
     superType: e.UNARY_NUMERIC_EXPRESSION,
     subTypes: [
@@ -2977,6 +2980,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ACOS_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -3008,6 +3012,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3027,6 +3032,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -3065,6 +3071,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_DIRECTIVE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3095,6 +3102,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_METHOD,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3127,6 +3135,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_METHOD_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3177,6 +3186,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_PROPERTY,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3209,6 +3219,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_PROPERTY_REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3241,6 +3252,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3260,6 +3272,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_REQUEST_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -3290,6 +3303,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_REQUEST_SOLUTION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3309,6 +3323,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_REQUEST_STATUS,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3361,6 +3376,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_RESOURCE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3419,6 +3435,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_RESOURCE_REQUIREMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3431,6 +3448,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_RESOURCE_TYPE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3450,6 +3468,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ACTION_STATUS,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -3538,12 +3557,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ADDRESS,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.ADVANCED_BREP_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -3551,6 +3572,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -3558,6 +3580,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ADVANCED_FACE,
+    depth: 4,
     isAbstract: false,
     superType: e.FACE_SURFACE,
   },
@@ -3578,6 +3601,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FACE_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.FACE,
   },
@@ -3617,12 +3641,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ALTERNATE_PRODUCT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.AMOUNT_OF_SUBSTANCE_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -3790,6 +3816,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MEASURE_WITH_UNIT,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.LENGTH_MEASURE_WITH_UNIT,
@@ -3811,6 +3838,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.AMOUNT_OF_SUBSTANCE_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -3825,6 +3853,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NAMED_UNIT,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.SI_UNIT,
@@ -3836,6 +3865,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.AND_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.MULTIPLE_ARITY_BOOLEAN_EXPRESSION,
   },
@@ -3851,6 +3881,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MULTIPLE_ARITY_BOOLEAN_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.BOOLEAN_EXPRESSION,
     subTypes: [
@@ -3862,6 +3893,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ANGULAR_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.DIMENSION_CURVE_DIRECTED_CALLOUT,
   },
@@ -3869,6 +3901,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIMENSION_CURVE_DIRECTED_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -3883,6 +3916,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANGULAR_LOCATION,
+    depth: 2,
     isAbstract: false,
     superType: e.DIMENSIONAL_LOCATION,
   },
@@ -3890,6 +3924,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIMENSIONAL_LOCATION,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT_RELATIONSHIP,
     subTypes: [
@@ -3908,6 +3943,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANGULAR_SIZE,
+    depth: 1,
     isAbstract: false,
     superType: e.DIMENSIONAL_SIZE,
   },
@@ -3928,6 +3964,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSIONAL_SIZE,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.ANGULAR_SIZE,
@@ -3938,6 +3975,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ANGULARITY_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -3953,6 +3991,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -3967,6 +4006,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_CURVE_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE,
   },
@@ -3974,6 +4014,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ANNOTATION_OCCURRENCE,
+    depth: 2,
     isAbstract: false,
     superType: e.STYLED_ITEM,
     subTypes: [
@@ -3995,6 +4036,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_FILL_AREA,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -4007,6 +4049,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
     subTypes: [
@@ -4054,6 +4097,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_FILL_AREA_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE,
   },
@@ -4099,6 +4143,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_TEXT_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE,
   },
@@ -4126,6 +4171,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_SYMBOL_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE,
   },
@@ -4148,6 +4194,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.STYLED_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -4155,6 +4202,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ANNOTATION_OCCURRENCE_ASSOCIATIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE_RELATIONSHIP,
   },
@@ -4188,6 +4236,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_OCCURRENCE_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -4235,6 +4284,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_PLANE,
+    depth: 3,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE,
   },
@@ -4242,6 +4292,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ANNOTATION_SUBFIGURE_OCCURRENCE,
+    depth: 4,
     isAbstract: false,
     superType: e.ANNOTATION_SYMBOL_OCCURRENCE,
   },
@@ -4263,6 +4314,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.MAPPED_ITEM,
   },
@@ -4284,6 +4336,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MAPPED_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -4311,6 +4364,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_TEXT,
+    depth: 2,
     isAbstract: false,
     superType: e.MAPPED_ITEM,
   },
@@ -4344,6 +4398,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ANNOTATION_TEXT_CHARACTER,
+    depth: 2,
     isAbstract: false,
     superType: e.MAPPED_ITEM,
   },
@@ -4351,6 +4406,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.APEX,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -4366,6 +4422,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DERIVED_SHAPE_ASPECT,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
     subTypes: [
@@ -4407,6 +4464,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLICATION_CONTEXT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -4426,6 +4484,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLICATION_CONTEXT_ELEMENT,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.PRODUCT_CONCEPT_CONTEXT,
@@ -4443,6 +4502,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONCEPT_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.APPLICATION_CONTEXT_ELEMENT,
   },
@@ -4456,6 +4516,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.APPLICATION_CONTEXT_ELEMENT,
   },
@@ -4469,6 +4530,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.APPLICATION_CONTEXT_ELEMENT,
   },
@@ -4502,6 +4564,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLICATION_CONTEXT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -4533,6 +4596,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLICATION_PROTOCOL_DEFINITION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -4848,6 +4912,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_ACTION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION_ASSIGNMENT,
   },
@@ -5056,6 +5121,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_ACTION_REQUEST_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION_REQUEST_ASSIGNMENT,
   },
@@ -5300,6 +5366,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_APPROVAL_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.APPROVAL_ASSIGNMENT,
   },
@@ -5320,12 +5387,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
     fields: {
     },
     typeId: e.APPLIED_AREA,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -5363,6 +5432,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SHAPE_ASPECT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -5402,6 +5472,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_CERTIFICATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.CERTIFICATION_ASSIGNMENT,
   },
@@ -5422,6 +5493,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CERTIFICATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -5635,6 +5707,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_CLASSIFICATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.CLASSIFICATION_ASSIGNMENT,
   },
@@ -5656,6 +5729,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CLASSIFICATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -5689,6 +5763,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_CONTRACT_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.CONTRACT_ASSIGNMENT,
   },
@@ -5709,6 +5784,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTRACT_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -6036,6 +6112,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_DATE_AND_TIME_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.DATE_AND_TIME_ASSIGNMENT,
   },
@@ -6057,6 +6134,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATE_AND_TIME_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -6384,6 +6462,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_DATE_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.DATE_ASSIGNMENT,
   },
@@ -6405,6 +6484,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATE_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -6666,6 +6746,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_DOCUMENT_REFERENCE,
+    depth: 1,
     isAbstract: false,
     superType: e.DOCUMENT_REFERENCE,
   },
@@ -6692,6 +6773,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_REFERENCE,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -6953,6 +7035,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_DOCUMENT_USAGE_CONSTRAINT_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.DOCUMENT_USAGE_CONSTRAINT_ASSIGNMENT,
   },
@@ -6974,6 +7057,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_USAGE_CONSTRAINT_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -7199,6 +7283,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_EFFECTIVITY_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY_ASSIGNMENT,
   },
@@ -7219,6 +7304,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EFFECTIVITY_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -7528,6 +7614,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_EVENT_OCCURRENCE_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.EVENT_OCCURRENCE_ASSIGNMENT,
   },
@@ -7549,6 +7636,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EVENT_OCCURRENCE_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -7588,6 +7676,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_EXTERNAL_IDENTIFICATION_ASSIGNMENT,
+    depth: 2,
     isAbstract: false,
     superType: e.EXTERNAL_IDENTIFICATION_ASSIGNMENT,
   },
@@ -7602,6 +7691,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXTERNAL_IDENTIFICATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: true,
     superType: e.IDENTIFICATION_ASSIGNMENT,
   },
@@ -7654,6 +7744,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_GROUP_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP_ASSIGNMENT,
   },
@@ -7674,6 +7765,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GROUP_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -7893,6 +7985,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_IDENTIFICATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.IDENTIFICATION_ASSIGNMENT,
   },
@@ -7913,6 +8006,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.IDENTIFICATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -8138,6 +8232,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_INEFFECTIVITY_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY_ASSIGNMENT,
   },
@@ -8172,6 +8267,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_NAME_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAME_ASSIGNMENT,
   },
@@ -8191,6 +8287,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NAME_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -8542,6 +8639,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_ORGANIZATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.ORGANIZATION_ASSIGNMENT,
   },
@@ -8563,6 +8661,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -8620,6 +8719,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_ORGANIZATIONAL_PROJECT_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.ORGANIZATIONAL_PROJECT_ASSIGNMENT,
   },
@@ -8641,6 +8741,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATIONAL_PROJECT_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -8974,6 +9075,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_PERSON_AND_ORGANIZATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.PERSON_AND_ORGANIZATION_ASSIGNMENT,
   },
@@ -8995,6 +9097,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PERSON_AND_ORGANIZATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -9064,6 +9167,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_PRESENTED_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.PRESENTED_ITEM,
   },
@@ -9071,6 +9175,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRESENTED_ITEM,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -9260,6 +9365,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_SECURITY_CLASSIFICATION_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.SECURITY_CLASSIFICATION_ASSIGNMENT,
   },
@@ -9280,6 +9386,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SECURITY_CLASSIFICATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -9589,6 +9696,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPLIED_TIME_INTERVAL_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.TIME_INTERVAL_ASSIGNMENT,
   },
@@ -9610,6 +9718,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TIME_INTERVAL_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -9629,6 +9738,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9674,6 +9784,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL_DATE_TIME,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9720,6 +9831,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL_PERSON_ORGANIZATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9752,6 +9864,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9769,6 +9882,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9781,6 +9895,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROVAL_STATUS,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9807,6 +9922,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROXIMATION_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -9814,6 +9930,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FOUNDED_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -9855,6 +9972,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROXIMATION_TOLERANCE_DEVIATION,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -9883,6 +10001,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.APPROXIMATION_TOLERANCE_PARAMETER,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -9904,12 +10023,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.AREA_IN_SET,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.AREA_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -9917,6 +10038,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.AREA_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.DERIVED_UNIT,
   },
@@ -9937,6 +10059,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DERIVED_UNIT,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.AREA_UNIT,
@@ -9947,6 +10070,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ASIN_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -9960,6 +10084,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ASSEMBLY_COMPONENT_USAGE,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_USAGE,
     subTypes: [
@@ -9972,6 +10097,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.NEXT_ASSEMBLY_USAGE_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ASSEMBLY_COMPONENT_USAGE,
   },
@@ -9993,6 +10119,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SPECIFIED_HIGHER_USAGE_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ASSEMBLY_COMPONENT_USAGE,
   },
@@ -10000,6 +10127,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PROMISSORY_USAGE_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ASSEMBLY_COMPONENT_USAGE,
   },
@@ -10007,6 +10135,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRODUCT_DEFINITION_USAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_RELATIONSHIP,
     subTypes: [
@@ -10044,12 +10173,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ASSEMBLY_COMPONENT_USAGE_SUBSTITUTE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.ATAN_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.BINARY_FUNCTION_CALL,
   },
@@ -10057,6 +10188,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BINARY_FUNCTION_CALL,
+    depth: 4,
     isAbstract: true,
     superType: e.BINARY_NUMERIC_EXPRESSION,
     subTypes: [
@@ -10087,6 +10219,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ATTRIBUTE_CLASSIFICATION_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -10527,6 +10660,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ATTRIBUTE_LANGUAGE_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.ATTRIBUTE_CLASSIFICATION_ASSIGNMENT,
   },
@@ -10567,6 +10701,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ATTRIBUTE_VALUE_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -10585,6 +10720,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ATTRIBUTE_VALUE_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -10604,6 +10740,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.AXIS1_PLACEMENT,
+    depth: 3,
     isAbstract: false,
     superType: e.PLACEMENT,
   },
@@ -10618,6 +10755,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLACEMENT,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -10644,6 +10782,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.AXIS2_PLACEMENT_2D,
+    depth: 3,
     isAbstract: false,
     superType: e.PLACEMENT,
   },
@@ -10672,6 +10811,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.AXIS2_PLACEMENT_3D,
+    depth: 3,
     isAbstract: false,
     superType: e.PLACEMENT,
   },
@@ -10724,6 +10864,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.B_SPLINE_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_CURVE,
     subTypes: [
@@ -10737,6 +10878,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.UNIFORM_CURVE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_CURVE,
   },
@@ -10770,6 +10912,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.B_SPLINE_CURVE_WITH_KNOTS,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_CURVE,
   },
@@ -10777,6 +10920,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.QUASI_UNIFORM_CURVE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_CURVE,
   },
@@ -10784,6 +10928,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BEZIER_CURVE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_CURVE,
   },
@@ -10791,6 +10936,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOUNDED_CURVE,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
     subTypes: [
@@ -10868,6 +11014,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.B_SPLINE_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_SURFACE,
     subTypes: [
@@ -10926,6 +11073,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.B_SPLINE_SURFACE_WITH_KNOTS,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_SURFACE,
   },
@@ -10933,6 +11081,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.UNIFORM_SURFACE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_SURFACE,
   },
@@ -10940,6 +11089,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.QUASI_UNIFORM_SURFACE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_SURFACE,
   },
@@ -10947,6 +11097,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BEZIER_SURFACE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_SURFACE,
   },
@@ -10954,6 +11105,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOUNDED_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE,
     subTypes: [
@@ -10987,6 +11139,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BACKGROUND_COLOUR,
+    depth: 1,
     isAbstract: false,
     superType: e.COLOUR,
   },
@@ -10994,12 +11147,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COLOUR,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.BARRING_HOLE,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -11007,6 +11162,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FEATURE_DEFINITION,
+    depth: 1,
     isAbstract: false,
     superType: e.CHARACTERIZED_OBJECT,
   },
@@ -11014,6 +11170,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BEAD,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -11021,6 +11178,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BEAD_END,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -11028,6 +11186,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BINARY_BOOLEAN_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.BOOLEAN_EXPRESSION,
     subTypes: [
@@ -11047,6 +11206,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.XOR_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_BOOLEAN_EXPRESSION,
   },
@@ -11054,6 +11214,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EQUALS_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_BOOLEAN_EXPRESSION,
   },
@@ -11061,6 +11222,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOOLEAN_EXPRESSION,
+    depth: 2,
     isAbstract: true,
     superType: e.EXPRESSION,
     subTypes: [
@@ -11085,6 +11247,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BINARY_GENERIC_EXPRESSION,
+    depth: 1,
     isAbstract: true,
     superType: e.GENERIC_EXPRESSION,
   },
@@ -11100,6 +11263,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BINARY_NUMERIC_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.NUMERIC_EXPRESSION,
     subTypes: [
@@ -11115,6 +11279,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GENERIC_EXPRESSION,
+    depth: 0,
     isAbstract: true,
     subTypes: [
        e.SIMPLE_GENERIC_EXPRESSION,
@@ -11127,6 +11292,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MINUS_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_NUMERIC_EXPRESSION,
   },
@@ -11134,6 +11300,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIV_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_NUMERIC_EXPRESSION,
   },
@@ -11141,6 +11308,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MOD_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_NUMERIC_EXPRESSION,
   },
@@ -11148,6 +11316,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SLASH_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_NUMERIC_EXPRESSION,
   },
@@ -11155,6 +11324,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.POWER_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.BINARY_NUMERIC_EXPRESSION,
   },
@@ -11172,6 +11342,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NUMERIC_EXPRESSION,
+    depth: 2,
     isAbstract: true,
     superType: e.EXPRESSION,
     subTypes: [
@@ -11213,6 +11384,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BLOCK,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -11220,6 +11392,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOOLEAN_DEFINED_FUNCTION,
+    depth: 1,
     isAbstract: true,
     superType: e.DEFINED_FUNCTION,
   },
@@ -11227,6 +11400,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DEFINED_FUNCTION,
+    depth: 0,
     isAbstract: true,
     subTypes: [
        e.NUMERIC_DEFINED_FUNCTION,
@@ -11238,6 +11412,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SIMPLE_BOOLEAN_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.BOOLEAN_EXPRESSION,
     subTypes: [
@@ -11249,6 +11424,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.UNARY_BOOLEAN_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.BOOLEAN_EXPRESSION,
     subTypes: [
@@ -11268,6 +11444,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPARISON_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.BOOLEAN_EXPRESSION,
     subTypes: [
@@ -11302,6 +11479,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.INTERVAL_EXPRESSION,
+    depth: 3,
     isAbstract: false,
     superType: e.BOOLEAN_EXPRESSION,
   },
@@ -11309,6 +11487,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXPRESSION,
+    depth: 1,
     isAbstract: true,
     superType: e.GENERIC_EXPRESSION,
     subTypes: [
@@ -11327,6 +11506,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOOLEAN_LITERAL,
+    depth: 4,
     isAbstract: false,
     superType: e.SIMPLE_BOOLEAN_EXPRESSION,
   },
@@ -11334,6 +11514,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GENERIC_LITERAL,
+    depth: 2,
     isAbstract: true,
     superType: e.SIMPLE_GENERIC_EXPRESSION,
   },
@@ -11472,6 +11653,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOOLEAN_RESULT,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -11479,6 +11661,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOOLEAN_VARIABLE,
+    depth: 4,
     isAbstract: false,
     superType: e.SIMPLE_BOOLEAN_EXPRESSION,
   },
@@ -11486,6 +11669,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VARIABLE,
+    depth: 3,
     isAbstract: true,
     superType: e.GENERIC_VARIABLE,
     subTypes: [
@@ -11498,6 +11682,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOSS,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -11505,6 +11690,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOSS_TOP,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -11512,6 +11698,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOUNDARY_CURVE,
+    depth: 6,
     isAbstract: false,
     superType: e.COMPOSITE_CURVE_ON_SURFACE,
   },
@@ -11526,6 +11713,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_CURVE_ON_SURFACE,
+    depth: 5,
     isAbstract: false,
     superType: e.COMPOSITE_CURVE,
   },
@@ -11541,6 +11729,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POLYLINE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_CURVE,
   },
@@ -11610,6 +11799,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TRIMMED_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_CURVE,
   },
@@ -11617,6 +11807,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOUNDED_PCURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.PCURVE,
   },
@@ -11624,6 +11815,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.BOUNDED_SURFACE_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.SURFACE_CURVE,
   },
@@ -11655,6 +11847,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_CURVE,
   },
@@ -11662,6 +11855,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CURVE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -11692,6 +11886,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PCURVE,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
   },
@@ -11742,6 +11937,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RECTANGULAR_TRIMMED_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_SURFACE,
   },
@@ -11770,6 +11966,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_BOUNDED_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_SURFACE,
   },
@@ -11795,6 +11992,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RECTANGULAR_COMPOSITE_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.BOUNDED_SURFACE,
   },
@@ -11802,6 +12000,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SURFACE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -11858,6 +12057,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_CURVE,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
     subTypes: [
@@ -11894,6 +12094,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOX_DOMAIN,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -11908,6 +12109,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOXED_HALF_SPACE,
+    depth: 3,
     isAbstract: false,
     superType: e.HALF_SPACE_SOLID,
   },
@@ -11928,6 +12130,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.HALF_SPACE_SOLID,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -11943,6 +12146,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BREP_WITH_VOIDS,
+    depth: 4,
     isAbstract: false,
     superType: e.MANIFOLD_SOLID_BREP,
   },
@@ -11957,6 +12161,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MANIFOLD_SOLID_BREP,
+    depth: 3,
     isAbstract: false,
     superType: e.SOLID_MODEL,
   },
@@ -11976,6 +12181,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CALENDAR_DATE,
+    depth: 1,
     isAbstract: false,
     superType: e.DATE,
   },
@@ -11989,6 +12195,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -12009,6 +12216,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_IMAGE,
+    depth: 2,
     isAbstract: false,
     superType: e.MAPPED_ITEM,
   },
@@ -12021,6 +12229,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_IMAGE_2D_WITH_SCALE,
+    depth: 3,
     isAbstract: false,
     superType: e.CAMERA_IMAGE,
   },
@@ -12033,6 +12242,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_IMAGE_3D_WITH_SCALE,
+    depth: 3,
     isAbstract: false,
     superType: e.CAMERA_IMAGE,
   },
@@ -12040,6 +12250,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CAMERA_MODEL,
+    depth: 2,
     isAbstract: true,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -12064,6 +12275,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_MODEL_D2,
+    depth: 3,
     isAbstract: false,
     superType: e.CAMERA_MODEL,
   },
@@ -12085,6 +12297,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_MODEL_D3,
+    depth: 3,
     isAbstract: false,
     superType: e.CAMERA_MODEL,
   },
@@ -12098,6 +12311,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_MODEL_D3_WITH_HLHSR,
+    depth: 4,
     isAbstract: false,
     superType: e.CAMERA_MODEL_D3,
   },
@@ -12112,6 +12326,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CAMERA_USAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_MAP,
   },
@@ -12141,6 +12356,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPRESENTATION_MAP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -12154,6 +12370,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CARTESIAN_POINT,
+    depth: 3,
     isAbstract: false,
     superType: e.POINT,
   },
@@ -12161,6 +12378,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.POINT,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -12207,6 +12425,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CARTESIAN_TRANSFORMATION_OPERATOR,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -12225,6 +12444,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CARTESIAN_TRANSFORMATION_OPERATOR_2D,
+    depth: 3,
     isAbstract: false,
     superType: e.CARTESIAN_TRANSFORMATION_OPERATOR,
   },
@@ -12246,6 +12466,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CARTESIAN_TRANSFORMATION_OPERATOR_3D,
+    depth: 3,
     isAbstract: false,
     superType: e.CARTESIAN_TRANSFORMATION_OPERATOR,
   },
@@ -12265,12 +12486,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FUNCTIONALLY_DEFINED_TRANSFORMATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CELSIUS_TEMPERATURE_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -12278,6 +12501,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CENTRE_OF_SYMMETRY,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -12304,6 +12528,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CERTIFICATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -12316,12 +12541,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CERTIFICATION_TYPE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CHAMFER,
+    depth: 2,
     isAbstract: false,
     superType: e.TRANSITION_FEATURE,
   },
@@ -12329,6 +12556,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TRANSITION_FEATURE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -12336,6 +12564,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CHAMFER_OFFSET,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -12361,6 +12590,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CHARACTER_GLYPH_SYMBOL,
+    depth: 3,
     isAbstract: false,
     superType: e.GENERIC_CHARACTER_GLYPH_SYMBOL,
   },
@@ -12368,6 +12598,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GENERIC_CHARACTER_GLYPH_SYMBOL,
+    depth: 2,
     isAbstract: true,
     superType: e.SYMBOL_REPRESENTATION,
   },
@@ -12375,6 +12606,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CHARACTERIZED_CLASS,
+    depth: 1,
     isAbstract: false,
     superType: e.CHARACTERIZED_OBJECT,
   },
@@ -12394,12 +12626,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CHARACTERIZED_OBJECT,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CLASS_,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP,
   },
@@ -12413,6 +12647,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CIRCLE,
+    depth: 4,
     isAbstract: false,
     superType: e.CONIC,
   },
@@ -12440,6 +12675,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONIC,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
     subTypes: [
@@ -12453,6 +12689,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CIRCULAR_CLOSED_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -12460,6 +12697,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CIRCULAR_PATTERN,
+    depth: 3,
     isAbstract: false,
     superType: e.REPLICATE_FEATURE,
   },
@@ -12467,6 +12705,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.REPLICATE_FEATURE,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -12474,6 +12713,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CIRCULAR_RUNOUT_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -12498,12 +12738,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GROUP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CLASS_SYSTEM,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP,
   },
@@ -12526,6 +12768,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CLASS_USAGE_EFFECTIVITY_CONTEXT_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY_CONTEXT_ASSIGNMENT,
   },
@@ -12547,6 +12790,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EFFECTIVITY_CONTEXT_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -12565,12 +12809,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CLASSIFICATION_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CLOSED_PATH_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -12578,6 +12824,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CLOSED_SHELL,
+    depth: 3,
     isAbstract: false,
     superType: e.CONNECTED_FACE_SET,
   },
@@ -12593,6 +12840,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONNECTED_FACE_SET,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
     subTypes: [
@@ -12604,6 +12852,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COAXIALITY_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -12629,6 +12878,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COLOUR_RGB,
+    depth: 2,
     isAbstract: false,
     superType: e.COLOUR_SPECIFICATION,
   },
@@ -12642,6 +12892,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COLOUR_SPECIFICATION,
+    depth: 1,
     isAbstract: false,
     superType: e.COLOUR,
   },
@@ -12649,6 +12900,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMMON_DATUM,
+    depth: 2,
     isAbstract: false,
     superType: e.COMPOSITE_SHAPE_ASPECT,
   },
@@ -12664,6 +12916,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_SHAPE_ASPECT,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -12685,6 +12938,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATUM,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -12692,6 +12946,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPARISON_EQUAL,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12699,6 +12954,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPARISON_GREATER,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12706,6 +12962,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPARISON_GREATER_EQUAL,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12713,6 +12970,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPARISON_LESS,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12720,6 +12978,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPARISON_LESS_EQUAL,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12727,6 +12986,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPARISON_NOT_EQUAL,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12734,6 +12994,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LIKE_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.COMPARISON_EXPRESSION,
   },
@@ -12769,6 +13030,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_CURVE_SEGMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -12776,6 +13038,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPOSITE_HOLE,
+    depth: 3,
     isAbstract: false,
     superType: e.COMPOUND_FEATURE,
   },
@@ -12783,6 +13046,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPOUND_FEATURE,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -12829,6 +13093,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_TEXT,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -12844,6 +13109,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_TEXT_WITH_ASSOCIATED_CURVES,
+    depth: 3,
     isAbstract: false,
     superType: e.COMPOSITE_TEXT,
   },
@@ -12858,6 +13124,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_TEXT_WITH_BLANKING_BOX,
+    depth: 3,
     isAbstract: false,
     superType: e.COMPOSITE_TEXT,
   },
@@ -12872,6 +13139,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOSITE_TEXT_WITH_EXTENT,
+    depth: 3,
     isAbstract: false,
     superType: e.COMPOSITE_TEXT,
   },
@@ -12899,6 +13167,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COMPOUND_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -12912,6 +13181,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPRESENTATION_ITEM,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.COMPOUND_REPRESENTATION_ITEM,
@@ -12923,6 +13193,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.COMPOUND_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -12938,6 +13209,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONCAT_EXPRESSION,
+    depth: 3,
     isAbstract: false,
     superType: e.STRING_EXPRESSION,
   },
@@ -12945,6 +13217,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.STRING_EXPRESSION,
+    depth: 2,
     isAbstract: true,
     superType: e.EXPRESSION,
     subTypes: [
@@ -12968,6 +13241,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MULTIPLE_ARITY_GENERIC_EXPRESSION,
+    depth: 1,
     isAbstract: true,
     superType: e.GENERIC_EXPRESSION,
   },
@@ -12975,6 +13249,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CONCENTRICITY_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -12994,6 +13269,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONCEPT_FEATURE_OPERATOR,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13026,6 +13302,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONCEPT_FEATURE_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13039,6 +13316,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONCEPT_FEATURE_RELATIONSHIP_WITH_CONDITION,
+    depth: 1,
     isAbstract: false,
     superType: e.CONCEPT_FEATURE_RELATIONSHIP,
   },
@@ -13053,6 +13331,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONDITIONAL_CONCEPT_FEATURE,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_CONCEPT_FEATURE,
   },
@@ -13078,6 +13357,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONCEPT_FEATURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13092,6 +13372,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURABLE_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.CONFIGURATION_ITEM,
   },
@@ -13130,6 +13411,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURATION_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13164,6 +13446,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURATION_DEFINITION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13207,6 +13490,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURATION_DESIGN,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13220,6 +13504,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURATION_EFFECTIVITY,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_EFFECTIVITY,
   },
@@ -13234,6 +13519,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_EFFECTIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY,
   },
@@ -13262,6 +13548,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURATION_INTERPOLATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13301,6 +13588,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURED_EFFECTIVITY_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY_ASSIGNMENT,
   },
@@ -13323,6 +13611,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONFIGURED_EFFECTIVITY_CONTEXT_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY_CONTEXT_ASSIGNMENT,
   },
@@ -13342,6 +13631,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ELLIPSE,
+    depth: 4,
     isAbstract: false,
     superType: e.CONIC,
   },
@@ -13361,6 +13651,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.HYPERBOLA,
+    depth: 4,
     isAbstract: false,
     superType: e.CONIC,
   },
@@ -13374,6 +13665,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PARABOLA,
+    depth: 4,
     isAbstract: false,
     superType: e.CONIC,
   },
@@ -13393,6 +13685,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONICAL_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.ELEMENTARY_SURFACE,
   },
@@ -13407,6 +13700,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ELEMENTARY_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE,
     subTypes: [
@@ -13429,6 +13723,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONNECTED_EDGE_SET,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
   },
@@ -13436,6 +13731,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TOPOLOGICAL_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
     subTypes: [
@@ -13452,6 +13748,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.OPEN_SHELL,
+    depth: 3,
     isAbstract: false,
     superType: e.CONNECTED_FACE_SET,
   },
@@ -13466,6 +13763,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONNECTED_FACE_SUB_SET,
+    depth: 3,
     isAbstract: false,
     superType: e.CONNECTED_FACE_SET,
   },
@@ -13473,6 +13771,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CONSTRUCTIVE_GEOMETRY_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -13511,12 +13810,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CONSTRUCTIVE_GEOMETRY_REPRESENTATION_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP,
   },
@@ -13550,12 +13851,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPRESENTATION_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CONTACT_RATIO_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -13583,6 +13886,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTEXT_DEPENDENT_INVISIBILITY,
+    depth: 1,
     isAbstract: false,
     superType: e.INVISIBILITY,
   },
@@ -13623,6 +13927,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.INVISIBILITY,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13674,6 +13979,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTEXT_DEPENDENT_OVER_RIDING_STYLED_ITEM,
+    depth: 3,
     isAbstract: false,
     superType: e.OVER_RIDING_STYLED_ITEM,
   },
@@ -13688,6 +13994,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.OVER_RIDING_STYLED_ITEM,
+    depth: 2,
     isAbstract: false,
     superType: e.STYLED_ITEM,
   },
@@ -13719,6 +14026,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTEXT_DEPENDENT_SHAPE_REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13731,6 +14039,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTEXT_DEPENDENT_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -13757,6 +14066,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTRACT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13769,6 +14079,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTRACT_TYPE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -13794,6 +14105,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONVERSION_BASED_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -13825,12 +14137,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COORDINATED_UNIVERSAL_TIME_OFFSET,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.COS_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -13838,6 +14152,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CSG_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -13895,6 +14210,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CSG_SOLID,
+    depth: 3,
     isAbstract: false,
     superType: e.SOLID_MODEL,
   },
@@ -13902,6 +14218,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SOLID_MODEL,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -13931,6 +14248,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LINE,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
   },
@@ -13957,6 +14275,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.OFFSET_CURVE_2D,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
   },
@@ -13990,6 +14309,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.OFFSET_CURVE_3D,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
   },
@@ -14011,6 +14331,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_REPLICA,
+    depth: 3,
     isAbstract: false,
     superType: e.CURVE,
   },
@@ -14018,6 +14339,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CURVE_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.DIMENSION_CURVE_DIRECTED_CALLOUT,
   },
@@ -14090,6 +14412,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -14111,6 +14434,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_STYLE_FONT,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -14130,6 +14454,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_STYLE_FONT_PATTERN,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -14151,12 +14476,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_STYLE_RENDERING,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.CURVE_SWEPT_SOLID_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -14164,6 +14491,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CYLINDRICAL_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -14204,6 +14532,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_PAIR,
+    depth: 1,
     isAbstract: false,
     superType: e.ITEM_DEFINED_TRANSFORMATION,
   },
@@ -14298,6 +14627,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CYLINDRICAL_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -14312,6 +14642,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SIMPLE_PAIR_RANGE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14337,6 +14668,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CYLINDRICAL_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -14351,6 +14683,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PAIR_VALUE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14363,6 +14696,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CYLINDRICAL_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.ELEMENTARY_SURFACE,
   },
@@ -14370,6 +14704,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.CYLINDRICITY_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -14403,6 +14738,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_TOLERANCE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14429,6 +14765,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATA_ENVIRONMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14449,6 +14786,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATE_AND_TIME,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14466,6 +14804,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATE_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14483,6 +14822,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATE_TIME_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14553,6 +14893,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATED_EFFECTIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY,
   },
@@ -14576,6 +14917,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EFFECTIVITY,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.SERIAL_NUMBERED_EFFECTIVITY,
@@ -14595,6 +14937,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATUM_FEATURE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -14602,6 +14945,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DATUM_FEATURE_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -14636,6 +14980,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAUGHTING_CALLOUT,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -14656,6 +15001,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATUM_REFERENCE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14675,6 +15021,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DATUM_TARGET,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -14682,6 +15029,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DATUM_TARGET_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -14689,6 +15037,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DEFAULT_TOLERANCE_TABLE,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -14696,6 +15045,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DEFAULT_TOLERANCE_TABLE_CELL,
+    depth: 2,
     isAbstract: false,
     superType: e.COMPOUND_REPRESENTATION_ITEM,
   },
@@ -14737,6 +15087,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DEFINED_CHARACTER_GLYPH,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -14744,6 +15095,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.NUMERIC_DEFINED_FUNCTION,
+    depth: 3,
     isAbstract: true,
     superType: e.NUMERIC_EXPRESSION,
     subTypes: [
@@ -14755,6 +15107,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.STRING_DEFINED_FUNCTION,
+    depth: 1,
     isAbstract: true,
     superType: e.DEFINED_FUNCTION,
   },
@@ -14789,6 +15142,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DEFINED_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -14796,6 +15150,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DEFINITIONAL_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -14817,6 +15172,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DEGENERATE_PCURVE,
+    depth: 3,
     isAbstract: false,
     superType: e.POINT,
   },
@@ -14830,6 +15186,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DEGENERATE_TOROIDAL_SURFACE,
+    depth: 5,
     isAbstract: false,
     superType: e.TOROIDAL_SURFACE,
   },
@@ -14849,6 +15206,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TOROIDAL_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.ELEMENTARY_SURFACE,
   },
@@ -14856,6 +15214,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRIC_ALIGNMENT,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -14863,6 +15222,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRIC_INTERSECTION,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -14877,6 +15237,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PARALLEL_OFFSET,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -14884,6 +15245,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PERPENDICULAR_TO,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -14891,6 +15253,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTENSION,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -14898,6 +15261,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TANGENT,
+    depth: 2,
     isAbstract: false,
     superType: e.DERIVED_SHAPE_ASPECT,
   },
@@ -14905,6 +15269,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VOLUME_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.DERIVED_UNIT,
   },
@@ -14925,6 +15290,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DERIVED_UNIT_ELEMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -14938,6 +15304,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DERIVED_UNIT_VARIABLE,
+    depth: 1,
     isAbstract: false,
     superType: e.DERIVED_UNIT,
   },
@@ -14945,6 +15312,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VARIABLE_SEMANTICS,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -15049,6 +15417,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DESCRIPTION_ATTRIBUTE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15061,6 +15430,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DESCRIPTIVE_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -15068,6 +15438,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIAMETER_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.DIMENSION_CURVE_DIRECTED_CALLOUT,
   },
@@ -15075,6 +15446,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIMENSION_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -15082,6 +15454,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIMENSION_CALLOUT_COMPONENT_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT_RELATIONSHIP,
   },
@@ -15115,12 +15488,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAUGHTING_CALLOUT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DIMENSION_CALLOUT_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT_RELATIONSHIP,
   },
@@ -15128,6 +15503,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIMENSION_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.ANNOTATION_CURVE_OCCURRENCE,
   },
@@ -15142,6 +15518,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSION_CURVE_TERMINATOR,
+    depth: 5,
     isAbstract: false,
     superType: e.TERMINATOR_SYMBOL,
   },
@@ -15156,6 +15533,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TERMINATOR_SYMBOL,
+    depth: 4,
     isAbstract: false,
     superType: e.ANNOTATION_SYMBOL_OCCURRENCE,
   },
@@ -15163,6 +15541,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIMENSION_PAIR,
+    depth: 1,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT_RELATIONSHIP,
   },
@@ -15184,12 +15563,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSION_RELATED_TOLERANCE_ZONE_ELEMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DIMENSION_TEXT_ASSOCIATIVITY,
+    depth: 3,
     isAbstract: false,
     superType: e.TEXT_LITERAL,
   },
@@ -15256,6 +15637,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_LITERAL,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -15290,6 +15672,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSIONAL_CHARACTERISTIC_REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15338,6 +15721,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSIONAL_EXPONENTS,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15351,6 +15735,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSIONAL_LOCATION_WITH_PATH,
+    depth: 2,
     isAbstract: false,
     superType: e.DIMENSIONAL_LOCATION,
   },
@@ -15389,6 +15774,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SHAPE_ASPECT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15402,6 +15788,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSIONAL_SIZE_WITH_PATH,
+    depth: 1,
     isAbstract: false,
     superType: e.DIMENSIONAL_SIZE,
   },
@@ -15416,6 +15803,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIRECTED_ACTION,
+    depth: 2,
     isAbstract: false,
     superType: e.EXECUTED_ACTION,
   },
@@ -15423,6 +15811,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXECUTED_ACTION,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION,
   },
@@ -15430,6 +15819,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIRECTED_ANGLE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -15437,6 +15827,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIRECTED_DIMENSIONAL_LOCATION,
+    depth: 2,
     isAbstract: false,
     superType: e.DIMENSIONAL_LOCATION,
   },
@@ -15451,6 +15842,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIRECTION,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -15458,6 +15850,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DIRECTION_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -15498,12 +15891,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DOCUMENT_FILE,
+    depth: 1,
     isAbstract: false,
     superType: e.DOCUMENT,
   },
@@ -15556,12 +15951,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_PRODUCT_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DOCUMENT_PRODUCT_EQUIVALENCE,
+    depth: 1,
     isAbstract: false,
     superType: e.DOCUMENT_PRODUCT_ASSOCIATION,
   },
@@ -15595,6 +15992,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15614,6 +16012,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_REPRESENTATION_TYPE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15626,6 +16025,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_TYPE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15651,6 +16051,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_USAGE_CONSTRAINT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15669,12 +16070,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DOCUMENT_USAGE_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DRAUGHTING_ANNOTATION_OCCURRENCE,
+    depth: 3,
     isAbstract: false,
     superType: e.ANNOTATION_OCCURRENCE,
   },
@@ -15682,6 +16085,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_ELEMENTS,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -15689,6 +16093,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_MODEL,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -15730,6 +16135,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAUGHTING_MODEL_ITEM_ASSOCIATION,
+    depth: 1,
     isAbstract: false,
     superType: e.ITEM_IDENTIFIED_REPRESENTATION_USAGE,
   },
@@ -15801,12 +16207,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ITEM_IDENTIFIED_REPRESENTATION_USAGE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DRAUGHTING_PRE_DEFINED_COLOUR,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_COLOUR,
   },
@@ -15814,6 +16222,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_COLOUR,
+    depth: 1,
     isAbstract: false,
     superType: e.PRE_DEFINED_ITEM,
   },
@@ -15821,6 +16230,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_PRE_DEFINED_CURVE_FONT,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_CURVE_FONT,
   },
@@ -15828,6 +16238,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_CURVE_FONT,
+    depth: 1,
     isAbstract: false,
     superType: e.PRE_DEFINED_ITEM,
   },
@@ -15835,6 +16246,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_PRE_DEFINED_TEXT_FONT,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_TEXT_FONT,
   },
@@ -15842,6 +16254,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_TEXT_FONT,
+    depth: 1,
     isAbstract: false,
     superType: e.PRE_DEFINED_ITEM,
   },
@@ -15864,6 +16277,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAUGHTING_SPECIFICATION_REFERENCE,
+    depth: 1,
     isAbstract: false,
     superType: e.DOCUMENT_REFERENCE,
   },
@@ -15871,6 +16285,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_SUBFIGURE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SYMBOL_REPRESENTATION,
   },
@@ -15878,6 +16293,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SYMBOL_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -15885,6 +16301,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_SYMBOL_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SYMBOL_REPRESENTATION,
   },
@@ -15892,6 +16309,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.DRAUGHTING_TEXT_LITERAL_WITH_DELINEATION,
+    depth: 4,
     isAbstract: false,
     superType: e.TEXT_LITERAL_WITH_DELINEATION,
   },
@@ -15905,6 +16323,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_LITERAL_WITH_DELINEATION,
+    depth: 3,
     isAbstract: false,
     superType: e.TEXT_LITERAL,
   },
@@ -15945,6 +16364,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAUGHTING_TITLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15963,6 +16383,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAWING_DEFINITION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -15988,6 +16409,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAWING_REVISION,
+    depth: 1,
     isAbstract: false,
     superType: e.PRESENTATION_SET,
   },
@@ -16003,6 +16425,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTATION_SET,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -16023,12 +16446,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAWING_REVISION_SEQUENCE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.DRAWING_SHEET_LAYOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_SYMBOL_REPRESENTATION,
   },
@@ -16042,6 +16467,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAWING_SHEET_REVISION,
+    depth: 3,
     isAbstract: false,
     superType: e.PRESENTATION_AREA,
   },
@@ -16049,6 +16475,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRESENTATION_AREA,
+    depth: 2,
     isAbstract: false,
     superType: e.PRESENTATION_REPRESENTATION,
   },
@@ -16062,6 +16489,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DRAWING_SHEET_REVISION_USAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.AREA_IN_SET,
   },
@@ -16083,6 +16511,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EDGE,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
     subTypes: [
@@ -16108,6 +16537,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EDGE_CURVE,
+    depth: 3,
     isAbstract: false,
     superType: e.EDGE,
   },
@@ -16140,6 +16570,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORIENTED_EDGE,
+    depth: 3,
     isAbstract: false,
     superType: e.EDGE,
   },
@@ -16154,6 +16585,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SUBEDGE,
+    depth: 3,
     isAbstract: false,
     superType: e.EDGE,
   },
@@ -16169,6 +16601,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EDGE_BASED_WIREFRAME_MODEL,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -16176,6 +16609,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -16188,6 +16622,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EDGE_LOOP,
+    depth: 3,
     isAbstract: false,
     superType: e.LOOP,
   },
@@ -16195,6 +16630,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LOOP,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
     subTypes: [
@@ -16215,6 +16651,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PATH,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
     subTypes: [
@@ -16226,6 +16663,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EDGE_ROUND,
+    depth: 2,
     isAbstract: false,
     superType: e.TRANSITION_FEATURE,
   },
@@ -16245,6 +16683,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SERIAL_NUMBERED_EFFECTIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY,
   },
@@ -16265,6 +16704,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LOT_EFFECTIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY,
   },
@@ -16279,6 +16719,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TIME_INTERVAL_BASED_EFFECTIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.EFFECTIVITY,
   },
@@ -16298,6 +16739,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EFFECTIVITY_CONTEXT_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -16330,12 +16772,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EFFECTIVITY_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.ELECTRIC_CURRENT_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -16343,6 +16787,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ELECTRIC_CURRENT_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -16350,6 +16795,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ELEMENT_DELIVERY,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION,
   },
@@ -16357,6 +16803,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLANE,
+    depth: 4,
     isAbstract: false,
     superType: e.ELEMENTARY_SURFACE,
   },
@@ -16370,6 +16817,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SPHERICAL_SURFACE,
+    depth: 4,
     isAbstract: false,
     superType: e.ELEMENTARY_SURFACE,
   },
@@ -16391,6 +16839,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ENVIRONMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -16404,6 +16853,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EVALUATED_DEGENERATE_PCURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.DEGENERATE_PCURVE,
   },
@@ -16429,6 +16879,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EVENT_OCCURRENCE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -16449,6 +16900,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EVENT_OCCURRENCE_CONTEXT_ASSIGNMENT,
+    depth: 0,
     isAbstract: true,
   },
   {
@@ -16467,6 +16919,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EVENT_OCCURRENCE_CONTEXT_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -16485,12 +16938,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EVENT_OCCURRENCE_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.EXCLUSIVE_PRODUCT_CONCEPT_FEATURE_CATEGORY,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_CONCEPT_FEATURE_CATEGORY,
   },
@@ -16498,6 +16953,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRODUCT_CONCEPT_FEATURE_CATEGORY,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP,
   },
@@ -16505,6 +16961,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXP_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -16519,6 +16976,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXPRESSION_CONVERSION_BASED_UNIT,
+    depth: 2,
     isAbstract: false,
     superType: e.CONTEXT_DEPENDENT_UNIT,
   },
@@ -16545,12 +17003,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXTERNAL_SOURCE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_CHARACTER_GLYPH,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16579,12 +17039,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXTERNALLY_DEFINED_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_CLASS,
+    depth: 2,
     isAbstract: false,
     superType: e.CLASS_,
   },
@@ -16592,6 +17054,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_CURVE_FONT,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16599,6 +17062,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_DIMENSION_DEFINITION,
+    depth: 1,
     isAbstract: false,
     superType: e.DIMENSIONAL_SIZE,
   },
@@ -16606,6 +17070,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_FEATURE_DEFINITION,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -16613,6 +17078,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_GENERAL_PROPERTY,
+    depth: 1,
     isAbstract: false,
     superType: e.GENERAL_PROPERTY,
   },
@@ -16638,12 +17104,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GENERAL_PROPERTY,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_HATCH_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16677,12 +17145,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXTERNALLY_DEFINED_ITEM_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16690,6 +17160,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_SYMBOL,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16697,6 +17168,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_TEXT_FONT,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16704,6 +17176,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.EXTERNALLY_DEFINED_TILE_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNALLY_DEFINED_ITEM,
   },
@@ -16724,6 +17197,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXTRUDED_AREA_SOLID,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_AREA_SOLID,
   },
@@ -16738,6 +17212,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SWEPT_AREA_SOLID,
+    depth: 3,
     isAbstract: false,
     superType: e.SOLID_MODEL,
     subTypes: [
@@ -16763,6 +17238,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.EXTRUDED_FACE_SOLID,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_FACE_SOLID,
   },
@@ -16777,6 +17253,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SWEPT_FACE_SOLID,
+    depth: 3,
     isAbstract: false,
     superType: e.SOLID_MODEL,
     subTypes: [
@@ -16796,6 +17273,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FACE,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
     subTypes: [
@@ -16815,6 +17293,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SUBFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.FACE,
   },
@@ -16842,6 +17321,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORIENTED_FACE,
+    depth: 3,
     isAbstract: false,
     superType: e.FACE,
   },
@@ -16857,6 +17337,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FACE_BASED_SURFACE_MODEL,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -16877,6 +17358,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FACE_BOUND,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
   },
@@ -16884,6 +17366,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FACE_OUTER_BOUND,
+    depth: 3,
     isAbstract: false,
     superType: e.FACE_BOUND,
   },
@@ -16891,6 +17374,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FACE_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -16898,6 +17382,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FACETED_BREP,
+    depth: 4,
     isAbstract: false,
     superType: e.MANIFOLD_SOLID_BREP,
   },
@@ -16905,6 +17390,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FACETED_BREP_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -16912,6 +17398,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FEATURE_COMPONENT_DEFINITION,
+    depth: 1,
     isAbstract: false,
     superType: e.CHARACTERIZED_OBJECT,
   },
@@ -16919,6 +17406,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FEATURE_COMPONENT_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT_RELATIONSHIP,
   },
@@ -16926,6 +17414,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FEATURE_IN_PANEL,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -16933,6 +17422,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FEATURE_PATTERN,
+    depth: 3,
     isAbstract: false,
     superType: e.REPLICATE_FEATURE,
   },
@@ -16940,6 +17430,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FEATURED_SHAPE,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_SHAPE,
   },
@@ -16947,6 +17438,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRODUCT_DEFINITION_SHAPE,
+    depth: 1,
     isAbstract: false,
     superType: e.PROPERTY_DEFINITION,
   },
@@ -16999,6 +17491,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FILL_AREA_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -17019,6 +17512,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FILL_AREA_STYLE_COLOUR,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -17059,6 +17553,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FILL_AREA_STYLE_HATCHING,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17073,6 +17568,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FILL_AREA_STYLE_TILE_SYMBOL_WITH_STYLE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17108,6 +17604,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FILL_AREA_STYLE_TILES,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17115,6 +17612,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FILLET,
+    depth: 2,
     isAbstract: false,
     superType: e.TRANSITION_FEATURE,
   },
@@ -17122,6 +17620,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FLATNESS_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -17141,6 +17640,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FORMAT_FUNCTION,
+    depth: 3,
     isAbstract: false,
     superType: e.STRING_EXPRESSION,
   },
@@ -17176,6 +17676,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.FOUNDED_KINEMATIC_PATH,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -17183,6 +17684,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.FULLY_CONSTRAINED_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -17220,6 +17722,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEAR_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -17274,6 +17777,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEAR_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -17299,6 +17803,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEAR_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -17306,6 +17811,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GENERAL_FEATURE,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -17313,6 +17819,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GENERAL_MATERIAL_PROPERTY,
+    depth: 1,
     isAbstract: false,
     superType: e.GENERAL_PROPERTY,
   },
@@ -17365,6 +17872,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GENERAL_PROPERTY_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -17397,12 +17905,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GENERAL_PROPERTY_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.SIMPLE_GENERIC_EXPRESSION,
+    depth: 1,
     isAbstract: true,
     superType: e.GENERIC_EXPRESSION,
     subTypes: [
@@ -17421,6 +17931,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNARY_GENERIC_EXPRESSION,
+    depth: 1,
     isAbstract: true,
     superType: e.GENERIC_EXPRESSION,
   },
@@ -17435,6 +17946,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GENERIC_VARIABLE,
+    depth: 2,
     isAbstract: true,
     superType: e.SIMPLE_GENERIC_EXPRESSION,
   },
@@ -17442,6 +17954,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRIC_CURVE_SET,
+    depth: 3,
     isAbstract: false,
     superType: e.GEOMETRIC_SET,
   },
@@ -17476,6 +17989,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_SET,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17504,6 +18018,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_ITEM_SPECIFIC_USAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.ITEM_IDENTIFIED_REPRESENTATION_USAGE,
   },
@@ -17517,6 +18032,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_REPRESENTATION_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_CONTEXT,
   },
@@ -17544,6 +18060,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPRESENTATION_CONTEXT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -17563,6 +18080,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VECTOR,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17578,6 +18096,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POLY_LOOP,
+    depth: 3,
     isAbstract: false,
     superType: e.LOOP,
   },
@@ -17592,6 +18111,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VERTEX_POINT,
+    depth: 3,
     isAbstract: false,
     superType: e.VERTEX,
   },
@@ -17612,6 +18132,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SPHERE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17644,6 +18165,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RIGHT_CIRCULAR_CONE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17670,6 +18192,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RIGHT_CIRCULAR_CYLINDER,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17696,6 +18219,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TORUS,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17734,6 +18258,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RIGHT_ANGULAR_WEDGE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17762,6 +18287,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SHELL_BASED_SURFACE_MODEL,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -17795,6 +18321,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_TOLERANCE_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -17808,6 +18335,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GEOMETRIC_TOLERANCE_WITH_DEFINED_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -17815,6 +18343,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRICAL_TOLERANCE_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -17822,6 +18351,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRICALLY_BOUNDED_2D_WIREFRAME_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -17829,6 +18359,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRICALLY_BOUNDED_SURFACE_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -17836,6 +18367,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -17851,6 +18383,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_CONTEXT,
   },
@@ -17879,6 +18412,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GLOBAL_UNIT_ASSIGNED_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_CONTEXT,
   },
@@ -17912,12 +18446,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.GROUP_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.HARDNESS_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -17925,6 +18461,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.HIDDEN_ELEMENT_OVER_RIDING_STYLED_ITEM,
+    depth: 4,
     isAbstract: false,
     superType: e.CONTEXT_DEPENDENT_OVER_RIDING_STYLED_ITEM,
   },
@@ -17932,6 +18469,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.HOLE_BOTTOM,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -17939,6 +18477,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.HOLE_IN_PANEL,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -17946,6 +18485,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.HOMOKINETIC_PAIR,
+    depth: 3,
     isAbstract: false,
     superType: e.UNIVERSAL_PAIR,
   },
@@ -17964,6 +18504,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNIVERSAL_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -18045,6 +18586,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ID_ATTRIBUTE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -18063,12 +18605,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.IDENTIFICATION_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.INCLUSION_PRODUCT_CONCEPT_FEATURE,
+    depth: 2,
     isAbstract: false,
     superType: e.CONDITIONAL_CONCEPT_FEATURE,
   },
@@ -18088,6 +18632,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.INDEX_EXPRESSION,
+    depth: 3,
     isAbstract: false,
     superType: e.STRING_EXPRESSION,
   },
@@ -18110,12 +18655,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.INITIAL_STATE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.INSTANCED_FEATURE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -18129,6 +18676,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.INT_LITERAL,
+    depth: 5,
     isAbstract: false,
     superType: e.LITERAL_NUMBER,
   },
@@ -18142,6 +18690,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LITERAL_NUMBER,
+    depth: 4,
     isAbstract: true,
     superType: e.SIMPLE_NUMERIC_EXPRESSION,
     subTypes: [
@@ -18153,6 +18702,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.INT_NUMERIC_VARIABLE,
+    depth: 5,
     isAbstract: false,
     superType: e.NUMERIC_VARIABLE,
   },
@@ -18160,6 +18710,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.NUMERIC_VARIABLE,
+    depth: 4,
     isAbstract: false,
     superType: e.SIMPLE_NUMERIC_EXPRESSION,
     subTypes: [
@@ -18171,6 +18722,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.INT_VALUE_FUNCTION,
+    depth: 4,
     isAbstract: false,
     superType: e.VALUE_FUNCTION,
   },
@@ -18185,6 +18737,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VALUE_FUNCTION,
+    depth: 3,
     isAbstract: false,
     superType: e.NUMERIC_EXPRESSION,
   },
@@ -18192,6 +18745,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.INTEGER_DEFINED_FUNCTION,
+    depth: 4,
     isAbstract: true,
     superType: e.NUMERIC_DEFINED_FUNCTION,
   },
@@ -18207,12 +18761,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.INTERPOLATED_CONFIGURATION_SEQUENCE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.INTERSECTION_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.SURFACE_CURVE,
   },
@@ -18246,12 +18802,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ITEM_DEFINED_TRANSFORMATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.JOGGLE,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -18259,6 +18817,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.JOGGLE_TERMINATION,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -18280,6 +18839,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_ANALYSIS_CONSISTENCY,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -18314,6 +18874,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_ANALYSIS_RESULT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -18342,6 +18903,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_CONTROL,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -18382,6 +18944,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_FRAME_BACKGROUND_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -18396,6 +18959,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_FRAME_BACKGROUND_REPRESENTATION_ASSOCIATION,
+    depth: 2,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION,
   },
@@ -18423,6 +18987,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP,
   },
@@ -18444,6 +19009,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_FRAME_BASED_TRANSFORMATION,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -18458,6 +19024,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_GROUND_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -18486,12 +19053,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_JOINT,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.KINEMATIC_LINK,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -18518,6 +19087,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_LINK_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -18532,6 +19102,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_LINK_REPRESENTATION_ASSOCIATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP,
   },
@@ -18553,12 +19124,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_LINK_REPRESENTATION_RELATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.KINEMATIC_PATH,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -18610,6 +19183,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_PROPERTY_DEFINITION,
+    depth: 1,
     isAbstract: false,
     superType: e.PROPERTY_DEFINITION,
   },
@@ -18678,12 +19252,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROPERTY_DEFINITION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.KINEMATIC_PROPERTY_REPRESENTATION_RELATION,
+    depth: 1,
     isAbstract: false,
     superType: e.PROPERTY_DEFINITION_REPRESENTATION,
   },
@@ -18746,6 +19322,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROPERTY_DEFINITION_REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -18760,12 +19337,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.KINEMATIC_STRUCTURE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.KNOWN_SOURCE,
+    depth: 1,
     isAbstract: false,
     superType: e.EXTERNAL_SOURCE,
   },
@@ -18779,12 +19358,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRE_DEFINED_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.LANGUAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP,
   },
@@ -18807,6 +19388,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LANGUAGE_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.CLASSIFICATION_ASSIGNMENT,
   },
@@ -18814,6 +19396,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LEADER_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.ANNOTATION_CURVE_OCCURRENCE,
   },
@@ -18821,6 +19404,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LEADER_DIRECTED_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -18828,6 +19412,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LEADER_DIRECTED_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.LEADER_DIRECTED_CALLOUT,
   },
@@ -18835,6 +19420,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LEADER_TERMINATOR,
+    depth: 5,
     isAbstract: false,
     superType: e.TERMINATOR_SYMBOL,
   },
@@ -18849,6 +19435,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LENGTH_FUNCTION,
+    depth: 3,
     isAbstract: false,
     superType: e.NUMERIC_EXPRESSION,
   },
@@ -18856,6 +19443,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LENGTH_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -18863,6 +19451,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LENGTH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -18877,6 +19466,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIGHT_SOURCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
     subTypes: [
@@ -18890,6 +19480,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LIGHT_SOURCE_AMBIENT,
+    depth: 3,
     isAbstract: false,
     superType: e.LIGHT_SOURCE,
   },
@@ -18904,6 +19495,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIGHT_SOURCE_DIRECTIONAL,
+    depth: 3,
     isAbstract: false,
     superType: e.LIGHT_SOURCE,
   },
@@ -18930,6 +19522,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIGHT_SOURCE_POSITIONAL,
+    depth: 3,
     isAbstract: false,
     superType: e.LIGHT_SOURCE,
   },
@@ -18975,6 +19568,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIGHT_SOURCE_SPOT,
+    depth: 3,
     isAbstract: false,
     superType: e.LIGHT_SOURCE,
   },
@@ -19006,12 +19600,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIMITS_AND_FITS,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.LINE_PROFILE_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -19019,6 +19615,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LINEAR_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.DIMENSION_CURVE_DIRECTED_CALLOUT,
   },
@@ -19032,6 +19629,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REAL_LITERAL,
+    depth: 5,
     isAbstract: false,
     superType: e.LITERAL_NUMBER,
   },
@@ -19039,6 +19637,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SIMPLE_NUMERIC_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.NUMERIC_EXPRESSION,
     subTypes: [
@@ -19075,12 +19674,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LOCAL_TIME,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.LOCATION_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -19088,6 +19689,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LOCATOR,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -19095,6 +19697,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LOG10_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -19102,6 +19705,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LOG2_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -19109,6 +19713,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LOG_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -19123,6 +19728,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VERTEX_LOOP,
+    depth: 3,
     isAbstract: false,
     superType: e.LOOP,
   },
@@ -19130,6 +19736,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LUMINOUS_INTENSITY_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19137,6 +19744,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.LUMINOUS_INTENSITY_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -19163,6 +19771,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MAKE_FROM_USAGE_OPTION,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_USAGE,
   },
@@ -19170,6 +19779,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MANIFOLD_SUBSURFACE_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -19177,6 +19787,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MANIFOLD_SURFACE_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -19184,6 +19795,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MASS_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19191,6 +19803,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MASS_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -19249,6 +19862,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MATERIAL_DESIGNATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -19288,12 +19902,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MATERIAL_DESIGNATION_CHARACTERIZATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.MATERIAL_PROPERTY,
+    depth: 1,
     isAbstract: false,
     superType: e.PROPERTY_DEFINITION,
   },
@@ -19308,6 +19924,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MATERIAL_PROPERTY_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.PROPERTY_DEFINITION_REPRESENTATION,
   },
@@ -19315,6 +19932,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MAXIMUM_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.MULTIPLE_ARITY_FUNCTION_CALL,
   },
@@ -19322,6 +19940,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MULTIPLE_ARITY_FUNCTION_CALL,
+    depth: 4,
     isAbstract: true,
     superType: e.MULTIPLE_ARITY_NUMERIC_EXPRESSION,
     subTypes: [
@@ -19379,12 +19998,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MEASURE_QUALIFICATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.MEASURE_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -19392,6 +20013,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TIME_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19399,6 +20021,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.THERMODYNAMIC_TEMPERATURE_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19406,6 +20029,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLANE_ANGLE_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19413,6 +20037,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SOLID_ANGLE_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19420,6 +20045,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VOLUME_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19427,6 +20053,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RATIO_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -19434,6 +20061,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_AREA,
+    depth: 3,
     isAbstract: false,
     superType: e.PRESENTATION_AREA,
   },
@@ -19441,6 +20069,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -19469,6 +20098,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MECHANISM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -19495,6 +20125,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MECHANISM_BASE_PLACEMENT,
+    depth: 2,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION,
   },
@@ -19502,6 +20133,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MINIMUM_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.MULTIPLE_ARITY_FUNCTION_CALL,
   },
@@ -19509,6 +20141,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MINUS_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -19523,6 +20156,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MODIFIED_GEOMETRIC_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -19530,6 +20164,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MODIFIED_PATTERN,
+    depth: 3,
     isAbstract: false,
     superType: e.REPLICATE_FEATURE,
   },
@@ -19537,6 +20172,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MOMENTS_OF_INERTIA_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -19584,6 +20220,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MOTION_LINK_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP,
   },
@@ -19591,6 +20228,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.MULT_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.MULTIPLE_ARITY_NUMERIC_EXPRESSION,
   },
@@ -19606,6 +20244,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MULTIPLE_ARITY_NUMERIC_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.NUMERIC_EXPRESSION,
     subTypes: [
@@ -20046,6 +20685,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MULTI_LANGUAGE_ATTRIBUTE_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.ATTRIBUTE_VALUE_ASSIGNMENT,
   },
@@ -20053,6 +20693,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.OR_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.MULTIPLE_ARITY_BOOLEAN_EXPRESSION,
   },
@@ -20060,6 +20701,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLUS_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.MULTIPLE_ARITY_NUMERIC_EXPRESSION,
   },
@@ -20141,6 +20783,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NAME_ATTRIBUTE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20167,6 +20810,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SI_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -20181,6 +20825,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NAMED_UNIT_VARIABLE,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -20188,6 +20833,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.NGON_CLOSED_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -20195,6 +20841,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.NON_MANIFOLD_SURFACE_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -20209,6 +20856,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NOT_EXPRESSION,
+    depth: 4,
     isAbstract: false,
     superType: e.UNARY_BOOLEAN_EXPRESSION,
   },
@@ -20216,6 +20864,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.REAL_DEFINED_FUNCTION,
+    depth: 4,
     isAbstract: true,
     superType: e.NUMERIC_DEFINED_FUNCTION,
   },
@@ -20230,6 +20879,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNARY_NUMERIC_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.NUMERIC_EXPRESSION,
     subTypes: [
@@ -20240,6 +20890,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.REAL_NUMERIC_VARIABLE,
+    depth: 5,
     isAbstract: false,
     superType: e.NUMERIC_VARIABLE,
   },
@@ -20259,6 +20910,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.OBJECT_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20272,6 +20924,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ODD_FUNCTION,
+    depth: 4,
     isAbstract: false,
     superType: e.UNARY_BOOLEAN_EXPRESSION,
   },
@@ -20298,6 +20951,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.OFFSET_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE,
   },
@@ -20312,6 +20966,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ONE_DIRECTION_REPEAT_FACTOR,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -20319,6 +20974,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.OPEN_PATH_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -20326,6 +20982,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ORDINATE_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.PROJECTION_DIRECTED_CALLOUT,
   },
@@ -20333,6 +20990,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PROJECTION_DIRECTED_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -20358,6 +21016,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20390,6 +21049,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATION_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20407,6 +21067,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATION_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20427,6 +21088,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATIONAL_ADDRESS,
+    depth: 1,
     isAbstract: false,
     superType: e.ADDRESS,
   },
@@ -20459,6 +21121,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATIONAL_PROJECT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20491,6 +21154,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATIONAL_PROJECT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20509,6 +21173,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORGANIZATIONAL_PROJECT_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20535,6 +21200,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORIENTED_CLOSED_SHELL,
+    depth: 4,
     isAbstract: false,
     superType: e.CLOSED_SHELL,
   },
@@ -20562,6 +21228,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORIENTED_OPEN_SHELL,
+    depth: 4,
     isAbstract: false,
     superType: e.OPEN_SHELL,
   },
@@ -20589,6 +21256,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORIENTED_PATH,
+    depth: 3,
     isAbstract: false,
     superType: e.PATH,
   },
@@ -20602,6 +21270,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ORIENTED_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE,
   },
@@ -20609,6 +21278,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.OUTER_BOUNDARY_CURVE,
+    depth: 7,
     isAbstract: false,
     superType: e.BOUNDARY_CURVE,
   },
@@ -20616,6 +21286,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PACKAGE_PRODUCT_CONCEPT_FEATURE,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_CONCEPT_FEATURE,
   },
@@ -20636,12 +21307,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PAIR_ACTUATOR,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PARALLELISM_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -20649,6 +21322,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PARAMETRIC_REPRESENTATION_CONTEXT,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_CONTEXT,
   },
@@ -20656,6 +21330,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PARTIAL_CIRCULAR_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -20663,6 +21338,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PATH_FEATURE_COMPONENT,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -20670,6 +21346,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PATH_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -20677,6 +21354,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PATTERN_OFFSET_MEMBERSHIP,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_COMPONENT_RELATIONSHIP,
   },
@@ -20684,6 +21362,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PATTERN_OMIT_MEMBERSHIP,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_COMPONENT_RELATIONSHIP,
   },
@@ -20691,6 +21370,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PERPENDICULARITY_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -20737,6 +21417,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PERSON,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -20767,12 +21448,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PERSON_AND_ORGANIZATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PERSON_AND_ORGANIZATION_ADDRESS,
+    depth: 2,
     isAbstract: false,
     superType: e.ORGANIZATIONAL_ADDRESS,
   },
@@ -20794,6 +21477,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PERSONAL_ADDRESS,
+    depth: 1,
     isAbstract: false,
     superType: e.ADDRESS,
   },
@@ -20812,12 +21496,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PERSON_AND_ORGANIZATION_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PHYSICALLY_MODELLED_PRODUCT_DEFINITION,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS,
   },
@@ -20833,6 +21519,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION,
   },
@@ -20840,6 +21527,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLACED_DATUM_TARGET_FEATURE,
+    depth: 2,
     isAbstract: false,
     superType: e.DATUM_TARGET,
   },
@@ -20847,6 +21535,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLACED_FEATURE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -20874,6 +21563,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANAR_BOX,
+    depth: 3,
     isAbstract: false,
     superType: e.PLANAR_EXTENT,
   },
@@ -20893,6 +21583,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANAR_EXTENT,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -20920,6 +21611,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANAR_CURVE_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -20948,6 +21640,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANAR_CURVE_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -20955,6 +21648,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLANAR_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -21089,6 +21783,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANAR_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -21121,6 +21816,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANAR_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -21128,6 +21824,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLANAR_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -21135,6 +21832,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PLANE_ANGLE_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -21182,12 +21880,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLUS_MINUS_TOLERANCE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.POCKET,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -21195,6 +21895,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.POCKET_BOTTOM,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -21215,6 +21916,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_CURVE,
+    depth: 3,
     isAbstract: false,
     superType: e.POINT,
   },
@@ -21241,6 +21943,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.POINT,
   },
@@ -21262,6 +21965,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_REPLICA,
+    depth: 3,
     isAbstract: false,
     superType: e.POINT,
   },
@@ -21282,6 +21986,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_PLANAR_CURVE_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -21423,6 +22128,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_PLANAR_CURVE_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -21469,6 +22175,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_PLANAR_CURVE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -21483,6 +22190,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_SURFACE_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -21624,6 +22332,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_SURFACE_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -21670,6 +22379,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_ON_SURFACE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -21677,6 +22387,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.POINT_PLACEMENT_SHAPE_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -21743,6 +22454,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POINT_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -21750,6 +22462,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.POSITION_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -21757,6 +22470,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_DIMENSION_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_SYMBOL,
   },
@@ -21764,6 +22478,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_SYMBOL,
+    depth: 1,
     isAbstract: false,
     superType: e.PRE_DEFINED_ITEM,
   },
@@ -21771,6 +22486,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_GEOMETRICAL_TOLERANCE_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_SYMBOL,
   },
@@ -21778,6 +22494,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_MARKER,
+    depth: 1,
     isAbstract: false,
     superType: e.PRE_DEFINED_ITEM,
   },
@@ -21785,6 +22502,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_POINT_MARKER_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_MARKER,
   },
@@ -21792,6 +22510,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_PRESENTATION_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -21799,6 +22518,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_SURFACE_CONDITION_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_SYMBOL,
   },
@@ -21806,6 +22526,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRE_DEFINED_TERMINATOR_SYMBOL,
+    depth: 2,
     isAbstract: false,
     superType: e.PRE_DEFINED_SYMBOL,
   },
@@ -21819,6 +22540,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRECISION_QUALIFIER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -21832,6 +22554,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTATION_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
     subTypes: [
@@ -21876,12 +22599,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTATION_LAYER_ASSIGNMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PRESENTATION_VIEW,
+    depth: 2,
     isAbstract: false,
     superType: e.PRESENTATION_REPRESENTATION,
   },
@@ -21922,6 +22647,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTATION_SIZE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -21997,6 +22723,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTATION_STYLE_ASSIGNMENT,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -22048,6 +22775,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTATION_STYLE_BY_CONTEXT,
+    depth: 2,
     isAbstract: false,
     superType: e.PRESENTATION_STYLE_ASSIGNMENT,
   },
@@ -22082,12 +22810,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTED_ITEM_REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PRISMATIC_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -22142,6 +22872,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRISMATIC_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -22162,6 +22893,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRISMATIC_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -22169,6 +22901,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PROCESS_OPERATION,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION_METHOD,
   },
@@ -22176,6 +22909,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PROCESS_PLAN,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION,
   },
@@ -22222,6 +22956,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROCESS_PRODUCT_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22279,6 +23014,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROCESS_PROPERTY_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22311,6 +23047,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22334,6 +23071,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CATEGORY,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22366,12 +23104,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CATEGORY_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PRODUCT_CLASS,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_CONCEPT,
   },
@@ -22404,6 +23144,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONCEPT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22436,6 +23177,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONCEPT_FEATURE_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22457,6 +23199,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONCEPT_FEATURE_CATEGORY_USAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP_ASSIGNMENT,
   },
@@ -22490,6 +23233,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_CONCEPT_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22527,6 +23271,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22554,6 +23299,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_CONTEXT_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22572,6 +23318,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_CONTEXT_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22597,6 +23344,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_FORMATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22635,6 +23383,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_FORMATION_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22648,6 +23397,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_FORMATION,
   },
@@ -22681,6 +23431,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_OCCURRENCE_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22701,6 +23452,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_PROCESS,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION,
   },
@@ -22740,12 +23492,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PRODUCT_DEFINITION_RESOURCE,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION_RESOURCE,
   },
@@ -22778,12 +23532,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_DEFINITION_SUBSTITUTE,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.PRODUCT_IDENTIFICATION,
+    depth: 1,
     isAbstract: false,
     superType: e.CONFIGURATION_ITEM,
   },
@@ -22791,6 +23547,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRODUCT_PROCESS_PLAN,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_DEFINITION_PROCESS,
   },
@@ -22806,6 +23563,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRODUCT_RELATED_PRODUCT_CATEGORY,
+    depth: 1,
     isAbstract: false,
     superType: e.PRODUCT_CATEGORY,
   },
@@ -22813,6 +23571,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PRODUCT_SPECIFICATION,
+    depth: 2,
     isAbstract: false,
     superType: e.PRODUCT_IDENTIFICATION,
   },
@@ -22834,6 +23593,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROJECTED_ZONE_DEFINITION,
+    depth: 1,
     isAbstract: false,
     superType: e.TOLERANCE_ZONE_DEFINITION,
   },
@@ -22856,6 +23616,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TOLERANCE_ZONE_DEFINITION,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.PROJECTED_ZONE_DEFINITION,
@@ -22866,6 +23627,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.PROJECTION_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.ANNOTATION_CURVE_OCCURRENCE,
   },
@@ -22899,6 +23661,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROPERTY_DEFINITION_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -22919,6 +23682,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PROPERTY_PROCESS,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION,
   },
@@ -22953,6 +23717,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.QUALIFIED_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -22966,6 +23731,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.QUALITATIVE_UNCERTAINTY,
+    depth: 1,
     isAbstract: false,
     superType: e.UNCERTAINTY_QUALIFIER,
   },
@@ -22985,6 +23751,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNCERTAINTY_QUALIFIER,
+    depth: 0,
     isAbstract: false,
     subTypes: [
        e.STANDARD_UNCERTAINTY,
@@ -23002,6 +23769,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.QUANTIFIED_ASSEMBLY_COMPONENT_USAGE,
+    depth: 3,
     isAbstract: false,
     superType: e.ASSEMBLY_COMPONENT_USAGE,
   },
@@ -23015,6 +23783,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RACK_AND_PINION_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -23069,6 +23838,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RACK_AND_PINION_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -23094,6 +23864,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RACK_AND_PINION_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -23101,6 +23872,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RADIUS_DIMENSION,
+    depth: 4,
     isAbstract: false,
     superType: e.DIMENSION_CURVE_DIRECTED_CALLOUT,
   },
@@ -23108,6 +23880,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RATIO_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -23128,6 +23901,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RATIONAL_B_SPLINE_CURVE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_CURVE,
   },
@@ -23148,6 +23922,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RATIONAL_B_SPLINE_SURFACE,
+    depth: 5,
     isAbstract: false,
     superType: e.B_SPLINE_SURFACE,
   },
@@ -23155,6 +23930,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RECTANGULAR_CLOSED_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -23162,6 +23938,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RECTANGULAR_PATTERN,
+    depth: 3,
     isAbstract: false,
     superType: e.REPLICATE_FEATURE,
   },
@@ -23176,6 +23953,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REFERENCED_MODIFIED_DATUM,
+    depth: 1,
     isAbstract: false,
     superType: e.DATUM_REFERENCE,
   },
@@ -23197,6 +23975,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RELATIVE_EVENT_OCCURRENCE,
+    depth: 1,
     isAbstract: false,
     superType: e.EVENT_OCCURRENCE,
   },
@@ -23204,6 +23983,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.REP_ITEM_GROUP,
+    depth: 1,
     isAbstract: false,
     superType: e.GROUP,
   },
@@ -23217,6 +23997,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REPARAMETRISED_COMPOSITE_CURVE_SEGMENT,
+    depth: 2,
     isAbstract: false,
     superType: e.COMPOSITE_CURVE_SEGMENT,
   },
@@ -23364,6 +24145,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VALUE_REPRESENTATION_ITEM,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_ITEM,
   },
@@ -23379,6 +24161,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REQUIREMENT_FOR_ACTION_RESOURCE,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION_RESOURCE_REQUIREMENT,
   },
@@ -23418,6 +24201,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RESOURCE_PROPERTY,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -23450,6 +24234,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RESOURCE_PROPERTY_REPRESENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -23468,6 +24253,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RESOURCE_REQUIREMENT_TYPE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -23482,6 +24268,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RESULTING_PATH,
+    depth: 2,
     isAbstract: false,
     superType: e.MOTION_LINK_RELATIONSHIP,
   },
@@ -23489,6 +24276,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RETENTION,
+    depth: 1,
     isAbstract: false,
     superType: e.ACTION,
   },
@@ -23496,6 +24284,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.REVOLUTE_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -23550,6 +24339,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REVOLUTE_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -23570,6 +24360,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REVOLUTE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -23596,6 +24387,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REVOLVED_AREA_SOLID,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_AREA_SOLID,
   },
@@ -23622,6 +24414,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.REVOLVED_FACE_SOLID,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_FACE_SOLID,
   },
@@ -23629,6 +24422,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RIB,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -23717,12 +24511,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ROLE_ASSOCIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.ROLLING_CURVE_PAIR,
+    depth: 3,
     isAbstract: false,
     superType: e.PLANAR_CURVE_PAIR,
   },
@@ -23744,6 +24540,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ROLLING_CURVE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -23751,6 +24548,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ROLLING_SURFACE_PAIR,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE_PAIR,
   },
@@ -23778,6 +24576,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -23805,6 +24604,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ROLLING_SURFACE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -23825,12 +24625,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ROTATION_ABOUT_DIRECTION,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.ROUND_HOLE,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -23838,6 +24640,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ROUNDED_U_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -23845,6 +24648,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.ROUNDNESS_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -23852,6 +24656,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.RULED_SURFACE_SWEPT_AREA_SOLID,
+    depth: 5,
     isAbstract: false,
     superType: e.SURFACE_CURVE_SWEPT_AREA_SOLID,
   },
@@ -23885,6 +24690,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_CURVE_SWEPT_AREA_SOLID,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_AREA_SOLID,
   },
@@ -23899,6 +24705,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RUNOUT_ZONE_DEFINITION,
+    depth: 1,
     isAbstract: false,
     superType: e.TOLERANCE_ZONE_DEFINITION,
   },
@@ -23913,6 +24720,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RUNOUT_ZONE_ORIENTATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -23926,6 +24734,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RUNOUT_ZONE_ORIENTATION_REFERENCE_DIRECTION,
+    depth: 1,
     isAbstract: false,
     superType: e.RUNOUT_ZONE_ORIENTATION,
   },
@@ -23939,6 +24748,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SCREW_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -23993,6 +24803,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SCREW_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -24018,6 +24829,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SCREW_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -24025,6 +24837,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SEAM_CURVE,
+    depth: 4,
     isAbstract: false,
     superType: e.SURFACE_CURVE,
   },
@@ -24039,6 +24852,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SEAM_EDGE,
+    depth: 4,
     isAbstract: false,
     superType: e.ORIENTED_EDGE,
   },
@@ -24065,6 +24879,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SECURITY_CLASSIFICATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -24077,12 +24892,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SECURITY_CLASSIFICATION_LEVEL,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.SHAPE_ASPECT_ASSOCIATIVITY,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT_RELATIONSHIP,
   },
@@ -24090,6 +24907,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_ASPECT_DERIVING_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT_RELATIONSHIP,
   },
@@ -24097,6 +24915,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_ASPECT_TRANSITION,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT_RELATIONSHIP,
   },
@@ -24104,6 +24923,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_DEFINING_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT_RELATIONSHIP,
   },
@@ -24111,6 +24931,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_DEFINITION_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.PROPERTY_DEFINITION_REPRESENTATION,
   },
@@ -24118,6 +24939,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_DIMENSION_REPRESENTATION,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -24125,6 +24947,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_REPRESENTATION_RELATIONSHIP,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_RELATIONSHIP,
   },
@@ -24132,6 +24955,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SHAPE_REPRESENTATION_WITH_PARAMETERS,
+    depth: 2,
     isAbstract: false,
     superType: e.SHAPE_REPRESENTATION,
   },
@@ -24139,6 +24963,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SIMPLE_STRING_EXPRESSION,
+    depth: 3,
     isAbstract: true,
     superType: e.STRING_EXPRESSION,
     subTypes: [
@@ -24156,6 +24981,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.STRING_LITERAL,
+    depth: 4,
     isAbstract: false,
     superType: e.SIMPLE_STRING_EXPRESSION,
   },
@@ -24163,6 +24989,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.STRING_VARIABLE,
+    depth: 4,
     isAbstract: false,
     superType: e.SIMPLE_STRING_EXPRESSION,
   },
@@ -24170,6 +24997,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SIN_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -24177,6 +25005,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SLIDING_CURVE_PAIR,
+    depth: 3,
     isAbstract: false,
     superType: e.PLANAR_CURVE_PAIR,
   },
@@ -24205,6 +25034,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SLIDING_CURVE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -24212,6 +25042,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SLIDING_SURFACE_PAIR,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE_PAIR,
   },
@@ -24246,6 +25077,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SLIDING_SURFACE_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -24253,6 +25085,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SLOT,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -24260,6 +25093,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SLOT_END,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -24267,6 +25101,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SOLID_ANGLE_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -24305,6 +25140,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SWEPT_DISK_SOLID,
+    depth: 3,
     isAbstract: false,
     superType: e.SOLID_MODEL,
   },
@@ -24326,6 +25162,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SOLID_REPLICA,
+    depth: 3,
     isAbstract: false,
     superType: e.SOLID_MODEL,
   },
@@ -24333,6 +25170,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SPHERICAL_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -24467,6 +25305,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SPHERICAL_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -24506,6 +25345,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SPHERICAL_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -24513,6 +25353,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SQL_MAPPABLE_DEFINED_FUNCTION,
+    depth: 1,
     isAbstract: true,
     superType: e.DEFINED_FUNCTION,
   },
@@ -24520,6 +25361,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SQUARE_ROOT_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -24527,6 +25369,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SQUARE_U_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -24540,6 +25383,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.STANDARD_UNCERTAINTY,
+    depth: 1,
     isAbstract: false,
     superType: e.UNCERTAINTY_QUALIFIER,
   },
@@ -24547,6 +25391,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.STRAIGHTNESS_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -24572,6 +25417,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SUBSTRING_EXPRESSION,
+    depth: 3,
     isAbstract: false,
     superType: e.STRING_EXPRESSION,
   },
@@ -24579,6 +25425,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.STRUCTURED_DIMENSION_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -24593,6 +25440,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SWEPT_SURFACE,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE,
     subTypes: [
@@ -24618,6 +25466,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_REPLICA,
+    depth: 3,
     isAbstract: false,
     superType: e.SURFACE,
   },
@@ -24625,6 +25474,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SURFACE_CONDITION_CALLOUT,
+    depth: 3,
     isAbstract: false,
     superType: e.DRAUGHTING_CALLOUT,
   },
@@ -24639,6 +25489,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_OF_LINEAR_EXTRUSION,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_SURFACE,
   },
@@ -24659,6 +25510,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_OF_REVOLUTION,
+    depth: 4,
     isAbstract: false,
     superType: e.SWEPT_SURFACE,
   },
@@ -24727,6 +25579,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -24775,6 +25628,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_PATCH,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -24782,6 +25636,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SURFACE_PROFILE_TOLERANCE,
+    depth: 1,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE,
   },
@@ -24796,6 +25651,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_RENDERING_PROPERTIES,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -24859,6 +25715,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_SIDE_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -24886,6 +25743,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_BOUNDARY,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -24913,6 +25771,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_CONTROL_GRID,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -24927,6 +25786,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_FILL_AREA,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -24975,6 +25835,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_PARAMETER_LINE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -24988,6 +25849,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_REFLECTANCE_AMBIENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25000,6 +25862,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE,
+    depth: 1,
     isAbstract: false,
     superType: e.SURFACE_STYLE_REFLECTANCE_AMBIENT,
   },
@@ -25026,6 +25889,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE_SPECULAR,
+    depth: 2,
     isAbstract: false,
     superType: e.SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE,
   },
@@ -25047,6 +25911,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_RENDERING,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25074,6 +25939,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_RENDERING_WITH_PROPERTIES,
+    depth: 1,
     isAbstract: false,
     superType: e.SURFACE_STYLE_RENDERING,
   },
@@ -25101,6 +25967,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_SEGMENTATION_CURVE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -25128,6 +25995,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_SILHOUETTE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -25141,6 +26009,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_TRANSPARENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25168,6 +26037,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_STYLE_USAGE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -25175,6 +26045,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SURFACE_TEXTURE_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -25189,6 +26060,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SYMBOL_COLOUR,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25222,6 +26094,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SYMBOL_REPRESENTATION_MAP,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION_MAP,
   },
@@ -25249,6 +26122,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SYMBOL_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -25288,6 +26162,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SYMBOL_TARGET,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_REPRESENTATION_ITEM,
   },
@@ -25303,6 +26178,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SYMMETRIC_SHAPE_ASPECT,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -25310,6 +26186,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.SYMMETRY_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -25317,6 +26194,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TACTILE_APPEARANCE_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -25324,6 +26202,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TAN_FUNCTION,
+    depth: 5,
     isAbstract: false,
     superType: e.UNARY_FUNCTION_CALL,
   },
@@ -25331,6 +26210,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TAPER,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -25338,6 +26218,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TEE_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -25353,6 +26234,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_LITERAL_WITH_ASSOCIATED_CURVES,
+    depth: 3,
     isAbstract: false,
     superType: e.TEXT_LITERAL,
   },
@@ -25367,6 +26249,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_LITERAL_WITH_BLANKING_BOX,
+    depth: 3,
     isAbstract: false,
     superType: e.TEXT_LITERAL,
   },
@@ -25381,6 +26264,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_LITERAL_WITH_EXTENT,
+    depth: 3,
     isAbstract: false,
     superType: e.TEXT_LITERAL,
   },
@@ -25439,6 +26323,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_STRING_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -25466,6 +26351,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_STYLE,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -25480,6 +26366,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_STYLE_FOR_DEFINED_FONT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25519,6 +26406,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_STYLE_WITH_BOX_CHARACTERISTICS,
+    depth: 2,
     isAbstract: false,
     superType: e.TEXT_STYLE,
   },
@@ -25546,6 +26434,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_STYLE_WITH_MIRROR,
+    depth: 2,
     isAbstract: false,
     superType: e.TEXT_STYLE,
   },
@@ -25585,6 +26474,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_STYLE_WITH_SPACING,
+    depth: 2,
     isAbstract: false,
     superType: e.TEXT_STYLE,
   },
@@ -25592,6 +26482,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.THERMODYNAMIC_TEMPERATURE_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -25599,6 +26490,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.THREAD,
+    depth: 2,
     isAbstract: false,
     superType: e.FEATURE_DEFINITION,
   },
@@ -25624,6 +26516,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TIME_INTERVAL,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25642,6 +26535,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TIME_INTERVAL_ROLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25719,6 +26613,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TIME_INTERVAL_WITH_BOUNDS,
+    depth: 1,
     isAbstract: false,
     superType: e.TIME_INTERVAL,
   },
@@ -25726,6 +26621,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TIME_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.NAMED_UNIT,
   },
@@ -25747,6 +26643,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TOLERANCE_VALUE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25768,6 +26665,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TOLERANCE_ZONE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -25781,12 +26679,14 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TOLERANCE_ZONE_FORM,
+    depth: 0,
     isAbstract: false,
   },
   {
     fields: {
     },
     typeId: e.VERTEX,
+    depth: 2,
     isAbstract: false,
     superType: e.TOPOLOGICAL_REPRESENTATION_ITEM,
   },
@@ -25794,6 +26694,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.TOTAL_RUNOUT_TOLERANCE,
+    depth: 2,
     isAbstract: false,
     superType: e.GEOMETRIC_TOLERANCE_WITH_DATUM_REFERENCE,
   },
@@ -25808,6 +26709,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TWO_DIRECTION_REPEAT_FACTOR,
+    depth: 3,
     isAbstract: false,
     superType: e.ONE_DIRECTION_REPEAT_FACTOR,
   },
@@ -25821,6 +26723,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TYPE_QUALIFIER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -25835,6 +26738,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNCERTAINTY_ASSIGNED_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -25854,6 +26758,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNCERTAINTY_MEASURE_WITH_UNIT,
+    depth: 1,
     isAbstract: false,
     superType: e.MEASURE_WITH_UNIT,
   },
@@ -25861,6 +26766,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.UNCONSTRAINED_PAIR,
+    depth: 2,
     isAbstract: false,
     superType: e.KINEMATIC_PAIR,
   },
@@ -25882,6 +26788,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNCONSTRAINED_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -25976,6 +26883,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNIVERSAL_PAIR_RANGE,
+    depth: 1,
     isAbstract: false,
     superType: e.SIMPLE_PAIR_RANGE,
   },
@@ -26002,6 +26910,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.UNIVERSAL_PAIR_VALUE,
+    depth: 1,
     isAbstract: false,
     superType: e.PAIR_VALUE,
   },
@@ -26009,6 +26918,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VALUE_RANGE,
+    depth: 2,
     isAbstract: false,
     superType: e.COMPOUND_REPRESENTATION_ITEM,
   },
@@ -26016,6 +26926,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VECTOR_STYLE,
+    depth: 3,
     isAbstract: false,
     superType: e.PRE_DEFINED_TERMINATOR_SYMBOL,
   },
@@ -26023,6 +26934,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VEE_PROFILE,
+    depth: 1,
     isAbstract: false,
     superType: e.SHAPE_ASPECT,
   },
@@ -26054,6 +26966,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VERSIONED_ACTION_REQUEST,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26092,6 +27005,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VERSIONED_ACTION_REQUEST_RELATIONSHIP,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26155,6 +27069,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VIEW_VOLUME,
+    depth: 1,
     isAbstract: false,
     superType: e.FOUNDED_ITEM,
   },
@@ -26162,6 +27077,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
     fields: {
     },
     typeId: e.VISUAL_APPEARANCE_REPRESENTATION,
+    depth: 1,
     isAbstract: false,
     superType: e.REPRESENTATION,
   },
@@ -26175,6 +27091,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.AMOUNT_OF_SUBSTANCE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26187,6 +27104,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.AREA_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26199,6 +27117,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOX_HEIGHT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26211,6 +27130,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOX_ROTATE_ANGLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26223,6 +27143,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOX_SLANT_ANGLE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26235,6 +27156,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.BOX_WIDTH,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26247,6 +27169,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CELSIUS_TEMPERATURE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26259,6 +27182,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CONTEXT_DEPENDENT_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26271,6 +27195,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.COUNT_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26283,6 +27208,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_TOLERANCE_DEVIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26295,6 +27221,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.CURVE_TOLERANCE_PARAMETER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26307,6 +27234,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DAY_IN_MONTH_NUMBER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26319,6 +27247,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DESCRIPTIVE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26331,6 +27260,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.DIMENSION_COUNT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26343,6 +27273,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.ELECTRIC_CURRENT_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26355,6 +27286,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.HOUR_IN_DAY,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26367,6 +27299,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.IDENTIFIER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26379,6 +27312,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LABEL,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26391,6 +27325,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LENGTH_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26442,6 +27377,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIST_OF_REVERSIBLE_TOPOLOGY_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26456,6 +27392,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LIST_REPRESENTATION_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26468,6 +27405,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.LUMINOUS_INTENSITY_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26480,6 +27418,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MASS_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26492,6 +27431,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MINUTE_IN_HOUR,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26504,6 +27444,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.MONTH_IN_YEAR_NUMBER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26516,6 +27457,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NON_NEGATIVE_LENGTH_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26528,6 +27470,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.NUMERIC_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26540,6 +27483,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PARAMETER_VALUE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26552,6 +27496,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PLANE_ANGLE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26564,6 +27509,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POSITIVE_LENGTH_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26576,6 +27522,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POSITIVE_PLANE_ANGLE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26588,6 +27535,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.POSITIVE_RATIO_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26600,6 +27548,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.PRESENTABLE_TEXT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26612,6 +27561,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.RATIO_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26624,6 +27574,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SECOND_IN_MINUTE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26675,6 +27626,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SET_OF_REVERSIBLE_TOPOLOGY_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26689,6 +27641,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SET_REPRESENTATION_ITEM,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26701,6 +27654,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SOLID_ANGLE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26713,6 +27667,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_TOLERANCE_DEVIATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26725,6 +27680,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.SURFACE_TOLERANCE_PARAMETER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26737,6 +27693,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26749,6 +27706,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_ALIGNMENT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26761,6 +27719,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TEXT_DELINEATION,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26773,6 +27732,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.THERMODYNAMIC_TEMPERATURE_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26785,6 +27745,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.TIME_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26797,6 +27758,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.U_DIRECTION_COUNT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26809,6 +27771,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.V_DIRECTION_COUNT,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26821,6 +27784,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.VOLUME_MEASURE,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26833,6 +27797,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.YEAR_NUMBER,
+    depth: 0,
     isAbstract: false,
   },
   {
@@ -26846,6 +27811,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
     },
     typeId: e.YPR_ROTATION,
+    depth: 0,
     isAbstract: false,
   },
 ]

@@ -35,7 +35,7 @@ export  class b_spline_surface extends bounded_surface {
 
   public get u_degree() : number {
     if ( this.u_degree_ === void 0 ) {
-      this.u_degree_ = this.extractNumber( 1, false )
+      this.u_degree_ = this.extractNumber( 1, 1, 4, false )
     }
 
     return this.u_degree_ as number
@@ -43,7 +43,7 @@ export  class b_spline_surface extends bounded_surface {
 
   public get v_degree() : number {
     if ( this.v_degree_ === void 0 ) {
-      this.v_degree_ = this.extractNumber( 2, false )
+      this.v_degree_ = this.extractNumber( 2, 1, 4, false )
     }
 
     return this.v_degree_ as number
@@ -52,7 +52,7 @@ export  class b_spline_surface extends bounded_surface {
   public get control_points_list() : Array<Array<cartesian_point>> {
     if ( this.control_points_list_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 1, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -94,7 +94,7 @@ export  class b_spline_surface extends bounded_surface {
 
   public get surface_form() : b_spline_surface_form {
     if ( this.surface_form_ === void 0 ) {
-      this.surface_form_ = this.extractLambda( 4, b_spline_surface_formDeserializeStep, false )
+      this.surface_form_ = this.extractLambda( 4, 1, 4, b_spline_surface_formDeserializeStep, false )
     }
 
     return this.surface_form_ as b_spline_surface_form
@@ -102,7 +102,7 @@ export  class b_spline_surface extends bounded_surface {
 
   public get u_closed() : boolean {
     if ( this.u_closed_ === void 0 ) {
-      this.u_closed_ = this.extractBoolean( 5, false )
+      this.u_closed_ = this.extractBoolean( 5, 1, 4, false )
     }
 
     return this.u_closed_ as boolean
@@ -110,7 +110,7 @@ export  class b_spline_surface extends bounded_surface {
 
   public get v_closed() : boolean {
     if ( this.v_closed_ === void 0 ) {
-      this.v_closed_ = this.extractBoolean( 6, false )
+      this.v_closed_ = this.extractBoolean( 6, 1, 4, false )
     }
 
     return this.v_closed_ as boolean
@@ -118,7 +118,7 @@ export  class b_spline_surface extends bounded_surface {
 
   public get self_intersect() : boolean {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 7, false )
+      this.self_intersect_ = this.extractBoolean( 7, 1, 4, false )
     }
 
     return this.self_intersect_ as boolean
@@ -138,8 +138,26 @@ export  class b_spline_surface extends bounded_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === b_spline_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for b_spline_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -24,7 +24,7 @@ export  class IfcWindowType extends IfcBuildingElementType {
 
   public get PredefinedType() : IfcWindowTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcWindowTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcWindowTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcWindowTypeEnum
@@ -32,7 +32,7 @@ export  class IfcWindowType extends IfcBuildingElementType {
 
   public get PartitioningType() : IfcWindowTypePartitioningEnum {
     if ( this.PartitioningType_ === void 0 ) {
-      this.PartitioningType_ = this.extractLambda( 10, IfcWindowTypePartitioningEnumDeserializeStep, false )
+      this.PartitioningType_ = this.extractLambda( 10, 9, 6, IfcWindowTypePartitioningEnumDeserializeStep, false )
     }
 
     return this.PartitioningType_ as IfcWindowTypePartitioningEnum
@@ -40,7 +40,7 @@ export  class IfcWindowType extends IfcBuildingElementType {
 
   public get ParameterTakesPrecedence() : boolean | null {
     if ( this.ParameterTakesPrecedence_ === void 0 ) {
-      this.ParameterTakesPrecedence_ = this.extractBoolean( 11, true )
+      this.ParameterTakesPrecedence_ = this.extractBoolean( 11, 9, 6, true )
     }
 
     return this.ParameterTakesPrecedence_ as boolean | null
@@ -48,7 +48,7 @@ export  class IfcWindowType extends IfcBuildingElementType {
 
   public get UserDefinedPartitioningType() : string | null {
     if ( this.UserDefinedPartitioningType_ === void 0 ) {
-      this.UserDefinedPartitioningType_ = this.extractString( 12, true )
+      this.UserDefinedPartitioningType_ = this.extractString( 12, 9, 6, true )
     }
 
     return this.UserDefinedPartitioningType_ as string | null
@@ -56,7 +56,9 @@ export  class IfcWindowType extends IfcBuildingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

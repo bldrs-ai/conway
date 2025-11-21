@@ -140,7 +140,8 @@
       "resumable": "cpp",
       "execution": "cpp",
       "coroutine": "cpp",
-      "stop_token": "cpp"
+      "stop_token": "cpp",
+      "stdfloat": "cpp"
     },
     "dotnet.defaultSolution": "disable"
 	}

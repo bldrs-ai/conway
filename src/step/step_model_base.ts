@@ -2,7 +2,7 @@ import { StepIndexEntry } from './parsing/step_parser'
 import StepVtableBuilder from './parsing/step_vtable_builder'
 import StepEntityBase from './step_entity_base'
 import StepEntitySchema from './step_entity_schema'
-import { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
+import StepEntityInternalReference, { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
 import { IIndexSetCursor } from '../core/i_index_set_cursor'
 import { extractOneHotLow } from '../indexing/bit_operations'
 import { MultiIndexSet } from '../indexing/multi_index_set'
@@ -30,7 +30,7 @@ implements Iterable<BaseEntity>, Model {
   private readonly vtableBuilder_: StepVtableBuilder = new StepVtableBuilder()
   private readonly expressIDMap_: InterpolationSearchTable32
   private readonly inlineAddressMap_: InterpolationSearchTable32
-  private readonly elementIndex_: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity>[]
+  private readonly elementIndex_: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity> []
 
   /**
    * Will this model memoize elements, set to false to disable,
@@ -155,6 +155,19 @@ implements Iterable<BaseEntity>, Model {
 
       for ( const item of this.elementIndex_ ) {
 
+        if ( Array.isArray( item ) ) {
+
+          for ( const subItem of item ) {
+            subItem.buffer = void 0
+            subItem.entity = void 0
+            subItem.vtable = void 0
+            subItem.vtableCount = void 0
+            subItem.vtableIndex = void 0
+          }
+
+          continue
+        }
+
         item.buffer = void 0
         item.entity = void 0
         item.vtable = void 0
@@ -168,6 +181,38 @@ implements Iterable<BaseEntity>, Model {
         item.entity = void 0
       }
     }
+  }
+
+  /**
+   * Populate a raw vtable entry for a particular element, extra
+   * 
+   * @param element The raw elment to populate the vtable entry for.
+   * @return {boolean} Did the vtable entry populate correctly?
+   */
+  public populateVtableEntryRaw( 
+    element: StepEntityInternalReference< EntityTypeIDs > ): boolean {
+    if (element.vtableIndex !== void 0 || element.typeID === 0 ) {
+      return true
+    }
+
+    const extratedEntry =
+      this.schema.parser.extractDataEntry(
+          this.buffer_,
+          element.address,
+          element.address + element.length,
+          this.vtableBuilder_)
+
+    if (extratedEntry === void 0) {
+      return false
+    }
+
+    element.vtableIndex = extratedEntry[ 0 ]
+    element.vtableCount = extratedEntry[ 1 ]
+    element.endCursor   = extratedEntry[ 2 ]
+    element.buffer = this.buffer_
+    element.vtable = this.vtableBuilder_.buffer
+
+    return true
   }
 
   /**
@@ -267,6 +312,27 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * Get an inline element by address.
+   *
+   * @param address
+   * @param type
+   * @return {BaseEntity | undefined} The number of elements.
+   */
+  public getTypedInlineElementByAddress<T extends StepEntityConstructorAbstract< EntityTypeIDs >, O extends InstanceType< T > & BaseEntity >(address: number | undefined, type: T ): O | undefined {
+    if (address === void 0) {
+      return
+    }
+
+    const localID = this.inlineAddressMap_.get(address)
+
+    if (localID === void 0) {
+      return
+    }
+
+    return this.getTypedElementByLocalID< T, O >( localID, type )
+  }
+
+  /**
    * Given an express ID, return the matching element if one exists.
    *
    * @param {number} expressID The express ID to fetch the element for.
@@ -281,6 +347,129 @@ implements Iterable<BaseEntity>, Model {
     }
 
     return this.getElementByLocalID(localID)
+  }
+  
+  /**
+   * Given an express ID, return the matching element if one exists.
+   *
+   * @param {number} expressID The express ID to fetch the element for.
+   * @param {StepEntityConstructorAbstract} type The constructor matching the type
+   * of the element to fetch.
+   * @return {object | undefined} The element if one exists for that ID,
+   * otherwise undefined.
+   */
+  public getTypedElementByExpressID< T extends StepEntityConstructorAbstract< EntityTypeIDs >, O extends InstanceType< T > & BaseEntity >(
+    expressID: number,
+    type: T ):
+    O | undefined {
+    const localID = this.expressIDMap_.get(expressID)
+
+    if (localID === void 0) {
+      return
+    }
+
+    return this.getTypedElementByLocalID( localID, type )
+  }
+
+
+  /**
+   * Given a local ID (i.e. dense index/reference), return the matching element if one
+   * exists.
+   *
+   * @param {number} localID The local ID to fetch for.
+   * @param {StepEntityConstructorAbstract} type The constructor matching the type
+   * of the element to fetch.
+   * @return {object | undefined} The matching element or undefined
+   * if none exists.
+   */
+  public getTypedElementByLocalID< T extends StepEntityConstructorAbstract< EntityTypeIDs >, O extends InstanceType< T > & BaseEntity >(
+    localID: number,
+    type: StepEntityConstructorAbstract< EntityTypeIDs > ):
+    O | undefined {
+  
+    if (localID > this.elementIndex_.length) {
+      return
+    }
+
+    const element = this.elementIndex_[localID]
+    const multiMapping = element.multiMapping
+
+    if ( multiMapping !== void 0 ) {
+
+      let multiElements = element.multiEntity
+
+      if ( multiElements === void 0 ) {        
+
+        const schema     = this.schema
+        const reflection = schema.reflection
+
+
+        // We sort this way because we want to go deepest first,
+        // that way we only visit unvisited elements once.
+        // Elements get visited during initialization, so we know that
+        // if an element has been previously visited, it is a super class
+        // of a current element.
+        multiMapping.sort( (a, b ) => reflection[ b.typeID ?? 0 ].depth - reflection[ a.typeID ?? 0 ].depth )
+
+        multiElements = []
+
+        for ( const subElement of multiMapping ) {
+
+          if ( subElement.visitedMulti ) {
+            continue
+          }
+
+          const elementTypeID = subElement.typeID
+
+          if ( elementTypeID === void 0 ) {
+            continue
+          }
+
+          const constructorRead =
+              schema.constructors[ elementTypeID ]
+
+          if ( constructorRead === void 0 ) {
+            continue
+          }
+
+          const subEntity = new constructorRead(localID, element, this, multiMapping)
+
+          subElement.entity = subEntity
+
+          multiElements.push( subEntity )
+        }
+
+        // We memoize multielements regardless of the setting as they're necessary
+        // for resolution of multi-mapping.
+        element.multiEntity = multiElements
+      }
+
+      return multiElements?.find( where => where instanceof type ) as O | undefined
+    }
+
+    let entity = element.entity as BaseEntity | undefined
+
+    if (entity === void 0 && element.typeID !== void 0) {
+
+      const elementTypeID = element.typeID
+
+      // TODO - we actually need to make this handle unknown type IDs by adding
+      // an ENTITY_UNKNOWN type - CS
+      const constructorRead =
+          this.schema.constructors[elementTypeID] as StepEntityConstructor< EntityTypeIDs, BaseEntity > | undefined
+
+      if ( constructorRead !== void 0 &&
+           ( type === ( constructorRead as unknown ) || constructorRead.prototype instanceof type ) ) {
+
+        entity = new constructorRead(localID, element, this )
+
+        if ( this.elementMemoization ) {
+          element.entity = entity!
+        }
+      }
+    }
+
+    return entity as O | undefined
   }
 
   /**
@@ -326,6 +515,59 @@ implements Iterable<BaseEntity>, Model {
     const element = this.elementIndex_[localID]
 
     let entity = element.entity
+    const multiMapping = element.multiMapping
+
+    if ( multiMapping !== void 0 ) {
+
+      let multiElements = element.multiEntity
+
+      if ( multiElements === void 0 ) {        
+
+        const schema     = this.schema
+        const reflection = schema.reflection
+
+        // We sort this way because we want to go deepest first,
+        // that way we only visit unvisited elements once.
+        // Elements get visited during initialization, so we know that
+        // if an element has been previously visited, it is a super class
+        // of a current element.
+        multiMapping.sort( (a, b ) => reflection[ b.typeID ?? 0 ].depth - reflection[ a.typeID ?? 0 ].depth )
+
+        multiElements = []
+
+        for ( const subElement of multiMapping ) {
+
+          if ( subElement.visitedMulti ) {
+            continue
+          }
+
+          const elementTypeID = subElement.typeID
+
+          if ( elementTypeID === void 0 ) {
+            continue
+          }
+
+          const constructorRead =
+              schema.constructors[ elementTypeID ]
+
+          if ( constructorRead === void 0 ) {
+            continue
+          }
+
+          const subEntity = new constructorRead(localID, element, this, multiMapping)
+
+          subElement.entity = subEntity
+
+          multiElements.push( subEntity )
+        }
+
+        // We memoize multielements regardless of the setting as they're necessary
+        // for resolution of multi-mapping.
+        element.multiEntity = multiElements
+      }
+
+      return multiElements[ 0 ] as BaseEntity | undefined
+    }
 
     if (entity === void 0 && element.typeID !== void 0) {
 

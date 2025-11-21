@@ -18,7 +18,7 @@ export  class IfcFlowMeterType extends IfcFlowControllerType {
 
   public get PredefinedType() : IfcFlowMeterTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcFlowMeterTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcFlowMeterTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcFlowMeterTypeEnum
@@ -26,7 +26,9 @@ export  class IfcFlowMeterType extends IfcFlowControllerType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

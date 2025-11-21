@@ -28,7 +28,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get OwningUser() : IfcPersonAndOrganization {
     if ( this.OwningUser_ === void 0 ) {
-      this.OwningUser_ = this.extractElement( 0, false, IfcPersonAndOrganization )
+      this.OwningUser_ = this.extractElement( 0, 0, 0, false, IfcPersonAndOrganization )
     }
 
     return this.OwningUser_ as IfcPersonAndOrganization
@@ -36,7 +36,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get OwningApplication() : IfcApplication {
     if ( this.OwningApplication_ === void 0 ) {
-      this.OwningApplication_ = this.extractElement( 1, false, IfcApplication )
+      this.OwningApplication_ = this.extractElement( 1, 0, 0, false, IfcApplication )
     }
 
     return this.OwningApplication_ as IfcApplication
@@ -44,7 +44,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get State() : IfcStateEnum | null {
     if ( this.State_ === void 0 ) {
-      this.State_ = this.extractLambda( 2, IfcStateEnumDeserializeStep, true )
+      this.State_ = this.extractLambda( 2, 0, 0, IfcStateEnumDeserializeStep, true )
     }
 
     return this.State_ as IfcStateEnum | null
@@ -52,7 +52,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get ChangeAction() : IfcChangeActionEnum | null {
     if ( this.ChangeAction_ === void 0 ) {
-      this.ChangeAction_ = this.extractLambda( 3, IfcChangeActionEnumDeserializeStep, true )
+      this.ChangeAction_ = this.extractLambda( 3, 0, 0, IfcChangeActionEnumDeserializeStep, true )
     }
 
     return this.ChangeAction_ as IfcChangeActionEnum | null
@@ -60,7 +60,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get LastModifiedDate() : number | null {
     if ( this.LastModifiedDate_ === void 0 ) {
-      this.LastModifiedDate_ = this.extractNumber( 4, true )
+      this.LastModifiedDate_ = this.extractNumber( 4, 0, 0, true )
     }
 
     return this.LastModifiedDate_ as number | null
@@ -68,7 +68,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get LastModifyingUser() : IfcPersonAndOrganization | null {
     if ( this.LastModifyingUser_ === void 0 ) {
-      this.LastModifyingUser_ = this.extractElement( 5, true, IfcPersonAndOrganization )
+      this.LastModifyingUser_ = this.extractElement( 5, 0, 0, true, IfcPersonAndOrganization )
     }
 
     return this.LastModifyingUser_ as IfcPersonAndOrganization | null
@@ -76,7 +76,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get LastModifyingApplication() : IfcApplication | null {
     if ( this.LastModifyingApplication_ === void 0 ) {
-      this.LastModifyingApplication_ = this.extractElement( 6, true, IfcApplication )
+      this.LastModifyingApplication_ = this.extractElement( 6, 0, 0, true, IfcApplication )
     }
 
     return this.LastModifyingApplication_ as IfcApplication | null
@@ -84,7 +84,7 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
 
   public get CreationDate() : number {
     if ( this.CreationDate_ === void 0 ) {
-      this.CreationDate_ = this.extractNumber( 7, false )
+      this.CreationDate_ = this.extractNumber( 7, 0, 0, false )
     }
 
     return this.CreationDate_ as number
@@ -92,7 +92,9 @@ export  class IfcOwnerHistory extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

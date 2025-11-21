@@ -18,7 +18,7 @@ export  class parallel_offset extends derived_shape_aspect {
 
   public get offset() : measure_with_unit {
     if ( this.offset_ === void 0 ) {
-      this.offset_ = this.extractElement( 4, false, measure_with_unit )
+      this.offset_ = this.extractElement( 4, 4, 2, false, measure_with_unit )
     }
 
     return this.offset_ as measure_with_unit
@@ -26,8 +26,26 @@ export  class parallel_offset extends derived_shape_aspect {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === parallel_offset.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for parallel_offset" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

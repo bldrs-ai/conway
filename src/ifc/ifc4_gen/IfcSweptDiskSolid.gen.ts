@@ -24,7 +24,7 @@ export  class IfcSweptDiskSolid extends IfcSolidModel {
 
   public get Directrix() : IfcCurve {
     if ( this.Directrix_ === void 0 ) {
-      this.Directrix_ = this.extractElement( 0, false, IfcCurve )
+      this.Directrix_ = this.extractElement( 0, 0, 3, false, IfcCurve )
     }
 
     return this.Directrix_ as IfcCurve
@@ -32,7 +32,7 @@ export  class IfcSweptDiskSolid extends IfcSolidModel {
 
   public get Radius() : number {
     if ( this.Radius_ === void 0 ) {
-      this.Radius_ = this.extractNumber( 1, false )
+      this.Radius_ = this.extractNumber( 1, 0, 3, false )
     }
 
     return this.Radius_ as number
@@ -40,7 +40,7 @@ export  class IfcSweptDiskSolid extends IfcSolidModel {
 
   public get InnerRadius() : number | null {
     if ( this.InnerRadius_ === void 0 ) {
-      this.InnerRadius_ = this.extractNumber( 2, true )
+      this.InnerRadius_ = this.extractNumber( 2, 0, 3, true )
     }
 
     return this.InnerRadius_ as number | null
@@ -48,7 +48,7 @@ export  class IfcSweptDiskSolid extends IfcSolidModel {
 
   public get StartParam() : number | null {
     if ( this.StartParam_ === void 0 ) {
-      this.StartParam_ = this.extractNumber( 3, true )
+      this.StartParam_ = this.extractNumber( 3, 0, 3, true )
     }
 
     return this.StartParam_ as number | null
@@ -56,7 +56,7 @@ export  class IfcSweptDiskSolid extends IfcSolidModel {
 
   public get EndParam() : number | null {
     if ( this.EndParam_ === void 0 ) {
-      this.EndParam_ = this.extractNumber( 4, true )
+      this.EndParam_ = this.extractNumber( 4, 0, 3, true )
     }
 
     return this.EndParam_ as number | null
@@ -64,7 +64,9 @@ export  class IfcSweptDiskSolid extends IfcSolidModel {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

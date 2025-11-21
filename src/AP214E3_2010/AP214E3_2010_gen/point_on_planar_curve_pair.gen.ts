@@ -19,7 +19,7 @@ export  class point_on_planar_curve_pair extends kinematic_pair {
 
   public get pair_curve() : curve {
     if ( this.pair_curve_ === void 0 ) {
-      this.pair_curve_ = this.extractElement( 5, false, curve )
+      this.pair_curve_ = this.extractElement( 5, 5, 2, false, curve )
     }
 
     return this.pair_curve_ as curve
@@ -27,7 +27,7 @@ export  class point_on_planar_curve_pair extends kinematic_pair {
 
   public get orientation() : boolean {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractBoolean( 6, false )
+      this.orientation_ = this.extractBoolean( 6, 5, 2, false )
     }
 
     return this.orientation_ as boolean
@@ -35,8 +35,26 @@ export  class point_on_planar_curve_pair extends kinematic_pair {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === point_on_planar_curve_pair.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for point_on_planar_curve_pair" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -27,7 +27,7 @@ export  class IfcMaterialLayerWithOffsets extends IfcMaterialLayer {
 
   public get OffsetDirection() : IfcLayerSetDirectionEnum {
     if ( this.OffsetDirection_ === void 0 ) {
-      this.OffsetDirection_ = this.extractLambda( 7, IfcLayerSetDirectionEnumDeserializeStep, false )
+      this.OffsetDirection_ = this.extractLambda( 7, 7, 2, IfcLayerSetDirectionEnumDeserializeStep, false )
     }
 
     return this.OffsetDirection_ as IfcLayerSetDirectionEnum
@@ -36,7 +36,7 @@ export  class IfcMaterialLayerWithOffsets extends IfcMaterialLayer {
   public get OffsetValues() : Array< number > {
     if ( this.OffsetValues_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 7, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -69,7 +69,9 @@ export  class IfcMaterialLayerWithOffsets extends IfcMaterialLayer {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

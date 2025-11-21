@@ -17,7 +17,7 @@ export abstract class literal_number extends simple_numeric_expression {
 
   public get the_value() : number {
     if ( this.the_value_ === void 0 ) {
-      this.the_value_ = this.extractNumber( 0, false )
+      this.the_value_ = this.extractNumber( 0, 0, 4, false )
     }
 
     return this.the_value_ as number
@@ -25,8 +25,26 @@ export abstract class literal_number extends simple_numeric_expression {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === literal_number.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for literal_number" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

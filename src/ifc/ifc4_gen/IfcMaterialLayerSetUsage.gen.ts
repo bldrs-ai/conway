@@ -26,7 +26,7 @@ export  class IfcMaterialLayerSetUsage extends IfcMaterialUsageDefinition {
 
   public get ForLayerSet() : IfcMaterialLayerSet {
     if ( this.ForLayerSet_ === void 0 ) {
-      this.ForLayerSet_ = this.extractElement( 0, false, IfcMaterialLayerSet )
+      this.ForLayerSet_ = this.extractElement( 0, 0, 1, false, IfcMaterialLayerSet )
     }
 
     return this.ForLayerSet_ as IfcMaterialLayerSet
@@ -34,7 +34,7 @@ export  class IfcMaterialLayerSetUsage extends IfcMaterialUsageDefinition {
 
   public get LayerSetDirection() : IfcLayerSetDirectionEnum {
     if ( this.LayerSetDirection_ === void 0 ) {
-      this.LayerSetDirection_ = this.extractLambda( 1, IfcLayerSetDirectionEnumDeserializeStep, false )
+      this.LayerSetDirection_ = this.extractLambda( 1, 0, 1, IfcLayerSetDirectionEnumDeserializeStep, false )
     }
 
     return this.LayerSetDirection_ as IfcLayerSetDirectionEnum
@@ -42,7 +42,7 @@ export  class IfcMaterialLayerSetUsage extends IfcMaterialUsageDefinition {
 
   public get DirectionSense() : IfcDirectionSenseEnum {
     if ( this.DirectionSense_ === void 0 ) {
-      this.DirectionSense_ = this.extractLambda( 2, IfcDirectionSenseEnumDeserializeStep, false )
+      this.DirectionSense_ = this.extractLambda( 2, 0, 1, IfcDirectionSenseEnumDeserializeStep, false )
     }
 
     return this.DirectionSense_ as IfcDirectionSenseEnum
@@ -50,7 +50,7 @@ export  class IfcMaterialLayerSetUsage extends IfcMaterialUsageDefinition {
 
   public get OffsetFromReferenceLine() : number {
     if ( this.OffsetFromReferenceLine_ === void 0 ) {
-      this.OffsetFromReferenceLine_ = this.extractNumber( 3, false )
+      this.OffsetFromReferenceLine_ = this.extractNumber( 3, 0, 1, false )
     }
 
     return this.OffsetFromReferenceLine_ as number
@@ -58,7 +58,7 @@ export  class IfcMaterialLayerSetUsage extends IfcMaterialUsageDefinition {
 
   public get ReferenceExtent() : number | null {
     if ( this.ReferenceExtent_ === void 0 ) {
-      this.ReferenceExtent_ = this.extractNumber( 4, true )
+      this.ReferenceExtent_ = this.extractNumber( 4, 0, 1, true )
     }
 
     return this.ReferenceExtent_ as number | null
@@ -66,7 +66,9 @@ export  class IfcMaterialLayerSetUsage extends IfcMaterialUsageDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

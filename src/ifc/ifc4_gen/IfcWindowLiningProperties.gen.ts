@@ -33,7 +33,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningDepth() : number | null {
     if ( this.LiningDepth_ === void 0 ) {
-      this.LiningDepth_ = this.extractNumber( 4, true )
+      this.LiningDepth_ = this.extractNumber( 4, 4, 4, true )
     }
 
     return this.LiningDepth_ as number | null
@@ -41,7 +41,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningThickness() : number | null {
     if ( this.LiningThickness_ === void 0 ) {
-      this.LiningThickness_ = this.extractNumber( 5, true )
+      this.LiningThickness_ = this.extractNumber( 5, 4, 4, true )
     }
 
     return this.LiningThickness_ as number | null
@@ -49,7 +49,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get TransomThickness() : number | null {
     if ( this.TransomThickness_ === void 0 ) {
-      this.TransomThickness_ = this.extractNumber( 6, true )
+      this.TransomThickness_ = this.extractNumber( 6, 4, 4, true )
     }
 
     return this.TransomThickness_ as number | null
@@ -57,7 +57,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get MullionThickness() : number | null {
     if ( this.MullionThickness_ === void 0 ) {
-      this.MullionThickness_ = this.extractNumber( 7, true )
+      this.MullionThickness_ = this.extractNumber( 7, 4, 4, true )
     }
 
     return this.MullionThickness_ as number | null
@@ -65,7 +65,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get FirstTransomOffset() : number | null {
     if ( this.FirstTransomOffset_ === void 0 ) {
-      this.FirstTransomOffset_ = this.extractNumber( 8, true )
+      this.FirstTransomOffset_ = this.extractNumber( 8, 4, 4, true )
     }
 
     return this.FirstTransomOffset_ as number | null
@@ -73,7 +73,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get SecondTransomOffset() : number | null {
     if ( this.SecondTransomOffset_ === void 0 ) {
-      this.SecondTransomOffset_ = this.extractNumber( 9, true )
+      this.SecondTransomOffset_ = this.extractNumber( 9, 4, 4, true )
     }
 
     return this.SecondTransomOffset_ as number | null
@@ -81,7 +81,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get FirstMullionOffset() : number | null {
     if ( this.FirstMullionOffset_ === void 0 ) {
-      this.FirstMullionOffset_ = this.extractNumber( 10, true )
+      this.FirstMullionOffset_ = this.extractNumber( 10, 4, 4, true )
     }
 
     return this.FirstMullionOffset_ as number | null
@@ -89,7 +89,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get SecondMullionOffset() : number | null {
     if ( this.SecondMullionOffset_ === void 0 ) {
-      this.SecondMullionOffset_ = this.extractNumber( 11, true )
+      this.SecondMullionOffset_ = this.extractNumber( 11, 4, 4, true )
     }
 
     return this.SecondMullionOffset_ as number | null
@@ -97,7 +97,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get ShapeAspectStyle() : IfcShapeAspect | null {
     if ( this.ShapeAspectStyle_ === void 0 ) {
-      this.ShapeAspectStyle_ = this.extractElement( 12, true, IfcShapeAspect )
+      this.ShapeAspectStyle_ = this.extractElement( 12, 4, 4, true, IfcShapeAspect )
     }
 
     return this.ShapeAspectStyle_ as IfcShapeAspect | null
@@ -105,7 +105,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningOffset() : number | null {
     if ( this.LiningOffset_ === void 0 ) {
-      this.LiningOffset_ = this.extractNumber( 13, true )
+      this.LiningOffset_ = this.extractNumber( 13, 4, 4, true )
     }
 
     return this.LiningOffset_ as number | null
@@ -113,7 +113,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningToPanelOffsetX() : number | null {
     if ( this.LiningToPanelOffsetX_ === void 0 ) {
-      this.LiningToPanelOffsetX_ = this.extractNumber( 14, true )
+      this.LiningToPanelOffsetX_ = this.extractNumber( 14, 4, 4, true )
     }
 
     return this.LiningToPanelOffsetX_ as number | null
@@ -121,7 +121,7 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
 
   public get LiningToPanelOffsetY() : number | null {
     if ( this.LiningToPanelOffsetY_ === void 0 ) {
-      this.LiningToPanelOffsetY_ = this.extractNumber( 15, true )
+      this.LiningToPanelOffsetY_ = this.extractNumber( 15, 4, 4, true )
     }
 
     return this.LiningToPanelOffsetY_ as number | null
@@ -129,7 +129,9 @@ export  class IfcWindowLiningProperties extends IfcPreDefinedPropertySet {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

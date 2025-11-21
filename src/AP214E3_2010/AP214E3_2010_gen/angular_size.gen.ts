@@ -18,7 +18,7 @@ export  class angular_size extends dimensional_size {
 
   public get angle_selection() : angle_relator {
     if ( this.angle_selection_ === void 0 ) {
-      this.angle_selection_ = this.extractLambda( 2, angle_relatorDeserializeStep, false )
+      this.angle_selection_ = this.extractLambda( 2, 2, 1, angle_relatorDeserializeStep, false )
     }
 
     return this.angle_selection_ as angle_relator
@@ -26,8 +26,26 @@ export  class angular_size extends dimensional_size {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === angular_size.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for angular_size" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

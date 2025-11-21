@@ -20,7 +20,7 @@ export  class vector extends geometric_representation_item {
 
   public get orientation() : direction {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractElement( 1, false, direction )
+      this.orientation_ = this.extractElement( 1, 1, 2, false, direction )
     }
 
     return this.orientation_ as direction
@@ -28,7 +28,7 @@ export  class vector extends geometric_representation_item {
 
   public get magnitude() : number {
     if ( this.magnitude_ === void 0 ) {
-      this.magnitude_ = this.extractNumber( 2, false )
+      this.magnitude_ = this.extractNumber( 2, 1, 2, false )
     }
 
     return this.magnitude_ as number
@@ -36,8 +36,26 @@ export  class vector extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === vector.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for vector" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

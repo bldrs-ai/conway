@@ -18,7 +18,7 @@ export  class IfcPipeFitting extends IfcFlowFitting {
 
   public get PredefinedType() : IfcPipeFittingTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcPipeFittingTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcPipeFittingTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcPipeFittingTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcPipeFitting extends IfcFlowFitting {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

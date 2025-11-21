@@ -22,7 +22,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get LengthExponent() : number {
     if ( this.LengthExponent_ === void 0 ) {
-      this.LengthExponent_ = this.extractNumber( 0, false )
+      this.LengthExponent_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.LengthExponent_ as number
@@ -30,7 +30,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get MassExponent() : number {
     if ( this.MassExponent_ === void 0 ) {
-      this.MassExponent_ = this.extractNumber( 1, false )
+      this.MassExponent_ = this.extractNumber( 1, 0, 0, false )
     }
 
     return this.MassExponent_ as number
@@ -38,7 +38,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get TimeExponent() : number {
     if ( this.TimeExponent_ === void 0 ) {
-      this.TimeExponent_ = this.extractNumber( 2, false )
+      this.TimeExponent_ = this.extractNumber( 2, 0, 0, false )
     }
 
     return this.TimeExponent_ as number
@@ -46,7 +46,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get ElectricCurrentExponent() : number {
     if ( this.ElectricCurrentExponent_ === void 0 ) {
-      this.ElectricCurrentExponent_ = this.extractNumber( 3, false )
+      this.ElectricCurrentExponent_ = this.extractNumber( 3, 0, 0, false )
     }
 
     return this.ElectricCurrentExponent_ as number
@@ -54,7 +54,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get ThermodynamicTemperatureExponent() : number {
     if ( this.ThermodynamicTemperatureExponent_ === void 0 ) {
-      this.ThermodynamicTemperatureExponent_ = this.extractNumber( 4, false )
+      this.ThermodynamicTemperatureExponent_ = this.extractNumber( 4, 0, 0, false )
     }
 
     return this.ThermodynamicTemperatureExponent_ as number
@@ -62,7 +62,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get AmountOfSubstanceExponent() : number {
     if ( this.AmountOfSubstanceExponent_ === void 0 ) {
-      this.AmountOfSubstanceExponent_ = this.extractNumber( 5, false )
+      this.AmountOfSubstanceExponent_ = this.extractNumber( 5, 0, 0, false )
     }
 
     return this.AmountOfSubstanceExponent_ as number
@@ -70,7 +70,7 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
 
   public get LuminousIntensityExponent() : number {
     if ( this.LuminousIntensityExponent_ === void 0 ) {
-      this.LuminousIntensityExponent_ = this.extractNumber( 6, false )
+      this.LuminousIntensityExponent_ = this.extractNumber( 6, 0, 0, false )
     }
 
     return this.LuminousIntensityExponent_ as number
@@ -78,7 +78,9 @@ export  class IfcDimensionalExponents extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -19,7 +19,7 @@ export  class IfcEllipseProfileDef extends IfcParameterizedProfileDef {
 
   public get SemiAxis1() : number {
     if ( this.SemiAxis1_ === void 0 ) {
-      this.SemiAxis1_ = this.extractNumber( 3, false )
+      this.SemiAxis1_ = this.extractNumber( 3, 3, 2, false )
     }
 
     return this.SemiAxis1_ as number
@@ -27,7 +27,7 @@ export  class IfcEllipseProfileDef extends IfcParameterizedProfileDef {
 
   public get SemiAxis2() : number {
     if ( this.SemiAxis2_ === void 0 ) {
-      this.SemiAxis2_ = this.extractNumber( 4, false )
+      this.SemiAxis2_ = this.extractNumber( 4, 3, 2, false )
     }
 
     return this.SemiAxis2_ as number
@@ -35,7 +35,9 @@ export  class IfcEllipseProfileDef extends IfcParameterizedProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

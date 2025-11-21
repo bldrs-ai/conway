@@ -26,7 +26,7 @@ export  class IfcStructuralLoadGroup extends IfcGroup {
 
   public get PredefinedType() : IfcLoadGroupTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 5, IfcLoadGroupTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 5, 5, 4, IfcLoadGroupTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcLoadGroupTypeEnum
@@ -34,7 +34,7 @@ export  class IfcStructuralLoadGroup extends IfcGroup {
 
   public get ActionType() : IfcActionTypeEnum {
     if ( this.ActionType_ === void 0 ) {
-      this.ActionType_ = this.extractLambda( 6, IfcActionTypeEnumDeserializeStep, false )
+      this.ActionType_ = this.extractLambda( 6, 5, 4, IfcActionTypeEnumDeserializeStep, false )
     }
 
     return this.ActionType_ as IfcActionTypeEnum
@@ -42,7 +42,7 @@ export  class IfcStructuralLoadGroup extends IfcGroup {
 
   public get ActionSource() : IfcActionSourceTypeEnum {
     if ( this.ActionSource_ === void 0 ) {
-      this.ActionSource_ = this.extractLambda( 7, IfcActionSourceTypeEnumDeserializeStep, false )
+      this.ActionSource_ = this.extractLambda( 7, 5, 4, IfcActionSourceTypeEnumDeserializeStep, false )
     }
 
     return this.ActionSource_ as IfcActionSourceTypeEnum
@@ -50,7 +50,7 @@ export  class IfcStructuralLoadGroup extends IfcGroup {
 
   public get Coefficient() : number | null {
     if ( this.Coefficient_ === void 0 ) {
-      this.Coefficient_ = this.extractNumber( 8, true )
+      this.Coefficient_ = this.extractNumber( 8, 5, 4, true )
     }
 
     return this.Coefficient_ as number | null
@@ -58,7 +58,7 @@ export  class IfcStructuralLoadGroup extends IfcGroup {
 
   public get Purpose() : string | null {
     if ( this.Purpose_ === void 0 ) {
-      this.Purpose_ = this.extractString( 9, true )
+      this.Purpose_ = this.extractString( 9, 5, 4, true )
     }
 
     return this.Purpose_ as string | null
@@ -68,7 +68,9 @@ export  class IfcStructuralLoadGroup extends IfcGroup {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

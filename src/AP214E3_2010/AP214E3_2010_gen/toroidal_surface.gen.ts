@@ -19,7 +19,7 @@ export  class toroidal_surface extends elementary_surface {
 
   public get major_radius() : number {
     if ( this.major_radius_ === void 0 ) {
-      this.major_radius_ = this.extractNumber( 2, false )
+      this.major_radius_ = this.extractNumber( 2, 2, 4, false )
     }
 
     return this.major_radius_ as number
@@ -27,7 +27,7 @@ export  class toroidal_surface extends elementary_surface {
 
   public get minor_radius() : number {
     if ( this.minor_radius_ === void 0 ) {
-      this.minor_radius_ = this.extractNumber( 3, false )
+      this.minor_radius_ = this.extractNumber( 3, 2, 4, false )
     }
 
     return this.minor_radius_ as number
@@ -35,8 +35,26 @@ export  class toroidal_surface extends elementary_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === toroidal_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for toroidal_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

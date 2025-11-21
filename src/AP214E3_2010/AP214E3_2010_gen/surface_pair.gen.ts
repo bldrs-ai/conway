@@ -20,7 +20,7 @@ export  class surface_pair extends kinematic_pair {
 
   public get surface_1() : surface {
     if ( this.surface_1_ === void 0 ) {
-      this.surface_1_ = this.extractElement( 5, false, surface )
+      this.surface_1_ = this.extractElement( 5, 5, 2, false, surface )
     }
 
     return this.surface_1_ as surface
@@ -28,7 +28,7 @@ export  class surface_pair extends kinematic_pair {
 
   public get surface_2() : surface {
     if ( this.surface_2_ === void 0 ) {
-      this.surface_2_ = this.extractElement( 6, false, surface )
+      this.surface_2_ = this.extractElement( 6, 5, 2, false, surface )
     }
 
     return this.surface_2_ as surface
@@ -36,7 +36,7 @@ export  class surface_pair extends kinematic_pair {
 
   public get orientation() : boolean {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractBoolean( 7, false )
+      this.orientation_ = this.extractBoolean( 7, 5, 2, false )
     }
 
     return this.orientation_ as boolean
@@ -44,8 +44,26 @@ export  class surface_pair extends kinematic_pair {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_pair.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_pair" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

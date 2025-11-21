@@ -28,7 +28,7 @@ export  class text_literal extends geometric_representation_item {
 
   public get literal() : string {
     if ( this.literal_ === void 0 ) {
-      this.literal_ = this.extractString( 1, false )
+      this.literal_ = this.extractString( 1, 1, 2, false )
     }
 
     return this.literal_ as string
@@ -38,7 +38,7 @@ export  class text_literal extends geometric_representation_item {
     if ( this.placement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 2, false )
+        this.extractReference( 2, 1, 2, false )
 
       if ( !( value instanceof axis2_placement_2d ) && !( value instanceof axis2_placement_3d ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -53,7 +53,7 @@ export  class text_literal extends geometric_representation_item {
 
   public get alignment() : string {
     if ( this.alignment_ === void 0 ) {
-      this.alignment_ = this.extractString( 3, false )
+      this.alignment_ = this.extractString( 3, 1, 2, false )
     }
 
     return this.alignment_ as string
@@ -61,7 +61,7 @@ export  class text_literal extends geometric_representation_item {
 
   public get path() : text_path {
     if ( this.path_ === void 0 ) {
-      this.path_ = this.extractLambda( 4, text_pathDeserializeStep, false )
+      this.path_ = this.extractLambda( 4, 1, 2, text_pathDeserializeStep, false )
     }
 
     return this.path_ as text_path
@@ -71,7 +71,7 @@ export  class text_literal extends geometric_representation_item {
     if ( this.font_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 5, false )
+        this.extractReference( 5, 1, 2, false )
 
       if ( !( value instanceof pre_defined_text_font ) && !( value instanceof externally_defined_text_font ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -86,8 +86,26 @@ export  class text_literal extends geometric_representation_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === text_literal.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for text_literal" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -12,7 +12,7 @@ env:
 jobs:
   run-ifc-regression:
     # This job uses your GitHub-managed large runner from the RegressionTesting group.
-    runs-on: RegressionTesting
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
 
     steps:
       # 1. Checkout the conway repository (your main repo)

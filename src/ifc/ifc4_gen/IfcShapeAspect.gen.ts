@@ -33,7 +33,7 @@ export  class IfcShapeAspect extends StepEntityBase< EntityTypesIfc > {
   public get ShapeRepresentations() : Array<IfcShapeModel> {
     if ( this.ShapeRepresentations_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -65,7 +65,7 @@ export  class IfcShapeAspect extends StepEntityBase< EntityTypesIfc > {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 1, true )
+      this.Name_ = this.extractString( 1, 0, 0, true )
     }
 
     return this.Name_ as string | null
@@ -73,7 +73,7 @@ export  class IfcShapeAspect extends StepEntityBase< EntityTypesIfc > {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 2, true )
+      this.Description_ = this.extractString( 2, 0, 0, true )
     }
 
     return this.Description_ as string | null
@@ -81,7 +81,7 @@ export  class IfcShapeAspect extends StepEntityBase< EntityTypesIfc > {
 
   public get ProductDefinitional() : boolean | null {
     if ( this.ProductDefinitional_ === void 0 ) {
-      this.ProductDefinitional_ = this.extractLogical( 3, false )
+      this.ProductDefinitional_ = this.extractLogical( 3, 0, 0, false )
     }
 
     return this.ProductDefinitional_ as boolean | null
@@ -91,7 +91,7 @@ export  class IfcShapeAspect extends StepEntityBase< EntityTypesIfc > {
     if ( this.PartOfProductDefinitionShape_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 4, true )
+        this.extractReference( 4, 0, 0, true )
 
       if ( !( value instanceof IfcProductDefinitionShape ) && !( value instanceof IfcRepresentationMap ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -106,7 +106,9 @@ export  class IfcShapeAspect extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -31,7 +31,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
 
   public get TemplateType() : IfcSimplePropertyTemplateTypeEnum | null {
     if ( this.TemplateType_ === void 0 ) {
-      this.TemplateType_ = this.extractLambda( 4, IfcSimplePropertyTemplateTypeEnumDeserializeStep, true )
+      this.TemplateType_ = this.extractLambda( 4, 4, 4, IfcSimplePropertyTemplateTypeEnumDeserializeStep, true )
     }
 
     return this.TemplateType_ as IfcSimplePropertyTemplateTypeEnum | null
@@ -39,7 +39,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
 
   public get PrimaryMeasureType() : string | null {
     if ( this.PrimaryMeasureType_ === void 0 ) {
-      this.PrimaryMeasureType_ = this.extractString( 5, true )
+      this.PrimaryMeasureType_ = this.extractString( 5, 4, 4, true )
     }
 
     return this.PrimaryMeasureType_ as string | null
@@ -47,7 +47,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
 
   public get SecondaryMeasureType() : string | null {
     if ( this.SecondaryMeasureType_ === void 0 ) {
-      this.SecondaryMeasureType_ = this.extractString( 6, true )
+      this.SecondaryMeasureType_ = this.extractString( 6, 4, 4, true )
     }
 
     return this.SecondaryMeasureType_ as string | null
@@ -55,7 +55,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
 
   public get Enumerators() : IfcPropertyEnumeration | null {
     if ( this.Enumerators_ === void 0 ) {
-      this.Enumerators_ = this.extractElement( 7, true, IfcPropertyEnumeration )
+      this.Enumerators_ = this.extractElement( 7, 4, 4, true, IfcPropertyEnumeration )
     }
 
     return this.Enumerators_ as IfcPropertyEnumeration | null
@@ -65,7 +65,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
     if ( this.PrimaryUnit_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 8, true )
+        this.extractReference( 8, 4, 4, true )
 
       if ( !( value instanceof IfcDerivedUnit ) && !( value instanceof IfcMonetaryUnit ) && !( value instanceof IfcNamedUnit ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -82,7 +82,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
     if ( this.SecondaryUnit_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 9, true )
+        this.extractReference( 9, 4, 4, true )
 
       if ( !( value instanceof IfcDerivedUnit ) && !( value instanceof IfcMonetaryUnit ) && !( value instanceof IfcNamedUnit ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -97,7 +97,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
 
   public get Expression() : string | null {
     if ( this.Expression_ === void 0 ) {
-      this.Expression_ = this.extractString( 10, true )
+      this.Expression_ = this.extractString( 10, 4, 4, true )
     }
 
     return this.Expression_ as string | null
@@ -105,7 +105,7 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
 
   public get AccessState() : IfcStateEnum | null {
     if ( this.AccessState_ === void 0 ) {
-      this.AccessState_ = this.extractLambda( 11, IfcStateEnumDeserializeStep, true )
+      this.AccessState_ = this.extractLambda( 11, 4, 4, IfcStateEnumDeserializeStep, true )
     }
 
     return this.AccessState_ as IfcStateEnum | null
@@ -113,7 +113,9 @@ export  class IfcSimplePropertyTemplate extends IfcPropertyTemplate {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

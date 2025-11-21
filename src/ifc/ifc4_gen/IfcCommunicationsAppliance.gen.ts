@@ -18,7 +18,7 @@ export  class IfcCommunicationsAppliance extends IfcFlowTerminal {
 
   public get PredefinedType() : IfcCommunicationsApplianceTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcCommunicationsApplianceTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcCommunicationsApplianceTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcCommunicationsApplianceTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcCommunicationsAppliance extends IfcFlowTerminal {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

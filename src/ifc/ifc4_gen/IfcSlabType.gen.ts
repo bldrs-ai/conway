@@ -18,7 +18,7 @@ export  class IfcSlabType extends IfcBuildingElementType {
 
   public get PredefinedType() : IfcSlabTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcSlabTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcSlabTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcSlabTypeEnum
@@ -26,7 +26,9 @@ export  class IfcSlabType extends IfcBuildingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

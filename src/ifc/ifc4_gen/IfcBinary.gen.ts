@@ -18,7 +18,7 @@ export class IfcBinary extends StepEntityBase< EntityTypesIfc > {
 
   public get Value() : [Uint8Array, number] {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractBinary( 0, false )
+      this.Value_ = this.extractBinary( 0, 0, 0, false )
     }
 
     return this.Value_ as [Uint8Array, number]
@@ -27,7 +27,8 @@ export class IfcBinary extends StepEntityBase< EntityTypesIfc > {
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesIfc >,
-      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+      multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
      super( localID, internalReference, model )
   }
 

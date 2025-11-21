@@ -17,7 +17,7 @@ function runCommand(command, options = {}) {
 
 function main() {
   // Get the makeCommand argument from the command line
-  const [,, makeCommand] = process.argv;
+  let [,, makeCommand] = process.argv;
 
   if (!makeCommand) {
     console.error('Please provide a make command as an argument.');
@@ -37,6 +37,11 @@ function main() {
   // Run the code generation
   console.log('Running code generation...');
   const options = { cwd: ifcGenPath };
+
+  if ( process.platform === 'win32' ) {
+    // For Windows, we need to use cmd.exe to run the batch file
+    makeCommand = makeCommand.replace(/'/g, '"') // Replace single quotes with double quotes for Windows compatibility
+  }
 
   if (!runCommand(makeCommand, options)) {
     console.error('Code generation failed.');

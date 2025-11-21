@@ -15,13 +15,14 @@ import StepEnumParser from './step_enum_parser'
 import StepStringParser from './step_string_parser'
 import StepVtableBuilder, { IndexMark } from './step_vtable_builder'
 
-
 export interface StepIndexEntryBase<TypeIDType> {
 
   address: number
   length: number
   typeID?: TypeIDType
   expressID?: number
+  multiMapping?: StepIndexEntryBase<TypeIDType>[]
+
   inlineEntities?: StepInlineIndexEntry<TypeIDType>[]
 }
 
@@ -449,8 +450,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
     }
 
     let inlineElements: StepInlineIndexEntry<TypeIDType>[] | undefined
+    let multiElements: StepIndexEntry<TypeIDType>[] | undefined
 
-    const parseInlineElement = (): BlockParseResult<TypeIDType> | undefined => {
+    const parseInlineElement = ( expressID?: number ): BlockParseResult<TypeIDType> | undefined => {
 
       whitespace()
 
@@ -579,16 +581,29 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
       inlineElements = savedInlineElements
 
-      inlineElements ??= []
+      if ( expressID === void 0 ) {
+        inlineElements ??= []
 
-      inlineElements.push(
-          {
-            address: startElement,
-            length: input.address - startElement,
-            typeID: foundItem,
-            inlineEntities: nestedInlineElements,
-          })
+        inlineElements.push(
+            {
+              address: startElement,
+              length: input.address - startElement,
+              typeID: foundItem,
+              inlineEntities: nestedInlineElements,
+            })
+      } else {
 
+        multiElements ??= []
+                
+        multiElements.push(
+            {
+              address: startElement,
+              length: input.address - startElement,
+              typeID: foundItem,
+              inlineEntities: nestedInlineElements,
+              expressID: expressID,
+            })
+      }
     }
 
     while (input.unfinished) {
@@ -633,7 +648,8 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         while ( !charws( CLOSE_PAREN ) ) {
 
           input.begin()
-          const elementResult = parseInlineElement()
+
+          const elementResult = parseInlineElement( expressID )
 
           if (elementResult !== (void 0)) {
 
@@ -656,8 +672,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
               typeID: 0 as TypeIDType, // external mapping special case.
               expressID: expressID,
               inlineEntities: inlineElements,
+              multiMapping: multiElements
             })
 
+        multiElements = void 0
         continue
       }
 
@@ -710,6 +728,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
             const elementResult = parseInlineElement()
 
             if (elementResult !== (void 0)) {
+
+              for ( const element of elementResult[0].elements ) {
+              
+                element.expressID = expressID
+              }
 
               input.rollback()
 

@@ -35,7 +35,7 @@ export  class IfcClassification extends IfcExternalInformation {
 
   public get Source() : string | null {
     if ( this.Source_ === void 0 ) {
-      this.Source_ = this.extractString( 0, true )
+      this.Source_ = this.extractString( 0, 0, 1, true )
     }
 
     return this.Source_ as string | null
@@ -43,7 +43,7 @@ export  class IfcClassification extends IfcExternalInformation {
 
   public get Edition() : string | null {
     if ( this.Edition_ === void 0 ) {
-      this.Edition_ = this.extractString( 1, true )
+      this.Edition_ = this.extractString( 1, 0, 1, true )
     }
 
     return this.Edition_ as string | null
@@ -51,7 +51,7 @@ export  class IfcClassification extends IfcExternalInformation {
 
   public get EditionDate() : string | null {
     if ( this.EditionDate_ === void 0 ) {
-      this.EditionDate_ = this.extractString( 2, true )
+      this.EditionDate_ = this.extractString( 2, 0, 1, true )
     }
 
     return this.EditionDate_ as string | null
@@ -59,7 +59,7 @@ export  class IfcClassification extends IfcExternalInformation {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 3, false )
+      this.Name_ = this.extractString( 3, 0, 1, false )
     }
 
     return this.Name_ as string
@@ -67,7 +67,7 @@ export  class IfcClassification extends IfcExternalInformation {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 4, true )
+      this.Description_ = this.extractString( 4, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -75,7 +75,7 @@ export  class IfcClassification extends IfcExternalInformation {
 
   public get Location() : string | null {
     if ( this.Location_ === void 0 ) {
-      this.Location_ = this.extractString( 5, true )
+      this.Location_ = this.extractString( 5, 0, 1, true )
     }
 
     return this.Location_ as string | null
@@ -84,7 +84,7 @@ export  class IfcClassification extends IfcExternalInformation {
   public get ReferenceTokens() : Array< string > | null {
     if ( this.ReferenceTokens_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -118,7 +118,9 @@ export  class IfcClassification extends IfcExternalInformation {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

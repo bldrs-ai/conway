@@ -20,7 +20,7 @@ export  class IfcStructuralSurfaceMember extends IfcStructuralMember {
 
   public get PredefinedType() : IfcStructuralSurfaceMemberTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 7, IfcStructuralSurfaceMemberTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 7, 7, 6, IfcStructuralSurfaceMemberTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcStructuralSurfaceMemberTypeEnum
@@ -28,7 +28,7 @@ export  class IfcStructuralSurfaceMember extends IfcStructuralMember {
 
   public get Thickness() : number | null {
     if ( this.Thickness_ === void 0 ) {
-      this.Thickness_ = this.extractNumber( 8, true )
+      this.Thickness_ = this.extractNumber( 8, 7, 6, true )
     }
 
     return this.Thickness_ as number | null
@@ -36,7 +36,9 @@ export  class IfcStructuralSurfaceMember extends IfcStructuralMember {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -23,7 +23,7 @@ export  class IfcCostSchedule extends IfcControl {
 
   public get PredefinedType() : IfcCostScheduleTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 6, IfcCostScheduleTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 6, 6, 4, IfcCostScheduleTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcCostScheduleTypeEnum | null
@@ -31,7 +31,7 @@ export  class IfcCostSchedule extends IfcControl {
 
   public get Status() : string | null {
     if ( this.Status_ === void 0 ) {
-      this.Status_ = this.extractString( 7, true )
+      this.Status_ = this.extractString( 7, 6, 4, true )
     }
 
     return this.Status_ as string | null
@@ -39,7 +39,7 @@ export  class IfcCostSchedule extends IfcControl {
 
   public get SubmittedOn() : string | null {
     if ( this.SubmittedOn_ === void 0 ) {
-      this.SubmittedOn_ = this.extractString( 8, true )
+      this.SubmittedOn_ = this.extractString( 8, 6, 4, true )
     }
 
     return this.SubmittedOn_ as string | null
@@ -47,7 +47,7 @@ export  class IfcCostSchedule extends IfcControl {
 
   public get UpdateDate() : string | null {
     if ( this.UpdateDate_ === void 0 ) {
-      this.UpdateDate_ = this.extractString( 9, true )
+      this.UpdateDate_ = this.extractString( 9, 6, 4, true )
     }
 
     return this.UpdateDate_ as string | null
@@ -55,7 +55,9 @@ export  class IfcCostSchedule extends IfcControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

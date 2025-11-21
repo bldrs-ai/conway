@@ -28,7 +28,7 @@ export  class IfcStructuralLoadConfiguration extends IfcStructuralLoad {
   public get Values() : Array<IfcStructuralLoadOrResult> {
     if ( this.Values_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -61,7 +61,7 @@ export  class IfcStructuralLoadConfiguration extends IfcStructuralLoad {
   public get Locations() : Array< Array< number > > | null {
     if ( this.Locations_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -104,7 +104,9 @@ export  class IfcStructuralLoadConfiguration extends IfcStructuralLoad {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

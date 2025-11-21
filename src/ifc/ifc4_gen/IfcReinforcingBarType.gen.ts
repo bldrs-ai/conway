@@ -36,7 +36,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
 
   public get PredefinedType() : IfcReinforcingBarTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcReinforcingBarTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcReinforcingBarTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcReinforcingBarTypeEnum
@@ -44,7 +44,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
 
   public get NominalDiameter() : number | null {
     if ( this.NominalDiameter_ === void 0 ) {
-      this.NominalDiameter_ = this.extractNumber( 10, true )
+      this.NominalDiameter_ = this.extractNumber( 10, 9, 7, true )
     }
 
     return this.NominalDiameter_ as number | null
@@ -52,7 +52,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
 
   public get CrossSectionArea() : number | null {
     if ( this.CrossSectionArea_ === void 0 ) {
-      this.CrossSectionArea_ = this.extractNumber( 11, true )
+      this.CrossSectionArea_ = this.extractNumber( 11, 9, 7, true )
     }
 
     return this.CrossSectionArea_ as number | null
@@ -60,7 +60,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
 
   public get BarLength() : number | null {
     if ( this.BarLength_ === void 0 ) {
-      this.BarLength_ = this.extractNumber( 12, true )
+      this.BarLength_ = this.extractNumber( 12, 9, 7, true )
     }
 
     return this.BarLength_ as number | null
@@ -68,7 +68,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
 
   public get BarSurface() : IfcReinforcingBarSurfaceEnum | null {
     if ( this.BarSurface_ === void 0 ) {
-      this.BarSurface_ = this.extractLambda( 13, IfcReinforcingBarSurfaceEnumDeserializeStep, true )
+      this.BarSurface_ = this.extractLambda( 13, 9, 7, IfcReinforcingBarSurfaceEnumDeserializeStep, true )
     }
 
     return this.BarSurface_ as IfcReinforcingBarSurfaceEnum | null
@@ -76,7 +76,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
 
   public get BendingShapeCode() : string | null {
     if ( this.BendingShapeCode_ === void 0 ) {
-      this.BendingShapeCode_ = this.extractString( 14, true )
+      this.BendingShapeCode_ = this.extractString( 14, 9, 7, true )
     }
 
     return this.BendingShapeCode_ as string | null
@@ -85,7 +85,7 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
   public get BendingParameters() : Array<IfcLengthMeasure | IfcPlaneAngleMeasure> | null {
     if ( this.BendingParameters_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 15 )
+      let   cursor    = this.getOffsetCursor( 15, 9, 7 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -124,7 +124,9 @@ export  class IfcReinforcingBarType extends IfcReinforcingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

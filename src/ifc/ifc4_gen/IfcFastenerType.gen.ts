@@ -18,7 +18,7 @@ export  class IfcFastenerType extends IfcElementComponentType {
 
   public get PredefinedType() : IfcFastenerTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcFastenerTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcFastenerTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcFastenerTypeEnum
@@ -26,7 +26,9 @@ export  class IfcFastenerType extends IfcElementComponentType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

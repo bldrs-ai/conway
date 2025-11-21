@@ -21,7 +21,7 @@ export  class IfcMechanicalFastener extends IfcElementComponent {
 
   public get NominalDiameter() : number | null {
     if ( this.NominalDiameter_ === void 0 ) {
-      this.NominalDiameter_ = this.extractNumber( 8, true )
+      this.NominalDiameter_ = this.extractNumber( 8, 8, 6, true )
     }
 
     return this.NominalDiameter_ as number | null
@@ -29,7 +29,7 @@ export  class IfcMechanicalFastener extends IfcElementComponent {
 
   public get NominalLength() : number | null {
     if ( this.NominalLength_ === void 0 ) {
-      this.NominalLength_ = this.extractNumber( 9, true )
+      this.NominalLength_ = this.extractNumber( 9, 8, 6, true )
     }
 
     return this.NominalLength_ as number | null
@@ -37,7 +37,7 @@ export  class IfcMechanicalFastener extends IfcElementComponent {
 
   public get PredefinedType() : IfcMechanicalFastenerTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 10, IfcMechanicalFastenerTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 10, 8, 6, IfcMechanicalFastenerTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcMechanicalFastenerTypeEnum | null
@@ -45,7 +45,9 @@ export  class IfcMechanicalFastener extends IfcElementComponent {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

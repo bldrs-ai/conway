@@ -18,7 +18,7 @@ export  class IfcLightSourceDirectional extends IfcLightSource {
 
   public get Orientation() : IfcDirection {
     if ( this.Orientation_ === void 0 ) {
-      this.Orientation_ = this.extractElement( 4, false, IfcDirection )
+      this.Orientation_ = this.extractElement( 4, 4, 3, false, IfcDirection )
     }
 
     return this.Orientation_ as IfcDirection
@@ -26,7 +26,9 @@ export  class IfcLightSourceDirectional extends IfcLightSource {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -25,7 +25,7 @@ export  class person_and_organization extends StepEntityBase< EntityTypesAP214 >
 
   public get the_person() : person {
     if ( this.the_person_ === void 0 ) {
-      this.the_person_ = this.extractElement( 0, false, person )
+      this.the_person_ = this.extractElement( 0, 0, 0, false, person )
     }
 
     return this.the_person_ as person
@@ -33,7 +33,7 @@ export  class person_and_organization extends StepEntityBase< EntityTypesAP214 >
 
   public get the_organization() : organization {
     if ( this.the_organization_ === void 0 ) {
-      this.the_organization_ = this.extractElement( 1, false, organization )
+      this.the_organization_ = this.extractElement( 1, 0, 0, false, organization )
     }
 
     return this.the_organization_ as organization
@@ -49,8 +49,26 @@ export  class person_and_organization extends StepEntityBase< EntityTypesAP214 >
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === person_and_organization.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for person_and_organization" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

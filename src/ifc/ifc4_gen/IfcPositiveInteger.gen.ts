@@ -19,7 +19,7 @@ export class IfcPositiveInteger extends StepEntityBase< EntityTypesIfc > {
 
   public get Value() : number {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractNumber( 0, false )
+      this.Value_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.Value_ as number
@@ -28,7 +28,8 @@ export class IfcPositiveInteger extends StepEntityBase< EntityTypesIfc > {
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesIfc >,
-      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+      model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+      multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
      super( localID, internalReference, model )
   }
 

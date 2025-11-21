@@ -18,7 +18,7 @@ export  class fill_area_style_tile_symbol_with_style extends geometric_represent
 
   public get symbol() : annotation_symbol_occurrence {
     if ( this.symbol_ === void 0 ) {
-      this.symbol_ = this.extractElement( 1, false, annotation_symbol_occurrence )
+      this.symbol_ = this.extractElement( 1, 1, 2, false, annotation_symbol_occurrence )
     }
 
     return this.symbol_ as annotation_symbol_occurrence
@@ -26,8 +26,26 @@ export  class fill_area_style_tile_symbol_with_style extends geometric_represent
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === fill_area_style_tile_symbol_with_style.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for fill_area_style_tile_symbol_with_style" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

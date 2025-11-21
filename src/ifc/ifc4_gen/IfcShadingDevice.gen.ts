@@ -18,7 +18,7 @@ export  class IfcShadingDevice extends IfcBuildingElement {
 
   public get PredefinedType() : IfcShadingDeviceTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcShadingDeviceTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcShadingDeviceTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcShadingDeviceTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcShadingDevice extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

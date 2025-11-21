@@ -20,7 +20,7 @@ export  class IfcSurfaceStyleShading extends IfcPresentationItem {
 
   public get SurfaceColour() : IfcColourRgb {
     if ( this.SurfaceColour_ === void 0 ) {
-      this.SurfaceColour_ = this.extractElement( 0, false, IfcColourRgb )
+      this.SurfaceColour_ = this.extractElement( 0, 0, 1, false, IfcColourRgb )
     }
 
     return this.SurfaceColour_ as IfcColourRgb
@@ -28,7 +28,7 @@ export  class IfcSurfaceStyleShading extends IfcPresentationItem {
 
   public get Transparency() : number | null {
     if ( this.Transparency_ === void 0 ) {
-      this.Transparency_ = this.extractNumber( 1, true )
+      this.Transparency_ = this.extractNumber( 1, 0, 1, true )
     }
 
     return this.Transparency_ as number | null
@@ -36,7 +36,9 @@ export  class IfcSurfaceStyleShading extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

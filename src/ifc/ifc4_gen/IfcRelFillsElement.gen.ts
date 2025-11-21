@@ -20,7 +20,7 @@ export  class IfcRelFillsElement extends IfcRelConnects {
 
   public get RelatingOpeningElement() : IfcOpeningElement {
     if ( this.RelatingOpeningElement_ === void 0 ) {
-      this.RelatingOpeningElement_ = this.extractElement( 4, false, IfcOpeningElement )
+      this.RelatingOpeningElement_ = this.extractElement( 4, 4, 3, false, IfcOpeningElement )
     }
 
     return this.RelatingOpeningElement_ as IfcOpeningElement
@@ -28,7 +28,7 @@ export  class IfcRelFillsElement extends IfcRelConnects {
 
   public get RelatedBuildingElement() : IfcElement {
     if ( this.RelatedBuildingElement_ === void 0 ) {
-      this.RelatedBuildingElement_ = this.extractElement( 5, false, IfcElement )
+      this.RelatedBuildingElement_ = this.extractElement( 5, 4, 3, false, IfcElement )
     }
 
     return this.RelatedBuildingElement_ as IfcElement
@@ -36,7 +36,9 @@ export  class IfcRelFillsElement extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

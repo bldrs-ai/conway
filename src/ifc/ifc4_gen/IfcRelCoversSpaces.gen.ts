@@ -26,7 +26,7 @@ export  class IfcRelCoversSpaces extends IfcRelConnects {
 
   public get RelatingSpace() : IfcSpace {
     if ( this.RelatingSpace_ === void 0 ) {
-      this.RelatingSpace_ = this.extractElement( 4, false, IfcSpace )
+      this.RelatingSpace_ = this.extractElement( 4, 4, 3, false, IfcSpace )
     }
 
     return this.RelatingSpace_ as IfcSpace
@@ -35,7 +35,7 @@ export  class IfcRelCoversSpaces extends IfcRelConnects {
   public get RelatedCoverings() : Array<IfcCovering> {
     if ( this.RelatedCoverings_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -67,7 +67,9 @@ export  class IfcRelCoversSpaces extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

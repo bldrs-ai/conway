@@ -18,7 +18,7 @@ export  class IfcReparametrisedCompositeCurveSegment extends IfcCompositeCurveSe
 
   public get ParamLength() : number {
     if ( this.ParamLength_ === void 0 ) {
-      this.ParamLength_ = this.extractNumber( 3, false )
+      this.ParamLength_ = this.extractNumber( 3, 3, 3, false )
     }
 
     return this.ParamLength_ as number
@@ -26,7 +26,9 @@ export  class IfcReparametrisedCompositeCurveSegment extends IfcCompositeCurveSe
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

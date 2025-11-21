@@ -18,7 +18,7 @@ export  class IfcDerivedUnitElement extends StepEntityBase< EntityTypesIfc > {
 
   public get Unit() : IfcNamedUnit {
     if ( this.Unit_ === void 0 ) {
-      this.Unit_ = this.extractElement( 0, false, IfcNamedUnit )
+      this.Unit_ = this.extractElement( 0, 0, 0, false, IfcNamedUnit )
     }
 
     return this.Unit_ as IfcNamedUnit
@@ -26,7 +26,7 @@ export  class IfcDerivedUnitElement extends StepEntityBase< EntityTypesIfc > {
 
   public get Exponent() : number {
     if ( this.Exponent_ === void 0 ) {
-      this.Exponent_ = this.extractNumber( 1, false )
+      this.Exponent_ = this.extractNumber( 1, 0, 0, false )
     }
 
     return this.Exponent_ as number
@@ -34,7 +34,9 @@ export  class IfcDerivedUnitElement extends StepEntityBase< EntityTypesIfc > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

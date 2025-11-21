@@ -25,7 +25,7 @@ export  class action_request_solution extends StepEntityBase< EntityTypesAP214 >
 
   public get method() : action_method {
     if ( this.method_ === void 0 ) {
-      this.method_ = this.extractElement( 0, false, action_method )
+      this.method_ = this.extractElement( 0, 0, 0, false, action_method )
     }
 
     return this.method_ as action_method
@@ -33,7 +33,7 @@ export  class action_request_solution extends StepEntityBase< EntityTypesAP214 >
 
   public get request() : versioned_action_request {
     if ( this.request_ === void 0 ) {
-      this.request_ = this.extractElement( 1, false, versioned_action_request )
+      this.request_ = this.extractElement( 1, 0, 0, false, versioned_action_request )
     }
 
     return this.request_ as versioned_action_request
@@ -49,8 +49,26 @@ export  class action_request_solution extends StepEntityBase< EntityTypesAP214 >
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === action_request_solution.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for action_request_solution" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -26,7 +26,7 @@ export  class IfcMaterialProfileWithOffsets extends IfcMaterialProfile {
   public get OffsetValues() : Array< number > {
     if ( this.OffsetValues_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 6, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,9 @@ export  class IfcMaterialProfileWithOffsets extends IfcMaterialProfile {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

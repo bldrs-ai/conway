@@ -27,7 +27,7 @@ export  class tolerance_zone extends shape_aspect {
   public get defining_tolerance() : Array<geometric_tolerance> {
     if ( this.defining_tolerance_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class tolerance_zone extends shape_aspect {
 
   public get form() : tolerance_zone_form {
     if ( this.form_ === void 0 ) {
-      this.form_ = this.extractElement( 5, false, tolerance_zone_form )
+      this.form_ = this.extractElement( 5, 4, 1, false, tolerance_zone_form )
     }
 
     return this.form_ as tolerance_zone_form
@@ -67,8 +67,26 @@ export  class tolerance_zone extends shape_aspect {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === tolerance_zone.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for tolerance_zone" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

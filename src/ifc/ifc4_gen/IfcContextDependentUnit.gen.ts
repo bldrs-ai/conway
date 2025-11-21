@@ -18,7 +18,7 @@ export  class IfcContextDependentUnit extends IfcNamedUnit {
 
   public get Name() : string {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 2, false )
+      this.Name_ = this.extractString( 2, 2, 1, false )
     }
 
     return this.Name_ as string
@@ -27,7 +27,9 @@ export  class IfcContextDependentUnit extends IfcNamedUnit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

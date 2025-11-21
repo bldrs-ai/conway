@@ -19,7 +19,7 @@ export  class solid_replica extends solid_model {
 
   public get parent_solid() : solid_model {
     if ( this.parent_solid_ === void 0 ) {
-      this.parent_solid_ = this.extractElement( 1, false, solid_model )
+      this.parent_solid_ = this.extractElement( 1, 1, 3, false, solid_model )
     }
 
     return this.parent_solid_ as solid_model
@@ -27,7 +27,7 @@ export  class solid_replica extends solid_model {
 
   public get transformation() : cartesian_transformation_operator_3d {
     if ( this.transformation_ === void 0 ) {
-      this.transformation_ = this.extractElement( 2, false, cartesian_transformation_operator_3d )
+      this.transformation_ = this.extractElement( 2, 1, 3, false, cartesian_transformation_operator_3d )
     }
 
     return this.transformation_ as cartesian_transformation_operator_3d
@@ -35,8 +35,26 @@ export  class solid_replica extends solid_model {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === solid_replica.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for solid_replica" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

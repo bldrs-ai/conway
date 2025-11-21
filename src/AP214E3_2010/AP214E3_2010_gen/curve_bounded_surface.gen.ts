@@ -27,7 +27,7 @@ export  class curve_bounded_surface extends bounded_surface {
 
   public get basis_surface() : surface {
     if ( this.basis_surface_ === void 0 ) {
-      this.basis_surface_ = this.extractElement( 1, false, surface )
+      this.basis_surface_ = this.extractElement( 1, 1, 4, false, surface )
     }
 
     return this.basis_surface_ as surface
@@ -36,7 +36,7 @@ export  class curve_bounded_surface extends bounded_surface {
   public get boundaries() : Array<boundary_curve> {
     if ( this.boundaries_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 1, 4 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -68,7 +68,7 @@ export  class curve_bounded_surface extends bounded_surface {
 
   public get implicit_outer() : boolean {
     if ( this.implicit_outer_ === void 0 ) {
-      this.implicit_outer_ = this.extractBoolean( 3, false )
+      this.implicit_outer_ = this.extractBoolean( 3, 1, 4, false )
     }
 
     return this.implicit_outer_ as boolean
@@ -76,8 +76,26 @@ export  class curve_bounded_surface extends bounded_surface {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === curve_bounded_surface.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for curve_bounded_surface" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

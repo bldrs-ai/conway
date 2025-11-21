@@ -38,7 +38,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get DurationType() : IfcTaskDurationEnum | null {
     if ( this.DurationType_ === void 0 ) {
-      this.DurationType_ = this.extractLambda( 3, IfcTaskDurationEnumDeserializeStep, true )
+      this.DurationType_ = this.extractLambda( 3, 3, 1, IfcTaskDurationEnumDeserializeStep, true )
     }
 
     return this.DurationType_ as IfcTaskDurationEnum | null
@@ -46,7 +46,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get ScheduleDuration() : string | null {
     if ( this.ScheduleDuration_ === void 0 ) {
-      this.ScheduleDuration_ = this.extractString( 4, true )
+      this.ScheduleDuration_ = this.extractString( 4, 3, 1, true )
     }
 
     return this.ScheduleDuration_ as string | null
@@ -54,7 +54,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get ScheduleStart() : string | null {
     if ( this.ScheduleStart_ === void 0 ) {
-      this.ScheduleStart_ = this.extractString( 5, true )
+      this.ScheduleStart_ = this.extractString( 5, 3, 1, true )
     }
 
     return this.ScheduleStart_ as string | null
@@ -62,7 +62,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get ScheduleFinish() : string | null {
     if ( this.ScheduleFinish_ === void 0 ) {
-      this.ScheduleFinish_ = this.extractString( 6, true )
+      this.ScheduleFinish_ = this.extractString( 6, 3, 1, true )
     }
 
     return this.ScheduleFinish_ as string | null
@@ -70,7 +70,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get EarlyStart() : string | null {
     if ( this.EarlyStart_ === void 0 ) {
-      this.EarlyStart_ = this.extractString( 7, true )
+      this.EarlyStart_ = this.extractString( 7, 3, 1, true )
     }
 
     return this.EarlyStart_ as string | null
@@ -78,7 +78,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get EarlyFinish() : string | null {
     if ( this.EarlyFinish_ === void 0 ) {
-      this.EarlyFinish_ = this.extractString( 8, true )
+      this.EarlyFinish_ = this.extractString( 8, 3, 1, true )
     }
 
     return this.EarlyFinish_ as string | null
@@ -86,7 +86,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get LateStart() : string | null {
     if ( this.LateStart_ === void 0 ) {
-      this.LateStart_ = this.extractString( 9, true )
+      this.LateStart_ = this.extractString( 9, 3, 1, true )
     }
 
     return this.LateStart_ as string | null
@@ -94,7 +94,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get LateFinish() : string | null {
     if ( this.LateFinish_ === void 0 ) {
-      this.LateFinish_ = this.extractString( 10, true )
+      this.LateFinish_ = this.extractString( 10, 3, 1, true )
     }
 
     return this.LateFinish_ as string | null
@@ -102,7 +102,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get FreeFloat() : string | null {
     if ( this.FreeFloat_ === void 0 ) {
-      this.FreeFloat_ = this.extractString( 11, true )
+      this.FreeFloat_ = this.extractString( 11, 3, 1, true )
     }
 
     return this.FreeFloat_ as string | null
@@ -110,7 +110,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get TotalFloat() : string | null {
     if ( this.TotalFloat_ === void 0 ) {
-      this.TotalFloat_ = this.extractString( 12, true )
+      this.TotalFloat_ = this.extractString( 12, 3, 1, true )
     }
 
     return this.TotalFloat_ as string | null
@@ -118,7 +118,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get IsCritical() : boolean | null {
     if ( this.IsCritical_ === void 0 ) {
-      this.IsCritical_ = this.extractBoolean( 13, true )
+      this.IsCritical_ = this.extractBoolean( 13, 3, 1, true )
     }
 
     return this.IsCritical_ as boolean | null
@@ -126,7 +126,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get StatusTime() : string | null {
     if ( this.StatusTime_ === void 0 ) {
-      this.StatusTime_ = this.extractString( 14, true )
+      this.StatusTime_ = this.extractString( 14, 3, 1, true )
     }
 
     return this.StatusTime_ as string | null
@@ -134,7 +134,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get ActualDuration() : string | null {
     if ( this.ActualDuration_ === void 0 ) {
-      this.ActualDuration_ = this.extractString( 15, true )
+      this.ActualDuration_ = this.extractString( 15, 3, 1, true )
     }
 
     return this.ActualDuration_ as string | null
@@ -142,7 +142,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get ActualStart() : string | null {
     if ( this.ActualStart_ === void 0 ) {
-      this.ActualStart_ = this.extractString( 16, true )
+      this.ActualStart_ = this.extractString( 16, 3, 1, true )
     }
 
     return this.ActualStart_ as string | null
@@ -150,7 +150,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get ActualFinish() : string | null {
     if ( this.ActualFinish_ === void 0 ) {
-      this.ActualFinish_ = this.extractString( 17, true )
+      this.ActualFinish_ = this.extractString( 17, 3, 1, true )
     }
 
     return this.ActualFinish_ as string | null
@@ -158,7 +158,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get RemainingTime() : string | null {
     if ( this.RemainingTime_ === void 0 ) {
-      this.RemainingTime_ = this.extractString( 18, true )
+      this.RemainingTime_ = this.extractString( 18, 3, 1, true )
     }
 
     return this.RemainingTime_ as string | null
@@ -166,7 +166,7 @@ export  class IfcTaskTime extends IfcSchedulingTime {
 
   public get Completion() : number | null {
     if ( this.Completion_ === void 0 ) {
-      this.Completion_ = this.extractNumber( 19, true )
+      this.Completion_ = this.extractNumber( 19, 3, 1, true )
     }
 
     return this.Completion_ as number | null
@@ -174,7 +174,9 @@ export  class IfcTaskTime extends IfcSchedulingTime {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

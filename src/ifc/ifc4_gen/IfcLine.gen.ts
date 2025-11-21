@@ -20,7 +20,7 @@ export  class IfcLine extends IfcCurve {
 
   public get Pnt() : IfcCartesianPoint {
     if ( this.Pnt_ === void 0 ) {
-      this.Pnt_ = this.extractElement( 0, false, IfcCartesianPoint )
+      this.Pnt_ = this.extractElement( 0, 0, 3, false, IfcCartesianPoint )
     }
 
     return this.Pnt_ as IfcCartesianPoint
@@ -28,7 +28,7 @@ export  class IfcLine extends IfcCurve {
 
   public get Dir() : IfcVector {
     if ( this.Dir_ === void 0 ) {
-      this.Dir_ = this.extractElement( 1, false, IfcVector )
+      this.Dir_ = this.extractElement( 1, 0, 3, false, IfcVector )
     }
 
     return this.Dir_ as IfcVector
@@ -36,7 +36,9 @@ export  class IfcLine extends IfcCurve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

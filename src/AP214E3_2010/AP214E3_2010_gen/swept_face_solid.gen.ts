@@ -18,7 +18,7 @@ export  class swept_face_solid extends solid_model {
 
   public get swept_face() : face_surface {
     if ( this.swept_face_ === void 0 ) {
-      this.swept_face_ = this.extractElement( 1, false, face_surface )
+      this.swept_face_ = this.extractElement( 1, 1, 3, false, face_surface )
     }
 
     return this.swept_face_ as face_surface
@@ -26,8 +26,26 @@ export  class swept_face_solid extends solid_model {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === swept_face_solid.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for swept_face_solid" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -18,7 +18,7 @@ export  class IfcSystemFurnitureElementType extends IfcFurnishingElementType {
 
   public get PredefinedType() : IfcSystemFurnitureElementTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcSystemFurnitureElementTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcSystemFurnitureElementTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcSystemFurnitureElementTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcSystemFurnitureElementType extends IfcFurnishingElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

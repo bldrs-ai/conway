@@ -19,7 +19,7 @@ export  class curve_style_font_pattern extends founded_item {
 
   public get visible_segment_length() : number {
     if ( this.visible_segment_length_ === void 0 ) {
-      this.visible_segment_length_ = this.extractNumber( 0, false )
+      this.visible_segment_length_ = this.extractNumber( 0, 0, 1, false )
     }
 
     return this.visible_segment_length_ as number
@@ -27,7 +27,7 @@ export  class curve_style_font_pattern extends founded_item {
 
   public get invisible_segment_length() : number {
     if ( this.invisible_segment_length_ === void 0 ) {
-      this.invisible_segment_length_ = this.extractNumber( 1, false )
+      this.invisible_segment_length_ = this.extractNumber( 1, 0, 1, false )
     }
 
     return this.invisible_segment_length_ as number
@@ -35,8 +35,26 @@ export  class curve_style_font_pattern extends founded_item {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === curve_style_font_pattern.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for curve_style_font_pattern" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

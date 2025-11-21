@@ -18,7 +18,7 @@ export  class IfcBuildingElementPartType extends IfcElementComponentType {
 
   public get PredefinedType() : IfcBuildingElementPartTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcBuildingElementPartTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 6, IfcBuildingElementPartTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcBuildingElementPartTypeEnum
@@ -26,7 +26,9 @@ export  class IfcBuildingElementPartType extends IfcElementComponentType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

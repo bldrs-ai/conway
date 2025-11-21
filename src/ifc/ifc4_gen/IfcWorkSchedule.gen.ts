@@ -18,7 +18,7 @@ export  class IfcWorkSchedule extends IfcWorkControl {
 
   public get PredefinedType() : IfcWorkScheduleTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 13, IfcWorkScheduleTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 13, 13, 5, IfcWorkScheduleTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcWorkScheduleTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcWorkSchedule extends IfcWorkControl {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -23,7 +23,7 @@ export  class IfcWindowStyle extends IfcTypeProduct {
 
   public get ConstructionType() : IfcWindowStyleConstructionEnum {
     if ( this.ConstructionType_ === void 0 ) {
-      this.ConstructionType_ = this.extractLambda( 8, IfcWindowStyleConstructionEnumDeserializeStep, false )
+      this.ConstructionType_ = this.extractLambda( 8, 8, 4, IfcWindowStyleConstructionEnumDeserializeStep, false )
     }
 
     return this.ConstructionType_ as IfcWindowStyleConstructionEnum
@@ -31,7 +31,7 @@ export  class IfcWindowStyle extends IfcTypeProduct {
 
   public get OperationType() : IfcWindowStyleOperationEnum {
     if ( this.OperationType_ === void 0 ) {
-      this.OperationType_ = this.extractLambda( 9, IfcWindowStyleOperationEnumDeserializeStep, false )
+      this.OperationType_ = this.extractLambda( 9, 8, 4, IfcWindowStyleOperationEnumDeserializeStep, false )
     }
 
     return this.OperationType_ as IfcWindowStyleOperationEnum
@@ -39,7 +39,7 @@ export  class IfcWindowStyle extends IfcTypeProduct {
 
   public get ParameterTakesPrecedence() : boolean {
     if ( this.ParameterTakesPrecedence_ === void 0 ) {
-      this.ParameterTakesPrecedence_ = this.extractBoolean( 10, false )
+      this.ParameterTakesPrecedence_ = this.extractBoolean( 10, 8, 4, false )
     }
 
     return this.ParameterTakesPrecedence_ as boolean
@@ -47,7 +47,7 @@ export  class IfcWindowStyle extends IfcTypeProduct {
 
   public get Sizeable() : boolean {
     if ( this.Sizeable_ === void 0 ) {
-      this.Sizeable_ = this.extractBoolean( 11, false )
+      this.Sizeable_ = this.extractBoolean( 11, 8, 4, false )
     }
 
     return this.Sizeable_ as boolean
@@ -55,7 +55,9 @@ export  class IfcWindowStyle extends IfcTypeProduct {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

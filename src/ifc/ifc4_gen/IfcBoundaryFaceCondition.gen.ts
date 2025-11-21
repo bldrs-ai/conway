@@ -23,7 +23,7 @@ export  class IfcBoundaryFaceCondition extends IfcBoundaryCondition {
     if ( this.TranslationalStiffnessByAreaX_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 1, true )
+        this.extractReference( 1, 1, 1, true )
 
       if ( !( value instanceof IfcBoolean ) && !( value instanceof IfcModulusOfSubgradeReactionMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -40,7 +40,7 @@ export  class IfcBoundaryFaceCondition extends IfcBoundaryCondition {
     if ( this.TranslationalStiffnessByAreaY_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 2, true )
+        this.extractReference( 2, 1, 1, true )
 
       if ( !( value instanceof IfcBoolean ) && !( value instanceof IfcModulusOfSubgradeReactionMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -57,7 +57,7 @@ export  class IfcBoundaryFaceCondition extends IfcBoundaryCondition {
     if ( this.TranslationalStiffnessByAreaZ_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc >| null = 
-        this.extractReference( 3, true )
+        this.extractReference( 3, 1, 1, true )
 
       if ( !( value instanceof IfcBoolean ) && !( value instanceof IfcModulusOfSubgradeReactionMeasure ) && value !== null ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -72,7 +72,9 @@ export  class IfcBoundaryFaceCondition extends IfcBoundaryCondition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -23,7 +23,7 @@ export  class IfcCompositeCurveSegment extends IfcGeometricRepresentationItem {
 
   public get Transition() : IfcTransitionCode {
     if ( this.Transition_ === void 0 ) {
-      this.Transition_ = this.extractLambda( 0, IfcTransitionCodeDeserializeStep, false )
+      this.Transition_ = this.extractLambda( 0, 0, 2, IfcTransitionCodeDeserializeStep, false )
     }
 
     return this.Transition_ as IfcTransitionCode
@@ -31,7 +31,7 @@ export  class IfcCompositeCurveSegment extends IfcGeometricRepresentationItem {
 
   public get SameSense() : boolean {
     if ( this.SameSense_ === void 0 ) {
-      this.SameSense_ = this.extractBoolean( 1, false )
+      this.SameSense_ = this.extractBoolean( 1, 0, 2, false )
     }
 
     return this.SameSense_ as boolean
@@ -39,7 +39,7 @@ export  class IfcCompositeCurveSegment extends IfcGeometricRepresentationItem {
 
   public get ParentCurve() : IfcCurve {
     if ( this.ParentCurve_ === void 0 ) {
-      this.ParentCurve_ = this.extractElement( 2, false, IfcCurve )
+      this.ParentCurve_ = this.extractElement( 2, 0, 2, false, IfcCurve )
     }
 
     return this.ParentCurve_ as IfcCurve
@@ -52,7 +52,9 @@ export  class IfcCompositeCurveSegment extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -19,7 +19,7 @@ export  class representation_map extends StepEntityBase< EntityTypesAP214 > {
 
   public get mapping_origin() : representation_item {
     if ( this.mapping_origin_ === void 0 ) {
-      this.mapping_origin_ = this.extractElement( 0, false, representation_item )
+      this.mapping_origin_ = this.extractElement( 0, 0, 0, false, representation_item )
     }
 
     return this.mapping_origin_ as representation_item
@@ -27,7 +27,7 @@ export  class representation_map extends StepEntityBase< EntityTypesAP214 > {
 
   public get mapped_representation() : representation {
     if ( this.mapped_representation_ === void 0 ) {
-      this.mapped_representation_ = this.extractElement( 1, false, representation )
+      this.mapped_representation_ = this.extractElement( 1, 0, 0, false, representation )
     }
 
     return this.mapped_representation_ as representation
@@ -36,8 +36,26 @@ export  class representation_map extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === representation_map.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for representation_map" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

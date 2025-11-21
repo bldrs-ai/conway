@@ -29,7 +29,7 @@ export  class IfcSectionedSpine extends IfcGeometricRepresentationItem {
 
   public get SpineCurve() : IfcCompositeCurve {
     if ( this.SpineCurve_ === void 0 ) {
-      this.SpineCurve_ = this.extractElement( 0, false, IfcCompositeCurve )
+      this.SpineCurve_ = this.extractElement( 0, 0, 2, false, IfcCompositeCurve )
     }
 
     return this.SpineCurve_ as IfcCompositeCurve
@@ -38,7 +38,7 @@ export  class IfcSectionedSpine extends IfcGeometricRepresentationItem {
   public get CrossSections() : Array<IfcProfileDef> {
     if ( this.CrossSections_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -71,7 +71,7 @@ export  class IfcSectionedSpine extends IfcGeometricRepresentationItem {
   public get CrossSectionPositions() : Array<IfcAxis2Placement3D> {
     if ( this.CrossSectionPositions_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -107,7 +107,9 @@ export  class IfcSectionedSpine extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

@@ -27,7 +27,7 @@ export  class IfcRelReferencedInSpatialStructure extends IfcRelConnects {
   public get RelatedElements() : Array<IfcProduct> {
     if ( this.RelatedElements_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class IfcRelReferencedInSpatialStructure extends IfcRelConnects {
 
   public get RelatingStructure() : IfcSpatialElement {
     if ( this.RelatingStructure_ === void 0 ) {
-      this.RelatingStructure_ = this.extractElement( 5, false, IfcSpatialElement )
+      this.RelatingStructure_ = this.extractElement( 5, 4, 3, false, IfcSpatialElement )
     }
 
     return this.RelatingStructure_ as IfcSpatialElement
@@ -67,7 +67,9 @@ export  class IfcRelReferencedInSpatialStructure extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

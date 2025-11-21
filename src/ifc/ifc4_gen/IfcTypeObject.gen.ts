@@ -26,7 +26,7 @@ export  class IfcTypeObject extends IfcObjectDefinition {
 
   public get ApplicableOccurrence() : string | null {
     if ( this.ApplicableOccurrence_ === void 0 ) {
-      this.ApplicableOccurrence_ = this.extractString( 4, true )
+      this.ApplicableOccurrence_ = this.extractString( 4, 4, 2, true )
     }
 
     return this.ApplicableOccurrence_ as string | null
@@ -35,7 +35,7 @@ export  class IfcTypeObject extends IfcObjectDefinition {
   public get HasPropertySets() : Array<IfcPropertySetDefinition> | null {
     if ( this.HasPropertySets_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 5 )
+      let   cursor    = this.getOffsetCursor( 5, 4, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -68,7 +68,9 @@ export  class IfcTypeObject extends IfcObjectDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

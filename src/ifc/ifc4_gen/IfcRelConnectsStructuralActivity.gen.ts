@@ -23,7 +23,7 @@ export  class IfcRelConnectsStructuralActivity extends IfcRelConnects {
     if ( this.RelatingElement_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 4, false )
+        this.extractReference( 4, 4, 3, false )
 
       if ( !( value instanceof IfcElement ) && !( value instanceof IfcStructuralItem ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -38,7 +38,7 @@ export  class IfcRelConnectsStructuralActivity extends IfcRelConnects {
 
   public get RelatedStructuralActivity() : IfcStructuralActivity {
     if ( this.RelatedStructuralActivity_ === void 0 ) {
-      this.RelatedStructuralActivity_ = this.extractElement( 5, false, IfcStructuralActivity )
+      this.RelatedStructuralActivity_ = this.extractElement( 5, 4, 3, false, IfcStructuralActivity )
     }
 
     return this.RelatedStructuralActivity_ as IfcStructuralActivity
@@ -46,7 +46,9 @@ export  class IfcRelConnectsStructuralActivity extends IfcRelConnects {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

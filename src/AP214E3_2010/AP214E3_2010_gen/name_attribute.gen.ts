@@ -28,7 +28,7 @@ export  class name_attribute extends StepEntityBase< EntityTypesAP214 > {
 
   public get attribute_value() : string {
     if ( this.attribute_value_ === void 0 ) {
-      this.attribute_value_ = this.extractString( 0, false )
+      this.attribute_value_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.attribute_value_ as string
@@ -38,7 +38,7 @@ export  class name_attribute extends StepEntityBase< EntityTypesAP214 > {
     if ( this.named_item_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesAP214 > = 
-        this.extractReference( 1, false )
+        this.extractReference( 1, 0, 0, false )
 
       if ( !( value instanceof action_request_solution ) && !( value instanceof address ) && !( value instanceof configuration_design ) && !( value instanceof context_dependent_shape_representation ) && !( value instanceof derived_unit ) && !( value instanceof effectivity ) && !( value instanceof person_and_organization ) && !( value instanceof product_definition ) && !( value instanceof product_definition_substitute ) && !( value instanceof property_definition_representation ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -53,8 +53,26 @@ export  class name_attribute extends StepEntityBase< EntityTypesAP214 > {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === name_attribute.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for name_attribute" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

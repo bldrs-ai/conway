@@ -31,7 +31,7 @@ export abstract class IfcSurfaceTexture extends IfcPresentationItem {
 
   public get RepeatS() : boolean {
     if ( this.RepeatS_ === void 0 ) {
-      this.RepeatS_ = this.extractBoolean( 0, false )
+      this.RepeatS_ = this.extractBoolean( 0, 0, 1, false )
     }
 
     return this.RepeatS_ as boolean
@@ -39,7 +39,7 @@ export abstract class IfcSurfaceTexture extends IfcPresentationItem {
 
   public get RepeatT() : boolean {
     if ( this.RepeatT_ === void 0 ) {
-      this.RepeatT_ = this.extractBoolean( 1, false )
+      this.RepeatT_ = this.extractBoolean( 1, 0, 1, false )
     }
 
     return this.RepeatT_ as boolean
@@ -47,7 +47,7 @@ export abstract class IfcSurfaceTexture extends IfcPresentationItem {
 
   public get Mode() : string | null {
     if ( this.Mode_ === void 0 ) {
-      this.Mode_ = this.extractString( 2, true )
+      this.Mode_ = this.extractString( 2, 0, 1, true )
     }
 
     return this.Mode_ as string | null
@@ -55,7 +55,7 @@ export abstract class IfcSurfaceTexture extends IfcPresentationItem {
 
   public get TextureTransform() : IfcCartesianTransformationOperator2D | null {
     if ( this.TextureTransform_ === void 0 ) {
-      this.TextureTransform_ = this.extractElement( 3, true, IfcCartesianTransformationOperator2D )
+      this.TextureTransform_ = this.extractElement( 3, 0, 1, true, IfcCartesianTransformationOperator2D )
     }
 
     return this.TextureTransform_ as IfcCartesianTransformationOperator2D | null
@@ -64,7 +64,7 @@ export abstract class IfcSurfaceTexture extends IfcPresentationItem {
   public get Parameter() : Array< string > | null {
     if ( this.Parameter_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -98,7 +98,9 @@ export abstract class IfcSurfaceTexture extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

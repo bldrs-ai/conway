@@ -18,7 +18,7 @@ export  class quantified_assembly_component_usage extends assembly_component_usa
 
   public get quantity() : measure_with_unit {
     if ( this.quantity_ === void 0 ) {
-      this.quantity_ = this.extractElement( 6, false, measure_with_unit )
+      this.quantity_ = this.extractElement( 6, 6, 3, false, measure_with_unit )
     }
 
     return this.quantity_ as measure_with_unit
@@ -26,8 +26,26 @@ export  class quantified_assembly_component_usage extends assembly_component_usa
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === quantified_assembly_component_usage.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for quantified_assembly_component_usage" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

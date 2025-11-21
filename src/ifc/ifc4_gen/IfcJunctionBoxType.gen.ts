@@ -18,7 +18,7 @@ export  class IfcJunctionBoxType extends IfcFlowFittingType {
 
   public get PredefinedType() : IfcJunctionBoxTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcJunctionBoxTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 8, IfcJunctionBoxTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcJunctionBoxTypeEnum
@@ -26,7 +26,9 @@ export  class IfcJunctionBoxType extends IfcFlowFittingType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

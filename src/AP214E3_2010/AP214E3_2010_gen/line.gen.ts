@@ -20,7 +20,7 @@ export  class line extends curve {
 
   public get pnt() : cartesian_point {
     if ( this.pnt_ === void 0 ) {
-      this.pnt_ = this.extractElement( 1, false, cartesian_point )
+      this.pnt_ = this.extractElement( 1, 1, 3, false, cartesian_point )
     }
 
     return this.pnt_ as cartesian_point
@@ -28,7 +28,7 @@ export  class line extends curve {
 
   public get dir() : vector {
     if ( this.dir_ === void 0 ) {
-      this.dir_ = this.extractElement( 2, false, vector )
+      this.dir_ = this.extractElement( 2, 1, 3, false, vector )
     }
 
     return this.dir_ as vector
@@ -36,8 +36,26 @@ export  class line extends curve {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === line.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for line" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

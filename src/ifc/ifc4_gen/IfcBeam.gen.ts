@@ -18,7 +18,7 @@ export  class IfcBeam extends IfcBuildingElement {
 
   public get PredefinedType() : IfcBeamTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcBeamTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcBeamTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcBeamTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcBeam extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

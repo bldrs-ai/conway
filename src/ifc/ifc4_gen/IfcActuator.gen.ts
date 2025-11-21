@@ -18,7 +18,7 @@ export  class IfcActuator extends IfcDistributionControlElement {
 
   public get PredefinedType() : IfcActuatorTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcActuatorTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 7, IfcActuatorTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcActuatorTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcActuator extends IfcDistributionControlElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

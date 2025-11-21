@@ -17,7 +17,7 @@ export  class surface_rendering_properties extends StepEntityBase< EntityTypesAP
 
   public get rendered_colour() : colour {
     if ( this.rendered_colour_ === void 0 ) {
-      this.rendered_colour_ = this.extractElement( 0, false, colour )
+      this.rendered_colour_ = this.extractElement( 0, 0, 0, false, colour )
     }
 
     return this.rendered_colour_ as colour
@@ -25,8 +25,26 @@ export  class surface_rendering_properties extends StepEntityBase< EntityTypesAP
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === surface_rendering_properties.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for surface_rendering_properties" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

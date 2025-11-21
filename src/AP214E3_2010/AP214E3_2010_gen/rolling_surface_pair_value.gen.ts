@@ -22,7 +22,7 @@ export  class rolling_surface_pair_value extends pair_value {
 
   public get actual_point_on_surface() : point_on_surface {
     if ( this.actual_point_on_surface_ === void 0 ) {
-      this.actual_point_on_surface_ = this.extractElement( 2, false, point_on_surface )
+      this.actual_point_on_surface_ = this.extractElement( 2, 1, 1, false, point_on_surface )
     }
 
     return this.actual_point_on_surface_ as point_on_surface
@@ -30,7 +30,7 @@ export  class rolling_surface_pair_value extends pair_value {
 
   public get actual_rotation() : number {
     if ( this.actual_rotation_ === void 0 ) {
-      this.actual_rotation_ = this.extractNumber( 3, false )
+      this.actual_rotation_ = this.extractNumber( 3, 1, 1, false )
     }
 
     return this.actual_rotation_ as number
@@ -38,8 +38,26 @@ export  class rolling_surface_pair_value extends pair_value {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === rolling_surface_pair_value.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for rolling_surface_pair_value" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

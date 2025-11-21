@@ -24,7 +24,7 @@ export  class si_unit extends named_unit {
 
   public get prefix() : si_prefix | null {
     if ( this.prefix_ === void 0 ) {
-      this.prefix_ = this.extractLambda( 1, si_prefixDeserializeStep, true )
+      this.prefix_ = this.extractLambda( 1, 1, 1, si_prefixDeserializeStep, true )
     }
 
     return this.prefix_ as si_prefix | null
@@ -32,7 +32,7 @@ export  class si_unit extends named_unit {
 
   public get name() : si_unit_name {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractLambda( 2, si_unit_nameDeserializeStep, false )
+      this.name_ = this.extractLambda( 2, 1, 1, si_unit_nameDeserializeStep, false )
     }
 
     return this.name_ as si_unit_name
@@ -44,8 +44,26 @@ export  class si_unit extends named_unit {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === si_unit.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for si_unit" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

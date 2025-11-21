@@ -18,7 +18,7 @@ export class thermodynamic_temperature_measure extends StepEntityBase< EntityTyp
 
   public get Value() : number {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractNumber( 0, false )
+      this.Value_ = this.extractNumber( 0, 0, 0, false )
     }
 
     return this.Value_ as number
@@ -27,7 +27,8 @@ export class thermodynamic_temperature_measure extends StepEntityBase< EntityTyp
   constructor(
       localID: number,
       internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
+      model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+      multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
      super( localID, internalReference, model )
   }
 

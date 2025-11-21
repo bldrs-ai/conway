@@ -25,7 +25,7 @@ export  class IfcAnnotationFillArea extends IfcGeometricRepresentationItem {
 
   public get OuterBoundary() : IfcCurve {
     if ( this.OuterBoundary_ === void 0 ) {
-      this.OuterBoundary_ = this.extractElement( 0, false, IfcCurve )
+      this.OuterBoundary_ = this.extractElement( 0, 0, 2, false, IfcCurve )
     }
 
     return this.OuterBoundary_ as IfcCurve
@@ -34,7 +34,7 @@ export  class IfcAnnotationFillArea extends IfcGeometricRepresentationItem {
   public get InnerBoundaries() : Array<IfcCurve> | null {
     if ( this.InnerBoundaries_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 1 )
+      let   cursor    = this.getOffsetCursor( 1, 0, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -66,7 +66,9 @@ export  class IfcAnnotationFillArea extends IfcGeometricRepresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

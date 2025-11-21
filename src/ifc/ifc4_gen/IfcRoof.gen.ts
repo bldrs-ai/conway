@@ -18,7 +18,7 @@ export  class IfcRoof extends IfcBuildingElement {
 
   public get PredefinedType() : IfcRoofTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcRoofTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 6, IfcRoofTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcRoofTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcRoof extends IfcBuildingElement {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

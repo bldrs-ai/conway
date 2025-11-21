@@ -20,7 +20,7 @@ export  class point_on_curve extends point {
 
   public get basis_curve() : curve {
     if ( this.basis_curve_ === void 0 ) {
-      this.basis_curve_ = this.extractElement( 1, false, curve )
+      this.basis_curve_ = this.extractElement( 1, 1, 3, false, curve )
     }
 
     return this.basis_curve_ as curve
@@ -28,7 +28,7 @@ export  class point_on_curve extends point {
 
   public get point_parameter() : number {
     if ( this.point_parameter_ === void 0 ) {
-      this.point_parameter_ = this.extractNumber( 2, false )
+      this.point_parameter_ = this.extractNumber( 2, 1, 3, false )
     }
 
     return this.point_parameter_ as number
@@ -36,8 +36,26 @@ export  class point_on_curve extends point {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === point_on_curve.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for point_on_curve" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

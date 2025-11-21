@@ -18,7 +18,7 @@ export  class IfcCooledBeam extends IfcEnergyConversionDevice {
 
   public get PredefinedType() : IfcCooledBeamTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcCooledBeamTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcCooledBeamTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcCooledBeamTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcCooledBeam extends IfcEnergyConversionDevice {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

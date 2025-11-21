@@ -27,7 +27,7 @@ export  class IfcTypeProduct extends IfcTypeObject {
   public get RepresentationMaps() : Array<IfcRepresentationMap> | null {
     if ( this.RepresentationMaps_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 6 )
+      let   cursor    = this.getOffsetCursor( 6, 6, 3 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export  class IfcTypeProduct extends IfcTypeObject {
 
   public get Tag() : string | null {
     if ( this.Tag_ === void 0 ) {
-      this.Tag_ = this.extractString( 7, true )
+      this.Tag_ = this.extractString( 7, 6, 3, true )
     }
 
     return this.Tag_ as string | null
@@ -68,7 +68,9 @@ export  class IfcTypeProduct extends IfcTypeObject {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

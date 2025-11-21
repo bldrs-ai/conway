@@ -27,7 +27,7 @@ export  class IfcDocumentInformationRelationship extends IfcResourceLevelRelatio
 
   public get RelatingDocument() : IfcDocumentInformation {
     if ( this.RelatingDocument_ === void 0 ) {
-      this.RelatingDocument_ = this.extractElement( 2, false, IfcDocumentInformation )
+      this.RelatingDocument_ = this.extractElement( 2, 2, 1, false, IfcDocumentInformation )
     }
 
     return this.RelatingDocument_ as IfcDocumentInformation
@@ -36,7 +36,7 @@ export  class IfcDocumentInformationRelationship extends IfcResourceLevelRelatio
   public get RelatedDocuments() : Array<IfcDocumentInformation> {
     if ( this.RelatedDocuments_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -68,7 +68,7 @@ export  class IfcDocumentInformationRelationship extends IfcResourceLevelRelatio
 
   public get RelationshipType() : string | null {
     if ( this.RelationshipType_ === void 0 ) {
-      this.RelationshipType_ = this.extractString( 4, true )
+      this.RelationshipType_ = this.extractString( 4, 2, 1, true )
     }
 
     return this.RelationshipType_ as string | null
@@ -76,7 +76,9 @@ export  class IfcDocumentInformationRelationship extends IfcResourceLevelRelatio
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

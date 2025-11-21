@@ -18,7 +18,7 @@ export  class IfcPipeSegment extends IfcFlowSegment {
 
   public get PredefinedType() : IfcPipeSegmentTypeEnum | null {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 8, IfcPipeSegmentTypeEnumDeserializeStep, true )
+      this.PredefinedType_ = this.extractLambda( 8, 8, 8, IfcPipeSegmentTypeEnumDeserializeStep, true )
     }
 
     return this.PredefinedType_ as IfcPipeSegmentTypeEnum | null
@@ -26,7 +26,9 @@ export  class IfcPipeSegment extends IfcFlowSegment {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

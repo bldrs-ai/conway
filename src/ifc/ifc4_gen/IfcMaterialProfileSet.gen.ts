@@ -30,7 +30,7 @@ export  class IfcMaterialProfileSet extends IfcMaterialDefinition {
 
   public get Name() : string | null {
     if ( this.Name_ === void 0 ) {
-      this.Name_ = this.extractString( 0, true )
+      this.Name_ = this.extractString( 0, 0, 1, true )
     }
 
     return this.Name_ as string | null
@@ -38,7 +38,7 @@ export  class IfcMaterialProfileSet extends IfcMaterialDefinition {
 
   public get Description() : string | null {
     if ( this.Description_ === void 0 ) {
-      this.Description_ = this.extractString( 1, true )
+      this.Description_ = this.extractString( 1, 0, 1, true )
     }
 
     return this.Description_ as string | null
@@ -47,7 +47,7 @@ export  class IfcMaterialProfileSet extends IfcMaterialDefinition {
   public get MaterialProfiles() : Array<IfcMaterialProfile> {
     if ( this.MaterialProfiles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -79,7 +79,7 @@ export  class IfcMaterialProfileSet extends IfcMaterialDefinition {
 
   public get CompositeProfile() : IfcCompositeProfileDef | null {
     if ( this.CompositeProfile_ === void 0 ) {
-      this.CompositeProfile_ = this.extractElement( 3, true, IfcCompositeProfileDef )
+      this.CompositeProfile_ = this.extractElement( 3, 0, 1, true, IfcCompositeProfileDef )
     }
 
     return this.CompositeProfile_ as IfcCompositeProfileDef | null
@@ -87,7 +87,9 @@ export  class IfcMaterialProfileSet extends IfcMaterialDefinition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

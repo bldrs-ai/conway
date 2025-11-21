@@ -21,7 +21,7 @@ export abstract class IfcCoordinateOperation extends StepEntityBase< EntityTypes
     if ( this.SourceCRS_ === void 0 ) {
       
       const value : StepEntityBase< EntityTypesIfc > = 
-        this.extractReference( 0, false )
+        this.extractReference( 0, 0, 0, false )
 
       if ( !( value instanceof IfcCoordinateReferenceSystem ) && !( value instanceof IfcGeometricRepresentationContext ) ) {
         throw new Error( 'Value in STEP was incorrectly typed for field' )
@@ -36,7 +36,7 @@ export abstract class IfcCoordinateOperation extends StepEntityBase< EntityTypes
 
   public get TargetCRS() : IfcCoordinateReferenceSystem {
     if ( this.TargetCRS_ === void 0 ) {
-      this.TargetCRS_ = this.extractElement( 1, false, IfcCoordinateReferenceSystem )
+      this.TargetCRS_ = this.extractElement( 1, 0, 0, false, IfcCoordinateReferenceSystem )
     }
 
     return this.TargetCRS_ as IfcCoordinateReferenceSystem
@@ -44,7 +44,9 @@ export abstract class IfcCoordinateOperation extends StepEntityBase< EntityTypes
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

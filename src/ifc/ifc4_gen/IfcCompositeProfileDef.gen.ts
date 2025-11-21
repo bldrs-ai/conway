@@ -26,7 +26,7 @@ export  class IfcCompositeProfileDef extends IfcProfileDef {
   public get Profiles() : Array<IfcProfileDef> {
     if ( this.Profiles_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 2 )
+      let   cursor    = this.getOffsetCursor( 2, 2, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -58,7 +58,7 @@ export  class IfcCompositeProfileDef extends IfcProfileDef {
 
   public get Label() : string | null {
     if ( this.Label_ === void 0 ) {
-      this.Label_ = this.extractString( 3, true )
+      this.Label_ = this.extractString( 3, 2, 1, true )
     }
 
     return this.Label_ as string | null
@@ -66,7 +66,9 @@ export  class IfcCompositeProfileDef extends IfcProfileDef {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

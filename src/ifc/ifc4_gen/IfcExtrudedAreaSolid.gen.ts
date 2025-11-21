@@ -20,7 +20,7 @@ export  class IfcExtrudedAreaSolid extends IfcSweptAreaSolid {
 
   public get ExtrudedDirection() : IfcDirection {
     if ( this.ExtrudedDirection_ === void 0 ) {
-      this.ExtrudedDirection_ = this.extractElement( 2, false, IfcDirection )
+      this.ExtrudedDirection_ = this.extractElement( 2, 2, 4, false, IfcDirection )
     }
 
     return this.ExtrudedDirection_ as IfcDirection
@@ -28,7 +28,7 @@ export  class IfcExtrudedAreaSolid extends IfcSweptAreaSolid {
 
   public get Depth() : number {
     if ( this.Depth_ === void 0 ) {
-      this.Depth_ = this.extractNumber( 3, false )
+      this.Depth_ = this.extractNumber( 3, 2, 4, false )
     }
 
     return this.Depth_ as number
@@ -36,7 +36,9 @@ export  class IfcExtrudedAreaSolid extends IfcSweptAreaSolid {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

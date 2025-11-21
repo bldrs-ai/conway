@@ -18,7 +18,7 @@ export  class screw_pair extends kinematic_pair {
 
   public get pitch() : number {
     if ( this.pitch_ === void 0 ) {
-      this.pitch_ = this.extractNumber( 5, false )
+      this.pitch_ = this.extractNumber( 5, 5, 2, false )
     }
 
     return this.pitch_ as number
@@ -26,8 +26,26 @@ export  class screw_pair extends kinematic_pair {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === screw_pair.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for screw_pair" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

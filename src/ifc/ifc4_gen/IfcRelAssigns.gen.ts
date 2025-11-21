@@ -27,7 +27,7 @@ export abstract class IfcRelAssigns extends IfcRelationship {
   public get RelatedObjects() : Array<IfcObjectDefinition> {
     if ( this.RelatedObjects_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 4 )
+      let   cursor    = this.getOffsetCursor( 4, 4, 2 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -59,7 +59,7 @@ export abstract class IfcRelAssigns extends IfcRelationship {
 
   public get RelatedObjectsType() : IfcObjectTypeEnum | null {
     if ( this.RelatedObjectsType_ === void 0 ) {
-      this.RelatedObjectsType_ = this.extractLambda( 5, IfcObjectTypeEnumDeserializeStep, true )
+      this.RelatedObjectsType_ = this.extractLambda( 5, 4, 2, IfcObjectTypeEnumDeserializeStep, true )
     }
 
     return this.RelatedObjectsType_ as IfcObjectTypeEnum | null
@@ -67,7 +67,9 @@ export abstract class IfcRelAssigns extends IfcRelationship {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

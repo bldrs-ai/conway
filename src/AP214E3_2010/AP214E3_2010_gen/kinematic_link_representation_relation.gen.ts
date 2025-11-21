@@ -19,7 +19,7 @@ export  class kinematic_link_representation_relation extends StepEntityBase< Ent
 
   public get topological_aspects() : kinematic_link {
     if ( this.topological_aspects_ === void 0 ) {
-      this.topological_aspects_ = this.extractElement( 0, false, kinematic_link )
+      this.topological_aspects_ = this.extractElement( 0, 0, 0, false, kinematic_link )
     }
 
     return this.topological_aspects_ as kinematic_link
@@ -27,7 +27,7 @@ export  class kinematic_link_representation_relation extends StepEntityBase< Ent
 
   public get geometric_aspects() : kinematic_link_representation {
     if ( this.geometric_aspects_ === void 0 ) {
-      this.geometric_aspects_ = this.extractElement( 1, false, kinematic_link_representation )
+      this.geometric_aspects_ = this.extractElement( 1, 0, 0, false, kinematic_link_representation )
     }
 
     return this.geometric_aspects_ as kinematic_link_representation
@@ -35,8 +35,26 @@ export  class kinematic_link_representation_relation extends StepEntityBase< Ent
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === kinematic_link_representation_relation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for kinematic_link_representation_relation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -32,7 +32,7 @@ export  class action_resource_requirement extends StepEntityBase< EntityTypesAP2
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
-      this.name_ = this.extractString( 0, false )
+      this.name_ = this.extractString( 0, 0, 0, false )
     }
 
     return this.name_ as string
@@ -40,7 +40,7 @@ export  class action_resource_requirement extends StepEntityBase< EntityTypesAP2
 
   public get description() : string {
     if ( this.description_ === void 0 ) {
-      this.description_ = this.extractString( 1, false )
+      this.description_ = this.extractString( 1, 0, 0, false )
     }
 
     return this.description_ as string
@@ -48,7 +48,7 @@ export  class action_resource_requirement extends StepEntityBase< EntityTypesAP2
 
   public get kind() : resource_requirement_type {
     if ( this.kind_ === void 0 ) {
-      this.kind_ = this.extractElement( 2, false, resource_requirement_type )
+      this.kind_ = this.extractElement( 2, 0, 0, false, resource_requirement_type )
     }
 
     return this.kind_ as resource_requirement_type
@@ -57,7 +57,7 @@ export  class action_resource_requirement extends StepEntityBase< EntityTypesAP2
   public get OPERATIONS() : Array<action | action_method | action_method_relationship | action_relationship> {
     if ( this.OPERATIONS_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 0, 0 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -96,8 +96,26 @@ export  class action_resource_requirement extends StepEntityBase< EntityTypesAP2
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === action_resource_requirement.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for action_resource_requirement" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

@@ -270,6 +270,7 @@ function doWork() {
                   path.basename( ifcFile, path.extname( ifcFile) ) )
 
             const result = geometryExtraction(model, limitCSG, maxCSGDepth)
+
             if (result !== void 0) {
               const scene = result
 
@@ -291,8 +292,6 @@ function doWork() {
                 }
               }
             }
-
-
           } else {
 
             console.log('\n')
@@ -385,8 +384,6 @@ function doWork() {
 
             if (FILE_NAME !== void 0) {
               const fileNameSplit: string[] = parseFileHeader(FILE_NAME)
-
-
                
               if (fileNameSplit.length > 6) {
                 const preprocessorVersion = fileNameSplit[5]
@@ -681,14 +678,13 @@ function geometryExtraction(
   const endTime = Date.now()
   const executionTimeInMs = endTime - startTime
 
-  const statistics = Logger.getStatistics(0)
+  const statistics = Logger.getStatistics(modelID)
   statistics?.setGeometryTime(executionTimeInMs)
 
   const ONE_KB = 1024
   const ONE_MB = ONE_KB * ONE_KB
    
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
-
 
   const ifcProjectName = conwayModel.getIfcProjectName()
 

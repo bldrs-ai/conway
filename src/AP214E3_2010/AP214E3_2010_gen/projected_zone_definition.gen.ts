@@ -20,7 +20,7 @@ export  class projected_zone_definition extends tolerance_zone_definition {
 
   public get projection_end() : shape_aspect {
     if ( this.projection_end_ === void 0 ) {
-      this.projection_end_ = this.extractElement( 2, false, shape_aspect )
+      this.projection_end_ = this.extractElement( 2, 2, 1, false, shape_aspect )
     }
 
     return this.projection_end_ as shape_aspect
@@ -28,7 +28,7 @@ export  class projected_zone_definition extends tolerance_zone_definition {
 
   public get projected_length() : measure_with_unit {
     if ( this.projected_length_ === void 0 ) {
-      this.projected_length_ = this.extractElement( 3, false, measure_with_unit )
+      this.projected_length_ = this.extractElement( 3, 2, 1, false, measure_with_unit )
     }
 
     return this.projected_length_ as measure_with_unit
@@ -36,8 +36,26 @@ export  class projected_zone_definition extends tolerance_zone_definition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === projected_zone_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for projected_zone_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

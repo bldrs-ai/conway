@@ -97,7 +97,7 @@ export  class multi_language_attribute_assignment extends attribute_value_assign
   public get items() : Array<action | action_directive | action_method | action_property | action_relationship | alternate_product_relationship | application_context | approval_relationship | assembly_component_usage_substitute | certification | configuration_design | configuration_item | contract | data_environment | date_role | date_time_role | descriptive_representation_item | document_relationship | draughting_title | effectivity | effectivity_relationship | event_occurrence | external_source | general_property | general_property_relationship | geometric_representation_item | geometric_tolerance | group | group_relationship | identification_role | kinematic_pair | mapped_item | name_assignment | organization_relationship | organization_role | organizational_project | organizational_project_relationship | pair_actuator | person_and_organization_role | presentation_layer_assignment | process_product_association | product | product_concept | product_concept_feature | product_concept_feature_association | product_concept_relationship | product_definition | product_definition_formation | product_definition_formation_relationship | product_definition_relationship | product_definition_substitute | product_related_product_category | property_definition | property_definition_relationship | representation | representation_relationship | requirement_for_action_resource | resource_property | resource_requirement_type | security_classification | shape_aspect | shape_aspect_relationship | styled_item | time_interval_role | topological_representation_item | uncertainty_measure_with_unit | uncertainty_qualifier | versioned_action_request | versioned_action_request_relationship> {
     if ( this.items_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 3 )
+      let   cursor    = this.getOffsetCursor( 3, 3, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -140,8 +140,26 @@ export  class multi_language_attribute_assignment extends attribute_value_assign
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === multi_language_attribute_assignment.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for multi_language_attribute_assignment" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

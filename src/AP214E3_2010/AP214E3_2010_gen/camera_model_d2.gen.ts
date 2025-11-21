@@ -19,7 +19,7 @@ export  class camera_model_d2 extends camera_model {
 
   public get view_window() : planar_box {
     if ( this.view_window_ === void 0 ) {
-      this.view_window_ = this.extractElement( 1, false, planar_box )
+      this.view_window_ = this.extractElement( 1, 1, 3, false, planar_box )
     }
 
     return this.view_window_ as planar_box
@@ -27,7 +27,7 @@ export  class camera_model_d2 extends camera_model {
 
   public get view_window_clipping() : boolean {
     if ( this.view_window_clipping_ === void 0 ) {
-      this.view_window_clipping_ = this.extractBoolean( 2, false )
+      this.view_window_clipping_ = this.extractBoolean( 2, 1, 3, false )
     }
 
     return this.view_window_clipping_ as boolean
@@ -35,8 +35,26 @@ export  class camera_model_d2 extends camera_model {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === camera_model_d2.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for camera_model_d2" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

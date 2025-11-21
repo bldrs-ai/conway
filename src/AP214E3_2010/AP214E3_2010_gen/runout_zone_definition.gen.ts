@@ -18,7 +18,7 @@ export  class runout_zone_definition extends tolerance_zone_definition {
 
   public get orientation() : runout_zone_orientation {
     if ( this.orientation_ === void 0 ) {
-      this.orientation_ = this.extractElement( 2, false, runout_zone_orientation )
+      this.orientation_ = this.extractElement( 2, 2, 1, false, runout_zone_orientation )
     }
 
     return this.orientation_ as runout_zone_orientation
@@ -26,8 +26,26 @@ export  class runout_zone_definition extends tolerance_zone_definition {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === runout_zone_definition.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for runout_zone_definition" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 

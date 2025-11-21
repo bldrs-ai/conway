@@ -25,7 +25,7 @@ export abstract class IfcTextureCoordinate extends IfcPresentationItem {
   public get Maps() : Array<IfcSurfaceTexture> {
     if ( this.Maps_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 0 )
+      let   cursor    = this.getOffsetCursor( 0, 0, 1 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -57,7 +57,9 @@ export abstract class IfcTextureCoordinate extends IfcPresentationItem {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

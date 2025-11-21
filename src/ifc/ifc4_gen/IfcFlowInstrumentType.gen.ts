@@ -18,7 +18,7 @@ export  class IfcFlowInstrumentType extends IfcDistributionControlElementType {
 
   public get PredefinedType() : IfcFlowInstrumentTypeEnum {
     if ( this.PredefinedType_ === void 0 ) {
-      this.PredefinedType_ = this.extractLambda( 9, IfcFlowInstrumentTypeEnumDeserializeStep, false )
+      this.PredefinedType_ = this.extractLambda( 9, 9, 7, IfcFlowInstrumentTypeEnumDeserializeStep, false )
     }
 
     return this.PredefinedType_ as IfcFlowInstrumentTypeEnum
@@ -26,7 +26,9 @@ export  class IfcFlowInstrumentType extends IfcDistributionControlElementType {
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

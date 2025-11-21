@@ -26,7 +26,7 @@ export  class IfcRationalBSplineCurveWithKnots extends IfcBSplineCurveWithKnots 
   public get WeightsData() : Array< number > {
     if ( this.WeightsData_ === void 0 ) {
       
-      let   cursor    = this.getOffsetCursor( 8 )
+      let   cursor    = this.getOffsetCursor( 8, 8, 6 )
       const buffer    = this.buffer
       const endCursor = buffer.length
 
@@ -60,7 +60,9 @@ export  class IfcRationalBSplineCurveWithKnots extends IfcBSplineCurveWithKnots 
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesIfc >,
-    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > > ) {
+    model: StepModelBase< EntityTypesIfc, StepEntityBase< EntityTypesIfc > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc >[] ) {
+
     super( localID, internalReference, model )
   }
 

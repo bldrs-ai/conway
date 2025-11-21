@@ -17,7 +17,7 @@ export  class runout_zone_orientation extends StepEntityBase< EntityTypesAP214 >
 
   public get angle() : measure_with_unit {
     if ( this.angle_ === void 0 ) {
-      this.angle_ = this.extractElement( 0, false, measure_with_unit )
+      this.angle_ = this.extractElement( 0, 0, 0, false, measure_with_unit )
     }
 
     return this.angle_ as measure_with_unit
@@ -25,8 +25,26 @@ export  class runout_zone_orientation extends StepEntityBase< EntityTypesAP214 >
   constructor(
     localID: number,
     internalReference: StepEntityInternalReference< EntityTypesAP214 >,
-    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > > ) {
-    super( localID, internalReference, model )
+    model: StepModelBase< EntityTypesAP214, StepEntityBase< EntityTypesAP214 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesAP214 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === runout_zone_orientation.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for runout_zone_orientation" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
   }
 
   public static readonly query = 
