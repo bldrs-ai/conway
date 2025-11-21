@@ -3924,14 +3924,40 @@ export class AP214GeometryExtraction {
         const entryTransformDepth = this.scene.stackLength
         const currentParent = this.scene.currentParent
 
-        if ( parentTransform !== void 0 ) {
+        const isHDMI = this.isHdmiShape(representation)
+        if (isHDMI) {
+          console.log(
+            "[HDMI] makeThunk enter",
+            "rep=", (representation as any).name,
+            "owning=", owningLocalID,
+            "mappedItem=", mappedItem,
+            "parentDepth=", entryTransformDepth,
+            "parentTransform=",
+            parentTransform ? parentTransform.getValues() : null,
+          )
+        }
 
-          this.scene.addTransform(
+        if ( parentTransform !== void 0 ) {
+          const beforeDepth = this.scene.stackLength
+          const sceneTransform = this.scene.addTransform(
             representation.localID,
             parentTransform.getValues(),
             parentTransform,
             true )
-
+          const afterDepth = this.scene.stackLength
+          if (isHDMI) {
+            console.log(
+              "[HDMI] makeThunk applied parentTransform",
+              "rep=",
+              (representation as any).name,
+              "depth",
+              beforeDepth,
+              "->",
+              afterDepth,
+              "sceneTransform=",
+              sceneTransform?.transform?.values ?? null,
+            )
+          }
         } 
 
         if ( mappedTreeNode?.children !== void 0 ) {
@@ -3940,18 +3966,25 @@ export class AP214GeometryExtraction {
 
             const mappedChild = treeMap.get( childLocalID )!
 
+            if (isHDMI) {
+              console.log(
+                "[HDMI] makeThunk child",
+                "parentRep=", (representation as any).name,
+                "childLocalID=", childLocalID,
+                "childTransform=",
+                childTransform ? childTransform.getValues() : null,
+              )
+            }
+
             const enterChildStackDepth = this.scene.stackLength
             const enterChildParent = this.scene.currentParent
 
             try {
               mappedChild.thunk!( childOwningLocalID, childTransform )
             } catch ( ex ) {
-
               if ( ex instanceof Error ) {
-
                 Logger.error( `Error processing child shape_representation: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
               } else {
-
                 Logger.error( `Unknown exception processing child shape_representation (${ex}) expressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
               }
             }
@@ -3963,52 +3996,46 @@ export class AP214GeometryExtraction {
             if( this.scene.stackLength !== enterChildStackDepth || this.scene.currentParent !== enterChildParent ) {
               Logger.error( `Stack length mismatch after processing child shape_representation ${this.scene.currentParent} ${enterChildParent} expressID: #${representation.expressID}` )
             }
+
+            if (isHDMI) {
+              console.log(
+                "[HDMI] makeThunk exit",
+                "rep=", (representation as any).name,
+                "depth=", this.scene.stackLength,
+              )
+            }
           }
         }
                 
         for ( const item of representation.items ) {
 
           try {             
-
             if ( item instanceof placement ) {
-          
               this.extractPlacement( item, mappedItem )
               continue
             }
 
             if ( item instanceof styled_item ) {
-
               this.extractStyledItemWithProcessing( item, owningLocalID )
               continue
             }
 
             if ( item instanceof mapped_item ) {
-
               this.extractMappedItem( item, owningLocalID )
-
             } else {
-
               this.extractRepresentationItem( item, owningLocalID )
-
               const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-
               if ( styledItemLocalID !== void 0 ) {
-
                 const styledItem =
                   model.getElementByLocalID( styledItemLocalID ) as styled_item
-
                 this.extractStyledItem( styledItem, item )
               }
             }
           } catch ( ex ) {
-
             if (ex instanceof Error) {
-
-                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${item.expressID}` )
-
+              Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${item.expressID}` )
             } else {
-
-                Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+              Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
             }
           }
         }
@@ -4047,89 +4074,14 @@ export class AP214GeometryExtraction {
 
         const assembly = contextDependentShapeRepresentation.represented_product_relation
         const owningLocalID = assembly.localID
-
         const shapeRelationship = contextDependentShapeRepresentation.representation_relation
-
         shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
-
         const sourceShape = shapeRelationship.rep_1
         const targetShape = shapeRelationship.rep_2
-        
-        const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
 
-        let transform: NativeTransform4x4 | undefined = void 0
-        let scaleTransform : NativeTransform4x4 | undefined = void 0
-
-        if( transformInstance !== void 0 ) {
-
-          const transformOperator = transformInstance.transformation_operator
-
-          if( transformOperator instanceof item_defined_transformation ) {
-
-            const placement1 = transformOperator.transform_item_1
-
-            if( !(placement1 instanceof placement) ) {
-              continue
-            }
-
-            const placement2 = transformOperator.transform_item_2
-
-            if( !(placement2 instanceof placement) ) {
-              continue
-            }
-
-            const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
-            const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
-
-            const localPlacementParameters: ParamsLocalPlacement = {
-              useRelPlacement: true,
-              axis2Placement: from,
-              relPlacement: to,
-            }
-
-            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-
-          } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
-
-            transform = this.extractCartesianTransformOperator3D( transformOperator )
-
-          }
-        }
-
-        const sourceShapeContext = 
-          sourceShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-          find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-          
-        const targetShapeContext =
-          targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-
-        if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
-
-          const scaleRatio = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
-
-          if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
-
-            scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio ) 
-          }
-        }
-
-        if ( scaleTransform !== void 0 ) {
-
-          if ( transform !== void 0 ) {
-              
-            const localPlacementParameters: ParamsLocalPlacement = {
-              useRelPlacement: true,
-              axis2Placement: transform,
-              relPlacement: scaleTransform,
-            }
-            
-            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-
-          } else {
-
-            transform = scaleTransform
-          }
+        const [transform, isContinue] = this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
+        if (isContinue) {
+          continue
         }
 
         const sourceID = sourceShape.localID
@@ -4137,24 +4089,18 @@ export class AP214GeometryExtraction {
         let sourceNode = treeMap.get( sourceID )
 
         if ( sourceNode === void 0 ) {
-
           sourceNode = { parents: 1 }
-
           treeMap.set( sourceID, sourceNode )
-
           sourceNode.thunk = makeThunk( sourceShape, owningLocalID, sourceNode )
-
         } else {
           sourceNode.parents ??= 0
           ++sourceNode.parents
         }
 
         let targetNode = treeMap.get( targetID )       
-
         if ( targetNode === void 0 ) {
           targetNode = { children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
-          
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
@@ -4164,14 +4110,10 @@ export class AP214GeometryExtraction {
       const shapeRelationships = [...model.types(shape_representation_relationship)]     
 
       for ( const shapeRelationship of shapeRelationships ) {
-      
         if ( shapeRepresentationRelationshipsSeen.has( shapeRelationship.localID ) ) {
-        
           continue
         }
-
         const owningLocalID = shapeRelationship.localID
-
         shapeRepresentationRelationshipsSeen.add( owningLocalID )
 
         /* Note, the rep_1 and rep_2 are swapped here compared to the
@@ -4183,81 +4125,9 @@ export class AP214GeometryExtraction {
         const sourceShape = shapeRelationship.rep_2
         const targetShape = shapeRelationship.rep_1
         
-        const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
-
-        let transform: NativeTransform4x4 | undefined = void 0
-        let scaleTransform : NativeTransform4x4 | undefined = void 0
-
-        if ( transformInstance !== void 0 ) {
-
-          const transformOperator = transformInstance.transformation_operator
-
-          if( transformOperator instanceof item_defined_transformation ) {
-
-            const placement1 = transformOperator.transform_item_1
-
-            if( !(placement1 instanceof placement) ) {
-              continue
-            }
-
-            const placement2 = transformOperator.transform_item_2
-
-            if( !(placement2 instanceof placement) ) {
-              continue
-            }
-
-            const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
-            const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
-
-            const localPlacementParameters: ParamsLocalPlacement = {
-              useRelPlacement: true,
-              axis2Placement: from,
-              relPlacement: to,
-            }
-
-            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-
-          } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
-
-            transform = this.extractCartesianTransformOperator3D( transformOperator )
-
-          }
-        }
-
-        const sourceShapeContext = 
-          sourceShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-          find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-          
-        const targetShapeContext =
-          targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-
-        if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
-
-          const scaleRatio = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
-
-          if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
-
-            scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio )
-          }
-        }
-
-        if ( scaleTransform !== void 0 ) {
-
-          if ( transform !== void 0 ) {
-              
-            const localPlacementParameters: ParamsLocalPlacement = {
-              useRelPlacement: true,
-              axis2Placement: transform,
-              relPlacement: scaleTransform,
-            }
-            
-            transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
-
-          } else {
-
-            transform = scaleTransform
-          }
+        const [transform, isContinue] = this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
+        if (isContinue) {
+          continue
         }
 
         const sourceID = sourceShape.localID
@@ -4265,11 +4135,8 @@ export class AP214GeometryExtraction {
         let sourceNode = treeMap.get( sourceID )
 
         if ( sourceNode === void 0 ) {
-
           sourceNode = { parents: 1 }
-
           treeMap.set( sourceID, sourceNode )
-
         } else {
           sourceNode.parents ??= 0
           ++sourceNode.parents
@@ -4278,12 +4145,9 @@ export class AP214GeometryExtraction {
         sourceNode.thunk = makeThunk( sourceShape, owningLocalID, sourceNode )
 
         let targetNode = treeMap.get( targetID )       
-
         if ( targetNode === void 0 ) {
-
           targetNode = { parents: 0, children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
-          
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
@@ -4293,11 +4157,8 @@ export class AP214GeometryExtraction {
       const shapeDefinitions = model.types( shape_definition_representation )
       
       for ( const shapeDefinitionRepresentation of shapeDefinitions ) {
-
         const shapeRepresentation = shapeDefinitionRepresentation.used_representation
-
         if ( !( shapeRepresentation instanceof shape_representation ) ) {
-
           continue
         }
 
@@ -4305,29 +4166,20 @@ export class AP214GeometryExtraction {
 
         const definition = shapeDefinitionRepresentation.definition
         const owningElementLocalID = definition.localID
-
         let treeNode = treeMap.get( shapeRepresentation.localID )
-
         const hasMappedNode = treeNode !== void 0
-
         if ( treeNode === void 0 ) {
-
           treeNode = { parents: 0 }
           treeMap.set( shapeRepresentation.localID, treeNode )
-
         } else {
-
           treeNode.parents ??= 0
         }
 
         const mappedTreeNode = treeNode
-
         const thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
-
         mappedTreeNode.thunk = thunk
 
         if ( !hasMappedNode ) {
-
           mappedTreeNode.processed = true
             
           const sourceShapeContext = 
@@ -4337,16 +4189,13 @@ export class AP214GeometryExtraction {
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
           if ( sourceShapeContext !== void 0 ) {
-
             const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-
             scaleTransform = this.identity3DNativeMatrix.uniformScale( 1.0 / sourceUnitInM )
           }
 
           // not an assembly mapped item, just extract the representation
           thunk( void 0, scaleTransform )
           continue
-
         }
       }
 
@@ -4356,11 +4205,8 @@ export class AP214GeometryExtraction {
         geometrically_bounded_wireframe_shape_representation)
 
       for ( const shapeRepresentation of shapeRepresentations ) {
-
         let treeNode = treeMap.get( shapeRepresentation.localID )
-
         if ( treeNode === void 0 ) {
-
           treeNode = { parents: 0 }
           treeMap.set( shapeRepresentation.localID, treeNode )
         }
@@ -4371,22 +4217,18 @@ export class AP214GeometryExtraction {
         }
 
         const mappedTreeNode = treeNode
-
         const owningElementLocalID = shapeRepresentation.localID
-
         mappedTreeNode.thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
       }
 
       // All thunks are set, now we can execute the full
       // assembly tree.
       for ( const [sourceID, mappedNode] of treeMap.entries() ) {
-
         if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
 
           //this.scene.clearParentStack()
 
           const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
-   
           const sourceShapeContext = 
             shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
             find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
@@ -4394,9 +4236,7 @@ export class AP214GeometryExtraction {
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
           if ( sourceShapeContext !== void 0 ) {
-
             const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-
             scaleTransform = this.identity3DNativeMatrix.uniformScale( 1.0 / sourceUnitInM )
           }
 
@@ -4421,5 +4261,102 @@ export class AP214GeometryExtraction {
     } finally {
       this.model.elementMemoization = previousMemoizationState
     }
+  }
+
+
+  /**
+   * Process the transforms for a shape relationship.
+   *
+   * @param shapeRelationship The shape relationship to process.
+   * @param sourceShape The source shape.
+   * @param targetShape The target shape.
+   * @param owningLocalID The owning local ID.
+   * @return The transform and a boolean indicating if the processing should continue inside the loop.
+   */
+  doTransforms(shapeRelationship: shape_representation_relationship, sourceShape: shape_representation, targetShape: shape_representation, owningLocalID: number): [NativeTransform4x4 | undefined, boolean] {
+    const isHDMI =
+      this.isHdmiShape(sourceShape) || this.isHdmiShape(targetShape)
+
+    if (isHDMI) {
+      console.log(
+        "[HDMI] doTransforms: relationship",
+        shapeRelationship.name,
+        "localID=",
+        shapeRelationship.localID,
+        "rep1=",
+        (sourceShape as any).name,
+        "rep2=",
+        (targetShape as any).name,
+      )
+    }
+
+    const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
+    let transform: NativeTransform4x4 | undefined = void 0
+    let scaleTransform : NativeTransform4x4 | undefined = void 0
+    if ( transformInstance !== void 0 ) {
+      const transformOperator = transformInstance.transformation_operator
+      if ( transformOperator instanceof item_defined_transformation ) {
+        const placement1 = transformOperator.transform_item_1
+        const placement2 = transformOperator.transform_item_2
+        if( !(placement1 instanceof placement) || !(placement2 instanceof placement) ) {
+          return [void 0, true]
+        }
+        const from = this.extractRawPlacement( placement1 )?.invert() ?? this.identity3DNativeMatrix
+        const to = this.extractRawPlacement( placement2 ) ?? this.identity3DNativeMatrix
+        const localPlacementParameters: ParamsLocalPlacement = {
+          useRelPlacement: true,
+          axis2Placement: from,
+          relPlacement: to,
+        }
+        transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+      } else if ( transformOperator instanceof cartesian_transformation_operator_3d ) {
+        transform = this.extractCartesianTransformOperator3D( transformOperator )
+      }
+    }
+
+    const sourceShapeContext = 
+      sourceShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+      find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+      
+    const targetShapeContext =
+      targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+        find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+    if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
+      const scaleRatio = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
+      if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
+        scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio ) 
+        if (isHDMI) {
+          console.log("[HDMI] scaleRatio:", scaleRatio)
+        }
+      }
+    }
+
+    if ( scaleTransform !== void 0 ) {
+      if ( transform !== void 0 ) {
+        const localPlacementParameters: ParamsLocalPlacement = {
+          useRelPlacement: true,
+          axis2Placement: transform,
+          relPlacement: scaleTransform,
+        }
+        transform = this.conwayModel.getLocalPlacement(localPlacementParameters)
+      } else {
+        transform = scaleTransform
+      }
+    }
+    return [transform, false]
+  }
+
+
+  /**
+   * Check if a shape is an HDMI shape.
+   *
+   * @param rep The shape to check.
+   * @return True if the shape is an HDMI shape, false otherwise.
+   */
+  private isHdmiShape(rep: shape_representation): boolean {
+    const name = (rep as any).name as string | undefined
+    if (!name) return false
+    return name.includes("HDMI_socket") || name.includes("HDMI")
   }
 }
