@@ -42,14 +42,23 @@ export class ConwayModelLoader {
 
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
+    let is203 = false
+
     switch ( modelFormat ) {
+
+      case ModelFormatType.AP203:
+
+        console.log( 'AP203 Step Detected, using AP214 loader' )
+        is203 = true
+        // Fallthru
 
       case ModelFormatType.AP214:
 
-        try {
-
+        if (!is203) {
           console.log( 'AP214 Step Detected' )
+        }
 
+        try {
           const conwayWasm = new ConwayGeometry()
 
           if ( !await conwayWasm.initialize() ) {
