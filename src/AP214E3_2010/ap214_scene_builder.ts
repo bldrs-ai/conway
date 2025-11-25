@@ -563,12 +563,17 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   }
 
   /**
+   * Add a transform node and make the current transform stack parent its parent.
    *
-   * @param localID
-   * @param transform
-   * @param nativeTransform
-   * @param mappedItem
-   * @return {AP214SceneTransform}
+   * Items added will be made the top of the transform stack.
+   *
+   * To prevent a node being used as a parent, pop it subsequently.
+   *
+   * @param localID The local ID of the transform.
+   * @param transform The transform matrix.
+   * @param nativeTransform The native transform matrix.
+   * @param mappedItem Whether the transform is a mapped item.
+   * @return The added transform node.
    */
   public addTransform(
       localID: number,
