@@ -97,54 +97,18 @@ jobs:
         if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: yarn build-GHA-all
 
-      # --- TypeScript cache: keyed on commit SHA with branch-scoped fallback.
-      # First run on a PR restores from prior PR run (or main); tsc --build
-      # then recompiles only changed files via .tsbuildinfo hashes.
-      - name: Restore TypeScript build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            compiled/src
-            compiled/examples
-            **/*.tsbuildinfo
-          key: ts-${{ runner.os }}-${{ hashFiles('**/tsconfig*.json', 'yarn.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ts-${{ runner.os }}-${{ hashFiles('**/tsconfig*.json', 'yarn.lock') }}-
-
+      # tsc --build always runs from scratch here. Earlier we cached
+      # compiled/src + compiled/examples + tsbuildinfo, but that subset
+      # left compiled/dependencies/conway-geom/index.js missing — the
+      # buildinfo claimed everything was up to date and tsc skipped
+      # recompiling the conway-geom shim, so the test runner couldn't
+      # resolve '../../dependencies/conway-geom/index.js'. A correct TS
+      # cache strategy can come back as a separate iteration.
       - name: TypeScript build (incremental)
         run: yarn build-incremental
 
       - name: Test
-        run: |
-          set -o pipefail
-          yarn test 2>&1 | tee /tmp/jest.log
-
-      - name: Post test log to PR on failure (TEMP)
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let log = '(no log file at /tmp/jest.log)';
-            try { log = fs.readFileSync('/tmp/jest.log', 'utf8'); } catch (e) {}
-            const lines = log.split('\n');
-            const tail = lines.slice(-250).join('\n');
-            const body = [
-              '## Build workflow: yarn test failed',
-              '',
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              '',
-              '### Last 250 lines of yarn test output',
-              '```',
-              tail,
-              '```',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
+        run: yarn test
 
       - name: Lint
         run: yarn lint
@@ -194,20 +158,7 @@ jobs:
           echo "::error::WASM cache miss in regression job; build should have populated it."
           exit 1
 
-      # Reuse build's TS output via the same cache. tsc --build then no-ops
-      # or does minimal incremental work to bring everything up to date.
-      - name: Restore TypeScript build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            compiled/src
-            compiled/examples
-            **/*.tsbuildinfo
-          key: ts-${{ runner.os }}-${{ hashFiles('**/tsconfig*.json', 'yarn.lock') }}-${{ github.sha }}
-          restore-keys: |
-            ts-${{ runner.os }}-${{ hashFiles('**/tsconfig*.json', 'yarn.lock') }}-
-
-      - name: TypeScript build (incremental)
+      - name: TypeScript build
         run: yarn build-incremental
 
       # Bump the minor version so the artifact tarball has a unique name
