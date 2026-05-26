@@ -50,7 +50,7 @@ export class ConwayModelLoader {
 
         console.log( 'AP203 Step Detected, using AP214 loader' )
         is203 = true
-        // Fallthru
+        // falls through
 
       case ModelFormatType.AP214:
 
