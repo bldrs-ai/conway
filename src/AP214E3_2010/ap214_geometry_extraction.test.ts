@@ -160,6 +160,79 @@ describe('AP214 Geometry Extraction', () => {
 
   })
 
+  test('uniformScaleAffine scales basis AND translation, preserves bottom row', () => {
+
+    // Direct unit test for the affine scale helper used by the unit-conversion
+    // path in doTransforms (see https://github.com/bldrs-ai/conway/issues/308).
+    // Models a placement in mm with a 1000 mm x-translation, 50 mm
+    // y-translation, converted to metres (factor = 1/MM_PER_M).
+    const MM_PER_M = 1000
+    const TX_MM = 1000
+    const TY_MM = 50
+    const factor = 1 / MM_PER_M
+
+    const model = conwayTubeModel as unknown as {
+      wasmModule: { Glmdmat4: new () => { setValues(v: number[]): void; getValues(): number[] } }
+      uniformScaleAffine(mat: unknown, factor: number): { getValues(): number[] }
+    }
+
+    const input = new model.wasmModule.Glmdmat4()
+    // Column-major: cols 0..2 = basis (identity), col 3 = translation
+    input.setValues([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      TX_MM, TY_MM, 0, 1,
+    ])
+
+    const v = model.uniformScaleAffine(input, factor).getValues()
+
+    // Basis diagonal scaled by factor.
+    expect(v[0]).toBeCloseTo(factor)
+    expect(v[5]).toBeCloseTo(factor)
+    expect(v[10]).toBeCloseTo(factor)
+
+    // Translation scaled by factor (mm -> m). This is the bug the C++
+    // `uniformScale` left in source units before; the helper fixes it.
+    expect(v[12]).toBeCloseTo(TX_MM * factor)
+    expect(v[13]).toBeCloseTo(TY_MM * factor)
+    expect(v[14]).toBeCloseTo(0)
+
+    // Bottom row left at [0, 0, 0, 1].
+    expect(v[3]).toBe(0)
+    expect(v[7]).toBe(0)
+    expect(v[11]).toBe(0)
+    expect(v[15]).toBe(1)
+  })
+
+  test('uniformScaleAffine with factor=1 returns the original matrix entries', () => {
+
+    const model = conwayTubeModel as unknown as {
+      wasmModule: { Glmdmat4: new () => { setValues(v: number[]): void; getValues(): number[] } }
+      uniformScaleAffine(mat: unknown, factor: number): { getValues(): number[] }
+    }
+
+    // A column-major rotation+translation matrix with non-trivial entries
+    // (60-degree z-rotation, arbitrary translation).
+    const COS60 = Math.cos(Math.PI / 3)
+    const SIN60 = Math.sin(Math.PI / 3)
+    const TY = 20
+    const TZ = 30
+    const original = [
+       COS60,  SIN60, 0, 0,
+      -SIN60,  COS60, 0, 0,
+       0,      0,     1, 0,
+       10,     TY,   TZ, 1,
+    ]
+    const input = new model.wasmModule.Glmdmat4()
+    input.setValues(original)
+
+    const v = model.uniformScaleAffine(input, 1).getValues()
+    for (let i = 0; i < original.length; ++i) {
+      expect(v[i]).toBeCloseTo(original[i])
+    }
+  })
+
   test('destroy()', () => {
     expect(destroy()).toBe(false)
   })
