@@ -188,7 +188,7 @@ const config: Config = {
 
   transform: {
    "^.+\\.js$": 'babel-jest'
-  }
+  },
 
   // An array of regexp pattern strings that are matched against all modules before the module loader will automatically return a mock for them
   // unmockedModulePathPatterns: undefined,
@@ -201,6 +201,10 @@ const config: Config = {
 
   // Whether to use watchman for file crawling
   // watchman: true,
-};
 
-export default config;
+  // Default timeout (ms) for tests and hooks. WASM init in beforeAll
+  // routinely exceeds the 5s jest default on cold start.
+  testTimeout: 30000,
+}
+
+export default config
