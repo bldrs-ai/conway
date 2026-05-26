@@ -3754,6 +3754,35 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Multiply a native 4x4 transform by a uniform scale factor in affine
+   * semantics: scale both the 3x3 basis and the translation column,
+   * leaving the bottom row at [0,0,0,1]. Equivalent to `factor * mat`
+   * for any affine input.
+   *
+   * Used in preference to the native `uniformScale` binding for unit
+   * conversion, where the placement's translation also needs to be
+   * scaled. See https://github.com/bldrs-ai/conway/issues/308.
+   *
+   * @param mat Source column-major Glmdmat4 transform; not mutated.
+   * @param factor Scalar applied to every affine entry.
+   * @return A freshly allocated 4x4 with the scale applied.
+   */
+  private uniformScaleAffine( mat: NativeTransform4x4, factor: number ): NativeTransform4x4 {
+    const v = mat.getValues().slice()
+    // Column-major Glmdmat4 layout:
+    //   basis at 0,1,2 / 4,5,6 / 8,9,10
+    //   translation at 12,13,14
+    //   bottom row at 3,7,11,15 (untouched: [0,0,0,1])
+    v[0]  *= factor; v[1]  *= factor; v[2]  *= factor
+    v[4]  *= factor; v[5]  *= factor; v[6]  *= factor
+    v[8]  *= factor; v[9]  *= factor; v[10] *= factor
+    v[12] *= factor; v[13] *= factor; v[14] *= factor
+    const result = ( new ( this.wasmModule.Glmdmat4 ) ) as NativeTransform4x4
+    result.setValues( v )
+    return result
+  }
+
+  /**
    *
    */
   populateStyledItemsMap() {
@@ -4145,7 +4174,8 @@ export class AP214GeometryExtraction {
 
           if ( sourceShapeContext !== void 0 ) {
             const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-            scaleTransform = this.identity3DNativeMatrix.uniformScale( 1.0 / sourceUnitInM )
+            scaleTransform =
+              this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
           }
 
           // not an assembly mapped item, just extract the representation
@@ -4192,7 +4222,8 @@ export class AP214GeometryExtraction {
 
           if ( sourceShapeContext !== void 0 ) {
             const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-            scaleTransform = this.identity3DNativeMatrix.uniformScale( 1.0 / sourceUnitInM )
+            scaleTransform =
+              this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
           }
 
           // not an assembly mapped item, just extract the representation
@@ -4260,42 +4291,19 @@ export class AP214GeometryExtraction {
       targetShape.context_of_items.findVariant( global_unit_assigned_context )?.units?.
         find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
 
-    let scaleTransform : NativeTransform4x4 | undefined = void 0
     let scaleRatio: number = 1.0
+    let needsScale = false
     if ( sourceShapeContext !== void 0 && targetShapeContext !== void 0 ) {
       const sr = this.lengthUnitConversionRatio( sourceShapeContext, targetShapeContext )
-      if (sr !== void 0) {
+      if ( sr !== void 0 && sr !== 1.0 ) {
         scaleRatio = sr
-      }
-      if ( scaleRatio !== void 0 && scaleRatio !== 1.0 ) {
-        scaleTransform = this.identity3DNativeMatrix.uniformScale( scaleRatio ) 
+        needsScale = true
       }
     }
 
-    if ( scaleTransform !== void 0 ) {
-      if ( transform !== void 0 ) {
-        // See https://github.com/bldrs-ai/conway/issues/308 for the following approach.
-        // Extract the matrix values
-        const v = transform.getValues().slice() // clone array
-
-        // NOTE: adjust index pattern if your matrix is column-major;
-        // these indices assume ROW-MAJOR:
-        //
-        // [ 0  1  2  3
-        //   4  5  6  7
-        //   8  9 10 11
-        //  12 13 14 15 ]
-        //
-        // Translation lives in v[12], v[13], v[14].
-        // Only scale the 3×3 basis (v[0..2], v[4..6], v[8..10]).
-        v[0] *= scaleRatio; v[1] *= scaleRatio; v[2] *= scaleRatio
-        v[4] *= scaleRatio; v[5] *= scaleRatio; v[6] *= scaleRatio
-        v[8] *= scaleRatio; v[9] *= scaleRatio; v[10] *= scaleRatio
-        transform = (new (this.wasmModule.Glmdmat4)) as NativeTransform4x4
-        transform.setValues(v)
-      } else {
-        transform = scaleTransform
-      }
+    if ( needsScale ) {
+      transform =
+        this.uniformScaleAffine( transform ?? this.identity3DNativeMatrix, scaleRatio )
     }
 
     return [transform, false]
