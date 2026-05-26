@@ -201,6 +201,10 @@ const config: Config = {
 
   // Whether to use watchman for file crawling
   // watchman: true,
+
+  // Default timeout (ms) for tests and hooks. WASM init in beforeAll
+  // routinely exceeds the 5s jest default on cold start.
+  testTimeout: 30000,
 };
 
 export default config;
