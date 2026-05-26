@@ -1,4 +1,4 @@
-name: Build
+name: CI
 
 on:
   pull_request:
@@ -9,10 +9,11 @@ on:
 env:
   EMSDK_VERSION: '3.1.72'
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
+  TEST_MODELS_TAG: '0.13.802'
 
 jobs:
   build:
-    # Heavy runner matches ifc-regression.yml. The WASM toolchain (genie +
+    # Heavy runner matches ifc-regression. The WASM toolchain (genie +
     # emcc) needs the headroom; the default 2-vCPU runner fails the compile.
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     steps:
@@ -36,6 +37,7 @@ jobs:
 
       # --- WASM cache: keyed on conway-geom submodule SHA + EMSDK version.
       # On hit, the heavy WASM build (GENie + EMSDK + emcc) is skipped entirely.
+      # The regression job depends on this job and consumes the same cache.
       - name: Restore WASM build cache
         id: wasm-cache
         uses: actions/cache@v4
@@ -117,3 +119,186 @@ jobs:
 
       - name: Lint
         run: yarn lint
+
+  # ---------------------------------------------------------------------------
+  # Regression: consumes build's WASM cache (no rebuild). Posts results to PR.
+  # Kept on a separate job (vs steps in build) so its 5-10 min runtime doesn't
+  # block the build-job status from showing once the fast feedback finishes.
+  # ---------------------------------------------------------------------------
+  run-ifc-regression:
+    needs: build
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    steps:
+      - name: Checkout Conway Repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Build job populated this cache. We expect a hit; if not, fail fast
+      # rather than silently rebuilding WASM and confusing the timing model.
+      - name: Restore WASM build cache (populated by build)
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      - name: Fail if WASM cache miss
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::WASM cache miss in regression job; build should have populated it."
+          exit 1
+
+      # Reuse build's TS output via the same cache. tsc --build then no-ops
+      # or does minimal incremental work to bring everything up to date.
+      - name: Restore TypeScript build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            compiled/src
+            compiled/examples
+            **/*.tsbuildinfo
+          key: ts-${{ runner.os }}-${{ hashFiles('**/tsconfig*.json', 'yarn.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ts-${{ runner.os }}-${{ hashFiles('**/tsconfig*.json', 'yarn.lock') }}-
+
+      - name: TypeScript build (incremental)
+        run: yarn build-incremental
+
+      # Bump the minor version so the artifact tarball has a unique name
+      # distinct from the released package (matches prior workflow behavior).
+      - name: Bump minor for artifact naming
+        run: yarn bumpMinor
+
+      - name: Bundle examples
+        run: yarn bundle-examples
+
+      # --- Test Models Checkout & Regression ---
+      - name: Restore Test Models Cache
+        id: cache-test-models
+        uses: actions/cache@v4
+        with:
+          path: test-models
+          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+
+      - name: Checkout Test Models Repo if Not Cached
+        if: steps.cache-test-models.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+
+      - name: Run IFC Regression Batch Script
+        run: |
+          node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
+            -e "sp-.*\.ifc" \
+            -t ${{ env.TEST_MODELS_TAG }} \
+            test-models \
+            test-models/regression/test_models \
+            --parallel --mem-utilization 90
+
+      - name: Gather Regression Results
+        id: regression_results
+        run: |
+          cd test-models/regression/test_models
+
+          # Process failed.csv with Python CSV parsing
+          if [ -f failed.csv ]; then
+            FAILED_OUTPUT=$(python - <<'EOF'
+          import csv
+          with open('failed.csv', newline='') as csvfile:
+              reader = list(csv.reader(csvfile))
+          if len(reader) <= 1:
+              print("No failures :white_check_mark:")
+          else:
+              header = reader[0]
+              header_line = "| " + " | ".join(header) + " |"
+              separator_line = "|" + " --- |" * len(header)
+              print(header_line)
+              print(separator_line)
+              for row in reader[1:]:
+                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
+                print("| " + " | ".join(sanitized_row) + " |")
+          EOF
+          )
+          else
+            FAILED_OUTPUT="No failed.csv found."
+          fi
+
+          # Process errors.csv with Python CSV parsing
+          if [ -f errors.csv ]; then
+            ERRORS_OUTPUT=$(python - <<'EOF'
+          import csv
+          with open('errors.csv', newline='') as csvfile:
+              reader = list(csv.reader(csvfile))
+          if len(reader) <= 1:
+              print("No errors found.")
+          else:
+              header = reader[0]
+              header_line = "| " + " | ".join(header) + " |"
+              separator_line = "|" + " --- |" * len(header)
+              print(header_line)
+              print(separator_line)
+              for row in reader[1:]:
+                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
+                print("| " + " | ".join(sanitized_row) + " |")
+          EOF
+          )
+          else
+            ERRORS_OUTPUT="No errors.csv found."
+          fi
+
+          echo "failed_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$FAILED_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "errors_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create NPM Package
+        id: npm_pack
+        run: |
+          PACKAGE_TGZ=$(npm pack 2>&1 | grep "filename:" | sed 's/.*filename: //')
+          echo "PACKAGE_TGZ=${PACKAGE_TGZ}" >> $GITHUB_ENV
+          echo "package_tgz=${PACKAGE_TGZ}" >> $GITHUB_OUTPUT
+
+      - name: Upload NPM Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.npm_pack.outputs.package_tgz }}
+          path: ${{ steps.npm_pack.outputs.package_tgz }}
+
+      - name: Comment on Pull Request with Regression Results and NPM Package Artifact
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## IFC Regression Results
+
+            **Failed.csv:**
+            ${{ steps.regression_results.outputs.failed_output }}
+
+            **Errors.csv:**
+            ${{ steps.regression_results.outputs.errors_output }}
+
+            **NPM Package Artifact:**
+            The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.
+            Download it from [this run's artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
