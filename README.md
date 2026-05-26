@@ -80,39 +80,6 @@ And finally, using the watch functionality, you can also have the code automatic
 yarn build-test-watch
 ```
 
-# Production NPM Build
-```
-yarn test
-yarn build                      # stamps build version string
-grep '"version"' package.json   # should see the new version string, 1 more than what the repo shows in GH
-npm pack
-```
-
-## Push to Production: H3 & Share
-The following process works the same for headless-three and Share.
-
-Do H3 first, then Share
-```
-cp bldrs-ai-conway-<VERSION>.tgz $H3_DIR
-cd $H3_DIR
-git fetch upstream # or origin if not on fork
-git checkout -b conway-<VERSION> upstream/main
-rm bldrs-ai-conway-<OLD VERSION>.tgz
-## OLD WAY: yarn remove @bldrs-ai/conway
-## OLD WAY: yarn add ./bldrs-ai-conway-<VERSION>.tgz
-## New way: edit package.json dep for conway to point to new filename.
-yarn install
-yarn build && yarn test
-yarn serve
-# Smoke test local candidate: load all sample models, load local model, exercise dialogs, etc.
-git add . ; git ci -m 'Upgrad of conway from <OLD VERSION> to <VERSION>'
-git push origin HEAD
-# 1) Send PR for review
-# 2) On merge, Netlify will detect and build and deploy to prod; watch deploy logs on Netlify
-# 3) Smoke test prod.  Same as above
-# 4) Post to #bot or #share "New Conway <VERSION> in prod" with linked changelist
-```
-
 # IFC Parser Console Test Application
 
 Conway has a test application for parsing IFC step files to see the performance and included entity types at src/core/ifc/ifc_command_line_main.ts. 
@@ -210,10 +177,67 @@ Conway also has a regression testing framework, which can be run on individual m
 
 
 # Release Steps
-1. Build Conway with `yarn build` via the above steps depending on your platform.
-2. Run the performance test script, instructions outlined in the [performance documentation](scripts/README.md)
-3. Run the regression testing batch script, instructions outlined in the [regression documentation](regression/README.md)
-4. Run `yarn create-release-candidate <major | minor> <GITHUB_PAT>`. This package release is by default tagged "latest". 
-5. Send PR with updated version + benchmarks and await approval.
-6. Once approved, Go to GitHub, select the new tagged version, and create a release from it. This means we also have changelogs for patch level releases.
-7. Once release has been deployed into Share, tag package as stable.
+
+Releases are cut from `main`. Patch numbers auto-increment on every build
+(from `git rev-list HEAD --count` via `scripts/updateVersion.mjs`); only
+`major` and `minor` are bumped manually by `create-release-candidate.sh`.
+
+### 1. Pre-release validation
+```
+yarn build                       # full build; stamps patch version
+grep '"version"' package.json    # should be 1 ahead of the latest tag on GH
+```
+- Run the performance test suite — see [scripts/README.md](scripts/README.md).
+- Run the regression batch — see [regression/README.md](regression/README.md).
+
+### 2. Publish the release candidate
+```
+yarn create-release-candidate <major|minor>
+```
+This bumps `package.json` + `src/version/version.ts`, re-runs
+`build-incremental`, tags the version in git, pushes the tag,
+`npm publish --access public` (you'll be prompted for npm OTP), and
+regenerates typedoc. The package is published with the default `latest`
+dist-tag; `stable` is added later (step 5).
+
+> **Heads up:** the script publishes to npm and pushes the tag *before*
+> the PR in step 3 lands. If the PR is rejected, you'll need to
+> `npm deprecate` (or `npm unpublish` within 72h) the published version.
+
+### 3. Open the version-bump PR
+Open a PR with the version bump and benchmark deltas. Wait for approval
+and merge.
+
+### 4. Roll into headless-three and Share
+The same flow applies to both — do **H3 first, then Share**:
+```
+cp bldrs-ai-conway-<VERSION>.tgz $H3_DIR
+cd $H3_DIR
+git fetch upstream                                       # or origin if not on a fork
+git checkout -b conway-<VERSION> upstream/main
+rm bldrs-ai-conway-<OLD>.tgz
+# Edit package.json dep for @bldrs-ai/conway to point at the new tarball filename.
+yarn install
+yarn build && yarn test
+yarn serve
+# Smoke test the local candidate: load all sample models, load a local model,
+# exercise dialogs, etc.
+git add . && git commit -m "Upgrade conway from <OLD> to <VERSION>"
+git push origin HEAD
+```
+Then:
+1. Send PR for review.
+2. On merge, Netlify auto-builds and deploys to prod; watch the deploy logs.
+3. Smoke test prod (same checks as local).
+4. Post in `#bot` or `#share`: "New Conway <VERSION> in prod" with a link
+   to the changelog.
+
+### 5. Cut the GitHub release and tag stable
+After Share prod is verified:
+```
+# Create the GitHub release from the tag (auto-generates changelog from PRs)
+gh release create <VERSION> --generate-notes
+
+# Promote the npm package to the stable dist-tag
+npm dist-tag add @bldrs-ai/conway@<VERSION> stable
+```

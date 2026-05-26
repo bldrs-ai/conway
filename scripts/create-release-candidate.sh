@@ -40,7 +40,8 @@ npm version "$NEW_VERSION" --no-git-tag-version
 VERSION_FILE="src/version/version.ts"
 if [ -f "$VERSION_FILE" ]; then
     echo "Updating version in $VERSION_FILE to $NEW_VERSION..."
-    sed -i '' "s/Conway Web-Ifc Shim v[0-9]*\.[0-9]*\.[0-9]*/Conway Web-Ifc Shim v$NEW_VERSION/" "$VERSION_FILE"
+    # perl -i is portable across macOS (BSD) and Linux (GNU); sed -i is not.
+    perl -i -pe "s/Conway Web-Ifc Shim v[0-9]+\.[0-9]+\.[0-9]+/Conway Web-Ifc Shim v$NEW_VERSION/" "$VERSION_FILE"
 else
     echo "Error: Version file $VERSION_FILE not found!"
     exit 1
