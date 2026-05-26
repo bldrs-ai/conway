@@ -75,6 +75,20 @@ jobs:
           version: ${{ env.EMSDK_VERSION }}
           actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
 
+      - name: Export EMSDK paths for subsequent steps
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          which em++
+          em++ -v
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> "$GITHUB_ENV"
+
+      - name: Extract WASM build dependencies
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn extract-wasm-dependencies
+
       - name: Build WASM (all four variants)
         if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: yarn run build-GHA-base ConwayGeomWasmNode ConwayGeomWasmNodeMT ConwayGeomWasmWeb ConwayGeomWasmWebMT
