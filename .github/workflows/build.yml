@@ -106,19 +106,43 @@ jobs:
       - name: Snapshot state before WASM compile
         if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: |
-          echo '--- bin/linux:'
-          ls -la bin/linux/
-          file bin/linux/genie
-          echo '--- conway-geom contents (top level):'
-          ls -la dependencies/conway-geom/ | head -25
-          echo '--- conway-geom/dependencies/wasm:'
-          ls dependencies/conway-geom/dependencies/wasm/ 2>/dev/null || echo "missing"
-          echo '--- genie.lua exists?'
-          ls -la dependencies/conway-geom/*.lua 2>/dev/null || echo "no lua files"
+          {
+            echo '## Pre-build state snapshot'
+            echo '### bin/linux/'
+            echo '```'
+            ls -la bin/linux/ 2>&1 || true
+            file bin/linux/genie 2>&1 || true
+            echo '```'
+            echo '### dependencies/conway-geom/'
+            echo '```'
+            ls -la dependencies/conway-geom/ 2>&1 | head -40 || true
+            echo '```'
+            echo '### dependencies/conway-geom/dependencies/wasm/'
+            echo '```'
+            ls dependencies/conway-geom/dependencies/wasm/ 2>&1 || echo "missing"
+            echo '```'
+            echo '### *.lua at conway-geom top level'
+            echo '```'
+            ls -la dependencies/conway-geom/*.lua 2>&1 || echo "no lua files"
+            echo '```'
+            echo "### env: EMSDK=${EMSDK:-unset}  EMSCRIPTEN=${EMSCRIPTEN:-unset}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build WASM via yarn build-GHA-all
         if: steps.wasm-cache.outputs.cache-hit != 'true'
-        run: yarn build-GHA-all
+        run: |
+          set -o pipefail
+          yarn build-GHA-all 2>&1 | tee /tmp/wasm-build.log
+
+      - name: Dump WASM build log tail to summary on failure
+        if: failure() && steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          {
+            echo '## WASM build failure - last 300 lines'
+            echo '```'
+            tail -300 /tmp/wasm-build.log 2>&1 || echo "no log file at /tmp/wasm-build.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # --- TypeScript cache: keyed on commit SHA with branch-scoped fallback.
       # First run on a PR restores from prior PR run (or main); tsc --build
