@@ -115,7 +115,36 @@ jobs:
         run: yarn build-incremental
 
       - name: Test
-        run: yarn test
+        run: |
+          set -o pipefail
+          yarn test 2>&1 | tee /tmp/jest.log
+
+      - name: Post test log to PR on failure (TEMP)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '(no log file at /tmp/jest.log)';
+            try { log = fs.readFileSync('/tmp/jest.log', 'utf8'); } catch (e) {}
+            const lines = log.split('\n');
+            const tail = lines.slice(-250).join('\n');
+            const body = [
+              '## Build workflow: yarn test failed',
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              '',
+              '### Last 250 lines of yarn test output',
+              '```',
+              tail,
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
 
       - name: Lint
         run: yarn lint
