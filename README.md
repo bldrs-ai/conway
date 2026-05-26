@@ -191,22 +191,26 @@ grep '"version"' package.json    # should be 1 ahead of the latest tag on GH
 - Run the regression batch — see [regression/README.md](regression/README.md).
 
 ### 2. Publish the release candidate
+Run this from a release branch (not directly on `main`):
 ```
 yarn create-release-candidate <major|minor>
 ```
 This bumps `package.json` + `src/version/version.ts`, re-runs
-`build-incremental`, tags the version in git, pushes the tag,
-`npm publish --access public` (you'll be prompted for npm OTP), and
-regenerates typedoc. The package is published with the default `latest`
-dist-tag; `stable` is added later (step 5).
+`build-incremental`, **commits the bump on the current branch**, tags
+that commit, pushes both branch and tag, runs `npm publish --access public`
+(you'll be prompted for npm OTP), and regenerates typedoc. The package is
+published with the default `latest` dist-tag; `stable` is added later
+(step 5).
 
 > **Heads up:** the script publishes to npm and pushes the tag *before*
 > the PR in step 3 lands. If the PR is rejected, you'll need to
-> `npm deprecate` (or `npm unpublish` within 72h) the published version.
+> `npm deprecate` (or `npm unpublish` within 72h) the published version,
+> and either delete the pushed tag or move it once a corrected commit
+> lands on `main`.
 
 ### 3. Open the version-bump PR
-Open a PR with the version bump and benchmark deltas. Wait for approval
-and merge.
+The bump commit is already on your release branch. Open a PR from it,
+add benchmark deltas to the body, wait for approval, and merge.
 
 ### 4. Roll into headless-three and Share
 The same flow applies to both — do **H3 first, then Share**:
