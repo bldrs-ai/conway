@@ -85,13 +85,25 @@ jobs:
           echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
           echo "EMSCRIPTEN=$EMSCRIPTEN" >> "$GITHUB_ENV"
 
-      - name: Extract WASM build dependencies
+      - name: Verify WASM build prerequisites
         if: steps.wasm-cache.outputs.cache-hit != 'true'
-        run: yarn extract-wasm-dependencies
+        run: |
+          set -x
+          echo "PATH=$PATH"
+          echo "EMSDK=${EMSDK:-unset}"
+          echo "EMSCRIPTEN=${EMSCRIPTEN:-unset}"
+          which em++ || echo "em++ NOT in PATH"
+          em++ --version || true
+          ls -la bin/linux/ || echo "no bin/linux/"
+          file bin/linux/genie || echo "no genie binary"
+          ls -la dependencies/conway-geom/ | head -20
+          ls dependencies/conway-geom/dependencies/wasm/ 2>/dev/null || echo "wasm deps dir missing"
 
-      - name: Build WASM (all four variants)
+      - name: Install dependencies + extract WASM headers + build WASM
         if: steps.wasm-cache.outputs.cache-hit != 'true'
-        run: yarn run build-GHA-base ConwayGeomWasmNode ConwayGeomWasmNodeMT ConwayGeomWasmWeb ConwayGeomWasmWebMT
+        run: |
+          yarn setup
+          yarn build-GHA-all
 
       # --- TypeScript cache: keyed on commit SHA with branch-scoped fallback.
       # First run on a PR restores from prior PR run (or main); tsc --build
