@@ -40,7 +40,8 @@ npm version "$NEW_VERSION" --no-git-tag-version
 VERSION_FILE="src/version/version.ts"
 if [ -f "$VERSION_FILE" ]; then
     echo "Updating version in $VERSION_FILE to $NEW_VERSION..."
-    sed -i '' "s/Conway Web-Ifc Shim v[0-9]*\.[0-9]*\.[0-9]*/Conway Web-Ifc Shim v$NEW_VERSION/" "$VERSION_FILE"
+    # perl -i is portable across macOS (BSD) and Linux (GNU); sed -i is not.
+    perl -i -pe "s/Conway Web-Ifc Shim v[0-9]+\.[0-9]+\.[0-9]+/Conway Web-Ifc Shim v$NEW_VERSION/" "$VERSION_FILE"
 else
     echo "Error: Version file $VERSION_FILE not found!"
     exit 1
@@ -52,11 +53,19 @@ echo "New version is $NEW_VERSION"
 echo "Running build-incremental"
 yarn build-incremental
 
-# Create a git tag for the new version without creating a commit
+# Commit the version bump so the tag points to a real commit that
+# matches package.json (otherwise the tag and the published package disagree).
+echo "Committing version bump for $NEW_VERSION..."
+git add package.json "$VERSION_FILE"
+git commit -m "Bump version to $NEW_VERSION"
+
+# Create a git tag on the bump commit
 echo "Creating git tag $NEW_VERSION..."
 git tag "$NEW_VERSION"
 
-# Push the tag to the remote
+# Push the bump commit on the current branch, then the tag
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git push origin "$CURRENT_BRANCH"
 git push origin "$NEW_VERSION"
 
 # Publish to GitHub npm registry

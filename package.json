@@ -3,7 +3,7 @@
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
-  "version": "0.22.969",
+  "version": "1.22.969",
   "repository": "https://github.com/bldrs-ai/conway",
   "files": [
     "./compiled/**/*"
@@ -61,7 +61,7 @@
     "build-codex-all": "yarn run build-codex-base ConwayGeomWasmNode ConwayGeomWasmNodeMT ConwayGeomWasmWeb ConwayGeomWasmWebMT && yarn bumpMinor",
     "build-codex-MT": "yarn run build-codex-base ConwayGeomWasmNodeMT",
     "bundle": "yarn esbuild --bundle --format=cjs --platform=node --banner:js='#!/usr/bin/env node'",
-    "bundle-examples": "yarn bundle-browser && yarn bundle-cli && yarn bundle-validator && shx chmod +x ./compiled/examples/*-bundled.cjs; cd compiled; rm Dist; cp -r dependencies/conway-geom/Dist .",
+    "bundle-examples": "yarn bundle-browser && yarn bundle-cli && yarn bundle-validator && shx chmod +x ./compiled/examples/*-bundled.cjs && shx rm -rf compiled/Dist && shx cp -r dependencies/conway-geom/Dist compiled/",
     "bundle-browser": "yarn bundle compiled/examples/browser.js --outfile=compiled/examples/browser-bundled.cjs",
     "bundle-cli": "yarn bundle compiled/src/ifc/ifc_command_line_main.js --outfile=compiled/examples/cli-bundled.cjs",
     "bundle-validator": "yarn bundle compiled/examples/validator.js --outfile=compiled/examples/validator-bundled.cjs",
