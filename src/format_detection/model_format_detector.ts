@@ -12,6 +12,8 @@ export enum ModelFormatType {
   IFC = 0,
    
   AP214 = 1,
+
+  AP203 = 2,
 }
 
 /**
@@ -30,33 +32,28 @@ export default class ModelFormatDetector {
 
     const [stepHeader, errorCode] = StepHeaderParser.instance.parseHeader( input )
 
-
-    console.log( ParseResult[errorCode] )
-
     if ( errorCode === ParseResult.COMPLETE || errorCode === ParseResult.INCOMPLETE ) {
 
       const schema = stepHeader.headers.get( 'FILE_SCHEMA' )?.toLocaleUpperCase()
 
       if ( schema !== void 0 ) {
 
-        const schemaNoSpaces = schema.replaceAll( ' ', '' )
+        const quotedEntries = Array.from( schema.matchAll( /'([^']+)'/g ) ).map( (match) => match[1] )
+        const schemaEntries = quotedEntries.length > 0 ? quotedEntries : [schema]
 
-        if ( schemaNoSpaces.startsWith( '((\'IFC' ) ) {
-          return ModelFormatType.IFC
-        }
+        for ( const rawEntry of schemaEntries ) {
+          const entryNoSpaces = rawEntry.replaceAll( ' ', '' )
 
-        
-        if ( schemaNoSpaces.startsWith( '((\'AUTOMOTIVE_DESIGN\'))' ) ) {
-        
-          return ModelFormatType.AP214
-        }
+          if ( entryNoSpaces.startsWith( 'IFC' ) ) {
+            return ModelFormatType.IFC
+          }
 
-        if ( schemaNoSpaces.startsWith( '((\'AUTOMOTIVE_DESIGN{') ) {
-
-          const afterBrace = schema.substring( schema.indexOf( '{' ) + 1 ).trimStart()
-
-          if ( afterBrace.startsWith( '1 0 10303 214' ) ) {
+          if ( entryNoSpaces.startsWith( 'AUTOMOTIVE_DESIGN' ) ) {
             return ModelFormatType.AP214
+          }
+
+          if ( entryNoSpaces.startsWith( 'CONFIG_CONTROL_DESIGN' ) ) {
+            return ModelFormatType.AP203
           }
         }
       }
