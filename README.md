@@ -190,23 +190,28 @@ grep '"version"' package.json    # should be 1 ahead of the latest tag on GH
 - Run the performance test suite — see [scripts/README.md](scripts/README.md).
 - Run the regression batch — see [regression/README.md](regression/README.md).
 
-### 2. Publish the release candidate
+### 2. Cut the release candidate
 Run this from a release branch (not directly on `main`):
 ```
 yarn create-release-candidate <major|minor>
 ```
 This bumps `package.json` + `src/version/version.ts`, re-runs
 `build-incremental`, **commits the bump on the current branch**, tags
-that commit, pushes both branch and tag, runs `npm publish --access public`
-(you'll be prompted for npm OTP), and regenerates typedoc. The package is
-published with the default `latest` dist-tag; `stable` is added later
-(step 5).
+that commit, pushes both branch and tag, and regenerates typedoc.
 
-> **Heads up:** the script publishes to npm and pushes the tag *before*
-> the PR in step 3 lands. If the PR is rejected, you'll need to
-> `npm deprecate` (or `npm unpublish` within 72h) the published version,
-> and either delete the pushed tag or move it once a corrected commit
-> lands on `main`.
+The tag push triggers `.github/workflows/publish.yml`, which rebuilds
+WASM + TS, bundles, and runs `npm publish --access public` from CI. The
+package is published with the default `latest` dist-tag; `stable` is
+added later (step 5).
+
+> **Requires:** an `NPM_TOKEN` repo secret (automation token from npmjs).
+> Without it the publish workflow fails loudly on tag push, and you can
+> add the token + re-run the failed job to recover.
+
+> **Heads up:** publish happens via CI *before* the PR in step 3 lands.
+> If the PR is rejected, you'll need to `npm deprecate` (or
+> `npm unpublish` within 72h) the published version, and either delete
+> the pushed tag or move it once a corrected commit lands on `main`.
 
 ### 3. Open the version-bump PR
 The bump commit is already on your release branch. Open a PR from it,

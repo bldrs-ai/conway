@@ -1,0 +1,131 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  EMSDK_VERSION: '3.1.72'
+  EMSDK_CACHE_FOLDER: 'cache/emsdk'
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    steps:
+      # Bail early if NPM_TOKEN hasn't been configured. The publish step at
+      # the end depends on it; failing here surfaces the missing secret
+      # before paying the cost of a full build.
+      - name: Verify NPM_TOKEN is configured
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN repo secret is not set. Add it under Settings → Secrets and variables → Actions, then re-push the tag (or 'Re-run failed jobs' on this run)."
+            exit 1
+          fi
+
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Same WASM cache key as the Build workflow. Tag pushes from main
+      # usually hit a fresh cache populated by the PR's Build job, so the
+      # slow emcc/GENie path is normally skipped.
+      - name: Restore WASM build cache
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      - name: Restore GENie cache
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        id: genie-cache
+        uses: actions/cache@v4
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      - name: Build GENie
+        if: steps.wasm-cache.outputs.cache-hit != 'true' && steps.genie-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/bkaradzic/GENie.git GENie
+          (cd GENie && make)
+          mkdir -p bin/linux
+          cp GENie/bin/linux/genie bin/linux/genie
+
+      - name: Cache Emscripten system libraries
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.EMSDK_CACHE_FOLDER }}
+          key: ${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
+
+      - name: Export EMSDK paths
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> "$GITHUB_ENV"
+
+      - name: Extract WASM build dependencies
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn extract-wasm-dependencies
+
+      # build-GHA-base (not build-GHA-all) - we deliberately skip the
+      # 'yarn bumpMinor' step that build-GHA-all does, because the
+      # published version must match the tag.
+      - name: Build WASM
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn run build-GHA-base ConwayGeomWasmNode ConwayGeomWasmNodeMT ConwayGeomWasmWeb ConwayGeomWasmWebMT
+
+      # On cache hit, the WASM step above is skipped and build-gha.sh's
+      # final 'yarn build-incremental' never runs. Catch up here so the
+      # TypeScript output exists for bundle-examples and npm publish.
+      - name: TypeScript build
+        if: steps.wasm-cache.outputs.cache-hit == 'true'
+        run: yarn build-incremental
+
+      - name: Bundle examples
+        run: yarn bundle-examples
+
+      - name: Verify package.json version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME}"
+          if [ "${PKG_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::package.json version (${PKG_VERSION}) does not match pushed tag (${TAG_VERSION})."
+            exit 1
+          fi
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
