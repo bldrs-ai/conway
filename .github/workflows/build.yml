@@ -282,3 +282,110 @@ jobs:
             The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.
             Download it from [this run's artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
             (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
+
+  # ---------------------------------------------------------------------------
+  # Continuous release: on every successful push to main, tag the commit with
+  # the next version and publish to npm. Version is `major.minor` (from
+  # package.json) joined with `git rev-list HEAD --count + 1` for patch. So
+  # every green merge ships a unique patch to @latest; manual major/minor
+  # bumps happen via a PR that edits package.json's version field.
+  # ---------------------------------------------------------------------------
+  auto-publish:
+    needs: [build, run-ifc-regression]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    permissions:
+      contents: write
+    steps:
+      - name: Verify NPM_TOKEN is configured
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN repo secret is not set. Add it under Settings → Secrets and variables → Actions, then re-run this job."
+            exit 1
+          fi
+
+      - name: Checkout (full history for rev-list)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'yarn'
+
+      - name: Compute next version
+        id: ver
+        run: |
+          MAJOR=$(node -p "require('./package.json').version.split('.')[0]")
+          # PR number is parsed out of the merge commit message. Both
+          # 'Merge pull request #N from ...' (merge commit) and
+          # '... (#N)' (squash-merge) embed it. If the push wasn't via
+          # PR merge, fall back to 0 - the version still publishes but
+          # signals 'manual push, not PR-attached'.
+          MSG=$(git log -1 --format=%B HEAD)
+          PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
+          if [ -z "$PR_NUM" ]; then
+            echo "::warning::Could not parse PR number from commit message; using 0."
+            PR_NUM=0
+          fi
+          COMMIT=$(git rev-list HEAD --count)
+          NEW_VERSION="${MAJOR}.${PR_NUM}.${COMMIT}"
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, PR=${PR_NUM}, commit=${COMMIT})"
+
+      - name: Stamp version into package.json + version.ts
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          perl -i -pe "s/(\"version\":\s*)\"[^\"]+\"/\$1\"$NEW_VERSION\"/" package.json
+          perl -i -pe "s/Conway Web-Ifc Shim v[0-9]+\.[0-9]+\.[0-9]+/Conway Web-Ifc Shim v$NEW_VERSION/" src/version/version.ts
+
+      - name: Compute conway-geom submodule SHA
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # WASM cache is populated by the build job earlier in this run.
+      - name: Restore WASM build cache
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      - name: Fail if WASM cache miss
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::WASM cache miss in auto-publish; build should have populated it."
+          exit 1
+
+      - name: TypeScript build
+        run: yarn build-incremental
+
+      - name: Bundle examples
+        run: yarn bundle-examples
+
+      - name: Create and push tag
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag -a "$NEW_VERSION" -m "Auto-release $NEW_VERSION"
+          git push origin "$NEW_VERSION"
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

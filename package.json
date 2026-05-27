@@ -72,7 +72,6 @@
     "browser": "node ./compiled/examples/browser-bundled.cjs",
     "validator": "node ./compiled/examples/validator-bundled.cjs",
     "extract-wasm-dependencies": "node ./scripts/extract-wasm-dependencies.cjs",
-    "create-release-candidate": "./scripts/create-release-candidate.sh",
     "build-all-profile-node": "yarn build-profile-conway_geom-node && yarn build-incremental",
     "build-all-profile-web": "yarn build-profile-conway_geom-web && yarn build-incremental",
     "build-all-release-node": "yarn build-conway_geom-node && yarn build-incremental",
