@@ -284,28 +284,25 @@ jobs:
             (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
 
   # ---------------------------------------------------------------------------
-  # Continuous release: on every successful push to main, tag the commit with
-  # the next version and publish to npm. Version is `major.minor` (from
-  # package.json) joined with `git rev-list HEAD --count + 1` for patch. So
-  # every green merge ships a unique patch to @latest; manual major/minor
-  # bumps happen via a PR that edits package.json's version field.
+  # Continuous release: on every successful push to main, publish to npm and
+  # tag the commit. Version is <major>.<PR>.<commit>:
+  #   major  - first segment of package.json's version (manual bump)
+  #   PR     - PR number parsed from the merge commit message (#N)
+  #   commit - 'git rev-list HEAD --count' at the merge commit
+  # So every green merge ships a uniquely-traceable patch to @latest.
+  #
+  # Auth: npm Trusted Publishing via GitHub OIDC. The trusted publisher must
+  # be configured on npmjs.com (Package → Settings → Trusted Publisher) and
+  # bound to repo+workflow. No NPM_TOKEN secret needed.
   # ---------------------------------------------------------------------------
   auto-publish:
     needs: [build, run-ifc-regression]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     permissions:
-      contents: write
+      contents: write    # tag push
+      id-token: write    # OIDC token for npm Trusted Publishing
     steps:
-      - name: Verify NPM_TOKEN is configured
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN repo secret is not set. Add it under Settings → Secrets and variables → Actions, then re-run this job."
-            exit 1
-          fi
-
       - name: Checkout (full history for rev-list)
         uses: actions/checkout@v4
         with:
@@ -318,6 +315,11 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
           cache: 'yarn'
+
+      # Trusted Publishing requires npm >= 11.5.1. Node 20 ships with npm 10.x,
+      # so upgrade the global npm binary before the publish step.
+      - name: Upgrade npm to a version that supports OIDC
+        run: npm install -g npm@latest
 
       - name: Compute next version
         id: ver
@@ -376,16 +378,21 @@ jobs:
       - name: Bundle examples
         run: yarn bundle-examples
 
+      # Publish BEFORE tagging. If publish fails, no stranded tag.
+      # npm CLI 11.5.1+ picks up the OIDC token from GHA automatically.
+      - name: Publish to npm
+        run: npm publish --access public
+
+      # Idempotent tag: skip if already on origin (e.g. on a re-run).
       - name: Create and push tag
         env:
           NEW_VERSION: ${{ steps.ver.outputs.version }}
         run: |
+          if git ls-remote --tags origin "$NEW_VERSION" | grep -q "refs/tags/$NEW_VERSION$"; then
+            echo "Tag $NEW_VERSION already exists on origin; skipping."
+            exit 0
+          fi
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           git tag -a "$NEW_VERSION" -m "Auto-release $NEW_VERSION"
           git push origin "$NEW_VERSION"
-
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
