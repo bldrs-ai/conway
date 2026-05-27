@@ -190,6 +190,64 @@ async function runDiff(
   }
 }
 
+/**
+ * Aggregate all per-file `*.perf.csv` rows in perfDir into a single CSV at
+ * outputCsvPath, sorted by file name. Files are written by individual child
+ * regression runs (one row + one header per file); we keep the header from
+ * the first file we read and concatenate the data rows from the rest. The
+ * input directory is removed afterwards.
+ *
+ * @param perfDir Directory the children wrote their per-file perf CSVs to.
+ * @param outputCsvPath Aggregate perf CSV destination.
+ */
+async function aggregatePerfCsvs(
+    perfDir: string,
+    outputCsvPath: string,
+): Promise<void> {
+
+  const entries = await fsPromises.readdir( perfDir, { withFileTypes: true } )
+  const perfFiles = entries
+      .filter( ( d ) => d.isFile() && d.name.endsWith( '.perf.csv' ) )
+      .map( ( d ) => path.join( perfDir, d.name ) )
+
+  if ( perfFiles.length === 0 ) {
+    console.warn( `No per-file perf CSVs found in ${perfDir}; skipping aggregate.` )
+    return
+  }
+
+  type PerfRow = { file: string; line: string }
+  const rows: PerfRow[] = []
+  let header: string | undefined
+
+  for ( const perfFile of perfFiles ) {
+
+    const contents = await fsPromises.readFile( perfFile, 'utf8' )
+    const lines = contents.split( /\r?\n/ ).filter( ( l ) => l.length > 0 )
+
+    if ( lines.length < 2 ) {
+      continue
+    }
+
+    if ( header === undefined ) {
+      header = lines[ 0 ]
+    }
+
+    // Each per-file CSV has exactly one data row (lines[1]); the first column
+    // is the file name which we use for stable sorting.
+    const dataLine = lines[ 1 ]
+    const firstComma = dataLine.indexOf( ',' )
+    const fileKey = firstComma >= 0 ? dataLine.slice( 0, firstComma ) : dataLine
+    rows.push( { file: fileKey, line: dataLine } )
+  }
+
+  rows.sort( ( a, b ) => a.file.localeCompare( b.file ) )
+
+  const body = rows.map( ( r ) => r.line ).join( '\n' )
+  await fsPromises.writeFile( outputCsvPath, `${header}\n${body}\n` )
+
+  console.log( `Wrote aggregate perf CSV: ${outputCsvPath} (${rows.length} rows)` )
+}
+
 let totalTime = 0 // To keep track of the running total time
 
 /**
@@ -198,14 +256,16 @@ let totalTime = 0 // To keep track of the running total time
  * @param filePath
  * @param outputPath
  * @param maxTimeout
+ * @param perfPath Optional path the child should write a one-row perf CSV to.
  */
 async function runForFile(filePath: string,
-    outputPath: string, maxTimeout:number): Promise<RunResults> {
+    outputPath: string, maxTimeout:number, perfPath?: string): Promise<RunResults> {
   const MAX_TIMEOUT_MS = maxTimeout
   const startTime = Date.now() // Start time
 
-   
-  const safeExecCommand = `node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d "${filePath}" "${outputPath}"`
+  const perfFlag = perfPath ? ` --perf "${perfPath}"` : ''
+
+  const safeExecCommand = `node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d${perfFlag} "${filePath}" "${outputPath}"`
 
   console.log(`Current File: ${filePath}`)
 
@@ -322,6 +382,7 @@ function getSystemMemoryUsagePercent(): number {
  * @param failedLines
  * @param memUtilization
  * @param maxTimeout
+ * @param perfDir If set, the child writes its perf CSV here as <basename>.perf.csv.
  */
 async function processIFCFilesInParallel(
     ifcFiles: string[],
@@ -331,6 +392,7 @@ async function processIFCFilesInParallel(
     failedLines: string[],
     memUtilization: number,
     maxTimeout:number,
+    perfDir?: string,
 ): Promise<void> {
   const concurrencyLimit = os.cpus().length
   console.log(`Concurrency: ${concurrencyLimit} threads - Max Timeout: ${maxTimeout} ms`)
@@ -352,10 +414,14 @@ async function processIFCFilesInParallel(
       console.log(
           `Starting task for "${path.basename(ifcPath)}". Active tasks: ${activeTasks}`,
       )
+      const perfChildPath = perfDir ?
+        path.join(perfDir, `${path.basename(ifcPath, '.ifc')}.perf.csv`) :
+        undefined
       const fileResults = await runForFile(
           ifcPath,
           path.join(outputPath, path.basename(ifcPath, '.ifc')),
           maxTimeout,
+          perfChildPath,
       )
 
       activeTasks--
@@ -402,6 +468,7 @@ async function processIFCFilesInParallel(
  * @param fileLines
  * @param failedLines
  * @param maxTimeout
+ * @param perfDir If set, the child writes its perf CSV here as <basename>.perf.csv.
  */
 async function recursiveWalk(
     parentPath: string,
@@ -411,6 +478,7 @@ async function recursiveWalk(
     fileLines: string[],
     failedLines: string[],
     maxTimeout: number,
+    perfDir?: string,
 ) {
   const items = await fsPromises.readdir(parentPath, { withFileTypes: true })
   items.sort((a, b) => (a.name > b.name ? 1 : -1))
@@ -424,12 +492,16 @@ async function recursiveWalk(
 
     if (item.isDirectory()) {
       await recursiveWalk(resolved, excludeRegex, outputPath,
-          errorLines, fileLines, failedLines, maxTimeout)
+          errorLines, fileLines, failedLines, maxTimeout, perfDir)
     } else if (path.extname(resolved).toLowerCase() === '.ifc') {
+      const perfChildPath = perfDir ?
+        path.join(perfDir, `${path.basename(resolved, '.ifc')}.perf.csv`) :
+        undefined
       const fileResults = await runForFile(
           resolved,
           path.join(outputPath, path.basename(resolved, '.ifc')),
           maxTimeout,
+          perfChildPath,
       )
 
       if (fileResults.type === 'Run') {
@@ -520,6 +592,16 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
             default: 150000,
           })
 
+          yargs2.option('perf', {
+
+            describe:
+              'Output path for aggregate perf CSV. Each child writes a one-row ' +
+              '<basename>.perf.csv to a temp dir; on completion they are merged ' +
+              'into this file, sorted by file name. Disabled when unset.',
+            type: 'string',
+            default: '',
+          })
+
           yargs2.positional('model_folder', {
             describe: 'Folder containing IFC files, recursively walked',
             type: 'string',
@@ -542,12 +624,25 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const doParallel = (argv['parallel'] as boolean) ?? false // <--- read the parallel flag
           const memUtilization = (argv['mem-utilization'] as number)
           const maxTimeout = (argv['timeout'] as number)
+          const perfOutputPath = ((argv['perf'] as string) ?? '').trim()
 
           if (changes.length === 0) {
             changes = path.join(outputPath, 'changes')
           }
 
           await fsPromises.mkdir(outputPath, { recursive: true })
+
+          // When perf is requested, children write their one-row CSVs into a
+          // throwaway temp dir; we aggregate and clean up afterwards. Keeping
+          // them out of outputPath avoids the runDiff step picking up
+          // machine-specific timings as "changes" against the test-models
+          // checked-in baselines.
+          let perfTmpDir: string | undefined
+          if (perfOutputPath.length > 0) {
+            perfTmpDir = await fsPromises.mkdtemp(
+                path.join(os.tmpdir(), 'conway-perf-'),
+            )
+          }
 
           const mainPath = path.join(outputPath, 'main.csv')
           const errorPath = path.join(outputPath, 'errors.csv')
@@ -573,17 +668,32 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
                 failedLines,
                 memUtilization,
                 maxTimeout,
+                perfTmpDir,
             )
           } else {
             console.log('Processing in serial mode...')
-             
-            await recursiveWalk(ifcFolder, excludeRegex, outputPath, errorLines, fileLines, failedLines, maxTimeout)
+
+            await recursiveWalk(ifcFolder, excludeRegex, outputPath,
+                errorLines, fileLines, failedLines, maxTimeout, perfTmpDir)
           }
 
           // Write out results
           await fsPromises.writeFile(mainPath, `file,hash,errors\n${  fileLines.join('')}`)
           await fsPromises.writeFile(errorPath, `${errorCSVHeader}\n${  errorLines.join('')}`)
           await fsPromises.writeFile(failedPath, `file,code,signal\n${  failedLines.join('')}`)
+
+          // Aggregate per-child perf rows (if requested) before runDiff so the
+          // run completes deterministically even when the git diff step is
+          // skipped or fails.
+          if (perfTmpDir) {
+            try {
+              await aggregatePerfCsvs(perfTmpDir, perfOutputPath)
+            } catch (e) {
+              console.error('Failed to aggregate perf CSVs:', e)
+            } finally {
+              await fsPromises.rm(perfTmpDir, { recursive: true, force: true })
+            }
+          }
 
           // If user wants a git diff
           await runDiff(ifcFolder, outputPath, target, changes, dryRun)

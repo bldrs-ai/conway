@@ -182,11 +182,16 @@ jobs:
         run: |
           git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
 
+      # Perf CSV lands OUTSIDE the diffed test_models folder so machine-specific
+      # timings don't show up as "changes" against test-models's checked-in
+      # baselines. The aggregate is uploaded as a workflow artifact below and
+      # summarised in the PR comment.
       - name: Run IFC Regression Batch Script
         run: |
           node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
             -e "sp-.*\.ifc" \
             -t ${{ env.TEST_MODELS_TAG }} \
+            --perf "${GITHUB_WORKSPACE}/perf.csv" \
             test-models \
             test-models/regression/test_models \
             --parallel --mem-utilization 90
@@ -250,6 +255,39 @@ jobs:
           echo "$ERRORS_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+          # Summarise the top-10 slowest models from the perf CSV. The full
+          # CSV is uploaded as an artifact for finer inspection.
+          PERF_CSV="${GITHUB_WORKSPACE}/perf.csv"
+          if [ -f "$PERF_CSV" ]; then
+            PERF_OUTPUT=$(python - "$PERF_CSV" <<'EOF'
+          import csv, sys
+          with open(sys.argv[1], newline='') as f:
+              rows = list(csv.DictReader(f))
+          if not rows:
+              print("perf.csv is empty.")
+          else:
+              top_n = 10
+              def total(r):
+                  try: return int(r.get('totalTimeMs','0') or 0)
+                  except ValueError: return 0
+              rows.sort(key=total, reverse=True)
+              header = ['file','status','parseTimeMs','geometryTimeMs','totalTimeMs','rssMb','heapUsedMb']
+              print("| " + " | ".join(header) + " |")
+              print("|" + " --- |" * len(header))
+              for r in rows[:top_n]:
+                  print("| " + " | ".join(r.get(h,'') for h in header) + " |")
+              print("")
+              print(f"_Showing top {min(top_n,len(rows))} of {len(rows)} models by totalTimeMs. Full CSV in the run artifacts._")
+          EOF
+          )
+          else
+            PERF_OUTPUT="perf.csv not produced."
+          fi
+
+          echo "perf_output<<EOF" >> $GITHUB_OUTPUT
+          echo "$PERF_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create NPM Package
         id: npm_pack
         run: |
@@ -262,6 +300,13 @@ jobs:
         with:
           name: ${{ steps.npm_pack.outputs.package_tgz }}
           path: ${{ steps.npm_pack.outputs.package_tgz }}
+
+      - name: Upload perf.csv artifact
+        if: ${{ hashFiles('perf.csv') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ github.run_id }}
+          path: perf.csv
 
       - name: Comment on Pull Request with Regression Results and NPM Package Artifact
         if: ${{ github.event_name == 'pull_request' }}
@@ -277,6 +322,9 @@ jobs:
 
             **Errors.csv:**
             ${{ steps.regression_results.outputs.errors_output }}
+
+            **Performance (top 10 by totalTimeMs):**
+            ${{ steps.regression_results.outputs.perf_output }}
 
             **NPM Package Artifact:**
             The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.

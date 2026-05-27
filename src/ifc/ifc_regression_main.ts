@@ -47,6 +47,60 @@ function csvSafeString( from: string ): string {
   return from
 }
 
+// Bytes per megabyte for memory-stat formatting in the perf CSV.
+// eslint-disable-next-line no-magic-numbers
+const BYTES_PER_MB = 1024 * 1024
+
+// Fixed-point precision for perf MB values.
+// eslint-disable-next-line no-magic-numbers
+const PERF_MB_PRECISION = 2
+
+/**
+ * Write a single-row per-file perf CSV at the given path. Memory snapshot is
+ * taken at call time; for the OK path this is right after geometry extraction
+ * — close to peak. No-op when perfPath is empty.
+ *
+ * @param perfPath Path to write the CSV to. Empty string disables.
+ * @param ifcFile Source IFC file path (basename used as the row key).
+ * @param status OK or FAIL.
+ * @param parseTimeMs Parse stage duration in ms.
+ * @param geometryTimeMs Geometry extraction duration in ms.
+ * @param totalTimeMs Sum of parse + geometry in ms.
+ */
+async function writePerfCsvIfRequested(
+    perfPath: string,
+    ifcFile: string,
+    status: 'OK' | 'FAIL',
+    parseTimeMs: number,
+    geometryTimeMs: number,
+    totalTimeMs: number,
+): Promise<void> {
+
+  if ( perfPath.length === 0 ) {
+    return
+  }
+
+  const mem = process.memoryUsage()
+  const rssMb = ( mem.rss / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const heapUsedMb = ( mem.heapUsed / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const heapTotalMb = ( mem.heapTotal / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+
+  const fileName = csvSafeString( path.basename( ifcFile ) )
+
+  const header =
+    'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,rssMb,heapUsedMb,heapTotalMb\n'
+  const row =
+    `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
+    `${rssMb},${heapUsedMb},${heapTotalMb}\n`
+
+  try {
+    await fsPromises.writeFile( perfPath, header + row )
+  } catch ( e ) {
+    // Perf is best-effort; never fail the regression run because of a perf write.
+    console.error( `Failed to write perf CSV at ${perfPath}:`, e )
+  }
+}
+
 /**
  * Display errors and dump errors errors to stderr
  *
@@ -123,6 +177,14 @@ function doWork() {
             alias: 'v',
             default: false,
           })
+          yargs2.option('perf', {
+
+            describe:
+              'Write a single-row perf CSV (parse/geometry/total time + memory) at this path',
+            type: 'string',
+            alias: 'p',
+            default: '',
+          })
 
           yargs2.positional('filename', { describe: 'IFC File Paths', type: 'string' })
           yargs2.positional('output', { describe: 'Output path', type: 'string' })
@@ -138,6 +200,7 @@ function doWork() {
           const strict = (argv['strict'] as boolean | undefined) ?? false
           const digest = (argv['digest'] as boolean | undefined) ?? false
           const verbose = (argv['verbose'] as boolean | undefined) ?? false
+          const perfPath = (argv['perf'] as string | undefined) ?? ''
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
@@ -157,6 +220,8 @@ function doWork() {
 
           const parser = IfcStepParser.Instance
           const bufferInput = new ParsingBuffer(indexIfcBuffer)
+
+          const parseStartMs = Date.now()
 
           const result0 = parser.parseHeader(bufferInput)[ 1 ]
 
@@ -218,13 +283,26 @@ function doWork() {
             default:
           }
 
+          const parseEndMs = Date.now()
+          const parseTimeMs = parseEndMs - parseStartMs
+
           if (model === void 0) {
+            await writePerfCsvIfRequested(
+                perfPath, ifcFile, 'FAIL', parseTimeMs, 0, parseTimeMs)
             return
           }
 
           model.nullOnErrors = !strict
 
+          const geomStartMs = Date.now()
           const result = await geometryExtraction(model)
+          const geomEndMs = Date.now()
+          const geometryTimeMs = geomEndMs - geomStartMs
+          const totalTimeMs = geomEndMs - parseStartMs
+
+          const perfStatus = result === void 0 ? 'FAIL' : 'OK'
+          await writePerfCsvIfRequested(
+              perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs)
 
           if ( result === void 0 ) {
             Logger.error( 'Couldn\'t extract geometry')
