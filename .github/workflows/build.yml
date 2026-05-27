@@ -322,11 +322,22 @@ jobs:
       - name: Compute next version
         id: ver
         run: |
-          MAJOR_MINOR=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
-          PATCH=$(($(git rev-list HEAD --count) + 1))
-          NEW_VERSION="${MAJOR_MINOR}.${PATCH}"
+          MAJOR=$(node -p "require('./package.json').version.split('.')[0]")
+          # PR number is parsed out of the merge commit message. Both
+          # 'Merge pull request #N from ...' (merge commit) and
+          # '... (#N)' (squash-merge) embed it. If the push wasn't via
+          # PR merge, fall back to 0 - the version still publishes but
+          # signals 'manual push, not PR-attached'.
+          MSG=$(git log -1 --format=%B HEAD)
+          PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
+          if [ -z "$PR_NUM" ]; then
+            echo "::warning::Could not parse PR number from commit message; using 0."
+            PR_NUM=0
+          fi
+          COMMIT=$(git rev-list HEAD --count)
+          NEW_VERSION="${MAJOR}.${PR_NUM}.${COMMIT}"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Auto-release version: ${NEW_VERSION}"
+          echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, PR=${PR_NUM}, commit=${COMMIT})"
 
       - name: Stamp version into package.json + version.ts
         env:

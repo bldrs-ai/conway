@@ -180,14 +180,22 @@ Conway also has a regression testing framework, which can be run on individual m
 
 **Releases are continuous.** Every green merge to `main` auto-tags and
 publishes to npm at the default `latest` dist-tag. The version is
-`<major>.<minor>.<patch>` where `major.minor` comes from
-`package.json` on `main` and `patch = git rev-list HEAD --count + 1` at
-the commit being published.
+`<major>.<PR>.<commit>` where:
+
+- `major` comes from `package.json` on `main` (only the first segment;
+  the other two are recomputed on every release)
+- `PR` is the GitHub PR number that produced the merge commit
+- `commit` is `git rev-list HEAD --count` at the merge commit (the
+  global commit position)
+
+So a merge of PR #321 at the 985th commit on main publishes as
+`1.321.985`. Each release is uniquely traceable to a PR and a commit.
 
 The auto-publish job lives in `.github/workflows/build.yml` and runs as
 `needs: [build, run-ifc-regression]` on `push: branches: [main]`. It
-computes the version, stamps `package.json` + `src/version/version.ts`
-in CI's working tree (not committed back), rebuilds, tags the merge
+parses the PR number from the merge commit message, stamps the
+computed version into `package.json` + `src/version/version.ts` in
+CI's working tree (not committed back), rebuilds, tags the merge
 commit, and runs `npm publish`.
 
 **Requires:** an `NPM_TOKEN` repo secret (automation token from npmjs).
@@ -202,15 +210,17 @@ error.
    `auto-publish` tags and ships. Watch the workflow run in the Actions
    tab; the new version is on npm within ~5-10 min of the merge.
 
-### Bumping major or minor
+### Bumping major
 
-Edit the `version` field in `package.json` on a PR. The patch suffix
-you put there doesn't matter — `auto-publish` only reads `major.minor`
-and computes its own patch from the rev-count.
+Edit the `version` field in `package.json` on a PR — only the first
+segment matters (the `PR` and `commit` parts are recomputed). For
+example, change `"version": "1.0.0"` to `"version": "2.0.0"` to start
+the `2.x.x` line. The first auto-publish after that lands ships
+`2.<PR>.<commit>`.
 
-Example: to bump from the `1.23.x` line to `1.24.x`, change
-`"version": "1.23.0"` to `"version": "1.24.0"` in any PR, merge it.
-The first auto-publish after that ships `1.24.<rev_count+1>`.
+There is no minor bump — `PR` lives in that slot — so increasing
+sequential versions across the `1.x` line look like `1.300.x`,
+`1.301.x`, etc., as PRs land.
 
 ### Rolling into headless-three and Share
 The same flow applies to both — do **H3 first, then Share**:
