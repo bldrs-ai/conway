@@ -178,7 +178,7 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`. |
-| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the pinned `test-models` tag, posts a per-PR comment with `failed.csv` / `errors.csv` summaries, and uploads the candidate npm tarball as a workflow artifact. |
+| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the pinned `test-models` tag, posts a per-PR comment with `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
 
 A merge to `main` re-runs those two jobs and then chains into `auto-publish` (see [Releases](#releases) below).
 
@@ -186,9 +186,11 @@ A merge to `main` re-runs those two jobs and then chains into `auto-publish` (se
 
 The same batch the regression CI job runs can be invoked locally — see [regression/README.md](regression/README.md) for digest / verbose / batch modes and the catalog of model fixtures. The CI pinned tag is `TEST_MODELS_TAG` near the top of `build.yml`.
 
-## Performance benchmarks (local only today)
+## Performance benchmarks
 
-Perf isn't wired into CI yet. The current flow is a local `scripts/performance_test.sh` against a checkout of [headless-three](https://github.com/bldrs-ai/headless-three) cross-linked via `yarn link` against the working tree; see [scripts/README.md](scripts/README.md). Wiring perf into CI is tracked in #314 — see [Roadmap](#roadmap).
+**Tier 1 — Conway-only perf in CI (live).** Every regression run emits a `perf.csv` of `parseTimeMs / geometryTimeMs / totalTimeMs / rssMb / heapUsedMb / heapTotalMb` per model. The top-10 slowest are posted in the PR comment; the full CSV is uploaded as a workflow artifact. This piggybacks on the existing regression batch so cost is ~0 extra runner minutes.
+
+**Tier 2 — full headless-three perf (planned, #314).** A `perf-three` job on `push: main` that runs `scripts/benchmark.cjs` against a clone of [headless-three](https://github.com/bldrs-ai/headless-three), installing the candidate Conway tarball as H3's `@bldrs-ai/conway` dep. Captures PNG renders + per-model timings via H3's rendering server, including a parallel job for `test-models-private`. Tracked in #314.
 
 
 # Releases
@@ -278,27 +280,23 @@ follow-ups to deepen its coverage. Big items first.
 
 ### #314 — Performance benchmarks in CI
 
-Today perf only runs locally before a major release, against a
-[headless-three](https://github.com/bldrs-ai/headless-three) checkout
-cross-linked via `yarn link`. That makes perf regressions easy to miss
-and impossible to gate merges on.
+**Tier 1 — Conway-only perf (done):** the regression batch now emits a
+per-model `perf.csv` (parse/geometry/total time + RSS/heap MB),
+piggybacking on the existing run so there's no extra runner cost. Top-10
+slowest models appear in each PR comment; the full CSV uploads as an
+artifact. See "Performance benchmarks" above.
 
-Wiring perf into CI as a third job (`needs: build`, parallel to
-`run-ifc-regression`) is the biggest open improvement. The blocker is
-deciding how to host the H3 dependency in the runner — three
-candidates:
-
-- **Vendor H3 as a submodule** of conway. Tight coupling but simplest
-  build chain.
-- **Pre-built H3 container image** that the perf job pulls. Looser
-  coupling, slower runner startup, more infra.
-- **A Conway-only perf harness** that bypasses H3 entirely — measure
-  parse + geometry timings directly off the CLI. Less faithful to the
-  Share end-to-end picture but the easiest to land.
-
-Once perf runs in CI, the comment posted on each PR should include a
-delta vs. main so regressions show up alongside the regression-batch
-results.
+**Tier 2 — full headless-three perf (next):** an end-to-end render-and-time
+job that runs `scripts/benchmark.cjs` against a clone of
+[headless-three](https://github.com/bldrs-ai/headless-three). To avoid the
+local `yarn link` toolchain, the job installs the candidate Conway tarball
+(produced by `run-ifc-regression`) as H3's `@bldrs-ai/conway` dep and pins
+`H3_TAG` in `build.yml`. Gated to `push: main` to keep PR runtime down
+while still exercising every release. A sibling job runs against
+`test-models-private` using `secrets.TEST_MODELS_PRIVATE_TOKEN`, never on
+PR events (so forks can't leak the secret), and uploads results as
+org-scoped artifacts. Delta vs. the previous release lands in the
+auto-publish summary.
 
 ### #315 — Bump pinned `TEST_MODELS_TAG`
 

@@ -41,6 +41,7 @@ Here are the options:
  2. Dry run mode (_--dryrun_ or _-d_)
  3. Set the changes file output path (_--changes_ or _-c_ &lt;file path without csv extension&gt;)
  4. Exclusion regex filter that filters out files from being processed (_--exclude_ or _-e_ &lt;regex&gt;).
+ 5. Aggregate performance CSV output (_--perf_ &lt;output path&gt;). Each model emits a one-row `parseTimeMs / geometryTimeMs / totalTimeMs / rssMb / heapUsedMb / heapTotalMb` row; the batch sorts by file name and writes them all to this path. Disabled when unset. The output path should live outside the regression folder so machine-specific timings don't get picked up by the git-diff step.
 
 Assuming you have the test models repository checked out in the cloned in the same parent folder as the conway repository, here would be an example of how to run regression on an the repo, putting the regression baselines in the correct place, as well as creating a custom change file, for a release. This assumes there is a tag (conway-0.1.596) in this case for the release, and that there is a new release for history that will be 0.2.597.
 
