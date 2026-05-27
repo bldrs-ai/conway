@@ -195,12 +195,13 @@ The auto-publish job lives in `.github/workflows/build.yml` and runs as
 `needs: [build, run-ifc-regression]` on `push: branches: [main]`. It
 parses the PR number from the merge commit message, stamps the
 computed version into `package.json` + `src/version/version.ts` in
-CI's working tree (not committed back), rebuilds, tags the merge
-commit, and runs `npm publish`.
+CI's working tree (not committed back), rebuilds, publishes to npm,
+and then tags the merge commit.
 
-**Requires:** an `NPM_TOKEN` repo secret (automation token from npmjs).
-Without it the auto-publish job fails on its first step with a clear
-error.
+**Auth:** npm Trusted Publishing via GitHub OIDC. A Trusted Publisher
+configured at npmjs.com on `@bldrs-ai/conway` is bound to this repo +
+`build.yml`. No long-lived `NPM_TOKEN` secret is used; the workflow
+gets a short-lived publish token per run via OIDC.
 
 ### Normal flow: ship a change
 
