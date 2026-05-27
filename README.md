@@ -178,54 +178,47 @@ Conway also has a regression testing framework, which can be run on individual m
 
 # Release Steps
 
-Releases are cut from `main`. Patch numbers auto-increment on every build
-(from `git rev-list HEAD --count` via `scripts/updateVersion.mjs`); only
-`major` and `minor` are bumped manually by `create-release-candidate.sh`.
+**Releases are continuous.** Every green merge to `main` auto-tags and
+publishes to npm at the default `latest` dist-tag. The version is
+`<major>.<minor>.<patch>` where `major.minor` comes from
+`package.json` on `main` and `patch = git rev-list HEAD --count + 1` at
+the commit being published.
 
-### 1. Pre-release validation
-```
-yarn build                       # full build; stamps patch version
-grep '"version"' package.json    # should be 1 ahead of the latest tag on GH
-```
-- Run the performance test suite — see [scripts/README.md](scripts/README.md).
-- Run the regression batch — see [regression/README.md](regression/README.md).
+The auto-publish job lives in `.github/workflows/build.yml` and runs as
+`needs: [build, run-ifc-regression]` on `push: branches: [main]`. It
+computes the version, stamps `package.json` + `src/version/version.ts`
+in CI's working tree (not committed back), rebuilds, tags the merge
+commit, and runs `npm publish`.
 
-### 2. Cut the release candidate
-Run this from a release branch (not directly on `main`):
-```
-yarn create-release-candidate <major|minor>
-```
-This bumps `package.json` + `src/version/version.ts`, re-runs
-`build-incremental`, **commits the bump on the current branch**, tags
-that commit, pushes both branch and tag, and regenerates typedoc.
+**Requires:** an `NPM_TOKEN` repo secret (automation token from npmjs).
+Without it the auto-publish job fails on its first step with a clear
+error.
 
-The tag push triggers `.github/workflows/publish.yml`, which rebuilds
-WASM + TS, bundles, and runs `npm publish --access public` from CI. The
-package is published with the default `latest` dist-tag; `stable` is
-added later (step 5).
+### Normal flow: ship a change
 
-> **Requires:** an `NPM_TOKEN` repo secret (automation token from npmjs).
-> Without it the publish workflow fails loudly on tag push, and you can
-> add the token + re-run the failed job to recover.
+1. Open a PR with your change. CI runs `build` and `run-ifc-regression`.
+2. Merge once both checks are green.
+3. On main push, CI re-runs `build` + `run-ifc-regression`, then
+   `auto-publish` tags and ships. Watch the workflow run in the Actions
+   tab; the new version is on npm within ~5-10 min of the merge.
 
-> **Heads up:** publish happens via CI *before* the PR in step 3 lands.
-> If the PR is rejected, you'll need to `npm deprecate` (or
-> `npm unpublish` within 72h) the published version, and either delete
-> the pushed tag or move it once a corrected commit lands on `main`.
+### Bumping major or minor
 
-### 3. Open the version-bump PR
-The bump commit is already on your release branch. Open a PR from it,
-add benchmark deltas to the body, wait for approval, and merge.
+Edit the `version` field in `package.json` on a PR. The patch suffix
+you put there doesn't matter — `auto-publish` only reads `major.minor`
+and computes its own patch from the rev-count.
 
-### 4. Roll into headless-three and Share
+Example: to bump from the `1.23.x` line to `1.24.x`, change
+`"version": "1.23.0"` to `"version": "1.24.0"` in any PR, merge it.
+The first auto-publish after that ships `1.24.<rev_count+1>`.
+
+### Rolling into headless-three and Share
 The same flow applies to both — do **H3 first, then Share**:
 ```
-cp bldrs-ai-conway-<VERSION>.tgz $H3_DIR
 cd $H3_DIR
 git fetch upstream                                       # or origin if not on a fork
 git checkout -b conway-<VERSION> upstream/main
-rm bldrs-ai-conway-<OLD>.tgz
-# Edit package.json dep for @bldrs-ai/conway to point at the new tarball filename.
+# Edit package.json dep for @bldrs-ai/conway to "<VERSION>"
 yarn install
 yarn build && yarn test
 yarn serve
@@ -241,10 +234,10 @@ Then:
 4. Post in `#bot` or `#share`: "New Conway <VERSION> in prod" with a link
    to the changelog.
 
-### 5. Cut the GitHub release and tag stable
-After Share prod is verified:
+### Blessing a `stable` version
+After Share prod is verified on a given Conway version:
 ```
-# Create the GitHub release from the tag (auto-generates changelog from PRs)
+# Create the GitHub release from the auto-pushed tag
 gh release create <VERSION> --generate-notes
 
 # Promote the npm package to the stable dist-tag
