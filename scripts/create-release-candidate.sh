@@ -17,10 +17,6 @@ if [ "$BUMP_TYPE" != "major" ] && [ "$BUMP_TYPE" != "minor" ]; then
     exit 1
 fi
 
-# Login to npmjs, uses OTP
-echo "Login to npmjs"
-npm login
-
 # Extract the current version from package.json
 CURRENT_VERSION=$(node -p "require('./package.json').version")
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
@@ -63,16 +59,17 @@ git commit -m "Bump version to $NEW_VERSION"
 echo "Creating git tag $NEW_VERSION..."
 git tag "$NEW_VERSION"
 
-# Push the bump commit on the current branch, then the tag
+# Push the bump commit on the current branch, then the tag. The tag push
+# triggers .github/workflows/publish.yml which builds and runs
+# 'npm publish' from CI. Requires the NPM_TOKEN repo secret to be set;
+# until then the publish workflow will fail loudly on the tag push.
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git push origin "$CURRENT_BRANCH"
 git push origin "$NEW_VERSION"
 
-# Publish to GitHub npm registry
-echo "Publishing to GitHub npm registry..."
-npm publish --access public
-
-# Generate type docs
+# Generate type docs (local artifact)
 yarn typedoc
 
-echo "Release candidate created, tagged (no commit), and published successfully!"
+echo "Release candidate $NEW_VERSION tagged and pushed."
+echo "CI will build and publish to npm on tag push:"
+echo "  https://github.com/bldrs-ai/conway/actions/workflows/publish.yml"
