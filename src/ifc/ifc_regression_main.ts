@@ -60,6 +60,12 @@ const PERF_MB_PRECISION = 2
  * taken at call time; for the OK path this is right after geometry extraction
  * — close to peak. No-op when perfPath is empty.
  *
+ * Memory semantics: `rssMb` includes the conway-geom WASM heap (mmap'd into
+ * the process) and is the load-bearing memory metric for geometry work.
+ * `heapUsedMb` / `heapTotalMb` are V8-only — useful for tracking JS-side
+ * allocation pressure but they exclude WASM-side buffers. Expect a large
+ * gap between rss and heap on geometry-heavy models.
+ *
  * @param perfPath Path to write the CSV to. Empty string disables.
  * @param ifcFile Source IFC file path (basename used as the row key).
  * @param status OK or FAIL.

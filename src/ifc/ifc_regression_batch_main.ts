@@ -242,6 +242,17 @@ async function aggregatePerfCsvs(
 
   rows.sort( ( a, b ) => a.file.localeCompare( b.file ) )
 
+  // Defensive: if every child wrote a malformed CSV (lines.length < 2 for all),
+  // header stays undefined and rows stays empty. Bail rather than write the
+  // literal "undefined" as a CSV header.
+  if ( rows.length === 0 || header === undefined ) {
+    console.warn(
+        `No usable perf rows in ${perfDir} (${perfFiles.length} file(s) checked); ` +
+        `skipping aggregate write.`,
+    )
+    return
+  }
+
   const body = rows.map( ( r ) => r.line ).join( '\n' )
   await fsPromises.writeFile( outputCsvPath, `${header}\n${body}\n` )
 
