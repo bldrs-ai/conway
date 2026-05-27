@@ -149,7 +149,7 @@ Profiling Conway, including building a Conway-Geom WASM binary with DWARF inform
 1. Run *build-profile-conway_geom* from Conway's package.json 
 2. Profile your app: 
 ```
-node --prof --experimental-specifier-resolution=node /Users/soar/Documents/GitHub/conway/compiled/src/ifc/ifc_command_line_main.js /Users/soar/Downloads/Schependomlaan.ifc -g
+node --prof --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_command_line_main.js <model.ifc> -g
 ```
 3. An isolate*.log file will be generated. Run:
 ```
@@ -171,12 +171,27 @@ You may also wish to use a low rename threshold no-commit merge strategy for som
 git merge -X rename-threshold=25 --no-commit
 ```
 
-# Regression Testing Framework
+# CI and Testing
 
-Conway also has a regression testing framework, which can be run on individual model files in a digest or verbose mode, or as a large batch across several models at the same time. For more details see the [documentation](regression/README.md).
+Every PR is gated on two checks defined in `.github/workflows/build.yml`:
+
+| Job | What it does |
+|---|---|
+| `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`. |
+| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the pinned `test-models` tag, posts a per-PR comment with `failed.csv` / `errors.csv` summaries, and uploads the candidate npm tarball as a workflow artifact. |
+
+A merge to `main` re-runs those two jobs and then chains into `auto-publish` (see [Releases](#releases) below).
+
+## Regression batch
+
+The same batch the regression CI job runs can be invoked locally — see [regression/README.md](regression/README.md) for digest / verbose / batch modes and the catalog of model fixtures. The CI pinned tag is `TEST_MODELS_TAG` near the top of `build.yml`.
+
+## Performance benchmarks (local only today)
+
+Perf isn't wired into CI yet. The current flow is a local `scripts/performance_test.sh` against a checkout of [headless-three](https://github.com/bldrs-ai/headless-three) cross-linked via `yarn link` against the working tree; see [scripts/README.md](scripts/README.md). Wiring perf into CI is tracked in #314 — see [Roadmap](#roadmap).
 
 
-# Release Steps
+# Releases
 
 **Releases are continuous.** Every green merge to `main` auto-tags and
 publishes to npm at the default `latest` dist-tag. The version is
@@ -254,3 +269,46 @@ gh release create <VERSION> --generate-notes
 # Promote the npm package to the stable dist-tag
 npm dist-tag add @bldrs-ai/conway@<VERSION> stable
 ```
+
+
+# Roadmap
+
+The CI / release pipeline is now continuous, but there are tracked
+follow-ups to deepen its coverage. Big items first.
+
+### #314 — Performance benchmarks in CI
+
+Today perf only runs locally before a major release, against a
+[headless-three](https://github.com/bldrs-ai/headless-three) checkout
+cross-linked via `yarn link`. That makes perf regressions easy to miss
+and impossible to gate merges on.
+
+Wiring perf into CI as a third job (`needs: build`, parallel to
+`run-ifc-regression`) is the biggest open improvement. The blocker is
+deciding how to host the H3 dependency in the runner — three
+candidates:
+
+- **Vendor H3 as a submodule** of conway. Tight coupling but simplest
+  build chain.
+- **Pre-built H3 container image** that the perf job pulls. Looser
+  coupling, slower runner startup, more infra.
+- **A Conway-only perf harness** that bypasses H3 entirely — measure
+  parse + geometry timings directly off the CLI. Less faithful to the
+  Share end-to-end picture but the easiest to land.
+
+Once perf runs in CI, the comment posted on each PR should include a
+delta vs. main so regressions show up alongside the regression-batch
+results.
+
+### #315 — Bump pinned `TEST_MODELS_TAG`
+
+The regression batch in `build.yml` is pinned to `test-models@0.13.802`.
+If newer stable tags exist, bumping picks up coverage of more recent
+fixtures. The bump itself is a one-line change; the work is triaging
+whatever new diffs appear on a no-op PR run.
+
+### #316 — CI waterfall
+
+Mostly done: `build → run-ifc-regression` is in place and shares the
+WASM cache. The only remaining piece is #314 above (the third leg of
+the waterfall).
