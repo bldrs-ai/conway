@@ -121,6 +121,10 @@ jobs:
   run-ifc-regression:
     needs: build
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    # Expose the packed tarball name so downstream perf jobs can download the
+    # artifact by name without re-packing conway.
+    outputs:
+      package_tgz: ${{ steps.npm_pack.outputs.package_tgz }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -330,6 +334,360 @@ jobs:
             The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.
             Download it from [this run's artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
             (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
+
+  # ---------------------------------------------------------------------------
+  # Headless-three perf benchmark (public models).
+  #
+  # Runs scripts/benchmark.cjs against bldrs-ai/test-models (public) using the
+  # candidate conway tarball produced by run-ifc-regression. The adapter
+  # (@bldrs-ai/conway-web-ifc-adapter) ships unbundled — it does runtime
+  # `import '@bldrs-ai/conway'` — so a yarn `resolutions` override in H3's
+  # package.json forces the entire chain (H3 → adapter → conway) onto our
+  # candidate without rebuilding the adapter.
+  #
+  # Info-only: results are posted as a PR comment for visibility. Future
+  # iterations will diff perf vs a golden baseline and may gate on it.
+  # ---------------------------------------------------------------------------
+  perf-three-public:
+    needs: run-ifc-regression
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
+    # 60 to bound runner-minute cost on a hung benchmark.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      # Pinned to a SHA so perf is reproducible. Override via repo variable
+      # `H3_SHA` when bumping the H3 baseline.
+      H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
+    steps:
+      - name: Checkout conway (for scripts/benchmark.cjs)
+        uses: actions/checkout@v4
+        with:
+          # No submodules — perf doesn't build conway, it consumes the tarball.
+          submodules: false
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download conway candidate tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.run-ifc-regression.outputs.package_tgz }}
+          path: artifacts
+
+      - name: Clone headless-three at pinned SHA
+        run: |
+          git clone https://github.com/bldrs-ai/headless-three.git h3
+          git -C h3 checkout "$H3_SHA"
+
+      - name: Override conway via yarn resolutions
+        env:
+          CANDIDATE_TGZ: ${{ github.workspace }}/artifacts/${{ needs.run-ifc-regression.outputs.package_tgz }}
+        run: |
+          test -f "$CANDIDATE_TGZ" || { echo "::error::Candidate tarball missing: $CANDIDATE_TGZ"; exit 1; }
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('h3/package.json', 'utf8'));
+            p.resolutions = Object.assign({}, p.resolutions, { '@bldrs-ai/conway': 'file:' + process.env.CANDIDATE_TGZ });
+            fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install H3 + build
+        working-directory: h3
+        run: |
+          yarn install
+          yarn build
+
+      # Safety check: if the resolutions override didn't take effect, H3 would
+      # silently benchmark whatever conway version its lockfile pins instead of
+      # our candidate. Compare the version in node_modules against the version
+      # baked into the candidate tarball's package.json.
+      - name: Verify candidate conway is resolved in H3
+        env:
+          CANDIDATE_TGZ: ${{ github.workspace }}/artifacts/${{ needs.run-ifc-regression.outputs.package_tgz }}
+        run: |
+          EXPECTED=$(tar -xzOf "$CANDIDATE_TGZ" package/package.json | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>console.log(JSON.parse(s).version))")
+          ACTUAL=$(node -p "require('./h3/node_modules/@bldrs-ai/conway/package.json').version")
+          echo "Expected conway: $EXPECTED"
+          echo "Actual conway:   $ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::yarn resolutions override did not take effect. Expected '$EXPECTED', got '$ACTUAL'."
+            exit 1
+          fi
+
+      - name: Restore Test Models Cache
+        id: cache-test-models
+        uses: actions/cache@v4
+        with:
+          path: test-models
+          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+
+      - name: Checkout Test Models Repo if Not Cached
+        if: steps.cache-test-models.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+
+      - name: Run H3 benchmark (public)
+        env:
+          EXCLUDE_FILENAMES: "sp-946MB.ifc"
+        run: |
+          node scripts/benchmark.cjs ./h3 ./test-models
+
+      - name: Locate detail CSV
+        id: detail
+        run: |
+          # benchmark.cjs writes to <modelDir>/benchmarks/<engine>_<modelDirName>/performance-detail.csv
+          CSV=$(find test-models/benchmarks -name performance-detail.csv -type f | head -1)
+          test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
+          echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
+
+      - name: Build perf table (all models, alpha sort)
+        id: table
+        env:
+          CSV_PATH: ${{ steps.detail.outputs.csv }}
+        run: |
+          TABLE=$(python - "$CSV_PATH" <<'EOF'
+          import csv, os, sys
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          if not rows:
+              print("performance-detail.csv is empty.")
+              sys.exit(0)
+          rows.sort(key=lambda r: r.get('filename',''))
+          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','rssMb']
+          print("| " + " | ".join(cols) + " |")
+          print("|" + " --- |" * len(cols))
+          for r in rows:
+              print("| " + " | ".join(str(r.get(c,'')) for c in cols) + " |")
+          print("")
+          print(f"_Total: {len(rows)} models._")
+          EOF
+          )
+          {
+            echo "table<<EOF"
+            echo "$TABLE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload public perf detail CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-three-public-${{ github.run_id }}
+          path: ${{ steps.detail.outputs.csv }}
+
+      # Parse PR# from the merge commit message — same trick auto-publish uses.
+      # Squash-merge embeds it as "... (#N)", merge commit as "Merge pull
+      # request #N from ...". If no PR# parses, skip the comment (artifact is
+      # still uploaded for manual inspection).
+      - name: Resolve PR number for comment target
+        id: pr
+        run: |
+          MSG=$(git log -1 --format=%B HEAD)
+          PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
+          echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on merged PR
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ steps.pr.outputs.number }}
+          body: |
+            <!-- perf-three-public -->
+            ## Headless-three Performance (public models)
+
+            **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models@${{ env.TEST_MODELS_TAG }}`.
+
+            ${{ steps.table.outputs.table }}
+
+            _Full `performance-detail.csv` in run artifacts (`perf-three-public-${{ github.run_id }}`)._
+
+  # ---------------------------------------------------------------------------
+  # Headless-three perf benchmark (private models).
+  #
+  # Same setup as perf-three-public but against bldrs-ai/test-models-private.
+  # The comment posts only aggregate stats (count/min/median/mean/max/stddev
+  # for parseTimeMs/geometryTimeMs/totalTimeMs) — no filenames — so the
+  # public PR thread doesn't leak private model identifiers. The detail CSV
+  # is uploaded as an artifact whose visibility follows the repo (private).
+  #
+  # Fail-fast on missing TEST_MODELS_PRIVATE_TOKEN: surfaces config problems
+  # immediately instead of silently skipping coverage.
+  # ---------------------------------------------------------------------------
+  perf-three-private:
+    needs: run-ifc-regression
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
+      # Default to main; override via repo variable once a stable tag exists.
+      TEST_MODELS_PRIVATE_TAG: ${{ vars.TEST_MODELS_PRIVATE_TAG || 'main' }}
+    steps:
+      - name: Fail fast if private models token missing
+        env:
+          TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_PRESENT" != "true" ]; then
+            echo "::error::TEST_MODELS_PRIVATE_TOKEN secret is not set. Required to clone bldrs-ai/test-models-private."
+            exit 1
+          fi
+
+      - name: Checkout conway (for scripts/benchmark.cjs)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download conway candidate tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.run-ifc-regression.outputs.package_tgz }}
+          path: artifacts
+
+      - name: Clone headless-three at pinned SHA
+        run: |
+          git clone https://github.com/bldrs-ai/headless-three.git h3
+          git -C h3 checkout "$H3_SHA"
+
+      - name: Override conway via yarn resolutions
+        env:
+          CANDIDATE_TGZ: ${{ github.workspace }}/artifacts/${{ needs.run-ifc-regression.outputs.package_tgz }}
+        run: |
+          test -f "$CANDIDATE_TGZ" || { echo "::error::Candidate tarball missing: $CANDIDATE_TGZ"; exit 1; }
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('h3/package.json', 'utf8'));
+            p.resolutions = Object.assign({}, p.resolutions, { '@bldrs-ai/conway': 'file:' + process.env.CANDIDATE_TGZ });
+            fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install H3 + build
+        working-directory: h3
+        run: |
+          yarn install
+          yarn build
+
+      - name: Verify candidate conway is resolved in H3
+        env:
+          CANDIDATE_TGZ: ${{ github.workspace }}/artifacts/${{ needs.run-ifc-regression.outputs.package_tgz }}
+        run: |
+          EXPECTED=$(tar -xzOf "$CANDIDATE_TGZ" package/package.json | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>console.log(JSON.parse(s).version))")
+          ACTUAL=$(node -p "require('./h3/node_modules/@bldrs-ai/conway/package.json').version")
+          echo "Expected conway: $EXPECTED"
+          echo "Actual conway:   $ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::yarn resolutions override did not take effect. Expected '$EXPECTED', got '$ACTUAL'."
+            exit 1
+          fi
+
+      - name: Clone private test models
+        env:
+          GH_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+        run: |
+          git clone --depth 1 --branch "$TEST_MODELS_PRIVATE_TAG" \
+            "https://x-access-token:${GH_TOKEN}@github.com/bldrs-ai/test-models-private.git" test-models-private
+
+      - name: Run H3 benchmark (private)
+        env:
+          EXCLUDE_FILENAMES: "sp-946MB.ifc"
+        run: |
+          node scripts/benchmark.cjs ./h3 ./test-models-private
+
+      - name: Locate detail CSV
+        id: detail
+        run: |
+          CSV=$(find test-models-private/benchmarks -name performance-detail.csv -type f | head -1)
+          test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
+          echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
+
+      - name: Build aggregate stats (no filenames)
+        id: stats
+        env:
+          CSV_PATH: ${{ steps.detail.outputs.csv }}
+        run: |
+          STATS=$(python - "$CSV_PATH" <<'EOF'
+          import csv, statistics, sys
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          total = len(rows)
+          # Treat any loadStatus other than 'ok' (case-insensitive) as failing.
+          ok_rows = [r for r in rows if (r.get('loadStatus','').strip().lower() == 'ok')]
+          fail = total - len(ok_rows)
+          def col_stats(col):
+              vals = []
+              for r in ok_rows:
+                  v = r.get(col, '')
+                  try:
+                      vals.append(float(v))
+                  except (TypeError, ValueError):
+                      pass
+              if not vals:
+                  return {'count': '0', 'min': '-', 'median': '-', 'mean': '-', 'max': '-', 'stddev': '-'}
+              return {
+                  'count': str(len(vals)),
+                  'min': f"{min(vals):.0f}",
+                  'median': f"{statistics.median(vals):.0f}",
+                  'mean': f"{statistics.mean(vals):.0f}",
+                  'max': f"{max(vals):.0f}",
+                  'stddev': f"{(statistics.stdev(vals) if len(vals) > 1 else 0):.0f}",
+              }
+          cols = ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs']
+          s = {c: col_stats(c) for c in cols}
+          print(f"**Pass/fail**: {len(ok_rows)} passing / {fail} failing of {total} total.")
+          print()
+          print("| stat | " + " | ".join(cols) + " |")
+          print("| --- |" + " --- |" * len(cols))
+          for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:
+              print(f"| {stat} | " + " | ".join(s[c][stat] for c in cols) + " |")
+          EOF
+          )
+          {
+            echo "stats<<EOF"
+            echo "$STATS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload private perf detail CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-three-private-${{ github.run_id }}
+          path: ${{ steps.detail.outputs.csv }}
+
+      - name: Resolve PR number for comment target
+        id: pr
+        run: |
+          MSG=$(git log -1 --format=%B HEAD)
+          PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
+          echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on merged PR
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ steps.pr.outputs.number }}
+          body: |
+            <!-- perf-three-private -->
+            ## Headless-three Performance (private models)
+
+            **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models-private@${{ env.TEST_MODELS_PRIVATE_TAG }}`.
+
+            ${{ steps.stats.outputs.stats }}
+
+            _Detail CSV in run artifacts (`perf-three-private-${{ github.run_id }}`, visible to repo collaborators only)._
 
   # ---------------------------------------------------------------------------
   # Continuous release: on every successful push to main, publish to npm and
