@@ -314,7 +314,7 @@ jobs:
 
       - name: Comment on Pull Request with Regression Results and NPM Package Artifact
         if: ${{ github.event_name == 'pull_request' }}
-        uses: peter-evans/create-or-update-comment@v2
+        uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
@@ -480,67 +480,25 @@ jobs:
           path: ${{ steps.detail.outputs.csv }}
 
       # --- Cross-version delta vs the most recent prior push:main run ---
-      # Locate the previous run's snapshot artifact, download it, join on
-      # filename via scripts/gen_delta_csv.cjs, render a delta table sorted by
-      # |Δ %| desc, and upload the delta CSV. Non-fatal: if anything goes
-      # wrong (no prior run yet, artifact expired, format change), the delta
-      # section is omitted from the comment and the snapshot still posts.
-      - name: Find previous public snapshot artifact
-        id: prev
-        uses: actions/github-script@v7
+      # See .github/actions/perf-delta for the shared find/download/compute/
+      # upload pipeline. Non-fatal: if anything goes wrong (no prior, expired,
+      # format change, script error), the delta section is omitted from the
+      # comment and the snapshot still posts.
+      - name: Compute public perf delta
+        id: perf_delta
+        uses: ./.github/actions/perf-delta
         with:
-          script: |
-            const prefix = 'perf-three-public-';
-            const arts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-            });
-            const prior = arts
-              .filter(a => a.name.startsWith(prefix) && !a.expired && a.workflow_run.id !== context.runId)
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-            if (prior) {
-              core.setOutput('found', 'true');
-              core.setOutput('name', prior.name);
-              core.setOutput('run_id', String(prior.workflow_run.id));
-              core.info(`Prior snapshot: ${prior.name} from run ${prior.workflow_run.id} (${prior.created_at}).`);
-            } else {
-              core.setOutput('found', 'false');
-              core.warning('No prior perf-three-public snapshot found; skipping delta.');
-            }
-
-      - name: Download previous public snapshot
-        if: steps.prev.outputs.found == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ steps.prev.outputs.name }}
-          run-id: ${{ steps.prev.outputs.run_id }}
+          artifact-prefix: 'perf-three-public-'
+          current-csv: ${{ steps.detail.outputs.csv }}
+          delta-artifact-name: perf-delta-public-${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: prev-perf
-
-      - name: Compute delta CSV
-        id: delta
-        if: steps.prev.outputs.found == 'true'
-        run: |
-          # Snapshot artifacts preserve the full relative path of the source
-          # CSV, so locate it by name rather than guessing the layout.
-          PREV_CSV=$(find prev-perf -name performance-detail.csv -type f 2>/dev/null | head -1)
-          if [ -z "$PREV_CSV" ]; then
-            echo "::warning::Prior artifact contained no performance-detail.csv; skipping delta."
-            exit 0
-          fi
-          if ! node scripts/gen_delta_csv.cjs "$PREV_CSV" "${{ steps.detail.outputs.csv }}" delta.csv; then
-            echo "::warning::gen_delta_csv.cjs failed; skipping delta."
-            exit 0
-          fi
-          echo "csv=delta.csv" >> "$GITHUB_OUTPUT"
 
       - name: Build delta section (sorted by abs %change)
         id: delta_table
-        if: steps.delta.outputs.csv != ''
+        if: steps.perf_delta.outputs.csv != ''
         env:
-          DELTA_CSV: ${{ steps.delta.outputs.csv }}
-          PREV_RUN_ID: ${{ steps.prev.outputs.run_id }}
+          DELTA_CSV: ${{ steps.perf_delta.outputs.csv }}
+          PREV_RUN_ID: ${{ steps.perf_delta.outputs.prev_run_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
           SECTION=$(python - "$DELTA_CSV" "$PREV_RUN_ID" "$RUN_ID" <<'EOF'
@@ -574,13 +532,6 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload public delta CSV
-        if: steps.delta.outputs.csv != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: perf-delta-public-${{ github.run_id }}
-          path: ${{ steps.delta.outputs.csv }}
-
       # Parse PR# from the merge commit message — same trick auto-publish uses.
       # Squash-merge embeds it as "... (#N)", merge commit as "Merge pull
       # request #N from ...". If no PR# parses, skip the comment (artifact is
@@ -592,12 +543,25 @@ jobs:
           PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
           echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
-      - name: Comment on merged PR
+      # Look up an existing perf comment by hidden marker and upsert. Without
+      # this, every re-run of push:main would post a new duplicate comment.
+      - name: Find existing public perf comment
+        id: find_comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ steps.pr.outputs.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- perf-three-public -->'
+
+      - name: Create or update public perf comment
         if: steps.pr.outputs.number != ''
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ steps.pr.outputs.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          edit-mode: replace
           body: |
             <!-- perf-three-public -->
             ## Headless-three Performance (public models)
@@ -772,53 +736,14 @@ jobs:
       # Mirrors the public-job logic but emits aggregate stats over the delta
       # columns (no filenames in the comment). The delta CSV itself contains
       # filenames and is uploaded as a collaborator-only artifact.
-      - name: Find previous private snapshot artifact
-        id: prev
-        uses: actions/github-script@v7
+      - name: Compute private perf delta
+        id: perf_delta
+        uses: ./.github/actions/perf-delta
         with:
-          script: |
-            const prefix = 'perf-three-private-';
-            const arts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-            });
-            const prior = arts
-              .filter(a => a.name.startsWith(prefix) && !a.expired && a.workflow_run.id !== context.runId)
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-            if (prior) {
-              core.setOutput('found', 'true');
-              core.setOutput('name', prior.name);
-              core.setOutput('run_id', String(prior.workflow_run.id));
-              core.info(`Prior snapshot: ${prior.name} from run ${prior.workflow_run.id} (${prior.created_at}).`);
-            } else {
-              core.setOutput('found', 'false');
-              core.warning('No prior perf-three-private snapshot found; skipping delta.');
-            }
-
-      - name: Download previous private snapshot
-        if: steps.prev.outputs.found == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ steps.prev.outputs.name }}
-          run-id: ${{ steps.prev.outputs.run_id }}
+          artifact-prefix: 'perf-three-private-'
+          current-csv: ${{ steps.detail.outputs.csv }}
+          delta-artifact-name: perf-delta-private-${{ github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: prev-perf
-
-      - name: Compute delta CSV
-        id: delta
-        if: steps.prev.outputs.found == 'true'
-        run: |
-          PREV_CSV=$(find prev-perf -name performance-detail.csv -type f 2>/dev/null | head -1)
-          if [ -z "$PREV_CSV" ]; then
-            echo "::warning::Prior artifact contained no performance-detail.csv; skipping delta."
-            exit 0
-          fi
-          if ! node scripts/gen_delta_csv.cjs "$PREV_CSV" "${{ steps.detail.outputs.csv }}" delta.csv; then
-            echo "::warning::gen_delta_csv.cjs failed; skipping delta."
-            exit 0
-          fi
-          echo "csv=delta.csv" >> "$GITHUB_OUTPUT"
 
       # Aggregate-only stats over the delta columns — no filenames leak into
       # the comment body. Pct change is a string like "12.34%"; strip the
@@ -827,10 +752,10 @@ jobs:
       # collapses to 0; we skip them here so the stats reflect real changes.
       - name: Build delta stats section
         id: delta_stats
-        if: steps.delta.outputs.csv != ''
+        if: steps.perf_delta.outputs.csv != ''
         env:
-          DELTA_CSV: ${{ steps.delta.outputs.csv }}
-          PREV_RUN_ID: ${{ steps.prev.outputs.run_id }}
+          DELTA_CSV: ${{ steps.perf_delta.outputs.csv }}
+          PREV_RUN_ID: ${{ steps.perf_delta.outputs.prev_run_id }}
           RUN_ID: ${{ github.run_id }}
         run: |
           SECTION=$(python - "$DELTA_CSV" "$PREV_RUN_ID" "$RUN_ID" <<'EOF'
@@ -901,13 +826,6 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload private delta CSV
-        if: steps.delta.outputs.csv != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: perf-delta-private-${{ github.run_id }}
-          path: ${{ steps.delta.outputs.csv }}
-
       - name: Resolve PR number for comment target
         id: pr
         run: |
@@ -915,12 +833,25 @@ jobs:
           PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
           echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
-      - name: Comment on merged PR
+      # Look up an existing perf comment by hidden marker and upsert. Without
+      # this, every re-run of push:main would post a new duplicate comment.
+      - name: Find existing private perf comment
+        id: find_comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ steps.pr.outputs.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- perf-three-private -->'
+
+      - name: Create or update private perf comment
         if: steps.pr.outputs.number != ''
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ steps.pr.outputs.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          edit-mode: replace
           body: |
             <!-- perf-three-private -->
             ## Headless-three Performance (private models)

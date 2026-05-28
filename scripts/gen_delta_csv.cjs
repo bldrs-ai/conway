@@ -149,7 +149,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           ),
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
-          heapUsedMbDelta: computeDelta('heapUseMb', entry2, entry1),
+          heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
         });
       } else {
@@ -225,7 +225,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsPercentageChange: totalTimePercentageChange,
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
-          heapUsedMbDelta: computeDelta('heapUseMb', entry2, entry1),
+          heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
         });
       } else {
