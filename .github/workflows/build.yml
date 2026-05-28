@@ -856,14 +856,18 @@ jobs:
               vals = [v for v in vals if v is not None]
               if not vals:
                   return {'count': '0', 'min': '-', 'median': '-', 'mean': '-', 'max': '-', 'stddev': '-'}
-              fmt = (lambda v: f"{v:+.0f}{suffix}") if not suffix else (lambda v: f"{v:+.2f}{suffix}")
+              # Match precision to the column's unit (% gets 2 decimals; ms is integer)
+              # and use the same suffix so the cells in a column read uniformly.
+              prec = 2 if suffix == '%' else 0
+              signed = lambda v: f"{v:+.{prec}f}{suffix}"
+              unsigned = lambda v: f"{v:.{prec}f}{suffix}"
               return {
                   'count': str(len(vals)),
-                  'min': fmt(min(vals)),
-                  'median': fmt(statistics.median(vals)),
-                  'mean': fmt(statistics.mean(vals)),
-                  'max': fmt(max(vals)),
-                  'stddev': f"{(statistics.stdev(vals) if len(vals) > 1 else 0):.2f}",
+                  'min': signed(min(vals)),
+                  'median': signed(statistics.median(vals)),
+                  'mean': signed(statistics.mean(vals)),
+                  'max': signed(max(vals)),
+                  'stddev': unsigned(statistics.stdev(vals) if len(vals) > 1 else 0),
               }
           parse_d  = col_stats('parseTimeMsDelta',   [parse_num(r.get('parseTimeMsDelta','')) for r in common])
           geom_d   = col_stats('geometryTimeMsDelta',[parse_num(r.get('geometryTimeMsDelta','')) for r in common])
