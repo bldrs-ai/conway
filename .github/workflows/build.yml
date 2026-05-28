@@ -314,7 +314,7 @@ jobs:
 
       - name: Comment on Pull Request with Regression Results and NPM Package Artifact
         if: ${{ github.event_name == 'pull_request' }}
-        uses: peter-evans/create-or-update-comment@v2
+        uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
@@ -358,6 +358,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      actions: read    # required by download-artifact@v4 to fetch from prior runs
     env:
       # Pinned to a SHA so perf is reproducible. Override via repo variable
       # `H3_SHA` when bumping the H3 baseline.
@@ -434,8 +435,6 @@ jobs:
           git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
 
       - name: Run H3 benchmark (public)
-        env:
-          EXCLUDE_FILENAMES: "sp-946MB.ifc"
         run: |
           node scripts/benchmark.cjs ./h3 ./test-models
 
@@ -480,6 +479,59 @@ jobs:
           name: perf-three-public-${{ github.run_id }}
           path: ${{ steps.detail.outputs.csv }}
 
+      # --- Cross-version delta vs the most recent prior push:main run ---
+      # See .github/actions/perf-delta for the shared find/download/compute/
+      # upload pipeline. Non-fatal: if anything goes wrong (no prior, expired,
+      # format change, script error), the delta section is omitted from the
+      # comment and the snapshot still posts.
+      - name: Compute public perf delta
+        id: perf_delta
+        uses: ./.github/actions/perf-delta
+        with:
+          artifact-prefix: 'perf-three-public-'
+          current-csv: ${{ steps.detail.outputs.csv }}
+          delta-artifact-name: perf-delta-public-${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build delta section (sorted by abs %change)
+        id: delta_table
+        if: steps.perf_delta.outputs.csv != ''
+        env:
+          DELTA_CSV: ${{ steps.perf_delta.outputs.csv }}
+          PREV_RUN_ID: ${{ steps.perf_delta.outputs.prev_run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          SECTION=$(python - "$DELTA_CSV" "$PREV_RUN_ID" "$RUN_ID" <<'EOF'
+          import csv, sys
+          delta_csv, prev_run_id, run_id = sys.argv[1], sys.argv[2], sys.argv[3]
+          def pct(s):
+              s = (s or '').strip().rstrip('%')
+              if s == '' or s == 'Infinity' or s == 'N/A': return float('inf') if s == 'Infinity' else 0.0
+              try: return float(s)
+              except ValueError: return 0.0
+          rows = list(csv.DictReader(open(delta_csv)))
+          if not rows:
+              sys.exit(0)
+          rows.sort(key=lambda r: abs(pct(r.get('totalTimeMsPercentageChange',''))), reverse=True)
+          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange']
+          headers = ['file','prev ms','curr ms','Δ ms','Δ %']
+          print(f"### Δ vs previous run [#{prev_run_id}](https://github.com/bldrs-ai/conway/actions/runs/{prev_run_id})")
+          print()
+          print("| " + " | ".join(headers) + " |")
+          print("|" + " --- |" * len(headers))
+          for r in rows:
+              print("| " + " | ".join(str(r.get(c,'')) for c in cols) + " |")
+          print()
+          print(f"_Δ rows: {len(rows)} (sorted by |Δ %| desc). Negative = improvement._")
+          print(f"_Delta CSV in run artifacts (`perf-delta-public-{run_id}`)._")
+          EOF
+          )
+          {
+            echo "section<<EOF"
+            echo "$SECTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # Parse PR# from the merge commit message — same trick auto-publish uses.
       # Squash-merge embeds it as "... (#N)", merge commit as "Merge pull
       # request #N from ...". If no PR# parses, skip the comment (artifact is
@@ -491,12 +543,25 @@ jobs:
           PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
           echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
-      - name: Comment on merged PR
+      # Look up an existing perf comment by hidden marker and upsert. Without
+      # this, every re-run of push:main would post a new duplicate comment.
+      - name: Find existing public perf comment
+        id: find_comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ steps.pr.outputs.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- perf-three-public -->'
+
+      - name: Create or update public perf comment
         if: steps.pr.outputs.number != ''
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ steps.pr.outputs.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          edit-mode: replace
           body: |
             <!-- perf-three-public -->
             ## Headless-three Performance (public models)
@@ -504,6 +569,8 @@ jobs:
             **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models@${{ env.TEST_MODELS_TAG }}`.
 
             ${{ steps.table.outputs.table }}
+
+            ${{ steps.delta_table.outputs.section }}
 
             _Full `performance-detail.csv` in run artifacts (`perf-three-public-${{ github.run_id }}`)._
 
@@ -527,6 +594,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      actions: read    # required by download-artifact@v4 to fetch from prior runs
     env:
       H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
       # Default to main; override via repo variable once a stable tag exists.
@@ -602,8 +670,6 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/bldrs-ai/test-models-private.git" test-models-private
 
       - name: Run H3 benchmark (private)
-        env:
-          EXCLUDE_FILENAMES: "sp-946MB.ifc"
         run: |
           node scripts/benchmark.cjs ./h3 ./test-models-private
 
@@ -666,6 +732,100 @@ jobs:
           name: perf-three-private-${{ github.run_id }}
           path: ${{ steps.detail.outputs.csv }}
 
+      # --- Cross-version delta vs previous push:main run ---
+      # Mirrors the public-job logic but emits aggregate stats over the delta
+      # columns (no filenames in the comment). The delta CSV itself contains
+      # filenames and is uploaded as a collaborator-only artifact.
+      - name: Compute private perf delta
+        id: perf_delta
+        uses: ./.github/actions/perf-delta
+        with:
+          artifact-prefix: 'perf-three-private-'
+          current-csv: ${{ steps.detail.outputs.csv }}
+          delta-artifact-name: perf-delta-private-${{ github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Aggregate-only stats over the delta columns — no filenames leak into
+      # the comment body. Pct change is a string like "12.34%"; strip the
+      # suffix for the numeric stats. Models present in only one side
+      # contribute N/A delta values which parseValue() in gen_delta_csv
+      # collapses to 0; we skip them here so the stats reflect real changes.
+      - name: Build delta stats section
+        id: delta_stats
+        if: steps.perf_delta.outputs.csv != ''
+        env:
+          DELTA_CSV: ${{ steps.perf_delta.outputs.csv }}
+          PREV_RUN_ID: ${{ steps.perf_delta.outputs.prev_run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          SECTION=$(python - "$DELTA_CSV" "$PREV_RUN_ID" "$RUN_ID" <<'EOF'
+          import csv, statistics, sys
+          delta_csv, prev_run_id, run_id = sys.argv[1], sys.argv[2], sys.argv[3]
+          rows = list(csv.DictReader(open(delta_csv)))
+          # Only models that ran successfully on BOTH sides have meaningful
+          # numeric deltas. loadStatus1/2 are 'OK' (uppercase) from benchmark.cjs.
+          common = [r for r in rows
+                    if r.get('loadStatus1','').strip().upper() == 'OK'
+                    and r.get('loadStatus2','').strip().upper() == 'OK']
+          def parse_pct(s):
+              s = (s or '').strip().rstrip('%')
+              if s in ('', 'N/A', 'Infinity'): return None
+              try: return float(s)
+              except ValueError: return None
+          def parse_num(s):
+              s = (s or '').strip()
+              if s in ('', 'N/A'): return None
+              try: return float(s)
+              except ValueError: return None
+          def col_stats(label, vals, suffix=''):
+              vals = [v for v in vals if v is not None]
+              if not vals:
+                  return {'count': '0', 'min': '-', 'median': '-', 'mean': '-', 'max': '-', 'stddev': '-'}
+              # Match precision to the column's unit (% gets 2 decimals; ms is integer)
+              # and use the same suffix so the cells in a column read uniformly.
+              prec = 2 if suffix == '%' else 0
+              signed = lambda v: f"{v:+.{prec}f}{suffix}"
+              unsigned = lambda v: f"{v:.{prec}f}{suffix}"
+              return {
+                  'count': str(len(vals)),
+                  'min': signed(min(vals)),
+                  'median': signed(statistics.median(vals)),
+                  'mean': signed(statistics.mean(vals)),
+                  'max': signed(max(vals)),
+                  'stddev': unsigned(statistics.stdev(vals) if len(vals) > 1 else 0),
+              }
+          parse_d  = col_stats('parseTimeMsDelta',   [parse_num(r.get('parseTimeMsDelta','')) for r in common])
+          geom_d   = col_stats('geometryTimeMsDelta',[parse_num(r.get('geometryTimeMsDelta','')) for r in common])
+          total_d  = col_stats('totalTimeMsDelta',   [parse_num(r.get('totalTimeMsDelta','')) for r in common])
+          pct_d    = col_stats('pct',                [parse_pct(r.get('totalTimeMsPercentageChange','')) for r in common], suffix='%')
+          # Track regressions/improvements at a glance.
+          pct_vals = [parse_pct(r.get('totalTimeMsPercentageChange','')) for r in common]
+          pct_vals = [v for v in pct_vals if v is not None]
+          regr = sum(1 for v in pct_vals if v > 0)
+          impr = sum(1 for v in pct_vals if v < 0)
+          flat = sum(1 for v in pct_vals if v == 0)
+          print(f"### Δ vs previous run [#{prev_run_id}](https://github.com/bldrs-ai/conway/actions/runs/{prev_run_id})")
+          print()
+          print(f"**Models compared (OK on both sides)**: {len(common)} of {len(rows)} delta rows.")
+          print(f"**Regressed / improved / flat (by totalTimeMs)**: {regr} / {impr} / {flat}.")
+          print()
+          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange']
+          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %']
+          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d}
+          print("| " + " | ".join(headers) + " |")
+          print("|" + " --- |" * len(headers))
+          for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:
+              print(f"| {stat} | " + " | ".join(s[c][stat] for c in cols) + " |")
+          print()
+          print(f"_Delta CSV in run artifacts (`perf-delta-private-{run_id}`, collaborator-only)._")
+          EOF
+          )
+          {
+            echo "section<<EOF"
+            echo "$SECTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Resolve PR number for comment target
         id: pr
         run: |
@@ -673,12 +833,25 @@ jobs:
           PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
           echo "number=${PR_NUM}" >> "$GITHUB_OUTPUT"
 
-      - name: Comment on merged PR
+      # Look up an existing perf comment by hidden marker and upsert. Without
+      # this, every re-run of push:main would post a new duplicate comment.
+      - name: Find existing private perf comment
+        id: find_comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ steps.pr.outputs.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- perf-three-private -->'
+
+      - name: Create or update private perf comment
         if: steps.pr.outputs.number != ''
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ steps.pr.outputs.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          edit-mode: replace
           body: |
             <!-- perf-three-private -->
             ## Headless-three Performance (private models)
@@ -686,6 +859,8 @@ jobs:
             **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models-private@${{ env.TEST_MODELS_PRIVATE_TAG }}`.
 
             ${{ steps.stats.outputs.stats }}
+
+            ${{ steps.delta_stats.outputs.section }}
 
             _Detail CSV in run artifacts (`perf-three-private-${{ github.run_id }}`, visible to repo collaborators only)._
 
