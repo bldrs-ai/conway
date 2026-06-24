@@ -190,7 +190,19 @@ The same batch the regression CI job runs can be invoked locally — see [regres
 
 **Tier 1 — Conway-only perf in CI (live).** Every regression run emits a `perf.csv` of `parseTimeMs / geometryTimeMs / totalTimeMs / rssMb / heapUsedMb / heapTotalMb` per model. The top-10 slowest are posted in the PR comment; the full CSV is uploaded as a workflow artifact. This piggybacks on the existing regression batch so cost is ~0 extra runner minutes.
 
-**Tier 2 — full headless-three perf (planned, #314).** A `perf-three` job on `push: main` that runs `scripts/benchmark.cjs` against a clone of [headless-three](https://github.com/bldrs-ai/headless-three), installing the candidate Conway tarball as H3's `@bldrs-ai/conway` dep. Captures PNG renders + per-model timings via H3's rendering server, including a parallel job for `test-models-private`. Tracked in #314.
+**Tier 2 — full headless-three perf in CI (live).** Two jobs,
+`perf-three-public` and `perf-three-private`, run on `push: main`
+(`needs: run-ifc-regression`). Each downloads the candidate Conway tarball
+that the regression job packed, clones [headless-three](https://github.com/bldrs-ai/headless-three)
+at a pinned `H3_SHA`, and forces the whole H3 → adapter → conway chain onto
+the candidate via a yarn `resolutions` override (no `yarn link`), then runs
+`scripts/benchmark.cjs` to time every model. The public job posts a
+per-model table to the merge's PR; the private job (`test-models-private`,
+gated on `secrets.TEST_MODELS_PRIVATE_TOKEN`, never on PR events so forks
+can't leak the secret) posts aggregate stats only, so no private model
+names appear in the public thread. Both compute a cross-version delta vs
+the previous `push: main` run (via the `.github/actions/perf-delta`
+composite action) and upload the detail CSV as a workflow artifact.
 
 
 # Releases
@@ -275,38 +287,23 @@ npm dist-tag add @bldrs-ai/conway@<VERSION> stable
 
 # Roadmap
 
-The CI / release pipeline is now continuous, but there are tracked
-follow-ups to deepen its coverage. Big items first.
+The CI / release pipeline is continuous and complete: `build` gates
+`run-ifc-regression`, which gates the headless-three perf jobs, and every
+green merge to `main` auto-publishes (see [Releases](#releases)). The
+umbrella waterfall (#316) and performance-in-CI (#314) issues are closed.
+The optional follow-ups below remain.
 
-### #314 — Performance benchmarks in CI
+### Headless-three perf on PRs
 
-**Tier 1 — Conway-only perf (done):** the regression batch now emits a
-per-model `perf.csv` (parse/geometry/total time + RSS/heap MB),
-piggybacking on the existing run so there's no extra runner cost. Top-10
-slowest models appear in each PR comment; the full CSV uploads as an
-artifact. See "Performance benchmarks" above.
+The `perf-three-public` / `perf-three-private` jobs run on `push: main`
+only — to keep PR wall-time down and to keep the private-models token off
+PR events (forks can't be trusted with it). Running them per-PR, behind a
+gate that withholds the private job from fork PRs, would catch H3
+render-time regressions before merge instead of just after.
 
-**Tier 2 — full headless-three perf (next):** an end-to-end render-and-time
-job that runs `scripts/benchmark.cjs` against a clone of
-[headless-three](https://github.com/bldrs-ai/headless-three). To avoid the
-local `yarn link` toolchain, the job installs the candidate Conway tarball
-(produced by `run-ifc-regression`) as H3's `@bldrs-ai/conway` dep and pins
-`H3_TAG` in `build.yml`. Gated to `push: main` to keep PR runtime down
-while still exercising every release. A sibling job runs against
-`test-models-private` using `secrets.TEST_MODELS_PRIVATE_TOKEN`, never on
-PR events (so forks can't leak the secret), and uploads results as
-org-scoped artifacts. Delta vs. the previous release lands in the
-auto-publish summary.
+### Golden `errors.csv` diffing + regression renders (#288)
 
-### #315 — Bump pinned `TEST_MODELS_TAG`
-
-The regression batch in `build.yml` is pinned to `test-models@0.13.802`.
-If newer stable tags exist, bumping picks up coverage of more recent
-fixtures. The bump itself is a one-line change; the work is triaging
-whatever new diffs appear on a no-op PR run.
-
-### #316 — CI waterfall
-
-Mostly done: `build → run-ifc-regression` is in place and shares the
-WASM cache. The only remaining piece is #314 above (the third leg of
-the waterfall).
+Fail a PR when its `errors.csv` diverges from a checked-in golden — "New
+errors detected. Copy errors.csv to golden/errors.csv to accept changes"
+— and attach per-model renders to the regression comment so geometry
+regressions are visible without downloading artifacts.
