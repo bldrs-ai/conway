@@ -177,7 +177,7 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 
 | Job | What it does |
 |---|---|
-| `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`. |
+| `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`, and a Tier-A geometry-digest check of the in-repo `data/` models against committed goldens. |
 | `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the public `test-models` ref (`TEST_MODELS_REF`, default `main`), pinned per-run to the resolved commit SHA; posts a per-PR comment with the resolved SHA + `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
 
 A merge to `main` re-runs those two jobs and then chains into `auto-publish` (see [Releases](#releases) below).
@@ -185,6 +185,10 @@ A merge to `main` re-runs those two jobs and then chains into `auto-publish` (se
 ## Regression batch
 
 The same batch the regression CI job runs can be invoked locally — see [regression/README.md](regression/README.md) for digest / verbose / batch modes and the catalog of model fixtures. CI tracks `TEST_MODELS_REF` near the top of `build.yml` (default `main`), resolved to a commit SHA per run and recorded in the PR comment + job summary, so each run is reproducible without relying on test-models cutting tags.
+
+### Tier A: in-repo quick-check models (`data/`)
+
+The `build` job also runs a fast, hermetic geometry gate over the models checked into `data/` (`index.ifc`, `block.ifc`) — no `test-models` clone and no token, so it protects every PR including forks. Each model's geometry digest (the same `ifc_regression_main.js -d` digest the batch produces) is diffed against a committed golden `data/<name>.csv`: a mismatch fails the build with a re-bless hint, so accepting an intended change is a single PR that updates the golden alongside the code. Goldens must come from CI's pinned toolchain — the first run uploads the candidates as the `tierA-goldens-<run_id>` artifact; committing them as `data/<name>.csv` turns the gate on.
 
 ## Performance benchmarks
 

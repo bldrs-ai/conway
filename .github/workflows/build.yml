@@ -117,6 +117,53 @@ jobs:
       - name: Lint
         run: yarn lint
 
+      # --- Tier A: in-repo quick-check geometry goldens (data/ models) ---
+      # A hermetic geometry gate that runs in `build` (no test-models clone, no
+      # token) so it protects every PR including forks. Each data/ model's digest
+      # is compared against a committed golden (data/<name>.csv):
+      #   - golden present & matches -> pass
+      #   - golden present & differs -> FAIL with a re-bless hint (the gate)
+      #   - golden absent            -> warn + emit candidate, exit 0 (bootstrap)
+      # Goldens must be produced by CI's pinned EMSDK toolchain to match, so the
+      # first run uploads the candidate digests as an artifact; committing them
+      # to data/ turns the gate on. Uses the same `ifc_regression_main.js -d`
+      # the batch job spawns, so the digest format is identical, and WASM is
+      # already loadable here (the jest `yarn test` step above exercises it via
+      # the same conway-geom import).
+      - name: Tier A quick-check geometry goldens (data/)
+        run: |
+          set -uo pipefail
+          OUT="${GITHUB_WORKSPACE}/tierA-goldens"
+          mkdir -p "$OUT"
+          status=0
+          for m in index block; do
+            node --experimental-specifier-resolution=node \
+              ./compiled/src/ifc/ifc_regression_main.js -d "data/$m.ifc" "$OUT/$m"
+            cand="$OUT/$m.csv"
+            golden="data/$m.csv"
+            if [ ! -f "$cand" ]; then
+              echo "::error::Digest not produced for data/$m.ifc"; status=1; continue
+            fi
+            if [ ! -f "$golden" ]; then
+              echo "::warning::No golden for data/$m.ifc yet -- download the tierA-goldens artifact and commit $m.csv to data/$m.csv to enable gating."
+              continue
+            fi
+            if diff -u "$golden" "$cand"; then
+              echo "data/$m.ifc: geometry digest matches golden."
+            else
+              echo "::error::Geometry digest changed for data/$m.ifc. If intended, re-bless: replace data/$m.csv with tierA-goldens/$m.csv from this run's artifact."
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Upload Tier A digest candidates
+        if: ${{ always() && hashFiles('tierA-goldens/*.csv') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tierA-goldens-${{ github.run_id }}
+          path: tierA-goldens/*.csv
+
   # ---------------------------------------------------------------------------
   # Regression: consumes build's WASM cache (no rebuild). Posts results to PR.
   # Kept on a separate job (vs steps in build) so its 5-10 min runtime doesn't
