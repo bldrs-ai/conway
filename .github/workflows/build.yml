@@ -9,7 +9,11 @@ on:
 env:
   EMSDK_VERSION: '3.1.72'
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
-  TEST_MODELS_TAG: '0.13.802'
+  # Public test-models git ref to track. Resolved to a concrete commit SHA per
+  # run (recorded in the PR comment + job summary) so the regression baseline is
+  # reproducible without test-models having to cut tags. Override via the
+  # repo/environment variable TEST_MODELS_REF (a branch, tag, or full commit SHA).
+  TEST_MODELS_REF: ${{ vars.TEST_MODELS_REF || 'main' }}
 
 jobs:
   build:
@@ -125,6 +129,9 @@ jobs:
     # artifact by name without re-packing conway.
     outputs:
       package_tgz: ${{ steps.npm_pack.outputs.package_tgz }}
+      # Resolved test-models commit SHA, so perf-three-public pins the exact
+      # same model set this job diffed against.
+      test_models_sha: ${{ steps.tmsha.outputs.sha }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -174,17 +181,38 @@ jobs:
         run: yarn bundle-examples
 
       # --- Test Models Checkout & Regression ---
+      # Resolve the tracked ref to a concrete commit SHA. Recording the SHA (not
+      # a tag) is what makes the baseline reproducible: test-models doesn't tag
+      # reliably, so we track its main branch and pin per-run to the commit we
+      # actually tested. The SHA keys the cache and is the git-diff target below.
+      - name: Resolve test-models SHA
+        id: tmsha
+        run: |
+          SHA=$(git ls-remote https://github.com/bldrs-ai/test-models.git "$TEST_MODELS_REF" | head -1 | cut -f1)
+          # ls-remote prints nothing for a raw commit SHA; fall back to the ref.
+          if [ -z "$SHA" ]; then SHA="$TEST_MODELS_REF"; fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved test-models ref '$TEST_MODELS_REF' -> $SHA"
+          echo "**Models:** test-models @ \`$SHA\` (ref \`$TEST_MODELS_REF\`)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Restore Test Models Cache
         id: cache-test-models
         uses: actions/cache@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+          key: ${{ runner.os }}-test-models-${{ steps.tmsha.outputs.sha }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+          SHA="${{ steps.tmsha.outputs.sha }}"
+          # Shallow-fetch exactly the resolved commit (GitHub allows fetch-by-SHA
+          # for reachable commits) so the working tree and git-diff target match
+          # the SHA we recorded, even if main advanced since we resolved it.
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$SHA"
+          git -C test-models checkout "$SHA"
 
       # Perf CSV lands OUTSIDE the diffed test_models folder so machine-specific
       # timings don't show up as "changes" against test-models's checked-in
@@ -194,7 +222,7 @@ jobs:
         run: |
           node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
             -e "sp-.*\.ifc" \
-            -t ${{ env.TEST_MODELS_TAG }} \
+            -t ${{ steps.tmsha.outputs.sha }} \
             --perf "${GITHUB_WORKSPACE}/perf.csv" \
             test-models \
             test-models/regression/test_models \
@@ -321,6 +349,8 @@ jobs:
           body: |
             ## IFC Regression Results
 
+            **Models:** `test-models` @ `${{ steps.tmsha.outputs.sha }}` (ref `${{ env.TEST_MODELS_REF }}`)
+
             **Failed.csv:**
             ${{ steps.regression_results.outputs.failed_output }}
 
@@ -427,12 +457,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+          key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+          SHA="${{ needs.run-ifc-regression.outputs.test_models_sha }}"
+          # Same exact commit run-ifc-regression diffed against (fetch-by-SHA).
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$SHA"
+          git -C test-models checkout "$SHA"
 
       - name: Run H3 benchmark (public)
         run: |
@@ -566,7 +601,7 @@ jobs:
             <!-- perf-three-public -->
             ## Headless-three Performance (public models)
 
-            **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models@${{ env.TEST_MODELS_TAG }}`.
+            **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models@${{ needs.run-ifc-regression.outputs.test_models_sha }}`.
 
             ${{ steps.table.outputs.table }}
 

@@ -178,13 +178,13 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`. |
-| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the pinned `test-models` tag, posts a per-PR comment with `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
+| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the public `test-models` ref (`TEST_MODELS_REF`, default `main`), pinned per-run to the resolved commit SHA; posts a per-PR comment with the resolved SHA + `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
 
 A merge to `main` re-runs those two jobs and then chains into `auto-publish` (see [Releases](#releases) below).
 
 ## Regression batch
 
-The same batch the regression CI job runs can be invoked locally — see [regression/README.md](regression/README.md) for digest / verbose / batch modes and the catalog of model fixtures. The CI pinned tag is `TEST_MODELS_TAG` near the top of `build.yml`.
+The same batch the regression CI job runs can be invoked locally — see [regression/README.md](regression/README.md) for digest / verbose / batch modes and the catalog of model fixtures. CI tracks `TEST_MODELS_REF` near the top of `build.yml` (default `main`), resolved to a commit SHA per run and recorded in the PR comment + job summary, so each run is reproducible without relying on test-models cutting tags.
 
 ## Performance benchmarks
 
