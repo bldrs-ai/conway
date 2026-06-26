@@ -9,7 +9,11 @@ on:
 env:
   EMSDK_VERSION: '3.1.72'
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
-  TEST_MODELS_TAG: '0.13.802'
+  # Public test-models git ref to track. Resolved to a concrete commit SHA per
+  # run (recorded in the PR comment + job summary) so the regression baseline is
+  # reproducible without test-models having to cut tags. Override via the
+  # repo/environment variable TEST_MODELS_REF (a branch, tag, or full commit SHA).
+  TEST_MODELS_REF: ${{ vars.TEST_MODELS_REF || 'main' }}
 
 jobs:
   build:
@@ -113,6 +117,65 @@ jobs:
       - name: Lint
         run: yarn lint
 
+      # --- Tier A: in-repo quick-check geometry goldens (data/ models) ---
+      # A hermetic geometry gate that runs in `build` (no test-models clone, no
+      # token) so it protects every PR including forks. Each data/ model's digest
+      # is compared against a committed golden (data/<name>.csv):
+      #   - golden present & matches -> pass
+      #   - golden present & differs -> FAIL with a re-bless hint (the gate)
+      #   - golden absent            -> warn + emit candidate, exit 0 (bootstrap)
+      # Goldens must be produced by CI's pinned EMSDK toolchain to match, so the
+      # first run uploads the candidate digests as an artifact; committing them
+      # to data/ turns the gate on. Uses the same `ifc_regression_main.js -d`
+      # the batch job spawns, so the digest format is identical, and WASM is
+      # already loadable here (the jest `yarn test` step above exercises it via
+      # the same conway-geom import).
+      - name: Tier A quick-check geometry goldens (data/)
+        run: |
+          set -uo pipefail
+          OUT="${GITHUB_WORKSPACE}/tierA-goldens"
+          mkdir -p "$OUT"
+          shopt -s nullglob
+          status=0
+          count=0
+          # Cover every in-repo quick-check model; deriving the list from
+          # data/*.ifc (vs a hard-coded set) means a newly added model is gated
+          # as soon as its golden is committed, with no edit here.
+          for f in data/*.ifc; do
+            count=$((count + 1))
+            m=$(basename "$f" .ifc)
+            node --experimental-specifier-resolution=node \
+              ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m"
+            cand="$OUT/$m.csv"
+            golden="data/$m.csv"
+            if [ ! -f "$cand" ]; then
+              echo "::error::No digest produced for $f -- parsing or geometry extraction likely failed for this model (see log above)."
+              status=1; continue
+            fi
+            if [ ! -f "$golden" ]; then
+              echo "::warning::No golden for $f yet -- download the tierA-goldens artifact and commit $m.csv to data/$m.csv to enable gating."
+              continue
+            fi
+            if diff -u "$golden" "$cand"; then
+              echo "$f: geometry digest matches golden."
+            else
+              echo "::error::Geometry digest changed for $f. If intended, re-bless: replace data/$m.csv with $m.csv from this run's tierA-goldens artifact."
+              status=1
+            fi
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No data/*.ifc quick-check models found."
+            status=1
+          fi
+          exit $status
+
+      - name: Upload Tier A digest candidates
+        if: ${{ always() && hashFiles('tierA-goldens/*.csv') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tierA-goldens-${{ github.run_id }}
+          path: tierA-goldens/*.csv
+
   # ---------------------------------------------------------------------------
   # Regression: consumes build's WASM cache (no rebuild). Posts results to PR.
   # Kept on a separate job (vs steps in build) so its 5-10 min runtime doesn't
@@ -125,6 +188,9 @@ jobs:
     # artifact by name without re-packing conway.
     outputs:
       package_tgz: ${{ steps.npm_pack.outputs.package_tgz }}
+      # Resolved test-models commit SHA, so perf-three-public pins the exact
+      # same model set this job diffed against.
+      test_models_sha: ${{ steps.tmsha.outputs.sha }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -174,17 +240,52 @@ jobs:
         run: yarn bundle-examples
 
       # --- Test Models Checkout & Regression ---
+      # Resolve the tracked ref to a concrete commit SHA. Recording the SHA (not
+      # a tag) is what makes the baseline reproducible: test-models doesn't tag
+      # reliably, so we track its main branch and pin per-run to the commit we
+      # actually tested. The SHA keys the cache and is the git-diff target below.
+      - name: Resolve test-models SHA
+        id: tmsha
+        run: |
+          set -euo pipefail
+          URL=https://github.com/bldrs-ai/test-models.git
+          # Run ls-remote as its own command (errexit) so a transient network
+          # failure aborts the job loudly instead of being masked by the head/cut
+          # pipeline and silently falling back to a moving ref. Annotated tags
+          # advertise a peeled "<ref>^{}" commit line, which we prefer over the
+          # tag-object id.
+          REFS=$(git ls-remote "$URL" "$TEST_MODELS_REF")
+          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
+          # No advertised match -> TEST_MODELS_REF is itself a raw commit SHA.
+          if [ -z "$SHA" ]; then SHA="$TEST_MODELS_REF"; fi
+          # Refuse anything that is not a 40-hex commit SHA rather than poisoning
+          # the cache key and git-diff target with a moving or bogus ref.
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve TEST_MODELS_REF='$TEST_MODELS_REF' to a commit SHA (got '$SHA'). Use an existing branch, tag, or full 40-char commit SHA."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved test-models ref '$TEST_MODELS_REF' -> $SHA"
+          echo "**Models:** test-models @ \`$SHA\` (ref \`$TEST_MODELS_REF\`)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Restore Test Models Cache
         id: cache-test-models
         uses: actions/cache@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+          key: ${{ runner.os }}-test-models-${{ steps.tmsha.outputs.sha }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+          SHA="${{ steps.tmsha.outputs.sha }}"
+          # Shallow-fetch exactly the resolved commit (GitHub allows fetch-by-SHA
+          # for reachable commits) so the working tree and git-diff target match
+          # the SHA we recorded, even if main advanced since we resolved it.
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$SHA"
+          git -C test-models checkout "$SHA"
 
       # Perf CSV lands OUTSIDE the diffed test_models folder so machine-specific
       # timings don't show up as "changes" against test-models's checked-in
@@ -194,7 +295,7 @@ jobs:
         run: |
           node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
             -e "sp-.*\.ifc" \
-            -t ${{ env.TEST_MODELS_TAG }} \
+            -t ${{ steps.tmsha.outputs.sha }} \
             --perf "${GITHUB_WORKSPACE}/perf.csv" \
             test-models \
             test-models/regression/test_models \
@@ -321,6 +422,8 @@ jobs:
           body: |
             ## IFC Regression Results
 
+            **Models:** `test-models` @ `${{ steps.tmsha.outputs.sha }}` (ref `${{ env.TEST_MODELS_REF }}`)
+
             **Failed.csv:**
             ${{ steps.regression_results.outputs.failed_output }}
 
@@ -427,12 +530,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ env.TEST_MODELS_TAG }}
+          key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch ${{ env.TEST_MODELS_TAG }} https://github.com/bldrs-ai/test-models.git test-models
+          SHA="${{ needs.run-ifc-regression.outputs.test_models_sha }}"
+          # Same exact commit run-ifc-regression diffed against (fetch-by-SHA).
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$SHA"
+          git -C test-models checkout "$SHA"
 
       - name: Run H3 benchmark (public)
         run: |
@@ -566,7 +674,7 @@ jobs:
             <!-- perf-three-public -->
             ## Headless-three Performance (public models)
 
-            **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models@${{ env.TEST_MODELS_TAG }}`.
+            **Setup**: conway `${{ needs.run-ifc-regression.outputs.package_tgz }}` against H3 `${{ env.H3_SHA }}` over `test-models@${{ needs.run-ifc-regression.outputs.test_models_sha }}`.
 
             ${{ steps.table.outputs.table }}
 
