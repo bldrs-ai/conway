@@ -157,20 +157,6 @@ jobs:
           done
           exit $status
 
-      # TEMP (bootstrap only): emit the candidate digests to the job log,
-      # base64 + sentinel-wrapped so a timestamp prefix can't corrupt them, so
-      # they can be recovered via the GitHub API without downloading the
-      # blob-storage artifact. Reverted in the same commit that lands data/*.csv.
-      - name: TEMP emit Tier A goldens to log (bootstrap)
-        if: ${{ always() }}
-        run: |
-          for m in index block; do
-            f="${GITHUB_WORKSPACE}/tierA-goldens/$m.csv"
-            if [ -f "$f" ]; then
-              echo "TIERA_GOLDEN::$m::$(base64 -w0 "$f")::END"
-            fi
-          done
-
       - name: Upload Tier A digest candidates
         if: ${{ always() && hashFiles('tierA-goldens/*.csv') != '' }}
         uses: actions/upload-artifact@v4
