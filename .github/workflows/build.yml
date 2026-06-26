@@ -135,26 +135,38 @@ jobs:
           set -uo pipefail
           OUT="${GITHUB_WORKSPACE}/tierA-goldens"
           mkdir -p "$OUT"
+          shopt -s nullglob
           status=0
-          for m in index block; do
+          count=0
+          # Cover every in-repo quick-check model; deriving the list from
+          # data/*.ifc (vs a hard-coded set) means a newly added model is gated
+          # as soon as its golden is committed, with no edit here.
+          for f in data/*.ifc; do
+            count=$((count + 1))
+            m=$(basename "$f" .ifc)
             node --experimental-specifier-resolution=node \
-              ./compiled/src/ifc/ifc_regression_main.js -d "data/$m.ifc" "$OUT/$m"
+              ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m"
             cand="$OUT/$m.csv"
             golden="data/$m.csv"
             if [ ! -f "$cand" ]; then
-              echo "::error::Digest not produced for data/$m.ifc"; status=1; continue
+              echo "::error::No digest produced for $f -- parsing or geometry extraction likely failed for this model (see log above)."
+              status=1; continue
             fi
             if [ ! -f "$golden" ]; then
-              echo "::warning::No golden for data/$m.ifc yet -- download the tierA-goldens artifact and commit $m.csv to data/$m.csv to enable gating."
+              echo "::warning::No golden for $f yet -- download the tierA-goldens artifact and commit $m.csv to data/$m.csv to enable gating."
               continue
             fi
             if diff -u "$golden" "$cand"; then
-              echo "data/$m.ifc: geometry digest matches golden."
+              echo "$f: geometry digest matches golden."
             else
-              echo "::error::Geometry digest changed for data/$m.ifc. If intended, re-bless: replace data/$m.csv with tierA-goldens/$m.csv from this run's artifact."
+              echo "::error::Geometry digest changed for $f. If intended, re-bless: replace data/$m.csv with $m.csv from this run's tierA-goldens artifact."
               status=1
             fi
           done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No data/*.ifc quick-check models found."
+            status=1
+          fi
           exit $status
 
       - name: Upload Tier A digest candidates
@@ -235,9 +247,23 @@ jobs:
       - name: Resolve test-models SHA
         id: tmsha
         run: |
-          SHA=$(git ls-remote https://github.com/bldrs-ai/test-models.git "$TEST_MODELS_REF" | head -1 | cut -f1)
-          # ls-remote prints nothing for a raw commit SHA; fall back to the ref.
+          set -euo pipefail
+          URL=https://github.com/bldrs-ai/test-models.git
+          # Run ls-remote as its own command (errexit) so a transient network
+          # failure aborts the job loudly instead of being masked by the head/cut
+          # pipeline and silently falling back to a moving ref. Annotated tags
+          # advertise a peeled "<ref>^{}" commit line, which we prefer over the
+          # tag-object id.
+          REFS=$(git ls-remote "$URL" "$TEST_MODELS_REF")
+          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
+          # No advertised match -> TEST_MODELS_REF is itself a raw commit SHA.
           if [ -z "$SHA" ]; then SHA="$TEST_MODELS_REF"; fi
+          # Refuse anything that is not a 40-hex commit SHA rather than poisoning
+          # the cache key and git-diff target with a moving or bogus ref.
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve TEST_MODELS_REF='$TEST_MODELS_REF' to a commit SHA (got '$SHA'). Use an existing branch, tag, or full 40-char commit SHA."
+            exit 1
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Resolved test-models ref '$TEST_MODELS_REF' -> $SHA"
           echo "**Models:** test-models @ \`$SHA\` (ref \`$TEST_MODELS_REF\`)" >> "$GITHUB_STEP_SUMMARY"
