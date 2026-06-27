@@ -3,6 +3,18 @@ name: CI
 on:
   pull_request:
     types: [opened, synchronize]
+    # Skip the heavy build + IFC regression on doc-only PRs. paths-ignore
+    # skips the workflow only when EVERY changed file matches — a PR that
+    # also touches code/config still runs the full suite. Push-to-main
+    # (auto-publish, perf) is intentionally left unfiltered below.
+    # NOTE: if `build` / `run-ifc-regression` are *required* status checks
+    # in branch protection, a path-skipped run reports nothing and the PR
+    # waits forever — switch to a per-job `if:` gate instead (a skipped-by-if
+    # job satisfies a required check; a path-skipped workflow does not).
+    paths-ignore:
+      - '**/*.md'
+      - 'design/**'
+      - 'docs/**'
   push:
     branches: [main]
 
