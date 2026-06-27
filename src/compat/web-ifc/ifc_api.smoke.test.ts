@@ -53,6 +53,11 @@ describe('web-ifc compat IfcAPI', () => {
     // tree (numeric expressID, non-empty children), and item properties for
     // the root round-trip the same expressID back.
     const tree = await api.properties.getSpatialStructure(modelID)
+    // getSpatialStructure returns `Node | undefined` (the passthrough is
+    // optional-chained). Narrow it — undefined here is itself a failure.
+    if (tree === undefined) {
+      throw new Error('getSpatialStructure returned undefined for the IFC model')
+    }
     expect(typeof tree.expressID).toBe('number')
     expect(Array.isArray(tree.children)).toBe(true)
     expect(tree.children.length).toBeGreaterThan(0)
