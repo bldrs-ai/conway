@@ -1,9 +1,15 @@
 /* eslint-disable */
+// Import the IFC type-code constants from their defining leaf module,
+// NOT through the './ifc_api' re-export. ifc_api re-exports ifc2x4
+// (`export * from './ifc2x4'`) AND pulls in the proxy → ifc_properties
+// chain, so importing these values back through ifc_api forms a cycle
+// whose const bindings are still in the temporal dead zone at load time
+// (ReferenceError: Cannot access 'IFCRELAGGREGATES' before initialization).
 import {
   IFCPROJECT, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL,
   IFCRELCONTAINEDINSPATIALSTRUCTURE,
   IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
-} from './ifc_api'
+} from './ifc2x4'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc';
 import { Node, PropertiesPassthrough } from './properties_passthrough';
 
