@@ -102,7 +102,13 @@ type-map literals. Audited, they fall into three buckets:
    codegen that emits `entity_types_ifc.gen.ts`, replacing the three
    hand-maintained literals with one generated table + a lookup helper.
    This is the `nickcastel50` TODO; doing it here is what keeps the map
-   from drifting again.
+   from drifting again. **Conway owns these constants** — add a
+   **Conway-internal parity test, opaque to consumers** (web-ifc as a
+   Conway `devDependency`) asserting the generated `name → code` table is
+   identical to web-ifc's `IfcTypesMap`. Consumers import the constants
+   from Conway and never see web-ifc; the test guarantees the values equal
+   it, so a future web-ifc schema bump fails Conway CI loudly instead of
+   silently diverging. (Decision Q2 from the companion doc.)
 3. **Decide the properties layer** (bucket 3) before vendoring
    `ifc2x4_helper.ts` — see "Properties layer" below.
 4. **Public entry** `src/compat/web-ifc/index.ts` re-exporting `IfcAPI`,
@@ -156,9 +162,20 @@ immediately), with (b) scheduled as the property-surface slice shared with
 - **Closes `step-support.md` gap #1**: this `./web-ifc` export is (part
   of) the stable public API surface STEP needs. Coordinate the named
   exports so the STEP work and this surface don't diverge.
-- **AP203** (`step-support.md` Phase 4, undecided): the compat factory
-  routes IFC + AP214 — it must **fail loudly**, not silently mis-route,
-  on AP203 until that lands.
+- **AP203** (decision Q3 from the companion doc): **route AP203 to the
+  AP214 proxy — do not fail loudly.** AP203 through the AP214 engine
+  succeeds often, which is why `conway_model_loader` has `case
+  ModelFormatType.AP203:` fall through to the AP214 loader (logging "AP203
+  Step Detected, using AP214 loader"). But the standalone adapter's
+  `IfcApiModelPassthroughFactory` only handles `AP214` / `IFC` /
+  `default:error` — it has **no `AP203` case**, so AP203 currently *errors*
+  through the adapter even though it works natively (`ModelFormatType.AP203
+  = 2` is distinct; the detector returns it for CONFIG_CONTROL_DESIGN). So
+  the compat factory should **add** the AP203→AP214 route, matching
+  `conway_model_loader` — a small improvement, not a regression.
+  Correctness hardening (fall-through vs own AP203 gen tree) stays with
+  `step-support.md` Phase 4. The `default` branch still errors on a format
+  with no proxy at all — unchanged.
 - **Deep-import coupling goes away**: once vendored, Conway can refactor
   the internals the adapter reached into (`ifc_step_model`, etc.) without
   breaking an out-of-repo package it doesn't build.
