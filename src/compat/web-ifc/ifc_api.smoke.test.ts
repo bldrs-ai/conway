@@ -5,14 +5,21 @@
 // compat `IfcAPI` shim. This proves the shim actually works end-to-end —
 // open a model, stream geometry, read properties — for the formats Bldrs
 // Share drives through it (IFC + STEP/AP214), and that the AP203→AP214
-// routing added to the passthrough factory is reachable without throwing.
+// routing added to the passthrough factory is reachable.
 //
 // Boots the wasm the same way src/ifc/ifc_geometry_extraction.test.ts
 // does (no SetWasmPath → default locate handler resolves the conway-geom
 // wasm from the dist). See design/new/web-ifc-compat-surface.md.
+//
+// NOTE: the models are intentionally NOT closed between tests.
+// `IfcAPI.CloseModel` calls `conwaywasm.destroy()` on the single shared
+// ConwayGeometry created in beforeAll, which would tear down the wasm the
+// remaining tests reuse. One wasm lives for the whole file; Jest reaps it
+// when the worker exits.
 import fs from 'fs'
-import { describe, expect, test, beforeAll } from '@jest/globals'
+import { describe, expect, test, beforeAll, jest } from '@jest/globals'
 import { IfcAPI } from './ifc_api'
+import Logger from '../../logging/logger'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
@@ -42,17 +49,16 @@ describe('web-ifc compat IfcAPI', () => {
     expect(meshCount).toBeGreaterThan(0)
     expect(placedGeometryCount).toBeGreaterThan(0)
 
-    // Properties: the spatial structure resolves to an IfcProject-rooted
-    // tree with a numeric expressID.
-    const tree: any = await api.properties.getSpatialStructure(modelID)
-    expect(tree).toBeDefined()
+    // Properties: the spatial structure resolves to a real IfcProject-rooted
+    // tree (numeric expressID, non-empty children), and item properties for
+    // the root round-trip the same expressID back.
+    const tree = await api.properties.getSpatialStructure(modelID)
     expect(typeof tree.expressID).toBe('number')
+    expect(Array.isArray(tree.children)).toBe(true)
+    expect(tree.children.length).toBeGreaterThan(0)
 
-    // Item properties for the spatial root come back as an object.
     const rootProps: any = await api.properties.getItemProperties(modelID, tree.expressID)
-    expect(rootProps).toBeDefined()
-
-    api.CloseModel(modelID)
+    expect(rootProps.expressID).toBe(tree.expressID)
   }, 120000)
 
   test('opens a STEP (AP214) model and streams geometry', async () => {
@@ -66,27 +72,25 @@ describe('web-ifc compat IfcAPI', () => {
       placedGeometryCount += mesh.geometries.size()
     })
     expect(placedGeometryCount).toBeGreaterThan(0)
-
-    api.CloseModel(modelID)
   }, 120000)
 
-  test('routes an AP203 (CONFIG_CONTROL_DESIGN) model through the AP214 loader without throwing', () => {
+  test('routes an AP203 (CONFIG_CONTROL_DESIGN) model through the AP214 loader', () => {
     // Validates the AP203→AP214 fall-through added to the passthrough
     // factory (the standalone adapter had no AP203 case and errored).
-    // Tolerant on the modelID — AP203-via-AP214 parse correctness is
-    // tracked separately (step-support.md Phase 4); here we only assert
-    // the routing path is reachable and does not throw.
+    // OpenModel catches construction errors internally and returns -1, so
+    // it never throws — asserting "doesn't throw" proves nothing. Instead
+    // assert the AP203 branch was actually entered, by spying on the
+    // factory's `Logger.warning('AP203 Step Detected, using AP214 loader')`.
+    // AP203-via-AP214 parse correctness is tracked separately
+    // (step-support.md Phase 4).
     const buffer = new Uint8Array(fs.readFileSync('data/config-control-design-min.step'))
 
-    let modelID = -2
-    expect(() => {
-      modelID = api.OpenModel(buffer, SETTINGS)
-    }).not.toThrow()
-    expect(typeof modelID).toBe('number')
-    expect(modelID).toBeGreaterThanOrEqual(-1)
-
-    if (modelID >= 0) {
-      api.CloseModel(modelID)
+    const warnSpy = jest.spyOn(Logger, 'warning').mockImplementation(() => {})
+    try {
+      api.OpenModel(buffer, SETTINGS)
+      expect(warnSpy).toHaveBeenCalledWith('AP203 Step Detected, using AP214 loader')
+    } finally {
+      warnSpy.mockRestore()
     }
   }, 120000)
 })
