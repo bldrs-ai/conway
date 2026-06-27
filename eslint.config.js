@@ -14,6 +14,12 @@ export default [
       'external',
       'src/ifc/ifc4_gen',
       'src/AP214E3_2010/AP214E3_2010_gen',
+      // Vendored web-ifc compat surface (from conway-web-ifc-adapter).
+      // tsc still type-checks it; eslint skips style on vendored code for
+      // the first cut. Tighten later to lint the hand-written proxies only
+      // (mirror the per-file src/shim/* precedent below). See
+      // design/new/web-ifc-compat-surface.md.
+      'src/compat/web-ifc',
       'src/shim/ifc2x4_helper.js',
       'src/shim/ifc2x4_helper.ts',
       'src/shim/ifc2x4.js',
