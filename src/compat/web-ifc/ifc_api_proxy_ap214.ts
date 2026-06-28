@@ -685,19 +685,6 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // extract center
-        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
-        const center = geometry.geometry.normalize()
-
-
-        geomCenter[0] = center.x
-        geomCenter[1] = center.y
-        geomCenter[2] = center.z
-
-        // Create a translation matrix from geom.min
-        const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
-
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
@@ -775,13 +762,19 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         // Scale the matrix
         glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
 
-        // Perform the matrix multiplications
+        // Compose the world transform from the engine's scene transform
+        // (newMatrix = nativeTransform). Geometry vertices stay in their
+        // source-unit local space; nativeTransform maps them to metre world
+        // space — the same bare composition the native consumer
+        // geometry_aggregator uses. The per-leaf geometry.normalize() recenter
+        // was removed: AP214 instances/mapped-items share one geometry buffer,
+        // so normalize() mutated it once and later instances lost their offset
+        // and collapsed toward the origin (issue #308 "port cluster"). The
+        // global coordinationMatrix still carries Y-up + COORDINATE_TO_ORIGIN.
         if (newMatrix !== void 0) {
           glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
         } else {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newTransform)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
+          glmatrix.mat4.copy(newTransform, coordinationMatrix)
         }
         const newTransformArr = Array.from(newTransform)
         geometryMaterialTransformMap.set(expressID,
@@ -920,19 +913,6 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // extract center
-        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
-        const center = geometry.geometry.normalize()
-
-
-        geomCenter[0] = center.x
-        geomCenter[1] = center.y
-        geomCenter[2] = center.z
-
-        // Create a translation matrix from geom.min
-        const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
-
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
@@ -1010,13 +990,19 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         // Scale the matrix
         glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
 
-        // Perform the matrix multiplications
+        // Compose the world transform from the engine's scene transform
+        // (newMatrix = nativeTransform). Geometry vertices stay in their
+        // source-unit local space; nativeTransform maps them to metre world
+        // space — the same bare composition the native consumer
+        // geometry_aggregator uses. The per-leaf geometry.normalize() recenter
+        // was removed: AP214 instances/mapped-items share one geometry buffer,
+        // so normalize() mutated it once and later instances lost their offset
+        // and collapsed toward the origin (issue #308 "port cluster"). The
+        // global coordinationMatrix still carries Y-up + COORDINATE_TO_ORIGIN.
         if (newMatrix !== void 0) {
           glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
         } else {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newTransform)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
+          glmatrix.mat4.copy(newTransform, coordinationMatrix)
         }
         const newTransformArr = Array.from(newTransform)
         geometryMaterialTransformMap.set(expressID,
