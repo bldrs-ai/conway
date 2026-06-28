@@ -12,6 +12,7 @@
   "types": "./compiled/src/index.d.ts",
   "bin": {
     "cli": "./compiled/examples/cli-bundled.cjs",
+    "step": "./compiled/examples/cli-step-bundled.cjs",
     "browser": "./compiled/examples/browser-bundled.js",
     "validator": "./compiled/examples/validator-bundled.js"
   },
@@ -66,9 +67,10 @@
     "build-codex-all": "yarn run build-codex-base ConwayGeomWasmNode ConwayGeomWasmNodeMT ConwayGeomWasmWeb ConwayGeomWasmWebMT && yarn bumpMinor",
     "build-codex-MT": "yarn run build-codex-base ConwayGeomWasmNodeMT",
     "bundle": "yarn esbuild --bundle --format=cjs --platform=node --banner:js='#!/usr/bin/env node'",
-    "bundle-examples": "yarn bundle-browser && yarn bundle-cli && yarn bundle-validator && shx chmod +x ./compiled/examples/*-bundled.cjs && shx rm -rf compiled/Dist && shx cp -r dependencies/conway-geom/Dist compiled/",
+    "bundle-examples": "yarn bundle-browser && yarn bundle-cli && yarn bundle-cli-step && yarn bundle-validator && shx chmod +x ./compiled/examples/*-bundled.cjs && shx rm -rf compiled/Dist && shx cp -r dependencies/conway-geom/Dist compiled/",
     "bundle-browser": "yarn bundle compiled/examples/browser.js --outfile=compiled/examples/browser-bundled.cjs",
     "bundle-cli": "yarn bundle compiled/src/ifc/ifc_command_line_main.js --outfile=compiled/examples/cli-bundled.cjs",
+    "bundle-cli-step": "yarn bundle compiled/src/AP214E3_2010/ap214_command_line_main.js --outfile=compiled/examples/cli-step-bundled.cjs",
     "bundle-validator": "yarn bundle compiled/examples/validator.js --outfile=compiled/examples/validator-bundled.cjs",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "generate-flamegraph": "node ./scripts/generate_flame_graph.cjs",
