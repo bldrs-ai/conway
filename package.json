@@ -22,6 +22,11 @@
       "import": "./compiled/src/index.js"
     },
     "./src/*": "./compiled/src/*.js",
+    "./web-ifc": {
+      "types": "./compiled/src/compat/web-ifc/index.d.ts",
+      "require": "./compiled/src/compat/web-ifc/index.js",
+      "import": "./compiled/src/compat/web-ifc/index.js"
+    },
     "./dependencies/conway-geom": "./dependencies/conway-geom/index.js",
     "./package.json": "./package.json"
   },
@@ -127,6 +132,7 @@
     "node": ">=16.0.0"
   },
   "dependencies": {
+    "gl-matrix": "3.4.3",
     "seedrandom": "3.0.5",
     "three": "^0.173.0",
     "yargs": "17.7.1"
