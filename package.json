@@ -99,6 +99,7 @@
     "clean-conway_geom": "run-script-os",
     "clean-tsc": "tsc --build --clean",
     "code-gen": "yarn code-gen-ifc && yarn code-gen-ap214",
+    "gen-web-ifc-types": "node scripts/gen-web-ifc-types.cjs",
     "dist": "tsc --project tsconfig.dist.json",
     "lint": "yarn eslint src",
     "precommit": "yarn lint && yarn test",
@@ -182,7 +183,8 @@
     "typedoc-plugin-markdown": "4.2.10",
     "typescript": "4.9.3",
     "typescript-eslint": "8.25.0",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "web-ifc": "0.0.35"
   },
   "type": "module"
 }

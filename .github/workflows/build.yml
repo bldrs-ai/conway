@@ -51,6 +51,17 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      # The compat/web-ifc constant tables are generated from the web-ifc
+      # devDependency (scripts/gen-web-ifc-types.cjs). Regenerate and fail if
+      # the committed files drift — catches a web-ifc bump that forgot
+      # `yarn gen-web-ifc-types`, or a hand-edit of a generated file. Pure
+      # JS + web-ifc, so it runs right after install (no WASM/build needed).
+      - name: Check web-ifc tables are up to date
+        run: |
+          yarn gen-web-ifc-types
+          git diff --exit-code -- src/compat/web-ifc/ifc2x4.ts src/compat/web-ifc/types-map.ts \
+            || { echo "::error::Generated web-ifc tables are stale. Run 'yarn gen-web-ifc-types' and commit the result."; exit 1; }
+
       # --- WASM cache: keyed on conway-geom submodule SHA + EMSDK version.
       # On hit, the heavy WASM build (GENie + EMSDK + emcc) is skipped entirely.
       # The regression job depends on this job and consumes the same cache.

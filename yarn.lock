@@ -7015,6 +7015,11 @@ weak-lru-cache@^1.2.2:
   resolved "https://registry.yarnpkg.com/weak-lru-cache/-/weak-lru-cache-1.2.2.tgz#fdbb6741f36bae9540d12f480ce8254060dccd19"
   integrity sha512-DEAoo25RfSYMuTGc9vPJzZcZullwIqRDSI9LOy+fkCJPi6hykCnfKaXTuPBDuXAUcqHXyOgFtHNp/kB2FjYHbw==
 
+web-ifc@0.0.35:
+  version "0.0.35"
+  resolved "https://registry.yarnpkg.com/web-ifc/-/web-ifc-0.0.35.tgz#60506779b82677a7b2977b7e784feddec494264b"
+  integrity sha512-if/L9RiJAD+jJ1oWtHj44+o2NG6K6azK0otE9Pbppr5hNBnouYfJQNmnHZ+Ya+wZeaByo9KeU64D60Y6lFnT4w==
+
 which-boxed-primitive@^1.1.0, which-boxed-primitive@^1.1.1:
   version "1.1.1"
   resolved "https://registry.yarnpkg.com/which-boxed-primitive/-/which-boxed-primitive-1.1.1.tgz#d76ec27df7fa165f18d5808374a5fe23c29b176e"
