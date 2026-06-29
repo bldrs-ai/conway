@@ -250,13 +250,43 @@ src/compat/web-ifc/ap214_properties.ts   (REWRITE the stub)
   (`Share/src/loader/bldrsSpatialTree.js` `serializeNode` preserves
   exactly these). Emit `Name` from `product.name`.
 - `expressID` is the selection/permalink key end-to-end. The product
-  **occurrence** (NAUO), not just the product, must carry a stable
-  expressID so two instances of the same part are distinct nodes and
-  distinct permalinks. Reconcile this with the geometry path's
-  `relatedElementLocalId` / `TriangleElementMap` so a NavTree click
-  highlights the right instance and a viewport pick selects the right
-  tree node. **This identity reconciliation is the main correctness risk
-  — call it out in review.**
+  **occurrence** (NAUO), not just the product, must carry a stable id so
+  two instances of the same part are distinct nodes and distinct
+  permalinks — see §"Occurrence identity" below. Reconcile this with the
+  geometry path's `relatedElementLocalId` / `TriangleElementMap` so a
+  NavTree click highlights the right instance and a viewport pick selects
+  the right tree node. **This identity reconciliation is the main
+  correctness risk — call it out in review.**
+
+### Occurrence identity (the load-bearing decision)
+
+STEP *instancing* breaks the IFC assumption that one entity = one
+selectable element. In `as1-oc-214`, `nut-bolt-assembly` occurs 3×
+(NAUO `#1921`/`#1927`/`#1932`), each reusing the **same**
+`product_definition` for `nut`. So:
+
+- `product` / `product_definition` expressID identifies the part *type* —
+  all instances collapse to one id (can't distinguish or permalink an
+  instance). ✗ as a node key.
+- `next_assembly_usage_occurrence` expressID identifies one occurrence
+  (one parent→child edge). ✓ unique per node.
+
+**Recommended scheme:** key each tree node (and the geometry instance in
+`TriangleElementMap`) by its NAUO occurrence; use the **occurrence path**
+(ordered NAUO ids root→node) as the selection/permalink token. Single-part
+files (the CTCs — no NAUO) fall back to
+`product_definition` / `product_definition_shape` expressID. The
+occurrence id must be threaded into the scene's instance map so a
+viewport pick returns the *same* id the tree node carries (bidirectional
+selection).
+
+**Share generalization flag.** Share's permalink is already a *path*
+(`/1/42/123` = parent chain), but its internal selection key is a scalar
+`expressID`. A scalar cannot distinguish instances; an occurrence **path**
+can. STEP is therefore the forcing function for Share's stated goal of
+generalizing "expressID" into a format-agnostic identifier — the target
+abstraction is an *ordered occurrence path*, not an integer. Flag this in
+every Share-side touchpoint as the metadata work propagates.
 - The product↔shape data already exists in `AP214ProductShapeMap`; the
   new extractor should consume/extend it rather than re-derive.
 
@@ -419,20 +449,28 @@ baseline dependency.
 
 ---
 
-## Open questions / decisions
+## Decisions (settled) & open questions
 
-- **1.0 line.** Recommend: 1.0 = Simplified tier (Phases 0–4) — navigable,
-  named, selectable, basic + validation properties — across the full NIST
+**Settled** (owner sign-off, this branch):
+
+- **1.0 line — DECIDED: Simplified tier.** 1.0 = Phases 0–4 (navigable,
+  named, selectable, basic + validation properties) across the full NIST
   corpus and real AP203/AP214 assemblies. Full semantic PMI (Phase 5) is
-  1.x. (This answers step-support.md's "AP242 in scope for first cut?"
-  open question: *detection + structure subset yes; full AP242 PMI no.*)
-- **AP242 strategy.** Interim AP214-parser routing for 1.0 vs. waiting on
-  the AP242 gen tree. Recommend interim routing, gated on the Phase 0
-  measurement of what survives.
-- **Occurrence identity.** What stable `expressID` does a NAUO occurrence
-  expose, and how does it reconcile with `TriangleElementMap` so
-  tree↔viewport selection is bidirectional? This is the load-bearing
-  design decision in Phase 1.
+  1.x. Answers step-support.md's "AP242 in scope for first cut?":
+  *detection + structure subset yes; full AP242 PMI no.*
+- **AP242 strategy — DECIDED: interim AP214-parser routing.** Add AP242
+  schema detection and route through the AP214 parser for 1.0, exactly
+  like the AP203 fall-through. Phase 0 measures what survives; AP242-only
+  entities that don't parse defer to the real AP242 gen tree
+  (step-support.md Phase 5).
+- **Occurrence identity — DECIDED: NAUO-keyed occurrence path.** Node key
+  = NAUO expressID; selection/permalink token = ordered occurrence path
+  root→node; single-part fallback = `product_definition[_shape]`
+  expressID. See §"Occurrence identity" for the threading into
+  `TriangleElementMap` and the Share format-agnostic-id flag.
+
+**Open:**
+
 - **PMI presentation in Share.** Annotation nodes in the tree vs. a PMI
   table on the Properties panel vs. rendered callouts — UX decision for
   Phase 5/6, deferrable.
