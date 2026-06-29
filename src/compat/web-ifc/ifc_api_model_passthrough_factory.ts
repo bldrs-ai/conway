@@ -39,6 +39,17 @@ export class IfcApiModelPassthroughFactory {
         Logger.warning( 'AP203 Step Detected, using AP214 loader' )
 
         // falls through
+      case ModelFormatType.AP242:
+
+        // Interim: AP242 reuses the AP214 engine for the metadata-1.0
+        // product-structure/property subset. See
+        // design/new/step-metadata-nist.md §"The AP242 wrinkle".
+        if ( modelFormat === ModelFormatType.AP242 ) {
+
+          Logger.warning( 'AP242 Step Detected, using AP214 loader (interim)' )
+        }
+
+        // falls through
       case ModelFormatType.AP214:
 
         try {

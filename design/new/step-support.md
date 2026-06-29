@@ -7,6 +7,14 @@ This branch (`STEP_support_2nd_stage-codex`) carries in-flight work from
 Nov–Dec 2025: schema detection for `CONFIG_CONTROL_DESIGN` and explicit
 AP203 naming in the format detector and loader. Merge resumes here.
 
+> **Scope note — this doc is about *geometry* parity.** The companion
+> [`step-metadata-nist.md`](step-metadata-nist.md) covers the orthogonal
+> *semantic metadata* track: extracting product/assembly structure, part
+> names, and properties (and later semantic PMI) from STEP so Share's
+> NavTree, selection, permalinks, and Properties panel work — using the
+> NIST PMI corpus in `test-models/step/nist/`. The metadata work reuses
+> this doc's parser/codegen foundation but is independently shippable.
+
 ## What's already shipped
 
 - `src/AP214E3_2010/` — full AP214 (`AUTOMOTIVE_DESIGN`, ISO 10303-214):

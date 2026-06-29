@@ -14,6 +14,8 @@ export enum ModelFormatType {
   AP214 = 1,
 
   AP203 = 2,
+
+  AP242 = 3,
 }
 
 /**
@@ -52,8 +54,22 @@ export default class ModelFormatDetector {
             return ModelFormatType.AP214
           }
 
-          if ( entryNoSpaces.startsWith( 'CONFIG_CONTROL_DESIGN' ) ) {
+          // AP203 ships under two schema names: the legacy CONFIG_CONTROL_DESIGN
+          // and the explicit AP203_CONFIGURATION_CONTROLLED_3D_DESIGN_*_MIM_LF
+          // form the NIST "AP203 geometry only" exports use. Match both.
+          if ( entryNoSpaces.startsWith( 'CONFIG_CONTROL_DESIGN' ) ||
+               entryNoSpaces.startsWith( 'AP203' ) ) {
             return ModelFormatType.AP203
+          }
+
+          // AP242 (ISO 10303-242, e.g. AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_*)
+          // is detected so it can be routed; for the metadata-1.0 interim it
+          // reuses the AP214 engine (their MIM product-structure/property
+          // entities overlap). Full AP242-only entity support is a follow-up —
+          // see design/new/step-metadata-nist.md §"The AP242 wrinkle" and
+          // step-support.md Phase 5.
+          if ( entryNoSpaces.startsWith( 'AP242' ) ) {
+            return ModelFormatType.AP242
           }
         }
       }
