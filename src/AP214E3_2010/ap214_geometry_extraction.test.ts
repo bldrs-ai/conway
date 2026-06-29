@@ -233,6 +233,105 @@ describe('AP214 Geometry Extraction', () => {
     }
   })
 
+  test('uniformScaleBasis scales the 3x3 basis but PRESERVES translation', () => {
+
+    // Direct unit test for the rigid-transform scale helper used by the
+    // unit-conversion path in doTransforms (see
+    // https://github.com/bldrs-ai/conway/issues/308 and PR #309/#334).
+    // An assembly relationship placement is rigid: when the two related
+    // shapes are in different length units, only the 3x3 basis is rescaled;
+    // the translation column is a physical offset that must NOT move, or the
+    // sub-components collapse toward the origin (the "port cluster"). Models a
+    // placement in mm with a 1000 mm x / 50 mm y translation, converted to
+    // metres (factor = 1/MM_PER_M).
+    const MM_PER_M = 1000
+    const TX_MM = 1000
+    const TY_MM = 50
+    const factor = 1 / MM_PER_M
+
+    const model = conwayTubeModel as unknown as {
+      wasmModule: { Glmdmat4: new () => { setValues(v: number[]): void; getValues(): number[] } }
+      uniformScaleBasis(mat: unknown, factor: number): { getValues(): number[] }
+    }
+
+    const input = new model.wasmModule.Glmdmat4()
+    // Column-major: cols 0..2 = basis (identity), col 3 = translation.
+    input.setValues([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      TX_MM, TY_MM, 0, 1,
+    ])
+
+    const v = model.uniformScaleBasis(input, factor).getValues()
+
+    // Basis diagonal scaled by factor.
+    expect(v[0]).toBeCloseTo(factor)
+    expect(v[5]).toBeCloseTo(factor)
+    expect(v[10]).toBeCloseTo(factor)
+
+    // Translation PRESERVED — this is the #308 invariant that distinguishes
+    // uniformScaleBasis from uniformScaleAffine (which scales translation too).
+    // Scaling these to TX_MM*factor / TY_MM*factor is exactly the regression
+    // that re-clustered the Arty board's parts.
+    expect(v[12]).toBeCloseTo(TX_MM)
+    expect(v[13]).toBeCloseTo(TY_MM)
+    expect(v[14]).toBeCloseTo(0)
+
+    // Bottom row left at [0, 0, 0, 1].
+    expect(v[3]).toBe(0)
+    expect(v[7]).toBe(0)
+    expect(v[11]).toBe(0)
+    expect(v[15]).toBe(1)
+  })
+
+  test('uniformScaleBasis and uniformScaleAffine differ only on the translation column', () => {
+
+    // Pins the #308 contract: for the SAME placement input the two helpers
+    // agree on the 3x3 basis and disagree on translation — basis preserves it,
+    // affine scales it. A future refactor that collapsed the two helpers would
+    // trip this and re-introduce the cluster regression.
+    const factor = 0.5
+    const TX = 7
+    const TY = -3
+    const TZ = 11
+
+    const model = conwayTubeModel as unknown as {
+      wasmModule: { Glmdmat4: new () => { setValues(v: number[]): void; getValues(): number[] } }
+      uniformScaleBasis(mat: unknown, factor: number): { getValues(): number[] }
+      uniformScaleAffine(mat: unknown, factor: number): { getValues(): number[] }
+    }
+
+    const values = [
+      2, 0, 0, 0,
+      0, 2, 0, 0,
+      0, 0, 2, 0,
+      TX, TY, TZ, 1,
+    ]
+    const basisInput = new model.wasmModule.Glmdmat4()
+    basisInput.setValues(values)
+    const affineInput = new model.wasmModule.Glmdmat4()
+    affineInput.setValues(values)
+
+    const basis = model.uniformScaleBasis(basisInput, factor).getValues()
+    const affine = model.uniformScaleAffine(affineInput, factor).getValues()
+
+    // Basis diagonal (column-major 0,5,10) identical between the two helpers —
+    // both scale the 3x3 basis the same way. (Indexed access keeps these out
+    // of no-magic-numbers via ignoreArrayIndexes.)
+    expect(basis[0]).toBeCloseTo(affine[0])
+    expect(basis[5]).toBeCloseTo(affine[5])
+    expect(basis[10]).toBeCloseTo(affine[10])
+
+    // Translation column (12,13,14): basis keeps it, affine scales it.
+    expect(basis[12]).toBeCloseTo(TX)
+    expect(basis[13]).toBeCloseTo(TY)
+    expect(basis[14]).toBeCloseTo(TZ)
+    expect(affine[12]).toBeCloseTo(TX * factor)
+    expect(affine[13]).toBeCloseTo(TY * factor)
+    expect(affine[14]).toBeCloseTo(TZ * factor)
+  })
+
   test('destroy()', () => {
     expect(destroy()).toBe(false)
   })
