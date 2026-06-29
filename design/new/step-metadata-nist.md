@@ -211,6 +211,68 @@ Phase 0.
 
 ---
 
+## Phase 0 results (measured)
+
+Measured by walking the actual entity chains (product/PD/NAUO, the
+`general_property` chain, PMI entities) over the materialized corpus — the
+same traversals the AP214 extractors will perform. These are the
+ground-truth assertions for the extractor unit tests.
+
+### Per-variant entity presence
+
+| File | Schema | PRODUCT / PD / NAUO | general_property / descriptive_item | PMI (shape_aspect / datum / dim_size / tol) |
+|---|---|---|---|---|
+| `as1-oc-214` | AP214 | 9 / 9 / 13 | 0 / 0 | 0 / 0 / 0 / 0 |
+| `ctc_01 …_rd` (AP203 geom-only) | **AP203** (`AP203_…_MIM_LF`) | 1 / 1 / 0 | 0 / 0 | 0 / 0 / 0 / 0 |
+| `ctc_01 …_ap242-e1` | AP242 | 1 / 1 / 0 | 5 / 5 | 51 / 3 / 9 / 6 |
+| `ftc_06 …_ap242-e2` | AP242 | 1 / 1 / 0 | 11 / 39 | (rich) |
+| `stc_06 …_ap242-e3` | AP242 | 1 / 1 / 0 | (present) | (reduced vs FTC) |
+
+Takeaways: the CTC/FTC/STC parts are **single parts** (no NAUO) — their
+"tree" is one named root; `as1` is the multi-level **assembly** that
+exercises the NAUO walker. Properties + semantic PMI live in the AP242
+variants; AP203-geom-only is structure+geometry only, as NIST documents.
+
+### Assembly tree — extracted correctly from `as1-oc-214`
+
+```
+- as1                                    [PD#5]
+  - rod-assembly                         [NAUO#1137]
+    - nut [NAUO#751]  - nut [NAUO#757]  - rod [NAUO#1131]
+  - l-bracket-assembly                   [NAUO#3810]
+    - nut-bolt-assembly [NAUO#1921]  → bolt [NAUO#1910], nut [NAUO#1916]
+    - nut-bolt-assembly [NAUO#1927]  → bolt [NAUO#1910], nut [NAUO#1916]
+    - nut-bolt-assembly [NAUO#1932]  → bolt [NAUO#1910], nut [NAUO#1916]
+    - l-bracket [NAUO#3804]
+  - plate                                [NAUO#6211]
+  - l-bracket-assembly                   [NAUO#6217]   ← 2nd occurrence of the same sub-assembly
+    …
+```
+
+**This is the occurrence-identity decision, confirmed by data.** Note
+`bolt [NAUO#1910]` repeats identically under all three `nut-bolt-assembly`
+nodes, and the whole `l-bracket-assembly` subtree appears twice
+(`NAUO#3810` and `NAUO#6217`). The leaf NAUO id alone is **not** unique
+per visual instance — only the **path** (`6217 → 1921 → 1910` vs
+`3810 → 1921 → 1910`) distinguishes the two bolts a user sees and would
+permalink. This is exactly why §"Occurrence identity" keys selection on
+the occurrence *path*, not a scalar — and why STEP forces Share's
+identifier generalization.
+
+### Properties — resolved from `ctc_01 …_ap242-e1`
+
+```
+Modeled By = Engineer
+CAGE Code  = 64JW1
+Company    = ACME
+geometric validation property = volume measure VOLUME_MEASURE(14644822.64)
+```
+
+The `general_property → property_definition → property_definition_representation
+→ descriptive_representation_item` chain resolves to clean key/values, plus
+NIST validation properties (volume/area). These are the expected
+Properties-panel rows.
+
 ## Target architecture
 
 Two new Conway extraction modules, mirroring the IFC precedent
@@ -378,6 +440,14 @@ Ordered so the first user-visible win (a real, named, navigable tree for
       web-ifc passthrough factory. Hermetic fixture `data/ap242-header-min.step`
       + detector test. (`model_format_detector.ts`,
       `conway_model_loader.ts`, `ifc_api_model_passthrough_factory.ts`.)
+- [x] **Fix AP203 detection.** NIST "AP203 geometry only" files declare
+      `AP203_CONFIGURATION_CONTROLLED_3D_DESIGN_…_MIM_LF`, **not**
+      `CONFIG_CONTROL_DESIGN` — they were undetected and never loaded.
+      Detector now also matches a `FILE_SCHEMA` entry starting `AP203`.
+      Fixture `data/ap203-mim-header-min.step` + test.
+- [x] Measure the extraction chains against the real corpus — see
+      §"Phase 0 results" below (assembly tree, properties, PMI presence
+      confirmed against ground truth).
 - [ ] Run every NIST variant + `as1` through the loader; record per-file:
       parse result, `MISSING_TYPE` entities, product/PD/NAUO counts,
       `general_property` counts, what `getSpatialStructure` returns today.

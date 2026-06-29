@@ -54,7 +54,11 @@ export default class ModelFormatDetector {
             return ModelFormatType.AP214
           }
 
-          if ( entryNoSpaces.startsWith( 'CONFIG_CONTROL_DESIGN' ) ) {
+          // AP203 ships under two schema names: the legacy CONFIG_CONTROL_DESIGN
+          // and the explicit AP203_CONFIGURATION_CONTROLLED_3D_DESIGN_*_MIM_LF
+          // form the NIST "AP203 geometry only" exports use. Match both.
+          if ( entryNoSpaces.startsWith( 'CONFIG_CONTROL_DESIGN' ) ||
+               entryNoSpaces.startsWith( 'AP203' ) ) {
             return ModelFormatType.AP203
           }
 
