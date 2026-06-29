@@ -42,3 +42,6 @@ benchmarks/*private
 /external/IFC-gen-internal/
 /external/IFC-gen-internal/*
 .parcel-cache
+
+# SessionStart hook per-step completion stamps (runtime state)
+.claude/.bootstrap/
