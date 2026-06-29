@@ -99,6 +99,7 @@
     "clean-conway_geom": "run-script-os",
     "clean-tsc": "tsc --build --clean",
     "code-gen": "yarn code-gen-ifc && yarn code-gen-ap214",
+    "gen-web-ifc-types": "node scripts/gen-web-ifc-types.cjs",
     "dist": "tsc --project tsconfig.dist.json",
     "lint": "yarn eslint src",
     "precommit": "yarn lint && yarn test",

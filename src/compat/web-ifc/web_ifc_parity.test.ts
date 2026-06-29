@@ -23,7 +23,7 @@
 // untyped namespace read below and the inverse-of-ifc2x4 check for the map.
 import { describe, expect, test } from '@jest/globals'
 import * as conwayIfc2x4 from './ifc2x4'
-import { IfcTypesMap } from './types-map'
+import { IfcTypesMap, IfcElements as IfcElementsObject } from './types-map'
 import * as webIfcNamespace from 'web-ifc'
 
 /**
@@ -45,6 +45,16 @@ function ifcConstants(namespace: unknown): Map<string, number> {
     }
   }
   return out
+}
+
+/**
+ * Read web-ifc's public `IfcElements` typecode array off a module namespace,
+ * tolerating the same ESM/CommonJS interop shapes as `ifcConstants`.
+ */
+function ifcElementsArray(namespace: unknown): number[] {
+  const candidate = namespace as { IfcElements?: unknown; default?: { IfcElements?: unknown } }
+  const value = candidate?.IfcElements ?? candidate?.default?.IfcElements
+  return Array.isArray(value) ? (value as number[]) : []
 }
 
 describe('web-ifc compat constants parity (web-ifc@0.0.35)', () => {
@@ -79,13 +89,34 @@ describe('web-ifc compat constants parity (web-ifc@0.0.35)', () => {
       expect(IfcTypesMap[code]).toBe(name)
     }
 
-    // Bijective: every map entry round-trips back to the same constant. The
-    // runtime object has one key per code (duplicate source lines collapse),
-    // so the distinct-name count equals the constant count.
+    // Bijective: every map entry round-trips back to the same constant, so the
+    // distinct-name count equals the constant count.
     const mapNames = new Set(Object.values(IfcTypesMap))
     expect(mapNames.size).toBe(conway.size)
     for (const [codeText, name] of Object.entries(IfcTypesMap)) {
       expect(conway.get(name)).toBe(Number(codeText))
+    }
+  })
+
+  test('ifc2x4 IfcElements array mirrors web-ifc', () => {
+    // ifc2x4.ts re-exports web-ifc's IfcElements (the geometric-element
+    // typecode list). Order is irrelevant to consumers, so compare as sets.
+    const conwayElements = (conwayIfc2x4 as { IfcElements?: number[] }).IfcElements ?? []
+    const webElements = ifcElementsArray(webIfcNamespace)
+    expect(webElements.length).toBeGreaterThan(0)
+    expect([...conwayElements].sort((a, b) => a - b))
+        .toEqual([...webElements].sort((a, b) => a - b))
+  })
+
+  test('types-map IfcElements object is consistent with IfcTypesMap', () => {
+    // The IfcElements object (code->name) is web-ifc's properties-helper map;
+    // web-ifc does not export it publicly, so anchor it to IfcTypesMap (already
+    // proven against ifc2x4 above): every entry must name the same type the
+    // map does for that code.
+    const entries = Object.entries(IfcElementsObject)
+    expect(entries.length).toBeGreaterThan(0)
+    for (const [code, name] of entries) {
+      expect(IfcTypesMap[Number(code)]).toBe(name)
     }
   })
 })
