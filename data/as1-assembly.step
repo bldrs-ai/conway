@@ -1,0 +1,91 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('as1 assembly structure reduction'),'2;1');
+FILE_NAME('as1-assembly.step','2026-06-29T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_PROTOCOL_DEFINITION('international standard',
+  'automotive_design',2000,#2);
+#2 = APPLICATION_CONTEXT(
+  'core data for automotive mechanical design processes');
+#8 = PRODUCT_CONTEXT('',#2,'mechanical');
+#9 = PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');
+
+/* as1 (root assembly) */
+#3 = SHAPE_DEFINITION_REPRESENTATION(#4,#10);
+#4 = PRODUCT_DEFINITION_SHAPE('','',#5);
+#5 = PRODUCT_DEFINITION('design','',#6,#9);
+#6 = PRODUCT_DEFINITION_FORMATION('','',#7);
+#7 = PRODUCT('as1','as1','',(#8));
+#10 = SHAPE_REPRESENTATION('',(#11),#12);
+#11 = AXIS2_PLACEMENT_3D('',#13,#14,#15);
+#12 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3)
+  GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#19))
+  GLOBAL_UNIT_ASSIGNED_CONTEXT((#16,#17,#18))
+  REPRESENTATION_CONTEXT('Context','3D') );
+#13 = CARTESIAN_POINT('',(0.,0.,0.));
+#14 = DIRECTION('',(0.,0.,1.));
+#15 = DIRECTION('',(1.,0.,0.));
+#16 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );
+#17 = ( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+#18 = ( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() );
+#19 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-006),#16,
+  'distance_accuracy_value','confusion accuracy');
+
+/* rod-assembly */
+#39 = PRODUCT_DEFINITION('design','',#40,#9);
+#40 = PRODUCT_DEFINITION_FORMATION('','',#41);
+#41 = PRODUCT('rod-assembly','rod-assembly','',(#8));
+
+/* nut (leaf, shared) */
+#742 = PRODUCT_DEFINITION('design','',#743,#9);
+#743 = PRODUCT_DEFINITION_FORMATION('','',#744);
+#744 = PRODUCT('nut','nut','',(#8));
+
+/* rod (leaf) */
+#1122 = PRODUCT_DEFINITION('design','',#1123,#9);
+#1123 = PRODUCT_DEFINITION_FORMATION('','',#1124);
+#1124 = PRODUCT('rod','rod','',(#8));
+
+/* l-bracket-assembly */
+#1141 = PRODUCT_DEFINITION('design','',#1142,#9);
+#1142 = PRODUCT_DEFINITION_FORMATION('','',#1143);
+#1143 = PRODUCT('l-bracket-assembly','l-bracket-assembly','',(#8));
+
+/* nut-bolt-assembly */
+#1170 = PRODUCT_DEFINITION('design','',#1171,#9);
+#1171 = PRODUCT_DEFINITION_FORMATION('','',#1172);
+#1172 = PRODUCT('nut-bolt-assembly','nut-bolt-assembly','',(#8));
+
+/* bolt (leaf) */
+#1901 = PRODUCT_DEFINITION('design','',#1902,#9);
+#1902 = PRODUCT_DEFINITION_FORMATION('','',#1903);
+#1903 = PRODUCT('bolt','bolt','',(#8));
+
+/* l-bracket (leaf) */
+#3795 = PRODUCT_DEFINITION('design','',#3796,#9);
+#3796 = PRODUCT_DEFINITION_FORMATION('','',#3797);
+#3797 = PRODUCT('l-bracket','l-bracket','',(#8));
+
+/* plate (leaf) */
+#6202 = PRODUCT_DEFINITION('design','',#6203,#9);
+#6203 = PRODUCT_DEFINITION_FORMATION('','',#6204);
+#6204 = PRODUCT('plate','plate','',(#8));
+
+/* assembly usage occurrences (parent = relating, child = related) */
+#751 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','nut_1','',#39,#742,$);
+#757 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('2','nut_2','',#39,#742,$);
+#1131 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('3','rod_1','',#39,#1122,$);
+#1137 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('4','rod-assembly_1','',#5,#39,$);
+#1910 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('5','bolt_1','',#1170,#1901,$);
+#1916 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('6','nut_3','',#1170,#742,$);
+#1921 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('7','nut-bolt-assembly_1','',#1141,#1170,$);
+#1927 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('8','nut-bolt-assembly_2','',#1141,#1170,$);
+#1932 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('9','nut-bolt-assembly_3','',#1141,#1170,$);
+#3804 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('10','l-bracket_1','',#1141,#3795,$);
+#3810 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('11','l-bracket-assembly_1','',#5,#1141,$);
+#6211 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('12','plate_1','',#5,#6202,$);
+#6217 = NEXT_ASSEMBLY_USAGE_OCCURRENCE('13','l-bracket-assembly_2','',#5,#1141,$);
+ENDSEC;
+END-ISO-10303-21;
