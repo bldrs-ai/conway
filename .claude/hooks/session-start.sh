@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # SessionStart hook: bring a fresh Claude Code on the web container to a state
-# where `yarn lint`, `yarn test`, and `yarn build-incremental` all work.
+# where `yarn lint`, `yarn typecheck`/`yarn build-incremental` work and the
+# TypeScript is editable.
+#
+# Deliberately scoped to the FAST, TS-only path. The EMSDK install and the
+# ~2–4 min conway-geom WASM build — needed only to *run* tests/geometry
+# locally — are NOT done here: the tests-pass invariant is owned by CI, so
+# paying that cost on every session start is wasted time. When you actually
+# need to run tests or geometry in a session, run:
+#
+#     bash .claude/hooks/wasm-setup.sh
 #
 # Each step is idempotent and gated on a per-step *completion stamp* written
-# only after the step fully succeeds (see `stamped`/`stamp` below). This makes
-# the bootstrap resumable: if a slow cold-start run is killed mid-step (e.g. the
-# synchronous hook hits its timeout, or OOM), no stamp is written, so the next
-# session re-runs that step instead of treating a half-finished artifact as
-# complete. Gating on the artifact alone (`node_modules/.bin/jest` exists) is
-# kill-fragile — a partial install missing typescript/@swc would be skipped
-# forever. See PLAYBOOK.md §"Session bootstrap" for the rationale per step.
+# only after the step fully succeeds (see `stamped`/`stamp`). This makes the
+# bootstrap resumable: if a slow cold-start run is killed mid-step (timeout,
+# OOM), no stamp is written, so the next session re-runs that step instead of
+# treating a half-finished artifact as complete. Gating on the artifact alone
+# (`node_modules/.bin/jest` exists) is kill-fragile — a partial install missing
+# typescript/@swc would be skipped forever. See PLAYBOOK.md §"Session bootstrap".
 
 set -euo pipefail
 
@@ -64,7 +72,9 @@ else
   log "node_modules present and stamped, skipping yarn install"
 fi
 
-# 2. Submodules (conway-geom + nested)
+# 2. Submodules (conway-geom + nested). tsconfig.json compiles
+# `dependencies/conway-geom/*.ts` directly, so typecheck/build need the
+# submodule checked out — but not its WASM build.
 if [ ! -f dependencies/conway-geom/genie.lua ] || ! stamped submodules; then
   log "git submodule update --init --recursive"
   git submodule update --init --recursive
@@ -73,45 +83,14 @@ else
   log "submodules present, skipping init"
 fi
 
-# 3. Pre-built WASM dependency zip extraction (idempotent, fast — always run).
-log "yarn extract-wasm-dependencies"
-yarn extract-wasm-dependencies >/dev/null
-
-# 4. EMSDK install at ../emsdk (matches scripts/setup-emsdk.sh + build-codex.sh).
-EMSDK_DIR="$(cd "$REPO/.." && pwd)/emsdk"
-if [ ! -x "$EMSDK_DIR/emsdk_env.sh" ] || ! stamped emsdk; then
-  log "installing EMSDK 3.1.72 at $EMSDK_DIR (slow on first run, cached afterward)"
-  bash "$REPO/scripts/setup-emsdk.sh"
-  stamp emsdk
+# 3. compiled/ — `tsc --build` over the TS (incl. conway-geom sources). TS-only;
+# no EMSDK/WASM. Gives a ready `yarn lint`/`yarn build-incremental`.
+if [ ! -d compiled ] || ! stamped build; then
+  log "yarn build-incremental"
+  yarn build-incremental
+  stamp build
 else
-  log "EMSDK present at $EMSDK_DIR, skipping install"
+  log "compiled/ present and stamped, skipping build-incremental"
 fi
 
-# Persist emsdk env into the session so emcc is on PATH for subsequent commands.
-if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -f "$EMSDK_DIR/emsdk_env.sh" ]; then
-  # shellcheck disable=SC1090,SC1091
-  source "$EMSDK_DIR/emsdk_env.sh" >/dev/null 2>&1 || true
-  {
-    echo "export EMSDK=\"$EMSDK\""
-    echo "export EMSDK_NODE=\"${EMSDK_NODE:-}\""
-    echo "export PATH=\"$EMSDK:$EMSDK/upstream/emscripten:\$PATH\""
-  } >> "$CLAUDE_ENV_FILE"
-fi
-
-# 5. conway-geom WASM build (MT node target — what tests need).
-WASM_OUT="$REPO/dependencies/conway-geom/Dist/ConwayGeomWasmNodeMT.js"
-if [ ! -f "$WASM_OUT" ] || ! stamped wasm; then
-  log "building conway-geom WASM (ConwayGeomWasmNodeMT) — first run ~2–4 min"
-  chmod +x "$REPO/scripts/build-codex.sh"
-  yarn build-codex-MT
-  stamp wasm
-else
-  log "WASM artifact present, skipping conway-geom build"
-  # Ensure compiled/ exists so tests can run.
-  if [ ! -d "$REPO/compiled" ]; then
-    log "compiled/ missing — running yarn build-incremental"
-    yarn build-incremental
-  fi
-fi
-
-log "ready"
+log "ready (TS dev). To run tests/geometry: bash .claude/hooks/wasm-setup.sh"
