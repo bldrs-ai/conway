@@ -3783,6 +3783,35 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Multiply only the 3x3 basis of a native 4x4 transform by a uniform
+   * scale factor, leaving the translation column (and bottom row)
+   * untouched. This is the RIGID-transform unit-conversion semantics:
+   * a relationship/assembly placement's offset is a physical position
+   * that has already been reconciled into the target unit elsewhere, so
+   * rescaling it here would collapse mixed-unit sub-components toward the
+   * origin (the issue #308 "port cluster"). Contrast `uniformScaleAffine`,
+   * which also scales translation and is correct only for identity-input
+   * geometry-frame conversions where the translation is zero.
+   *
+   * See https://github.com/bldrs-ai/conway/issues/308 and PR #309.
+   *
+   * @param mat Source column-major Glmdmat4 transform; not mutated.
+   * @param factor Scalar applied to the 3x3 basis entries only.
+   * @return A freshly allocated 4x4 with the basis scaled.
+   */
+  private uniformScaleBasis( mat: NativeTransform4x4, factor: number ): NativeTransform4x4 {
+    const v = mat.getValues().slice()
+    // Column-major Glmdmat4 layout: basis at 0,1,2 / 4,5,6 / 8,9,10.
+    // Translation (12,13,14) and bottom row (3,7,11,15) left as-is.
+    v[0] *= factor; v[1] *= factor; v[2]  *= factor
+    v[4] *= factor; v[5] *= factor; v[6]  *= factor
+    v[8] *= factor; v[9] *= factor; v[10] *= factor
+    const result = ( new ( this.wasmModule.Glmdmat4 ) ) as NativeTransform4x4
+    result.setValues( v )
+    return result
+  }
+
+  /**
    *
    */
   populateStyledItemsMap() {
@@ -4302,8 +4331,16 @@ export class AP214GeometryExtraction {
     }
 
     if ( needsScale ) {
+      // Issue #308: an assembly relationship placement is a RIGID transform.
+      // Reconciling mismatched units between the two shapes rescales only the
+      // 3x3 basis — NEVER the translation column. Scaling the translation
+      // collapses mixed-unit sub-component offsets toward the origin (the
+      // "port cluster"). uniformScaleAffine (which also scales translation) is
+      // for identity-input geometry-frame conversions, not relationship
+      // transforms; applying it here re-broke #308 on mixed-unit assemblies.
+      // (On an identity input the two coincide, since its translation is 0.)
       transform =
-        this.uniformScaleAffine( transform ?? this.identity3DNativeMatrix, scaleRatio )
+        this.uniformScaleBasis( transform ?? this.identity3DNativeMatrix, scaleRatio )
     }
 
     return [transform, false]
