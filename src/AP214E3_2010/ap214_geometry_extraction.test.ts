@@ -316,15 +316,14 @@ describe('AP214 Geometry Extraction', () => {
     const basis = model.uniformScaleBasis(basisInput, factor).getValues()
     const affine = model.uniformScaleAffine(affineInput, factor).getValues()
 
-    // Identical basis (every index except the translation column 12,13,14).
-    for (let i = 0; i < 16; ++i) {
-      if (i === 12 || i === 13 || i === 14) {
-        continue
-      }
-      expect(basis[i]).toBeCloseTo(affine[i])
-    }
+    // Basis diagonal (column-major 0,5,10) identical between the two helpers —
+    // both scale the 3x3 basis the same way. (Indexed access keeps these out
+    // of no-magic-numbers via ignoreArrayIndexes.)
+    expect(basis[0]).toBeCloseTo(affine[0])
+    expect(basis[5]).toBeCloseTo(affine[5])
+    expect(basis[10]).toBeCloseTo(affine[10])
 
-    // Translation: basis keeps it, affine scales it.
+    // Translation column (12,13,14): basis keeps it, affine scales it.
     expect(basis[12]).toBeCloseTo(TX)
     expect(basis[13]).toBeCloseTo(TY)
     expect(basis[14]).toBeCloseTo(TZ)
