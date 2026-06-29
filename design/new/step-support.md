@@ -51,6 +51,11 @@ AP203 naming in the format detector and loader. Merge resumes here.
 
 ### Phase 2 — STEP regression infrastructure
 
+> Detailed design: [`step-regression.md`](step-regression.md). Read its
+> §"The digest" first — the STEP digest must hash **post-transform,
+> assembled** geometry, not per-entity like IFC, or it passes on the #308
+> assembly-clustering bug class.
+
 - [ ] `src/AP214E3_2010/ap214_regression_main.ts` mirroring
       `ifc_regression_main.ts`: `-d` (digest CSV) + `-v` (verbose OBJ)
 - [ ] `src/AP214E3_2010/ap214_regression_batch_main.ts` mirroring
