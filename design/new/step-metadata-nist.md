@@ -524,6 +524,29 @@ baseline dependency.
 
 ---
 
+## Build-environment blocker (separate PR)
+
+Phases 1–2 (the extractor modules + the `ap214_properties.ts` rewrite)
+need a working Conway build to compile and run their Jest tests
+(`yarn test` runs against `compiled/**`). The Claude-Code-on-web
+environment currently **cannot build Conway**, so this plan's
+runtime-behavior work can't be verified in-session:
+
+- The pinned `typescript@4.9.3` and `ts-add-js-extension` are **absent
+  from `node_modules`**; the only `tsc` on `PATH` is a global
+  `6.0.2`, which **errors** on the repo's `tsconfig.json`
+  `moduleResolution: node10` (`TS5107` — needs `ignoreDeprecations` or a
+  modern resolution setting).
+- `yarn build-incremental` therefore fails; `npm install --no-save
+  typescript@4.9.3` fails on peer-dependency conflicts.
+
+Phase 0's detection/fixture work is trivial TS that CI compiles cleanly,
+and its measurement was validated standalone — but the extractors should
+land where they can be built and run. **This is being addressed in a
+dedicated build-environment-update PR** (stale toolchain / web-session
+setup), separate from this metadata work, so future sessions across all
+of Conway stop hitting it.
+
 ## Decisions (settled) & open questions
 
 **Settled** (owner sign-off, this branch):
