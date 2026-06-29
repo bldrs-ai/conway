@@ -372,7 +372,12 @@ Ordered so the first user-visible win (a real, named, navigable tree for
 ### Phase 0 — Measure (the coverage spike)
 - [ ] Wire the NIST corpus + `as1-oc-214.stp` as conway fixtures (LFS pull
       or reductions).
-- [ ] Add AP242 schema detection → AP214-parser routing (interim).
+- [x] Add AP242 schema detection → AP214-parser routing (interim).
+      `ModelFormatType.AP242` matches `FILE_SCHEMA` starting `AP242`;
+      routes through the AP214 engine at both the model loader and the
+      web-ifc passthrough factory. Hermetic fixture `data/ap242-header-min.step`
+      + detector test. (`model_format_detector.ts`,
+      `conway_model_loader.ts`, `ifc_api_model_passthrough_factory.ts`.)
 - [ ] Run every NIST variant + `as1` through the loader; record per-file:
       parse result, `MISSING_TYPE` entities, product/PD/NAUO counts,
       `general_property` counts, what `getSpatialStructure` returns today.

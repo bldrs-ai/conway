@@ -13,6 +13,8 @@ const gearBuffer: Buffer =
   fs.readFileSync('data/a-gear-with-3-inch-diameter-and-20-curved-teeth.step')
 const configControlDesignBuffer: Buffer =
   fs.readFileSync('data/config-control-design-min.step')
+const ap242Buffer: Buffer =
+  fs.readFileSync('data/ap242-header-min.step')
 const nativeHDBuffer: Buffer =
   fs.readFileSync('data/native_hd.m3u8')
 const emptyBuffer: Uint8Array = new Uint8Array( 0 )
@@ -21,6 +23,7 @@ const indexIfcBufferInput = new ParsingBuffer(indexIfcBuffer)
 const tubeBufferInput = new ParsingBuffer(tubeBuffer)
 const gearBufferInput = new ParsingBuffer(gearBuffer)
 const configControlDesignBufferInput = new ParsingBuffer(configControlDesignBuffer)
+const ap242BufferInput = new ParsingBuffer(ap242Buffer)
 const nativeHDBufferInput = new ParsingBuffer(nativeHDBuffer)
 const emptyBufferInput = new ParsingBuffer(emptyBuffer)
 
@@ -50,6 +53,13 @@ function testGearStep(): ModelFormatType | undefined {
  */
 function testConfigControlDesignStep(): ModelFormatType | undefined {
   return ModelFormatDetector.detect( configControlDesignBufferInput )
+}
+
+/**
+ * @return {ModelFormatType} The type for model formats, should be AP242.
+ */
+function testAp242Step(): ModelFormatType | undefined {
+  return ModelFormatDetector.detect( ap242BufferInput )
 }
 
 /**
@@ -90,6 +100,12 @@ describe('Model Format Detector', () => {
   test('testConfigControlDesignStep()', () => {
 
     expect(testConfigControlDesignStep()).toBe(ModelFormatType.AP203)
+
+  })
+
+  test('testAp242Step()', () => {
+
+    expect(testAp242Step()).toBe(ModelFormatType.AP242)
 
   })
 
