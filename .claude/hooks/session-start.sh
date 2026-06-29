@@ -18,10 +18,25 @@ cd "$REPO"
 
 log() { printf '[session-start] %s\n' "$*"; }
 
-# 1. node_modules
+# 1. node_modules. The agent proxy can abort large tarball fetches under
+# parallel load (observed on @swc/core platform binaries), so cap network
+# concurrency and retry. yarn caches each successfully-fetched tarball, so a
+# retry resumes where the previous attempt aborted rather than restarting.
 if [ ! -d node_modules ] || [ ! -x node_modules/.bin/jest ]; then
-  log "yarn install"
-  yarn install --frozen-lockfile
+  install_ok=false
+  for attempt in 1 2 3 4 5; do
+    log "yarn install (attempt ${attempt})"
+    if yarn install --frozen-lockfile --network-concurrency 4; then
+      install_ok=true
+      break
+    fi
+    log "yarn install attempt ${attempt} failed; backing off"
+    sleep $(( attempt * 5 ))
+  done
+  if [ "${install_ok}" != true ]; then
+    log "yarn install failed after retries"
+    exit 1
+  fi
 else
   log "node_modules present, skipping yarn install"
 fi
