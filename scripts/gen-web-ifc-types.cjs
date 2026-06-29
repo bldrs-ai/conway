@@ -65,7 +65,11 @@ function extractIfcElementsObject() {
         'update extractIfcElementsObject() in scripts/gen-web-ifc-types.cjs.')
   }
   const open = source.indexOf('{', marker)
-  const close = source.indexOf('};', open)
+  // The literal is a flat `{ <digits>: "<name>", ... }` — keys are numeric and
+  // values are IFCxxx identifiers, so neither contains a brace. The first `}`
+  // after the open brace is therefore the object terminator, regardless of
+  // whether it's immediately followed by `;`.
+  const close = source.indexOf('}', open + 1)
   const obj = {}
   for (const m of source.slice(open, close + 1).matchAll(/(\d+):\s*"(IFC\w+)"/g)) {
     obj[Number(m[1])] = m[2]

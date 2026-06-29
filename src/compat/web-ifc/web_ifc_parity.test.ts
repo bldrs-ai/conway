@@ -61,13 +61,19 @@ describe('web-ifc compat constants parity (web-ifc@0.0.35)', () => {
 
   const conway = ifcConstants(conwayIfc2x4)
   const web = ifcConstants(webIfcNamespace)
+  const conwayElements = (conwayIfc2x4 as { IfcElements?: number[] }).IfcElements ?? []
+  const webElements = ifcElementsArray(webIfcNamespace)
+  const elementsObjectEntries = Object.entries(IfcElementsObject)
 
-  test('web-ifc actually exposes its ifc2x4 constants (guards the import)', () => {
-    // If a future web-ifc reshapes its exports so the namespace read yields
-    // nothing, the parity assertions below would vacuously pass — fail loudly
-    // here instead.
+  test('both sides expose non-empty tables (guards every assertion below)', () => {
+    // If web-ifc reshapes its exports, or a generated table comes back empty,
+    // the parity assertions below could vacuously pass. Fail loudly here
+    // instead — one guard covering every collection the later tests compare.
     expect(web.size).toBeGreaterThan(0)
     expect(conway.size).toBeGreaterThan(0)
+    expect(webElements.length).toBeGreaterThan(0)
+    expect(conwayElements.length).toBeGreaterThan(0)
+    expect(elementsObjectEntries.length).toBeGreaterThan(0)
   })
 
   test('ifc2x4.ts mirrors web-ifc exactly (same names, same codes)', () => {
@@ -101,9 +107,7 @@ describe('web-ifc compat constants parity (web-ifc@0.0.35)', () => {
   test('ifc2x4 IfcElements array mirrors web-ifc', () => {
     // ifc2x4.ts re-exports web-ifc's IfcElements (the geometric-element
     // typecode list). Order is irrelevant to consumers, so compare as sets.
-    const conwayElements = (conwayIfc2x4 as { IfcElements?: number[] }).IfcElements ?? []
-    const webElements = ifcElementsArray(webIfcNamespace)
-    expect(webElements.length).toBeGreaterThan(0)
+    // (Both sides are guarded non-empty above.)
     expect([...conwayElements].sort((a, b) => a - b))
         .toEqual([...webElements].sort((a, b) => a - b))
   })
@@ -113,9 +117,7 @@ describe('web-ifc compat constants parity (web-ifc@0.0.35)', () => {
     // web-ifc does not export it publicly, so anchor it to IfcTypesMap (already
     // proven against ifc2x4 above): every entry must name the same type the
     // map does for that code.
-    const entries = Object.entries(IfcElementsObject)
-    expect(entries.length).toBeGreaterThan(0)
-    for (const [code, name] of entries) {
+    for (const [code, name] of elementsObjectEntries) {
       expect(IfcTypesMap[Number(code)]).toBe(name)
     }
   })
