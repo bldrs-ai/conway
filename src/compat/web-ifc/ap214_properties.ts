@@ -1,81 +1,440 @@
-/* eslint-disable */
-import {shape_definition_representation } from '../../AP214E3_2010/AP214E3_2010_gen/shape_definition_representation.gen';
-import {product} from '../../AP214E3_2010/AP214E3_2010_gen/product.gen'
 import {
-  IfcAPI,
-} from './ifc_api'
-import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214';
+  AP214ProductStructureExtraction,
+  ProductStructureNode,
+} from '../../AP214E3_2010/ap214_product_structure_extraction'
+import {
+  AP214PropertyExtraction,
+  ExtractedProperty,
+  ExtractedPropertyMap,
+} from '../../AP214E3_2010/ap214_property_extraction'
+import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
+import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
+import { Node } from './properties_passthrough'
 
 
-interface Node {
-    expressID: number
-    type: string
-    children: Node[]
+/**
+ * A web-ifc value handle — `{ value }`. This is the shape Share's consumers
+ * read everywhere: `reifyName` (`@bldrs-ai/ifclib`) reads `Name.value`, and the
+ * Properties panel reads `Name.value` / `NominalValue.value`. Emitting a bare
+ * string here instead silently drops the name (the node falls back to its type
+ * label) and the value, so every label/value field below is wrapped.
+ */
+interface ValueHandle {
+  value: string | number
 }
 
+/**
+ * A web-ifc tape reference handle — `{ type: 5, value: expressID }`. STEP psets
+ * surface their properties as these handles in `HasProperties` (matching
+ * `IfcPropertySet`), and Share's Properties panel (`itemProperties.js`
+ * `unpackHelper`) resolves each one via `getItemProperties(expressID)`; an
+ * inline property object would throw its "Array contains non-reference type".
+ */
+interface ReferenceHandle {
+  type: number
+  value: number
+}
+
+/**
+ * web-ifc tape type code for an entity reference. `unpackHelper` rejects any
+ * `HasProperties` entry whose `type` is not this.
+ */
+const WEB_IFC_REF_TYPE = 5
+
+/**
+ * Spatial node enriched with the STEP fields Share consumes
+ * (`bldrsSpatialTree.js serializeNode` preserves `Name`) plus the occurrence
+ * identity that STEP forces.
+ */
+interface AP214Node extends Node {
+
+  /** Display label (web-ifc `{value}` handle), emitted from `product.name`. */
+  Name: ValueHandle
+
+  /** Express id of the underlying `product_definition` (the part *type*). */
+  productDefinitionExpressID: number
+
+  /**
+   * Ordered occurrence path (NAUO express ids) root→node. This is the
+   * format-agnostic selection / permalink token that a scalar `expressID`
+   * cannot represent — see `design/new/step-metadata-nist.md`
+   * §"Occurrence identity". Share still keys selection on `expressID` today;
+   * generalizing that to this path is the STEP-driven follow-up flagged in the
+   * plan (and the same per-occurrence handle GPU instancing needs — see
+   * Share `design/new/viewer-replacement.md` §3b.iv).
+   */
+  occurrencePath: number[]
+
+  children: AP214Node[]
+}
+
+/**
+ * A property row resolved for an element: the source representation-item
+ * express id (so it can be surfaced as a `HasProperties` reference and resolved
+ * back via `getItemProperties`), the key, the value, and the grouping label.
+ */
+interface AP214PropertyRow {
+  expressID?: number
+  Name: string
+  value: string | number
+  group: string
+}
+
+/** Express id used for a synthetic root when a file has multiple roots. */
+const SYNTHETIC_ROOT_EXPRESS_ID = 0
+
+/**
+ * web-ifc-compatible property/spatial surface over an AP214/AP242 step model.
+ *
+ * Backed by {@link AP214ProductStructureExtraction} and
+ * {@link AP214PropertyExtraction}: `getSpatialStructure` returns the real
+ * nested, named, occurrence-keyed tree (replacing the old flat, nameless stub);
+ * `getItemProperties` / `getPropertySets` return the extracted attribute and
+ * validation rows; `getAllItemsOfType` is backed by the model type index.
+ *
+ * This is the seam Share consumes (via `IfcApiProxyAP214`); nothing in Share
+ * changes — it lights up the moment this returns a real tree.
+ */
 export class AP214Properties {
 
-  private types: any
+  private structureRoots_?: ProductStructureNode[]
+  private propertyMap_?: ExtractedPropertyMap
+  private ownerByExpressID_?: Map<number, number>
+  private nodeNameByExpressID_?: Map<number, string>
+  private propertyByItemId_?: Map<number, ExtractedProperty>
 
-  constructor(private api: IfcApiProxyAP214) {
+  /**
+   * @param api The AP214 passthrough proxy owning the step model.
+   */
+  constructor( private api: IfcApiProxyAP214 ) {
   }
 
-  getIfcType(type: number) {
+  /**
+   * No-op type-name lookup retained for interface compatibility; AP214 surfaces
+   * STEP entity names directly on the nodes.
+   *
+   * @param type The numeric type code.
+   * @return {string} The empty string (AP214 has no IFC type-name map).
+   */
+  getIfcType( type: number ): string {
     return ''
   }
 
-  async getItemProperties(id: number, recursive = false) {
-    return this.api.getLine(id, recursive)
-  }
+  /**
+   * Resolve one express id to a web-ifc-shaped item, dispatching on what the id
+   * denotes:
+   *
+   * - a **property single** (a `descriptive_/measure_representation_item` id,
+   *   referenced from a pset's `HasProperties`) → `{ expressID, Name: {value},
+   *   NominalValue: {value} }`, the shape `unpackHelper` reads after it
+   *   dereferences a `HasProperties` handle;
+   * - a **tree node** (NAUO occurrence id, or `product_definition[_shape]` id
+   *   for single-part files) → `{ expressID, Name: {value} }`, the part's
+   *   identity row.
+   *
+   * Property-single ids and node ids are disjoint (distinct STEP entities), so
+   * the lookup is unambiguous.
+   *
+   * @param id Express id to resolve.
+   * @param recursive Unused; kept for web-ifc signature parity.
+   * @return {Promise<object>} The web-ifc-shaped item.
+   */
+  async getItemProperties( id: number, recursive = false ): Promise<object> {
 
-  async getPropertySets(elementID: number, recursive = false) {
-    return []
-  }
+    this.buildIndexes()
 
-  async getTypeProperties(elementID: number, recursive = false) {
-    return []
-  }
+    const property = this.propertyByItemId_!.get( id )
 
-  async getMaterialsProperties(elementID: number, recursive = false) {
-    return []
-  }
-
-  async getSpatialStructure(includeProperties?: boolean) {
-
-    const model = this.api.StepModel
-    const products = Array.from( model.types(product) )
-    const productObj = products[0]
-    const productNode = AP214Properties.newAP214Product(productObj.expressID!)
-    
-    const shapeDefinitions = model.types(shape_definition_representation)
-
-    for ( const shapeDefinition of shapeDefinitions ) {
-
-      const nodeExpressID = shapeDefinition.expressID
-
-      if ( nodeExpressID !== void 0 ) {
-
-        productNode.children.push({
-          expressID: nodeExpressID,
-          type: 'shape_definition',
-          children: [],
-        })
+    if ( property !== void 0 ) {
+      return {
+        expressID: id,
+        Name: { value: property.name },
+        NominalValue: { value: property.numericValue ?? property.value },
       }
     }
 
-    return productNode
+    return {
+      expressID: id,
+      Name: { value: this.nodeNameByExpressID_!.get( id ) ?? '' },
+    }
   }
 
-  async getAllItemsOfType(type: number, verbose: boolean) {
+  /**
+   * Get a part's property sets: one `IfcPropertySet`-shaped set per grouping
+   * label (plain attributes vs. validation properties). Each set's
+   * `HasProperties` is an array of web-ifc reference handles
+   * (`{ type: 5, value: itemExpressID }`) that Share's Properties panel resolves
+   * back to individual properties via `getItemProperties` — emitting inline
+   * property objects instead would trip `unpackHelper`'s reference-type guard.
+   *
+   * @param elementID Node express id.
+   * @param recursive Unused; kept for web-ifc signature parity.
+   * @return {Promise<any[]>} The property sets for the element.
+   */
+  async getPropertySets( elementID: number, recursive = false ): Promise<any[]> {
 
+    const rows = this.rowsForElement( elementID )
+
+    if ( rows.length === 0 ) {
+      return []
+    }
+
+    const byGroup = new Map<string, AP214PropertyRow[]>()
+
+    for ( const row of rows ) {
+
+      let groupRows = byGroup.get( row.group )
+
+      if ( groupRows === void 0 ) {
+        groupRows = []
+        byGroup.set( row.group, groupRows )
+      }
+
+      groupRows.push( row )
+    }
+
+    const propertySets: any[] = []
+
+    for ( const [ group, groupRows ] of byGroup ) {
+
+      const hasProperties: ReferenceHandle[] = []
+
+      for ( const row of groupRows ) {
+        if ( row.expressID !== void 0 ) {
+          hasProperties.push( { type: WEB_IFC_REF_TYPE, value: row.expressID } )
+        }
+      }
+
+      if ( hasProperties.length === 0 ) {
+        continue
+      }
+
+      propertySets.push( {
+        // The set's own id is never dereferenced by the panel; use the first
+        // member's id so it is stable and distinct per group.
+        expressID: hasProperties[0].value,
+        Name: { value: group.length > 0 ? group : 'Attributes' },
+        HasProperties: hasProperties,
+      } )
+    }
+
+    return propertySets
+  }
+
+  /**
+   * Type properties are not modeled for AP214 at the Simplified tier.
+   *
+   * @param elementID Node express id.
+   * @param recursive Unused; kept for web-ifc signature parity.
+   * @return {Promise<any[]>} An empty array.
+   */
+  async getTypeProperties( elementID: number, recursive = false ): Promise<any[]> {
     return []
   }
 
-  private static newAP214Product(id: number): Node {
-    return {
-      expressID: id,
-      type: 'product',
-      children: [],
+  /**
+   * Material properties are not modeled for AP214 at the Simplified tier.
+   *
+   * @param elementID Node express id.
+   * @param recursive Unused; kept for web-ifc signature parity.
+   * @return {Promise<any[]>} An empty array.
+   */
+  async getMaterialsProperties( elementID: number, recursive = false ): Promise<any[]> {
+    return []
+  }
+
+  /**
+   * Get the real nested, named, occurrence-keyed product structure.
+   *
+   * @param includeProperties When true, merge each node's item properties onto
+   * the node (mirrors the IFC surface's `includeProperties`).
+   * @return {Promise<Node>} The root node. A single-root file returns its root
+   * directly; a multi-root file is wrapped in a synthetic container root.
+   */
+  async getSpatialStructure( includeProperties?: boolean ): Promise<Node> {
+
+    const roots = this.productStructure()
+
+    const nodes = await Promise.all(
+        roots.map( ( root ) => this.toSpatialNode( root, includeProperties ) ) )
+
+    if ( nodes.length === 1 ) {
+      return nodes[0]
     }
+
+    const syntheticRoot: AP214Node = {
+      expressID: SYNTHETIC_ROOT_EXPRESS_ID,
+      type: 'product_structure',
+      Name: { value: 'Model' },
+      productDefinitionExpressID: SYNTHETIC_ROOT_EXPRESS_ID,
+      occurrencePath: [],
+      children: nodes,
+    }
+
+    return syntheticRoot
+  }
+
+  /**
+   * Get every element of a STEP entity type, backed by the model type index.
+   *
+   * @param type The numeric AP214 entity type id.
+   * @param verbose When true, return raw line data; otherwise express ids.
+   * @return {Promise<any[]>} The matching elements (ids or raw lines).
+   */
+  async getAllItemsOfType( type: number, verbose: boolean ): Promise<any[]> {
+
+    const model = this.api.StepModel
+    const results: any[] = []
+
+    for ( const element of model.typeIDs( type as EntityTypesAP214 ) ) {
+
+      const expressID = element.expressID
+
+      if ( expressID === void 0 ) {
+        continue
+      }
+
+      results.push( verbose ? this.api.getRawLineData( expressID ) : expressID )
+    }
+
+    return results
+  }
+
+  /**
+   * Convert an extracted structure node into a spatial node for the compat
+   * surface, recursing into children.
+   *
+   * @param node The extracted product-structure node.
+   * @param includeProperties When true, merge the node's item properties.
+   * @return {Promise<AP214Node>} The converted spatial node.
+   */
+  private async toSpatialNode(
+      node: ProductStructureNode,
+      includeProperties?: boolean ): Promise<AP214Node> {
+
+    const children = await Promise.all(
+        node.children.map( ( childNode ) => this.toSpatialNode( childNode, includeProperties ) ) )
+
+    let spatialNode: AP214Node = {
+      expressID: node.expressID,
+      type: node.type,
+      Name: { value: node.name },
+      productDefinitionExpressID: node.productDefinitionExpressID,
+      occurrencePath: node.occurrencePath,
+      children,
+    }
+
+    if ( includeProperties ) {
+      const properties = await this.getItemProperties( node.expressID )
+      spatialNode = { ...properties, ...spatialNode }
+    }
+
+    return spatialNode
+  }
+
+  /**
+   * Resolve the property rows for an element, mapping an occurrence node id back
+   * to its owning product definition (where properties are keyed).
+   *
+   * @param id Node express id.
+   * @return {AP214PropertyRow[]} The element's property rows (possibly empty).
+   */
+  private rowsForElement( id: number ): AP214PropertyRow[] {
+
+    this.buildIndexes()
+
+    const ownerId = this.ownerByExpressID_!.get( id ) ?? id
+    const extracted = this.properties().get( ownerId )
+
+    if ( extracted === void 0 ) {
+      return []
+    }
+
+    return extracted.map( ( property: ExtractedProperty ) => ( {
+      expressID: property.expressID,
+      Name: property.name,
+      value: property.numericValue ?? property.value,
+      group: property.group,
+    } ) )
+  }
+
+  /**
+   * Lazily build and cache every index the surface reads in one pass:
+   * - `structureRoots_` — the assembly forest;
+   * - `ownerByExpressID_` — node id → owning product-definition id (where the
+   *   property map is keyed);
+   * - `nodeNameByExpressID_` — node id → display name (for `getItemProperties`
+   *   identity rows);
+   * - `propertyByItemId_` — representation-item id → property (so a pset's
+   *   `HasProperties` reference resolves back to its key/value).
+   */
+  private buildIndexes(): void {
+
+    if ( this.structureRoots_ !== void 0 ) {
+      return
+    }
+
+    const model: AP214StepModel = this.api.StepModel
+
+    this.structureRoots_ =
+      new AP214ProductStructureExtraction( model ).extractProductStructure()
+
+    this.ownerByExpressID_ = new Map<number, number>()
+    this.nodeNameByExpressID_ = new Map<number, string>()
+
+    for ( const root of this.structureRoots_ ) {
+      this.indexNodes( root )
+    }
+
+    this.propertyByItemId_ = new Map<number, ExtractedProperty>()
+
+    for ( const rows of this.properties().values() ) {
+      for ( const property of rows ) {
+        if ( property.expressID !== void 0 ) {
+          this.propertyByItemId_.set( property.expressID, property )
+        }
+      }
+    }
+  }
+
+  /**
+   * Record a node's owning product-definition id and display name, recursing
+   * into children.
+   *
+   * @param node The node to index.
+   */
+  private indexNodes( node: ProductStructureNode ): void {
+
+    this.ownerByExpressID_!.set( node.expressID, node.productDefinitionExpressID )
+    this.nodeNameByExpressID_!.set( node.expressID, node.name )
+
+    for ( const childNode of node.children ) {
+      this.indexNodes( childNode )
+    }
+  }
+
+  /**
+   * Return the cached product-structure forest, building the indexes if needed.
+   *
+   * @return {ProductStructureNode[]} The cached assembly roots.
+   */
+  private productStructure(): ProductStructureNode[] {
+    this.buildIndexes()
+    return this.structureRoots_!
+  }
+
+  /**
+   * Lazily build and cache the extracted property map.
+   *
+   * @return {ExtractedPropertyMap} The cached per-part property map.
+   */
+  private properties(): ExtractedPropertyMap {
+
+    if ( this.propertyMap_ === void 0 ) {
+      this.propertyMap_ = new AP214PropertyExtraction( this.api.StepModel ).extractProperties()
+    }
+
+    return this.propertyMap_
   }
 }
