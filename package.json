@@ -45,7 +45,7 @@
     }
   },
   "scripts": {
-    "setup": "bash scripts/web-setup.sh",
+    "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies",
     "codex-setup-emsdk": "bash ./scripts/setup-emsdk.sh",
     "clean": "run-script-os",
     "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",
@@ -149,7 +149,7 @@
     "@types/seedrandom": "3.0.5",
     "@types/three": "^0.173.0",
     "adm-zip": "^0.5.16",
-    "babel-jest": "^29.6.2",
+    "babel-jest": "28.1.3",
     "concurrently": "7.5.0",
     "cross-env": "^7.0.3",
     "esbuild": "0.25.0",
@@ -186,6 +186,5 @@
     "vite": "^6.2.3",
     "web-ifc": "0.0.35"
   },
-  "type": "module",
-  "packageManager": "yarn@4.9.2"
+  "type": "module"
 }
