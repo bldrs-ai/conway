@@ -456,30 +456,39 @@ Ordered so the first user-visible win (a real, named, navigable tree for
       "compare against what we support" deliverable.
 
 ### Phase 1 — Simplified tier: assembly tree + names (1.0 core)
-- [ ] `AP214ProductStructureExtraction`: product/PD/NAUO walk → nested
+*(Implemented in PR #345 — in review.)*
+- [x] `AP214ProductStructureExtraction`: product/PD/NAUO walk → nested
       tree; roots = PDs never a `related_PD`; labels from `product.name`
-      / `reference_designator`.
+      / `reference_designator`. Occurrence-path keyed per the decided
+      identity scheme.
 - [ ] Reconcile occurrence `expressID` with geometry
       `relatedElementLocalId` / `TriangleElementMap` for pick↔tree
-      round-trip.
-- [ ] Rewrite `ap214_properties.ts::getSpatialStructure` to return the
+      round-trip. *(Tree carries `shapeRepresentationIds` + the occurrence
+      path; the bidirectional reconciliation into the scene instance map
+      is verified Share-side in Phase 3.)*
+- [x] Rewrite `ap214_properties.ts::getSpatialStructure` to return the
       real nested, named tree (drop the flat `shape_definition` stub).
-- [ ] Hermetic `as1` tree test.
+- [x] Hermetic `as1` tree test
+      (`ap214_product_structure_extraction.test`).
 
 ### Phase 2 — Simplified tier: properties
-- [ ] `AP214PropertyExtraction`: `general_property` /
+*(Implemented in PR #345 — in review.)*
+- [x] `AP214PropertyExtraction`: `general_property` /
       `property_definition_representation` /
       `descriptive_representation_item` → key/values; validation
       properties (volume/area).
-- [ ] Implement `getItemProperties` (merge) + `getPropertySets` (real
+- [x] Implement `getItemProperties` (merge) + `getPropertySets` (real
       rows) in the compat layer; back `getAllItemsOfType` with the type
       index.
-- [ ] Hermetic CTC property test.
+- [x] Hermetic CTC property test (`ap214_property_extraction.test`).
 
 ### Phase 3 — Wire through to Share + verify
 - [ ] Confirm the metadata reaches Share through the web-ifc compat
-      surface (depends on `web-ifc-compat-surface.md` publishing path /
-      adapter republish — see "Cross-repo seam").
+      surface. The compat-surface-in-Conway migration has **landed** (the
+      adapter is retired; Share consumes `@bldrs-ai/conway/web-ifc`
+      directly — see "Cross-repo seam"), so this now needs only a Conway
+      release carrying PR #345's `ap214_properties.ts` + a Share dep bump,
+      not an adapter republish.
 - [ ] Verify in Share against the live NIST files in `test-models`:
       NavTree shows named hierarchy, click ⇄ pick, permalink to a part,
       comment on a part, Properties panel populated.
@@ -512,40 +521,68 @@ Ordered so the first user-visible win (a real, named, navigable tree for
 ## Cross-repo seam (release-chain dependency)
 
 Conway metadata only reaches Share through the `web-ifc`-compatible
-`IfcAPI` (`IfcApiProxyAP214` → `ap214_properties.ts`). Today Share reaches
-Conway via the separately-versioned `conway-web-ifc-adapter`, **pinned to
-an old Conway** (`web-ifc-compat-surface.md`): improvements here are
-invisible to Share until either the adapter is republished or the
-compat-surface-in-Conway migration lands. **Phases 1–2 (Conway
-extraction) are independent and can land first**; Phase 3 (Share
-visibility) is gated on that release path. Track it as the one ordering
-dependency, exactly as `step-regression.md` tracks the test-models
-baseline dependency.
+`IfcAPI` (`IfcApiProxyAP214` → `ap214_properties.ts`).
+
+**Update (2026-06) — the compat-surface-in-Conway migration has landed,
+collapsing the old three-hop chain.** When this plan was written Share
+reached Conway via the separately-versioned `conway-web-ifc-adapter`
+pinned to an old Conway, so metadata improvements here were invisible to
+Share until that adapter was hand-republished. That indirection is now
+**retired**:
+
+- Conway vendors the load-bearing `web-ifc` surface in
+  `src/compat/web-ifc/` and publishes it as the `@bldrs-ai/conway/web-ifc`
+  subpath export (conway #331); the IFC name↔typecode tables are generated
+  from a pinned `web-ifc@0.0.35` devDependency and guarded by an internal,
+  consumer-opaque parity test (conway #337); an IFC+STEP `IfcAPI` smoke
+  test is a Conway gate.
+- Share now depends on `@bldrs-ai/conway` directly — its `webIfcShimAlias`
+  esbuild plugin resolves `web-ifc` imports straight to
+  `@bldrs-ai/conway/compiled/src/compat/web-ifc/index.js` and the
+  standalone adapter package is gone. The release chain is now
+  **Conway → Share**.
+
+See [`web-ifc-compat-surface.md`](web-ifc-compat-surface.md) for the
+landed-status detail and the one remaining follow-up (the properties-layer
+reshape onto Conway-native entities, decision (b) — deferred, not
+blocking).
+
+**Net for this plan:** **Phases 1–2 (Conway extraction) are independent
+and land first** (PR #345). Phase 3 (Share visibility) is **no longer
+gated on an adapter republish** — it now needs only (1) PR #345 merged,
+(2) a Conway release cut carrying the `ap214_properties.ts` metadata, and
+(3) Share bumping its `@bldrs-ai/conway` dependency to that release. Track
+this release→bump as the one ordering dependency, exactly as
+`step-regression.md` tracks the test-models baseline dependency.
 
 ---
 
-## Build-environment blocker (separate PR)
+## Build-environment blocker — RESOLVED (2026-06)
 
-Phases 1–2 (the extractor modules + the `ap214_properties.ts` rewrite)
-need a working Conway build to compile and run their Jest tests
-(`yarn test` runs against `compiled/**`). The Claude-Code-on-web
-environment currently **cannot build Conway**, so this plan's
-runtime-behavior work can't be verified in-session:
+When this plan was written the Claude-Code-on-web environment **could not
+build Conway** (pinned `typescript@4.9.3` absent from `node_modules`, only
+a global `tsc 6.0.2` that errors on the repo's `node10`
+`moduleResolution`), so the extractors' runtime behavior couldn't be
+verified in-session. **That is fixed.** The TS-only path now works in web
+sessions:
 
-- The pinned `typescript@4.9.3` and `ts-add-js-extension` are **absent
-  from `node_modules`**; the only `tsc` on `PATH` is a global
-  `6.0.2`, which **errors** on the repo's `tsconfig.json`
-  `moduleResolution: node10` (`TS5107` — needs `ignoreDeprecations` or a
-  modern resolution setting).
-- `yarn build-incremental` therefore fails; `npm install --no-save
-  typescript@4.9.3` fails on peer-dependency conflicts.
+- A `SessionStart` hook (conway #340) + install-resilience for the
+  proxy's socket resets (conway #341) + the standardized `yarn setup`
+  multi-repo dispatcher (conway #343) bring a fresh container to a state
+  where `yarn build-incremental` / `yarn lint` / the pure-TS Jest suites
+  run. See [`web-build-environment.md`](web-build-environment.md).
+- The two extractor suites
+  (`ap214_product_structure_extraction.test`,
+  `ap214_property_extraction.test`) are parse-only (no geometry/WASM) and
+  run in-session against `compiled/**` — they are the real gate for this
+  work and pass there.
 
-Phase 0's detection/fixture work is trivial TS that CI compiles cleanly,
-and its measurement was validated standalone — but the extractors should
-land where they can be built and run. **This is being addressed in a
-dedicated build-environment-update PR** (stale toolchain / web-session
-setup), separate from this metadata work, so future sessions across all
-of Conway stop hitting it.
+**One residual limit:** the `conway-geom` **WASM C++ build** still can't
+run in a web session — its nested C++ submodules (`manifold` / `CDT` /
+`tinynurbs` / `gltf-sdk`) are out of scope to clone there. So the
+geometry/IFC Jest suites that load `ConwayGeomWasmNodeMT.js` run only in
+**CI** (which builds the WASM). This does not affect the metadata
+extractors, which never touch the geometry path.
 
 ## Decisions (settled) & open questions
 

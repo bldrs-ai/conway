@@ -1,9 +1,60 @@
 # Publishing a `web-ifc` compat surface from Conway
 
-**Status:** proposal / scope
+**Status:** **landed (2026-06)** — core scope shipped; one follow-up open (see below)
 **Branch:** `claude/conway-web-ifc-adapter-removal-s1olih`
 **Companion (consumer side):** [`Share/design/new/adapter-removal.md`](https://github.com/bldrs-ai/share/blob/main/design/new/adapter-removal.md)
 **Related:** [`step-support.md`](step-support.md) gap #1 ("Public API surface")
+
+---
+
+## Status — landed (2026-06)
+
+The scope below shipped across conway #329 (scope), #330 (scope merged +
+doc-only CI skip), **#331 (vendor)**, and **#337 (generated tables +
+parity guard)**. Share now consumes the surface directly and the
+standalone adapter is retired. Scope-item status:
+
+| # | Scope item | Status |
+|---|---|---|
+| 1 | Vendor load-bearing code → `src/compat/web-ifc/` (`ifc_api.ts`, proxies, factory, property extractors); drop dead `IFC4x2.ts` | ✅ #331 |
+| 2 | Generate name↔typecode mapping + Conway-internal parity test vs web-ifc | ✅ #337 — see nuance below |
+| 3 | Decide properties layer (bucket 3) | ✅ decided **(a)** — `ifc2x4_helper.ts` vendored as-is; reshape **(b)** deferred |
+| 4 | Public entry `src/compat/web-ifc/index.ts` | ✅ #331 |
+| 5 | `package.json#exports` `./web-ifc` | ✅ #331 |
+| 6 | Build/ship in the `compiled/**` files allowlist | ✅ #331 |
+| 7 | IFC + STEP `IfcAPI` smoke test as a Conway gate | ✅ `ifc_api.smoke.test.ts` |
+| 8 | Versioning: ship with Conway's version; abandon the `0.23.x` adapter line | ✅ adapter retired; `./web-ifc` ships in the Conway tarball |
+
+Plus the AP203→AP214 routing fix in `IfcApiModelPassthroughFactory` (the
+standalone adapter errored on AP203; conway #331 added the route, matching
+`conway_model_loader` — fixes Share#1557).
+
+**Nuance on item 2:** the "derive the typecodes with a lookup function"
+idea (below) **didn't pan out** — web-ifc's typecodes (e.g.
+`IFCWALL = 2391406946`) are arbitrary upstream constants, a different
+scheme from Conway's sequential `EntityTypesIfc` enum and *not* a
+recomputable hash of the name. So Conway **mirrors** web-ifc's table
+rather than deriving it: `scripts/gen-web-ifc-types.cjs`
+(`yarn gen-web-ifc-types`) regenerates `ifc2x4.ts` + `types-map.ts` from a
+pinned `web-ifc@0.0.35` **devDependency** (runtime-dep-free; excluded from
+the published tarball), and a static `web_ifc_parity.test.ts` (no wasm)
+guards them against upstream. Stepping web-ifc forward = bump the devDep →
+`yarn gen-web-ifc-types` → the test confirms or pinpoints the delta.
+
+**Consumer side:** Share's `webIfcShimAlias` esbuild plugin now resolves
+`web-ifc` imports to
+`node_modules/@bldrs-ai/conway/compiled/src/compat/web-ifc/index.js`; the
+`@bldrs-ai/conway-web-ifc-adapter` dependency is gone. Release chain
+collapsed to **Conway → Share** (companion `adapter-removal.md`).
+
+**Open follow-up:** the **properties-layer reshape (decision (b))** —
+replacing the vendored `ifc2x4_helper.ts` (~42 K, web-ifc `GetLine`
+shape) with a thin `Conway-native entity → GetLine` adapter, shared with
+`step-support.md`'s structured property surface — remains deferred so the
+duplicate entity layer doesn't become permanent. This is the only material
+item from the scope below not yet done.
+
+The original scope/rationale is preserved below as the design of record.
 
 ---
 
