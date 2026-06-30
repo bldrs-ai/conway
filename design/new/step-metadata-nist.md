@@ -249,15 +249,53 @@ variants; AP203-geom-only is structure+geometry only, as NIST documents.
     …
 ```
 
-**This is the occurrence-identity decision, confirmed by data.** Note
-`bolt [NAUO#1910]` repeats identically under all three `nut-bolt-assembly`
-nodes, and the whole `l-bracket-assembly` subtree appears twice
-(`NAUO#3810` and `NAUO#6217`). The leaf NAUO id alone is **not** unique
-per visual instance — only the **path** (`6217 → 1921 → 1910` vs
-`3810 → 1921 → 1910`) distinguishes the two bolts a user sees and would
-permalink. This is exactly why §"Occurrence identity" keys selection on
-the occurrence *path*, not a scalar — and why STEP forces Share's
-identifier generalization.
+**This is the occurrence-identity decision, confirmed by data.**
+
+A caution on reading this: each NAUO *is* a unique EXPRESS entity (defined
+once, referenced once), and for a node whose entire ancestor chain occurs
+only once — e.g. the **top-level** `plate [NAUO#6211]` or
+`l-bracket-assembly [NAUO#6217]`, both direct children of the single root
+`#5` — the scalar NAUO id genuinely *is* a sufficient key. The collision
+is not at those nodes; it is in their **descendants**, and that is the
+easy thing to miss by eyeballing the file (each line looks unique because
+it *is* unique — as an edge between part *types*).
+
+A NAUO identifies an assembly **edge** ("type A is a component of type
+B"), not a physical occurrence. The same edge is traversed once per
+instance of its *ancestors*, so a leaf multiplies. Concretely, the **bolt
+edge `#1910`** (`nut-bolt-assembly[#1170] → bolt[#1901]`, the *only* bolt
+edge in the file) sits under a sub-assembly that is itself instanced:
+
+- `nut-bolt-assembly[#1170]` is the same PD on all three slots
+  `#1921 / #1927 / #1932` of `l-bracket-assembly[#1141]`, and
+- `l-bracket-assembly[#1141]` is the same PD on both `#3810` and `#6217`
+  under `as1`.
+
+So the assembled product contains **2 × 3 × 1 = 6 physical bolts, every
+one carrying NAUO `#1910`** (likewise 2 physical l-brackets sharing
+`#3804`, 6 inner nuts sharing `#1916`). The six bolts are distinguishable
+only by **path**:
+
+```
+#3810 → #1921 → #1910      #6217 → #1921 → #1910
+#3810 → #1927 → #1910      #6217 → #1927 → #1910
+#3810 → #1932 → #1910      #6217 → #1932 → #1910
+```
+
+The leaf NAUO id alone is therefore **not** unique per visual instance —
+only the path is. A scalar can't say which of the six bolts a user clicked
+or permalinked. This is why §"Occurrence identity" keys selection on the
+occurrence *path*, not a scalar.
+
+**Contrast with IFC** (why this is new for Share): IFC, as Share consumes
+it, hands over a *materialized* tree — each placed product is its own
+`IfcProduct` with its own expressID/GUID, and reuse lives one level down
+at geometry (`IfcMappedItem` / `IfcRepresentationMap`). So one expressID =
+one placed thing and a scalar key works. STEP AP214 instead stores a
+*compressed DAG of types + edges*; the physical bill of materials is the
+set of root→leaf paths, and no single entity represents "the 4th bolt." The
+path is the only honest identifier — which is exactly the
+`expressID → ordered occurrence path` generalization STEP forces on Share.
 
 ### Properties — resolved from `ctc_01 …_ap242-e1`
 
