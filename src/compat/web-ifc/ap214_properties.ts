@@ -14,14 +14,43 @@ import { Node } from './properties_passthrough'
 
 
 /**
- * A web-ifc value handle — `{ value }`. This is the shape Share's consumers
- * read everywhere: `reifyName` (`@bldrs-ai/ifclib`) reads `Name.value`, and the
- * Properties panel reads `Name.value` / `NominalValue.value`. Emitting a bare
- * string here instead silently drops the name (the node falls back to its type
- * label) and the value, so every label/value field below is wrapped.
+ * A web-ifc value handle — `{ type, value }`. Share reads these two ways and
+ * both must work:
+ *
+ * - `reifyName` (`@bldrs-ai/ifclib`) and the pset path read `.value` directly;
+ * - the Properties panel runs an element's identity row through `deref`, which
+ *   only unwraps a handle whose `type` passes its `isTypeValue` guard (`type`
+ *   AND `value` both non-null) and then switches on `type` (1 → `decodeIFCString`,
+ *   4 → numeric measure, returned as-is). A handle *without* `type` fails that
+ *   guard, so deref returns the wrapping object untouched and React throws
+ *   "Objects are not valid as a React child (found: object with keys {value})".
+ *   So every handle carries the tape type code — a bare `{ value }` crashed the
+ *   panel on every STEP element. Build them with {@link valueHandle}.
  */
 interface ValueHandle {
+  type: number
   value: string | number
+}
+
+/**
+ * web-ifc tape type codes `deref` switches on: 1 = string (decoded via
+ * `decodeIFCString`), 4 = numeric measure (returned as-is).
+ */
+const WEB_IFC_STRING_TYPE = 1
+const WEB_IFC_MEASURE_TYPE = 4
+
+/**
+ * Wrap a scalar as a web-ifc value handle carrying the tape type code `deref`
+ * needs — string → 1, number → 4.
+ *
+ * @param value The scalar to wrap.
+ * @return {ValueHandle} The typed value handle.
+ */
+function valueHandle( value: string | number ): ValueHandle {
+  return {
+    type: typeof value === 'number' ? WEB_IFC_MEASURE_TYPE : WEB_IFC_STRING_TYPE,
+    value,
+  }
 }
 
 /**
@@ -49,7 +78,7 @@ const WEB_IFC_REF_TYPE = 5
  */
 interface AP214Node extends Node {
 
-  /** Display label (web-ifc `{value}` handle), emitted from `product.name`. */
+  /** Display label (web-ifc `{type,value}` handle), emitted from `product.name`. */
   Name: ValueHandle
 
   /** Express id of the underlying `product_definition` (the part *type*). */
@@ -126,12 +155,12 @@ export class AP214Properties {
    * denotes:
    *
    * - a **property single** (a `descriptive_/measure_representation_item` id,
-   *   referenced from a pset's `HasProperties`) → `{ expressID, Name: {value},
-   *   NominalValue: {value} }`, the shape `unpackHelper` reads after it
+   *   referenced from a pset's `HasProperties`) → `{ expressID, Name: {type,value},
+   *   NominalValue: {type,value} }`, the shape `unpackHelper` reads after it
    *   dereferences a `HasProperties` handle;
    * - a **tree node** (NAUO occurrence id, or `product_definition[_shape]` id
-   *   for single-part files) → `{ expressID, Name: {value} }`, the part's
-   *   identity row.
+   *   for single-part files) → `{ expressID, Name: {type,value} }`, the part's
+   *   identity row that the Properties panel runs through `deref`.
    *
    * Property-single ids and node ids are disjoint (distinct STEP entities), so
    * the lookup is unambiguous.
@@ -149,14 +178,14 @@ export class AP214Properties {
     if ( property !== void 0 ) {
       return {
         expressID: id,
-        Name: { value: property.name },
-        NominalValue: { value: property.numericValue ?? property.value },
+        Name: valueHandle( property.name ),
+        NominalValue: valueHandle( property.numericValue ?? property.value ),
       }
     }
 
     return {
       expressID: id,
-      Name: { value: this.nodeNameByExpressID_!.get( id ) ?? '' },
+      Name: valueHandle( this.nodeNameByExpressID_!.get( id ) ?? '' ),
     }
   }
 
@@ -214,7 +243,7 @@ export class AP214Properties {
         // The set's own id is never dereferenced by the panel; use the first
         // member's id so it is stable and distinct per group.
         expressID: hasProperties[0].value,
-        Name: { value: group.length > 0 ? group : 'Attributes' },
+        Name: valueHandle( group.length > 0 ? group : 'Attributes' ),
         HasProperties: hasProperties,
       } )
     }
@@ -266,7 +295,7 @@ export class AP214Properties {
     const syntheticRoot: AP214Node = {
       expressID: SYNTHETIC_ROOT_EXPRESS_ID,
       type: 'product_structure',
-      Name: { value: 'Model' },
+      Name: valueHandle( 'Model' ),
       productDefinitionExpressID: SYNTHETIC_ROOT_EXPRESS_ID,
       occurrencePath: [],
       children: nodes,
@@ -319,7 +348,7 @@ export class AP214Properties {
     let spatialNode: AP214Node = {
       expressID: node.expressID,
       type: node.type,
-      Name: { value: node.name },
+      Name: valueHandle( node.name ),
       productDefinitionExpressID: node.productDefinitionExpressID,
       occurrencePath: node.occurrencePath,
       children,

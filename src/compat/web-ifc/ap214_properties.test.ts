@@ -70,6 +70,39 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     expect( item.Name.value ).toBe( 'as1' )
   } )
 
+  test( 'value handles carry a deref-compatible web-ifc type (string => 1)', async () => {
+
+    // Regression: the Properties panel runs a node's identity row through
+    // @bldrs-ai/ifclib `deref`, which only unwraps a handle whose `type` passes
+    // its `isTypeValue` guard (type AND value both present) and switches on type
+    // (1 => decodeIFCString). A bare `{ value }` (no type) fell through, so deref
+    // returned the wrapping object and React threw "Objects are not valid as a
+    // React child (found: object with keys {value})" on every STEP element.
+    const surface = compatSurfaceFor( 'data/as1-assembly.step' )
+    const root = await surface.getSpatialStructure() as any
+    const item = await surface.getItemProperties( root.expressID ) as any
+
+    // Both the spatial-node label and the identity row must be typed handles.
+    expect( root.Name.type ).toBe( 1 )
+    expect( item.Name.type ).toBe( 1 )
+  } )
+
+  test( 'resolved property single carries typed Name and NominalValue handles', async () => {
+
+    const surface = compatSurfaceFor( 'data/nist-ctc-properties.step' )
+    const psets = await surface.getPropertySets( CTC_PRODUCT_DEFINITION_EXPRESS_ID )
+    const ref = psets[0].HasProperties[0]
+    const prop = await surface.getItemProperties( ref.value ) as any
+
+    // The property name is always a string => type 1. The value's type depends
+    // on whether it is descriptive or numeric, but it must be a deref code (1 or
+    // 4) and non-null so deref's isTypeValue guard passes and unwraps it rather
+    // than rendering the raw object.
+    expect( prop.Name.type ).toBe( 1 )
+    expect( [ 1, 4 ] ).toContain( prop.NominalValue.type )
+    expect( prop.NominalValue.value ).not.toBe( null )
+  } )
+
   test( 'getPropertySets emits IfcPropertySet-shaped sets with reference HasProperties', async () => {
 
     const surface = compatSurfaceFor( 'data/nist-ctc-properties.step' )
