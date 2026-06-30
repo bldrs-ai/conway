@@ -1093,7 +1093,29 @@ jobs:
       # Publish BEFORE tagging. If publish fails, no stranded tag.
       # npm CLI 11.5.1+ picks up the OIDC token from GHA automatically.
       - name: Publish to npm
-        run: npm publish --access public
+        env:
+          NEW_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The version scheme is <major>.<PR#>.<commit-count>. The PR-number
+          # segment is non-monotonic: when PRs merge out of order, a later main
+          # commit can carry a *lower* PR number than the package currently
+          # tagged `latest` (e.g. #345 merging right after #346). npm then
+          # refuses to *implicitly* move `latest` onto the lower SemVer and
+          # aborts the publish ("Cannot implicitly apply the latest tag ...").
+          # The commit-count segment is strictly monotonic on main, so this
+          # build genuinely supersedes `latest` even when its middle segment is
+          # lower — pass `--tag latest` explicitly to override npm's guard and
+          # keep `latest` pointing at the newest code. The in-order case (new
+          # version is the higher SemVer) still takes the plain implicit path.
+          CURRENT_LATEST=$(npm view @bldrs-ai/conway@latest version 2>/dev/null || echo '0.0.0')
+          HIGHEST=$(printf '%s\n%s\n' "$CURRENT_LATEST" "$NEW_VERSION" | sort -V | tail -1)
+          if [ "$NEW_VERSION" != "$CURRENT_LATEST" ] && [ "$HIGHEST" = "$NEW_VERSION" ]; then
+            npm publish --access public
+          else
+            echo "::warning::Computed version ${NEW_VERSION} is not greater than current latest ${CURRENT_LATEST} (out-of-order PR merge); publishing with explicit --tag latest."
+            npm publish --access public --tag latest
+          fi
 
       # Idempotent tag: skip if already on origin (e.g. on a re-run).
       - name: Create and push tag
