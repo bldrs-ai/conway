@@ -42,14 +42,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'
 
       - name: Compute conway-geom submodule SHA
         id: subsha
         run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: |
+          # Activate yarn Berry from package.json#packageManager (+ vendored
+          # .yarn/releases binary). --immutable is Berry's --frozen-lockfile.
+          corepack enable
+          yarn install --immutable
 
       # The compat/web-ifc constant tables are generated from the web-ifc
       # devDependency (scripts/gen-web-ifc-types.cjs). Regenerate and fail if
@@ -224,14 +227,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'
 
       - name: Compute conway-geom submodule SHA
         id: subsha
         run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: |
+          # Activate yarn Berry from package.json#packageManager (+ vendored
+          # .yarn/releases binary). --immutable is Berry's --frozen-lockfile.
+          corepack enable
+          yarn install --immutable
 
       # Build job populated this cache. We expect a hit; if not, fail fast
       # rather than silently rebuilding WASM and confusing the timing model.
@@ -1026,7 +1032,6 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          cache: 'yarn'
 
       # Trusted Publishing requires npm >= 11.5.1. Node 20 ships with npm 10.x,
       # so upgrade the global npm binary before the publish step.
@@ -1065,7 +1070,11 @@ jobs:
         run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: |
+          # Activate yarn Berry from package.json#packageManager (+ vendored
+          # .yarn/releases binary). --immutable is Berry's --frozen-lockfile.
+          corepack enable
+          yarn install --immutable
 
       # WASM cache is populated by the build job earlier in this run.
       - name: Restore WASM build cache
