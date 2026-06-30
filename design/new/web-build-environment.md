@@ -99,10 +99,24 @@ Per the [web docs](https://code.claude.com/docs/en/claude-code-on-the-web):
 | Time budget | keep ≲ 5 min so the cache can build | adds latency every session |
 
 So the heavy install belongs in the **setup script** (cached → "ready right
-off"); the SessionStart hook should shrink to a fast, stamp-gated guard that is
-a no-op when the snapshot already has `node_modules` (and still covers local
-dev + a cold cache). The EMSDK/WASM toolchain is already correctly on-demand
+off"); the SessionStart hook should shrink to a fast guard that is a no-op when
+the snapshot already has up-to-date `node_modules` (and still covers local dev +
+a cold cache). The EMSDK/WASM toolchain is already correctly on-demand
 (`.claude/hooks/wasm-setup.sh`), off the every-session path.
+
+### Snapshot invalidation (and why the install gate hashes the lockfile)
+
+The environment snapshot is rebuilt **only** when (a) the setup-script text
+changes, (b) the network-allowlist changes, or (c) it hits its ~7-day expiry.
+Crucially it is keyed on the environment config, **not the repo** — a new commit
+/ changed `package.json` / changed `yarn.lock` does **not** bust it. So a bare
+"node_modules exists" stamp would let a warm snapshot serve **stale deps** after
+a dependency bump until the 7-day expiry. `scripts/web-setup.sh` therefore gates
+the install on a **hash of `yarn.lock` + `package.json`**: unchanged inputs are
+an instant no-op every session (like an up-to-date local `yarn install`); a
+changed lockfile forces a re-install; and the 7-day rebuild is the slow
+"inch-along" path. Manual bust: edit the setup-script field to force a fresh
+snapshot.
 
 ## Plan
 

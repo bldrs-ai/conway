@@ -67,7 +67,15 @@ fi
 # loudly (deterministic) instead of silently mutating yarn.lock.
 ATTEMPTS="${WEB_SETUP_INSTALL_ATTEMPTS:-6}"
 ATTEMPT_TIMEOUT="${WEB_SETUP_INSTALL_TIMEOUT:-180}"
-if [ ! -d node_modules ] || ! stamped node_modules; then
+# Gate on a hash of the dependency inputs, NOT a bare stamp. The cloud
+# environment snapshot is invalidated only by a setup-script/network edit or the
+# ~7-day expiry — never by a repo/lockfile change — so a warm snapshot would
+# otherwise serve stale node_modules after a dependency bump. Unchanged inputs =>
+# instant no-op every session (like a local `yarn install` that's already up to
+# date); a changed yarn.lock/package.json => re-install.
+DEP_HASH="$( sha256sum yarn.lock package.json 2>/dev/null | sha256sum | cut -d' ' -f1 )"
+INSTALL_STAMP="$STAMP_DIR/node_modules.${DEP_HASH}"
+if [ ! -d node_modules ] || [ ! -f "$INSTALL_STAMP" ]; then
   install_ok=false
   install_log="$(mktemp)"
   for attempt in $(seq 1 "$ATTEMPTS"); do
@@ -93,9 +101,11 @@ if [ ! -d node_modules ] || ! stamped node_modules; then
     log "yarn install did not complete after ${ATTEMPTS} attempts — FAILING (no npm fallback by design)"
     exit 1
   fi
-  stamp node_modules
+  # Drop stamps for previous dependency sets, then record the current one.
+  rm -f "$STAMP_DIR"/node_modules.* 2>/dev/null || true
+  touch "$INSTALL_STAMP"
 else
-  log "node_modules present and stamped, skipping install"
+  log "node_modules up to date for current yarn.lock + package.json, skipping install"
 fi
 
 # 2. Submodules (conway-geom + nested) — tsconfig compiles its .ts directly, so
