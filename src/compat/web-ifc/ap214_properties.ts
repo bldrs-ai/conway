@@ -14,14 +14,43 @@ import { Node } from './properties_passthrough'
 
 
 /**
+ * A web-ifc value handle — `{ value }`. This is the shape Share's consumers
+ * read everywhere: `reifyName` (`@bldrs-ai/ifclib`) reads `Name.value`, and the
+ * Properties panel reads `Name.value` / `NominalValue.value`. Emitting a bare
+ * string here instead silently drops the name (the node falls back to its type
+ * label) and the value, so every label/value field below is wrapped.
+ */
+interface ValueHandle {
+  value: string | number
+}
+
+/**
+ * A web-ifc tape reference handle — `{ type: 5, value: expressID }`. STEP psets
+ * surface their properties as these handles in `HasProperties` (matching
+ * `IfcPropertySet`), and Share's Properties panel (`itemProperties.js`
+ * `unpackHelper`) resolves each one via `getItemProperties(expressID)`; an
+ * inline property object would throw its "Array contains non-reference type".
+ */
+interface ReferenceHandle {
+  type: number
+  value: number
+}
+
+/**
+ * web-ifc tape type code for an entity reference. `unpackHelper` rejects any
+ * `HasProperties` entry whose `type` is not this.
+ */
+const WEB_IFC_REF_TYPE = 5
+
+/**
  * Spatial node enriched with the STEP fields Share consumes
  * (`bldrsSpatialTree.js serializeNode` preserves `Name`) plus the occurrence
  * identity that STEP forces.
  */
 interface AP214Node extends Node {
 
-  /** Display label, emitted from `product.name`. */
-  Name: string
+  /** Display label (web-ifc `{value}` handle), emitted from `product.name`. */
+  Name: ValueHandle
 
   /** Express id of the underlying `product_definition` (the part *type*). */
   productDefinitionExpressID: number
@@ -32,17 +61,23 @@ interface AP214Node extends Node {
    * cannot represent — see `design/new/step-metadata-nist.md`
    * §"Occurrence identity". Share still keys selection on `expressID` today;
    * generalizing that to this path is the STEP-driven follow-up flagged in the
-   * plan.
+   * plan (and the same per-occurrence handle GPU instancing needs — see
+   * Share `design/new/viewer-replacement.md` §3b.iv).
    */
   occurrencePath: number[]
 
   children: AP214Node[]
 }
 
-/** A property row as surfaced to the web-ifc compat consumers. */
+/**
+ * A property row resolved for an element: the source representation-item
+ * express id (so it can be surfaced as a `HasProperties` reference and resolved
+ * back via `getItemProperties`), the key, the value, and the grouping label.
+ */
 interface AP214PropertyRow {
+  expressID?: number
   Name: string
-  NominalValue: string | number
+  value: string | number
   group: string
 }
 
@@ -66,6 +101,8 @@ export class AP214Properties {
   private structureRoots_?: ProductStructureNode[]
   private propertyMap_?: ExtractedPropertyMap
   private ownerByExpressID_?: Map<number, number>
+  private nodeNameByExpressID_?: Map<number, string>
+  private propertyByItemId_?: Map<number, ExtractedProperty>
 
   /**
    * @param api The AP214 passthrough proxy owning the step model.
@@ -85,34 +122,55 @@ export class AP214Properties {
   }
 
   /**
-   * Get a part's merged item properties: its node identity plus extracted
-   * key/values.
+   * Resolve one express id to a web-ifc-shaped item, dispatching on what the id
+   * denotes:
    *
-   * @param id Node express id (a NAUO occurrence id, or a product-definition id
-   * for single-part files).
+   * - a **property single** (a `descriptive_/measure_representation_item` id,
+   *   referenced from a pset's `HasProperties`) → `{ expressID, Name: {value},
+   *   NominalValue: {value} }`, the shape `unpackHelper` reads after it
+   *   dereferences a `HasProperties` handle;
+   * - a **tree node** (NAUO occurrence id, or `product_definition[_shape]` id
+   *   for single-part files) → `{ expressID, Name: {value} }`, the part's
+   *   identity row.
+   *
+   * Property-single ids and node ids are disjoint (distinct STEP entities), so
+   * the lookup is unambiguous.
+   *
+   * @param id Express id to resolve.
    * @param recursive Unused; kept for web-ifc signature parity.
-   * @return {Promise<object>} The merged item-properties object.
+   * @return {Promise<object>} The web-ifc-shaped item.
    */
   async getItemProperties( id: number, recursive = false ): Promise<object> {
 
-    const properties: Record<string, string | number> = {
+    this.buildIndexes()
+
+    const property = this.propertyByItemId_!.get( id )
+
+    if ( property !== void 0 ) {
+      return {
+        expressID: id,
+        Name: { value: property.name },
+        NominalValue: { value: property.numericValue ?? property.value },
+      }
+    }
+
+    return {
       expressID: id,
+      Name: { value: this.nodeNameByExpressID_!.get( id ) ?? '' },
     }
-
-    for ( const row of this.rowsForElement( id ) ) {
-      properties[row.Name] = row.NominalValue
-    }
-
-    return properties
   }
 
   /**
-   * Get a part's property sets: one set per grouping label (plain attributes vs.
-   * validation properties), each carrying its key/value rows.
+   * Get a part's property sets: one `IfcPropertySet`-shaped set per grouping
+   * label (plain attributes vs. validation properties). Each set's
+   * `HasProperties` is an array of web-ifc reference handles
+   * (`{ type: 5, value: itemExpressID }`) that Share's Properties panel resolves
+   * back to individual properties via `getItemProperties` — emitting inline
+   * property objects instead would trip `unpackHelper`'s reference-type guard.
    *
    * @param elementID Node express id.
    * @param recursive Unused; kept for web-ifc signature parity.
-   * @return {Promise<any[]>} The property-set rows for the element.
+   * @return {Promise<any[]>} The property sets for the element.
    */
   async getPropertySets( elementID: number, recursive = false ): Promise<any[]> {
 
@@ -139,12 +197,25 @@ export class AP214Properties {
     const propertySets: any[] = []
 
     for ( const [ group, groupRows ] of byGroup ) {
+
+      const hasProperties: ReferenceHandle[] = []
+
+      for ( const row of groupRows ) {
+        if ( row.expressID !== void 0 ) {
+          hasProperties.push( { type: WEB_IFC_REF_TYPE, value: row.expressID } )
+        }
+      }
+
+      if ( hasProperties.length === 0 ) {
+        continue
+      }
+
       propertySets.push( {
-        Name: group.length > 0 ? group : 'Attributes',
-        HasProperties: groupRows.map( ( row ) => ( {
-          Name: row.Name,
-          NominalValue: { value: row.NominalValue },
-        } ) ),
+        // The set's own id is never dereferenced by the panel; use the first
+        // member's id so it is stable and distinct per group.
+        expressID: hasProperties[0].value,
+        Name: { value: group.length > 0 ? group : 'Attributes' },
+        HasProperties: hasProperties,
       } )
     }
 
@@ -195,7 +266,7 @@ export class AP214Properties {
     const syntheticRoot: AP214Node = {
       expressID: SYNTHETIC_ROOT_EXPRESS_ID,
       type: 'product_structure',
-      Name: 'Model',
+      Name: { value: 'Model' },
       productDefinitionExpressID: SYNTHETIC_ROOT_EXPRESS_ID,
       occurrencePath: [],
       children: nodes,
@@ -248,7 +319,7 @@ export class AP214Properties {
     let spatialNode: AP214Node = {
       expressID: node.expressID,
       type: node.type,
-      Name: node.name,
+      Name: { value: node.name },
       productDefinitionExpressID: node.productDefinitionExpressID,
       occurrencePath: node.occurrencePath,
       children,
@@ -271,9 +342,9 @@ export class AP214Properties {
    */
   private rowsForElement( id: number ): AP214PropertyRow[] {
 
-    this.productStructure()
+    this.buildIndexes()
 
-    const ownerId = this.ownerByExpressID_?.get( id ) ?? id
+    const ownerId = this.ownerByExpressID_!.get( id ) ?? id
     const extracted = this.properties().get( ownerId )
 
     if ( extracted === void 0 ) {
@@ -281,22 +352,27 @@ export class AP214Properties {
     }
 
     return extracted.map( ( property: ExtractedProperty ) => ( {
+      expressID: property.expressID,
       Name: property.name,
-      NominalValue: property.numericValue ?? property.value,
+      value: property.numericValue ?? property.value,
       group: property.group,
     } ) )
   }
 
   /**
-   * Lazily build and cache the product structure, plus the
-   * occurrence-id → product-definition-id index used to attach properties.
-   *
-   * @return {ProductStructureNode[]} The cached assembly roots.
+   * Lazily build and cache every index the surface reads in one pass:
+   * - `structureRoots_` — the assembly forest;
+   * - `ownerByExpressID_` — node id → owning product-definition id (where the
+   *   property map is keyed);
+   * - `nodeNameByExpressID_` — node id → display name (for `getItemProperties`
+   *   identity rows);
+   * - `propertyByItemId_` — representation-item id → property (so a pset's
+   *   `HasProperties` reference resolves back to its key/value).
    */
-  private productStructure(): ProductStructureNode[] {
+  private buildIndexes(): void {
 
     if ( this.structureRoots_ !== void 0 ) {
-      return this.structureRoots_
+      return
     }
 
     const model: AP214StepModel = this.api.StepModel
@@ -305,26 +381,47 @@ export class AP214Properties {
       new AP214ProductStructureExtraction( model ).extractProductStructure()
 
     this.ownerByExpressID_ = new Map<number, number>()
+    this.nodeNameByExpressID_ = new Map<number, string>()
 
     for ( const root of this.structureRoots_ ) {
-      this.indexOwners( root )
+      this.indexNodes( root )
     }
 
-    return this.structureRoots_
+    this.propertyByItemId_ = new Map<number, ExtractedProperty>()
+
+    for ( const rows of this.properties().values() ) {
+      for ( const property of rows ) {
+        if ( property.expressID !== void 0 ) {
+          this.propertyByItemId_.set( property.expressID, property )
+        }
+      }
+    }
   }
 
   /**
-   * Record the owning product-definition id for a node and its descendants.
+   * Record a node's owning product-definition id and display name, recursing
+   * into children.
    *
    * @param node The node to index.
    */
-  private indexOwners( node: ProductStructureNode ): void {
+  private indexNodes( node: ProductStructureNode ): void {
 
     this.ownerByExpressID_!.set( node.expressID, node.productDefinitionExpressID )
+    this.nodeNameByExpressID_!.set( node.expressID, node.name )
 
     for ( const childNode of node.children ) {
-      this.indexOwners( childNode )
+      this.indexNodes( childNode )
     }
+  }
+
+  /**
+   * Return the cached product-structure forest, building the indexes if needed.
+   *
+   * @return {ProductStructureNode[]} The cached assembly roots.
+   */
+  private productStructure(): ProductStructureNode[] {
+    this.buildIndexes()
+    return this.structureRoots_!
   }
 
   /**

@@ -197,7 +197,10 @@ export class AP214ProductStructureExtraction {
         continue
       }
 
-      const shapeId = sdr.used_representation?.expressID ?? sdr.expressID
+      // The shape id is the *used_representation* (the geometry), not the SDR's
+      // own id — falling back to `sdr.expressID` would store a non-geometry id
+      // that a pick-reconciliation consumer could not resolve to a scene mesh.
+      const shapeId = sdr.used_representation?.expressID
 
       if ( shapeId !== void 0 ) {
         this.addShapeRepresentation( productDefId, shapeId )

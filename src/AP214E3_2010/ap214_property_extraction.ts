@@ -29,6 +29,15 @@ export interface ExtractedProperty {
    * Empty for plain attribute properties.
    */
   group: string
+
+  /**
+   * Express id of the source representation item (the
+   * `descriptive_representation_item` / `measure_representation_item`). The
+   * compat surface uses it as the property's own express id so the web-ifc
+   * `IfcPropertySet.HasProperties` reference handles can be resolved back to
+   * this row via `getItemProperties`. `undefined` if the item carried no id.
+   */
+  expressID?: number
 }
 
 /** Properties grouped by the express id of the owning `product_definition`. */
@@ -191,17 +200,32 @@ export class AP214PropertyExtraction {
       group: string ): ExtractedProperty | undefined {
 
     const key = item.name.length > 0 ? item.name : fallbackKey
+    const expressID = item.expressID
 
     if ( item instanceof descriptive_representation_item ) {
-      return { name: key, value: item.description, group }
+
+      // Skip a descriptive item with no value — it would surface as a blank
+      // key/value row in the Properties panel where there is nothing to show.
+      if ( item.description.length === 0 ) {
+        return void 0
+      }
+
+      return { name: key, value: item.description, group, expressID }
     }
 
     if ( item instanceof measure_representation_item ) {
 
-      const measure = item.value_component as unknown as { Value: number }
-      const numericValue = measure.Value
+      // `value_component` is a `measure_value` SELECT: most members carry a
+      // numeric `.Value`, but `descriptive_measure` / `context_dependent_measure`
+      // carry a string. Only treat a genuinely numeric value as `numericValue`
+      // so a textual measure doesn't end up typed as a number downstream.
+      const rawValue = ( item.value_component as unknown as { Value: unknown } ).Value
 
-      return { name: key, value: String( numericValue ), numericValue, group }
+      if ( typeof rawValue === 'number' ) {
+        return { name: key, value: String( rawValue ), numericValue: rawValue, group, expressID }
+      }
+
+      return { name: key, value: String( rawValue ), group, expressID }
     }
 
     return void 0
