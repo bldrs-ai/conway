@@ -998,7 +998,10 @@ jobs:
   # ---------------------------------------------------------------------------
   # Continuous release: on every successful push to main, publish to npm and
   # tag the commit. Version is <major>.<PR>.<commit>:
-  #   major  - first segment of package.json's version (manual bump)
+  #   major  - first segment of package.json's version (manual bump). The
+  #            minor/patch in package.json/version.ts are an unstamped 1.0.0
+  #            placeholder on main and are ignored here - both are recomputed
+  #            below, so only edit the major segment to roll a major version.
   #   PR     - PR number parsed from the merge commit message (#N)
   #   commit - 'git rev-list HEAD --count' at the merge commit
   # So every green merge ships a uniquely-traceable patch to @latest.
