@@ -5,6 +5,18 @@
 name: Generate Berry lockfile
 
 on:
+  # Push-triggered on this migration branch only (the MCP integration token
+  # can't dispatch, and workflow_dispatch needs the file on the default branch).
+  # Idempotent: once yarn.lock is Berry format, the convert step is a no-op and
+  # nothing is committed, so it does not loop on its own commit.
+  push:
+    branches:
+      - claude/yarn-berry-migration-tjw7hc
+    paths:
+      - .yarnrc.yml
+      - package.json
+      - .yarn/releases/**
+      - .github/workflows/berry-lockfile.yml
   workflow_dispatch:
 
 permissions:
