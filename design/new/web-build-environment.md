@@ -104,6 +104,14 @@ the snapshot already has up-to-date `node_modules` (and still covers local dev +
 a cold cache). The EMSDK/WASM toolchain is already correctly on-demand
 (`.claude/hooks/wasm-setup.sh`), off the every-session path.
 
+**Set the setup-script field to `bash scripts/web-setup.sh || true`, not the bare
+command.** A non-zero setup script makes the *session fail to start* (per the web
+docs), so a transient cold-install failure on the flaky egress would lock you out
+with no way in to fix it. `|| true` lets the session start anyway; the
+SessionStart hook then re-runs the same script and — unlike the setup script — a
+non-zero hook does **not** block the session, so the failure surfaces in-session
+where it is recoverable.
+
 ### Snapshot invalidation (and why the install gate hashes the lockfile)
 
 The environment snapshot is rebuilt **only** when (a) the setup-script text
