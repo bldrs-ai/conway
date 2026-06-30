@@ -1,4 +1,8 @@
-Do not try and run yarn setup again. It has already been run in the environment setup. 
+Dependencies are bootstrapped by `scripts/web-setup.sh` (run from the cloud
+environment setup script and/or the SessionStart hook). If `node_modules` is
+already present, it has run — don't redo it. If `node_modules` is **absent**, the
+bootstrap failed; re-run `bash scripts/web-setup.sh` and, if it still fails,
+report it (see the install-failure rule below) — do not improvise an install.
 
 
 To build, run yarn build-codex-MT. To test, run yarn test. If only making changes to the typescript code in conway, you can run yarn build-incremental. If making changes to conway-geom, you need to run a full yarn build-codex-MT. 
@@ -6,7 +10,14 @@ To build, run yarn build-codex-MT. To test, run yarn test. If only making change
 Run chmod +x on scripts/build-codex.sh before trying to call yarn build-codex-MT.
 
 
-This repo uses yarn 1.22.22.
+This repo uses **yarn Berry (4.9.2)**, vendored at `.yarn/releases/` and pinned
+via `package.json#packageManager` + `.yarnrc.yml` (`nodeLinker: node-modules`).
+In the web sandbox, corepack can't self-bootstrap yarn (its download host is
+egress-blocked), so `scripts/web-setup.sh` installs a `yarn` PATH shim that execs
+the vendored binary — `yarn <cmd>` then works normally. If `yarn` ever errors
+trying to reach `repo.yarnpkg.com`, call it directly:
+`node .yarn/releases/yarn-4.9.2.cjs <cmd>`. CI activates Berry with
+`corepack enable` (the runner network is unrestricted).
 
 ## Install failures: stop, do not improvise
 
