@@ -1,5 +1,7 @@
-Dependencies are bootstrapped by `scripts/web-setup.sh` (run from the cloud
-environment setup script and/or the SessionStart hook). If `node_modules` is
+Dependencies are bootstrapped by `scripts/web-setup.sh`, exposed as `yarn setup`
+(run from the cloud environment setup script — a multi-repo dispatcher that runs
+`yarn setup` per checkout, see `design/new/web-build-environment.md` — and/or the
+SessionStart hook). If `node_modules` is
 already present, it has run — don't redo it. If `node_modules` is **absent**, the
 bootstrap failed; re-run `bash scripts/web-setup.sh` and, if it still fails,
 report it (see the install-failure rule below) — do not improvise an install.

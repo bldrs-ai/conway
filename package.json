@@ -45,7 +45,7 @@
     }
   },
   "scripts": {
-    "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies",
+    "setup": "bash scripts/web-setup.sh",
     "codex-setup-emsdk": "bash ./scripts/setup-emsdk.sh",
     "clean": "run-script-os",
     "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",

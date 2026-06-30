@@ -6,14 +6,24 @@
 # Used in two places (keep the logic here, not duplicated):
 #   - the Claude Code on the web *environment setup script* (cloud UI), which is
 #     snapshotted/cached so `node_modules` is present right off in every session.
-#     Set that field to:   bash scripts/web-setup.sh || true
-#     The `|| true` is load-bearing: a non-zero setup script makes the SESSION
-#     FAIL TO START, so a transient cold-install failure would lock you out
-#     entirely. With `|| true` the session still starts and the SessionStart hook
-#     re-runs this script — failing loudly but recoverably, in-session — if the
-#     install didn't complete.
+#     This repo exposes the script as `yarn setup` (package.json#scripts.setup).
+#     The session root may be this repo OR a parent dir holding several checkouts
+#     (conway, Share, ...) — in the latter case a bare `scripts/web-setup.sh` does
+#     not resolve and the SessionStart hook below never loads (Claude reads
+#     .claude/ from the parent root, not this subdir). So set the cloud field to a
+#     small multi-repo dispatcher that runs `yarn setup` in the CWD if it has that
+#     target, else in each known subrepo:
+#
+#       has_setup() { [ -f "$1/package.json" ] && node -e 'process.exit(((require(process.argv[1]+"/package.json").scripts)||{}).setup?0:1)' "$(cd "$1" && pwd)" 2>/dev/null; }
+#       if has_setup .; then yarn setup; else for d in conway Share; do [ -d "$d" ] && has_setup "$d" && ( cd "$d" && yarn setup ); done; fi; true
+#
+#     The trailing `true` is load-bearing: a non-zero setup script makes the
+#     SESSION FAIL TO START, so a transient cold-install failure would lock you
+#     out entirely. Exiting 0 lets the session start anyway; when the root IS this
+#     repo the SessionStart hook re-runs this script, surfacing a failure
+#     in-session where it is recoverable.
 #   - the repo SessionStart hook (.claude/hooks/session-start.sh), as a guard for
-#     local dev and for a cold cache.
+#     local dev and a cold cache (only when the session root IS this repo).
 #
 # Why Berry + a resume loop (see design/new/web-build-environment.md):
 # the Claude-Code-on-web egress resets — and sometimes silently hangs —

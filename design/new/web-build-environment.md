@@ -104,13 +104,42 @@ the snapshot already has up-to-date `node_modules` (and still covers local dev +
 a cold cache). The EMSDK/WASM toolchain is already correctly on-demand
 (`.claude/hooks/wasm-setup.sh`), off the every-session path.
 
-**Set the setup-script field to `bash scripts/web-setup.sh || true`, not the bare
-command.** A non-zero setup script makes the *session fail to start* (per the web
-docs), so a transient cold-install failure on the flaky egress would lock you out
-with no way in to fix it. `|| true` lets the session start anyway; the
-SessionStart hook then re-runs the same script and — unlike the setup script — a
-non-zero hook does **not** block the session, so the failure surfaces in-session
-where it is recoverable.
+**Set the setup-script field to the multi-repo dispatcher below, not a bare
+`bash scripts/web-setup.sh`.** Two reasons: (1) the session root may be a *parent
+dir holding several checkouts* (conway, Share, ...), where a repo-relative
+`scripts/web-setup.sh` does not resolve and silently no-ops under the field's
+`|| true`; (2) a non-zero setup script makes the *session fail to start* (per the
+web docs), so a transient cold-install failure on the flaky egress would lock you
+out with no way in to fix it. Each repo exposes its bootstrap as `yarn setup`
+(conway's runs this script); the dispatcher runs `yarn setup` in the CWD if it
+has that target, else in each known subrepo, and always exits 0:
+
+```bash
+has_setup() { [ -f "$1/package.json" ] && node -e 'process.exit(((require(process.argv[1]+"/package.json").scripts)||{}).setup?0:1)' "$(cd "$1" && pwd)" 2>/dev/null; }
+if has_setup .; then yarn setup; else for d in conway Share; do [ -d "$d" ] && has_setup "$d" && ( cd "$d" && yarn setup ); done; fi; true
+```
+
+The trailing `true` is the load-bearing equivalent of the old `|| true`. When the
+root IS conway the SessionStart hook then re-runs the same script and — unlike the
+setup script — a non-zero hook does **not** block the session, so a failure
+surfaces in-session where it is recoverable. Under a multi-repo parent root the
+hook does **not** load (Claude reads `.claude/` from the parent), so the
+dispatcher is the only bootstrap path — keep it correct.
+
+### Multi-repo session root (measured 2026-06)
+
+A web session can be rooted at a parent dir (`/home/user`) with conway, Share,
+conway-geom and test-models checked out side by side, **not** at the conway repo.
+That broke the original single-repo assumptions on two axes at once: the
+setup-script field `bash scripts/web-setup.sh || true` ran from the parent (no
+such path → silent no-op → empty `node_modules`), and the SessionStart hook in
+`conway/.claude/settings.json` never loaded (Claude reads `.claude/` from the
+parent root). The fix is the `yarn setup` convention + dispatcher above. Note the
+in-session egress is as hostile as ever — the Berry fetch still hangs at the
+sustained-install stage in a live session; what makes `yarn setup` complete is
+that the **setup-script phase runs in a healthier network context** and is
+snapshotted, so the dispatcher belongs in the cloud field, not relied on via the
+in-session hook.
 
 ### Snapshot invalidation (and why the install gate hashes the lockfile)
 
