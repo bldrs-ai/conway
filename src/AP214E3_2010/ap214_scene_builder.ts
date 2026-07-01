@@ -85,8 +85,14 @@ export class AP214SceneGeometry implements SceneNodeGeometry {
     public readonly index: number,
     public readonly relatedElementLocalId?: number,
     public readonly parentIndex?: number,
-    public readonly materialOverideLocalID?: number ) { }
-   
+    public readonly materialOverideLocalID?: number,
+    // Ordered occurrence path (NAUO express ids, root->this placement) this
+    // geometry instance sits under. `relatedElementLocalId` is the part *type*
+    // (product_definition_shape), shared by every occurrence of the part; this
+    // path is what distinguishes them and matches the product-structure node's
+    // `occurrencePath`, so a picked mesh can resolve to the right tree node.
+    public readonly occurrencePath: readonly number[] = [] ) { }
+
 }
 
 export type AP214SceneNode = AP214SceneTransform | AP214SceneGeometry
@@ -104,6 +110,12 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
 
   private sceneStack_: AP214SceneTransform[] = []
   private currentParent_?: AP214SceneTransform
+
+  // Occurrence path (NAUO express ids, root->current) of the assembly placement
+  // currently being walked. Maintained as a stack by the geometry extractor
+  // around each child recursion (see AP214GeometryExtraction.makeThunk) so
+  // addGeometry can stamp every geometry node with the occurrence it belongs to.
+  private occurrenceStack_: number[] = []
 
   private transformListeners_?: SceneListener[]
   private geometryListeners_?: SceneListener[]
@@ -270,8 +282,28 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   public clearParentStack(): void {
 
     this.sceneStack_.length = 0
+    this.occurrenceStack_.length = 0
 
     delete this.currentParent_
+  }
+
+  /**
+   * Enter an assembly occurrence: subsequent geometry is stamped as belonging
+   * to this NAUO. Balanced by {@link popOccurrence}.
+   *
+   * @param occurrenceExpressID The NAUO express id of the placement being entered.
+   */
+  public pushOccurrence( occurrenceExpressID: number ): void {
+
+    this.occurrenceStack_.push( occurrenceExpressID )
+  }
+
+  /**
+   * Leave the most recently entered assembly occurrence.
+   */
+  public popOccurrence(): void {
+
+    this.occurrenceStack_.pop()
   }
 
   /**
@@ -458,6 +490,34 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   }
 
   /**
+   * Walk every geometry node yielding its owning part-type element (the
+   * `product_definition_shape`, shared across occurrences) alongside the
+   * occurrence path (NAUO express ids) that uniquely places it. This is the
+   * seam that lets a picked mesh resolve to the right product-structure node:
+   * the owner id alone collides across reused parts; the occurrence path does not.
+   *
+   * @yields [owning element, occurrence path] per geometry node.
+   */
+  public* geometryOccurrences():
+    IterableIterator<[StepEntityBase<EntityTypesAP214> | undefined, readonly number[]]> {
+
+    for ( const node of this.scene_ ) {
+
+      if ( node instanceof AP214SceneGeometry ) {
+
+        if ( this.model.geometry?.getByLocalID( node.localID ) === void 0 ) {
+          continue
+        }
+
+        const owner = node.relatedElementLocalId !== void 0 ?
+          this.model.getElementByLocalID( node.relatedElementLocalId ) : void 0
+
+        yield [ owner, node.occurrencePath ]
+      }
+    }
+  }
+
+  /**
    *
    */
   public popTransform(): void {
@@ -525,7 +585,8 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
           nodeIndex,
           owningElementLocalID,
           parentIndex,
-          materialOverridLocalID )
+          materialOverridLocalID,
+          this.occurrenceStack_.slice() )
 
     this.scene_.push(result)
 

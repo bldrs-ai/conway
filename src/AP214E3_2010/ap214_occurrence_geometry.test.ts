@@ -1,6 +1,7 @@
 import fs from 'fs'
 import { describe, expect, test, beforeAll } from '@jest/globals'
 import { AP214GeometryExtraction } from './ap214_geometry_extraction'
+import { AP214SceneBuilder } from './ap214_scene_builder'
 import { ParseResult } from '../step/parsing/step_parser'
 import AP214StepParser from './ap214_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
@@ -21,8 +22,8 @@ import { IfcApiProxyAP214 } from '../compat/web-ifc/ifc_api_proxy_ap214'
  */
 const FIXTURE = 'data/as1-oc-214.stp'
 
-let extraction: AP214GeometryExtraction
 let model: ReturnType<AP214StepParser['parseDataToModel']>[1]
+let scene: AP214SceneBuilder
 
 beforeAll( async () => {
 
@@ -40,55 +41,101 @@ beforeAll( async () => {
 
   expect( await conwayGeometry.initialize() ).toBe( true )
 
-  extraction = new AP214GeometryExtraction( conwayGeometry, model! )
+  const [ result, sceneBuilder ] =
+    new AP214GeometryExtraction( conwayGeometry, model! ).extractAP214GeometryData()
+
+  expect( result ).toBe( ExtractResult.COMPLETE )
+  scene = sceneBuilder
 } )
 
 
-describe( 'AP214 as1-oc-214 geometry fixture', () => {
+/** @return {any} The spatial-structure root of the fixture. */
+async function spatialRoot(): Promise<any> {
+  const props = new AP214Properties( { StepModel: model! } as unknown as IfcApiProxyAP214 )
+  return await props.getSpatialStructure() as any
+}
 
-  test( 'extracts geometry for the assembly', () => {
-
-    const [ result, scene ] = extraction.extractAP214GeometryData()
-
-    expect( result ).toBe( ExtractResult.COMPLETE )
-
-    let geometryNodes = 0
-    for ( const [ , , , , entity ] of scene.walk() ) {
-      if ( entity !== void 0 ) {
-        geometryNodes++
-      }
+/**
+ * Collect the occurrence path of every leaf (geometry-bearing) product node.
+ *
+ * @param root Spatial-structure root.
+ * @return {number[][]} One occurrence path per leaf node.
+ */
+function leafOccurrencePaths( root: any ): number[][] {
+  const paths: number[][] = []
+  const walk = ( node: any ) => {
+    const children = node.children ?? []
+    if ( children.length === 0 ) {
+      paths.push( node.occurrencePath )
     }
+    for ( const child of children ) {
+      walk( child )
+    }
+  }
+  walk( root )
+  return paths
+}
 
-    // Real geometry (10 BREP solids placed across the occurrence tree) — a
-    // non-trivial mesh count guards the fixture against silently regressing to
-    // a structure-only stub.
-    expect( geometryNodes ).toBeGreaterThan( 0 )
+
+describe( 'AP214 as1-oc-214 occurrence geometry', () => {
+
+  test( 'extracts real geometry for the assembly', () => {
+
+    const owners = [ ...scene.geometryOccurrences() ].filter( ( [ owner ] ) => owner !== void 0 )
+
+    // 10 BREP solids placed across the occurrence tree — a non-trivial mesh
+    // count guards against the fixture silently regressing to a stub.
+    expect( owners.length ).toBeGreaterThan( 0 )
   } )
 
   test( 'the same leaf part is reused across occurrences (the selection case)', async () => {
 
-    const props = new AP214Properties( { StepModel: model! } as unknown as IfcApiProxyAP214 )
-    const root = await props.getSpatialStructure() as any
-
+    const root = await spatialRoot()
     const nuts: any[] = []
     const walk = ( node: any ) => {
       if ( node.Name?.value === 'nut' ) {
         nuts.push( node )
       }
-      for ( const c of node.children ?? [] ) {
-        walk( c )
+      for ( const child of node.children ?? [] ) {
+        walk( child )
       }
     }
     walk( root )
 
-    // Multiple nut occurrences, some sharing a scalar expressID but each with a
-    // distinct occurrence path — the invariant occurrence-keyed selection needs.
     expect( nuts.length ).toBeGreaterThan( 1 )
 
-    const collidingId = nuts.filter( ( n ) => n.expressID === nuts[0].expressID )
-    if ( collidingId.length > 1 ) {
-      const paths = collidingId.map( ( n ) => JSON.stringify( n.occurrencePath ) )
-      expect( new Set( paths ).size ).toBe( collidingId.length )
+    // The nut inside nut-bolt-assembly is reused across every l-bracket-assembly
+    // occurrence, so several nut nodes share one scalar expressID. Group by it
+    // and take the largest colliding set.
+    const byExpressID = new Map<number, any[]>()
+    for ( const nut of nuts ) {
+      const group = byExpressID.get( nut.expressID ) ?? []
+      group.push( nut )
+      byExpressID.set( nut.expressID, group )
     }
+    const colliding =
+      [ ...byExpressID.values() ].sort( ( a, b ) => b.length - a.length )[0]
+
+    // Same scalar id, but each occurrence has a distinct path — exactly what a
+    // scalar id cannot represent and the occurrence path can.
+    expect( colliding.length ).toBeGreaterThan( 1 )
+    const paths = colliding.map( ( n ) => JSON.stringify( n.occurrencePath ) )
+    expect( new Set( paths ).size ).toBe( colliding.length )
+  } )
+
+  test( 'every geometry instance carries the occurrence path of its tree leaf', async () => {
+
+    const geometryPaths =
+      [ ...scene.geometryOccurrences() ].map( ( [ , path ] ) => JSON.stringify( path ) )
+
+    const treePaths = leafOccurrencePaths( await spatialRoot() ).map( ( p ) => JSON.stringify( p ) )
+
+    // Each leaf occurrence has geometry, and each geometry instance is stamped
+    // with a leaf's occurrence path: the two multisets match. This is the
+    // mesh<->node reconciliation occurrence-keyed selection needs.
+    expect( geometryPaths.slice().sort() ).toEqual( treePaths.slice().sort() )
+
+    // ...and every path is distinct, so no two instances are confusable.
+    expect( new Set( geometryPaths ).size ).toBe( geometryPaths.length )
   } )
 } )
