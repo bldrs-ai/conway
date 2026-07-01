@@ -45,7 +45,7 @@
     }
   },
   "scripts": {
-    "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies",
+    "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies && yarn build-incremental && yarn wasm-prebuilt",
     "codex-setup-emsdk": "bash ./scripts/setup-emsdk.sh",
     "clean": "run-script-os",
     "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",
@@ -79,6 +79,7 @@
     "browser": "node ./compiled/examples/browser-bundled.cjs",
     "validator": "node ./compiled/examples/validator-bundled.cjs",
     "extract-wasm-dependencies": "node ./scripts/extract-wasm-dependencies.cjs",
+    "wasm-prebuilt": "node ./scripts/fetch-prebuilt-wasm.cjs",
     "build-all-profile-node": "yarn build-profile-conway_geom-node && yarn build-incremental",
     "build-all-profile-web": "yarn build-profile-conway_geom-web && yarn build-incremental",
     "build-all-release-node": "yarn build-conway_geom-node && yarn build-incremental",
