@@ -4009,10 +4009,22 @@ export class AP214GeometryExtraction {
             // root->leaf occurrence path the tree node does; other placement
             // kinds fall back to the owning element's own id.
             const owningElement = this.model.getElementByLocalID( childOwningLocalID )
-            const occurrenceExpressID =
-              ( owningElement instanceof property_definition ?
-                owningElement.definition?.expressID : void 0 ) ??
-              this.model.getExpressIDByLocalID( childOwningLocalID )
+            // `.definition` is a getter that THROWS on a malformed/mistyped
+            // reference, and this runs outside the per-child try/catch below —
+            // at the top level it would escape extraction entirely. Before
+            // occurrence stamping a bad placement merely produced no geometry,
+            // so guard it and degrade to the owning element's own express id
+            // rather than failing the whole model load.
+            let occurrenceExpressID: number | undefined
+            try {
+              occurrenceExpressID =
+                owningElement instanceof property_definition ?
+                  owningElement.definition?.expressID : void 0
+            } catch {
+              // Malformed PDS.definition — fall through to the express-id fallback.
+              occurrenceExpressID = void 0
+            }
+            occurrenceExpressID ??= this.model.getExpressIDByLocalID( childOwningLocalID )
             this.scene.pushOccurrence( occurrenceExpressID ?? childOwningLocalID )
 
             try {
