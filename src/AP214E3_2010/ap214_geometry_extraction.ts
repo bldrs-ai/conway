@@ -113,6 +113,7 @@ import {
   polyline,
   presentation_layer_assignment,
   product,
+  property_definition,
   ratio_measure,
   rational_b_spline_curve,
   rational_b_spline_surface,
@@ -4000,6 +4001,32 @@ export class AP214GeometryExtraction {
             const enterChildStackDepth = this.scene.stackLength
             const enterChildParent = this.scene.currentParent
 
+            // A context_dependent_shape_representation places a part via a
+            // product_definition_shape whose `definition` is the NAUO the
+            // product-structure tree keys occurrences on
+            // (represented_product_relation -> PDS -> NAUO). Record that NAUO's
+            // express id so geometry added under this child carries the same
+            // root->leaf occurrence path the tree node does; other placement
+            // kinds fall back to the owning element's own id.
+            const owningElement = this.model.getElementByLocalID( childOwningLocalID )
+            // `.definition` is a getter that THROWS on a malformed/mistyped
+            // reference, and this runs outside the per-child try/catch below —
+            // at the top level it would escape extraction entirely. Before
+            // occurrence stamping a bad placement merely produced no geometry,
+            // so guard it and degrade to the owning element's own express id
+            // rather than failing the whole model load.
+            let occurrenceExpressID: number | undefined
+            try {
+              occurrenceExpressID =
+                owningElement instanceof property_definition ?
+                  owningElement.definition?.expressID : void 0
+            } catch {
+              // Malformed PDS.definition — fall through to the express-id fallback.
+              occurrenceExpressID = void 0
+            }
+            occurrenceExpressID ??= this.model.getExpressIDByLocalID( childOwningLocalID )
+            this.scene.pushOccurrence( occurrenceExpressID ?? childOwningLocalID )
+
             try {
               mappedChild.thunk!( childOwningLocalID, childTransform )
             } catch ( ex ) {
@@ -4009,7 +4036,9 @@ export class AP214GeometryExtraction {
                 Logger.error( `Unknown exception processing child shape_representation (${ex}) expressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
               }
             }
-                
+
+            this.scene.popOccurrence()
+
             while ( this.scene.stackLength > enterChildStackDepth ) {
               this.scene.popTransform()
             }

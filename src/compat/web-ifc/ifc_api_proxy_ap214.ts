@@ -662,7 +662,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     let coordinationMatrix = this.model[5]
 
     // eslint-disable-next-line no-unused-vars
-    for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
+    for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
+      of scene.walkWithOccurrence()) {
 
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {
         let material_: CanonicalMaterial | undefined
@@ -797,6 +798,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
                 color: color,
                 geometryExpressID: expressID,
                 flatTransformation: newTransformArr,
+                occurrencePath,
               }
 
               mesh[0].push(singlePlacedGeometry)
@@ -819,6 +821,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
                 color: color,
                 geometryExpressID: expressID,
                 flatTransformation: newTransformArr,
+                occurrencePath,
               }
 
               // eslint-disable-next-line no-array-constructor
@@ -890,7 +893,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     let coordinationMatrix = this.model[5]
 
     // eslint-disable-next-line no-unused-vars
-    for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
+    for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
+      of scene.walkWithOccurrence()) {
 
       if (geometry.type === CanonicalMeshType.BUFFER_GEOMETRY && !geometry.temporary) {
         let material_: CanonicalMaterial | undefined
@@ -1025,6 +1029,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
                 color: color,
                 geometryExpressID: expressID,
                 flatTransformation: newTransformArr,
+                occurrencePath,
               }
 
               mesh[0].push(singlePlacedGeometry)
@@ -1047,6 +1052,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
                 color: color,
                 geometryExpressID: expressID,
                 flatTransformation: newTransformArr,
+                occurrencePath,
               }
 
               // eslint-disable-next-line no-array-constructor
