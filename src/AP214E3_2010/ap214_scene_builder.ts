@@ -490,6 +490,52 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   }
 
   /**
+   * Same as {@link walk}, but also yields each geometry instance's occurrence
+   * path (NAUO express ids) as a 6th element. Kept separate from `walk` (which
+   * satisfies the shared `WalkableScene` contract) so the AP214 shim can attach
+   * per-instance occurrence identity to each emitted PlacedGeometry without
+   * changing the interface every scene builder implements.
+   *
+   * @param includeSpaces Unused; kept for signature parity with `walk`.
+   * @yields walk tuple plus the occurrence path of the geometry instance.
+   */
+  public* walkWithOccurrence(includeSpaces: boolean = false):
+    IterableIterator<[readonly number[] | undefined,
+      NativeTransform4x4 | undefined,
+      CanonicalMesh,
+      CanonicalMaterial | undefined,
+      StepEntityBase<EntityTypesAP214> | undefined,
+      readonly number[]]> {
+
+    for ( const node of this.scene_ ) {
+
+      if ( node instanceof AP214SceneGeometry ) {
+
+        const geometry = node.model.geometry?.getByLocalID( node.localID )
+
+        if ( geometry === void 0 ) {
+          continue
+        }
+
+        const parentNode = node.parentIndex !== void 0 ?
+          this.scene_[node.parentIndex] as AP214SceneTransform : void 0
+
+        const material = this.materials.getMaterialByGeometryID( geometry.localID )
+
+        yield [
+          parentNode?.absoluteTransform,
+          parentNode?.absoluteNativeTransform,
+          geometry,
+          material !== void 0 ? material[0] : void 0,
+          node.relatedElementLocalId !== void 0 ?
+            this.model.getElementByLocalID( node.relatedElementLocalId ) : void 0,
+          node.occurrencePath,
+        ]
+      }
+    }
+  }
+
+  /**
    * Walk every geometry node yielding its owning part-type element (the
    * `product_definition_shape`, shared across occurrences) alongside the
    * occurrence path (NAUO express ids) that uniquely places it. This is the

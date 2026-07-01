@@ -79,6 +79,42 @@ describe('web-ifc compat IfcAPI', () => {
     expect(placedGeometryCount).toBeGreaterThan(0)
   }, 120000)
 
+  test('STEP: each PlacedGeometry carries its occurrence path, matching the tree', async () => {
+    // The Share-facing contract for per-occurrence selection: a reused part
+    // (the nut, placed under every l-bracket-assembly) streams one
+    // PlacedGeometry per occurrence, each tagged with the unique occurrence
+    // path — even though they share a geometryExpressID (the part type).
+    const buffer = new Uint8Array(fs.readFileSync('data/as1-oc-214.stp'))
+
+    const modelID = api.OpenModel(buffer, SETTINGS)
+    expect(modelID).toBeGreaterThanOrEqual(0)
+
+    const meshPaths: string[] = []
+    api.StreamAllMeshes(modelID, (mesh) => {
+      for (let i = 0; i < mesh.geometries.size(); i++) {
+        const placed: any = mesh.geometries.get(i)
+        meshPaths.push(JSON.stringify(placed.occurrencePath ?? []))
+      }
+    })
+
+    // Every instance has a non-empty, unique occurrence path -> a pick resolves
+    // to one occurrence, not the shared part type.
+    expect(meshPaths.length).toBeGreaterThan(0)
+    expect(meshPaths.every((p) => p !== '[]')).toBe(true)
+    expect(new Set(meshPaths).size).toBe(meshPaths.length)
+
+    // ...and the streamed paths are exactly the product-structure leaf paths.
+    const tree: any = await api.properties.getSpatialStructure(modelID)
+    const leafPaths: string[] = []
+    const walk = (node: any) => {
+      const children = node.children ?? []
+      if (children.length === 0) leafPaths.push(JSON.stringify(node.occurrencePath))
+      for (const child of children) walk(child)
+    }
+    walk(tree)
+    expect(meshPaths.slice().sort()).toEqual(leafPaths.slice().sort())
+  }, 120000)
+
   test('routes an AP203 (CONFIG_CONTROL_DESIGN) model through the AP214 loader', () => {
     // Validates the AP203→AP214 fall-through added to the passthrough
     // factory (the standalone adapter had no AP203 case and errored).

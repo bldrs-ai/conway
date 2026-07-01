@@ -49,6 +49,13 @@ export interface PlacedGeometry {
   color: Color
   geometryExpressID: number
   flatTransformation: Array<number>
+  // Shim extension (STEP/AP214): the occurrence path (NAUO express ids,
+  // root->leaf) uniquely placing this instance. web-ifc keys picking on a
+  // scalar expressID, but STEP reuses one part across occurrences, so the
+  // `geometryExpressID` alone collides; this per-instance path lets Share
+  // resolve a pick to the exact product-structure node. Undefined for IFC
+  // (never set); empty for an AP214 root-level / single-occurrence placement.
+  occurrencePath?: ReadonlyArray<number>
 }
 
 export interface FlatMesh {
