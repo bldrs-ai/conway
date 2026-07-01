@@ -65,6 +65,18 @@ Build just conway, not conway-geom, e.g. for updating just the Conway API or too
 yarn build-incremental
 ```
 
+#### Running tests without building conway-geom (no EMSDK)
+
+The jest suite loads the conway-geom WASM binaries, which are normally produced
+by the EMSDK/GENie native build. If you only touch the TypeScript, you can skip
+that toolchain entirely: `yarn setup` builds the TypeScript (`build-incremental`)
+and then runs `yarn wasm-prebuilt`, which fetches the WASM `Dist/` bundle from
+the last-published `@bldrs-ai/conway` npm package — so a fresh `yarn setup && yarn
+test` works with no EMSDK. Pin a build with `CONWAY_PREBUILT_WASM_VERSION`, or
+refresh with `yarn wasm-prebuilt --force`.
+This is a convenience for TS-only work — if you change the `conway-geom`
+submodule you must do a real `yarn build` to get matching binaries.
+
 For a full, clean rebuild:
 ```
 yarn build-rebuild
