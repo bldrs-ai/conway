@@ -1,6 +1,10 @@
 # STEP semantic metadata → Share NavTree (NIST PMI corpus)
 
-**Status:** proposal / plan
+**Status:** Simplified tier (1.0) **landed** — product-structure + property
+extraction (conway PR #345), geometry occurrence-path stamping + shim exposure
+(conway PR #353), consumed end-to-end in Share for occurrence-keyed NavTree↔scene
+selection and per-occurrence hide (Share PRs #1573 + #1575). Full tier (1.x
+semantic PMI) still planned. See §"Phased plan" for the per-phase state.
 **Branch:** `claude/nist-step-metadata-plan-ew2ere`
 **Companions:**
 [`step-support.md`](step-support.md) (geometry parity + AP203/AP242 rollout),
@@ -175,25 +179,32 @@ traversed/extracted · ❌ not parsed (schema/detector gap).
 
 ### Simplified tier (1.0 target)
 
-| Entity | AP214 | AP242 | Status today | Needed for |
-|---|---|---|---|---|
-| `product` (name/desc) | gen ✅ | ❌* | 🟡 | tree labels |
-| `product_definition` | gen ✅ | ❌* | 🟡 | tree nodes |
-| `product_definition_formation` | gen ✅ | ❌* | 🟡 | versioning row |
-| `next_assembly_usage_occurrence` (125) | gen ✅ | ❌* | 🟡 | tree edges |
-| `assembly_component_usage` / `reference_designator` | gen ✅ | ❌* | 🟡 | occurrence names |
-| `product_definition_shape` | gen ✅ | ❌* | 🟡 (geom only) | node→geometry link |
-| `shape_definition_representation` | gen ✅ | ❌* | ✅ geom / 🟡 tree | node→geometry link |
-| `context_dependent_shape_representation` + `item_defined_transformation` | gen ✅ | ❌* | ✅ (geom xform) | occurrence placement |
-| `general_property` (+`_association`) | gen ✅ | ❌* | 🟡 | properties |
-| `property_definition` (+`_representation`) | gen ✅ | ❌* | 🟡 | properties |
-| `descriptive_representation_item` | gen ✅ | ❌* | 🟡 | property values |
-| `measure_representation_item` (validation) | gen ✅ | ❌* | 🟡 | volume/area rows |
+Status column is **as of PR #345 (landed)** — the extractors now traverse
+these chains, so the entities the Simplified tier needs are ✅ (was 🟡 in the
+proposal). AP214 and AP242 share a ✅ because AP242 detection→AP214-parser
+routing also landed (Phase 0), so the same extractors reach the AP242 MIM files.
 
-\* **AP242 detection/parse is itself a gap** — see §"The AP242 wrinkle".
-The entity *names* in the AP242 MIM overlap AP214 heavily, so most of the
-above parse through the AP214 vtable once detection routes AP242 there;
-the table's AP242 ❌ is "not yet *reached*," not "fundamentally absent."
+| Entity | AP214 | AP242 | Status | Needed for |
+|---|---|---|---|---|
+| `product` (name/desc) | ✅ | ✅* | ✅ | tree labels |
+| `product_definition` | ✅ | ✅* | ✅ | tree nodes |
+| `product_definition_formation` | ✅ | ✅* | ✅ | versioning row |
+| `next_assembly_usage_occurrence` (125) | ✅ | ✅* | ✅ | tree edges |
+| `assembly_component_usage` / `reference_designator` | ✅ | ✅* | ✅ | occurrence names |
+| `product_definition_shape` | ✅ | ✅* | ✅ | node→geometry link |
+| `shape_definition_representation` | ✅ | ✅* | ✅ | node→geometry link |
+| `context_dependent_shape_representation` + `item_defined_transformation` | ✅ | ✅* | ✅ | occurrence placement |
+| `general_property` (+`_association`) | ✅ | ✅* | ✅ | properties |
+| `property_definition` (+`_representation`) | ✅ | ✅* | ✅ | properties |
+| `descriptive_representation_item` | ✅ | ✅* | ✅ | property values |
+| `measure_representation_item` (validation) | ✅ | ✅* | ✅ | volume/area rows |
+
+\* **AP242 reached via AP214-parser routing** (interim), not a native AP242 gen
+tree — see §"The AP242 wrinkle". The entity *names* in the AP242 MIM overlap
+AP214 heavily, so these parse through the AP214 vtable once detection routes
+AP242 there; Phase 0 confirmed structure + properties survive that routing on
+the real NIST AP242 files. A native AP242 gen tree (step-support.md Phase 5) is
+only needed for the AP242-only semantic-PMI entities in the Full tier below.
 
 ### Full tier (1.x target)
 
@@ -425,15 +436,14 @@ Two tiers, matching `step-regression.md`.
 
 Small, checked-in, no `test-models` round-trip:
 
-- [ ] `data/as1-assembly.step` — a referential reduction of
-      `as1-oc-214.stp` (or the file itself if size allows). Drives the
-      assembly-tree unit test: assert the walker yields the
-      nut/bolt/rod/plate/l-bracket hierarchy with correct nesting and
-      names, and that instance occurrences are distinct nodes.
-- [ ] `data/nist-ctc-properties.step` — a reduction of a CTC AP242 file
-      keeping the `general_property` chain. Drives the property-extraction
-      unit test: `Modeled By=Engineer`, `CAGE Code=64JW1`, `Company=ACME`,
-      and a `volume` validation property.
+- [x] `data/as1-assembly.step` — checked in. Drives the assembly-tree unit
+      test: the walker yields the nut/bolt/rod/plate/l-bracket hierarchy
+      with correct nesting and names, and instance occurrences are distinct
+      nodes. `data/as1-oc-214.stp` (the geometry-rich full file) is also
+      checked in for the occurrence-path geometry tests (PR #353).
+- [x] `data/nist-ctc-properties.step` — checked in. Drives the
+      property-extraction unit test: `Modeled By=Engineer`,
+      `CAGE Code=64JW1`, `Company=ACME`, and a `volume` validation property.
 - [ ] (Full tier) `data/nist-ftc-pmi.step` — minimal datum + tolerance
       chain for the PMI extractor.
 
@@ -494,23 +504,26 @@ Ordered so the first user-visible win (a real, named, navigable tree for
       "compare against what we support" deliverable.
 
 ### Phase 1 — Simplified tier: assembly tree + names (1.0 core)
-*(Implemented in PR #345 — in review.)*
+*(Landed — PR #345.)*
 - [x] `AP214ProductStructureExtraction`: product/PD/NAUO walk → nested
       tree; roots = PDs never a `related_PD`; labels from `product.name`
       / `reference_designator`. Occurrence-path keyed per the decided
       identity scheme.
-- [ ] Reconcile occurrence `expressID` with geometry
+- [x] Reconcile occurrence `expressID` with geometry
       `relatedElementLocalId` / `TriangleElementMap` for pick↔tree
-      round-trip. *(Tree carries `shapeRepresentationIds` + the occurrence
-      path; the bidirectional reconciliation into the scene instance map
-      is verified Share-side in Phase 3.)*
+      round-trip. **Landed via PR #353**: each geometry instance is stamped
+      with its occurrence path in the AP214 assembly walk, and the web-ifc
+      shim exposes it as `PlacedGeometry.occurrencePath` — the join key both
+      the tree leaf and the geometry instance carry. Share consumes it for
+      bidirectional occurrence-keyed selection (Share PRs #1573 + #1575; see
+      Share `design/new/step-occurrence-selection.md`).
 - [x] Rewrite `ap214_properties.ts::getSpatialStructure` to return the
       real nested, named tree (drop the flat `shape_definition` stub).
 - [x] Hermetic `as1` tree test
       (`ap214_product_structure_extraction.test`).
 
 ### Phase 2 — Simplified tier: properties
-*(Implemented in PR #345 — in review.)*
+*(Landed — PR #345.)*
 - [x] `AP214PropertyExtraction`: `general_property` /
       `property_definition_representation` /
       `descriptive_representation_item` → key/values; validation
@@ -521,19 +534,28 @@ Ordered so the first user-visible win (a real, named, navigable tree for
 - [x] Hermetic CTC property test (`ap214_property_extraction.test`).
 
 ### Phase 3 — Wire through to Share + verify
-- [ ] Confirm the metadata reaches Share through the web-ifc compat
+*(Selection/tree path landed via Share PRs #1573 + #1575; permalink +
+Properties-panel/comment verification still open.)*
+- [x] Confirm the metadata reaches Share through the web-ifc compat
       surface. The compat-surface-in-Conway migration has **landed** (the
       adapter is retired; Share consumes `@bldrs-ai/conway/web-ifc`
-      directly — see "Cross-repo seam"), so this now needs only a Conway
-      release carrying PR #345's `ap214_properties.ts` + a Share dep bump,
-      not an adapter republish.
-- [ ] Verify in Share against the live NIST files in `test-models`:
-      NavTree shows named hierarchy, click ⇄ pick, permalink to a part,
-      comment on a part, Properties panel populated.
-- [ ] GLB-cache parity: `bldrsSpatialTree.js` /
-      `bldrsElementProperties.js` already serialize the generic node +
-      property shapes — confirm the STEP tree/properties survive a cache
-      round-trip.
+      directly — see "Cross-repo seam"); Share bumped to the Conway release
+      carrying PR #345's `ap214_properties.ts` + PR #353's occurrence path,
+      and the named STEP tree renders in the NavTree.
+- [~] Verify in Share against the live NIST files in `test-models`:
+      NavTree shows named hierarchy **✅**, click ⇄ pick **✅**
+      (occurrence-keyed, both directions — Share PRs #1573 + #1575),
+      per-occurrence hide **✅**. Permalink to a part, comment on a part,
+      and Properties-panel population are **not yet verified for STEP**
+      (permalink is a tracked follow-up in Share
+      `design/new/step-occurrence-selection.md` §Remaining).
+- [x] GLB-cache parity: the occurrence tables survive the cache round-trip
+      — the writer persists `instanceId → occurrencePath` on the
+      `BLDRS_face_ids` extension and `bldrsSpatialTree.js` preserves
+      `occurrencePath` on each node; schema bumped `0.8.0 → 0.9.0` to
+      invalidate occurrence-less caches (Share PR #1575). Property-row cache
+      parity for STEP is untested pending the Properties-panel verification
+      above.
 
 ### Phase 4 — Metadata regression gate
 - [ ] Metadata digest in the STEP regression runner (extends
