@@ -154,22 +154,16 @@ async function main() {
   // Determine engine version
   let engineVersion = "";
   if (isEngineConway) {
+    // Read the INSTALLED package's version. `yarn list` reports the lockfile
+    // dependency string, which is wrong when CI overrides conway via yarn
+    // resolutions (it kept reporting the pinned version, so benchmark output
+    // dirs collided with committed snapshot dirs in the model repos).
     try {
-      const yarnListOutput = execSync(
-        `yarn list --pattern @bldrs-ai/conway --json`,
-        { cwd: serverDir, stdio: ['pipe','pipe','pipe'] }
-      ).toString();
-      const matchedLines = yarnListOutput
-        .split(/\r?\n/)
-        .filter((line) => line.includes('@bldrs-ai/conway@'));
-      if (matchedLines.length > 0) {
-        const jsonLine = JSON.parse(matchedLines[0]);
-        const name = jsonLine.data.trees[0].name; // e.g., "@bldrs-ai/conway@0.1.560"
-        const parts = name.split('@');
-        engineVersion = parts[2] || '';
-      }
+      const installedPkg = path.join(
+        serverDir, 'node_modules', '@bldrs-ai', 'conway', 'package.json');
+      engineVersion = JSON.parse(fs.readFileSync(installedPkg, 'utf8')).version || 'unknown';
     } catch (e) {
-      console.error('Failed to get @bldrs-ai/conway version from yarn list. Using fallback "unknown".', e);
+      console.error('Failed to read installed @bldrs-ai/conway version. Using fallback "unknown".', e);
       engineVersion = 'unknown';
     }
   } else {
@@ -211,8 +205,13 @@ async function main() {
   // Test run name for the benchmarks folder.
   const testRunName = `${engineStr}_${modelDirName}`;
 
-  // Construct output directory for logs/CSVs.
-  const outputBase = path.join(modelDir, 'benchmarks');
+  // Construct output directory for logs/CSVs. BENCHMARK_OUTPUT_DIR routes
+  // outputs OUT of the model directory: the model repos contain committed
+  // benchmark snapshots under <modelDir>/benchmarks, and writing (or
+  // reporting) there let CI pick up stale committed CSVs instead of this
+  // run's results.
+  const outputBase = process.env.BENCHMARK_OUTPUT_DIR ||
+    path.join(modelDir, 'benchmarks');
   const outputDir = path.join(outputBase, testRunName);
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -237,6 +236,8 @@ async function main() {
   });
 
   let allStatus = 'OK';
+  let okCount = 0;
+  let failCount = 0;
   const startTime = Date.now();
 
   // Array to hold entries for the HTML report.
@@ -247,24 +248,39 @@ async function main() {
     fs.appendFileSync(filename, line + "\n", 'utf8');
   }
 
-  // Function to recursively get all IFC files.
-  function getIfcFiles(directory) {
+  // Model types to benchmark. Defaults to IFC only; set BENCHMARK_EXTS
+  // (e.g. "ifc,stp,step") to include STEP models under <modelDir>/step once
+  // the render server supports them.
+  const modelExts = (process.env.BENCHMARK_EXTS || 'ifc')
+    .split(',')
+    .map((e) => e.trim().toLowerCase().replace(/^\./, ''))
+    .filter(Boolean);
+
+  // Function to recursively get all model files with the requested extensions.
+  function getModelFiles(directory) {
     let results = [];
     if (!fs.existsSync(directory)) return results;
     const list = fs.readdirSync(directory, { withFileTypes: true });
     list.forEach((dirent) => {
       const fullPath = path.join(directory, dirent.name);
       if (dirent.isDirectory()) {
-        results = results.concat(getIfcFiles(fullPath));
-      } else if (dirent.isFile() && dirent.name.endsWith('.ifc')) {
-        results.push(fullPath);
+        results = results.concat(getModelFiles(fullPath));
+      } else if (dirent.isFile()) {
+        const ext = path.extname(dirent.name).toLowerCase().replace(/^\./, '');
+        if (modelExts.includes(ext)) {
+          results.push(fullPath);
+        }
       }
     });
     return results;
   }
 
-  const ifcRoot = path.join(modelDir, 'ifc');
-  const allIfcFiles = getIfcFiles(ifcRoot);
+  // IFC models live under <modelDir>/ifc, STEP models under <modelDir>/step.
+  const modelRoots = [path.join(modelDir, 'ifc')];
+  if (modelExts.includes('stp') || modelExts.includes('step')) {
+    modelRoots.push(path.join(modelDir, 'step'));
+  }
+  const allIfcFiles = modelRoots.flatMap((root) => getModelFiles(root));
 
   for (const filePath of allIfcFiles) {
     const baseFilename = path.basename(filePath);
@@ -288,8 +304,10 @@ async function main() {
     const encodedFileName = encodeFileName(baseFilename);
     const url = `file://${filePath}`; // local file path
 
-    // --- Save the output PNG in the same directory as the IFC file ---
-    const outputPng = path.join(path.dirname(filePath), `${baseFilename}-fit.png`);
+    // --- Save the output PNG in the benchmark output directory ---
+    // (writing next to the model files pollutes the cached/committed model
+    // repo checkout in CI).
+    const outputPng = path.join(outputDir, `${baseFilename}-fit.png`);
 
     let curlSuccess = true;
     const renderEndpoint = 'http://localhost:8001/renderPanoramic';
@@ -404,6 +422,16 @@ async function main() {
       ].join(',');
       appendLineToFile(newResults, line);
 
+      if (loadStatus === 'OK') {
+        okCount++;
+      } else {
+        failCount++;
+      }
+      console.log(
+        `[${okCount + failCount}/${allIfcFiles.length}] ${loadStatus} ` +
+        `${baseFilename} parse=${parseTimeMs}ms geometry=${geometryTimeMs}ms ` +
+        `total=${totalTimeMs}ms`);
+
       // --- RECORD THE HTML ENTRY ---
       if (fs.existsSync(outputPng)) {
         // Compute a relative path from outputDir to the image.
@@ -422,6 +450,11 @@ async function main() {
       allStatus = 'fail';
       const failLine = `${timestamp},FAIL,${unameVal},N/A,${baseFilename},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A`;
       appendLineToFile(newResults, failLine);
+
+      failCount++;
+      console.log(
+        `[${okCount + failCount}/${allIfcFiles.length}] FAIL ${baseFilename} ` +
+        `(render request failed - see ${tempServerOutputFile})`);
     }
 
     // Kill the server.
@@ -438,6 +471,19 @@ async function main() {
   const endTime = Date.now();
   const deltaTimeSec = ((endTime - startTime) / 1000).toFixed(2);
   appendLineToFile(basicStatsFilename, `${allStatus}, ${deltaTimeSec}s, ALL_FILES`);
+
+  console.log(
+    `Benchmark complete: ${okCount} OK, ${failCount} FAIL of ` +
+    `${allIfcFiles.length} models in ${deltaTimeSec}s. Results: ${newResults}`);
+
+  // A run where nothing rendered is a broken harness (server failed to
+  // start, missing display, bad wasm path, ...), not a measurement. Fail
+  // loudly instead of letting CI report garbage.
+  if (okCount === 0 && allIfcFiles.length > 0) {
+    console.error(
+      'Benchmark produced no successful measurements; failing the run.');
+    process.exitCode = 1;
+  }
 
   // Delta CSV generation (if applicable).
   let oldVersion = '';
