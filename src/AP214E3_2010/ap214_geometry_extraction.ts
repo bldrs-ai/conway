@@ -246,6 +246,13 @@ export class AP214GeometryExtraction {
 
   private csgDepth: number = 0
 
+  /**
+   * When the wasm module supports it, face tessellation is staged and then
+   * finalized in parallel on the native thread pool instead of being run
+   * synchronously per face. See finalizeStagedFaces.
+   */
+  private readonly useStagedFaces: boolean
+
   public readonly curves: AP214ModelCurves
 
   public readonly csgOperations: CsgMemoization
@@ -282,6 +289,39 @@ export class AP214GeometryExtraction {
     this.initializeMemoryPools()
     this.curves = model.curves
     this.csgOperations = model.csgOperations
+
+    // Deferred (parallel) face tessellation produces byte-identical output,
+    // but only pays off when the wasm module's allocator scales across
+    // threads (with the default dlmalloc, one global malloc lock makes the
+    // parallel path SLOWER than serial). It is therefore enabled by default
+    // only when the module reports a scalable allocator.
+    //
+    // Overrides: CONWAY_FORCE_STAGED_FACES=1 enables it regardless (for
+    // benchmarking), CONWAY_DISABLE_STAGED_FACES=1 disables it regardless.
+    const env = ( typeof process !== 'undefined' ) ? process.env : void 0
+    const stagedFacesDisabled = env?.CONWAY_DISABLE_STAGED_FACES === '1'
+    const stagedFacesForced   = env?.CONWAY_FORCE_STAGED_FACES === '1'
+
+    this.useStagedFaces =
+      !stagedFacesDisabled &&
+      ( conwayModel.supportsStagedFaces?.() ?? false ) &&
+      ( stagedFacesForced || ( conwayModel.hasScalableAllocator?.() ?? false ) )
+  }
+
+  /**
+   * Flush any staged (deferred) face tessellation jobs, tessellating them in
+   * parallel on the native thread pool and appending the results to their
+   * target geometry objects in staging order.
+   *
+   * This must be called before triangle data is read from (or native memory
+   * freed for) any geometry that faces have been staged into — i.e. before
+   * CSG evaluation and before extraction returns.
+   */
+  finalizeStagedFaces(): void {
+
+    if ( this.useStagedFaces ) {
+      this.conwayModel.finalizeStagedFaces()
+    }
   }
 
   /**
@@ -854,6 +894,10 @@ export class AP214GeometryExtraction {
    * @param from
    */
   extractBooleanResult( from: boolean_result ) {
+
+    // CSG reads operand triangle data, so any faces staged for deferred
+    // (parallel) tessellation must be finalized first.
+    this.finalizeStagedFaces()
 
     const firstOperand = from.first_operand
 
@@ -2955,19 +2999,27 @@ export class AP214GeometryExtraction {
               end: trimmingEnd,
             }
 
-            let curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
-            
+            const curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
+
             if (curve !== void 0) {
 
               if ( !edge.orientation ) {
                 // reverse curve
                 // Logger.info("edge orientation == true, inverting curve")
-                curve = curve.clone()
+                const invertedCurve = curve.clone()
 
-                curve.invert()
+                invertedCurve.invert()
+
+                // push_back copies into the native vector, so the clone must
+                // be freed here or its native memory leaks (the memoized
+                // original in this.curves must NOT be freed).
+                nativeEdgeCurves.push_back(invertedCurve)
+                invertedCurve.delete()
+
+              } else {
+
+                nativeEdgeCurves.push_back(curve)
               }
-
-              nativeEdgeCurves.push_back(curve)
 
             } else {
               Logger.error(`curve === undefined, type: ${EntityTypesAP214[edgeCurve.type]}`)
@@ -3019,7 +3071,9 @@ export class AP214GeometryExtraction {
               }
             }
 
+            // push_back copies, so free the temporary point-pair curve.
             nativeEdgeCurves.push_back(curve)
+            curve.delete()
           }
         }
       } else {
@@ -3045,6 +3099,12 @@ export class AP214GeometryExtraction {
       const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
 
       bound3DVector.push_back(bound3D)
+
+      // createBound3D and push_back both copy, so the loop curve and the
+      // bound wrapper are temporaries that must be freed to avoid leaking
+      // native memory on every face bound.
+      bound3D.delete()
+      curve.delete()
       vec3Array.delete()
       nativeEdgeCurves.delete()
     }
@@ -3076,7 +3136,11 @@ export class AP214GeometryExtraction {
 
       const faceGeometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
 
-      this.conwayModel.addFaceToGeometry(parameters, faceGeometry)
+      if ( this.useStagedFaces ) {
+        this.conwayModel.stageFaceToGeometry(parameters, faceGeometry)
+      } else {
+        this.conwayModel.addFaceToGeometry(parameters, faceGeometry)
+      }
  
       const canonicalMesh: CanonicalMesh = {
         type: CanonicalMeshType.BUFFER_GEOMETRY,
@@ -3087,11 +3151,15 @@ export class AP214GeometryExtraction {
 
       this.model.geometry.add( canonicalMesh, parentLocalID )
 
+    } else if ( this.useStagedFaces ) {
+
+      this.conwayModel.stageFaceToGeometry(parameters, geometry)
+
     } else {
 
       this.conwayModel.addFaceToGeometry(parameters, geometry)
     }
- 
+
     nativeSurface.delete()
     bound3DVector.delete()
   }
@@ -3429,8 +3497,10 @@ export class AP214GeometryExtraction {
             bound.type === EntityTypesAP214.FACE_OUTER_BOUND ? 0 : 1,
           )
 
-          // Push your result somewhere
+          // Push your result somewhere (push_back copies, so free the
+          // temporary bound wrapper to avoid leaking native memory).
           bound3DVector.push_back(bound3D)
+          bound3D.delete()
 
           // Save the buffer for reuse in the next iteration
           this.pointBuffer = result
@@ -3443,7 +3513,11 @@ export class AP214GeometryExtraction {
         scaling: this.getLinearScalingFactor(),
       }
 
-      this.conwayModel.addFaceToGeometrySimple(parameters, geometry)
+      if ( this.useStagedFaces ) {
+        this.conwayModel.stageFaceToGeometrySimple(parameters, geometry)
+      } else {
+        this.conwayModel.addFaceToGeometrySimple(parameters, geometry)
+      }
 
       bound3DVector.delete()
     }
@@ -4289,6 +4363,10 @@ export class AP214GeometryExtraction {
         }
       }
       
+      // Run any deferred face tessellation across the native thread pool
+      // before geometry can be read or temporaries freed.
+      this.finalizeStagedFaces()
+
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
         this.model.geometry.deleteTemporaries()
       }
@@ -4303,6 +4381,10 @@ export class AP214GeometryExtraction {
       return [result, this.scene, this.productShapeMap]
 
     } finally {
+      // Ensure no staged face jobs outlive extraction (their target
+      // geometry may be freed once the model is invalidated), even if
+      // extraction exits through an exception.
+      this.finalizeStagedFaces()
       this.model.elementMemoization = previousMemoizationState
     }
   }
