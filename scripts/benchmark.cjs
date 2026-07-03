@@ -455,6 +455,19 @@ async function main() {
       console.log(
         `[${okCount + failCount}/${allIfcFiles.length}] FAIL ${baseFilename} ` +
         `(render request failed - see ${tempServerOutputFile})`);
+
+      // Surface the server's own error in the job log for the first few
+      // failures — the log file lives on the runner and is gone once the
+      // job ends unless it's separately uploaded as an artifact.
+      if (failCount <= 3) {
+        try {
+          const serverLog = fs.readFileSync(tempServerOutputFile, 'utf8');
+          const tail = serverLog.split('\n').slice(-30).join('\n');
+          console.error(`--- server log tail for ${baseFilename} ---\n${tail}\n--- end server log ---`);
+        } catch (e) {
+          console.error(`(could not read server log: ${e.message})`);
+        }
+      }
     }
 
     // Kill the server.
