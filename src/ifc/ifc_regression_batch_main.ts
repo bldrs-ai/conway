@@ -276,7 +276,13 @@ async function runForFile(filePath: string,
 
   const perfFlag = perfPath ? ` --perf "${perfPath}"` : ''
 
-  const safeExecCommand = `node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_main.js -d${perfFlag} "${filePath}" "${outputPath}"`
+  // STEP (AP214) models are digested by the AP214 pipeline, IFC models by
+  // the IFC pipeline; both children emit the same digest/error/perf formats.
+  const childScript = isStepFile(filePath) ?
+    './compiled/src/AP214E3_2010/ap214_regression_main.js' :
+    './compiled/src/ifc/ifc_regression_main.js'
+
+  const safeExecCommand = `node --experimental-specifier-resolution=node ${childScript} -d${perfFlag} "${filePath}" "${outputPath}"`
 
   console.log(`Current File: ${filePath}`)
 
@@ -323,6 +329,33 @@ async function runForFile(filePath: string,
   }
 }
 
+// Model files the regression harness understands: IFC plus STEP AP214.
+const SUPPORTED_MODEL_EXTENSIONS = ['.ifc', '.stp', '.step']
+
+/**
+ * Whether this is a STEP (AP214) model file by extension.
+ *
+ * @param filePath
+ * @return {boolean}
+ */
+function isStepFile( filePath: string ): boolean {
+
+  const extension = path.extname( filePath ).toLowerCase()
+
+  return extension === '.stp' || extension === '.step'
+}
+
+/**
+ * Whether this file is a supported model type (IFC or STEP), by extension.
+ *
+ * @param filePath
+ * @return {boolean}
+ */
+function isSupportedModelFile( filePath: string ): boolean {
+
+  return SUPPORTED_MODEL_EXTENSIONS.includes( path.extname( filePath ).toLowerCase() )
+}
+
 /**
  * Recursively collect all IFC file paths (instead of processing them immediately).
  *
@@ -358,7 +391,7 @@ async function collectIFCFiles(
 
       if (item.isDirectory()) {
         await recursiveWalk(resolved)
-      } else if (path.extname(resolved).toLowerCase() === '.ifc') {
+      } else if (isSupportedModelFile(resolved)) {
         ifcFiles.push(resolved)
       }
     }
@@ -426,11 +459,11 @@ async function processIFCFilesInParallel(
           `Starting task for "${path.basename(ifcPath)}". Active tasks: ${activeTasks}`,
       )
       const perfChildPath = perfDir ?
-        path.join(perfDir, `${path.basename(ifcPath, '.ifc')}.perf.csv`) :
+        path.join(perfDir, `${path.parse(ifcPath).name}.perf.csv`) :
         undefined
       const fileResults = await runForFile(
           ifcPath,
-          path.join(outputPath, path.basename(ifcPath, '.ifc')),
+          path.join(outputPath, path.parse(ifcPath).name),
           maxTimeout,
           perfChildPath,
       )
@@ -504,13 +537,13 @@ async function recursiveWalk(
     if (item.isDirectory()) {
       await recursiveWalk(resolved, excludeRegex, outputPath,
           errorLines, fileLines, failedLines, maxTimeout, perfDir)
-    } else if (path.extname(resolved).toLowerCase() === '.ifc') {
+    } else if (isSupportedModelFile(resolved)) {
       const perfChildPath = perfDir ?
-        path.join(perfDir, `${path.basename(resolved, '.ifc')}.perf.csv`) :
+        path.join(perfDir, `${path.parse(resolved).name}.perf.csv`) :
         undefined
       const fileResults = await runForFile(
           resolved,
-          path.join(outputPath, path.basename(resolved, '.ifc')),
+          path.join(outputPath, path.parse(resolved).name),
           maxTimeout,
           perfChildPath,
       )

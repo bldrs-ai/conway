@@ -443,7 +443,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
           body: |
-            ## IFC Regression Results
+            ## Regression Results (IFC + STEP)
 
             **Models:** `test-models` @ `${{ steps.tmsha.outputs.sha }}` (ref `${{ env.TEST_MODELS_REF }}`)
 
@@ -530,6 +530,9 @@ jobs:
         run: |
           yarn install
           yarn build
+          # The bundled server resolves the conway wasm from <cwd>/Dist at
+          # runtime; without this every render 500s with ERR_MODULE_NOT_FOUND.
+          ln -sfn node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist Dist
 
       # Safety check: if the resolutions override didn't take effect, H3 would
       # silently benchmark whatever conway version its lockfile pins instead of
@@ -547,6 +550,15 @@ jobs:
             echo "::error::yarn resolutions override did not take effect. Expected '$EXPECTED', got '$ACTUAL'."
             exit 1
           fi
+
+      # headless-gl (the `gl` package H3 renders through) needs an X/GLX
+      # display; without one every render dies with "Could not open the
+      # default X display" (see H3's own Dockerfile, which runs under
+      # xvfb-run).
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb
 
       - name: Restore Test Models Cache
         id: cache-test-models
@@ -566,14 +578,20 @@ jobs:
           git -C test-models checkout "$SHA"
 
       - name: Run H3 benchmark (public)
+        env:
+          # Keep outputs OUT of the test-models checkout: it contains
+          # committed benchmark snapshot CSVs, and reporting used to pick
+          # those up instead of this run's results.
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-public
         run: |
-          node scripts/benchmark.cjs ./h3 ./test-models
+          xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
+            node scripts/benchmark.cjs ./h3 ./test-models
 
       - name: Locate detail CSV
         id: detail
         run: |
-          # benchmark.cjs writes to <modelDir>/benchmarks/<engine>_<modelDirName>/performance-detail.csv
-          CSV=$(find test-models/benchmarks -name performance-detail.csv -type f | head -1)
+          # benchmark.cjs writes to $BENCHMARK_OUTPUT_DIR/<engine>_<modelDirName>/performance-detail.csv
+          CSV=$(find "${{ runner.temp }}/bench-public" -name performance-detail.csv -type f | head -1)
           test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
           echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
 
@@ -779,6 +797,9 @@ jobs:
         run: |
           yarn install
           yarn build
+          # The bundled server resolves the conway wasm from <cwd>/Dist at
+          # runtime; without this every render 500s with ERR_MODULE_NOT_FOUND.
+          ln -sfn node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist Dist
 
       - name: Verify candidate conway is resolved in H3
         env:
@@ -793,6 +814,12 @@ jobs:
             exit 1
           fi
 
+      # headless-gl needs an X/GLX display; see the public perf job.
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb
+
       - name: Clone private test models
         env:
           GH_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
@@ -801,13 +828,18 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/bldrs-ai/test-models-private.git" test-models-private
 
       - name: Run H3 benchmark (private)
+        env:
+          # Keep outputs OUT of the model checkout (it may contain committed
+          # benchmark snapshot CSVs that reporting would pick up instead).
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-private
         run: |
-          node scripts/benchmark.cjs ./h3 ./test-models-private
+          xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
+            node scripts/benchmark.cjs ./h3 ./test-models-private
 
       - name: Locate detail CSV
         id: detail
         run: |
-          CSV=$(find test-models-private/benchmarks -name performance-detail.csv -type f | head -1)
+          CSV=$(find "${{ runner.temp }}/bench-private" -name performance-detail.csv -type f | head -1)
           test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
           echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
 
