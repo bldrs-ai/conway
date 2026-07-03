@@ -554,9 +554,12 @@ function geometryExtraction(
   const ONE_KB = 1024
   const ONE_MB = ONE_KB * ONE_KB
 
-  Logger.info(
-      `WASM heap high-water: ${
-        (conwaywasm.wasmModule.HEAPU8.length / ONE_MB).toFixed(1)} MB`)
+  const wasmHeap = conwaywasm.wasmModule?.HEAPU8
+
+  if (wasmHeap !== void 0) {
+    Logger.info(
+        `WASM heap high-water: ${(wasmHeap.length / ONE_MB).toFixed(1)} MB`)
+  }
 
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
