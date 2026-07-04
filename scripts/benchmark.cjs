@@ -102,6 +102,42 @@ function sleep(sec) {
   return new Promise((resolve) => setTimeout(resolve, sec * 1000));
 }
 
+/**
+ * Poll until an HTTP server answers on the given port, or time out.
+ * A fixed post-spawn sleep races the server boot (yarn + node startup can
+ * exceed it on a loaded machine) and then every render fails with
+ * connection refused.
+ * @param {number} port
+ * @param {number} timeoutSeconds
+ * @returns {Promise<boolean>} true once the server accepts a connection.
+ */
+function waitForServer(port, timeoutSeconds = 60) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      const req = http.request(
+        { hostname: 'localhost', port, path: '/', method: 'GET', timeout: 1000 },
+        (res) => {
+          res.resume();
+          resolve(true);
+        }
+      );
+      const retry = () => {
+        req.destroy();
+        if (Date.now() > deadline) {
+          resolve(false);
+        } else {
+          setTimeout(attempt, 250);
+        }
+      };
+      req.on('error', retry);
+      req.on('timeout', retry);
+      req.end();
+    };
+    attempt();
+  });
+}
+
 // ---------- MAIN ----------
 
 async function main() {
@@ -112,7 +148,7 @@ async function main() {
     usageAndExit();
   }
 
-  const [serverDir, modelDir, thirdArg] = args;
+  let [serverDir, modelDir, thirdArg] = args;
   if (!serverDir) {
     console.error("Error: No server directory path provided.");
     usageAndExit();
@@ -121,6 +157,12 @@ async function main() {
     console.error("Error: No model directory path provided.");
     usageAndExit();
   }
+
+  // Resolve to absolute paths: model paths become file:// URLs sent to the
+  // render server, whose cwd is serverDir, not ours — a relative modelDir
+  // makes the server ENOENT on every model.
+  serverDir = path.resolve(serverDir);
+  modelDir = path.resolve(modelDir);
 
   const command = [
     'node benchmark.cjs',
@@ -298,7 +340,11 @@ async function main() {
     serverChild.stdout.pipe(writeStream);
     serverChild.stderr.pipe(writeStream);
 
-    await sleep(3);
+    const serverUp = await waitForServer(8001, 60);
+    if (!serverUp) {
+      console.error(
+        `Server did not start listening on :8001 within 60s for ${baseFilename}`);
+    }
 
     const modelStartTime = Date.now();
     const encodedFileName = encodeFileName(baseFilename);
