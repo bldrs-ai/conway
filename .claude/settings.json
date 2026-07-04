@@ -32,7 +32,10 @@
       "mcp__github__search_code",
       "mcp__github__get_me",
       "mcp__github__get_latest_release",
-      "mcp__github__list_releases"
+      "mcp__github__list_releases",
+      "mcp__Claude_Code_Remote__send_later",
+      "mcp__Claude_Code_Remote__delete_trigger",
+      "mcp__Claude_Code_Remote__list_triggers"
     ]
   }
 }
