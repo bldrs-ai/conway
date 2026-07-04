@@ -480,7 +480,7 @@ jobs:
   # ---------------------------------------------------------------------------
   perf-three-public:
     needs: run-ifc-regression
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.head_ref == 'claude/fix-perf-three-gl'  # TEMP: validate perf jobs on this PR; revert before merge
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
@@ -767,7 +767,7 @@ jobs:
   # ---------------------------------------------------------------------------
   perf-three-private:
     needs: run-ifc-regression
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || github.head_ref == 'claude/fix-perf-three-gl'  # TEMP: validate perf jobs on this PR; revert before merge
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     timeout-minutes: 60
     permissions:
