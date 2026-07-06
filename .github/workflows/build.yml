@@ -938,9 +938,13 @@ jobs:
           path: ${{ steps.detail.outputs.csv }}
 
       # Server log + per-model outputs even when the benchmark fails, so
-      # render failures are diagnosable. Private models: the log can contain
-      # private filenames, but the artifact inherits the repo's access
-      # control, same as the detail CSV above.
+      # render failures are diagnosable. NOTE: conway is a PUBLIC repo, so
+      # this artifact is downloadable by anyone who can view the run — the
+      # PNG filenames and server log contain private model names. That
+      # exposure already exists via the per-model console lines and the
+      # detail CSV above; this does not narrow it. If private model names are
+      # sensitive, move private perf to a private repo/runner instead of
+      # relying on "collaborator-only" (which is not true for a public repo).
       - name: Upload bench output (always)
         if: always()
         uses: actions/upload-artifact@v4

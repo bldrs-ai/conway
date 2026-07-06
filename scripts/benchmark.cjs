@@ -102,6 +102,10 @@ function sleep(sec) {
   return new Promise((resolve) => setTimeout(resolve, sec * 1000));
 }
 
+// Port the render server listens on and the benchmark POSTs to. Single
+// source so the health-check and the render endpoint can't drift apart.
+const SERVER_PORT = 8001;
+
 /**
  * Poll until an HTTP server answers on the given port, or time out.
  * A fixed post-spawn sleep races the server boot (yarn + node startup can
@@ -340,10 +344,10 @@ async function main() {
     serverChild.stdout.pipe(writeStream);
     serverChild.stderr.pipe(writeStream);
 
-    const serverUp = await waitForServer(8001, 60);
+    const serverUp = await waitForServer(SERVER_PORT, 60);
     if (!serverUp) {
       console.error(
-        `Server did not start listening on :8001 within 60s for ${baseFilename}`);
+        `Server did not start listening on :${SERVER_PORT} within 60s for ${baseFilename}`);
     }
 
     const modelStartTime = Date.now();
@@ -356,7 +360,7 @@ async function main() {
     const outputPng = path.join(outputDir, `${baseFilename}-fit.png`);
 
     let curlSuccess = true;
-    const renderEndpoint = 'http://localhost:8001/renderPanoramic';
+    const renderEndpoint = `http://localhost:${SERVER_PORT}/renderPanoramic`;
 
     try {
       const success = await postToServerAndSaveFile(
@@ -382,10 +386,16 @@ async function main() {
       appendLineToFile(basicStatsFilename, `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
     }
 
-    if (curlSuccess) {
-      await sleep(1);
-      writeStream.close();
+    // Flush and close the server-output stream on BOTH paths before reading
+    // it. The failure branch below reads this file for the log tail; without
+    // closing here the read races the stream buffer, the fd leaks every
+    // failing iteration, and the next iteration's `flags: 'w'` open truncates
+    // the log while it's still open. sleep(1) gives the child time to emit
+    // its final output before end() flushes.
+    await sleep(1);
+    await new Promise((resolve) => writeStream.end(resolve));
 
+    if (curlSuccess) {
       let logContents = '';
       try {
         logContents = fs.readFileSync(tempServerOutputFile, 'utf8');
