@@ -24,8 +24,36 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const os = require('os');
+const crypto = require('crypto');
 const urlModule = require('url');
 const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
+
+// When set (BENCHMARK_ANONYMIZE=1), every model IDENTIFIER emitted to a place
+// that can become public — console lines, the performance-detail CSV, PNG
+// filenames, the server-log tail header — is replaced by a stable hash of the
+// model's path instead of its real name. conway runs the private benchmark on
+// a PUBLIC repo (Actions logs + artifacts are world-readable), so private
+// model NAMES must never appear there. The hash is derived from the path, so
+// it's stable across runs and machines and the cross-version delta still joins
+// old vs new by identifier.
+const ANONYMIZE_NAMES =
+  process.env.BENCHMARK_ANONYMIZE === '1' || process.env.BENCHMARK_ANONYMIZE === 'true';
+
+/**
+ * Public-safe identifier for a model. Real basename normally; a stable
+ * path-derived hash when ANONYMIZE_NAMES is set (private models on a public
+ * repo).
+ * @param {string} modelDir absolute model root
+ * @param {string} filePath absolute model path
+ * @return {string}
+ */
+function modelDisplayId(modelDir, filePath) {
+  if (!ANONYMIZE_NAMES) {
+    return path.basename(filePath);
+  }
+  const rel = path.relative(modelDir, filePath).split(path.sep).join('/');
+  return `m-${crypto.createHash('sha1').update(rel).digest('hex').slice(0, 12)}`;
+}
 
 // ---------- UTILITIES ----------
 
@@ -344,20 +372,23 @@ async function main() {
     serverChild.stdout.pipe(writeStream);
     serverChild.stderr.pipe(writeStream);
 
+    // Public-safe identifier: real name normally, path-hash for private models.
+    const displayName = modelDisplayId(modelDir, filePath);
+
     const serverUp = await waitForServer(SERVER_PORT, 60);
     if (!serverUp) {
       console.error(
-        `Server did not start listening on :${SERVER_PORT} within 60s for ${baseFilename}`);
+        `Server did not start listening on :${SERVER_PORT} within 60s for ${displayName}`);
     }
 
     const modelStartTime = Date.now();
-    const encodedFileName = encodeFileName(baseFilename);
+    const encodedFileName = encodeFileName(ANONYMIZE_NAMES ? displayName : baseFilename);
     const url = `file://${filePath}`; // local file path
 
     // --- Save the output PNG in the benchmark output directory ---
     // (writing next to the model files pollutes the cached/committed model
     // repo checkout in CI).
-    const outputPng = path.join(outputDir, `${baseFilename}-fit.png`);
+    const outputPng = path.join(outputDir, `${displayName}-fit.png`);
 
     let curlSuccess = true;
     const renderEndpoint = `http://localhost:${SERVER_PORT}/renderPanoramic`;
@@ -485,11 +516,14 @@ async function main() {
       }
       console.log(
         `[${okCount + failCount}/${allIfcFiles.length}] ${loadStatus} ` +
-        `${baseFilename} parse=${parseTimeMs}ms geometry=${geometryTimeMs}ms ` +
+        `${displayName} parse=${parseTimeMs}ms geometry=${geometryTimeMs}ms ` +
         `total=${totalTimeMs}ms`);
 
       // --- RECORD THE HTML ENTRY ---
-      if (fs.existsSync(outputPng)) {
+      // Skip when anonymizing: the HTML report embeds the real model path and
+      // a share link, and the path/link console logs below would print the
+      // private name into the (public) Actions log.
+      if (fs.existsSync(outputPng) && !ANONYMIZE_NAMES) {
         // Compute a relative path from outputDir to the image.
         const relImagePath = path.relative(outputDir, outputPng);
         // Compute the IFC file path relative to the modelDir so that the "ifc/" folder is included.
@@ -504,24 +538,32 @@ async function main() {
       const timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
       const unameVal = os.arch();
       allStatus = 'fail';
-      const failLine = `${timestamp},FAIL,${unameVal},N/A,${baseFilename},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A`;
+      const failLine = `${timestamp},FAIL,${unameVal},N/A,${displayName},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A`;
       appendLineToFile(newResults, failLine);
 
       failCount++;
       console.log(
-        `[${okCount + failCount}/${allIfcFiles.length}] FAIL ${baseFilename} ` +
+        `[${okCount + failCount}/${allIfcFiles.length}] FAIL ${displayName} ` +
         `(render request failed - see ${tempServerOutputFile})`);
 
       // Surface the server's own error in the job log for the first few
       // failures — the log file lives on the runner and is gone once the
-      // job ends unless it's separately uploaded as an artifact.
+      // job ends unless it's separately uploaded as an artifact. The server
+      // log contains the real model path, so it's suppressed when anonymizing
+      // (private models on a public repo); those failures can't be diagnosed
+      // from the public log — re-run against a private runner if needed.
       if (failCount <= 3) {
-        try {
-          const serverLog = fs.readFileSync(tempServerOutputFile, 'utf8');
-          const tail = serverLog.split('\n').slice(-30).join('\n');
-          console.error(`--- server log tail for ${baseFilename} ---\n${tail}\n--- end server log ---`);
-        } catch (e) {
-          console.error(`(could not read server log: ${e.message})`);
+        if (ANONYMIZE_NAMES) {
+          console.error(
+            `(server log for ${displayName} withheld — contains the private model path)`);
+        } else {
+          try {
+            const serverLog = fs.readFileSync(tempServerOutputFile, 'utf8');
+            const tail = serverLog.split('\n').slice(-30).join('\n');
+            console.error(`--- server log tail for ${displayName} ---\n${tail}\n--- end server log ---`);
+          } catch (e) {
+            console.error(`(could not read server log: ${e.message})`);
+          }
         }
       }
     }

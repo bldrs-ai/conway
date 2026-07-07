@@ -757,10 +757,12 @@ jobs:
   # Headless-three perf benchmark (private models).
   #
   # Same setup as perf-three-public but against bldrs-ai/test-models-private.
-  # The comment posts only aggregate stats (count/min/median/mean/max/stddev
-  # for parseTimeMs/geometryTimeMs/totalTimeMs) — no filenames — so the
-  # public PR thread doesn't leak private model identifiers. The detail CSV
-  # is uploaded as an artifact whose visibility follows the repo (private).
+  # conway is a PUBLIC repo, so Actions logs and artifacts are world-readable.
+  # Private model names are therefore anonymized to stable path hashes
+  # (BENCHMARK_ANONYMIZE) everywhere the benchmark could surface them, the
+  # posted comment is aggregate-only, and the raw bench dir (server log / PNGs
+  # that carry the real path) is not uploaded — so no private model name
+  # reaches a public sink.
   #
   # Fail-fast on missing TEST_MODELS_PRIVATE_TOKEN: surfaces config problems
   # immediately instead of silently skipping coverage.
@@ -874,6 +876,12 @@ jobs:
           # Keep outputs OUT of the model checkout (it may contain committed
           # benchmark snapshot CSVs that reporting would pick up instead).
           BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-private
+          # conway is a PUBLIC repo — Actions logs and artifacts are
+          # world-readable. Anonymize private model names to stable path
+          # hashes everywhere they could surface (console, detail CSV, PNG
+          # names, log tail) so private names never leak. The cross-version
+          # delta still joins by the stable hash.
+          BENCHMARK_ANONYMIZE: '1'
         run: |
           xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
             node scripts/benchmark.cjs ./h3 ./test-models-private
@@ -931,32 +939,26 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # The detail CSV carries only anonymized identifiers (BENCHMARK_ANONYMIZE
+      # above), so it's safe to upload on this public repo.
       - name: Upload private perf detail CSV
         uses: actions/upload-artifact@v4
         with:
           name: perf-three-private-${{ github.run_id }}
           path: ${{ steps.detail.outputs.csv }}
 
-      # Server log + per-model outputs even when the benchmark fails, so
-      # render failures are diagnosable. NOTE: conway is a PUBLIC repo, so
-      # this artifact is downloadable by anyone who can view the run — the
-      # PNG filenames and server log contain private model names. That
-      # exposure already exists via the per-model console lines and the
-      # detail CSV above; this does not narrow it. If private model names are
-      # sensitive, move private perf to a private repo/runner instead of
-      # relying on "collaborator-only" (which is not true for a public repo).
-      - name: Upload bench output (always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: perf-three-private-benchdir-${{ github.run_id }}
-          path: ${{ runner.temp }}/bench-private
-          if-no-files-found: ignore
+      # NOTE: the full bench dir (per-model PNGs, 00-rendering-server.log.txt)
+      # is deliberately NOT uploaded for the private job. The server log
+      # records the real model file path and the PNGs would be named by it,
+      # and conway is a PUBLIC repo where artifacts are world-readable. Private
+      # render failures therefore can't be diagnosed from a public artifact —
+      # re-run against a private runner if needed. (The public job uploads its
+      # bench dir; those model names are already public.)
 
       # --- Cross-version delta vs previous push:main run ---
       # Mirrors the public-job logic but emits aggregate stats over the delta
-      # columns (no filenames in the comment). The delta CSV itself contains
-      # filenames and is uploaded as a collaborator-only artifact.
+      # columns (no identifiers in the comment). The delta CSV carries only the
+      # anonymized identifiers, so the uploaded artifact leaks no model names.
       - name: Compute private perf delta
         id: perf_delta
         uses: ./.github/actions/perf-delta
@@ -1038,7 +1040,7 @@ jobs:
           for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:
               print(f"| {stat} | " + " | ".join(s[c][stat] for c in cols) + " |")
           print()
-          print(f"_Delta CSV in run artifacts (`perf-delta-private-{run_id}`, collaborator-only)._")
+          print(f"_Delta CSV in run artifacts (`perf-delta-private-{run_id}`); model identifiers are anonymized._")
           EOF
           )
           {
@@ -1083,7 +1085,7 @@ jobs:
 
             ${{ steps.delta_stats.outputs.section }}
 
-            _Detail CSV in run artifacts (`perf-three-private-${{ github.run_id }}`, visible to repo collaborators only)._
+            _Detail CSV in run artifacts (`perf-three-private-${{ github.run_id }}`); model identifiers are anonymized._
 
   # ---------------------------------------------------------------------------
   # Continuous release: on every successful push to main, publish to npm and
