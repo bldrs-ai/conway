@@ -17,6 +17,10 @@ on:
       - 'docs/**'
   push:
     branches: [main]
+  # Manual runs from any branch (Actions > CI > Run workflow) so the
+  # perf jobs — normally push-to-main only — can be exercised and debugged
+  # on a branch without merging. auto-publish stays push:main-only.
+  workflow_dispatch:
 
 env:
   EMSDK_VERSION: '3.1.72'
@@ -476,7 +480,7 @@ jobs:
   # ---------------------------------------------------------------------------
   perf-three-public:
     needs: run-ifc-regression
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
@@ -552,13 +556,28 @@ jobs:
           fi
 
       # headless-gl (the `gl` package H3 renders through) needs an X/GLX
-      # display; without one every render dies with "Could not open the
-      # default X display" (see H3's own Dockerfile, which runs under
-      # xvfb-run).
-      - name: Install Xvfb
+      # display plus the GL libraries H3's own Dockerfile installs
+      # (libxi/libGLU/GLEW); with only xvfb the server can die at startup
+      # and every render fails.
+      - name: Install Xvfb + GL libraries
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q xvfb
+          sudo apt-get install -y -q xvfb pkg-config build-essential \
+            libxi-dev libglu1-mesa-dev libglew-dev
+
+      # Prove the `gl` native module can actually create a context on this
+      # runner before spending minutes benchmarking. The npm prebuilt binary
+      # is built on a different image; if it can't initialize here, rebuild
+      # it from source against this runner's libraries and re-verify.
+      - name: GL smoke test (rebuild gl from source if prebuilt is broken)
+        working-directory: h3
+        run: |
+          SMOKE='const gl=require("gl")(8,8); if(!gl){throw new Error("gl context creation returned null")}; console.log("gl OK:", gl.getParameter(gl.VERSION))'
+          if ! xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"; then
+            echo "::warning::Prebuilt gl failed to initialize; rebuilding from source."
+            npm rebuild gl --build-from-source
+            xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"
+          fi
 
       - name: Restore Test Models Cache
         id: cache-test-models
@@ -627,6 +646,17 @@ jobs:
         with:
           name: perf-three-public-${{ github.run_id }}
           path: ${{ steps.detail.outputs.csv }}
+
+      # Full bench output (per-model PNGs, 00-rendering-server.log.txt) even —
+      # especially — when the benchmark fails, so render failures are
+      # diagnosable from the artifact instead of being lost with the runner.
+      - name: Upload bench output (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-three-public-benchdir-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-public
+          if-no-files-found: ignore
 
       # --- Cross-version delta vs the most recent prior push:main run ---
       # See .github/actions/perf-delta for the shared find/download/compute/
@@ -727,17 +757,19 @@ jobs:
   # Headless-three perf benchmark (private models).
   #
   # Same setup as perf-three-public but against bldrs-ai/test-models-private.
-  # The comment posts only aggregate stats (count/min/median/mean/max/stddev
-  # for parseTimeMs/geometryTimeMs/totalTimeMs) — no filenames — so the
-  # public PR thread doesn't leak private model identifiers. The detail CSV
-  # is uploaded as an artifact whose visibility follows the repo (private).
+  # conway is a PUBLIC repo, so Actions logs and artifacts are world-readable.
+  # Private model names are therefore anonymized to stable path hashes
+  # (BENCHMARK_ANONYMIZE) everywhere the benchmark could surface them, the
+  # posted comment is aggregate-only, and the raw bench dir (server log / PNGs
+  # that carry the real path) is not uploaded — so no private model name
+  # reaches a public sink.
   #
   # Fail-fast on missing TEST_MODELS_PRIVATE_TOKEN: surfaces config problems
   # immediately instead of silently skipping coverage.
   # ---------------------------------------------------------------------------
   perf-three-private:
     needs: run-ifc-regression
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     timeout-minutes: 60
     permissions:
@@ -814,11 +846,23 @@ jobs:
             exit 1
           fi
 
-      # headless-gl needs an X/GLX display; see the public perf job.
-      - name: Install Xvfb
+      # headless-gl needs an X/GLX display + GL libraries; see the public
+      # perf job for details.
+      - name: Install Xvfb + GL libraries
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q xvfb
+          sudo apt-get install -y -q xvfb pkg-config build-essential \
+            libxi-dev libglu1-mesa-dev libglew-dev
+
+      - name: GL smoke test (rebuild gl from source if prebuilt is broken)
+        working-directory: h3
+        run: |
+          SMOKE='const gl=require("gl")(8,8); if(!gl){throw new Error("gl context creation returned null")}; console.log("gl OK:", gl.getParameter(gl.VERSION))'
+          if ! xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"; then
+            echo "::warning::Prebuilt gl failed to initialize; rebuilding from source."
+            npm rebuild gl --build-from-source
+            xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"
+          fi
 
       - name: Clone private test models
         env:
@@ -832,6 +876,12 @@ jobs:
           # Keep outputs OUT of the model checkout (it may contain committed
           # benchmark snapshot CSVs that reporting would pick up instead).
           BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-private
+          # conway is a PUBLIC repo — Actions logs and artifacts are
+          # world-readable. Anonymize private model names to stable path
+          # hashes everywhere they could surface (console, detail CSV, PNG
+          # names, log tail) so private names never leak. The cross-version
+          # delta still joins by the stable hash.
+          BENCHMARK_ANONYMIZE: '1'
         run: |
           xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
             node scripts/benchmark.cjs ./h3 ./test-models-private
@@ -889,16 +939,26 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # The detail CSV carries only anonymized identifiers (BENCHMARK_ANONYMIZE
+      # above), so it's safe to upload on this public repo.
       - name: Upload private perf detail CSV
         uses: actions/upload-artifact@v4
         with:
           name: perf-three-private-${{ github.run_id }}
           path: ${{ steps.detail.outputs.csv }}
 
+      # NOTE: the full bench dir (per-model PNGs, 00-rendering-server.log.txt)
+      # is deliberately NOT uploaded for the private job. The server log
+      # records the real model file path and the PNGs would be named by it,
+      # and conway is a PUBLIC repo where artifacts are world-readable. Private
+      # render failures therefore can't be diagnosed from a public artifact —
+      # re-run against a private runner if needed. (The public job uploads its
+      # bench dir; those model names are already public.)
+
       # --- Cross-version delta vs previous push:main run ---
       # Mirrors the public-job logic but emits aggregate stats over the delta
-      # columns (no filenames in the comment). The delta CSV itself contains
-      # filenames and is uploaded as a collaborator-only artifact.
+      # columns (no identifiers in the comment). The delta CSV carries only the
+      # anonymized identifiers, so the uploaded artifact leaks no model names.
       - name: Compute private perf delta
         id: perf_delta
         uses: ./.github/actions/perf-delta
@@ -980,7 +1040,7 @@ jobs:
           for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:
               print(f"| {stat} | " + " | ".join(s[c][stat] for c in cols) + " |")
           print()
-          print(f"_Delta CSV in run artifacts (`perf-delta-private-{run_id}`, collaborator-only)._")
+          print(f"_Delta CSV in run artifacts (`perf-delta-private-{run_id}`); model identifiers are anonymized._")
           EOF
           )
           {
@@ -1025,7 +1085,7 @@ jobs:
 
             ${{ steps.delta_stats.outputs.section }}
 
-            _Detail CSV in run artifacts (`perf-three-private-${{ github.run_id }}`, visible to repo collaborators only)._
+            _Detail CSV in run artifacts (`perf-three-private-${{ github.run_id }}`); model identifiers are anonymized._
 
   # ---------------------------------------------------------------------------
   # Continuous release: on every successful push to main, publish to npm and
