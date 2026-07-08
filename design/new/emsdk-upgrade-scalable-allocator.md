@@ -104,7 +104,73 @@ silent hang without them).
    an allocator flip.
 3. **Phase 1 (EMSDK 6.0.2 + dlmalloc, ~25% serial win) remains the action
    item.** Phases 2-3 are parked: blocked upstream AND their expected value
-   needs re-estimation per (2).
+   needs re-estimation per (2). The successor to Phases 2-3 is the
+   Allocation-Free Tessellation Pipeline below.
+
+## Phase 4 — Allocation-Free Tessellation Pipeline (AFTP)
+
+**Goal:** tame transient memory and unlock high multi-core utilization by
+removing allocation from the tessellation hot path entirely, instead of
+swapping global allocators.
+
+**Why this supersedes the mimalloc plan.** The debug session showed the
+multi-GB peaks are an artifact of allocation *strategy*, not intrinsic need:
+Arty_Z7's retained geometry is ~75 MB while RSS peaked at 4.5 GB. Two
+mechanisms dominate: (a) mesh accumulation buffers grow by realloc
+(geometric growth → transient old+new copies → fragmentation; the traced
+2504 ≥32 MB system allocations), and (b) per-face temporaries (CDT
+triangulation state, trim-curve polygons, NURBS sample grids) are
+malloc/freed ~31.7k times per model — which is also exactly the dlmalloc
+global-lock contention that made the parallel path lose. Remove the
+allocations and both problems disappear: peak memory drops toward
+(retained output + few pooled buffers per thread), and the parallel path
+stops fighting a malloc lock — no exotic allocator required, no upstream
+dependency.
+
+**Design sketch**
+
+1. **Per-thread scratch arenas.** Each ThreadPool worker (and the main
+   thread) owns a reusable bump-allocated arena for all per-face
+   tessellation temporaries. Reset (pointer rewind) after each face —
+   zero malloc/free in steady state. Rare oversized faces spill to the
+   heap via an explicit slow path (counted, logged).
+2. **Exact-size commits.** Tessellate into scratch, then perform one
+   exact-size allocation (or reservation-backed append) to commit
+   triangles into the target CanonicalMesh — eliminating the realloc
+   ratchet. Where output size is knowable (grid tessellation), reserve
+   up front; where it isn't (CDT), commit from scratch after the fact.
+3. **Reservation-aware accumulation.** Size-estimate per-element meshes
+   (sum of face estimates) and reserve once; fall back to chunked
+   growth with capped over-allocation where estimates are unavailable.
+4. **Allocator-agnostic.** Works identically under dlmalloc today and any
+   future allocator; independently useful on the Web (single-thread)
+   build by cutting allocator pressure and peak memory.
+
+**Constraints / cautions**
+
+- Byte-identical output is the regression bar (digests must not move):
+  AFTP changes *where* intermediates live, never the arithmetic or
+  ordering of emitted triangles.
+- CDT's internal allocations are third-party (external/CDT); phase them
+  in via a custom allocator/adapter or accept CDT-internal mallocs
+  initially (they are a fraction of the per-face churn).
+- Scratch sizing needs telemetry first: instrument per-face temporary
+  high-water marks across the STEP+IFC corpus to pick arena sizes and
+  quantify the spill rate before committing to numbers.
+
+**Success criteria**
+
+- Peak RSS on Arty_Z7 ≤ ~4× retained geometry (target: hundreds of MB,
+  not GBs); no regression on small models.
+- Parallel staged tessellation beats serial by ≥1.5× on 4 cores for
+  tessellation-heavy models, with `hasScalableAllocator()`-style gating
+  replaced by "always on" once allocation-free.
+- Digests byte-identical to the serial path across the full regression
+  corpus.
+
+**Plan**: telemetry pass → arena + scratch for face tessellation →
+exact-size commits → reservation-aware meshes → re-measure parallel
+scaling → widen the parallel section (profiles/curves) as a follow-on.
 
 ## TL;DR
 

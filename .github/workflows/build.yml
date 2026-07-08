@@ -19,7 +19,7 @@ on:
     branches: [main]
 
 env:
-  EMSDK_VERSION: '3.1.72'
+  EMSDK_VERSION: '6.0.2'
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
   # Public test-models git ref to track. Resolved to a concrete commit SHA per
   # run (recorded in the PR comment + job summary) so the regression baseline is
