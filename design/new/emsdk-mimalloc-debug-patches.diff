@@ -1,0 +1,57 @@
+# Instrumentation + experiment patches applied to emscripten 6.0.2's vendored mimalloc 3.3.1
+# during the conway wasm32 large-heap crash investigation (see emsdk-upgrade-scalable-allocator.md).
+# For the upstream report: none of these FIX the issue; the arena cap and purge-off patches
+# falsify the corresponding hypotheses, and the prim.c logging produces the diagnostic traces.
+
+--- /tmp/prim.c.orig	2026-07-08 12:15:01.410551988 +0000
++++ <emscripten>/system/lib/mimalloc/src/prim/emscripten/prim.c	2026-07-08 15:14:57.923790865 +0000
+@@ -13,6 +13,7 @@
+ #include "mimalloc/prim.h"
+ 
+ #include <sched.h>   // sched_yield
++#include <emscripten/console.h>  // SPIKE instrumentation
+ #include <unistd.h>  // getentropy
+ 
+ // Design
+@@ -86,7 +87,13 @@
+   if (try_alignment < MIN_EMMALLOC_ALIGN) {
+     try_alignment = MIN_EMMALLOC_ALIGN;
+   }
++  if (size >= 32*1024*1024) {  // SPIKE: log big requests reaching the system allocator
++    emscripten_console_errorf("[mi_prim SPIKEV2] alloc size=%zu (%.2f MB) align=%zu", size, size/1048576.0, try_alignment);
++  }
+   *addr = emmalloc_memalign(try_alignment, size);
++  if (*addr == NULL && size >= 1024*1024) {
++    emscripten_console_errorf("[mi_prim] alloc FAILED size=%zu align=%zu", size, try_alignment);
++  }
+   return (*addr != NULL ? 0 : ENOMEM);
+ }
+ 
+
+--- /tmp/arena.c.orig	2026-07-08 15:02:40.883024554 +0000
++++ <emscripten>/system/lib/mimalloc/src/arena.c	2026-07-08 15:14:57.909958574 +0000
+@@ -338,7 +338,21 @@
+ 
+   // check arena bounds
+   const size_t min_reserve = MI_ARENA_MIN_SIZE;
++  #if MI_INTPTR_SIZE <= 4
++  // On 32-bit targets -- wasm32 in particular, where the whole address space
++  // is at most 4 GiB and (on Emscripten) the underlying sbrk heap cannot
++  // exceed MAXIMUM_MEMORY -- the exponential arena scaling above quickly
++  // produces reservations (1 GiB and beyond) that exceed the remaining
++  // address space. The reservation then fails deep inside the allocator
++  // (on Emscripten: emmalloc asks memory.grow to exceed the 4 GiB limit),
++  // and the failure path can leave internal locks held, deadlocking other
++  // threads. Cap individual arena reservations to a size that a 32-bit
++  // heap can always plausibly satisfy.
++  const size_t max_reserve = 256 * MI_MiB;
++  if (arena_reserve > max_reserve) { _mi_warning_message("SPIKE32CAP arena reserve capped: %zu -> %zu\n", arena_reserve, max_reserve); }
++  #else
+   const size_t max_reserve = MI_ARENA_MAX_SIZE;   // 16 GiB
++  #endif
+   if (arena_reserve < min_reserve) {
+     arena_reserve = min_reserve;
+   }
+
+--- options.c purge_delay default (hand edit) ---
+140:  { -1 /*SPIKE: wasm decommit is a no-op; purging is pure arena churn*/,MI_OPTION_UNINIT, MI_OPTION_LEGACY(purge_delay,reset_delay) },  // purge delay in milli-seconds
