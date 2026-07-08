@@ -1,6 +1,58 @@
 # EMSDK upgrade → scalable allocator → enable parallel tessellation (~2× multi-core)
 
-**Status:** Proposal / scoping. No behavior change in this PR — this is the plan.
+**Status:** Proposal / scoping, **Phase 0 spike executed — results below.** No
+behavior change in this PR.
+
+## Phase 0 spike results (executed 2026-07-08, emsdk 6.0.2, 4-core container)
+
+Branch: `conway-geom` `spike/emsdk6-mimalloc` (throwaway; `-sMALLOC=mimalloc`
+on the NodeMT target only, gate left off so one binary A/Bs via
+`CONWAY_FORCE_STAGED_FACES`).
+
+**mimalloc 3.3.1: NO-GO.** The 3.x rewrite did not fix the big-heap failure —
+it changed its shape. On Arty_Z7 (needs a multi-GB heap), right after parse the
+allocator issues a single bogus ~4 GB enlarge request and dies, then poisons
+every subsequent allocation:
+
+```
+Cannot enlarge memory, requested 4294962208 bytes, but the limit is 4294901760 bytes!
+Aborted(Assertion failed: ... "pthread mutex deadlock detected",
+  at: .../musl/src/thread/pthread_mutex_timedlock.c,95,__pthread_mutex_timedlock)   × hundreds
+```
+
+The request (0xFFFFEC20, ≈ UINT32_MAX) looks like a size computation overflow
+in mimalloc's arena/growth path on wasm32. Pre-reserving the heap
+(`-sINITIAL_MEMORY=3072MB`) does **not** avoid it — same abort cascade — so
+it's not merely the growth *event*; the request size itself is wrong. Small and
+mid-size models (≤ ~14 MB source) run fine under mimalloc, confirming it's the
+large-heap regime, same territory as the 2.x unaligned-atomic fault.
+**Action:** file upstream (emscripten-core/emscripten) with this repro;
+parallel tessellation stays gated off until a fixed allocator exists.
+
+**Consolation prize — the EMSDK 6.0.2 toolchain alone is a ~25% serial win
+(GO for Phase 1).** Same models, same container, dlmalloc serial path:
+
+| model | 3.1.72 geometry | 6.0.2 geometry | Δ |
+|---|---|---|---|
+| driver board.step (13.8 MB) | 6.1 s | 5.1 s | −17% |
+| Jetenginestep.stp (19.9 MB) | 17.0 s | 12.9 s | −24% |
+| Arty_Z7.stp (55 MB) | 67.6 s | 49.2 s | **−27%** |
+
+Correctness sanity: supercap.step digest under 6.0.2/dlmalloc has identical
+structure to the committed baseline (1169 rows, same IDs and types); only
+geometry hashes moved — the expected codegen/FP drift, confirming the Phase 1
+re-bless plan.
+
+**Build fallout actually observed (small):** the 3.1.72-era genie.lua flags all
+still work (deprecation warnings only: `USE_PTHREADS` → prefer `-pthread`);
+prebuilt 3.1.72 dependency archives (draco/manifold/gltfsdk) link fine under
+6.0.2's wasm-ld; and the predicted 4.0.7 breakage is real — `'HEAPU8' was not
+exported` surfaces in conway's error path, so the MT targets need the used heap
+views added to `EXPORTED_RUNTIME_METHODS` in Phase 1.
+
+**Revised recommendation:** decouple. Do Phase 1 (EMSDK bump to 6.0.2, dlmalloc,
+re-bless) now for the free ~25%; park Phases 2-3 behind the upstream mimalloc
+fix. The plan below is kept as originally scoped for reference.
 
 ## TL;DR
 
