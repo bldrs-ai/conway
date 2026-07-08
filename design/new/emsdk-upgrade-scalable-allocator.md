@@ -60,11 +60,14 @@ link-flag + toolchain change, not a code rewrite.
 
 ## Unknowns to resolve first (spike, ~1–2 days)
 
-1. **Which emscripten version fixes the mimalloc arena fault?** Bisect emsdk
-   releases > 4.0.23 (and check the emscripten + mimalloc changelogs / issue
-   tracker for the specific unaligned-atomic-in-arena fix). Success =
-   a minimal repro (worker threads allocating to ~4 GB under
-   `-sMALLOC=mimalloc`) that no longer crashes.
+1. **Does the mimalloc 3.x rewrite (emsdk ≥ 5.0.7) fix the arena fault?**
+   This is the sharpest lead from the changelog review below: we only ever
+   tested mimalloc **2.x** (it was 2.1.7 around emsdk 3.1.73, and 4.0.23 shipped
+   a 2.x port). Emscripten **5.0.7 (2026-04-30) updated mimalloc to 3.3.1**, a
+   major rewrite of exactly the arena/heap code where our unaligned-atomic
+   fault lived. So the spike should **start at 5.0.7+ (prefer the latest,
+   6.0.2)**, not bisect from 4.0.23. Success = a minimal repro (worker threads
+   allocating to ~4 GB under `-sMALLOC=mimalloc`) that no longer crashes.
 2. **Does mimalloc actually win once it doesn't crash?** Re-measure the parallel
    staged path with mimalloc on the fixed toolchain (`CONWAY_FORCE_STAGED_FACES`)
    vs the serial path, on Arty_Z7 / DSA2 / the STEP corpus. Confirm the ~2×
@@ -77,12 +80,69 @@ link-flag + toolchain change, not a code rewrite.
    count; confirm the pool size and the runtime `ThreadPool` are sane on the
    target runners and typical user machines once the parallel path is hot.
 
+## EMSDK changes to account for in testing (3.1.72 → 6.0.x)
+
+We are pinned at **3.1.72 (2024-11-19)**. The current release is **6.0.2
+(2026-07-01)** — so an upgrade crosses **three** major bumps (4.0, 5.0, 6.0).
+The changes below are the ones that can affect *our* build, bindings, output,
+or consumers and therefore need explicit test coverage. "Verify" = confirmed in
+the emscripten ChangeLog; "check" = likely-affects-us, confirm during the spike.
+
+### Directly relevant to this effort (allocator / memory / threads)
+- **mimalloc 2.1.7 → 3.3.1 (5.0.7).** The whole premise — a major-version
+  rewrite of the allocator; target ≥ 5.0.7 (see Unknown #1).
+- **`MEMORY64` is no longer experimental (as of 3.1.72); `-m64` is honored as an
+  alias for `-sMEMORY64`/`--target=wasm64` (6.0.0).** A real lever if mimalloc's
+  per-thread heaps push us into the 4 GB ceiling — but wasm64 is a large change
+  (perf, size, browser support) and stays a *separate* spike, not part of the
+  default upgrade.
+- **`GROWABLE_ARRAYBUFFERS` defaults to `=1` (6.0.2), with `=2` to avoid the
+  overhead in multi-threaded builds.** We are a multi-threaded, memory-growth
+  build; measure MT memory/perf and consider `=2`.
+
+### Likely to force build/binding changes (test these)
+- **Standard memory views `HEAP8`/`HEAP32`/… are no longer exported by default
+  (4.0.7),** and **missing entries in `EXPORTED_RUNTIME_METHODS` now *error*
+  instead of warn (4.0.7).** conway's TS glue accesses the heap views; expect to
+  add the ones we use (e.g. `HEAPU8`, `HEAPF64`, `HEAP32`) to the MT targets'
+  `EXPORTED_RUNTIME_METHODS` in `genie.lua`, and expect a hard build error if
+  any referenced export is missing rather than a silent warning.
+- **`MODULARIZE` factory is `async` (4.0.0) and *always* returns a promise, even
+  with async compilation disabled (4.0.12).** We build `MODULARIZE=1
+  EXPORT_ES6=1`; confirm every `ConwayGeomWasm*()` instantiation in conway and
+  in headless-three awaits the factory.
+- **C++ exception ABI moved: `WASM_LEGACY_EXCEPTIONS` toggle added (4.0.0); the
+  standard Wasm EH now uses the LLVM backend (4.0.2); C++ exceptions are always
+  thrown as `CppException` objects (5.0.5).** We build
+  `NO_DISABLE_EXCEPTION_CATCHING` and conway-geom throws internally (e.g. CDT).
+  Decide legacy-vs-standard EH and confirm our catch paths still behave.
+- **`SINGLE_FILE` binary embedding changed from base64 to UTF-8 string (4.0.18).**
+  Our Node MT/`SINGLE_FILE=1` bundles embed the wasm — confirm the single-file
+  module still loads and that size/parse time didn't regress.
+
+### Consumer / environment floors (note, don't block)
+- **Minimum Node for generated code bumped v12.22 → v18.3.0 (6.0.0).** CI and
+  the perf harness run Node 20, so fine — but flag it for any downstream Node
+  consumer of `@bldrs-ai/conway`.
+- **Minimum browsers raised: Chrome 74→85, Firefox 68→79, Safari 12.2→14.1
+  (6.0.0).** Affects the `ConwayGeomWasmWebMT` module and Share; confirm the
+  target-browser matrix is still acceptable.
+
+### Cross-cutting consequence
+Any of the codegen-affecting changes above (new toolchain, new EH backend,
+different allocator) means **generated code and floating-point results will
+move** — output will *not* be byte-identical to 3.1.72. This is the driver for
+the golden/baseline re-bless in Phase 1, and the reason to bump EMSDK on its own
+before touching the allocator.
+
 ## Work plan (phased)
 
 **Phase 0 — Spike (answers the unknowns above).** Throwaway branch: bump
-`EMSDK_VERSION`, add the mimalloc link flags to the MT targets, build, run the
-allocator stress repro, and micro-benchmark the parallel path. Go/no-go gate:
-only proceed if (1) mimalloc doesn't crash and (2) the parallel path is
+`EMSDK_VERSION` to a mimalloc-3.x release (**≥ 5.0.7, prefer 6.0.2**), add the
+mimalloc link flags to the MT targets, get it to build (expect to fix the
+`HEAP*` exports and possibly the MODULARIZE-async / EH items above), run the
+allocator stress repro near 4 GB, and micro-benchmark the parallel path. Go/no-go
+gate: only proceed if (1) mimalloc 3.x doesn't crash and (2) the parallel path is
 measurably faster.
 
 **Phase 1 — Toolchain upgrade (conway + conway-geom), allocator still dlmalloc.**
