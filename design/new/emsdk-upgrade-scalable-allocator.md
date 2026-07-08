@@ -29,14 +29,19 @@ large-heap regime, same territory as the 2.x unaligned-atomic fault.
 **Action:** file upstream (emscripten-core/emscripten) with this repro;
 parallel tessellation stays gated off until a fixed allocator exists.
 
-**Consolation prize — the EMSDK 6.0.2 toolchain alone is a ~25% serial win
-(GO for Phase 1).** Same models, same container, dlmalloc serial path:
-
-| model | 3.1.72 geometry | 6.0.2 geometry | Δ |
-|---|---|---|---|
-| driver board.step (13.8 MB) | 6.1 s | 5.1 s | −17% |
-| Jetenginestep.stp (19.9 MB) | 17.0 s | 12.9 s | −24% |
-| Arty_Z7.stp (55 MB) | 67.6 s | 49.2 s | **−27%** |
+**EMSDK 6.0.2 serial performance: initial measurements suggested ~17-27%
+faster, but interleaved re-measurement demoted that to "unconfirmed,
+likely modest".** The initial single-shot comparisons (driver 6.1→5.1 s,
+jet 17.0→12.9 s, Arty 67.6→49.2 s) were taken hours apart in a shared
+container whose absolute speed later proved to swing by ±18% (the same
+3.1.72 binary measured 64.7 s and 92.3 s across three interleaved
+rounds). Interleaved A/B on Arty averages 75.9 s (3.1.72) vs 70.8 s
+(6.0.2) — a ~5-15% improvement at best, within this container's noise
+floor. **The definitive number will come from the perf-three CI delta on
+dedicated runners after this merges** — the pipeline fixed in #358 is
+precisely the instrument for it. The upgrade is justified regardless:
+three-major toolchain currency, the HEAP-export fix, MEMORY64 maturity,
+and the platform for future allocator work.
 
 Correctness sanity: supercap.step digest under 6.0.2/dlmalloc has identical
 structure to the committed baseline (1169 rows, same IDs and types); only
@@ -51,7 +56,9 @@ exported` surfaces in conway's error path, so the MT targets need the used heap
 views added to `EXPORTED_RUNTIME_METHODS` in Phase 1.
 
 **Revised recommendation:** decouple. Do Phase 1 (EMSDK bump to 6.0.2, dlmalloc,
-re-bless) now for the free ~25%; park Phases 2-3 behind the upstream mimalloc
+re-bless) now — perf upside is unconfirmed-but-likely (see the corrected
+measurement note above; CI perf-three will quantify it) and the toolchain
+currency + HEAP fixes stand on their own; park Phases 2-3 behind the upstream mimalloc
 fix. The plan below is kept as originally scoped for reference.
 
 ## Deep-debug session (2026-07-08, follow-up): root cause isolated
@@ -102,7 +109,8 @@ silent hang without them).
    widen the parallel section (parallelize profile/curve/CSG stages, batch
    ThreadPool jobs more coarsely), which is a conway-geom design effort, not
    an allocator flip.
-3. **Phase 1 (EMSDK 6.0.2 + dlmalloc, ~25% serial win) remains the action
+3. **Phase 1 (EMSDK 6.0.2 + dlmalloc; serial delta to be confirmed by CI
+   perf-three) remains the action
    item.** Phases 2-3 are parked: blocked upstream AND their expected value
    needs re-estimation per (2). The successor to Phases 2-3 is the
    Allocation-Free Tessellation Pipeline below.
