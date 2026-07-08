@@ -54,6 +54,58 @@ views added to `EXPORTED_RUNTIME_METHODS` in Phase 1.
 re-bless) now for the free ~25%; park Phases 2-3 behind the upstream mimalloc
 fix. The plan below is kept as originally scoped for reference.
 
+## Deep-debug session (2026-07-08, follow-up): root cause isolated
+
+We instrumented emscripten's vendored mimalloc (marker strings verified present
+in the linked binary each iteration — earlier "healthy" runs turned out to be
+stale-toolchain artifacts and were discarded) and tested three hypotheses
+against a deterministic 5-second Arty_Z7 repro:
+
+| hypothesis | patch tried | result |
+|---|---|---|
+| exponential arena escalation (32 MB → 1 GiB → ~4 GiB) overruns wasm32 | cap per-arena reserve at 256 MiB on 32-bit (`mi_arena_reserve`) | failures moved from 1 GiB to exactly 256 MiB — **still dies identically** |
+| purge churn (decommit is a no-op on wasm, purge_delay default 1000 ms) | `purge_delay = -1` (never purge) | **zero behavior change** |
+| growth-event overhead | `-sINITIAL_MEMORY=3072MB` pre-reserve | **zero behavior change** |
+
+The tell: the instrumented count of ≥32 MB system-level allocations is **2504
+in every configuration** — these are not allocator-internal arena operations,
+they are the workload's own large tessellation buffers passing through to
+emmalloc. Emscripten's port builds mimalloc with 16 KiB arena slices
+(`-DMI_ARENA_SLICE_SHIFT=(12+MI_SIZE_SHIFT)`), which makes the maximum
+in-arena object small, so every multi-MB geometry buffer bypasses arenas
+entirely and goes to emmalloc. Conway's tessellation grows vertex/index
+buffers by realloc: each step allocates a larger block and frees the smaller
+one, and emmalloc cannot reuse the accumulated smaller holes for the next
+larger request — the sbrk break ratchets monotonically upward until it hits
+the 4 GiB ceiling (`Cannot enlarge memory, requested 4294962208`) while live
+data is only ~1.5 GB. **dlmalloc survives the identical allocation pattern
+because it extends its top chunk in place instead of leapfrogging.**
+
+Secondary bug: when that allocation fails, mimalloc's failure path aborts (or
+returns) while internal locks are held, so every subsequent allocation from any
+thread deadlocks (`pthread mutex deadlock detected` cascade with assertions; a
+silent hang without them).
+
+**Conclusions**
+
+1. This is not fixable with mimalloc *tuning*; it needs an upstream change to
+   large-object handling on wasm32/emmalloc (e.g. realloc-aware pass-through,
+   or in-place growth cooperation with emmalloc), plus the lock-safety fix on
+   the failure path. Upstream report material: deterministic repro, the three
+   falsified hypotheses, instrumentation traces, and both patches (in the
+   session's instrumented emsdk tree; arena cap + purge default).
+2. Even with a working allocator, the parallel-tessellation prize has shrunk:
+   post-NURBS-optimization, staged face tessellation is only ~20-25% of Arty
+   geometry time (best parallel run 37.8 s vs 45.1 s serial, 2.3× CPU
+   utilization ⇒ Amdahl-bound ≤ ~1.3×). The "~2×" in this doc's title was
+   calibrated before the NURBS wins landed. A future parallel win needs to
+   widen the parallel section (parallelize profile/curve/CSG stages, batch
+   ThreadPool jobs more coarsely), which is a conway-geom design effort, not
+   an allocator flip.
+3. **Phase 1 (EMSDK 6.0.2 + dlmalloc, ~25% serial win) remains the action
+   item.** Phases 2-3 are parked: blocked upstream AND their expected value
+   needs re-estimation per (2).
+
 ## TL;DR
 
 The parallel, staged face-tessellation path is already built, verified
