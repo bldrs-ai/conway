@@ -1,7 +1,11 @@
 # EMSDK upgrade → scalable allocator → enable parallel tessellation (~2× multi-core)
 
-**Status:** Proposal / scoping, **Phase 0 spike executed — results below.** No
-behavior change in this PR.
+**Status:** Phase 0 spike executed (results below) and **Phase 1 — the EMSDK
+6.0.2 toolchain bump — ships in this same PR**: `EMSDK_VERSION` → 6.0.2, the
+conway-geom link-flag fixes (HEAP view exports, workerfs ENVIRONMENT), and
+re-blessed goldens/baselines via companion PRs in test-models and
+test-models-private. Phases 2-3 are parked behind the upstream mimalloc bug;
+Phase 4 (AFTP, below) is the planned successor.
 
 ## Phase 0 spike results (executed 2026-07-08, emsdk 6.0.2, 4-core container)
 
@@ -197,7 +201,10 @@ exists. Expected upside from earlier local runs: roughly **2× geometry time on
 multi-core, for both IFC and STEP** (they share the same geometry kernel), on
 top of the ~3.8× already shipped.
 
-## Where this stands today (facts, with pointers)
+## Where this stood at scoping time (facts as of the 3.1.72 pin)
+
+*(Snapshot from before this PR's Phase 1 landed; kept for the record. The
+EMSDK pin below is now 6.0.2 — this PR changes it.)*
 
 - `hasScalableAllocator()` returns `false` unless the `CONWAY_SCALABLE_ALLOCATOR`
   macro is defined — `dependencies/conway-geom/conway-api.cpp:270-281`. It is
