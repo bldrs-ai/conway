@@ -184,6 +184,44 @@ dependency.
 exact-size commits → reservation-aware meshes → re-measure parallel
 scaling → widen the parallel section (profiles/curves) as a follow-on.
 
+### Telemetry pass results (executed 2026-07-09, emsdk 6.0.2 build)
+
+Instrument: `conway-geom` `structures/alloc_telemetry.{h,cpp}` on branch
+`claude/aftp-telemetry` — a thread-local RAII scope around each
+`AddFaceToGeometry{,Simple}` interposes the system allocator (wasm-ld
+`--wrap`) and records per-face allocator-call counts and peak live bytes,
+decomposed into scratch (freed in-scope, arena-sizable) vs escaped
+(outlives the face — mesh commits). Opt-in at genie time via the
+`CONWAY_ALLOC_TELEMETRY` env var; release/CI builds unchanged.
+
+| model | faces | allocator calls (avg/face, max/face) | per-face peak scratch | escaped/face (avg, max) |
+|---|---|---|---|---|
+| Arty_Z7.stp (55 MB) | 31,681 | **217.6M** (6,870, 26.5M) | 48.6% <1 KiB, 99.71% <512 KiB, 99.91% <1 MiB; 8 outlier faces up to ~3.9 GB transient | 3.1 KB, 1.5 MB |
+| Jetenginestep.stp (19.9 MB) | 5,061 | 14.4M (2,849, 505k) | 81.5% <32 KiB, 97.8% <2 MiB, max 83.6 MB | 50 KB, 24 MB |
+| Schependomlaan.ifc / FM_ARC_DigitalHub.ifc | 0 scoped | — | — | — |
+
+**What this says:**
+
+1. **The malloc traffic is enormous and per-face scratch is tiny.** One
+   Arty load makes ~218M allocator calls — the dlmalloc global lock gets
+   acquired ~218M times, which is the measured reason the parallel staged
+   path lost to serial. Meanwhile 99.9% of faces never need more than
+   ~1 MiB of transient memory at once.
+2. **Arena sizing:** a **1–2 MiB per-thread bump arena** (reset per face)
+   absorbs ≥99.9% of faces on Arty and ~98% on the NURBS-dense jet engine;
+   a counted heap-spill slow path covers the tail (jet's spill tail reaches
+   ~84 MB, Arty has 8 pathological faces that transiently touch GBs —
+   worth a follow-up look in their own right).
+3. **Escaped bytes are small** (avg 3–50 KB/face) — commits into the target
+   mesh are a minor share of in-scope allocation, so the arena + exact-size
+   commit design attacks the right target.
+4. **Scope note:** `AddFaceToGeometry` is the STEP / IFC-advanced-brep
+   path; standard IFC models (extrusions/profiles/CSG — e.g.
+   Schependomlaan, DigitalHub) record zero scoped faces. Their tessellation
+   entry points need their own scopes in the next telemetry increment
+   before IFC gets arena treatment; the STEP path is where the measured
+   lock convoy lives, so it goes first.
+
 ## TL;DR
 
 The parallel, staged face-tessellation path is already built, verified
