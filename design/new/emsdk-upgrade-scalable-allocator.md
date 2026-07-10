@@ -222,6 +222,48 @@ decomposed into scratch (freed in-scope, arena-sizable) vs escaped
    before IFC gets arena treatment; the STEP path is where the measured
    lock convoy lives, so it goes first.
 
+### Implementation results (executed 2026-07-10, emsdk 6.0.2)
+
+The arena and its wiring landed on `conway-geom:claude/aftp-telemetry`
+(conway PR #360 / conway-geom PR #139), byte-identical throughout:
+
+1. **The primitive** — `structures/scratch_arena.h`: a per-thread bump
+   `ScratchArena` (counted heap spill for the giant-face tail), a
+   nestable checkpoint `ScratchArenaScope` (mark/rewind, not reset-to-zero,
+   so tessellation helpers nest safely), a `ScratchAllocator<T>` for typed
+   `std::vector` temporaries, and a `ScratchArenaResource : std::pmr::
+   memory_resource` so pmr containers draw from the same arena. Standalone
+   host test passes clean under ASan/UBSan.
+
+2. **`TriangulateBounds`** (faceted planar path): boundary rings routed
+   through `ScratchAllocator`. Byte-identical, but ~0.3% on NURBS models —
+   the diagnostic that sent us to the real hot path.
+
+3. **`WingedEdgeMesh` arena-backing** (the win): the per-face tessellation
+   mesh — whose `edge_map` allocates a node per edge, plus its growing
+   vertex/edge/triangle vectors — is the dominant per-face malloc source.
+   Making its four containers `std::pmr` and constructing the three
+   `ParameterVertex` surface tessellators (bspline/cylindrical/spherical)
+   on `ThreadScratchResource()` under a per-face `ScratchArenaScope` moves
+   that traffic to the arena. pmr keeps `WingedEdgeMesh` a single type, so
+   `tesselate()`/`appendMeshToGeometry` signatures don't change; the default
+   resource stays new/delete so the CSG/manifold and `glm::dvec*` meshes are
+   untouched.
+
+   **Measured (Jetenginestep, telemetry build):** allocator calls
+   **14,416,593 → 4,710,049** — **−67%** (avg 2,848.6 → 930.7 per face).
+   Digests for duplex, AC20-FZK-Haus, haus, ISSUE_126_model, dental_clinic,
+   advanced_model, and Jetenginestep all match the committed 6.0.2 baselines
+   exactly.
+
+**Remaining / next:** the surviving ~4.7M/face allocs are third-party CDT
+internals (`external/CDT`, which doesn't expose an allocator hook — needs a
+vendored adapter) plus earcut internals, and the standard-IFC extrusion/CSG
+paths (which record zero scoped faces today). Those are the follow-on
+targets, same byte-identical gate. Once per-face allocation is low enough,
+re-measure the staged parallel path (the original point: it lost to serial
+on dlmalloc's global lock, which the arena sidesteps).
+
 ## TL;DR
 
 The parallel, staged face-tessellation path is already built, verified
