@@ -256,13 +256,40 @@ The arena and its wiring landed on `conway-geom:claude/aftp-telemetry`
    advanced_model, and Jetenginestep all match the committed 6.0.2 baselines
    exactly.
 
-**Remaining / next:** the surviving ~4.7M/face allocs are third-party CDT
+4. **Subdivision candidate heap** (`tesselate()`): the
+   `std::priority_queue<CandidateEdge>` runs inside the same per-face scope
+   and is backed with a pmr container on the arena. Byte-identical (heap
+   order is the comparator's, not the allocator's).
+
+### The payoff: parallel now wins (the point of AFTP)
+
+The whole reason AFTP exists: the staged parallel tessellation path was
+built and byte-identical but **gated off**, because on dlmalloc's single
+global malloc lock it ran *slower* than serial. With each worker now
+tessellating in its own thread-local arena, that lock contention is gone.
+
+**Re-measured on the arena build (Jetenginestep, 4-core container,
+interleaved serial vs `CONWAY_FORCE_STAGED_FACES`, geometry ms):**
+
+| round | serial | parallel | speedup |
+|---|---|---|---|
+| 1 | 12484 | 7778 | 1.60× |
+| 2 | 12107 | 7698 | 1.57× |
+| 3 | 12604 | 8025 | 1.57× |
+| 4 | 12079 | 7981 | 1.51× |
+
+**~1.57× on 4 cores** — and the parallel path is **byte-identical** to serial
+(same digest, confirming the thread-local arena is correct under real
+pthreads). This *flips* the previous result. Container timing is noisy in
+absolute terms, so the definitive number is still the CI perf-three delta on
+dedicated runners; but the direction (parallel < serial, previously the
+reverse) is unambiguous and consistent across rounds.
+
+**Remaining:** the surviving ~4.7M/face allocs are third-party CDT
 internals (`external/CDT`, which doesn't expose an allocator hook — needs a
 vendored adapter) plus earcut internals, and the standard-IFC extrusion/CSG
-paths (which record zero scoped faces today). Those are the follow-on
-targets, same byte-identical gate. Once per-face allocation is low enough,
-re-measure the staged parallel path (the original point: it lost to serial
-on dlmalloc's global lock, which the arena sidesteps).
+paths (which record zero scoped faces today) — follow-on targets, same
+byte-identical gate, to widen the win and push the parallel scaling further.
 
 ## TL;DR
 
