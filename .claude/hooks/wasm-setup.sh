@@ -32,11 +32,14 @@ log "yarn extract-wasm-dependencies"
 yarn extract-wasm-dependencies >/dev/null
 
 # 2. EMSDK install at ../emsdk (matches scripts/setup-emsdk.sh + build-codex.sh).
+# The stamp includes the version so a version bump re-provisions environments
+# that were stamped on the old toolchain.
+EMSDK_VERSION="${EMSDK_VERSION:-6.0.2}"
 EMSDK_DIR="$(cd "$REPO/.." && pwd)/emsdk"
-if [ ! -x "$EMSDK_DIR/emsdk_env.sh" ] || ! stamped emsdk; then
-  log "installing EMSDK 3.1.72 at $EMSDK_DIR (slow on first run, cached afterward)"
-  bash "$REPO/scripts/setup-emsdk.sh"
-  stamp emsdk
+if [ ! -x "$EMSDK_DIR/emsdk_env.sh" ] || ! stamped "emsdk-$EMSDK_VERSION"; then
+  log "installing EMSDK $EMSDK_VERSION at $EMSDK_DIR (slow on first run, cached afterward)"
+  EMSDK_VERSION="$EMSDK_VERSION" bash "$REPO/scripts/setup-emsdk.sh"
+  stamp "emsdk-$EMSDK_VERSION"
 else
   log "EMSDK present at $EMSDK_DIR, skipping install"
 fi
@@ -57,11 +60,11 @@ fi
 
 # 3. conway-geom WASM build (MT node target — what tests load at runtime).
 WASM_OUT="$REPO/dependencies/conway-geom/Dist/ConwayGeomWasmNodeMT.js"
-if [ ! -f "$WASM_OUT" ] || ! stamped wasm; then
+if [ ! -f "$WASM_OUT" ] || ! stamped "wasm-emsdk-$EMSDK_VERSION"; then
   log "building conway-geom WASM (ConwayGeomWasmNodeMT) — first run ~2–4 min"
   chmod +x "$REPO/scripts/build-codex.sh"
   yarn build-codex-MT
-  stamp wasm
+  stamp "wasm-emsdk-$EMSDK_VERSION"
 else
   log "WASM artifact present, skipping conway-geom build"
 fi

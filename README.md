@@ -20,14 +20,14 @@ Conway includes two major subcomponents:
 
 ### EMSDK Setup
 1. Clone the [EMSDK](https://github.com/emscripten-core/emsdk) repo and add it to your path (see their instructions)
-2. Conway is using `3.1.72`
+2. Conway is using `6.0.2` (or run `scripts/setup-emsdk.sh`, which installs the pinned version)
 ```
 > cd $EMSDK
-> ./emsdk install 3.1.72
-> ./emsdk activate 3.1.72
+> ./emsdk install 6.0.2
+> ./emsdk activate 6.0.2
 > cd $CONWAY
 conway> emcc -v
-emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.72 (437140d149d9c977ffc8b09dbaf9b0f5a02db190)
+emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.2
 ...
 ```
 
