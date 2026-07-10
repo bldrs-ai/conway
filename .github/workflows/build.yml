@@ -1124,9 +1124,11 @@ jobs:
           cache: 'yarn'
 
       # Trusted Publishing requires npm >= 11.5.1. Node 20 ships with npm 10.x,
-      # so upgrade the global npm binary before the publish step.
+      # so upgrade the global npm binary before the publish step. Pin to the 11.x
+      # line: npm@latest is now 12.x, which requires Node >= 22 (EBADENGINE on
+      # Node 20). 11.x has OIDC trusted publishing and runs on Node 20.
       - name: Upgrade npm to a version that supports OIDC
-        run: npm install -g npm@latest
+        run: npm install -g 'npm@^11.5.1'
 
       - name: Compute next version
         id: ver
