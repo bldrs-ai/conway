@@ -9,6 +9,7 @@ import {
 } from '../../parsing/token_parsing'
 import StepAttributeMap, { ATTRIBUTE_PARSE_TYPE } from './step_attribute_map'
 import StepCommentParser from './step_comment_parser'
+import { decodeUtf8 } from './decode_utf8'
 import { stepExtractString } from './step_deserialization_functions'
 import StepEntityIdentifierParser from './step_entity_identifier_parser'
 import StepEnumParser from './step_enum_parser'
@@ -95,7 +96,6 @@ export interface StepHeader {
 
 export type HeaderParseResult = [StepHeader, ParseResult]
 
-const textDecoder = new TextDecoder()
 
 /**
  * Parser base for header parsing.
@@ -184,7 +184,7 @@ export class StepHeaderParser {
         return syntaxError()
       }
 
-      const headerID = textDecoder.decode(input.buffer.subarray(startIdentifier, input.cursor))
+      const headerID = decodeUtf8(input.buffer.subarray(startIdentifier, input.cursor))
 
       let firstAttribute = true
 
@@ -287,7 +287,7 @@ export class StepHeaderParser {
 
       whitespace()
 
-      const headerBlock = textDecoder.decode(input.buffer.subarray(startBlock, input.cursor))
+      const headerBlock = decodeUtf8(input.buffer.subarray(startBlock, input.cursor))
 
       headers.headers.set(headerID, headerBlock)
 
@@ -943,7 +943,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
             // do not include the trailing period delimiter
             const subArray = input.buffer.subarray(startEnum_ + 1, input.cursor - 1)
-            const enumString = new TextDecoder().decode(subArray)
+            const enumString = decodeUtf8(subArray)
 
             arg_ = {
               type: 3,
@@ -1132,7 +1132,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
           // do not include the trailing period delimiter
           const subArray = input.buffer.subarray(startEnum_ + 1, input.cursor - 1)
-          const enumString = new TextDecoder().decode(subArray)
+          const enumString = decodeUtf8(subArray)
 
           arg = {
             type: 3,
