@@ -285,11 +285,62 @@ absolute terms, so the definitive number is still the CI perf-three delta on
 dedicated runners; but the direction (parallel < serial, previously the
 reverse) is unambiguous and consistent across rounds.
 
-**Remaining:** the surviving ~4.7M/face allocs are third-party CDT
-internals (`external/CDT`, which doesn't expose an allocator hook — needs a
-vendored adapter) plus earcut internals, and the standard-IFC extrusion/CSG
-paths (which record zero scoped faces today) — follow-on targets, same
-byte-identical gate, to widen the win and push the parallel scaling further.
+### Phase 3: the spill storm — a chunked, growing arena (executed 2026-07-11)
+
+Phase 2 left ~4.7M allocator calls/model (avg 930/face). The phase-2 note
+guessed the remainder was third-party CDT/earcut internals. **Per-callsite
+attribution** (added to the telemetry: `AllocTagScope` tags around
+earcut/CDT/surface-eval/NURBS-inverse and each `Triangulate*` dispatch branch)
+disproved that outright:
+
+| site | before | share |
+|---|---|---|
+| `tri_cylinder` | 1004.7/face | **83.0%** |
+| `tri_conical` | 188.2/face | 15.5% |
+| cdt | 2.4/face | 0.2% |
+| earcut | 0.8/face | 0.1% |
+| surface_eval | ~0/face | 0.0% |
+
+CDT and earcut were *noise*. The cost was concentrated in the cylinder/conical
+surface tessellators — and not in their mesh (already arena-backed) but in the
+**arena's own spill path**. The fixed 8 MiB buffer spilled *every* allocation
+past capacity to its own `operator new`; a handful of enormous faces (peak
+scratch up to ~150 MiB, `maxAllocCalls/face = 467,474`) overflowed it and
+death-spiralled into hundreds of thousands of individual mallocs — precisely
+the traffic AFTP exists to remove, reintroduced one face at a time.
+
+The fix is in the primitive, not the callsites: **`ScratchArena` now grows in
+chunks**. On overflow it appends one geometrically-larger chunk (or reuses an
+already-grown one) and bumps within it, so an N-byte face costs O(log N) heap
+allocations instead of O(N). Grown chunks are retained across the per-face
+rewind up to a cap (`kDefaultRetainedCapacity`, 32 MiB) so steady-state faces
+stay malloc-free, and the excess is released so a rare giant face doesn't pin
+per-thread RSS. `Marker` now carries `{chunk, offset, committedLower}`; mark/
+rewind and nested scopes work identically across chunk boundaries. Standalone
+test extended (incl. a 100k-allocation spill-storm regression) and passes clean
+under ASan/UBSan.
+
+**Measured (Jetenginestep, telemetry build):** allocator calls
+**6,128,606 → 101,839** — a further **−98.3%** (avg 1210.9 → 20.1/face,
+**max 467,474 → 1,972/face**). `tri_cylinder` 1004.7 → 1.9/face; `tri_conical`
+188.2 → 0.2/face. Digests for duplex, AC20-FZK-Haus, haus, ISSUE_126_model,
+dental_clinic, advanced_model, and Jetenginestep all still match the committed
+6.0.2 baselines exactly — serial **and** parallel.
+
+**The scaling payoff (re-measured, same interleaved A/B, geometry ms):**
+
+| round | serial | parallel | speedup |
+|---|---|---|---|
+| 1 | 12624 | 4494 | 2.81× |
+| 2 | 12867 | 4501 | 2.86× |
+
+Killing the spill storm nearly **doubled the parallel speedup: ~1.57× →
+~2.83×** (≈71% of ideal on 4 cores, up from ≈39%). Those 467k mallocs on the
+giant faces were serialising against every other worker on dlmalloc's global
+lock; removing them dropped the parallel wall-clock from ~7.8s to ~4.5s while
+serial (no lock contention to shed) held at ~12.7s. The definitive number is
+still the CI perf-three delta on dedicated runners, but the direction is
+unambiguous and consistent.
 
 ## TL;DR
 
