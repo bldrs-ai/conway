@@ -1,6 +1,12 @@
 import ParsingConstants from '../../parsing/parsing_constants'
 import ParsingDfa16Table from '../../parsing/parsing_dfa_16table'
-import { decodeUtf8 } from './decode_utf8'
+import { decodeUtf8, installResizableTextDecoderShim } from './decode_utf8'
+
+// Emscripten 6's browser wasm heap is a resizable ArrayBuffer, on which strict
+// browsers' TextDecoder.decode() throws — including the glue's own UTF8ToString
+// during geometry extraction. Install the global copy-first shim as the STEP
+// pipeline loads, before any heap-string decode. Idempotent.
+installResizableTextDecoderShim()
 
 /**
  * Enum representing the state machine of the string parser DFA.

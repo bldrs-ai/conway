@@ -1,5 +1,5 @@
 import {describe, expect, test} from '@jest/globals'
-import { decodeUtf8 } from './decode_utf8'
+import { decodeUtf8, installResizableTextDecoderShim } from './decode_utf8'
 
 
 /**
@@ -65,5 +65,33 @@ describe('decodeUtf8', () => {
   test('preserves non-ASCII UTF-8 through the copy path', () => {
     const view = resizableView('café — Ω')
     expect(decodeUtf8(view)).toBe('café — Ω')
+  })
+
+  test('global shim rescues decodes we do not own (e.g. the wasm glue)', () => {
+    // The wasm glue's UTF8ToString / embind string returns call
+    // TextDecoder.prototype.decode directly on resizable-heap views — we can't
+    // route those through decodeUtf8. The global shim must intercept them.
+    const proto = TextDecoder.prototype as { decode: TextDecoder['decode'] }
+    const realDecode = proto.decode
+    // Simulate a strict browser: the base decode throws on a resizable view.
+    proto.decode = function strict(this: TextDecoder, input?: BufferSource, opts?: TextDecodeOptions): string {
+      const buffer = (ArrayBuffer.isView(input) ? input.buffer : input) as
+        { resizable?: boolean } | undefined
+      if (buffer?.resizable === true) {
+        throw new TypeError("TextDecoder.decode: ... can't be a resizable ArrayBuffer")
+      }
+      return realDecode.call(this, input as BufferSource, opts)
+    }
+    try {
+      const view = resizableView('ADVANCED_FACE_STRING_VALUE')
+      // Before the shim, a raw decode (the glue's path) throws.
+      expect(() => proto.decode.call(new TextDecoder(), view)).toThrow(TypeError)
+      // Install the shim on top of the strict base.
+      installResizableTextDecoderShim()
+      // Now the same raw decode is intercepted, copied out, and succeeds.
+      expect(new TextDecoder().decode(view)).toBe('ADVANCED_FACE_STRING_VALUE')
+    } finally {
+      proto.decode = realDecode
+    }
   })
 })
