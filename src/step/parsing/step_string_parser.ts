@@ -1,5 +1,6 @@
 import ParsingConstants from '../../parsing/parsing_constants'
 import ParsingDfa16Table from '../../parsing/parsing_dfa_16table'
+import { decodeUtf8 } from './decode_utf8'
 
 /**
  * Enum representing the state machine of the string parser DFA.
@@ -27,7 +28,6 @@ const FOUR = ParsingConstants.ZERO + 4
 const ZERO = ParsingConstants.ZERO
 const NINE = ParsingConstants.NINE
 
-const decoder = new TextDecoder()
 
  
 const ISO8859Table = [['¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '­', '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ð', 'Ñ', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'Ý', 'Þ', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ð', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù', 'ú', 'û', 'ü', 'ý', 'þ'], ['Ą', '˘', 'Ł', '¤', 'Ľ', 'Ś', '§', '¨', 'Š', 'Ş', 'Ť', 'Ź', '­', 'Ž', 'Ż', '°', 'ą', '˛', 'ł', '´', 'ľ', 'ś', 'ˇ', '¸', 'š', 'ş', 'ť', 'ź', '˝', 'ž', 'ż', 'Ŕ', 'Á', 'Â', 'Ă', 'Ä', 'Ĺ', 'Ć', 'Ç', 'Č', 'É', 'Ę', 'Ë', 'Ě', 'Í', 'Î', 'Ď', 'Đ', 'Ń', 'Ň', 'Ó', 'Ô', 'Ő', 'Ö', '×', 'Ř', 'Ů', 'Ú', 'Ű', 'Ü', 'Ý', 'Ţ', 'ß', 'ŕ', 'á', 'â', 'ă', 'ä', 'ĺ', 'ć', 'ç', 'č', 'é', 'ę', 'ë', 'ě', 'í', 'î', 'ď', 'đ', 'ń', 'ň', 'ó', 'ô', 'ő', 'ö', '÷', 'ř', 'ů', 'ú', 'ű', 'ü', 'ý', 'ţ'], ['Ħ', '˘', '£', '¤', '', 'Ĥ', '§', '¨', 'İ', 'Ş', 'Ğ', 'Ĵ', '­', '', 'Ż', '°', 'ħ', '²', '³', '´', 'µ', 'ĥ', '·', '¸', 'ı', 'ş', 'ğ', 'ĵ', '½', '', 'ż', 'À', 'Á', 'Â', '', 'Ä', 'Ċ', 'Ĉ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', '', 'Ñ', 'Ò', 'Ó', 'Ô', 'Ġ', 'Ö', '×', 'Ĝ', 'Ù', 'Ú', 'Û', 'Ü', 'Ŭ', 'Ŝ', 'ß', 'à', 'á', 'â', '', 'ä', 'ċ', 'ĉ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', '', 'ñ', 'ò', 'ó', 'ô', 'ġ', 'ö', '÷', 'ĝ', 'ù', 'ú', 'û', 'ü', 'ŭ', 'ŝ'], ['Ą', 'ĸ', 'Ŗ', '¤', 'Ĩ', 'Ļ', '§', '¨', 'Š', 'Ē', 'Ģ', 'Ŧ', '­', 'Ž', '¯', '°', 'ą', '˛', 'ŗ', '´', 'ĩ', 'ļ', 'ˇ', '¸', 'š', 'ē', 'ģ', 'ŧ', 'Ŋ', 'ž', 'ŋ', 'Ā', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Į', 'Č', 'É', 'Ę', 'Ë', 'Ė', 'Í', 'Î', 'Ī', 'Đ', 'Ņ', 'Ō', 'Ķ', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ų', 'Ú', 'Û', 'Ü', 'Ũ', 'Ū', 'ß', 'ā', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'į', 'č', 'é', 'ę', 'ë', 'ė', 'í', 'î', 'ī', 'đ', 'ņ', 'ō', 'ķ', 'ô', 'õ', 'ö', '÷', 'ø', 'ų', 'ú', 'û', 'ü', 'ũ', 'ū'], ['Ё', 'Ђ', 'Ѓ', 'Є', 'Ѕ', 'І', 'Ї', 'Ј', 'Љ', 'Њ', 'Ћ', 'Ќ', '­', 'Ў', 'Џ', 'А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ж', 'З', 'И', 'Й', 'К', 'Л', 'М', 'Н', 'О', 'П', 'Р', 'С', 'Т', 'У', 'Ф', 'Х', 'Ц', 'Ч', 'Ш', 'Щ', 'Ъ', 'Ы', 'Ь', 'Э', 'Ю', 'Я', 'а', 'б', 'в', 'г', 'д', 'е', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о', 'п', 'р', 'с', 'т', 'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я', '№', 'ё', 'ђ', 'ѓ', 'є', 'ѕ', 'і', 'ї', 'ј', 'љ', 'њ', 'ћ', 'ќ', '§', 'ў'], ['', '', '', '¤', '', '', '', '', '', '', '', '،', '­', '', '', '', '', '', '', '', '', '', '', '', '', '', '؛', '', '', '', '؟', '', 'ء', 'آ', 'أ', 'ؤ', 'إ', 'ئ', 'ا', 'ب', 'ة', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', '', '', '', '', '', 'ـ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ى', 'ي', 'ً', 'ٌ', 'ٍ', 'َ', 'ُ', 'ِ', 'ّ', 'ْ', '', '', '', '', '', '', '', '', '', '', '', ''], ['ʽ', 'ʼ', '£', '', '', '¦', '§', '¨', '©', '', '«', '¬', '­', '', '―', '°', '±', '²', '³', '΄', '΅', 'Ά', '·', 'Έ', 'Ή', 'Ί', '»', 'Ό', '½', 'Ύ', 'Ώ', 'ΐ', 'Α', 'Β', 'Γ', 'Δ', 'Ε', 'Ζ', 'Η', 'Θ', 'Ι', 'Κ', 'Λ', 'Μ', 'Ν', 'Ξ', 'Ο', 'Π', 'Ρ', '', 'Σ', 'Τ', 'Υ', 'Φ', 'Χ', 'Ψ', 'Ω', 'Ϊ', 'Ϋ', 'ά', 'έ', 'ή', 'ί', 'ΰ', 'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'ς', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω', 'ϊ', 'ϋ', 'ό', 'ύ', 'ώ'], ['', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', '×', '«', '¬', '­', '®', '‾', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', '÷', '»', '¼', '½', '¾', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '‗', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'ך', 'כ', 'ל', 'ם', 'מ', 'ן', 'נ', 'ס', 'ע', 'ף', 'פ', 'ץ', 'צ', 'ק', 'ר', 'ש', 'ת', '', '', '', ''], ['¡', '¢', '£', '¤', '¥', '¦', '§', '¨', '©', 'ª', '«', '¬', '­', '®', '¯', '°', '±', '²', '³', '´', 'µ', '¶', '·', '¸', '¹', 'º', '»', '¼', '½', '¾', '¿', 'À', 'Á', 'Â', 'Ã', 'Ä', 'Å', 'Æ', 'Ç', 'È', 'É', 'Ê', 'Ë', 'Ì', 'Í', 'Î', 'Ï', 'Ğ', 'Ñ', 'Ò', 'Ó', 'Ô', 'Õ', 'Ö', '×', 'Ø', 'Ù', 'Ú', 'Û', 'Ü', 'İ', 'Ş', 'ß', 'à', 'á', 'â', 'ã', 'ä', 'å', 'æ', 'ç', 'è', 'é', 'ê', 'ë', 'ì', 'í', 'î', 'ï', 'ğ', 'ñ', 'ò', 'ó', 'ô', 'õ', 'ö', '÷', 'ø', 'ù', 'ú', 'û', 'ü', 'ı', 'ş']]
@@ -117,7 +117,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               result ??= ''
 
               if (cursor > reificationIndex) {
-                result += decoder.decode(input.subarray(reificationIndex, cursor - 1))
+                result += decodeUtf8(input.subarray(reificationIndex, cursor - 1))
               }
 
               result += '\''
@@ -127,7 +127,7 @@ export default class StepStringParser extends ParsingDfa16Table {
             } else {
               result ??= ''
 
-              result += decoder.decode(input.subarray(reificationIndex, cursor))
+              result += decodeUtf8(input.subarray(reificationIndex, cursor))
 
               return result
             }
@@ -165,7 +165,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
               if (nextChar2 !== BSLASH) {
                 result ??= ''
-                result += decoder.decode(input.subarray(reificationIndex, cursor))
+                result += decodeUtf8(input.subarray(reificationIndex, cursor))
                 cursor = nextCursor2 + 1
                 break
               }
@@ -183,7 +183,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               }
 
               result ??= ''
-              result += decoder.decode(input.subarray(reificationIndex, cursor))
+              result += decodeUtf8(input.subarray(reificationIndex, cursor))
 
               codePage = nextChar3 - A
 
@@ -202,7 +202,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
               if (nextChar2 !== BSLASH) {
                 result ??= ''
-                result += decoder.decode(input.subarray(reificationIndex, cursor))
+                result += decodeUtf8(input.subarray(reificationIndex, cursor))
                 cursor = nextCursor2 + 1
                 break
               }
@@ -216,7 +216,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               const nextChar3 = input[nextCursor3]
 
               result ??= ''
-              result += decoder.decode(input.subarray(reificationIndex, cursor))
+              result += decodeUtf8(input.subarray(reificationIndex, cursor))
 
               /* eslint-disable no-magic-numbers */
               if (nextChar3 < 0x7F) {
@@ -242,7 +242,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               const nextChar2 = input[nextCursor2]
 
               result ??= ''
-              result += decoder.decode(input.subarray(reificationIndex, cursor))
+              result += decodeUtf8(input.subarray(reificationIndex, cursor))
 
               const hexParserTil0 = (count: number) => {
 
