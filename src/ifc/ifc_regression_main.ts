@@ -310,6 +310,10 @@ function doWork() {
           await writePerfCsvIfRequested(
               perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs)
 
+          // AFTP sizing pass: no-op unless the wasm module was built with
+          // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).
+          conwayGeom.dumpAllocTelemetry(path.basename(ifcFile))
+
           if ( result === void 0 ) {
             Logger.error( 'Couldn\'t extract geometry')
           } else {

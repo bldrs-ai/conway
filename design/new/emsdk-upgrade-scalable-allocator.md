@@ -184,6 +184,164 @@ dependency.
 exact-size commits → reservation-aware meshes → re-measure parallel
 scaling → widen the parallel section (profiles/curves) as a follow-on.
 
+### Telemetry pass results (executed 2026-07-09, emsdk 6.0.2 build)
+
+Instrument: `conway-geom` `structures/alloc_telemetry.{h,cpp}` on branch
+`claude/aftp-telemetry` — a thread-local RAII scope around each
+`AddFaceToGeometry{,Simple}` interposes the system allocator (wasm-ld
+`--wrap`) and records per-face allocator-call counts and peak live bytes,
+decomposed into scratch (freed in-scope, arena-sizable) vs escaped
+(outlives the face — mesh commits). Opt-in at genie time via the
+`CONWAY_ALLOC_TELEMETRY` env var; release/CI builds unchanged.
+
+| model | faces | allocator calls (avg/face, max/face) | per-face peak scratch | escaped/face (avg, max) |
+|---|---|---|---|---|
+| Arty_Z7.stp (55 MB) | 31,681 | **217.6M** (6,870, 26.5M) | 48.6% <1 KiB, 99.71% <512 KiB, 99.91% <1 MiB; 8 outlier faces up to ~3.9 GB transient | 3.1 KB, 1.5 MB |
+| Jetenginestep.stp (19.9 MB) | 5,061 | 14.4M (2,849, 505k) | 81.5% <32 KiB, 97.8% <2 MiB, max 83.6 MB | 50 KB, 24 MB |
+| Schependomlaan.ifc / FM_ARC_DigitalHub.ifc | 0 scoped | — | — | — |
+
+**What this says:**
+
+1. **The malloc traffic is enormous and per-face scratch is tiny.** One
+   Arty load makes ~218M allocator calls — the dlmalloc global lock gets
+   acquired ~218M times, which is the measured reason the parallel staged
+   path lost to serial. Meanwhile 99.9% of faces never need more than
+   ~1 MiB of transient memory at once.
+2. **Arena sizing:** a **1–2 MiB per-thread bump arena** (reset per face)
+   absorbs ≥99.9% of faces on Arty and ~98% on the NURBS-dense jet engine;
+   a counted heap-spill slow path covers the tail (jet's spill tail reaches
+   ~84 MB, Arty has 8 pathological faces that transiently touch GBs —
+   worth a follow-up look in their own right).
+3. **Escaped bytes are small** (avg 3–50 KB/face) — commits into the target
+   mesh are a minor share of in-scope allocation, so the arena + exact-size
+   commit design attacks the right target.
+4. **Scope note:** `AddFaceToGeometry` is the STEP / IFC-advanced-brep
+   path; standard IFC models (extrusions/profiles/CSG — e.g.
+   Schependomlaan, DigitalHub) record zero scoped faces. Their tessellation
+   entry points need their own scopes in the next telemetry increment
+   before IFC gets arena treatment; the STEP path is where the measured
+   lock convoy lives, so it goes first.
+
+### Implementation results (executed 2026-07-10, emsdk 6.0.2)
+
+The arena and its wiring landed on `conway-geom:claude/aftp-telemetry`
+(conway PR #360 / conway-geom PR #139), byte-identical throughout:
+
+1. **The primitive** — `structures/scratch_arena.h`: a per-thread bump
+   `ScratchArena` (counted heap spill for the giant-face tail), a
+   nestable checkpoint `ScratchArenaScope` (mark/rewind, not reset-to-zero,
+   so tessellation helpers nest safely), a `ScratchAllocator<T>` for typed
+   `std::vector` temporaries, and a `ScratchArenaResource : std::pmr::
+   memory_resource` so pmr containers draw from the same arena. Standalone
+   host test passes clean under ASan/UBSan.
+
+2. **`TriangulateBounds`** (faceted planar path): boundary rings routed
+   through `ScratchAllocator`. Byte-identical, but ~0.3% on NURBS models —
+   the diagnostic that sent us to the real hot path.
+
+3. **`WingedEdgeMesh` arena-backing** (the win): the per-face tessellation
+   mesh — whose `edge_map` allocates a node per edge, plus its growing
+   vertex/edge/triangle vectors — is the dominant per-face malloc source.
+   Making its four containers `std::pmr` and constructing the three
+   `ParameterVertex` surface tessellators (bspline/cylindrical/spherical)
+   on `ThreadScratchResource()` under a per-face `ScratchArenaScope` moves
+   that traffic to the arena. pmr keeps `WingedEdgeMesh` a single type, so
+   `tesselate()`/`appendMeshToGeometry` signatures don't change; the default
+   resource stays new/delete so the CSG/manifold and `glm::dvec*` meshes are
+   untouched.
+
+   **Measured (Jetenginestep, telemetry build):** allocator calls
+   **14,416,593 → 4,710,049** — **−67%** (avg 2,848.6 → 930.7 per face).
+   Digests for duplex, AC20-FZK-Haus, haus, ISSUE_126_model, dental_clinic,
+   advanced_model, and Jetenginestep all match the committed 6.0.2 baselines
+   exactly.
+
+4. **Subdivision candidate heap** (`tesselate()`): the
+   `std::priority_queue<CandidateEdge>` runs inside the same per-face scope
+   and is backed with a pmr container on the arena. Byte-identical (heap
+   order is the comparator's, not the allocator's).
+
+### The payoff: parallel now wins (the point of AFTP)
+
+The whole reason AFTP exists: the staged parallel tessellation path was
+built and byte-identical but **gated off**, because on dlmalloc's single
+global malloc lock it ran *slower* than serial. With each worker now
+tessellating in its own thread-local arena, that lock contention is gone.
+
+**Re-measured on the arena build (Jetenginestep, 4-core container,
+interleaved serial vs `CONWAY_FORCE_STAGED_FACES`, geometry ms):**
+
+| round | serial | parallel | speedup |
+|---|---|---|---|
+| 1 | 12484 | 7778 | 1.60× |
+| 2 | 12107 | 7698 | 1.57× |
+| 3 | 12604 | 8025 | 1.57× |
+| 4 | 12079 | 7981 | 1.51× |
+
+**~1.57× on 4 cores** — and the parallel path is **byte-identical** to serial
+(same digest, confirming the thread-local arena is correct under real
+pthreads). This *flips* the previous result. Container timing is noisy in
+absolute terms, so the definitive number is still the CI perf-three delta on
+dedicated runners; but the direction (parallel < serial, previously the
+reverse) is unambiguous and consistent across rounds.
+
+### Phase 3: the spill storm — a chunked, growing arena (executed 2026-07-11)
+
+Phase 2 left ~4.7M allocator calls/model (avg 930/face). The phase-2 note
+guessed the remainder was third-party CDT/earcut internals. **Per-callsite
+attribution** (added to the telemetry: `AllocTagScope` tags around
+earcut/CDT/surface-eval/NURBS-inverse and each `Triangulate*` dispatch branch)
+disproved that outright:
+
+| site | before | share |
+|---|---|---|
+| `tri_cylinder` | 1004.7/face | **83.0%** |
+| `tri_conical` | 188.2/face | 15.5% |
+| cdt | 2.4/face | 0.2% |
+| earcut | 0.8/face | 0.1% |
+| surface_eval | ~0/face | 0.0% |
+
+CDT and earcut were *noise*. The cost was concentrated in the cylinder/conical
+surface tessellators — and not in their mesh (already arena-backed) but in the
+**arena's own spill path**. The fixed 8 MiB buffer spilled *every* allocation
+past capacity to its own `operator new`; a handful of enormous faces (peak
+scratch up to ~150 MiB, `maxAllocCalls/face = 467,474`) overflowed it and
+death-spiralled into hundreds of thousands of individual mallocs — precisely
+the traffic AFTP exists to remove, reintroduced one face at a time.
+
+The fix is in the primitive, not the callsites: **`ScratchArena` now grows in
+chunks**. On overflow it appends one geometrically-larger chunk (or reuses an
+already-grown one) and bumps within it, so an N-byte face costs O(log N) heap
+allocations instead of O(N). Grown chunks are retained across the per-face
+rewind up to a cap (`kDefaultRetainedCapacity`, 32 MiB) so steady-state faces
+stay malloc-free, and the excess is released so a rare giant face doesn't pin
+per-thread RSS. `Marker` now carries `{chunk, offset, committedLower}`; mark/
+rewind and nested scopes work identically across chunk boundaries. Standalone
+test extended (incl. a 100k-allocation spill-storm regression) and passes clean
+under ASan/UBSan.
+
+**Measured (Jetenginestep, telemetry build):** allocator calls
+**6,128,606 → 101,839** — a further **−98.3%** (avg 1210.9 → 20.1/face,
+**max 467,474 → 1,972/face**). `tri_cylinder` 1004.7 → 1.9/face; `tri_conical`
+188.2 → 0.2/face. Digests for duplex, AC20-FZK-Haus, haus, ISSUE_126_model,
+dental_clinic, advanced_model, and Jetenginestep all still match the committed
+6.0.2 baselines exactly — serial **and** parallel.
+
+**The scaling payoff (re-measured, same interleaved A/B, geometry ms):**
+
+| round | serial | parallel | speedup |
+|---|---|---|---|
+| 1 | 12624 | 4494 | 2.81× |
+| 2 | 12867 | 4501 | 2.86× |
+
+Killing the spill storm nearly **doubled the parallel speedup: ~1.57× →
+~2.83×** (≈71% of ideal on 4 cores, up from ≈39%). Those 467k mallocs on the
+giant faces were serialising against every other worker on dlmalloc's global
+lock; removing them dropped the parallel wall-clock from ~7.8s to ~4.5s while
+serial (no lock contention to shed) held at ~12.7s. The definitive number is
+still the CI perf-three delta on dedicated runners, but the direction is
+unambiguous and consistent.
+
 ## TL;DR
 
 The parallel, staged face-tessellation path is already built, verified
