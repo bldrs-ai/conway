@@ -501,10 +501,16 @@ jobs:
           submodules: false
           fetch-depth: 1
 
+      # Unlike the other jobs (pure JS/wasm on Node 26), perf builds
+      # headless-three's native addons — `gl` and `canvas`. Neither ships a
+      # prebuilt for Node 26, and `gl` won't even compile against Node 26's V8
+      # (GetAlignedPointerFromInternalField signature change). Pin Node 20,
+      # which has prebuilt binaries for both; it's also the runtime the 1.361
+      # perf baseline was measured under, so the comparison stays apples-to-apples.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '26'
+          node-version: '20'
 
       - name: Download conway candidate tarball
         uses: actions/download-artifact@v4
@@ -808,10 +814,12 @@ jobs:
           submodules: false
           fetch-depth: 1
 
+      # See the public perf job — Node 20 so headless-three's native `gl` /
+      # `canvas` addons resolve prebuilts instead of failing to compile on Node 26.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '26'
+          node-version: '20'
 
       - name: Download conway candidate tarball
         uses: actions/download-artifact@v4
