@@ -644,7 +644,7 @@ jobs:
               print("performance-detail.csv is empty.")
               sys.exit(0)
           rows.sort(key=lambda r: r.get('filename',''))
-          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','rssMb']
+          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','rssMb','heapUsedMb']
           print("| " + " | ".join(cols) + " |")
           print("|" + " --- |" * len(cols))
           for r in rows:
@@ -710,8 +710,8 @@ jobs:
           if not rows:
               sys.exit(0)
           rows.sort(key=lambda r: abs(pct(r.get('totalTimeMsPercentageChange',''))), reverse=True)
-          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange']
-          headers = ['file','prev ms','curr ms','Δ ms','Δ %']
+          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','rssMbDelta']
+          headers = ['file','prev ms','curr ms','Δ ms','Δ %','Δ geomMem MB','Δ RSS MB']
           print(f"### Δ vs previous run [#{prev_run_id}](https://github.com/bldrs-ai/conway/actions/runs/{prev_run_id})")
           print()
           print("| " + " | ".join(headers) + " |")
@@ -952,7 +952,7 @@ jobs:
                   'max': f"{max(vals):.0f}",
                   'stddev': f"{(statistics.stdev(vals) if len(vals) > 1 else 0):.0f}",
               }
-          cols = ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs']
+          cols = ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb', 'rssMb']
           s = {c: col_stats(c) for c in cols}
           print(f"**Pass/fail**: {len(ok_rows)} passing / {fail} failing of {total} total.")
           print()
@@ -1050,6 +1050,8 @@ jobs:
           geom_d   = col_stats('geometryTimeMsDelta',[parse_num(r.get('geometryTimeMsDelta','')) for r in common])
           total_d  = col_stats('totalTimeMsDelta',   [parse_num(r.get('totalTimeMsDelta','')) for r in common])
           pct_d    = col_stats('pct',                [parse_pct(r.get('totalTimeMsPercentageChange','')) for r in common], suffix='%')
+          gmem_d   = col_stats('geometryMemoryMbDelta', [parse_num(r.get('geometryMemoryMbDelta','')) for r in common])
+          rss_d    = col_stats('rssMbDelta',         [parse_num(r.get('rssMbDelta','')) for r in common])
           # Track regressions/improvements at a glance.
           pct_vals = [parse_pct(r.get('totalTimeMsPercentageChange','')) for r in common]
           pct_vals = [v for v in pct_vals if v is not None]
@@ -1061,9 +1063,9 @@ jobs:
           print(f"**Models compared (OK on both sides)**: {len(common)} of {len(rows)} delta rows.")
           print(f"**Regressed / improved / flat (by totalTimeMs)**: {regr} / {impr} / {flat}.")
           print()
-          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange']
-          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %']
-          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d}
+          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','rssMbDelta']
+          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %','Δ geomMem MB','Δ RSS MB']
+          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d, 'geometryMemoryMbDelta': gmem_d, 'rssMbDelta': rss_d}
           print("| " + " | ".join(headers) + " |")
           print("|" + " --- |" * len(headers))
           for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:
