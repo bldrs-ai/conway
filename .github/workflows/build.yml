@@ -529,6 +529,18 @@ jobs:
             fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
           "
 
+      # headless-three pulls in `canvas`, which has no prebuilt binary for this
+      # runner's Node, so the `yarn install` below compiles it from source. Its
+      # node-gyp build needs cairo/pixman/pango/etc. dev headers present *before*
+      # install — the GL libraries installed further down (for headless-gl) come
+      # too late and don't include these. Without this, `yarn install` dies with
+      # "Package pixman-1 was not found" and every perf run is skipped.
+      - name: Install canvas native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config build-essential \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev libpixman-1-dev
+
       - name: Install H3 + build
         working-directory: h3
         run: |
@@ -823,6 +835,15 @@ jobs:
             p.resolutions = Object.assign({}, p.resolutions, { '@bldrs-ai/conway': 'file:' + process.env.CANDIDATE_TGZ });
             fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
           "
+
+      # See the public perf job — canvas compiles from source here and needs
+      # cairo/pixman/pango dev headers before `yarn install`, ahead of the
+      # GL libraries installed further down.
+      - name: Install canvas native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config build-essential \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev libpixman-1-dev
 
       - name: Install H3 + build
         working-directory: h3
