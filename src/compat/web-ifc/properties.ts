@@ -32,7 +32,7 @@ export class Properties {
     return await this.api.getPassthrough( modelID )?.properties.getMaterialsProperties( elementID, recursive )
   }
 
-  async getSpatialStructure(modelID: number, includeProperties?: boolean) {
+  async getSpatialStructure(modelID: number, includeProperties?: boolean | 'names') {
 
     return await this.api.getPassthrough( modelID )?.properties.getSpatialStructure( includeProperties )
   }

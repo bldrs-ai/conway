@@ -265,6 +265,29 @@ export class IfcAPI {
   }
 
   /**
+   * Conway extension (no web-ifc equivalent): drop the model's
+   * materialised entity/descriptor caches, returning that memory to the
+   * JS heap. Entities and attributes rematerialise transparently on the
+   * next property access, so callers can invoke this between UI
+   * interactions to keep the property working set bounded to what the
+   * active UI is touching.
+   *
+   * @param modelID
+   */
+  ReleaseEntityCache(modelID: number): void {
+
+    const result = this.models.get(modelID)
+
+    if (result === void 0) {
+
+      Logger.error('[ReleaseEntityCache]: model === undefined')
+      return
+    }
+
+    result.releaseEntityCache?.()
+  }
+
+  /**
    *
    * @param modelID
    * @return {Vector<LoaderError>}

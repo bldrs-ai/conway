@@ -11,7 +11,7 @@ import {
   IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
 } from './ifc2x4'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc';
-import { Node, PropertiesPassthrough } from './properties_passthrough';
+import { IncludeProperties, Node, PropertiesPassthrough } from './properties_passthrough';
 
 import { IfcElements, IfcTypesMap } from './types-map'
 
@@ -83,12 +83,15 @@ export class IfcProperties implements PropertiesPassthrough {
     return await this.getProperty(elementID, recursive, PropsNames.materials)
   }
 
-  async getSpatialStructure(includeProperties?: boolean): Promise< Node > {
+  async getSpatialStructure(includeProperties?: IncludeProperties): Promise< Node > {
     await this.getAllTypesOfModel()
     const chunks = await this.getSpatialTreeChunks()
     const allLines = await this.api.getLineIDsWithType(IFCPROJECT)
     const projectID = allLines.get(0)
     const project = IfcProperties.newIfcProject(projectID)
+    if (includeProperties === 'names') {
+      Object.assign(project, this.api.getLineNameAttributes(projectID))
+    }
     await this.getSpatialNode(project, chunks, includeProperties)
     this.cleanupTypes()
     return project
@@ -144,12 +147,12 @@ export class IfcProperties implements PropertiesPassthrough {
     }
   }
 
-  private async getSpatialNode(node: Node, treeChunks: any, includeProperties?: boolean) {
+  private async getSpatialNode(node: Node, treeChunks: any, includeProperties?: IncludeProperties) {
     await this.getChildren(node, treeChunks, PropsNames.aggregates, includeProperties)
     await this.getChildren(node, treeChunks, PropsNames.spatial, includeProperties)
   }
 
-  private async getChildren(node: Node, treeChunks: any, propNames: pName, includeProperties?: boolean) {
+  private async getChildren(node: Node, treeChunks: any, propNames: pName, includeProperties?: IncludeProperties) {
     const children = treeChunks[node.expressID]
     if (children == undefined) {
       return
@@ -159,7 +162,11 @@ export class IfcProperties implements PropertiesPassthrough {
     for (let i = 0; i < children.length; i++) {
       const child = children[i]
       let node = this.newNode(child)
-      if (includeProperties) {
+      if (includeProperties === 'names') {
+        // Light mode: Name/LongName/GlobalId handles only — decodes just
+        // those vtable slots instead of flattening the whole record.
+        Object.assign(node, this.api.getLineNameAttributes(node.expressID))
+      } else if (includeProperties) {
         const properties = await this.getItemProperties(node.expressID) as any
         node = {...properties, ...node}
       }

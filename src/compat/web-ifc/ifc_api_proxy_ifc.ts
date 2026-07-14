@@ -405,6 +405,75 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Light attribute read: Name / LongName / GlobalId as web-ifc value
+   * handles, WITHOUT materialising the entity's full flattened record.
+   * Reads go through the typed entity's lazy per-field getters, so only
+   * these attributes' vtable slots are decoded. Used by the spatial
+   * structure's `'names'` mode.
+   *
+   * @param expressID
+   * @return {object} `{ Name?, LongName?, GlobalId? }` string handles
+   * (`{type: 1, value}`), each present only when the attribute exists
+   * and is non-null on the entity.
+   */
+  getLineNameAttributes(expressID: number):
+    { Name?: { type: number, value: string },
+      LongName?: { type: number, value: string },
+      GlobalId?: { type: number, value: string } } {
+
+    const result: {
+      Name?: { type: number, value: string },
+      LongName?: { type: number, value: string },
+      GlobalId?: { type: number, value: string } } = {}
+
+    const entity = this.model[0].getElementByExpressID(expressID) as any
+
+    if (entity === void 0) {
+      return result
+    }
+
+    // web-ifc tape type 1 = string; ifclib's deref switches on this code.
+    const WEB_IFC_STRING_TYPE = 1
+
+    // Defensive per-attribute reads: getters throw on malformed records
+    // when the model's nullOnErrors is off, and LongName only exists on
+    // spatial-structure entity types.
+    try {
+      const name = entity.Name
+      if (typeof name === 'string') {
+        result.Name = { type: WEB_IFC_STRING_TYPE, value: name }
+      }
+    } catch (e) { /* attribute unreadable — omit */ }
+
+    try {
+      const longName = entity.LongName
+      if (typeof longName === 'string') {
+        result.LongName = { type: WEB_IFC_STRING_TYPE, value: longName }
+      }
+    } catch (e) { /* attribute absent on this type — omit */ }
+
+    try {
+      const globalId = entity.GlobalId
+      if (typeof globalId === 'string') {
+        result.GlobalId = { type: WEB_IFC_STRING_TYPE, value: globalId }
+      }
+    } catch (e) { /* attribute unreadable — omit */ }
+
+    return result
+  }
+
+  /**
+   * Drop this model's materialised entity/descriptor cache (and lazily
+   * rebuilt vtable data), returning that memory to the JS heap. Entities
+   * and attributes rematerialise transparently on next access, so this is
+   * safe to call between UI interactions to keep the property working set
+   * bounded to what the active UI has touched.
+   */
+  releaseEntityCache(): void {
+    this.model[0].invalidate(true)
+  }
+
+  /**
    *
    * @param modelID
    * @return {Vector<LoaderError>}

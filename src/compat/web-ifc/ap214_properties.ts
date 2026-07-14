@@ -281,7 +281,7 @@ export class AP214Properties {
    * @return {Promise<Node>} The root node. A single-root file returns its root
    * directly; a multi-root file is wrapped in a synthetic container root.
    */
-  async getSpatialStructure( includeProperties?: boolean ): Promise<Node> {
+  async getSpatialStructure( includeProperties?: boolean | 'names' ): Promise<Node> {
 
     const roots = this.productStructure()
 
@@ -340,7 +340,7 @@ export class AP214Properties {
    */
   private async toSpatialNode(
       node: ProductStructureNode,
-      includeProperties?: boolean ): Promise<AP214Node> {
+      includeProperties?: boolean | 'names' ): Promise<AP214Node> {
 
     const children = await Promise.all(
         node.children.map( ( childNode ) => this.toSpatialNode( childNode, includeProperties ) ) )
@@ -354,7 +354,8 @@ export class AP214Properties {
       children,
     }
 
-    if ( includeProperties ) {
+    // `'names'` is satisfied by the unconditional Name handle above.
+    if ( includeProperties === true ) {
       const properties = await this.getItemProperties( node.expressID )
       spatialNode = { ...properties, ...spatialNode }
     }
