@@ -15,6 +15,7 @@ import {
   RawLineData,
   Vector,
 } from './ifc_api'
+import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
@@ -466,6 +467,50 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   releaseEntityCache(): void {
     this.model[0].invalidate(true)
+  }
+
+  /**
+   * Are the model's source bytes spilled to an external store (served
+   * through on-demand windows) rather than fully resident?
+   *
+   * @return {boolean} True after spillSourceToExternalStore.
+   */
+  get sourceIsExternal(): boolean {
+    return this.model[0].isSourceExternal
+  }
+
+  /**
+   * Release the resident source buffer and serve subsequent record
+   * reads through fixed-size windows paged in from the given external
+   * store (which must hold exactly the model's source bytes — e.g.
+   * the original file already sitting in OPFS). See
+   * StepModelBase.spillSourceToExternalStore.
+   *
+   * @param store The external byte store.
+   * @param chunkBytes Optional window size in bytes.
+   * @param maxResidentChunks Optional residency cap in windows.
+   */
+  spillSourceToExternalStore(
+      store: StepExternalByteStore,
+      chunkBytes?: number,
+      maxResidentChunks?: number ): void {
+    this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+  }
+
+  /**
+   * Page in the byte range backing a record so a following synchronous
+   * read (getLine / attribute access) succeeds. Fast no-op while the
+   * source is fully resident.
+   *
+   * Note: covers the record itself (including its inline elements),
+   * NOT entities it merely references — recursive flattening across
+   * references needs each referenced record ensured in turn.
+   *
+   * @param expressID The record's express ID.
+   * @return {Promise<void>} Resolves when resident.
+   */
+  async ensureLineResident(expressID: number): Promise<void> {
+    await this.model[0].ensureResidentByExpressID(expressID)
   }
 
   /**

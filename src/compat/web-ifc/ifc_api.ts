@@ -4,6 +4,7 @@ import {versionString} from '../../version/version'
 import Logger from '../../logging/logger'
 import Environment from '../../utilities/environment'
 import * as glmatrix from 'gl-matrix'
+import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiModelPassthroughFactory } from './ifc_api_model_passthrough_factory'
 import { Properties } from './properties'
@@ -285,6 +286,46 @@ export class IfcAPI {
     }
 
     result.releaseEntityCache?.()
+  }
+
+  /**
+   * Conway extension: release the model's resident source buffer and
+   * serve subsequent record reads through fixed-size windows paged in
+   * from an external byte store (which must hold exactly the model's
+   * source bytes — e.g. the original file already sitting in OPFS).
+   *
+   * After a spill, asynchronous property APIs page ranges in on
+   * demand; SYNCHRONOUS record reads (getLine on the passthrough)
+   * require the range to be resident and throw otherwise. Call this
+   * only after load-time sweeps (geometry extraction, spatial tree,
+   * GLB property capture) are done.
+   *
+   * @param modelID The model to spill.
+   * @param store The external byte store holding the source bytes.
+   * @param chunkBytes Optional window size in bytes (default 4MiB).
+   * @param maxResidentChunks Optional residency cap (default 16 windows).
+   * @return {boolean} True when the spill happened.
+   */
+  SpillModelSource(
+      modelID: number,
+      store: StepExternalByteStore,
+      chunkBytes?: number,
+      maxResidentChunks?: number ): boolean {
+
+    const result = this.models.get(modelID)
+
+    if (result === void 0) {
+
+      Logger.error('[SpillModelSource]: model === undefined')
+      return false
+    }
+
+    if (result.spillSourceToExternalStore === void 0) {
+      return false
+    }
+
+    result.spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+    return true
   }
 
   /**
