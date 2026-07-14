@@ -16,6 +16,7 @@ import {
   Vector,
 } from './ifc_api'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
+import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
@@ -407,9 +408,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /**
    * Light attribute read: Name / LongName / GlobalId as web-ifc value
    * handles, WITHOUT materialising the entity's full flattened record.
-   * Reads go through the typed entity's lazy per-field getters, so only
-   * these attributes' vtable slots are decoded. Used by the spatial
-   * structure's `'names'` mode.
+   * Reads go through the typed entity's lazy per-field getters — the
+   * first access tokenizes the record's field offsets into the shared
+   * vtable, but only these attributes' values are deserialized. Used by
+   * the spatial structure's `'names'` mode.
    *
    * @param expressID
    * @return {object} `{ Name?, LongName?, GlobalId? }` string handles
@@ -417,14 +419,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * and is non-null on the entity.
    */
   getLineNameAttributes(expressID: number):
-    { Name?: { type: number, value: string },
-      LongName?: { type: number, value: string },
-      GlobalId?: { type: number, value: string } } {
+    { Name?: NodeValueHandle,
+      LongName?: NodeValueHandle,
+      GlobalId?: NodeValueHandle } {
 
     const result: {
-      Name?: { type: number, value: string },
-      LongName?: { type: number, value: string },
-      GlobalId?: { type: number, value: string } } = {}
+      Name?: NodeValueHandle,
+      LongName?: NodeValueHandle,
+      GlobalId?: NodeValueHandle } = {}
 
     const entity = this.model[0].getElementByExpressID(expressID) as any
 
@@ -435,29 +437,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // web-ifc tape type 1 = string; ifclib's deref switches on this code.
     const WEB_IFC_STRING_TYPE = 1
 
-    // Defensive per-attribute reads: getters throw on malformed records
-    // when the model's nullOnErrors is off, and LongName only exists on
-    // spatial-structure entity types.
-    try {
-      const name = entity.Name
-      if (typeof name === 'string') {
-        result.Name = { type: WEB_IFC_STRING_TYPE, value: name }
-      }
-    } catch (e) { /* attribute unreadable — omit */ }
+    // Absent attributes (e.g. LongName on non-spatial types) read as
+    // undefined and are omitted via the typeof check. The catch guards
+    // malformed records: field extraction throws on truncated records
+    // regardless of the model's nullOnErrors setting.
+    for (const attribute of ['Name', 'LongName', 'GlobalId'] as const) {
+      try {
+        const value = entity[attribute]
 
-    try {
-      const longName = entity.LongName
-      if (typeof longName === 'string') {
-        result.LongName = { type: WEB_IFC_STRING_TYPE, value: longName }
+        if (typeof value === 'string') {
+          result[attribute] = { type: WEB_IFC_STRING_TYPE, value }
+        }
+      } catch (e) {
+        Logger.warning(
+            `[getLineNameAttributes]: unreadable ${attribute} for expressID: ${expressID}`)
       }
-    } catch (e) { /* attribute absent on this type — omit */ }
-
-    try {
-      const globalId = entity.GlobalId
-      if (typeof globalId === 'string') {
-        result.GlobalId = { type: WEB_IFC_STRING_TYPE, value: globalId }
-      }
-    } catch (e) { /* attribute unreadable — omit */ }
+    }
 
     return result
   }

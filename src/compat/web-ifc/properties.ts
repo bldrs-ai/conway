@@ -3,6 +3,7 @@ import {
   IfcAPI,
 } from './ifc_api'
 
+import { IncludeProperties } from './properties_passthrough'
 import { IfcTypesMap } from './types-map'
 
 export class Properties {
@@ -32,7 +33,7 @@ export class Properties {
     return await this.api.getPassthrough( modelID )?.properties.getMaterialsProperties( elementID, recursive )
   }
 
-  async getSpatialStructure(modelID: number, includeProperties?: boolean | 'names') {
+  async getSpatialStructure(modelID: number, includeProperties?: IncludeProperties) {
 
     return await this.api.getPassthrough( modelID )?.properties.getSpatialStructure( includeProperties )
   }

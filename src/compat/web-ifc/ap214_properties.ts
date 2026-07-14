@@ -10,7 +10,7 @@ import {
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
 import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
-import { Node } from './properties_passthrough'
+import { IncludeProperties, Node } from './properties_passthrough'
 
 
 /**
@@ -281,7 +281,7 @@ export class AP214Properties {
    * @return {Promise<Node>} The root node. A single-root file returns its root
    * directly; a multi-root file is wrapped in a synthetic container root.
    */
-  async getSpatialStructure( includeProperties?: boolean | 'names' ): Promise<Node> {
+  async getSpatialStructure( includeProperties?: IncludeProperties ): Promise<Node> {
 
     const roots = this.productStructure()
 
@@ -340,7 +340,7 @@ export class AP214Properties {
    */
   private async toSpatialNode(
       node: ProductStructureNode,
-      includeProperties?: boolean | 'names' ): Promise<AP214Node> {
+      includeProperties?: IncludeProperties ): Promise<AP214Node> {
 
     const children = await Promise.all(
         node.children.map( ( childNode ) => this.toSpatialNode( childNode, includeProperties ) ) )
@@ -354,8 +354,11 @@ export class AP214Properties {
       children,
     }
 
-    // `'names'` is satisfied by the unconditional Name handle above.
-    if ( includeProperties === true ) {
+    if ( includeProperties === 'names' ) {
+      // Satisfied by the unconditional Name handle above.
+    } else if ( includeProperties ) {
+      // Truthy semantics match the IFC path (web-ifc parity for untyped
+      // JS callers passing truthy non-booleans).
       const properties = await this.getItemProperties( node.expressID )
       spatialNode = { ...properties, ...spatialNode }
     }
