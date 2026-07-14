@@ -63,6 +63,15 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
   }
 
   /**
+   * Drop this model's materialised entity/descriptor cache (and lazily
+   * rebuilt vtable data), returning that memory to the JS heap. Entities
+   * rematerialise transparently on next access.
+   */
+  releaseEntityCache(): void {
+    this.model[0].invalidate(true)
+  }
+
+  /**
    * Contains all the logic and methods regarding properties, psets, qsets, etc.
    */
   properties = new AP214Properties(this)

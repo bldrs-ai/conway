@@ -17,4 +17,10 @@ export interface IfcApiModelPassthrough {
   flattenLine(line: any): void
   getLine(expressID: number, flatten?: boolean): string | void
   getGeometry(geometryExpressID: number): IfcGeometry
+
+  /**
+   * Optional: drop the model's materialised entity/descriptor caches,
+   * returning that memory. Entities rematerialise on next access.
+   */
+  releaseEntityCache?(): void
 }

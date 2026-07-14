@@ -16,6 +16,7 @@ import {
   Vector,
 } from './ifc_api'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
+import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
@@ -402,6 +403,69 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
 
     return lineData
+  }
+
+  /**
+   * Light attribute read: Name / LongName / GlobalId as web-ifc value
+   * handles, WITHOUT materialising the entity's full flattened record.
+   * Reads go through the typed entity's lazy per-field getters — the
+   * first access tokenizes the record's field offsets into the shared
+   * vtable, but only these attributes' values are deserialized. Used by
+   * the spatial structure's `'names'` mode.
+   *
+   * @param expressID
+   * @return {object} `{ Name?, LongName?, GlobalId? }` string handles
+   * (`{type: 1, value}`), each present only when the attribute exists
+   * and is non-null on the entity.
+   */
+  getLineNameAttributes(expressID: number):
+    { Name?: NodeValueHandle,
+      LongName?: NodeValueHandle,
+      GlobalId?: NodeValueHandle } {
+
+    const result: {
+      Name?: NodeValueHandle,
+      LongName?: NodeValueHandle,
+      GlobalId?: NodeValueHandle } = {}
+
+    const entity = this.model[0].getElementByExpressID(expressID) as any
+
+    if (entity === void 0) {
+      return result
+    }
+
+    // web-ifc tape type 1 = string; ifclib's deref switches on this code.
+    const WEB_IFC_STRING_TYPE = 1
+
+    // Absent attributes (e.g. LongName on non-spatial types) read as
+    // undefined and are omitted via the typeof check. The catch guards
+    // malformed records: field extraction throws on truncated records
+    // regardless of the model's nullOnErrors setting.
+    for (const attribute of ['Name', 'LongName', 'GlobalId'] as const) {
+      try {
+        const value = entity[attribute]
+
+        if (typeof value === 'string') {
+          result[attribute] = { type: WEB_IFC_STRING_TYPE, value }
+        }
+      } catch (e) {
+        Logger.warning(
+            `[getLineNameAttributes]: unreadable ${attribute} for expressID: ${expressID}`)
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Drop this model's materialised entity/descriptor cache (and lazily
+   * rebuilt vtable data), returning that memory to the JS heap. Entities
+   * and attributes rematerialise transparently on next access, so this is
+   * safe to call between UI interactions to keep the property working set
+   * bounded to what the active UI has touched.
+   */
+  releaseEntityCache(): void {
+    this.model[0].invalidate(true)
   }
 
   /**
