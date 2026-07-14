@@ -402,6 +402,17 @@ export class AP214Properties {
    * - `propertyByItemId_` — representation-item id → property (so a pset's
    *   `HasProperties` reference resolves back to its key/value).
    */
+  /**
+   * Build the property/structure indexes NOW (they are otherwise built
+   * lazily on first property access). Called before a source-buffer
+   * spill: the index build is a full-model sweep of synchronous record
+   * reads, so it must run while the source is resident — after it,
+   * post-spill property reads are pure map lookups.
+   */
+  public primeIndexes(): void {
+    this.buildIndexes()
+  }
+
   private buildIndexes(): void {
 
     if ( this.structureRoots_ !== void 0 ) {

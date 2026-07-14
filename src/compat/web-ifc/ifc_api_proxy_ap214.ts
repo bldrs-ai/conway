@@ -87,6 +87,12 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * reads through fixed-size windows paged in from the given external
    * store — see StepModelBase.spillSourceToExternalStore.
    *
+   * AP214 property access is served from indexes built by a one-time
+   * full-model sweep of synchronous reads, so they are primed here
+   * while the source is still resident; post-spill property reads are
+   * then pure map lookups. (`getAllItemsOfType(_, verbose=true)` still
+   * reads raw lines synchronously and is not supported post-spill.)
+   *
    * @param store The external byte store.
    * @param chunkBytes Optional window size in bytes.
    * @param maxResidentChunks Optional residency cap in windows.
@@ -95,6 +101,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       store: StepExternalByteStore,
       chunkBytes?: number,
       maxResidentChunks?: number ): void {
+    this.properties.primeIndexes()
     this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
   }
 

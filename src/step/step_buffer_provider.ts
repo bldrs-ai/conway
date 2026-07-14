@@ -289,6 +289,15 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   private readonly loading_ = new Map< number, Promise< Uint8Array > >()
 
   /**
+   * Chunks covered by an `ensureResident` call that hasn't returned
+   * yet, refcounted. Eviction skips them: an overlapping ensure for a
+   * different range must not evict chunks another caller has ensured
+   * but not yet synchronously acquired (the acquire happens in the
+   * caller's continuation, which can interleave with this one).
+   */
+  private readonly ensurePins_ = new Map< number, number >()
+
+  /**
    * Construct this over an external byte store.
    *
    * @param store_ The store holding the source bytes.
@@ -428,63 +437,87 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     const firstChunk = Math.floor( address / chunkBytes )
     const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
 
-    const loads: Promise< void >[] = []
-
+    // Pin this call's chunks against eviction by overlapping ensures
+    // until we return — the caller's synchronous acquire runs in its
+    // continuation, which can interleave with other ensures' evictions.
     for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
-
-      const resident = this.chunks_.get( chunkIndex )
-
-      if ( resident !== void 0 ) {
-
-        this.touch_( chunkIndex, resident )
-        continue
-      }
-
-      let inflight = this.loading_.get( chunkIndex )
-
-      if ( inflight === void 0 ) {
-
-        const chunkBase   = chunkIndex * chunkBytes
-        const chunkLength = Math.min( chunkBytes, this.store_.byteLength - chunkBase )
-
-        inflight = this.store_.read( chunkBase, chunkLength ).then( ( chunk ) => {
-
-          tagBufferBase( chunk, chunkBase )
-
-          this.chunks_.set( chunkIndex, chunk )
-          this.loading_.delete( chunkIndex )
-
-          return chunk
-        }, ( error ) => {
-
-          this.loading_.delete( chunkIndex )
-          throw error
-        })
-
-        this.loading_.set( chunkIndex, inflight )
-      }
-
-      loads.push( inflight.then( () => void 0 ) )
+      this.ensurePins_.set( chunkIndex, ( this.ensurePins_.get( chunkIndex ) ?? 0 ) + 1 )
     }
 
-    if ( loads.length > 0 ) {
-      await Promise.all( loads )
-    }
+    try {
 
-    // Evict beyond the cap, oldest first, sparing this call's range.
-    if ( this.chunks_.size > this.maxResidentChunks_ ) {
+      const loads: Promise< void >[] = []
 
-      for ( const candidate of this.chunks_.keys() ) {
+      for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
 
-        if ( this.chunks_.size <= this.maxResidentChunks_ ) {
-          break
-        }
+        const resident = this.chunks_.get( chunkIndex )
 
-        if ( candidate >= firstChunk && candidate <= lastChunk ) {
+        if ( resident !== void 0 ) {
+
+          this.touch_( chunkIndex, resident )
           continue
         }
 
-        this.chunks_.delete( candidate )
+        let inflight = this.loading_.get( chunkIndex )
+
+        if ( inflight === void 0 ) {
+
+          const chunkBase   = chunkIndex * chunkBytes
+          const chunkLength = Math.min( chunkBytes, this.store_.byteLength - chunkBase )
+
+          inflight = this.store_.read( chunkBase, chunkLength ).then( ( chunk ) => {
+
+            tagBufferBase( chunk, chunkBase )
+
+            this.chunks_.set( chunkIndex, chunk )
+            this.loading_.delete( chunkIndex )
+
+            return chunk
+          }, ( error ) => {
+
+            this.loading_.delete( chunkIndex )
+            throw error
+          })
+
+          this.loading_.set( chunkIndex, inflight )
+        }
+
+        loads.push( inflight.then( () => void 0 ) )
+      }
+
+      if ( loads.length > 0 ) {
+        await Promise.all( loads )
+      }
+
+      // Evict beyond the cap, oldest first, sparing pinned chunks
+      // (this call's own range is pinned above).
+      if ( this.chunks_.size > this.maxResidentChunks_ ) {
+
+        for ( const candidate of this.chunks_.keys() ) {
+
+          if ( this.chunks_.size <= this.maxResidentChunks_ ) {
+            break
+          }
+
+          if ( ( this.ensurePins_.get( candidate ) ?? 0 ) > 0 ) {
+            continue
+          }
+
+          this.chunks_.delete( candidate )
+        }
+      }
+
+    } finally {
+
+      for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+        const pins = this.ensurePins_.get( chunkIndex ) ?? 0
+
+        if ( pins <= 1 ) {
+          this.ensurePins_.delete( chunkIndex )
+        } else {
+          this.ensurePins_.set( chunkIndex, pins - 1 )
+        }
       }
     }
   }

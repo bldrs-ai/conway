@@ -155,6 +155,45 @@ describe('WindowedStepBufferProvider', () => {
     expect(provider.residentBytes).toBeLessThanOrEqual(48)
   })
 
+  test('an overlapping ensure cannot evict chunks another in-flight ensure covers', async () => {
+    // Regression pin for the ensure/acquire interleave: caller A
+    // ensures chunk 3, and while A's continuation hasn't acquired yet,
+    // caller B's ensure (different range) triggers eviction. B must
+    // not evict A's pinned chunk even when everything older than it is
+    // B's own (protected) range.
+    const bytes = makeBytes(160)
+
+    let releaseRead: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      releaseRead = resolve
+    })
+
+    const slowStore: StepExternalByteStore = {
+      byteLength: bytes.byteLength,
+      async read(offset: number, length: number): Promise< Uint8Array > {
+        // Only chunk 3 (offset 48) is slow, so B's ensure completes
+        // while A's is still in flight.
+        if (offset === 48) {
+          await gate
+        }
+        return bytes.slice(offset, offset + length)
+      },
+    }
+
+    const provider = new WindowedStepBufferProvider(slowStore, 16, 2)
+
+    const ensureA = provider.ensureResident(48, 8)   // chunk 3, gated
+
+    releaseRead!()
+
+    // B loads two chunks — with cap 2 this forces eviction pressure
+    // right as A's chunk lands.
+    await provider.ensureResident(0, 24)             // chunks 0,1
+    await ensureA
+
+    expect(() => provider.acquire(48, 8)).not.toThrow()
+  })
+
   test('a range needed by the current ensure is never evicted by it', async () => {
     const bytes = makeBytes(160)
     // Cap of 2 but the range needs 3 chunks — all three must survive
