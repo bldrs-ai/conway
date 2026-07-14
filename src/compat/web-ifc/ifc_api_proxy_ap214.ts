@@ -13,6 +13,7 @@ import {
   RawLineData,
   Vector,
 } from './ifc_api'
+import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import * as glmatrix from 'gl-matrix'
 import Logger from '../../logging/logger'
@@ -69,6 +70,50 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    */
   releaseEntityCache(): void {
     this.model[0].invalidate(true)
+  }
+
+  /**
+   * Are the model's source bytes spilled to an external store (served
+   * through on-demand windows) rather than fully resident?
+   *
+   * @return {boolean} True after spillSourceToExternalStore.
+   */
+  get sourceIsExternal(): boolean {
+    return this.model[0].isSourceExternal
+  }
+
+  /**
+   * Release the resident source buffer and serve subsequent record
+   * reads through fixed-size windows paged in from the given external
+   * store — see StepModelBase.spillSourceToExternalStore.
+   *
+   * AP214 property access is served from indexes built by a one-time
+   * full-model sweep of synchronous reads, so they are primed here
+   * while the source is still resident; post-spill property reads are
+   * then pure map lookups. (`getAllItemsOfType(_, verbose=true)` still
+   * reads raw lines synchronously and is not supported post-spill.)
+   *
+   * @param store The external byte store.
+   * @param chunkBytes Optional window size in bytes.
+   * @param maxResidentChunks Optional residency cap in windows.
+   */
+  spillSourceToExternalStore(
+      store: StepExternalByteStore,
+      chunkBytes?: number,
+      maxResidentChunks?: number ): void {
+    this.properties.primeIndexes()
+    this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+  }
+
+  /**
+   * Page in the byte range backing a record so a following synchronous
+   * read succeeds. Fast no-op while the source is fully resident.
+   *
+   * @param expressID The record's express ID.
+   * @return {Promise<void>} Resolves when resident.
+   */
+  async ensureLineResident(expressID: number): Promise<void> {
+    await this.model[0].ensureResidentByExpressID(expressID)
   }
 
   /**

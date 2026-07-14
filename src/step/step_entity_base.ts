@@ -14,6 +14,7 @@ import {
   stepExtractReference,
   stepExtractString,
 } from './parsing/step_deserialization_functions'
+import { stepBufferBase } from './step_buffer_provider'
 import { StepEntityConstructorAbstract } from './step_entity_constructor'
 import StepEntityInternalReference,
 { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
@@ -31,6 +32,31 @@ enum IfcTokenType {
   SET_BEGIN,
   SET_END,
   LINE_END
+}
+
+/**
+ * Extract an inline element's ABSOLUTE source address at a cursor.
+ *
+ * `stepExtractInlineElemement` returns a cursor relative to the view
+ * it parses — with a windowed buffer provider that view may not start
+ * at source address 0, while the model's inline-element index is
+ * keyed by parse-time absolute address. Adding the view's base
+ * (0 for the fully-resident buffer) restores the absolute key.
+ *
+ * @param buffer The view to parse.
+ * @param cursor The view-relative cursor to parse at.
+ * @param endCursor The view-relative end bound.
+ * @return {number | undefined} The absolute inline-element address,
+ * or undefined if there is no inline element at the cursor.
+ */
+function extractInlineElementAddress(
+    buffer: Uint8Array,
+    cursor: number,
+    endCursor: number ): number | undefined {
+
+  const relative = stepExtractInlineElemement( buffer, cursor, endCursor )
+
+  return relative === void 0 ? void 0 : relative + stepBufferBase( buffer )
 }
 
 /**
@@ -248,8 +274,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
         throw new Error('Value in STEP was incorrectly typed')
       }
 
-      const buffer    = this.buffer
-
       if ( !this.model.nullOnErrors && stepExtractOptional(buffer, cursor, endCursor) !== null ) {
         throw new Error('Value in STEP was incorrectly typed')
       }
@@ -384,15 +408,16 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     depth: number,
     optional: boolean): StepEntityBase<EntityTypeIDs> | null {
 
-    const cursor    = this.getOffsetCursor( offset, baseOffset, depth )
-    const buffer    = this.buffer
-    const endCursor = buffer.length
+    // Use the tuple form so the buffer is the SAME view the cursor was
+    // recorded against — with a windowed provider, `this.buffer` and a
+    // multi-class reference's buffer can be different windows.
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
 
     const expressID = stepExtractReference(buffer, cursor, endCursor)
     const value: StepEntityBase<EntityTypeIDs> | undefined =
       expressID !== void 0 ? this.model.getElementByExpressID(expressID) :
         (this.model.getInlineElementByAddress(
-            stepExtractInlineElemement(buffer, cursor, endCursor)))
+            extractInlineElementAddress(buffer, cursor, endCursor)))
 
     if (value === void 0) {
       if (!optional) {
@@ -470,8 +495,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const internalReference = this.internalReference_ as
     Required<StepEntityInternalReference<EntityTypeIDs>>
 
-    const cursor = internalReference.address
     const buffer = internalReference.buffer
+    // `address` is absolute; the buffer view may be a window that
+    // doesn't start at source address 0 — translate via its base.
+    const cursor = internalReference.address - stepBufferBase(buffer)
     const endCursor = cursor + internalReference.length
 
     // include the Open parenthesis + ending semicolon
@@ -496,7 +523,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const value: StepEntityBase<EntityTypeIDs> | undefined =
       expressID !== void 0 ? this.model.getElementByExpressID(expressID) :
         (this.model.getInlineElementByAddress(
-            stepExtractInlineElemement(buffer, cursor, endCursor)))
+            extractInlineElementAddress(buffer, cursor, endCursor)))
 
     return value
   }
@@ -692,7 +719,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const value =
       expressID !== void 0 ? model.getTypedElementByExpressID(expressID, entityConstructor) :
         model.getTypedInlineElementByAddress(
-            stepExtractInlineElemement( buffer, cursor, endCursor ), entityConstructor )
+            extractInlineElementAddress( buffer, cursor, endCursor ), entityConstructor )
 
     if (value === void 0) {
       if (!optional) {
@@ -736,7 +763,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const value =
       expressID !== void 0 ? model.getTypedElementByExpressID( expressID, entityConstructor ) :
       model.getTypedInlineElementByAddress(
-          stepExtractInlineElemement( buffer, cursor, endCursor ), entityConstructor )
+          extractInlineElementAddress( buffer, cursor, endCursor ), entityConstructor )
 
     if ( value === void 0 ) {
       return
@@ -828,7 +855,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
     }
 
-    const buffer     = this.buffer
+    // Read through the SAME reference the vtable cursors came from —
+    // with a windowed provider, `this.buffer` and a multi-class
+    // reference's buffer can be different windows.
+    const buffer     = internalReference.buffer
     const vtableSlot = internalReference.vtableIndex + offset
     const cursor     = internalReference.vtable[ vtableSlot ]
     const nextSlot   = vtableSlot + 1
@@ -1048,18 +1078,23 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
     if ( multiReference !== void 0 ) {
 
-      const classReference = multiReference[depth] 
+      const classReference = multiReference[depth]
 
       if ( classReference.vtableIndex === void 0 ) {
 
         const populated = this.model.populateVtableEntryRaw( classReference )
-        
+
         if (!populated) {
           throw new Error('Entity does not have matching table entry to read from model')
         }
-
-        this.internalReference_.buffer = classReference.buffer
       }
+
+      // Sync on EVERY access (not just first populate): generated
+      // getters read `this.buffer` right after resolving a cursor for
+      // this depth, and with a windowed provider each class reference
+      // can hold a different window — `this.buffer` must always be the
+      // view the depth's cursors were recorded against.
+      this.internalReference_.buffer = classReference.buffer
 
       return classReference as Required< StepEntityInternalReference<EntityTypeIDs> >
     }

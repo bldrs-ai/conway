@@ -1,3 +1,4 @@
+import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcGeometry, RawLineData, Vector } from './ifc_api'
 import { PropertiesPassthrough } from './properties_passthrough'
 
@@ -23,4 +24,25 @@ export interface IfcApiModelPassthrough {
    * returning that memory. Entities rematerialise on next access.
    */
   releaseEntityCache?(): void
+
+  /**
+   * Optional: true when the model's source bytes are spilled to an
+   * external store and served through on-demand windows.
+   */
+  readonly sourceIsExternal?: boolean
+
+  /**
+   * Optional: release the resident source buffer, serving subsequent
+   * record reads through windows paged from the given external store.
+   */
+  spillSourceToExternalStore?(
+    store: StepExternalByteStore,
+    chunkBytes?: number,
+    maxResidentChunks?: number ): void
+
+  /**
+   * Optional: page in the byte range backing a record so a following
+   * synchronous read succeeds. Fast no-op while fully resident.
+   */
+  ensureLineResident?( expressID: number ): Promise< void >
 }

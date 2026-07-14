@@ -67,7 +67,26 @@ export class IfcProperties implements PropertiesPassthrough {
     return IfcTypesMap[type]
   }
 
+  /**
+   * Page in the byte range backing a record before a synchronous read,
+   * when the model's source has been spilled to an external store.
+   * Fast no-op (no promise allocation) while fully resident.
+   *
+   * @param id The record's express ID.
+   */
+  private async ensureLine(id: number) {
+    if (this.api.sourceIsExternal) {
+      await this.api.ensureLineResident(id)
+    }
+  }
+
   async getItemProperties(id: number, recursive = false) {
+    // NOTE: with a spilled source, `recursive` flattening follows
+    // references synchronously and only this record's range is
+    // ensured here — recursive reads on spilled models require the
+    // closure to be resident. No lazy-load consumer uses recursive
+    // reads; revisit if one appears.
+    await this.ensureLine(id)
     return this.api.getLine(id, recursive)
   }
 
@@ -90,6 +109,7 @@ export class IfcProperties implements PropertiesPassthrough {
     const projectID = allLines.get(0)
     const project = IfcProperties.newIfcProject(projectID)
     if (includeProperties === 'names') {
+      await this.ensureLine(projectID)
       Object.assign(project, this.api.getLineNameAttributes(projectID))
     }
     await this.getSpatialNode(project, chunks, includeProperties)
@@ -108,6 +128,7 @@ export class IfcProperties implements PropertiesPassthrough {
     }
     const result: any[] = []
     for (let i = 0; i < items.length; i++) {
+      await this.ensureLine(items[i])
       result.push(await this.api.getLine(items[i]))
     }
     return result
@@ -117,6 +138,7 @@ export class IfcProperties implements PropertiesPassthrough {
     const propSetIds = await this.getAllRelatedItemsOfType(elementID, propName)
     const result: any[] = []
     for (let i = 0; i < propSetIds.length; i++) {
+      await this.ensureLine(propSetIds[i])
       result.push(await this.api.getLine(propSetIds[i], recursive))
     }
     return result
@@ -125,6 +147,7 @@ export class IfcProperties implements PropertiesPassthrough {
   private async getChunks(chunks: any, propNames: pName) {
     const relation = await this.api.getLineIDsWithType(propNames.name)
     for (let i = 0; i < relation.size(); i++) {
+      await this.ensureLine(relation.get(i))
       const rel = await this.api.getLine(relation.get(i), false)
       this.saveChunk(chunks, propNames, rel)
     }
@@ -165,6 +188,7 @@ export class IfcProperties implements PropertiesPassthrough {
       if (includeProperties === 'names') {
         // Light mode: Name/LongName/GlobalId handles only — decodes just
         // those vtable slots instead of flattening the whole record.
+        await this.ensureLine(node.expressID)
         Object.assign(node, this.api.getLineNameAttributes(node.expressID))
       } else if (includeProperties) {
         const properties = await this.getItemProperties(node.expressID) as any
@@ -220,6 +244,7 @@ export class IfcProperties implements PropertiesPassthrough {
     const lines = await this.api.getLineIDsWithType(propNames.name)
     const IDs: number[] = []
     for (let i = 0; i < lines.size(); i++) {
+      await this.ensureLine(lines.get(i))
       const rel = await this.api.getLine(lines.get(i))
       const isRelated = IfcProperties.isRelated(id, rel, propNames)
       if (isRelated) {

@@ -1,4 +1,10 @@
 import { StepIndexEntry } from './parsing/step_parser'
+import {
+  ResidentStepBufferProvider,
+  StepBufferProvider,
+  StepExternalByteStore,
+  WindowedStepBufferProvider,
+} from './step_buffer_provider'
 import StepVtableBuilder from './parsing/step_vtable_builder'
 import StepEntityBase from './step_entity_base'
 import StepEntitySchema from './step_entity_schema'
@@ -59,6 +65,14 @@ implements Iterable<BaseEntity>, Model {
   private readonly complexEntries_?:
     Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > >
 
+  // Residency provider for the raw source bytes. Defaults to a resident
+  // provider over the constructor's buffer (historical behaviour,
+  // bit-for-bit). `spillSourceToExternalStore` swaps in a windowed
+  // provider and releases the resident buffer — after that, synchronous
+  // extraction requires the range to have been paged in first (see
+  // `ensureResidentByExpressID` / `ensureResidentByLocalID`).
+  private bufferProvider_: StepBufferProvider
+
   /**
    * Will this model memoize elements, set to false to disable,
    * true to enable.
@@ -89,7 +103,9 @@ implements Iterable<BaseEntity>, Model {
    */
   constructor(
     public readonly schema: StepEntitySchema< EntityTypeIDs, BaseEntity >,
-    private readonly buffer_: Uint8Array, elementIndex: StepIndexEntry<EntityTypeIDs>[]) {
+    private buffer_: Uint8Array | undefined, elementIndex: StepIndexEntry<EntityTypeIDs>[]) {
+
+    this.bufferProvider_ = new ResidentStepBufferProvider( buffer_ as Uint8Array )
 
     const localElementIndex: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity>[] =
       elementIndex
@@ -268,7 +284,10 @@ implements Iterable<BaseEntity>, Model {
       this.descriptorCache_ = []
 
       // Complex (multiMapping) entries are retained objects; clear their lazy
-      // fields in place, matching the previous per-entry reset.
+      // fields in place, matching the previous per-entry reset. The mapped
+      // class references are cleared too — they capture buffer views at
+      // populate time, and a stale view would otherwise pin the released
+      // source buffer across a spill.
       if ( this.complexEntries_ !== void 0 ) {
 
         for ( const item of this.complexEntries_.values() ) {
@@ -278,6 +297,19 @@ implements Iterable<BaseEntity>, Model {
           item.vtable      = void 0
           item.vtableCount = void 0
           item.vtableIndex = void 0
+          item.multiEntity = void 0
+
+          if ( item.multiMapping !== void 0 ) {
+
+            for ( const mapped of item.multiMapping ) {
+
+              mapped.buffer      = void 0
+              mapped.entity      = void 0
+              mapped.vtable      = void 0
+              mapped.vtableCount = void 0
+              mapped.vtableIndex = void 0
+            }
+          }
         }
       }
 
@@ -306,17 +338,23 @@ implements Iterable<BaseEntity>, Model {
    * @param element The raw elment to populate the vtable entry for.
    * @return {boolean} Did the vtable entry populate correctly?
    */
-  public populateVtableEntryRaw( 
+  public populateVtableEntryRaw(
     element: StepEntityInternalReference< EntityTypeIDs > ): boolean {
     if (element.vtableIndex !== void 0 || element.typeID === 0 ) {
       return true
     }
 
+    // Acquire the record's byte range through the provider — the full
+    // resident buffer at offset 0 by default, or a window/merged view
+    // after a spill. Cursors recorded below are relative to the view.
+    const acquisition = this.bufferProvider_.acquire( element.address, element.length )
+    const viewAddress = element.address - acquisition.offset
+
     const extratedEntry =
       this.schema.parser.extractDataEntry(
-          this.buffer_,
-          element.address,
-          element.address + element.length,
+          acquisition.buffer,
+          viewAddress,
+          viewAddress + element.length,
           this.vtableBuilder_)
 
     if (extratedEntry === void 0) {
@@ -326,7 +364,7 @@ implements Iterable<BaseEntity>, Model {
     element.vtableIndex = extratedEntry[ 0 ]
     element.vtableCount = extratedEntry[ 1 ]
     element.endCursor   = extratedEntry[ 2 ]
-    element.buffer = this.buffer_
+    element.buffer = acquisition.buffer
     element.vtable = this.vtableBuilder_.buffer
 
     return true
@@ -347,28 +385,7 @@ implements Iterable<BaseEntity>, Model {
 
     const element = this.entry(localID)
 
-    if (element.vtableIndex !== void 0 || element.typeID === 0 ) {
-      return true
-    }
-
-    const extratedEntry =
-      this.schema.parser.extractDataEntry(
-          this.buffer_,
-          element.address,
-          element.address + element.length,
-          this.vtableBuilder_)
-
-    if (extratedEntry === void 0) {
-      return false
-    }
-
-    element.vtableIndex = extratedEntry[ 0 ]
-    element.vtableCount = extratedEntry[ 1 ]
-    element.endCursor   = extratedEntry[ 2 ]
-    element.buffer = this.buffer_
-    element.vtable = this.vtableBuilder_.buffer
-
-    return true
+    return this.populateVtableEntryRaw( element )
   }
 
 
@@ -385,7 +402,8 @@ implements Iterable<BaseEntity>, Model {
 
     const element = this.entry(localID)
 
-    element.buffer = this.buffer_
+    element.buffer =
+      this.bufferProvider_.acquire( element.address, element.length ).buffer
   }
 
 
@@ -395,7 +413,123 @@ implements Iterable<BaseEntity>, Model {
    * @return {number} The number of elements.
    */
   public get bufferBytesize(): number {
-    return this.buffer_.byteLength
+    return this.bufferProvider_.byteLength
+  }
+
+  /**
+   * Are the source bytes held externally (spilled), i.e. windowed in
+   * on demand rather than fully resident?
+   *
+   * @return {boolean} True after a successful `spillSourceToExternalStore`.
+   */
+  public get isSourceExternal(): boolean {
+    return this.buffer_ === void 0
+  }
+
+  /**
+   * Bytes of source currently held resident by the buffer provider
+   * (the whole buffer before a spill; the windowed working set after).
+   *
+   * @return {number} The resident byte count.
+   */
+  public get residentSourceBytes(): number {
+    return this.bufferProvider_.residentBytes
+  }
+
+  /**
+   * Release the resident source buffer and serve subsequent record
+   * reads from fixed-size windows paged in from an external store.
+   *
+   * The store must contain EXACTLY the model's source bytes (same
+   * length; byte-identical content is the caller's responsibility —
+   * typically the original file already sitting in OPFS). All cached
+   * descriptors/entities are invalidated, since they hold views over
+   * the released buffer; they rematerialise on demand through the
+   * windowed provider.
+   *
+   * After this, synchronous extraction of a record whose range isn't
+   * resident throws StepBufferNotResidentError — async API surfaces
+   * must call `ensureResidentByExpressID` / `ensureResidentByLocalID`
+   * first. Parse and geometry extraction always run before any spill,
+   * so those paths are unaffected.
+   *
+   * @param store The external store holding the source bytes.
+   * @param chunkBytes Optional window size in bytes.
+   * @param maxResidentChunks Optional residency cap in windows.
+   */
+  public spillSourceToExternalStore(
+      store: StepExternalByteStore,
+      chunkBytes?: number,
+      maxResidentChunks?: number ): void {
+
+    if ( store.byteLength !== this.bufferProvider_.byteLength ) {
+      throw new Error(
+          `External store byteLength ${store.byteLength} does not match ` +
+          `source byteLength ${this.bufferProvider_.byteLength}` )
+    }
+
+    this.bufferProvider_ = new WindowedStepBufferProvider( store, chunkBytes, maxResidentChunks )
+    this.buffer_         = void 0
+
+    this.invalidate( true )
+  }
+
+  /**
+   * Page in the byte range(s) backing a record so following
+   * synchronous extraction of it succeeds. Covers the record's own
+   * range (which contains any inline elements) and, for complex /
+   * external-mapped records, each mapped class record's range.
+   *
+   * No-op (fast resolved promise) while the source is fully resident.
+   *
+   * @param localID The local ID of the record.
+   * @return {Promise< void >} Resolves when resident.
+   */
+  public async ensureResidentByLocalID( localID: number ): Promise< void > {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    if ( localID >= this.count_ ) {
+      throw new Error(`Invalid localID ${localID}`)
+    }
+
+    await this.bufferProvider_.ensureResident(
+        this.address_[ localID ], this.length_[ localID ] )
+
+    const complex = this.complexEntries_?.get( localID )
+
+    if ( complex?.multiMapping !== void 0 ) {
+
+      for ( const mapped of complex.multiMapping ) {
+        await this.bufferProvider_.ensureResident( mapped.address, mapped.length )
+      }
+    }
+  }
+
+  /**
+   * Page in the byte range(s) backing a record by express ID — see
+   * `ensureResidentByLocalID`. Unknown express IDs resolve silently
+   * (the following read will surface the miss the same way it does
+   * for a fully-resident model).
+   *
+   * @param expressID The express ID of the record.
+   * @return {Promise< void >} Resolves when resident.
+   */
+  public async ensureResidentByExpressID( expressID: number ): Promise< void > {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    const localID = this.expressIDMap_.get( expressID )
+
+    if ( localID === void 0 ) {
+      return
+    }
+
+    await this.ensureResidentByLocalID( localID )
   }
 
 
