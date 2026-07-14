@@ -30,7 +30,31 @@ implements Iterable<BaseEntity>, Model {
   private readonly vtableBuilder_: StepVtableBuilder = new StepVtableBuilder()
   private readonly expressIDMap_: InterpolationSearchTable32
   private readonly inlineAddressMap_: InterpolationSearchTable32
-  private readonly elementIndex_: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity> []
+
+  // Structure-of-arrays index. The parsed element index used to be retained as
+  // one heterogeneous JS object per entity for the model's whole life (~135 B
+  // each; SKYLARK's 7.8 M / PSB's 9.4 M entities cost ~1 GB+ that `invalidate`
+  // could never reclaim). Instead we keep the persistent scalar fields in
+  // parallel typed-array columns (~16 B/entity) and materialise a descriptor
+  // object lazily, on demand, into `descriptorCache_` — which `invalidate`
+  // clears, so descriptor memory is actually reclaimable. Local IDs index the
+  // columns directly. Inline entities are unfolded to a contiguous tail range,
+  // so express-ID presence is positional (`localID < firstInlineElement_`).
+  private readonly address_: Uint32Array
+  private readonly length_: Uint32Array
+  private readonly typeID_: Int32Array         // -1 = undefined (0 is external-mapping)
+  private readonly expressID_: Uint32Array     // real (non-inline) entries only
+  private readonly count_: number
+  private readonly firstInlineElement_: number
+
+  // Lazily-materialised descriptors for touched entities; cleared by invalidate.
+  private readonly descriptorCache_:
+    Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > = new Map()
+
+  // Rare STEP complex/external-mapping entities (multiMapping) keep their full
+  // descriptor object — the multi-entity graph isn't column-encoded.
+  private readonly complexEntries_?:
+    Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > >
 
   /**
    * Will this model memoize elements, set to false to disable,
@@ -129,15 +153,97 @@ implements Iterable<BaseEntity>, Model {
 
     const expressIDMap = new InterpolationSearchTable32( expressIdTable, expressIdsAlreadySorted )
 
-    // Continguous dense array map from express IDs.
-    // for (const element of elementIndex) {
-    //   if (element.expressID !== void 0) {
-    //     expressIDMap.set(element.expressID, indexId++)
-    //   }
-    // }
-
     this.expressIDMap_ = expressIDMap
-    this.elementIndex_ = localElementIndex
+
+    // Pack the persistent scalar fields into columns and pull the rare
+    // multiMapping (complex/external-mapping) entries aside as retained
+    // descriptor objects. After this the `localElementIndex` object array is
+    // unreferenced and collected — its per-entity objects no longer pin memory.
+    const count      = inlineElementEnd
+    const address    = new Uint32Array( count )
+    const lengths    = new Uint32Array( count )
+    const typeIDs    = new Int32Array( count )
+    const expressIDs = new Uint32Array( firstInlineElement )
+
+    let complexEntries:
+      Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined =
+        void 0
+
+    for ( let localID = 0; localID < count; ++localID ) {
+
+      const element = localElementIndex[ localID ]
+
+      address[ localID ] = element.address
+      lengths[ localID ] = element.length
+      typeIDs[ localID ] = element.typeID === void 0 ? -1 : ( element.typeID as number )
+
+      if ( localID < firstInlineElement ) {
+        expressIDs[ localID ] = element.expressID as number
+      }
+
+      if ( element.multiMapping !== void 0 ) {
+        ( complexEntries ??= new Map() ).set( localID, element )
+      }
+    }
+
+    this.address_            = address
+    this.length_             = lengths
+    this.typeID_             = typeIDs
+    this.expressID_          = expressIDs
+    this.count_              = count
+    this.firstInlineElement_ = firstInlineElement
+    this.complexEntries_     = complexEntries
+  }
+
+  /**
+   * Materialise the descriptor object for a local ID from the columns. Only the
+   * persistent scalars are set; lazy fields (vtable, buffer, entity) are filled
+   * in on demand by populateVtableEntry / entity construction.
+   *
+   * @param localID The local ID to build a descriptor for.
+   * @return {StepEntityInternalReferencePrivate} The descriptor.
+   */
+  private makeDescriptor( localID: number ):
+    StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > {
+
+    const typeID = this.typeID_[ localID ]
+
+    return {
+      address:   this.address_[ localID ],
+      length:    this.length_[ localID ],
+      typeID:    typeID === -1 ? void 0 : ( typeID as EntityTypeIDs ),
+      expressID: localID < this.firstInlineElement_ ?
+        this.expressID_[ localID ] : void 0,
+    }
+  }
+
+  /**
+   * Get the (cached or freshly materialised) descriptor for a local ID. The
+   * same object is returned for repeated calls until invalidate(), so entities
+   * built on it and populateVtableEntry() mutations agree.
+   *
+   * @param localID The local ID to get a descriptor for.
+   * @return {StepEntityInternalReferencePrivate} The descriptor.
+   */
+  private entry( localID: number ):
+    StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > {
+
+    const complex = this.complexEntries_?.get( localID )
+
+    if ( complex !== void 0 ) {
+      return complex
+    }
+
+    let descriptor = this.descriptorCache_.get( localID )
+
+    if ( descriptor === void 0 ) {
+
+      descriptor = this.makeDescriptor( localID )
+
+      this.descriptorCache_.set( localID, descriptor )
+    }
+
+    return descriptor
   }
 
 
@@ -153,32 +259,38 @@ implements Iterable<BaseEntity>, Model {
 
       this.vtableBuilder_.clear( true )
 
-      for ( const item of this.elementIndex_ ) {
+      // Common entries: drop their materialised descriptors outright — this is
+      // the memory the old retained object array could never release. They
+      // rematerialise from the columns on next access.
+      this.descriptorCache_.clear()
 
-        if ( Array.isArray( item ) ) {
+      // Complex (multiMapping) entries are retained objects; clear their lazy
+      // fields in place, matching the previous per-entry reset.
+      if ( this.complexEntries_ !== void 0 ) {
 
-          for ( const subItem of item ) {
-            subItem.buffer = void 0
-            subItem.entity = void 0
-            subItem.vtable = void 0
-            subItem.vtableCount = void 0
-            subItem.vtableIndex = void 0
-          }
+        for ( const item of this.complexEntries_.values() ) {
 
-          continue
+          item.buffer      = void 0
+          item.entity      = void 0
+          item.vtable      = void 0
+          item.vtableCount = void 0
+          item.vtableIndex = void 0
         }
-
-        item.buffer = void 0
-        item.entity = void 0
-        item.vtable = void 0
-        item.vtableCount = void 0
-        item.vtableIndex = void 0
       }
+
     } else {
 
-      for ( const item of this.elementIndex_ ) {
+      for ( const item of this.descriptorCache_.values() ) {
 
         item.entity = void 0
+      }
+
+      if ( this.complexEntries_ !== void 0 ) {
+
+        for ( const item of this.complexEntries_.values() ) {
+
+          item.entity = void 0
+        }
       }
     }
   }
@@ -224,11 +336,11 @@ implements Iterable<BaseEntity>, Model {
    * @return {boolean} Did the vtable entry populate correctly?
    */
   public populateVtableEntry(localID: number): boolean {
-    if (localID > this.elementIndex_.length) {
+    if (localID >= this.count_) {
       throw new Error(`Invalid localID ${localID}`)
     }
 
-    const element = this.elementIndex_[localID]
+    const element = this.entry(localID)
 
     if (element.vtableIndex !== void 0 || element.typeID === 0 ) {
       return true
@@ -262,11 +374,11 @@ implements Iterable<BaseEntity>, Model {
    * @throws {Error} Throws an error if the ID is invalid.
    */
   public populateBufferEntry( localID: number ): void {
-    if (localID > this.elementIndex_.length) {
+    if (localID >= this.count_) {
       throw new Error(`Invalid localID ${localID}`)
     }
 
-    const element = this.elementIndex_[localID]
+    const element = this.entry(localID)
 
     element.buffer = this.buffer_
   }
@@ -288,7 +400,7 @@ implements Iterable<BaseEntity>, Model {
    * @return {number} The number of elements.
    */
   public get size(): number {
-    return this.elementIndex_.length
+    return this.count_
   }
 
   /**
@@ -387,11 +499,11 @@ implements Iterable<BaseEntity>, Model {
     type: StepEntityConstructorAbstract< EntityTypeIDs > ):
     O | undefined {
   
-    if (localID > this.elementIndex_.length) {
+    if (localID >= this.count_) {
       return
     }
 
-    const element = this.elementIndex_[localID]
+    const element = this.entry(localID)
     const multiMapping = element.multiMapping
 
     if ( multiMapping !== void 0 ) {
@@ -480,9 +592,11 @@ implements Iterable<BaseEntity>, Model {
    */
   public mapLocalIDsToExpressIDs( from: ReadonlyUint32Array ): Uint32Array {
 
-    const index = this.elementIndex_
+    const firstInlineElement = this.firstInlineElement_
+    const expressIDs         = this.expressID_
 
-    return from.map( (value) => index[ value ]?.expressID ?? TriangleElementMap.NO_ELEMENT )
+    return from.map( ( value ) =>
+      value < firstInlineElement ? expressIDs[ value ] : TriangleElementMap.NO_ELEMENT )
   }
 
   /**
@@ -494,9 +608,7 @@ implements Iterable<BaseEntity>, Model {
    */
   public getExpressIDByLocalID(localID: number): number | undefined {
 
-    const index = this.elementIndex_
-
-    return index[ localID ]?.expressID
+    return localID < this.firstInlineElement_ ? this.expressID_[ localID ] : void 0
   }
 
   /**
@@ -508,11 +620,11 @@ implements Iterable<BaseEntity>, Model {
    * if none exists.
    */
   public getElementByLocalID(localID: number): BaseEntity | undefined {
-    if (localID > this.elementIndex_.length) {
+    if (localID >= this.count_) {
       return
     }
 
-    const element = this.elementIndex_[localID]
+    const element = this.entry(localID)
 
     let entity = element.entity
     const multiMapping = element.multiMapping
@@ -720,7 +832,7 @@ implements Iterable<BaseEntity>, Model {
    * @yields An element per iteration for all the elements in this.
    */
   public* [Symbol.iterator](): IterableIterator<BaseEntity> {
-    for (let localID = 0, endID = this.elementIndex_.length; localID < endID; ++localID) {
+    for (let localID = 0, endID = this.count_; localID < endID; ++localID) {
       const foundElement = this.getElementByLocalID(localID)
 
       if (foundElement !== void 0) {
