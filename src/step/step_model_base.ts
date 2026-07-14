@@ -47,9 +47,12 @@ implements Iterable<BaseEntity>, Model {
   private readonly count_: number
   private readonly firstInlineElement_: number
 
-  // Lazily-materialised descriptors for touched entities; cleared by invalidate.
-  private readonly descriptorCache_:
-    Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > = new Map()
+  // Lazily-materialised descriptors for touched entities, indexed by local ID;
+  // dropped wholesale by invalidate(). A sparse array, not a Map: at PSB/SKYLARK
+  // scale most entities are touched during extraction, where a Map's ~45 B/entry
+  // overhead would dominate — an array slot is 8 B.
+  private descriptorCache_:
+    ( StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > | undefined )[] = []
 
   // Rare STEP complex/external-mapping entities (multiMapping) keep their full
   // descriptor object — the multi-entity graph isn't column-encoded.
@@ -234,13 +237,13 @@ implements Iterable<BaseEntity>, Model {
       return complex
     }
 
-    let descriptor = this.descriptorCache_.get( localID )
+    let descriptor = this.descriptorCache_[ localID ]
 
     if ( descriptor === void 0 ) {
 
       descriptor = this.makeDescriptor( localID )
 
-      this.descriptorCache_.set( localID, descriptor )
+      this.descriptorCache_[ localID ] = descriptor
     }
 
     return descriptor
@@ -262,7 +265,7 @@ implements Iterable<BaseEntity>, Model {
       // Common entries: drop their materialised descriptors outright — this is
       // the memory the old retained object array could never release. They
       // rematerialise from the columns on next access.
-      this.descriptorCache_.clear()
+      this.descriptorCache_ = []
 
       // Complex (multiMapping) entries are retained objects; clear their lazy
       // fields in place, matching the previous per-entry reset.
@@ -280,9 +283,11 @@ implements Iterable<BaseEntity>, Model {
 
     } else {
 
-      for ( const item of this.descriptorCache_.values() ) {
+      for ( const item of this.descriptorCache_ ) {
 
-        item.entity = void 0
+        if ( item !== void 0 ) {
+          item.entity = void 0
+        }
       }
 
       if ( this.complexEntries_ !== void 0 ) {
