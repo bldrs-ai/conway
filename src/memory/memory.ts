@@ -38,6 +38,30 @@ export default class Memory {
   }
 
   /**
+   * Numeric used-heap sample for progress/telemetry events, unlike the
+   * human-formatted strings above. Chrome-only in browsers
+   * (performance.memory); undefined where the environment exposes nothing.
+   *
+   * @return {number | undefined} - used JS heap in MB, if available
+   */
+  static usedHeapMb(): number | undefined {
+    /* eslint-disable no-magic-numbers */
+    switch (Environment.environmentType) {
+      case EnvironmentType.BROWSER:
+        if (typeof window !== 'undefined' && window.performance?.memory) {
+          return window.performance.memory.usedJSHeapSize / 1024 / 1024
+        }
+        return void 0
+      case EnvironmentType.NODE:
+      case EnvironmentType.BOTH_FEATURES:
+        return process.memoryUsage().heapUsed / 1024 / 1024
+      default:
+        return void 0
+    }
+    /* eslint-enable no-magic-numbers */
+  }
+
+  /**
    *
    * @return {string} - memory usage result for browser systems
    */

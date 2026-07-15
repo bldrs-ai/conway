@@ -863,6 +863,24 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * Count entities of a set of types (including sub-types) without iterating
+   * or materializing them — reads the type index's prefix sums, so it's cheap
+   * enough to call up front for progress totals (see core/progress.ts).
+   * Multi-mapped elements can be counted once per matching mapping, so treat
+   * this as an upper bound; see MultiIndexSet.count.
+   *
+   * @param types The list of types to count.
+   * @return {number} The number of matching entities.
+   */
+  public typeCount<T extends StepEntityConstructorAbstract<EntityTypeIDs>[]>(
+      ...types: T ): number {
+    const distinctTypes = types.length === 1 ? (types[0].query) :
+      (new Set(types.flatMap((type) => type.query)))
+
+    return this.typeIndex.count(...distinctTypes)
+  }
+
+  /**
    * Get the non empty type IDs for this.
    *
    * @return {Set} The unique set of non empty type IDs for this model.

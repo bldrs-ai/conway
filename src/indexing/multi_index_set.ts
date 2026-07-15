@@ -3,6 +3,23 @@ import { MultiIndexSetCursorOr } from './multi_index_set_cursor_or'
 import { indexSetPointQuery32 } from './search_operations'
 import { SingleIndexSetCursor } from './single_index_set_cursor'
 
+/* eslint-disable no-magic-numbers -- SWAR popcount constants */
+/**
+ * Standard SWAR population count for a 32 bit integer.
+ *
+ * @param value The value to count set bits in.
+ * @return {number} The number of set bits.
+ */
+function popCount32( value: number ): number {
+  let result = value - ( ( value >> 1 ) & 0x55555555 )
+
+  result = ( result & 0x33333333 ) + ( ( result >> 2 ) & 0x33333333 )
+  result = ( result + ( result >> 4 ) ) & 0x0F0F0F0F
+
+  return ( result * 0x01010101 ) >> 24
+}
+/* eslint-enable no-magic-numbers */
+
 /**
  * A set of indices each associated with a number identifier.
  */
@@ -64,6 +81,43 @@ export class MultiIndexSet< IndexType extends number > {
     const indexEnd    = prefixSum[ indexType + 1 ] * 2
 
     return indexSetPointQuery32( localID, this.elements_, indexOffset, indexEnd )
+  }
+
+  /**
+   * Count of items for a set of types without materializing entities —
+   * popcounts the packed one-hot blocks per type (the prefix sums index
+   * 32-element blocks, not items), so it's O(blocks), thousands of times
+   * cheaper than iterating a cursor. Per-type ranges are disjoint, but an
+   * element multi-mapped under several of the queried types counts once per
+   * mapping (matching what a cursor union would visit), so treat multi-type
+   * counts as an upper bound (fine for progress totals, its motivating use).
+   *
+   * @param indexTypes The list of types to count.
+   * @return {number} The summed count for the given types.
+   */
+  public count( ...indexTypes: IndexType[] ): number {
+    const prefixSum = this.prefixSumTable_
+    const elements = this.elements_
+
+    let result = 0
+
+    for ( const indexType of indexTypes ) {
+
+      if ( indexType >= prefixSum.length - 1 ) {
+        continue
+      }
+
+      const blockStart = prefixSum[ indexType ] * 2
+      const blockEnd = prefixSum[ indexType + 1 ] * 2
+
+      // Each packed block is [maskedTopBits, oneHotBitfield] — the bitfield's
+      // set bits are the block's members.
+      for ( let where = blockStart; where < blockEnd; where += 2 ) {
+        result += popCount32( elements[ where + 1 ] )
+      }
+    }
+
+    return result
   }
 
   /**

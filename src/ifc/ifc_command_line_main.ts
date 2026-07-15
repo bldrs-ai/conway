@@ -14,7 +14,9 @@ import { ConwayGeometry }
 import { IfcSceneBuilder } from './ifc_scene_builder'
 import GeometryConvertor from '../core/geometry_convertor'
 import GeometryAggregator from '../core/geometry_aggregator'
-import Logger from '../logging/logger'
+import Logger, { LogLevel } from '../logging/logger'
+import { CountProgressCallback, ProgressTracker } from '../core/progress'
+import { CliProgressRenderer } from '../cli/cli_progress_renderer'
 import Environment from '../utilities/environment'
 import Memory from '../memory/memory'
 import { ExtractResult } from '../core/shared_constants'
@@ -142,6 +144,16 @@ function doWork() {
             type: 'boolean',
             alias: 'r',
           })
+          yargs2.option('verbose', {
+            describe: 'Verbose logging (full deduped log table + debug lines)',
+            type: 'boolean',
+            alias: 'v',
+          })
+          yargs2.option('quiet', {
+            describe: 'Errors only; also disables the progress display',
+            type: 'boolean',
+            alias: 'q',
+          })
           yargs2.positional('filename', { describe: 'IFC File Paths', type: 'string' })
         }, (argv) => {
           const ifcFile = argv['filename'] as string
@@ -167,6 +179,20 @@ function doWork() {
           const outputGltfDraco = (argv['gltf-draco'] as boolean |
             undefined)
           const outputGlbDraco = (argv['glb-draco'] as boolean | undefined)
+          const verbose = (argv['verbose'] as boolean | undefined) ?? false
+          const quiet = (argv['quiet'] as boolean | undefined) ?? false
+
+          // Logs (and the load summary) echo on stderr so stdout carries
+          // only data output (query table / serialized paths) — issue #301.
+          Logger.setSink((_level, message) => process.stderr.write(`${message}\n`))
+          Logger.setLogLevel(
+              quiet ? LogLevel.ERROR : (verbose ? LogLevel.DEBUG : LogLevel.INFO))
+
+          // Live progress: single repainting status line on a TTY, sparse
+          // plain lines when redirected. Rendering on stderr, like the logs.
+          const progressRenderer = quiet ? void 0 : new CliProgressRenderer()
+          const tracker = progressRenderer !== void 0 ?
+            new ProgressTracker(progressRenderer.onProgress) : void 0
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
@@ -189,6 +215,8 @@ function doWork() {
           const bufferInput = new ParsingBuffer(indexIfcBuffer)
 
           const headerDataTimeStart = Date.now()
+
+          tracker?.beginPhase('headerParse', 'bytes', indexIfcBuffer.length)
 
           const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
@@ -222,9 +250,16 @@ function doWork() {
             default:
           }
 
+          tracker?.beginPhase('dataParse', 'bytes', indexIfcBuffer.length)
+
+          const parseTick = tracker !== void 0 ?
+            (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
           const parseDataTimeStart = Date.now()
-          const [result1, model] = parser.parseDataToModel(bufferInput)
+          const [result1, model] = parser.parseDataToModel(bufferInput, parseTick)
           const parseDataTimeEnd = Date.now()
+
+          tracker?.endPhase(indexIfcBuffer.length)
 
           switch (result1) {
             case ParseResult.COMPLETE:
@@ -269,7 +304,17 @@ function doWork() {
                   path.dirname( ifcFile ),
                   path.basename( ifcFile, path.extname( ifcFile) ) )
 
-            const result = geometryExtraction(model, limitCSG, maxCSGDepth)
+            tracker?.beginPhase('geometry', 'products')
+
+            const geometryTick: CountProgressCallback | undefined = tracker !== void 0 ?
+              (completed: number, total: number) => {
+                tracker.setPhaseTotal(total)
+                tracker.update(completed)
+              } : void 0
+
+            const result = geometryExtraction(model, limitCSG, maxCSGDepth, geometryTick)
+
+            tracker?.endPhase()
 
             if (result !== void 0) {
               const scene = result
@@ -284,12 +329,18 @@ function doWork() {
               const maxGeometrySize = maxChunk << MEGABYTE_SHIFT
 
               if (noOutput === undefined || !noOutput) {
+                // Heartbeat only: chunk counts aren't known until the
+                // aggregator runs inside serializeGeometry.
+                tracker?.beginPhase('serialize', 'chunks')
+
                 if (outputGltf === undefined && outputGlb === undefined &&
-                    outputGltfDraco === undefined && outputGlbDraco === undefined) { 
+                    outputGltfDraco === undefined && outputGlbDraco === undefined) {
                     serializeGeometry(scene, fileName, maxGeometrySize, true, true, true, true, includeSpace)
                   } else {
-                  serializeGeometry(scene, fileName, maxGeometrySize, outputGltf, outputGlb, outputGltfDraco, outputGlbDraco, includeSpace) 
+                  serializeGeometry(scene, fileName, maxGeometrySize, outputGltf, outputGlb, outputGltfDraco, outputGlbDraco, includeSpace)
                 }
+
+                tracker?.endPhase()
               }
             }
           } else {
@@ -397,6 +448,7 @@ function doWork() {
             statistics.setMemoryStatistics(Memory.checkMemoryUsage())
           }
 
+          progressRenderer?.done()
 
           Logger.displayLogs()
           Logger.printStatistics(modelID)
@@ -656,12 +708,14 @@ function propertyExtraction(model: IfcStepModel) {
  * @param model
  * @param limitCSGDepth
  * @param maxCSGDepth
+ * @param onProgress Optional per-product progress callback (completed, total).
  * @return {IfcSceneBuilder | undefined} The scene or undefined on error.
  */
 function geometryExtraction(
   model: IfcStepModel,
   limitCSGDepth: boolean = true,
-  maxCSGDepth: number = 20):
+  maxCSGDepth: number = 20,
+  onProgress?: CountProgressCallback):
   IfcSceneBuilder | undefined {
 
   const conwayModel =
@@ -674,7 +728,7 @@ function geometryExtraction(
   // parse + extract data model + geometry data
   const startTime = Date.now()
   const [extractionResult, scene] =
-    conwayModel.extractIFCGeometryData()
+    conwayModel.extractIFCGeometryData(onProgress)
   const endTime = Date.now()
   const executionTimeInMs = endTime - startTime
 

@@ -97,4 +97,47 @@ export class IfcApiModelPassthroughFactory {
         Logger.error( 'No type detected when constructing model')
     }
   }
+
+  /**
+   * Cooperative twin of from() (used by OpenModelAsync): IFC input is
+   * parsed/extracted with periodic event-loop yields so progress UI can
+   * repaint (issue #301 §2); AP214/AP203/AP242 currently fall back to the
+   * synchronous path (thunk-tree extraction has no flat product loop yet).
+   *
+   * @param modelID
+   * @param data
+   * @param wasmModule
+   * @param settings
+   * @return {Promise<IfcApiModelPassthrough | undefined>}
+   */
+  public static async fromAsync(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
+
+    if ( modelFormat !== ModelFormatType.IFC ) {
+
+      return IfcApiModelPassthroughFactory.from( modelID, data, wasmModule, settings )
+    }
+
+    try {
+
+      return await IfcApiProxyIfc.createAsync(modelID, data, wasmModule, settings)
+
+    } catch ( e ) {
+
+      if ( e instanceof Error ) {
+
+        // eslint-disable-next-line max-len
+        Logger.error( `Error loading IFC model in passthrough factory ${modelID}:\n${e.message}\n\n${e.stack}`)
+      } else {
+
+        Logger.error( `Unknown error loading IFC model in passthrough factory ${modelID}` )
+      }
+
+    }
+  }
 }
