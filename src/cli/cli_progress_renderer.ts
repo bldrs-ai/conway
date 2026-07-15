@@ -85,10 +85,15 @@ export class CliProgressRenderer {
   /**
    * Finish rendering: freeze any running stage's line and print the
    * separate before/after Total line.
+   *
+   * @param atElapsedMs Optional load-end elapsed ms, so the final stage's
+   * duration covers the time until the load finished (not just until its
+   * last progress event).
+   * @param atMemoryMb Optional load-end heap MB.
    */
-  public done(): void {
+  public done( atElapsedMs?: number, atMemoryMb?: number ): void {
 
-    const closedLine = this.log.closeCurrentStage()
+    const closedLine = this.log.closeCurrentStage( atElapsedMs, atMemoryMb )
 
     if ( closedLine !== void 0 ) {
       this.freezeLine( closedLine )

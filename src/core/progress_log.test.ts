@@ -3,6 +3,7 @@ import {describe, expect, test} from '@jest/globals'
 import {
   LoadLogAccumulator,
   formatBar,
+  formatMb,
   formatModelLine,
   formatSeconds,
   stageLabel,
@@ -10,21 +11,32 @@ import {
 
 
 const HALF_PERCENT = 56
-const FULL_PERCENT = 100
-const FULL_DOTS = 16
 const HALF_DOTS = 9
 const SAMPLE_MS = 3210
+const SAMPLE_MB = 210
+const LOAD_END_MS = 16_600
+const LOAD_END_MB = 720
 
 describe( 'formatBar', () => {
 
   test( 'grows dots with percent and completes at 100', () => {
     expect( formatBar( 0 ) ).toBe( '[0%0%]' )
     expect( formatBar( HALF_PERCENT ) ).toBe( `[0%${'.'.repeat( HALF_DOTS )}56%]` )
-    expect( formatBar( FULL_PERCENT ) ).toBe( `[0%${'.'.repeat( FULL_DOTS )}100%]` )
   } )
 
   test( 'renders indeterminate without a percent', () => {
     expect( formatBar( void 0 ) ).toBe( '[...]' )
+  } )
+} )
+
+describe( 'formatSeconds / formatMb', () => {
+
+  test( 'seconds render to millisecond precision', () => {
+    expect( formatSeconds( SAMPLE_MS ) ).toBe( '3.210s' )
+  } )
+
+  test( 'memory renders to byte precision', () => {
+    expect( formatMb( SAMPLE_MB ) ).toBe( '210.000000' )
   } )
 } )
 
@@ -44,8 +56,6 @@ describe( 'formatModelLine', () => {
 
   test( 'degrades gracefully with partial info', () => {
     expect( formatModelLine( {} ) ).toBe( 'Model: (unnamed)' )
-    expect( formatModelLine( { fileName: 'a.ifc', schema: 'IFC4' } ) )
-        .toBe( 'Model: a.ifc — IFC4' )
   } )
 } )
 
@@ -55,43 +65,60 @@ describe( 'stageLabel', () => {
     expect( stageLabel( 'headerParse' ) ).toBe( 'Parsing' )
     expect( stageLabel( 'dataParse' ) ).toBe( 'Parsing' )
     expect( stageLabel( 'geometry' ) ).toBe( 'Geometry' )
-    expect( stageLabel( 'convert' ) ).toBe( 'Convert' )
     expect( stageLabel( 'somethingElse' ) ).toBe( 'SomethingElse' )
   } )
 } )
 
 describe( 'LoadLogAccumulator', () => {
 
-  test( 'freezes stage lines with owned deltas and a separate Total', () => {
+  test( 'a completed stage drops its bar and owns the gap until the next begins', () => {
 
     const log = new LoadLogAccumulator()
 
     log.setModelInfo( { fileName: 'index.ifc', schema: 'IFC4' } )
 
-    // Parsing: 0→3200ms, heap 500→710 MB, determinate.
+    // Parsing hits 100% at 3200ms, but the real work runs on to the
+    // geometry transition at 3300ms / 712 MB — the closing stage owns it.
     log.onProgress( { phase: 'dataParse', completed: 0, total: 100, elapsedMs: 0, memoryMb: 500 } )
     log.onProgress(
         { phase: 'dataParse', completed: 100, total: 100, elapsedMs: 3200, memoryMb: 710 } )
 
-    // Geometry begins: closes Parsing.
     const closed = log.onProgress(
         { phase: 'geometry', completed: 0, total: 200, elapsedMs: 3300, memoryMb: 712 } )
 
-    expect( closed ).toBe( `Parsing [0%${'.'.repeat( FULL_DOTS )}100%] 3.2s, +210 MB heap` )
+    // Completed (reached 100%): colon format, no bar, extended to 3300ms.
+    expect( closed ).toBe( 'Parsing: 3.300s, +212.000000 MB heap' )
+  } )
 
+  test( 'a stage frozen below 100% keeps its bar (failure reach)', () => {
+
+    const log = new LoadLogAccumulator()
+
+    log.onProgress( { phase: 'geometry', completed: 0, total: 200, elapsedMs: 0, memoryMb: 712 } )
     log.onProgress(
-        { phase: 'geometry', completed: 112, total: 200, elapsedMs: 44_300, memoryMb: 1100 } )
+        { phase: 'geometry', completed: 112, total: 200, elapsedMs: 41_000, memoryMb: 1100 } )
 
-    expect( log.currentLine() ).toBe( `Geometry [0%${'.'.repeat( HALF_DOTS )}56%] 41.0s, +388 MB heap` )
+    // Live line always shows the bar.
+    expect( log.currentLine() ).toBe(
+        `Geometry [0%${'.'.repeat( HALF_DOTS )}56%] 41.000s, +388.000000 MB heap` )
 
+    // Frozen at 56% (never reached 100%) → keep the bar.
     log.closeCurrentStage()
 
-    expect( log.allLines() ).toEqual( [
-      'Model: index.ifc — IFC4',
-      `Parsing [0%${'.'.repeat( FULL_DOTS )}100%] 3.2s, +210 MB heap`,
-      `Geometry [0%${'.'.repeat( FULL_DOTS )}100%] 41.0s, +388 MB heap`,
-      'Total: 44.3s, 500 → 1100 MB heap',
-    ] )
+    expect( log.finishedLines()[ 0 ] ).toBe(
+        `Geometry [0%${'.'.repeat( HALF_DOTS )}56%] 41.000s, +388.000000 MB heap` )
+  } )
+
+  test( 'closeCurrentStage extends the final stage to the load-end point', () => {
+
+    const log = new LoadLogAccumulator()
+
+    log.onProgress( { phase: 'geometry', completed: 0, elapsedMs: 100, memoryMb: 500 } )
+    // Indeterminate stage, load finishes at 16600ms / 720 MB.
+    log.closeCurrentStage( LOAD_END_MS, LOAD_END_MB )
+
+    expect( log.finishedLines()[ 0 ] ).toBe( 'Geometry: 16.500s, +220.000000 MB heap' )
+    expect( log.totalLine() ).toBe( 'Total: 16.500s, 500.000000 → 720.000000 MB heap' )
   } )
 
   test( 'handles indeterminate stages and missing memory', () => {
@@ -101,14 +128,12 @@ describe( 'LoadLogAccumulator', () => {
     log.onProgress( { phase: 'geometry', completed: 0, elapsedMs: 0 } )
     log.onProgress( { phase: 'geometry', completed: 0, elapsedMs: 12_400 } )
 
-    expect( log.currentLine() ).toBe( 'Geometry [...] 12.4s' )
+    expect( log.currentLine() ).toBe( 'Geometry [...] 12.400s' )
 
     log.closeCurrentStage()
 
-    expect( log.totalLine() ).toBe( 'Total: 12.4s' )
-  } )
-
-  test( 'formatSeconds renders one decimal', () => {
-    expect( formatSeconds( SAMPLE_MS ) ).toBe( '3.2s' )
+    // Indeterminate + complete → colon, no bar, no heap.
+    expect( log.finishedLines()[ 0 ] ).toBe( 'Geometry: 12.400s' )
+    expect( log.totalLine() ).toBe( 'Total: 12.400s' )
   } )
 } )

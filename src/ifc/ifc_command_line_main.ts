@@ -451,7 +451,8 @@ function doWork() {
             statistics.setMemoryStatistics(Memory.checkMemoryUsage())
           }
 
-          progressRenderer?.done()
+          progressRenderer?.done(
+              Date.now() - allTimeStart, Memory.usedHeapMb())
 
           Logger.displayLogs()
           Logger.printStatistics(modelID)

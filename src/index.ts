@@ -25,6 +25,7 @@ export {
   ModelInfo,
   ProgressEventLike,
   formatBar,
+  formatMb,
   formatModelLine,
   formatSeconds,
   stageLabel,
