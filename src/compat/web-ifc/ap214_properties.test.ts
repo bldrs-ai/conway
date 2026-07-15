@@ -59,6 +59,37 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     }
   } )
 
+  test( 'getSpatialStructure surfaces the ephemeral solid layer on opt-in only', async () => {
+
+    const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
+
+    const plainRoot = await surface.getSpatialStructure() as any
+    const collectTypes = ( node: any, into: Set<string> ): Set<string> => {
+      into.add( node.type )
+      node.children.forEach( ( child: any ) => collectTypes( child, into ) )
+      return into
+    }
+
+    expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
+
+    const root = await surface.getSpatialStructure( void 0, { includeSolids: true } ) as any
+    const widget = root.children.find( ( node: any ) => node.Name.value === 'widget' )
+    const solids = widget.children.filter( ( node: any ) => node.type === 'solid' )
+
+    expect( solids.length ).toBeGreaterThan( 0 )
+
+    for ( const solid of solids ) {
+      expect( solid.ephemeral ).toBe( true )
+      expect( solid.Name.type ).toBe( 1 )
+      expect( solid.occurrencePath ).toEqual( widget.occurrencePath )
+    }
+
+    // A solid id resolves to its own identity row, like any tree node.
+    const item = await surface.getItemProperties( solids[0].expressID ) as any
+
+    expect( item.Name.value ).toBe( solids[0].Name.value )
+  } )
+
   test( 'getItemProperties returns a {value}-wrapped identity for a node', async () => {
 
     const surface = compatSurfaceFor( 'data/as1-assembly.step' )

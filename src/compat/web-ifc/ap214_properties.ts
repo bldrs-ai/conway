@@ -10,7 +10,11 @@ import {
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
 import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
-import { IncludeProperties, Node } from './properties_passthrough'
+import {
+  IncludeProperties,
+  Node,
+  SpatialStructureOptions,
+} from './properties_passthrough'
 
 
 /**
@@ -96,6 +100,16 @@ interface AP214Node extends Node {
   occurrencePath: number[]
 
   children: AP214Node[]
+
+  /**
+   * True for ephemeral (non-product) nodes — solid-level bodies surfaced via
+   * `SpatialStructureOptions.includeSolids`. Share should render these
+   * lighter-weight, selectable-but-not-product.
+   */
+  ephemeral?: boolean
+
+  /** Solids suppressed under this node by the ephemeral-layer limits. */
+  droppedSolids?: number
 }
 
 /**
@@ -128,6 +142,7 @@ const SYNTHETIC_ROOT_EXPRESS_ID = 0
 export class AP214Properties {
 
   private structureRoots_?: ProductStructureNode[]
+  private structureRootsWithSolids_?: ProductStructureNode[]
   private propertyMap_?: ExtractedPropertyMap
   private ownerByExpressID_?: Map<number, number>
   private nodeNameByExpressID_?: Map<number, string>
@@ -278,12 +293,18 @@ export class AP214Properties {
    *
    * @param includeProperties When true, merge each node's item properties onto
    * the node (mirrors the IFC surface's `includeProperties`).
+   * @param options Optional shaping: `{ includeSolids: true }` adds the
+   * ephemeral solid layer beneath multibody products (`type: 'solid'`,
+   * `ephemeral: true` nodes) — see `design/new/step-nonproduct-semantics.md`.
    * @return {Promise<Node>} The root node. A single-root file returns its root
    * directly; a multi-root file is wrapped in a synthetic container root.
    */
-  async getSpatialStructure( includeProperties?: IncludeProperties ): Promise<Node> {
+  async getSpatialStructure(
+      includeProperties?: IncludeProperties,
+      options?: SpatialStructureOptions ): Promise<Node> {
 
-    const roots = this.productStructure()
+    const roots = options?.includeSolids === true ?
+      this.productStructureWithSolids() : this.productStructure()
 
     const nodes = await Promise.all(
         roots.map( ( root ) => this.toSpatialNode( root, includeProperties ) ) )
@@ -352,6 +373,14 @@ export class AP214Properties {
       productDefinitionExpressID: node.productDefinitionExpressID,
       occurrencePath: node.occurrencePath,
       children,
+    }
+
+    if ( node.ephemeral === true ) {
+      spatialNode.ephemeral = true
+    }
+
+    if ( node.droppedSolids !== void 0 ) {
+      spatialNode.droppedSolids = node.droppedSolids
     }
 
     if ( includeProperties === 'names' ) {
@@ -466,6 +495,33 @@ export class AP214Properties {
   private productStructure(): ProductStructureNode[] {
     this.buildIndexes()
     return this.structureRoots_!
+  }
+
+  /**
+   * Return (and cache) the product-structure forest with the ephemeral solid
+   * layer included. Built separately from the plain forest so default callers
+   * never pay for the solid walk; the solid nodes are also indexed so
+   * `getItemProperties` resolves a solid id to its identity row and
+   * `getPropertySets` maps it to the owning product's rows.
+   *
+   * @return {ProductStructureNode[]} The cached solid-including roots.
+   */
+  private productStructureWithSolids(): ProductStructureNode[] {
+
+    this.buildIndexes()
+
+    if ( this.structureRootsWithSolids_ === void 0 ) {
+
+      this.structureRootsWithSolids_ =
+        new AP214ProductStructureExtraction( this.api.StepModel )
+            .extractProductStructure( { includeSolids: true } )
+
+      for ( const root of this.structureRootsWithSolids_ ) {
+        this.indexNodes( root )
+      }
+    }
+
+    return this.structureRootsWithSolids_
   }
 
   /**

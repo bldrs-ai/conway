@@ -17,14 +17,16 @@ common enough to justify surfacing ephemeral pickable nodes in the tree?
    inside the *single* motor product's shape representation. They have no
    product identity in the file; there is nothing more to extract at the
    product level.
-2. **Below-product semantics are common and sometimes dominant.** In a
-   12-model survey, 4 models carry significant geometry identity below the
-   product level, and in 2 of them (an ECAD board, a monolithic export) the
-   product tree collapses to almost nothing while the scene holds hundreds to
-   tens of thousands of individually pickable solids. **Recommendation: yes —
-   surface an opt-in layer of ephemeral solid-level nodes beneath each
-   product**, with lazy expansion / capping for degenerate cases, and do *not*
-   surface per-face styling as tree nodes.
+2. **Below-product semantics are common, and the tree-worthy signal is
+   *named* sub-solids.** In a 12-model survey, 4 models carry significant
+   geometry identity below the product level, but they split into two very
+   different shapes: MCAD multibody parts whose solids carry meaningful *names*
+   (the NEMA case), and large *anonymous* solid dumps (ECAD merged-component
+   products, tessellated surface soup) that carry no navigable semantics.
+   **Implemented: an opt-in layer of ephemeral solid-level nodes beneath each
+   multibody product** — named solids surface with their file names, small
+   unnamed sets get positional labels, oversized all-unnamed sets are
+   suppressed (with the count reported), and per-face styling stays pick-only.
 
 ## Q1 — the NEMA file: genuine non-product geometry
 
@@ -89,11 +91,20 @@ exports, NIST AP242 PMI parts, generated parts, and lab-equipment exports):
 | **Arty Z7 (ECAD board)** | 55 | 102 | **1,242** | **22.6** | 3,919 | 0 |
 | **DSA2 (monolithic export)** | 1 | 0 | **28,674** | **28,674** | 28,674 | 0 |
 
-Key distribution detail for Arty Z7: two shape representations hold 535 and 654
-solids respectively — i.e. **~96 % of the board's geometry lives under 2 of its
-55 products** (bare-board + merged-components products, a very common ECAD
-export shape). For DSA2, the *entire 110 MB model is one product*: the NavTree
-would show a single node for 28,674 individually styled solids.
+Two distribution details matter (confirmed against Share's rendering of both
+models):
+
+- **Arty Z7 decomposes well at the product level** — its 55 products / 102
+  NAUOs are the components (switches, jacks, LEDs, headers), and the NavTree is
+  already rich. The below-product mass is concentrated in two representations
+  holding 535 and 654 *unnamed* solids (bare-board / merged-group products, a
+  common ECAD export shape). Those dumps carry no names and no navigable
+  semantics — promoting them would flood an otherwise-good tree.
+- **DSA2 is a single keyboard key** whose handful of logical parts (a few
+  fasteners, the key faces) are modeled as *nothing nameable*: the whole
+  110 MB model is one product over 28,674 unnamed single-face
+  `SHELL_BASED_SURFACE_MODEL`s. There is no identity in-file to promote; the
+  NavTree shows one node, and any per-solid layer must not change that.
 
 Patterns observed, by exporter/domain:
 
@@ -119,48 +130,63 @@ should therefore not clutter them: only emit ephemeral nodes where a product
 has ≥2 solids, or a solid has a name).
 
 **Bottom line: 4 of 12 real-world models carry significant non-product
-semantics, and for 2 of them the product tree is effectively empty relative to
-the scene. That is common enough to justify surfacing ephemeral pickable
-nodes.**
+semantics. Named sub-solids (the MCAD multibody pattern) deserve tree nodes;
+anonymous solid dumps do not.**
 
-## Recommendation
+## Implemented: the ephemeral solid layer
 
-Extend `getSpatialStructure` (via `AP214ProductStructureExtraction`) with an
-**opt-in ephemeral solid layer**:
+`AP214ProductStructureExtraction.extractProductStructure` and the compat
+surface's `getSpatialStructure` now take an opt-in
+(`ProductStructureOptions.includeSolids` /
+`SpatialStructureOptions.includeSolids`, default **off**):
 
-- **What becomes a node**: each top-level solid representation item
-  (`manifold_solid_brep`, `brep_with_voids`, `faceted_brep`,
-  `shell_based_surface_model`) reached from a product's shape representation —
-  including through `shape_representation_relationship` indirection (the NEMA
-  motor's solids are only reachable that way). One node per solid, as a child
-  of the owning product/occurrence node.
-- **Node shape**: `type: 'solid'` plus an `ephemeral: true` flag so Share can
-  render them lighter-weight (selectable-but-not-product). Name from the
-  solid's own name when non-empty/non-`NONE` (`Boss-Extrude7`), else a
-  positional fallback (`Solid 3 of 10`).
-- **Identity**: `(occurrencePath, solid expressID)` — the occurrence path
-  disambiguates instances of a multibody part used twice, and the solid's
-  express id is stable in-file, satisfying the permalink requirement from the
-  occurrence-identity work. No new identity scheme is needed.
+- **What becomes a node**: each solid representation item
+  (`manifold_solid_brep` — covering `brep_with_voids` / `faceted_brep` —
+  `shell_based_surface_model`, `face_based_surface_model`) reached from a
+  product's `shape_definition_representation`, including through *plain*
+  `shape_representation_relationship` indirection (the NEMA motor's solids are
+  only reachable that way). Transformation-bearing relationship variants are
+  assembly placements and are excluded — following them would leak every child
+  part's solids into its parent assembly.
+- **Node shape**: `type: 'solid'`, `ephemeral: true`, as children of each
+  owning product/occurrence node, so Share can render them lighter-weight
+  (selectable-but-not-product). Name from the solid's own name when meaningful
+  (`Boss-Extrude7`), else a positional fallback (`Solid 3 of 10`).
+- **Identity**: `(occurrencePath, solid expressID)` — the path (NAUO-only,
+  inherited from the parent occurrence) disambiguates instances of a multibody
+  part used twice; the solid's express id is stable in-file, satisfying the
+  permalink requirement from the occurrence-identity work.
 - **Pick ⇄ tree round-trip is nearly free**: the geometry pipeline already
   emits one canonical mesh keyed by the solid's own localID, so an ephemeral
   node maps 1:1 onto an existing pickable scene mesh.
-- **Suppress the layer where it adds nothing**: only emit ephemeral children
-  when a product has ≥2 solids or a named solid, so clean product-per-part
-  models (as1, jet engine, …) are unchanged.
-- **Guard the degenerate cases**: DSA2 puts 28,674 solids under one product.
-  Children of a single product should be lazily expanded and/or capped
-  (e.g. materialize the first N with a "… 28,574 more" sentinel) rather than
-  built eagerly into the tree payload.
-- **Do not surface per-face styling as nodes**: 254 styled faces (NEMA) to
-  28,674 (DSA2) would be pure noise; faces stay hover/pick-only. Named
-  `shape_aspect`s (MBD datums) are a worthwhile *future* second ephemeral kind
-  for AP242 PMI files, behind the same flag.
+- **Heuristics** (the survey's two shapes, encoded):
+  - a product with fewer than 2 solids gets no children — the product node
+    already maps 1:1 onto its body (as1, jet engine, … are unchanged);
+  - an *all-unnamed* set larger than `maxUnnamedSolidsPerProduct`
+    (default 32) is suppressed entirely — anonymous dumps carry no navigable
+    semantics (Arty's mega-products, DSA2's shells);
+  - a hard cap `maxSolidsPerProduct` (default 256) bounds any single node's
+    children;
+  - both suppressions report the count via the node's `droppedSolids`, so a
+    consumer can render an "N more…" affordance instead of silently truncating.
+- **Not nodes**: per-face styling (254 styled faces on NEMA, 28,674 on DSA2)
+  stays hover/pick-only. Named `shape_aspect`s (MBD datums, e.g. `MBD_A` in
+  the NIST PMI files) are a worthwhile *future* second ephemeral kind, behind
+  the same flag.
 
-Estimated cost is small: `indexShapeRepresentations` already walks
-`shape_definition_representation`s; the additions are a
-`shape_representation_relationship` traversal and solid enumeration per
-representation. No geometry-pipeline changes are required.
+Verified against the survey corpus with `includeSolids: true`:
+
+| Model | Product nodes | Solid nodes added | Dropped (reported) |
+| --- | ---: | ---: | ---: |
+| NEMA 23 | 6 (unchanged) | 10 named bodies under the motor occurrence | 0 |
+| Arty Z7 | 124 (unchanged) | 13 (small multibody components) | 1,189 across the 2 mega-products |
+| DSA2 | 1 (unchanged) | 0 | 28,674 on the single root |
+
+Hermetic coverage lives in `data/ap214-multibody-part.step` +
+`ap214_product_structure_extraction.test.ts` (named multibody, per-occurrence
+duplication, single-solid gate, transformation-relationship exclusion,
+unnamed-soup suppression, cap overflow) and `ap214_properties.test.ts`
+(compat-surface opt-in and identity-row resolution).
 
 ## Reproducing the survey
 

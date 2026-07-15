@@ -30,6 +30,20 @@ export interface Node {
  */
 export type IncludeProperties = boolean | 'names'
 
+/**
+ * Optional spatial-structure shaping, beyond web-ifc parity.
+ */
+export interface SpatialStructureOptions {
+
+  /**
+   * STEP (AP214/AP242) only: surface ephemeral solid-level nodes beneath
+   * multibody products — pickable bodies that carry identity in the file but
+   * no product semantics (`type: 'solid'`, `ephemeral: true`). Ignored by the
+   * IFC surface. See `design/new/step-nonproduct-semantics.md`.
+   */
+  includeSolids?: boolean
+}
+
 export interface PropertiesPassthrough {
 
   getIfcType(type: number): string | undefined
@@ -42,7 +56,9 @@ export interface PropertiesPassthrough {
 
   getMaterialsProperties(elementID: number, recursive?: boolean): Promise< any[] >
 
-  getSpatialStructure(includeProperties?: IncludeProperties): Promise< Node >
+  getSpatialStructure(
+    includeProperties?: IncludeProperties,
+    options?: SpatialStructureOptions ): Promise< Node >
 
   getAllItemsOfType(type: number, verbose: boolean): Promise< any[] >
 }
