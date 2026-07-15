@@ -145,8 +145,11 @@ interface ProductSolid {
   /** The solid's own name (SolidWorks/CATIA body names), possibly empty. */
   name: string
 
-  /** Express id of the representation the solid was found in. */
-  representationId: number
+  /**
+   * Express id of the representation the solid was found in; `undefined` for
+   * an inline representation with no express id of its own.
+   */
+  representationId: number | undefined
 }
 
 /**
@@ -191,6 +194,7 @@ export class AP214ProductStructureExtraction {
   private readonly productDefById_ = new Map<number, product_definition>()
   private readonly shapeRepsByProductDef_ = new Map<number, number[]>()
   private readonly solidsByProductDef_ = new Map<number, ProductSolid[]>()
+  private readonly solidIdsByProductDef_ = new Map<number, Set<number>>()
   private includeSolids_ = false
   private maxSolidsPerProduct_ = DEFAULT_MAX_SOLIDS_PER_PRODUCT
   private maxUnnamedSolidsPerProduct_ = DEFAULT_MAX_UNNAMED_SOLIDS_PER_PRODUCT
@@ -418,7 +422,7 @@ export class AP214ProductStructureExtraction {
           this.addSolid( productDefId, {
             expressID: item.expressID,
             name: item.name,
-            representationId: rep.expressID ?? -1,
+            representationId: rep.expressID,
           } )
         }
       }
@@ -436,13 +440,19 @@ export class AP214ProductStructureExtraction {
   private addSolid( productDefId: number, solid: ProductSolid ): void {
 
     let solids = this.solidsByProductDef_.get( productDefId )
+    let solidIds = this.solidIdsByProductDef_.get( productDefId )
 
-    if ( solids === void 0 ) {
+    if ( solids === void 0 || solidIds === void 0 ) {
       solids = []
+      solidIds = new Set<number>()
       this.solidsByProductDef_.set( productDefId, solids )
+      this.solidIdsByProductDef_.set( productDefId, solidIds )
     }
 
-    if ( !solids.some( ( existing ) => existing.expressID === solid.expressID ) ) {
+    // Set-backed dedup: a linear scan here is quadratic over a product's
+    // solids, and a single product can hold tens of thousands (DSA2).
+    if ( !solidIds.has( solid.expressID ) ) {
+      solidIds.add( solid.expressID )
       solids.push( solid )
     }
   }
@@ -503,36 +513,37 @@ export class AP214ProductStructureExtraction {
       children: [],
     }
 
+    const childUsages = this.nauosByParent_.get( productDefId )
+
+    if ( childUsages !== void 0 && !onPath.has( productDefId ) ) {
+
+      onPath.add( productDefId )
+
+      for ( const childUsage of childUsages ) {
+
+        const childDefId = childUsage.related_product_definition?.expressID
+
+        if ( childDefId === void 0 ) {
+          continue
+        }
+
+        const childDef = this.productDefById_.get( childDefId )
+
+        if ( childDef === void 0 ) {
+          continue
+        }
+
+        node.children.push( this.buildNode( childDef, childUsage, occurrencePath, onPath ) )
+      }
+
+      onPath.delete( productDefId )
+    }
+
+    // Ephemeral solids come after the occurrence children: they are the
+    // lighter-weight entries of the two.
     if ( this.includeSolids_ ) {
       this.appendSolidChildren( node )
     }
-
-    const childUsages = this.nauosByParent_.get( productDefId )
-
-    if ( childUsages === void 0 || onPath.has( productDefId ) ) {
-      return node
-    }
-
-    onPath.add( productDefId )
-
-    for ( const childUsage of childUsages ) {
-
-      const childDefId = childUsage.related_product_definition?.expressID
-
-      if ( childDefId === void 0 ) {
-        continue
-      }
-
-      const childDef = this.productDefById_.get( childDefId )
-
-      if ( childDef === void 0 ) {
-        continue
-      }
-
-      node.children.push( this.buildNode( childDef, childUsage, occurrencePath, onPath ) )
-    }
-
-    onPath.delete( productDefId )
 
     return node
   }
@@ -581,7 +592,8 @@ export class AP214ProductStructureExtraction {
         // A solid is not an occurrence: the path stays NAUO-only, and the
         // selection identity is the (occurrencePath, expressID) pair.
         occurrencePath: [ ...node.occurrencePath ],
-        shapeRepresentationIds: [ solid.representationId ],
+        shapeRepresentationIds:
+          solid.representationId !== void 0 ? [ solid.representationId ] : [],
         children: [],
         ephemeral: true,
       } )
