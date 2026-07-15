@@ -3,6 +3,7 @@ import { ConwayGeometry, FileHandlerFunction as FileHandlerCallback,
 import {versionString} from '../../version/version'
 import Logger, { LogLevel as ConwayLogLevel } from '../../logging/logger'
 import { ProgressCallback } from '../../core/progress'
+import { ModelInfo } from '../../core/progress_log'
 import Environment from '../../utilities/environment'
 import * as glmatrix from 'gl-matrix'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
@@ -40,6 +41,14 @@ export interface Loadersettings {
    * feature-detect ('ON_PROGRESS simply ignored by older engines').
    */
   ON_PROGRESS?: ProgressCallback
+
+  /**
+   * Conway extension: fired once, right after the STEP header parses —
+   * before the full file parse — with everything the header reveals
+   * (file name, schema, originating system, preprocessor, byte size), so
+   * embedders can print the model line as early as possible (issue #301).
+   */
+  ON_MODEL_INFO?: ( info: ModelInfo ) => void
 }
 
 /**

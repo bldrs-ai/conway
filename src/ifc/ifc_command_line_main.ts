@@ -21,7 +21,7 @@ import Environment from '../utilities/environment'
 import Memory from '../memory/memory'
 import { ExtractResult } from '../core/shared_constants'
 import path from 'path'
-import { parseFileHeader } from '../loaders/loading_utilities'
+import { extractModelInfo, parseFileHeader } from '../loaders/loading_utilities'
 
 // create a model ID
 const modelID: number = 0
@@ -221,6 +221,9 @@ function doWork() {
           const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
           const headerDataTimeEnd = Date.now()
+
+          // Model line as early as possible — header-only (issue #301).
+          progressRenderer?.onModelInfo(extractModelInfo(stepHeader, indexIfcBuffer.length))
 
           switch (result0) {
             case ParseResult.COMPLETE:
@@ -448,7 +451,8 @@ function doWork() {
             statistics.setMemoryStatistics(Memory.checkMemoryUsage())
           }
 
-          progressRenderer?.done()
+          progressRenderer?.done(
+              Date.now() - allTimeStart, Memory.usedHeapMb())
 
           Logger.displayLogs()
           Logger.printStatistics(modelID)

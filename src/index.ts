@@ -20,3 +20,13 @@ export {
   yieldToEventLoop,
 } from './core/progress'
 export { ModelLoadOptions } from './loaders/conway_model_loader'
+export {
+  LoadLogAccumulator,
+  ModelInfo,
+  ProgressEventLike,
+  formatBar,
+  formatMb,
+  formatModelLine,
+  formatSeconds,
+  stageLabel,
+} from './core/progress_log'

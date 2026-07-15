@@ -22,6 +22,8 @@ import * as glmatrix from 'gl-matrix'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker } from '../../core/progress'
+import { formatModelLine } from '../../core/progress_log'
+import { extractModelInfo } from '../../loaders/loading_utilities'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { StepHeader } from '../../step/parsing/step_parser'
@@ -32,6 +34,7 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import { IfcProduct } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 
 /**
@@ -362,6 +365,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
 
+    // Model line as early as possible — header-only, before the full file
+    // parse (issue #301 follow-up, log line 3).
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
@@ -404,6 +414,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       statistics?.setLoadStatus('FAIL')
       throw new Error( 'Couldn\'t extract model' )
     }
+
+    statistics?.setProductCount(model.typeCount(IfcProduct))
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
 
     return {
       conwaywasm,
@@ -448,6 +461,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
 
+    // Model line as early as possible — header-only, before the full file
+    // parse (issue #301 follow-up, log line 3).
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
@@ -490,6 +510,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       statistics?.setLoadStatus('FAIL')
       throw new Error( 'Couldn\'t extract model' )
     }
+
+    statistics?.setProductCount(model.typeCount(IfcProduct))
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
 
     return {
       conwaywasm,

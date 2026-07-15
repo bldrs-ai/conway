@@ -99,10 +99,11 @@ export class IfcApiModelPassthroughFactory {
   }
 
   /**
-   * Cooperative twin of from() (used by OpenModelAsync): IFC input is
-   * parsed/extracted with periodic event-loop yields so progress UI can
-   * repaint (issue #301 §2); AP214/AP203/AP242 currently fall back to the
-   * synchronous path (thunk-tree extraction has no flat product loop yet).
+   * Cooperative twin of from() (used by OpenModelAsync): the data parse
+   * runs with periodic event-loop yields so progress UI can repaint
+   * (issue #301 §2) for IFC and AP214/AP203/AP242 alike. IFC geometry
+   * extraction is cooperative too; AP214's stays synchronous (thunk-tree
+   * extraction has no flat product loop yet) and reports as a heartbeat.
    *
    * @param modelID
    * @param data
@@ -118,24 +119,45 @@ export class IfcApiModelPassthroughFactory {
 
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
-    if ( modelFormat !== ModelFormatType.IFC ) {
-
-      return IfcApiModelPassthroughFactory.from( modelID, data, wasmModule, settings )
-    }
-
     try {
 
-      return await IfcApiProxyIfc.createAsync(modelID, data, wasmModule, settings)
+      switch ( modelFormat ) {
 
+        case ModelFormatType.AP203:
+
+          Logger.warning( 'AP203 Step Detected, using AP214 loader' )
+
+          // falls through
+        case ModelFormatType.AP242:
+
+          if ( modelFormat === ModelFormatType.AP242 ) {
+
+            Logger.warning( 'AP242 Step Detected, using AP214 loader (interim)' )
+          }
+
+          // falls through
+        case ModelFormatType.AP214:
+
+          return await IfcApiProxyAP214.createAsync(modelID, data, wasmModule, settings)
+
+        case ModelFormatType.IFC:
+
+          return await IfcApiProxyIfc.createAsync(modelID, data, wasmModule, settings)
+
+        default:
+
+          Logger.error( 'No type detected when constructing model')
+          return void 0
+      }
     } catch ( e ) {
 
       if ( e instanceof Error ) {
 
         // eslint-disable-next-line max-len
-        Logger.error( `Error loading IFC model in passthrough factory ${modelID}:\n${e.message}\n\n${e.stack}`)
+        Logger.error( `Error loading model in passthrough factory ${modelID}:\n${e.message}\n\n${e.stack}`)
       } else {
 
-        Logger.error( `Unknown error loading IFC model in passthrough factory ${modelID}` )
+        Logger.error( `Unknown error loading model in passthrough factory ${modelID}` )
       }
 
     }
