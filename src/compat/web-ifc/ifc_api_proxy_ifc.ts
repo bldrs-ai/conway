@@ -34,6 +34,7 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import { IfcProduct } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 
 /**
@@ -414,6 +415,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       throw new Error( 'Couldn\'t extract model' )
     }
 
+    statistics?.setProductCount(model.typeCount(IfcProduct))
     statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
 
     return {
@@ -509,6 +511,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       throw new Error( 'Couldn\'t extract model' )
     }
 
+    statistics?.setProductCount(model.typeCount(IfcProduct))
     statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
 
     return {

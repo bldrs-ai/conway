@@ -2500,16 +2500,6 @@ export class AP214GeometryExtraction {
   }
 
   /**
-   * Extract a representation item, including its geometry if necessary,
-   * adding it to the current scene walk.
-   *
-   * Note - memoized result for instancing.
-   *
-   * @param from The representation to extract from.
-   * @param owningElementLocalID
-   * @param isMappedItem Whether this is a mapped item.
-   */
-  /**
    * Count of representation items by AP214 entity type name — the geometry
    * breakdown for the load report (issue #301 follow-up). Copied into
    * Statistics by the loader/proxies after extraction.
@@ -2525,6 +2515,16 @@ export class AP214GeometryExtraction {
     this.geometryTypeCounts.set(name, (this.geometryTypeCounts.get(name) ?? 0) + 1)
   }
 
+  /**
+   * Extract a representation item, including its geometry if necessary,
+   * adding it to the current scene walk.
+   *
+   * Note - memoized result for instancing.
+   *
+   * @param from The representation to extract from.
+   * @param owningElementLocalID
+   * @param isMappedItem Whether this is a mapped item.
+   */
   extractRepresentationItem(
       from: representation_item,
       owningElementLocalID?: number,

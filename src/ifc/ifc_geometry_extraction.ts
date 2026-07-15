@@ -4099,6 +4099,15 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Increment the geometry-type breakdown counter for a type name.
+   *
+   * @param name The entity type name.
+   */
+  private countGeometryType(name: string): void {
+    this.geometryTypeCounts.set(name, (this.geometryTypeCounts.get(name) ?? 0) + 1)
+  }
+
+  /**
    * Extract a representation item, including its geometry if necessary,
    * adding it to the current scene walk.
    *
@@ -4110,15 +4119,6 @@ export class IfcGeometryExtraction {
    * @param isSpace
    * @param isMappedItem
    */
-  /**
-   * Increment the geometry-type breakdown counter for a type name.
-   *
-   * @param name The entity type name.
-   */
-  private countGeometryType(name: string): void {
-    this.geometryTypeCounts.set(name, (this.geometryTypeCounts.get(name) ?? 0) + 1)
-  }
-
   extractRepresentationItem(from: IfcRepresentationItem,
       owningElementLocalID?: number,
       isRelVoid: boolean = false,
