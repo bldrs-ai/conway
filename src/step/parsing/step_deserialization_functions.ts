@@ -28,7 +28,28 @@ const HASH         = ParsingConstants.HASH
 const ZERO         = ParsingConstants.ZERO
 const SLASH        = ParsingConstants.SLASH
 
-const parsingBufferReusable = new ParsingBuffer( new Uint8Array( 1 ), 0, 1 )
+const EMPTY_PARSING_BYTES = new Uint8Array( 1 )
+
+const parsingBufferReusable = new ParsingBuffer( EMPTY_PARSING_BYTES, 0, 1 )
+
+/**
+ * Drop the module-level scratch parsing buffer's reference to the last
+ * buffer it read from.
+ *
+ * The scratch is `reinit`-pointed at a caller's buffer on every numeric
+ * extraction and never cleared, so after a parse it silently pins the
+ * ENTIRE source buffer (hundreds of MB on large models) until the next
+ * extraction repoints it. That was invisible while the model itself
+ * held the source, but once `spillSourceToExternalStore` releases the
+ * model's copy this scratch became the last thing keeping it alive
+ * (found via heap-snapshot retainer chain:
+ * `Context[parsingBufferReusable] → ParsingBuffer.buffer → source`).
+ * Called from the model's spill and cache-release paths; safe at any
+ * time because every use reinits the scratch first.
+ */
+export function releaseScratchParsingBuffer(): void {
+  parsingBufferReusable.reinit( EMPTY_PARSING_BYTES, 0, 1 )
+}
 
 
 /**

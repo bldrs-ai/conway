@@ -1,4 +1,5 @@
 import { StepIndexEntry } from './parsing/step_parser'
+import { releaseScratchParsingBuffer } from './parsing/step_deserialization_functions'
 import {
   ResidentStepBufferProvider,
   StepBufferProvider,
@@ -277,6 +278,16 @@ implements Iterable<BaseEntity>, Model {
     if ( dropVtable ) {
 
       this.vtableBuilder_.clear( true )
+
+      // The module-level scratch parsing buffer stays pointed at the
+      // last buffer a numeric extraction read from — after a parse,
+      // that's this model's FULL source. Releasing caches (and
+      // especially spilling the source, which routes through here)
+      // must drop that pin too, or the released source stays alive
+      // via the scratch (heap-snapshot verified). Safe globally: every
+      // use reinits the scratch first, and any other live model just
+      // repoints it on its next read.
+      releaseScratchParsingBuffer()
 
       // Common entries: drop their materialised descriptors outright — this is
       // the memory the old retained object array could never release. They
