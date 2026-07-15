@@ -5896,15 +5896,21 @@ export class IfcGeometryExtraction {
 
     const stepper = this.extractIFCGeometryDataIncremental()
 
-    while ( true ) {
+    try {
+      while ( true ) {
 
-      const next = stepper.next()
+        const next = stepper.next()
 
-      if ( next.done === true ) {
-        return next.value
+        if ( next.done === true ) {
+          return next.value
+        }
+
+        onProgress?.( next.value[ 0 ], next.value[ 1 ] )
       }
-
-      onProgress?.( next.value[ 0 ], next.value[ 1 ] )
+    } finally {
+      // If onProgress threw while the generator was suspended, this runs its
+      // finally (memoization-state restore); no-op on a finished generator.
+      stepper.return( void 0 as never )
     }
   }
 
@@ -5928,20 +5934,26 @@ export class IfcGeometryExtraction {
 
     let lastYield = Date.now()
 
-    while ( true ) {
+    try {
+      while ( true ) {
 
-      const next = stepper.next()
+        const next = stepper.next()
 
-      if ( next.done === true ) {
-        return next.value
+        if ( next.done === true ) {
+          return next.value
+        }
+
+        onProgress?.( next.value[ 0 ], next.value[ 1 ] )
+
+        if ( Date.now() - lastYield >= yieldIntervalMs ) {
+          await yieldToEventLoop()
+          lastYield = Date.now()
+        }
       }
-
-      onProgress?.( next.value[ 0 ], next.value[ 1 ] )
-
-      if ( Date.now() - lastYield >= yieldIntervalMs ) {
-        await yieldToEventLoop()
-        lastYield = Date.now()
-      }
+    } finally {
+      // If onProgress threw while the generator was suspended, this runs its
+      // finally (memoization-state restore); no-op on a finished generator.
+      stepper.return( void 0 as never )
     }
   }
 

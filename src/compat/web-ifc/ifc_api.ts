@@ -238,7 +238,10 @@ export class IfcAPI {
    */
   async OpenModelAsync(data: Uint8Array, settings?: Loadersettings): Promise<number> {
 
-    const modelIdResult = this.globalModelIDCounter
+    // Reserve the ID before the first await — another OpenModel(Async) call
+    // interleaving with the cooperative parse must not get the same ID. A
+    // failed open burns an ID, which is harmless (IDs are only keys).
+    const modelIdResult = this.globalModelIDCounter++
 
     const result =
       await IfcApiModelPassthroughFactory.fromAsync(
@@ -250,8 +253,6 @@ export class IfcAPI {
     if ( result === void 0 ) {
       return -1
     }
-
-    this.globalModelIDCounter++
 
     this.models.set( modelIdResult, result )
 
