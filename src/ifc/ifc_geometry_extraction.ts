@@ -54,6 +54,7 @@ import {
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { CanonicalProfile } from '../core/canonical_profile'
+import { CountProgressCallback, yieldToEventLoop } from '../core/progress'
 import { ObjectPool } from '../core/native_pool'
 import {
   NativeULongVector,
@@ -207,6 +208,10 @@ import { ParamsGetBlock } from '../../dependencies/conway-geom/interface/paramet
 
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
+
+// Await cadence for extractIFCGeometryDataAsync: long enough that yielding
+// doesn't dominate, short enough that browser paint + watchdogs stay live.
+const DEFAULT_GEOMETRY_YIELD_INTERVAL_MS = 50
 
 
 /**
@@ -5875,11 +5880,99 @@ export class IfcGeometryExtraction {
   /**
    * Extract the geometry data from the IFC
    *
+   * Synchronous driver over extractIFCGeometryDataIncremental — see
+   * extractIFCGeometryDataAsync for the cooperative (repaint-friendly)
+   * variant.
+   *
+   * @param onProgress Optional per-product progress callback
+   * (completed, total). The heavy per-product work (tessellation, CSG,
+   * weld) happens inside single wasm calls, so ticks land between
+   * products — a hang localizes to one product. Issue #301.
    * @return {[ExtractResult, IfcSceneBuilder]} - Enum indicating extraction result
    * + Geometry array
    */
-  extractIFCGeometryData():
+  extractIFCGeometryData( onProgress?: CountProgressCallback ):
     [ExtractResult, IfcSceneBuilder] {
+
+    const stepper = this.extractIFCGeometryDataIncremental()
+
+    try {
+      while ( true ) {
+
+        const next = stepper.next()
+
+        if ( next.done === true ) {
+          return next.value
+        }
+
+        onProgress?.( next.value[ 0 ], next.value[ 1 ] )
+      }
+    } finally {
+      // If onProgress threw while the generator was suspended, this runs its
+      // finally (memoization-state restore); no-op on a finished generator.
+      stepper.return( void 0 as never )
+    }
+  }
+
+  /**
+   * Cooperative variant of extractIFCGeometryData: identical extraction
+   * (same generator body), but periodically awaits a macrotask between
+   * products so the event loop can run — browsers repaint progress UI and
+   * watchdog timers fire during a large extraction. Issue #301 §2.
+   *
+   * @param onProgress Optional per-product progress callback (completed, total).
+   * @param yieldIntervalMs Minimum ms between event-loop yields.
+   * @return {Promise<[ExtractResult, IfcSceneBuilder]>} - Enum indicating
+   * extraction result + Geometry array
+   */
+  async extractIFCGeometryDataAsync(
+      onProgress?: CountProgressCallback,
+      yieldIntervalMs: number = DEFAULT_GEOMETRY_YIELD_INTERVAL_MS ):
+    Promise<[ExtractResult, IfcSceneBuilder]> {
+
+    const stepper = this.extractIFCGeometryDataIncremental()
+
+    let lastYield = Date.now()
+
+    try {
+      while ( true ) {
+
+        const next = stepper.next()
+
+        if ( next.done === true ) {
+          return next.value
+        }
+
+        onProgress?.( next.value[ 0 ], next.value[ 1 ] )
+
+        if ( Date.now() - lastYield >= yieldIntervalMs ) {
+          await yieldToEventLoop()
+          lastYield = Date.now()
+        }
+      }
+    } finally {
+      // If onProgress threw while the generator was suspended, this runs its
+      // finally (memoization-state restore); no-op on a finished generator.
+      stepper.return( void 0 as never )
+    }
+  }
+
+  /**
+   * Extract the geometry data from the IFC, suspending with
+   * [completed, total] between products so drivers can report progress (and
+   * optionally yield to the event loop) without the extraction body
+   * diverging between sync and async paths.
+   *
+   * The total counts IfcProducts plus IfcRelAggregates (the second
+   * extraction pass) straight off the type index's prefix sums; completed is
+   * monotonic across both loops.
+   *
+   * @yields {[number, number]} [completed, total] extraction progress.
+   * @return {[ExtractResult, IfcSceneBuilder]} - Enum indicating extraction result
+   * + Geometry array
+   */
+  private* extractIFCGeometryDataIncremental():
+    Generator<[number, number], [ExtractResult, IfcSceneBuilder], undefined> {
 
     let result: ExtractResult = ExtractResult.INCOMPLETE
 
@@ -5947,7 +6040,16 @@ export class IfcGeometryExtraction {
 
       const products = this.model.types(IfcProduct)
 
+      // Prefix-sum counts (no iteration/materialization) — see typeCount.
+      // Slight over-count from multi-mapped elements just leaves the bar
+      // shy of 100% until endPhase; fine for progress.
+      const totalItems =
+        this.model.typeCount(IfcProduct) + this.model.typeCount(IfcRelAggregates)
+      let completedItems = 0
+
       for (const product of products) {
+
+        yield [++completedItems, totalItems]
 
         this.scene.clearParentStack()
 
@@ -6116,6 +6218,8 @@ export class IfcGeometryExtraction {
       const relAggregates = this.model.types(IfcRelAggregates)
 
       for ( const relAggregate of relAggregates ) {
+
+        yield [++completedItems, totalItems]
 
         try {
 

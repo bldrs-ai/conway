@@ -2,6 +2,7 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { AP214GeometryExtraction } from '../AP214E3_2010/ap214_geometry_extraction'
 import AP214StepParser from '../AP214E3_2010/ap214_step_parser'
 import { Model } from '../core/model'
+import { ProgressCallback, ProgressTracker } from '../core/progress'
 import { Scene } from '../core/scene'
 import { ExtractResult } from '../core/shared_constants'
 import ModelFormatDetector, { ModelFormatType } from '../format_detection/model_format_detector'
@@ -17,6 +18,28 @@ const ONE_KB = 1024
 const ONE_MB = ONE_KB * ONE_KB
 
 /**
+ * Options threading the progress/yield contract (issue #301) through a load.
+ */
+export interface ModelLoadOptions {
+
+  /**
+   * Structured, throttled progress events across the load phases
+   * (headerParse / dataParse / geometry) — see core/progress.ts.
+   */
+  onProgress?: ProgressCallback
+
+  /**
+   * When true, the parse and geometry loops periodically await a macrotask
+   * so browsers can repaint between progress events and the tab is not
+   * flagged as stalled. Costs a few % wall clock; off by default.
+   */
+  yieldToEventLoop?: boolean
+
+  /** Minimum ms between progress events (default in core/progress.ts). */
+  progressIntervalMs?: number
+}
+
+/**
  * Static class for loading a model from a Uint 8 array...
  *
  * note this is only the initial model parse, no geometry extraction has been performed.
@@ -30,15 +53,22 @@ export class ConwayModelLoader {
    * @param limitCSGDepth Whether to limit CSG depth during geometry extraction.
    * @param maximumCSGDepth The maximum CSG depth allowed during geometry extraction.
    * @param modelID The model id to use for statistics (or 0 if none is provided)
+   * @param options Optional progress/yield options for the load.
    * @return {Promise<[Model, Scene]>} A promise to return the loaded model and scene.
    */
   public static async loadModelWithScene(
       data: Uint8Array,
       limitCSGDepth: boolean = true,
       maximumCSGDepth: number = 20,
-      modelID: number = 0 ): Promise<[Model, Scene]> {
+      modelID: number = 0,
+      options?: ModelLoadOptions ): Promise<[Model, Scene]> {
 
     const allTimeStart = Date.now()
+
+    const onProgress = options?.onProgress
+    const tracker = onProgress !== void 0 ?
+      new ProgressTracker( onProgress, options?.progressIntervalMs ) : void 0
+    const cooperative = options?.yieldToEventLoop === true
 
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
@@ -48,7 +78,7 @@ export class ConwayModelLoader {
 
       case ModelFormatType.AP203:
 
-        console.log( 'AP203 Step Detected, using AP214 loader' )
+        Logger.info( 'AP203 Step Detected, using AP214 loader' )
         is203 = true
         // falls through
 
@@ -58,14 +88,14 @@ export class ConwayModelLoader {
         // product-structure/property subset. See
         // design/new/step-metadata-nist.md §"The AP242 wrinkle".
         if ( modelFormat === ModelFormatType.AP242 ) {
-          console.log( 'AP242 Step Detected, using AP214 loader (interim)' )
+          Logger.info( 'AP242 Step Detected, using AP214 loader (interim)' )
         }
         // falls through
 
       case ModelFormatType.AP214:
 
         if (!is203 && modelFormat !== ModelFormatType.AP242) {
-          console.log( 'AP214 Step Detected' )
+          Logger.info( 'AP214 Step Detected' )
         }
 
         try {
@@ -83,11 +113,13 @@ export class ConwayModelLoader {
 
           const headerDataTimeStart = Date.now()
 
+          tracker?.beginPhase( 'headerParse', 'bytes', data.length )
+
           const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
           const headerDataTimeEnd = Date.now()
 
-          Logger.info( `Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms` )
+          Logger.debug( `Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms` )
 
           switch (result0) {
             case ParseResult.COMPLETE:
@@ -117,9 +149,18 @@ export class ConwayModelLoader {
             default:
           }
 
+          tracker?.beginPhase( 'dataParse', 'bytes', data.length )
+
+          const parseTick = tracker !== void 0 ?
+            ( cursorBytes: number ) => tracker.update( cursorBytes ) : void 0
+
           const parseDataTimeStart = Date.now()
-          const [result1, model]   = parser.parseDataToModel( bufferInput )
+          const [result1, model]   = cooperative ?
+            await parser.parseDataToModelAsync( bufferInput, parseTick ) :
+            parser.parseDataToModel( bufferInput, parseTick )
           const parseDataTimeEnd   = Date.now()
+
+          tracker?.endPhase( data.length )
 
           switch (result1) {
             case ParseResult.COMPLETE:
@@ -156,6 +197,11 @@ export class ConwayModelLoader {
 
           const conwayModel = new AP214GeometryExtraction(conwayWasm, model)
 
+          // AP214 extraction is thunk-tree structured (no flat product loop),
+          // so it reports as an indeterminate heartbeat phase for now — the
+          // per-item ticks + cooperative yielding exist only on the IFC path.
+          tracker?.beginPhase( 'geometry', 'products' )
+
           // parse + extract data model + geometry data
           const startTime = Date.now()
           const [extractionResult, scene] =
@@ -163,6 +209,8 @@ export class ConwayModelLoader {
 
           const endTime = Date.now()
           const executionTimeInMs = endTime - startTime
+
+          tracker?.endPhase()
 
           statistics.setGeometryTime(executionTimeInMs)
 
@@ -220,7 +268,7 @@ export class ConwayModelLoader {
           Logger.displayLogs()
           Logger.printStatistics(modelID)
 
-          console.log( 'Loader returning' )
+          Logger.debug( 'Loader returning' )
 
           return [model, scene]
 
@@ -241,7 +289,7 @@ export class ConwayModelLoader {
 
         try {
 
-          console.log( 'IFC Detected' )
+          Logger.info( 'IFC Detected' )
 
           const conwayWasm = new ConwayGeometry()
 
@@ -257,11 +305,13 @@ export class ConwayModelLoader {
 
           const headerDataTimeStart = Date.now()
 
+          tracker?.beginPhase( 'headerParse', 'bytes', data.length )
+
           const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
           const headerDataTimeEnd = Date.now()
 
-          Logger.info(`Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms`)
+          Logger.debug(`Header parse time ${headerDataTimeEnd - headerDataTimeStart} ms`)
 
           switch (result0) {
             case ParseResult.COMPLETE:
@@ -291,9 +341,18 @@ export class ConwayModelLoader {
             default:
           }
 
+          tracker?.beginPhase( 'dataParse', 'bytes', data.length )
+
+          const parseTick = tracker !== void 0 ?
+            ( cursorBytes: number ) => tracker.update( cursorBytes ) : void 0
+
           const parseDataTimeStart = Date.now()
-          const [result1, model] = parser.parseDataToModel(bufferInput)
+          const [result1, model] = cooperative ?
+            await parser.parseDataToModelAsync(bufferInput, parseTick) :
+            parser.parseDataToModel(bufferInput, parseTick)
           const parseDataTimeEnd = Date.now()
+
+          tracker?.endPhase( data.length )
 
           switch (result1) {
             case ParseResult.COMPLETE:
@@ -334,13 +393,24 @@ export class ConwayModelLoader {
             limitCSGDepth,
             maximumCSGDepth)
 
+          tracker?.beginPhase( 'geometry', 'products' )
+
+          const geometryTick = tracker !== void 0 ?
+            ( completed: number, total: number ) => {
+              tracker.setPhaseTotal( total )
+              tracker.update( completed )
+            } : void 0
+
           // parse + extract data model + geometry data
           const startTime = Date.now()
-          const [extractionResult, scene] =
-            conwayModel.extractIFCGeometryData()
+          const [extractionResult, scene] = cooperative ?
+            await conwayModel.extractIFCGeometryDataAsync(geometryTick) :
+            conwayModel.extractIFCGeometryData(geometryTick)
 
           const endTime = Date.now()
           const executionTimeInMs = endTime - startTime
+
+          tracker?.endPhase()
 
           statistics.setGeometryTime(executionTimeInMs)
 
@@ -404,7 +474,7 @@ export class ConwayModelLoader {
           Logger.displayLogs()
           Logger.printStatistics(modelID)
 
-          console.log( 'Loader returning' )
+          Logger.debug( 'Loader returning' )
 
           return [model, scene]
 

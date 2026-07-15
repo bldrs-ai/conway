@@ -1,3 +1,4 @@
+import { yieldToEventLoop } from '../../core/progress'
 import TypeIndex from '../../indexing/type_index'
 import HexParser from '../../parsing/hex_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
@@ -89,6 +90,23 @@ const stringParser = StepStringParser.Instance.match
 
 export type BlockParseResult<TypeIDType> = [StepIndex<TypeIDType>, ParseResult]
 export type LineArgumentParseResult<TypeIDType> = [StepIndex<TypeIDType>, ParseResult]
+
+/**
+ * Byte-cursor progress callback for the data-parse loop — the parse phase is
+ * determinate in bytes (cursor position / buffer size). Kept primitive so the
+ * parser stays decoupled from the higher-level progress event contract in
+ * core/progress.ts (ProgressTracker maps this into a ProgressEvent).
+ */
+export type ParseProgressCallback = ( cursorBytes: number ) => void
+
+// One generator suspension per (mask + 1) parsed elements keeps progress
+// overhead unmeasurable in the hot data-parse loop (a 9M-entity model yields
+// ~2200 times) while still ticking several times a second on large models.
+const PARSE_PROGRESS_ELEMENT_MASK = 4095
+
+// Await cadence for the *Async drivers: long enough that yielding doesn't
+// dominate, short enough that browser paint + watchdog timers stay live.
+const DEFAULT_PARSE_YIELD_INTERVAL_MS = 50
 
 export interface StepHeader {
   headers: Map<string, string>
@@ -410,12 +428,85 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   }
 
   /**
-   * Parse the data block of a step file, indexing it.,
+   * Parse the data block of a step file, indexing it.
+   *
+   * Synchronous driver over parseDataBlockIncremental — see
+   * parseDataBlockAsync for the cooperative (repaint-friendly) variant.
    *
    * @param input The input parsing buffer, in the data section.
+   * @param onProgress Optional byte-cursor progress callback, invoked
+   * roughly every PARSE_PROGRESS_ELEMENT_MASK + 1 elements.
    * @return {BlockParseResult} The parsing result, including the index and result enum.
    */
-  public parseDataBlock(input: ParsingBuffer): BlockParseResult<TypeIDType> {
+  public parseDataBlock(
+      input: ParsingBuffer,
+      onProgress?: ParseProgressCallback ): BlockParseResult<TypeIDType> {
+
+    const parser = this.parseDataBlockIncremental( input )
+
+    while ( true ) {
+
+      const next = parser.next()
+
+      if ( next.done === true ) {
+        return next.value
+      }
+
+      onProgress?.( next.value )
+    }
+  }
+
+  /**
+   * Cooperative variant of parseDataBlock: identical parse (same generator
+   * body), but periodically awaits a macrotask so the event loop can run —
+   * browsers repaint progress UI, watchdog timers fire, and the tab is not
+   * flagged as stalled during a large parse. Issue #301 §2.
+   *
+   * @param input The input parsing buffer, in the data section.
+   * @param onProgress Optional byte-cursor progress callback.
+   * @param yieldIntervalMs Minimum ms between event-loop yields.
+   * @return {Promise<BlockParseResult>} The parsing result, including the
+   * index and result enum.
+   */
+  public async parseDataBlockAsync(
+      input: ParsingBuffer,
+      onProgress?: ParseProgressCallback,
+      yieldIntervalMs: number = DEFAULT_PARSE_YIELD_INTERVAL_MS ):
+      Promise<BlockParseResult<TypeIDType>> {
+
+    const parser = this.parseDataBlockIncremental( input )
+
+    let lastYield = Date.now()
+
+    while ( true ) {
+
+      const next = parser.next()
+
+      if ( next.done === true ) {
+        return next.value
+      }
+
+      onProgress?.( next.value )
+
+      if ( Date.now() - lastYield >= yieldIntervalMs ) {
+        await yieldToEventLoop()
+        lastYield = Date.now()
+      }
+    }
+  }
+
+  /**
+   * Parse the data block of a step file, indexing it, suspending with the
+   * current byte cursor every PARSE_PROGRESS_ELEMENT_MASK + 1 elements so
+   * drivers can report progress (and optionally yield to the event loop)
+   * without the loop body diverging between sync and async paths.
+   *
+   * @param input The input parsing buffer, in the data section.
+   * @yields {number} The current byte cursor within the input buffer.
+   * @return {BlockParseResult} The parsing result, including the index and result enum.
+   */
+  private* parseDataBlockIncremental(input: ParsingBuffer):
+      Generator<number, BlockParseResult<TypeIDType>, undefined> {
 
     const indexResult: StepIndex<TypeIDType> = { elements: [] }
 
@@ -606,7 +697,14 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       }
     }
 
+    let parsedElementCount = 0
+
     while (input.unfinished) {
+
+      // Cheap power-of-two cadence check for the progress yield.
+      if ( ( ++parsedElementCount & PARSE_PROGRESS_ELEMENT_MASK ) === 0 ) {
+        yield input.cursor
+      }
 
       if (!charws(HASH)) {
         if (tokenws(END_SECTION)) {

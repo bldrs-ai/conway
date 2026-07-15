@@ -21,8 +21,10 @@ import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
+import { ProgressTracker } from '../../core/progress'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
+import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import { ParseResult } from '../../index'
@@ -31,6 +33,22 @@ import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { CanonicalMeshType } from '../../index'
+
+/**
+ * Everything parse/extraction produces that the proxy constructor's tail
+ * (mesh vectors, statistics) consumes — precomputed by createAsync so the
+ * cooperative path can await mid-parse, or computed synchronously inside
+ * the constructor for the classic OpenModel path.
+ */
+interface IfcProxyLoadState {
+  conwaywasm: ConwayGeometry
+  allTimeStart: number
+  stepHeader: StepHeader
+  model: IfcStepModel
+  scene: IfcSceneBuilder
+  conwayGeometry: IfcGeometryExtraction
+  geometryTimeInMs: number
+}
 
 /**
  * The proxy for IFC from the shim.
@@ -74,79 +92,27 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       public readonly modelID: number,
       data: Uint8Array,
       private readonly wasmModule: any,
-      private readonly settings?: Loadersettings ) {
+      private readonly settings?: Loadersettings,
+      precomputed?: IfcProxyLoadState ) {
 
-    this.conwaywasm = new ConwayGeometry(wasmModule)
+    // The cooperative path (createAsync) parses/extracts before construction
+    // so it can await mid-load; the classic OpenModel path does it here,
+    // synchronously. Both share the tail below (mesh vectors, statistics).
+    const loadState = precomputed ??
+      IfcApiProxyIfc.parseAndExtract(modelID, data, new ConwayGeometry(wasmModule), settings)
 
-    const allTimeStart = Date.now()
-    const parser = IfcStepParser.Instance
-    const bufferInput = new ParsingBuffer(data)
-    const [stepHeader, result0] = parser.parseHeader(bufferInput)
-
-    Logger.createStatistics(modelID)
+    this.conwaywasm = loadState.conwaywasm
 
     const statistics = Logger.getStatistics(modelID)
 
-    switch (result0) {
-      case ParseResult.COMPLETE:
-
-        break
-
-      case ParseResult.INCOMPLETE:
-
-        Logger.warning('Parse incomplete but no errors')
-        statistics?.setLoadStatus('HEADER PARSE: INCOMPLETE')
-        break
-
-      case ParseResult.INVALID_STEP:
-
-        Logger.error('Error: Invalid STEP detected in parse, but no syntax error detected')
-        statistics?.setLoadStatus('HEADER PARSE: INVALID_STEP')
-        break
-
-      case ParseResult.MISSING_TYPE:
-
-        Logger.warning('Error: missing STEP type, but no syntax error detected')
-        statistics?.setLoadStatus('HEADER PARSE: MISSING_TYPE')
-        break
-
-      case ParseResult.SYNTAX_ERROR:
-
-        Logger.error(`Error: Syntax error detected on line ${bufferInput.lineCount}`)
-        statistics?.setLoadStatus('HEADER PARSE: SYNTAX_ERROR')
-        break
-
-      default:
-    }
-
-    const parseStartTime = Date.now()
-    const model = parser.parseDataToModel(bufferInput)[1]
-    const parseEndTime = Date.now()
-
-    if (model === void 0) {
-      Logger.error('[OpenModel]: model === undefined')
-      statistics?.setLoadStatus('PARSE_FAIL')
-      throw new Error( 'Failed to load model' )
-    }
-
-    statistics?.setParseTime(parseEndTime - parseStartTime)
-
-    // TODO(nickcastel50): Doing geometry extraction in here for now...
-    // parse + extract data model + geometry data
-    const conwayGeometry = new IfcGeometryExtraction(this.conwaywasm, model)
-
-    const startTime = Date.now()
-    const [extractionResult, scene] =
-      conwayGeometry.extractIFCGeometryData()
-
-    const endTime = Date.now()
-    const executionTimeInMs = endTime - startTime
-
-    if (extractionResult !== ExtractResult.COMPLETE) {
-      Logger.error('[OpenModel]: Error extracting geometry, exiting...')
-      statistics?.setLoadStatus('FAIL')
-      throw new Error( 'Couldn\'t extract model' )
-    }
+    const {
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: executionTimeInMs,
+    } = loadState
 
     // get linear scaling factor
     this.linearScalingFactor = conwayGeometry.getLinearScalingFactor()
@@ -276,6 +242,264 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     statistics?.setGeometryTime(executionTimeInMs)
     // eslint-disable-next-line no-magic-numbers
     statistics?.setGeometryMemory(scene.model.geometry.calculateGeometrySize() / (1024 * 1024))
+  }
+
+  /**
+   * Cooperative construction (conway extension, used by OpenModelAsync):
+   * identical parse/extraction to the constructor path, but periodically
+   * yields to the event loop so progress UI can repaint — issue #301 §2.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The IFC data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcApiProxyIfc>} The constructed proxy.
+   */
+  public static async createAsync(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
+
+    const loadState = await IfcApiProxyIfc.parseAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings)
+
+    return new IfcApiProxyIfc(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Log + record the header parse result on the model statistics.
+   *
+   * @param result0 The header parse result.
+   * @param bufferInput The parsing buffer (for line numbers).
+   * @param modelID The model ID (for statistics lookup).
+   */
+  private static reportHeaderParseResult(
+      result0: ParseResult,
+      bufferInput: ParsingBuffer,
+      modelID: number ): void {
+
+    const statistics = Logger.getStatistics(modelID)
+
+    switch (result0) {
+      case ParseResult.COMPLETE:
+
+        break
+
+      case ParseResult.INCOMPLETE:
+
+        Logger.warning('Parse incomplete but no errors')
+        statistics?.setLoadStatus('HEADER PARSE: INCOMPLETE')
+        break
+
+      case ParseResult.INVALID_STEP:
+
+        Logger.error('Error: Invalid STEP detected in parse, but no syntax error detected')
+        statistics?.setLoadStatus('HEADER PARSE: INVALID_STEP')
+        break
+
+      case ParseResult.MISSING_TYPE:
+
+        Logger.warning('Error: missing STEP type, but no syntax error detected')
+        statistics?.setLoadStatus('HEADER PARSE: MISSING_TYPE')
+        break
+
+      case ParseResult.SYNTAX_ERROR:
+
+        Logger.error(`Error: Syntax error detected on line ${bufferInput.lineCount}`)
+        statistics?.setLoadStatus('HEADER PARSE: SYNTAX_ERROR')
+        break
+
+      default:
+    }
+  }
+
+  /**
+   * Build the progress tracker for a load, when the settings carry an
+   * ON_PROGRESS callback.
+   *
+   * @param settings Loader settings.
+   * @return {ProgressTracker | undefined} The tracker, if progress is wanted.
+   */
+  private static makeTracker(
+      settings: Loadersettings | undefined ): ProgressTracker | undefined {
+
+    if (settings?.ON_PROGRESS === void 0) {
+      return void 0
+    }
+
+    return new ProgressTracker(settings.ON_PROGRESS)
+  }
+
+  /**
+   * Synchronous parse + geometry extraction (the classic OpenModel path).
+   *
+   * @param modelID The model ID being opened.
+   * @param data The IFC data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {IfcProxyLoadState} Everything the constructor tail needs.
+   */
+  private static parseAndExtract(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings ): IfcProxyLoadState {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = IfcStepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+    const model = parser.parseDataToModel(bufferInput, parseTick)[1]
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (model === void 0) {
+      Logger.error('[OpenModel]: model === undefined')
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Failed to load model' )
+    }
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
+
+    tracker?.beginPhase('geometry', 'products')
+
+    const geometryTick = tracker !== void 0 ?
+      (completed: number, total: number) => {
+        tracker.setPhaseTotal(total)
+        tracker.update(completed)
+      } : void 0
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      conwayGeometry.extractIFCGeometryData(geometryTick)
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModel]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
+  }
+
+  /**
+   * Cooperative twin of parseAndExtract: awaits the *Async parser/extraction
+   * variants so the event loop can run between progress ticks.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The IFC data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseAndExtractAsync(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = IfcStepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+    const model = (await parser.parseDataToModelAsync(bufferInput, parseTick))[1]
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (model === void 0) {
+      Logger.error('[OpenModel]: model === undefined')
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Failed to load model' )
+    }
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
+
+    tracker?.beginPhase('geometry', 'products')
+
+    const geometryTick = tracker !== void 0 ?
+      (completed: number, total: number) => {
+        tracker.setPhaseTotal(total)
+        tracker.update(completed)
+      } : void 0
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      await conwayGeometry.extractIFCGeometryDataAsync(geometryTick)
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModel]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
   }
 
 
