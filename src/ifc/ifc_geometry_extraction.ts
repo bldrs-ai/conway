@@ -4477,13 +4477,19 @@ export class IfcGeometryExtraction {
       from: Array<Array<number>>,
       to: StdVector<StdVector<number>>): void {
 
-    this.wasmModule.resizeVectorVectorDouble(to, from.length)
+    // Build each row and push_back (which copies) — embind's vector get()
+    // returns a COPY of the inner vector, so the previous resize + write
+    // into get(where) mutated temporaries and left the outer vector's rows
+    // empty, silently dropping NURBS weights (see the AP214 twin of this
+    // helper and conway#350).
+    for (const row of from) {
 
-    // to.resize(from.length)
+      const nativeRow = this.conwayModel.nativeVectorDouble()
 
-    for (let where = 0, end = from.length; where < end; ++where) {
+      this.extractToDoubleVector(row, nativeRow)
 
-      this.extractToDoubleVector(from[where], to.get(where))
+      to.push_back(nativeRow)
+      nativeRow.delete()
     }
   }
 

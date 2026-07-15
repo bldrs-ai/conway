@@ -2835,11 +2835,20 @@ export class AP214GeometryExtraction {
       from: Array< Array < number > >,
       to: StdVector< StdVector< number > >): void {
 
-    to.resize( from.length, this.conwayModel.nativeVectorDouble() )
+    // Build each row and push_back (which copies) — embind's vector get()
+    // returns a COPY of the inner vector, so the previous resize + write
+    // into get(where) mutated temporaries and left the outer vector's rows
+    // empty. That silently dropped NURBS weights, so rational surfaces
+    // (STEP cylinders written as weighted Bezier patches) tessellated as
+    // plain polynomials and bulged — part of conway#350.
+    for ( const row of from ) {
 
-    for (let where = 0, end = from.length; where < end; ++where) {
+      const nativeRow = this.conwayModel.nativeVectorDouble()
 
-      this.extractToDoubleVector( from[ where ], to.get( where ) )
+      this.extractToDoubleVector( row, nativeRow )
+
+      to.push_back( nativeRow )
+      nativeRow.delete()
     }
   }
 

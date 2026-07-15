@@ -24,6 +24,7 @@ const FIXTURE = 'data/as1-oc-214.stp'
 
 let model: ReturnType<AP214StepParser['parseDataToModel']>[1]
 let scene: AP214SceneBuilder
+let conwayGeometry: ConwayGeometry
 
 beforeAll( async () => {
 
@@ -37,7 +38,7 @@ beforeAll( async () => {
   expect( parsed ).not.toBe( void 0 )
   model = parsed
 
-  const conwayGeometry = new ConwayGeometry()
+  conwayGeometry = new ConwayGeometry()
 
   expect( await conwayGeometry.initialize() ).toBe( true )
 
@@ -121,6 +122,93 @@ describe( 'AP214 as1-oc-214 occurrence geometry', () => {
     expect( colliding.length ).toBeGreaterThan( 1 )
     const paths = colliding.map( ( n ) => JSON.stringify( n.occurrencePath ) )
     expect( new Set( paths ).size ).toBe( colliding.length )
+  } )
+
+  test( 'the rod\'s lateral b-spline surface tessellates (issue #350)', () => {
+
+    // The rod (occurrence rod-assembly_1 #1137 -> rod_1 #1131) is the one AS1
+    // part whose entire lateral surface is rational b-spline geometry (two
+    // weighted Bezier half-cylinders); its planar end caps tessellate
+    // regardless. When rational surface tessellation regresses, the rod
+    // degenerates to two thin discs — present in the scene walk and the
+    // NavTree, but invisible in the render (issue #350). Comparing the mesh's
+    // measured area against the analytic closed-cylinder area (from its own
+    // bounding box, so it is unit-agnostic) catches exactly that: caps-only
+    // is ~2.4% of the expected area, a real cylinder is ~100%.
+    const rodAssemblyNauo = 1137
+    const rodNauo = 1131
+
+    let rodGeometry: any
+
+    for ( const [ , , mesh, , , occ ] of scene.walkWithOccurrence() ) {
+      if ( occ.length === 2 && occ[ 0 ] === rodAssemblyNauo && occ[ 1 ] === rodNauo ) {
+        rodGeometry = ( mesh as any ).geometry
+        break
+      }
+    }
+
+    expect( rodGeometry ).toBeDefined()
+
+    const wasm = ( conwayGeometry as any ).wasmModule
+
+    // Reified layout: 6 floats per vertex (position xyz + normal xyz),
+    // uint32 indices, 3 per triangle.
+    const vertexFloatCount = rodGeometry.GetVertexDataSize()
+    const indexCount = rodGeometry.GetIndexDataSize()
+    /* eslint-disable no-magic-numbers */
+    const vertexData = wasm.HEAPF32.subarray(
+        rodGeometry.GetVertexData() / 4,
+        rodGeometry.GetVertexData() / 4 + vertexFloatCount )
+    const indexData = wasm.HEAPU32.subarray(
+        rodGeometry.GetIndexData() / 4,
+        rodGeometry.GetIndexData() / 4 + indexCount )
+
+    const mins = [ Infinity, Infinity, Infinity ]
+    const maxs = [ -Infinity, -Infinity, -Infinity ]
+
+    for ( let where = 0; where < vertexFloatCount; where += 6 ) {
+      for ( let axis = 0; axis < 3; ++axis ) {
+        mins[ axis ] = Math.min( mins[ axis ], vertexData[ where + axis ] )
+        maxs[ axis ] = Math.max( maxs[ axis ], vertexData[ where + axis ] )
+      }
+    }
+
+    const extents = [ 0, 1, 2 ].map( ( axis ) => maxs[ axis ] - mins[ axis ] ).sort( ( a, b ) => a - b )
+    // Cylinder aligned to one axis: two equal cross extents (diameter) and
+    // the length along the third.
+    const radius = extents[ 0 ] / 2
+    const length = extents[ 2 ]
+    const expectedArea = 2 * Math.PI * radius * ( length + radius )
+
+    let area = 0
+
+    for ( let where = 0; where < indexCount; where += 3 ) {
+      const a = indexData[ where ] * 6
+      const b = indexData[ where + 1 ] * 6
+      const c = indexData[ where + 2 ] * 6
+      const ux = vertexData[ b ] - vertexData[ a ]
+      const uy = vertexData[ b + 1 ] - vertexData[ a + 1 ]
+      const uz = vertexData[ b + 2 ] - vertexData[ a + 2 ]
+      const vx = vertexData[ c ] - vertexData[ a ]
+      const vy = vertexData[ c + 1 ] - vertexData[ a + 1 ]
+      const vz = vertexData[ c + 2 ] - vertexData[ a + 2 ]
+      const cx = uy * vz - uz * vy
+      const cy = uz * vx - ux * vz
+      const cz = ux * vy - uy * vx
+
+      area += 0.5 * Math.sqrt( ( cx * cx ) + ( cy * cy ) + ( cz * cz ) )
+    }
+
+    // Caps-only (the regression) measures ~0.024x; a correctly tessellated
+    // cylinder converges on 1x from below. 0.5 leaves generous headroom for
+    // coarser tessellation settings without ever passing a rod with no side.
+    expect( area ).toBeGreaterThan( expectedArea * 0.5 )
+
+    // ...and a sane upper bound: dropped rational weights bulged the profile
+    // ~37% over the analytic area, so also require we are close from either
+    // side.
+    expect( area ).toBeLessThan( expectedArea * 1.1 )
+    /* eslint-enable no-magic-numbers */
   } )
 
   test( 'every geometry instance carries the occurrence path of its tree leaf', async () => {
