@@ -6,19 +6,23 @@ import { ParseResult } from '../step/parsing/step_parser'
 import {
   AP214ProductStructureExtraction,
   ProductStructureNode,
+  ProductStructureOptions,
 } from './ap214_product_structure_extraction'
 
 
 const parser = AP214StepParser.Instance
 
 /**
- * Parse the hermetic as1 assembly fixture and extract its product structure.
+ * Parse a hermetic fixture and extract its product structure.
  *
+ * @param path The fixture path.
+ * @param options Optional extraction options (e.g. the ephemeral solid layer).
  * @return {ProductStructureNode[]} The extracted assembly forest.
  */
-function extractAs1Structure(): ProductStructureNode[] {
+function extractStructure(
+    path: string, options?: ProductStructureOptions ): ProductStructureNode[] {
 
-  const buffer = fs.readFileSync( 'data/as1-assembly.step' )
+  const buffer = fs.readFileSync( path )
   const bufferInput = new ParsingBuffer( buffer )
 
   const headerResult = parser.parseHeader( bufferInput )[1]
@@ -31,7 +35,16 @@ function extractAs1Structure(): ProductStructureNode[] {
   expect(
       result === ParseResult.COMPLETE || result === ParseResult.INCOMPLETE ).toBe( true )
 
-  return new AP214ProductStructureExtraction( model! ).extractProductStructure()
+  return new AP214ProductStructureExtraction( model! ).extractProductStructure( options )
+}
+
+/**
+ * Parse the hermetic as1 assembly fixture and extract its product structure.
+ *
+ * @return {ProductStructureNode[]} The extracted assembly forest.
+ */
+function extractAs1Structure(): ProductStructureNode[] {
+  return extractStructure( 'data/as1-assembly.step' )
 }
 
 /**
@@ -161,5 +174,126 @@ describe( 'AP214ProductStructureExtraction', () => {
     const root = extractAs1Structure()[0]
 
     expect( root.children.length ).toBe( AS1_ROOT_CHILD_COUNT )
+  } )
+} )
+
+const MULTIBODY_FIXTURE = 'data/ap214-multibody-part.step'
+const WIDGET_SOLID_COUNT = 3
+const SOUP_SOLID_COUNT = 3
+
+/**
+ * Collect the ephemeral solid children of a node.
+ *
+ * @param node The parent node.
+ * @return {ProductStructureNode[]} The `type: 'solid'` children.
+ */
+function solidChildren( node: ProductStructureNode ): ProductStructureNode[] {
+  return node.children.filter( ( candidate ) => candidate.type === 'solid' )
+}
+
+describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
+
+  test( 'is off by default: no solid nodes anywhere', () => {
+
+    const root = extractStructure( MULTIBODY_FIXTURE )[0]
+
+    const stack = [ root ]
+
+    while ( stack.length > 0 ) {
+
+      const node = stack.pop()!
+
+      expect( node.type ).not.toBe( 'solid' )
+      expect( node.ephemeral ).toBe( void 0 )
+      stack.push( ...node.children )
+    }
+  } )
+
+  test( 'surfaces named multibody solids beneath each occurrence', () => {
+
+    const root = extractStructure( MULTIBODY_FIXTURE, { includeSolids: true } )[0]
+
+    const widgets = root.children.filter( ( node ) => node.name === 'widget' )
+
+    expect( widgets.length ).toBe( 2 )
+
+    for ( const widget of widgets ) {
+
+      const solids = solidChildren( widget )
+
+      expect( solids.length ).toBe( WIDGET_SOLID_COUNT )
+
+      // Named bodies keep their file names; the unnamed one gets a
+      // positional fallback.
+      expect( solids.map( ( solid ) => solid.name ) )
+          .toEqual( [ 'Body1', 'Body2', 'Solid 3 of 3' ] )
+
+      for ( const solid of solids ) {
+        expect( solid.ephemeral ).toBe( true )
+        expect( solid.children.length ).toBe( 0 )
+        expect( solid.productDefinitionExpressID )
+            .toBe( widget.productDefinitionExpressID )
+        // A solid is not an occurrence: it inherits the parent's NAUO-only
+        // path, and (path, expressID) is the selection identity.
+        expect( solid.occurrencePath ).toEqual( widget.occurrencePath )
+      }
+    }
+
+    // The same part type under two occurrences repeats the same solid ids —
+    // the occurrence path is what tells the instances apart.
+    expect( solidChildren( widgets[0] ).map( ( solid ) => solid.expressID ) )
+        .toEqual( solidChildren( widgets[1] ).map( ( solid ) => solid.expressID ) )
+    expect( widgets[0].occurrencePath ).not.toEqual( widgets[1].occurrencePath )
+  } )
+
+  test( 'leaves single-solid products and the assembly root alone', () => {
+
+    const root = extractStructure( MULTIBODY_FIXTURE, { includeSolids: true } )[0]
+
+    // The widget solids live in a representation bridged to the assembly's
+    // representation by a transformation-bearing relationship (an assembly
+    // placement); following it would leak child solids into the parent.
+    expect( solidChildren( root ).length ).toBe( 0 )
+
+    const pin = root.children.find( ( node ) => node.name === 'pin' )!
+
+    // One solid maps 1:1 onto the product node itself; a child adds nothing.
+    expect( solidChildren( pin ).length ).toBe( 0 )
+    expect( pin.droppedSolids ).toBe( void 0 )
+  } )
+
+  test( 'suppresses oversized all-unnamed solid sets and reports the drop', () => {
+
+    const root = extractStructure( MULTIBODY_FIXTURE,
+        { includeSolids: true, maxUnnamedSolidsPerProduct: 2 } )[0]
+
+    const soup = root.children.find( ( node ) => node.name === 'soup' )!
+
+    expect( solidChildren( soup ).length ).toBe( 0 )
+    expect( soup.droppedSolids ).toBe( SOUP_SOLID_COUNT )
+  } )
+
+  test( 'emits small all-unnamed sets with positional names', () => {
+
+    const root = extractStructure( MULTIBODY_FIXTURE, { includeSolids: true } )[0]
+
+    const soup = root.children.find( ( node ) => node.name === 'soup' )!
+
+    expect( solidChildren( soup ).map( ( solid ) => solid.name ) )
+        .toEqual( [ 'Solid 1 of 3', 'Solid 2 of 3', 'Solid 3 of 3' ] )
+  } )
+
+  test( 'caps per-product solids and reports the overflow', () => {
+
+    const root = extractStructure( MULTIBODY_FIXTURE,
+        { includeSolids: true, maxSolidsPerProduct: 2 } )[0]
+
+    const widget = root.children.find( ( node ) => node.name === 'widget' )!
+    const solids = solidChildren( widget )
+
+    expect( solids.length ).toBe( 2 )
+    expect( widget.droppedSolids ).toBe( WIDGET_SOLID_COUNT - 2 )
+    // Truncated, not renumbered: positions stay stable under the cap.
+    expect( solids.map( ( solid ) => solid.name ) ).toEqual( [ 'Body1', 'Body2' ] )
   } )
 } )

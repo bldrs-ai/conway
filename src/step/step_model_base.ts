@@ -1,4 +1,5 @@
 import { StepIndexEntry } from './parsing/step_parser'
+import { releaseScratchParsingBuffer } from './parsing/step_deserialization_functions'
 import {
   ResidentStepBufferProvider,
   StepBufferProvider,
@@ -277,6 +278,16 @@ implements Iterable<BaseEntity>, Model {
     if ( dropVtable ) {
 
       this.vtableBuilder_.clear( true )
+
+      // The module-level scratch parsing buffer stays pointed at the
+      // last buffer a numeric extraction read from — after a parse,
+      // that's this model's FULL source. Releasing caches (and
+      // especially spilling the source, which routes through here)
+      // must drop that pin too, or the released source stays alive
+      // via the scratch (heap-snapshot verified). Safe globally: every
+      // use reinits the scratch first, and any other live model just
+      // repoints it on its next read.
+      releaseScratchParsingBuffer()
 
       // Common entries: drop their materialised descriptors outright — this is
       // the memory the old retained object array could never release. They
@@ -860,6 +871,24 @@ implements Iterable<BaseEntity>, Model {
     return this.from(
         this.typeIndex.cursor(...distinctTypes),
         true) as IterableIterator<InstanceType<T[number]>>
+  }
+
+  /**
+   * Count entities of a set of types (including sub-types) without iterating
+   * or materializing them — reads the type index's prefix sums, so it's cheap
+   * enough to call up front for progress totals (see core/progress.ts).
+   * Multi-mapped elements can be counted once per matching mapping, so treat
+   * this as an upper bound; see MultiIndexSet.count.
+   *
+   * @param types The list of types to count.
+   * @return {number} The number of matching entities.
+   */
+  public typeCount<T extends StepEntityConstructorAbstract<EntityTypeIDs>[]>(
+      ...types: T ): number {
+    const distinctTypes = types.length === 1 ? (types[0].query) :
+      (new Set(types.flatMap((type) => type.query)))
+
+    return this.typeIndex.count(...distinctTypes)
   }
 
   /**

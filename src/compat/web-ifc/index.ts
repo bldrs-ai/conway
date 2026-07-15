@@ -15,3 +15,14 @@
 // See design/new/web-ifc-compat-surface.md for scope + the Conway-owned
 // constants / AP203 / properties-layer decisions.
 export * from './ifc_api'
+
+// Conway extension: the structured progress contract carried by
+// `Loadersettings.ON_PROGRESS` / `OpenModelAsync` (issue #301). Exported
+// here so shim consumers (Share) can type progress handlers without
+// reaching into conway internals.
+export {
+  ProgressEvent,
+  ProgressCallback,
+  ProgressPhase,
+  ProgressUnit,
+} from '../../core/progress'

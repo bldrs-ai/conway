@@ -1,7 +1,8 @@
 import { ConwayGeometry, FileHandlerFunction as FileHandlerCallback,
  } from '../../index'
 import {versionString} from '../../version/version'
-import Logger from '../../logging/logger'
+import Logger, { LogLevel as ConwayLogLevel } from '../../logging/logger'
+import { ProgressCallback } from '../../core/progress'
 import Environment from '../../utilities/environment'
 import * as glmatrix from 'gl-matrix'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
@@ -31,6 +32,35 @@ export interface Loadersettings {
   CIRCLE_SEGMENTS_MEDIUM?: number
   CIRCLE_SEGMENTS_HIGH?: number
   BOOL_ABORT_THRESHOLD?: number
+
+  /**
+   * Conway extension (real web-ifc has no per-phase progress surface):
+   * throttled structured progress events during OpenModel/OpenModelAsync —
+   * see core/progress.ts and conway issue #301. Embedders should
+   * feature-detect ('ON_PROGRESS simply ignored by older engines').
+   */
+  ON_PROGRESS?: ProgressCallback
+}
+
+/**
+ * web-ifc compatible log levels (numeric values match web-ifc's enum so an
+ * engine swap keeps SetLogLevel calls working). Mapped onto conway's
+ * Logger threshold — see logging/logger.ts.
+ */
+export enum LogLevel {
+  LOG_LEVEL_DEBUG = 1,
+  LOG_LEVEL_INFO = 2,
+  LOG_LEVEL_WARN = 3,
+  LOG_LEVEL_ERROR = 4,
+  LOG_LEVEL_OFF = 5,
+}
+
+const CONWAY_LOG_LEVEL_BY_WEBIFC: Record<LogLevel, ConwayLogLevel> = {
+  [LogLevel.LOG_LEVEL_DEBUG]: ConwayLogLevel.DEBUG,
+  [LogLevel.LOG_LEVEL_INFO]: ConwayLogLevel.INFO,
+  [LogLevel.LOG_LEVEL_WARN]: ConwayLogLevel.WARNING,
+  [LogLevel.LOG_LEVEL_ERROR]: ConwayLogLevel.ERROR,
+  [LogLevel.LOG_LEVEL_OFF]: ConwayLogLevel.OFF,
 }
 
 export interface Vector<T> {
@@ -192,6 +222,59 @@ export class IfcAPI {
     this.models.set( modelIdResult, result )
 
     return modelIdResult
+  }
+
+  /**
+   * Cooperative variant of OpenModel (conway extension; feature-detect with
+   * typeof api.OpenModelAsync === 'function'). Identical parse/extraction,
+   * but periodically yields to the event loop so browsers can repaint
+   * progress UI (settings.ON_PROGRESS) and the tab is not flagged as
+   * stalled — conway issue #301 §2. Currently cooperative for IFC input;
+   * AP214/AP203/AP242 fall back to the synchronous path.
+   *
+   * @param data containing IFC data (bytes)
+   * @param settings settings for loading the model
+   * @return {Promise<number>} model ID
+   */
+  async OpenModelAsync(data: Uint8Array, settings?: Loadersettings): Promise<number> {
+
+    // Reserve the ID before the first await — another OpenModel(Async) call
+    // interleaving with the cooperative parse must not get the same ID. A
+    // failed open burns an ID, which is harmless (IDs are only keys).
+    const modelIdResult = this.globalModelIDCounter++
+
+    const result =
+      await IfcApiModelPassthroughFactory.fromAsync(
+          modelIdResult,
+          data,
+          this.wasmModule,
+          settings)
+
+    if ( result === void 0 ) {
+      return -1
+    }
+
+    this.models.set( modelIdResult, result )
+
+    return modelIdResult
+  }
+
+  /**
+   * Set conway's console-echo log threshold, web-ifc compatible surface
+   * (numeric LogLevel enum). Embedders (e.g. Share) use this to quiet a
+   * clean load's console down to warnings/errors — conway issue #301.
+   *
+   * @param level the web-ifc style numeric log level
+   */
+  SetLogLevel(level: LogLevel): void {
+    const mapped = CONWAY_LOG_LEVEL_BY_WEBIFC[level]
+
+    if (mapped === void 0) {
+      Logger.warning(`[SetLogLevel]: unknown log level ${level}`)
+      return
+    }
+
+    Logger.setLogLevel(mapped)
   }
 
 

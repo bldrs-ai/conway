@@ -182,6 +182,16 @@ export class Statistics {
    * prints statistics
    */
   printStatistics(): void {
+    console.log(this.format())
+  }
+
+  /**
+   * Format the load-summary line (Logger routes this through its sink so
+   * the CLI can keep stdout clean — issue #301).
+   *
+   * @return {string} the single-line load summary
+   */
+  format(): string {
     const date = new Date()
     const options: Intl.DateTimeFormatOptions = {
       year: 'numeric',
@@ -215,9 +225,7 @@ export class Statistics {
       versionStr = 'Version not defined'
     }
 
-     
-    console.log(
-        `[${dateString}]: Load Status: ${this.loadStatus}, ` +
+    return `[${dateString}]: Load Status: ${this.loadStatus}, ` +
             `Project Name: ${this.projectName}, Version: ${versionStr}, ` +
             `Conway Version: ${conwayVersionNumber}-${wasmType}, ` +
             `Parse Time: ${this.parseTime} ms, Geometry Time: ${this.geometryTime} ms, ` +
@@ -225,8 +233,6 @@ export class Statistics {
             `Geometry Memory: ${this.geometryMemory?.toFixed(3)} MB, ` +
             `Memory Statistics: ${this.memoryStatistics}, ` +
             `Preprocessor Version: ${this.preprocessorVersion}, ` +
-            `Originating System: ${this.originatingSystem}`,
-    )
-     
+            `Originating System: ${this.originatingSystem}`
   }
 }
