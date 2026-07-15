@@ -28,6 +28,26 @@ import { AP214GeometryExtraction } from '../../AP214E3_2010/ap214_geometry_extra
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
 import { AP214Properties } from './ap214_properties'
 import { EntityTypesAP214Count } from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import { ProgressTracker } from '../../core/progress'
+import { formatModelLine } from '../../core/progress_log'
+import { extractModelInfo } from '../../loaders/loading_utilities'
+import { StepHeader } from '../../step/parsing/step_parser'
+
+/**
+ * Everything parse/extraction produces that the proxy constructor's tail
+ * (mesh vectors, statistics) consumes — precomputed by createAsync so the
+ * cooperative path can await mid-parse, or computed synchronously inside
+ * the constructor for the classic OpenModel path. Mirrors IfcApiProxyIfc.
+ */
+interface Ap214ProxyLoadState {
+  conwaywasm: ConwayGeometry
+  allTimeStart: number
+  stepHeader: StepHeader
+  model: AP214StepModel
+  scene: AP214SceneBuilder
+  conwayGeometry: AP214GeometryExtraction
+  geometryTimeInMs: number
+}
 
 /**
  */
@@ -131,79 +151,27 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       public readonly modelID: number,
       data: Uint8Array,
       private readonly wasmModule: any,
-      private readonly settings?: Loadersettings ) {
+      private readonly settings?: Loadersettings,
+      precomputed?: Ap214ProxyLoadState ) {
 
-    this.conwaywasm = new ConwayGeometry(wasmModule)
+    // The cooperative path (createAsync) parses/extracts before construction
+    // so it can await mid-load; the classic OpenModel path does it here,
+    // synchronously. Both share the tail below (mesh vectors, statistics).
+    const loadState = precomputed ??
+      IfcApiProxyAP214.parseAndExtract(modelID, data, new ConwayGeometry(wasmModule), settings)
 
-    const allTimeStart = Date.now()
-    const parser = AP214StepParser.Instance
-    const bufferInput = new ParsingBuffer(data)
-    const [stepHeader, result0] = parser.parseHeader(bufferInput)
-
-    Logger.createStatistics(modelID)
+    this.conwaywasm = loadState.conwaywasm
 
     const statistics = Logger.getStatistics(modelID)
 
-    switch (result0) {
-      case ParseResult.COMPLETE:
-
-        break
-
-      case ParseResult.INCOMPLETE:
-
-        Logger.warning('Parse incomplete but no errors')
-        statistics?.setLoadStatus('HEADER PARSE: INCOMPLETE')
-        break
-
-      case ParseResult.INVALID_STEP:
-
-        Logger.error('Error: Invalid STEP detected in parse, but no syntax error detected')
-        statistics?.setLoadStatus('HEADER PARSE: INVALID_STEP')
-        break
-
-      case ParseResult.MISSING_TYPE:
-
-        Logger.warning('Error: missing STEP type, but no syntax error detected')
-        statistics?.setLoadStatus('HEADER PARSE: MISSING_TYPE')
-        break
-
-      case ParseResult.SYNTAX_ERROR:
-
-        Logger.error(`Error: Syntax error detected on line ${bufferInput.lineCount}`)
-        statistics?.setLoadStatus('HEADER PARSE: SYNTAX_ERROR')
-        break
-
-      default:
-    }
-
-    const parseStartTime = Date.now()
-    const model = parser.parseDataToModel(bufferInput)[1]
-    const parseEndTime = Date.now()
-
-    if (model === void 0) {
-      Logger.error('[OpenModel]: model === undefined')
-      statistics?.setLoadStatus('PARSE_FAIL')
-      throw new Error( 'Failed to load model' )
-    }
-
-    statistics?.setParseTime(parseEndTime - parseStartTime)
-
-    // TODO(nickcastel50): Doing geometry extraction in here for now...
-    // parse + extract data model + geometry data
-    const conwayGeometry = new AP214GeometryExtraction(this.conwaywasm, model)
-
-    const startTime = Date.now()
-    const [extractionResult, scene] =
-      conwayGeometry.extractAP214GeometryData()
-
-    const endTime = Date.now()
-    const executionTimeInMs = endTime - startTime
-
-    if (extractionResult !== ExtractResult.COMPLETE) {
-      Logger.error('[OpenModel]: Error extracting geometry, exiting...')
-      statistics?.setLoadStatus('FAIL')
-      throw new Error( 'Couldn\'t extract model' )
-    }
+    const {
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: executionTimeInMs,
+    } = loadState
 
     // get linear scaling factor
     this.linearScalingFactor = conwayGeometry.getLinearScalingFactor()
@@ -333,6 +301,277 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     statistics?.setGeometryTime(executionTimeInMs)
     // eslint-disable-next-line no-magic-numbers
     statistics?.setGeometryMemory(scene.model.geometry.calculateGeometrySize() / (1024 * 1024))
+  }
+
+  /**
+   * Cooperative construction (conway extension, used by OpenModelAsync):
+   * identical parse/extraction to the constructor path, but the data parse
+   * periodically yields to the event loop so progress UI can repaint —
+   * issue #301 §2. Geometry extraction stays synchronous (the AP214
+   * thunk-tree walk has no flat product loop yet) and reports as a
+   * heartbeat phase.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<IfcApiProxyAP214>} The constructed proxy.
+   */
+  public static async createAsync(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyAP214> {
+
+    const loadState = await IfcApiProxyAP214.parseAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings)
+
+    return new IfcApiProxyAP214(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Log + record the header parse result on the model statistics.
+   *
+   * @param result0 The header parse result.
+   * @param bufferInput The parsing buffer (for line numbers).
+   * @param modelID The model ID (for statistics lookup).
+   */
+  private static reportHeaderParseResult(
+      result0: ParseResult,
+      bufferInput: ParsingBuffer,
+      modelID: number ): void {
+
+    const statistics = Logger.getStatistics(modelID)
+
+    switch (result0) {
+      case ParseResult.COMPLETE:
+
+        break
+
+      case ParseResult.INCOMPLETE:
+
+        Logger.warning('Parse incomplete but no errors')
+        statistics?.setLoadStatus('HEADER PARSE: INCOMPLETE')
+        break
+
+      case ParseResult.INVALID_STEP:
+
+        Logger.error('Error: Invalid STEP detected in parse, but no syntax error detected')
+        statistics?.setLoadStatus('HEADER PARSE: INVALID_STEP')
+        break
+
+      case ParseResult.MISSING_TYPE:
+
+        Logger.warning('Error: missing STEP type, but no syntax error detected')
+        statistics?.setLoadStatus('HEADER PARSE: MISSING_TYPE')
+        break
+
+      case ParseResult.SYNTAX_ERROR:
+
+        Logger.error(`Error: Syntax error detected on line ${bufferInput.lineCount}`)
+        statistics?.setLoadStatus('HEADER PARSE: SYNTAX_ERROR')
+        break
+
+      default:
+    }
+  }
+
+  /**
+   * Build the progress tracker for a load, when the settings carry an
+   * ON_PROGRESS callback.
+   *
+   * @param settings Loader settings.
+   * @return {ProgressTracker | undefined} The tracker, if progress is wanted.
+   */
+  private static makeTracker(
+      settings: Loadersettings | undefined ): ProgressTracker | undefined {
+
+    if (settings?.ON_PROGRESS === void 0) {
+      return void 0
+    }
+
+    return new ProgressTracker(settings.ON_PROGRESS)
+  }
+
+  /**
+   * Synchronous parse + geometry extraction (the classic OpenModel path).
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Ap214ProxyLoadState} Everything the constructor tail needs.
+   */
+  private static parseAndExtract(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings ): Ap214ProxyLoadState {
+
+    const tracker = IfcApiProxyAP214.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = AP214StepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyAP214.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    // Model line as early as possible — header-only, before the full file
+    // parse (issue #301 follow-up, log line 3).
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+    const model = parser.parseDataToModel(bufferInput, parseTick)[1]
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (model === void 0) {
+      Logger.error('[OpenModel]: model === undefined')
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Failed to load model' )
+    }
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new AP214GeometryExtraction(conwaywasm, model)
+
+    // Heartbeat only: the AP214 thunk-tree extraction has no flat product
+    // loop to tick from yet (see conway_model_loader's matching note).
+    tracker?.beginPhase('geometry', 'products')
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      conwayGeometry.extractAP214GeometryData()
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModel]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
+  }
+
+  /**
+   * Cooperative twin of parseAndExtract: awaits the async data parse so the
+   * event loop can run between progress ticks.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<Ap214ProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseAndExtractAsync(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings ): Promise<Ap214ProxyLoadState> {
+
+    const tracker = IfcApiProxyAP214.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = AP214StepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyAP214.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    // Model line as early as possible — header-only, before the full file
+    // parse (issue #301 follow-up, log line 3).
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+    const model = (await parser.parseDataToModelAsync(bufferInput, parseTick))[1]
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (model === void 0) {
+      Logger.error('[OpenModel]: model === undefined')
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Failed to load model' )
+    }
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new AP214GeometryExtraction(conwaywasm, model)
+
+    // Heartbeat only: the AP214 thunk-tree extraction has no flat product
+    // loop to tick from yet (see conway_model_loader's matching note).
+    tracker?.beginPhase('geometry', 'products')
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      conwayGeometry.extractAP214GeometryData()
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModel]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
   }
 
 

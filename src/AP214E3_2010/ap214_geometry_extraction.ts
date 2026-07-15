@@ -2509,6 +2509,22 @@ export class AP214GeometryExtraction {
    * @param owningElementLocalID
    * @param isMappedItem Whether this is a mapped item.
    */
+  /**
+   * Count of representation items by AP214 entity type name — the geometry
+   * breakdown for the load report (issue #301 follow-up). Copied into
+   * Statistics by the loader/proxies after extraction.
+   */
+  public readonly geometryTypeCounts = new Map<string, number>()
+
+  /**
+   * Increment the geometry-type breakdown counter for a type name.
+   *
+   * @param name The entity type name.
+   */
+  private countGeometryType(name: string): void {
+    this.geometryTypeCounts.set(name, (this.geometryTypeCounts.get(name) ?? 0) + 1)
+  }
+
   extractRepresentationItem(
       from: representation_item,
       owningElementLocalID?: number,
@@ -2551,8 +2567,14 @@ export class AP214GeometryExtraction {
     if ( from instanceof mapped_item ) {
 
       return
+    }
 
-    } else if ( from instanceof boolean_result ) {
+    // Geometry-type breakdown for the load report (issue #301 follow-up):
+    // after the memoization early-return, so each unique geometry
+    // definition counts once regardless of occurrence instancing.
+    this.countGeometryType(EntityTypesAP214[from.type])
+
+    if ( from instanceof boolean_result ) {
 
       // also handles AP214BooleanClippingResult
       this.extractBooleanResult( from )

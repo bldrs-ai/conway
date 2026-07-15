@@ -3,16 +3,18 @@ import { AP214GeometryExtraction } from '../AP214E3_2010/ap214_geometry_extracti
 import AP214StepParser from '../AP214E3_2010/ap214_step_parser'
 import { Model } from '../core/model'
 import { ProgressCallback, ProgressTracker } from '../core/progress'
+import { ModelInfo, formatModelLine } from '../core/progress_log'
 import { Scene } from '../core/scene'
 import { ExtractResult } from '../core/shared_constants'
 import ModelFormatDetector, { ModelFormatType } from '../format_detection/model_format_detector'
 import { IfcGeometryExtraction } from '../ifc/ifc_geometry_extraction'
+import { IfcProduct } from '../ifc/ifc4_gen'
 import IfcStepParser from '../ifc/ifc_step_parser'
 import Logger from '../logging/logger'
 import Memory from '../memory/memory'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
-import { parseFileHeader } from './loading_utilities'
+import { extractModelInfo, parseFileHeader } from './loading_utilities'
 
 const ONE_KB = 1024
 const ONE_MB = ONE_KB * ONE_KB
@@ -37,6 +39,13 @@ export interface ModelLoadOptions {
 
   /** Minimum ms between progress events (default in core/progress.ts). */
   progressIntervalMs?: number
+
+  /**
+   * Fired once, right after the STEP header parses — before the full file
+   * parse — with everything the header reveals, so callers can print the
+   * model line as early as possible (issue #301 follow-up, log line 3).
+   */
+  onModelInfo?: ( info: ModelInfo ) => void
 }
 
 /**
@@ -149,6 +158,14 @@ export class ConwayModelLoader {
             default:
           }
 
+          {
+            // Model line as early as possible — header-only (issue #301).
+            const modelInfo = extractModelInfo( stepHeader, data.length )
+
+            Logger.info( formatModelLine( modelInfo ) )
+            options?.onModelInfo?.( modelInfo )
+          }
+
           tracker?.beginPhase( 'dataParse', 'bytes', data.length )
 
           const parseTick = tracker !== void 0 ?
@@ -217,6 +234,8 @@ export class ConwayModelLoader {
           statistics.setGeometryMemory(
                
               conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
+
+          statistics.setGeometryTypeCounts(conwayModel.geometryTypeCounts)
 
           model.invalidate(true)
 
@@ -341,6 +360,14 @@ export class ConwayModelLoader {
             default:
           }
 
+          {
+            // Model line as early as possible — header-only (issue #301).
+            const modelInfo = extractModelInfo( stepHeader, data.length )
+
+            Logger.info( formatModelLine( modelInfo ) )
+            options?.onModelInfo?.( modelInfo )
+          }
+
           tracker?.beginPhase( 'dataParse', 'bytes', data.length )
 
           const parseTick = tracker !== void 0 ?
@@ -423,6 +450,9 @@ export class ConwayModelLoader {
           if (ifcProjectName !== null) {
             statistics.setProjectName(ifcProjectName)
           }
+
+          statistics.setProductCount(model.typeCount(IfcProduct))
+          statistics.setGeometryTypeCounts(conwayModel.geometryTypeCounts)
 
           model.invalidate(true)
 

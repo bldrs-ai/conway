@@ -15,6 +15,8 @@ export class Statistics {
   private preprocessorVersion: string | undefined
   private originatingSystem: string | undefined
   private memoryStatistics: string | undefined
+  private productCount: number | undefined
+  private geometryTypeCounts: Map<string, number> | undefined
 
   // Getters and setters
 
@@ -179,6 +181,64 @@ export class Statistics {
   }
 
   /**
+   *
+   * @return {number | undefined} - number of products extracted
+   */
+  getProductCount(): number | undefined {
+    return this.productCount
+  }
+
+  /**
+   *
+   * @param value - number of products extracted
+   */
+  setProductCount(value: number) {
+    this.productCount = value
+  }
+
+  /**
+   *
+   * @return {Map<string, number> | undefined} - geometry type breakdown
+   * (entity type name -> count of unique geometry definitions extracted)
+   */
+  getGeometryTypeCounts(): Map<string, number> | undefined {
+    return this.geometryTypeCounts
+  }
+
+  /**
+   *
+   * @param value - geometry type breakdown map
+   */
+  setGeometryTypeCounts(value: Map<string, number>) {
+    this.geometryTypeCounts = value
+  }
+
+  /**
+   * Format the geometry-type breakdown as a compact sorted list, e.g.
+   * "IFCEXTRUDEDAREASOLID×3421 IFCFACETEDBREP×212 (+3 more)".
+   *
+   * @param maxEntries - cap on listed types (rest summarized)
+   * @return {string | undefined} the formatted breakdown, if any
+   */
+  // eslint-disable-next-line no-magic-numbers
+  formatGeometryTypeCounts(maxEntries: number = 12): string | undefined {
+    if (this.geometryTypeCounts === void 0 || this.geometryTypeCounts.size === 0) {
+      return void 0
+    }
+
+    const sorted = Array.from(this.geometryTypeCounts.entries())
+        .sort((leftEntry, rightEntry) => rightEntry[1] - leftEntry[1])
+
+    const shown = sorted.slice(0, maxEntries)
+        .map(([name, count]) => `${name}×${count}`)
+        .join(' ')
+
+    const remainder = sorted.length - maxEntries
+
+    return remainder > 0 ? `${shown} (+${remainder} more)` : shown
+  }
+
+  /**
    * prints statistics
    */
   printStatistics(): void {
@@ -225,14 +285,21 @@ export class Statistics {
       versionStr = 'Version not defined'
     }
 
+    const products = this.productCount !== void 0 ?
+      `Products: ${this.productCount}, ` : ''
+    const breakdown = this.formatGeometryTypeCounts()
+    const geometryTypes = breakdown !== void 0 ? `, Geometry Types: ${breakdown}` : ''
+
     return `[${dateString}]: Load Status: ${this.loadStatus}, ` +
             `Project Name: ${this.projectName}, Version: ${versionStr}, ` +
             `Conway Version: ${conwayVersionNumber}-${wasmType}, ` +
             `Parse Time: ${this.parseTime} ms, Geometry Time: ${this.geometryTime} ms, ` +
             `Total Time: ${this.totalTime} ms, ` +
             `Geometry Memory: ${this.geometryMemory?.toFixed(3)} MB, ` +
+            products +
             `Memory Statistics: ${this.memoryStatistics}, ` +
             `Preprocessor Version: ${this.preprocessorVersion}, ` +
-            `Originating System: ${this.originatingSystem}`
+            `Originating System: ${this.originatingSystem}` +
+            geometryTypes
   }
 }

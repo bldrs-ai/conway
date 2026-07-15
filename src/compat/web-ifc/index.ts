@@ -26,3 +26,16 @@ export {
   ProgressPhase,
   ProgressUnit,
 } from '../../core/progress'
+
+// The shared normalized load-log text rendition (stage lines + Total) used
+// by the conway CLI and Share's status-bar/console output alike — see
+// Share design/new/load-log-format.md.
+export {
+  LoadLogAccumulator,
+  ModelInfo,
+  ProgressEventLike,
+  formatBar,
+  formatModelLine,
+  formatSeconds,
+  stageLabel,
+} from '../../core/progress_log'

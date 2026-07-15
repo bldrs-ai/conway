@@ -371,6 +371,14 @@ export class IfcGeometryExtraction {
 
   private csgMemoization: boolean = true
 
+  /**
+   * Count of newly-extracted representation items by IFC entity type name
+   * (e.g. IFCEXTRUDEDAREASOLID, IFCFACETEDBREP, IFCBOOLEANCLIPPINGRESULT) —
+   * the geometry breakdown for the load report (issue #301 follow-up).
+   * Copied into Statistics by the loader/proxies after extraction.
+   */
+  public readonly geometryTypeCounts = new Map<string, number>()
+
   private csgDepth: number = 0
 
   /**
@@ -4102,6 +4110,15 @@ export class IfcGeometryExtraction {
    * @param isSpace
    * @param isMappedItem
    */
+  /**
+   * Increment the geometry-type breakdown counter for a type name.
+   *
+   * @param name The entity type name.
+   */
+  private countGeometryType(name: string): void {
+    this.geometryTypeCounts.set(name, (this.geometryTypeCounts.get(name) ?? 0) + 1)
+  }
+
   extractRepresentationItem(from: IfcRepresentationItem,
       owningElementLocalID?: number,
       isRelVoid: boolean = false,
@@ -4137,7 +4154,14 @@ export class IfcGeometryExtraction {
 
       // mapped items are handled separately.
       return
-    } else if (from instanceof IfcPolygonalFaceSet) {
+    }
+
+    // Geometry-type breakdown for the load report (issue #301 follow-up):
+    // counted here, after the memoization early-return, so each unique
+    // geometry definition counts once regardless of instancing.
+    this.countGeometryType(EntityTypesIfc[from.type])
+
+    if (from instanceof IfcPolygonalFaceSet) {
 
       const faceSetResult: ExtractResult =
         this.extractPolygonalFaceSet(from, false, isRelVoid)

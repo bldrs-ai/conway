@@ -22,6 +22,8 @@ import * as glmatrix from 'gl-matrix'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker } from '../../core/progress'
+import { formatModelLine } from '../../core/progress_log'
+import { extractModelInfo } from '../../loaders/loading_utilities'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { StepHeader } from '../../step/parsing/step_parser'
@@ -362,6 +364,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
 
+    // Model line as early as possible — header-only, before the full file
+    // parse (issue #301 follow-up, log line 3).
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
@@ -404,6 +413,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       statistics?.setLoadStatus('FAIL')
       throw new Error( 'Couldn\'t extract model' )
     }
+
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
 
     return {
       conwaywasm,
@@ -448,6 +459,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
 
+    // Model line as early as possible — header-only, before the full file
+    // parse (issue #301 follow-up, log line 3).
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
@@ -490,6 +508,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       statistics?.setLoadStatus('FAIL')
       throw new Error( 'Couldn\'t extract model' )
     }
+
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
 
     return {
       conwaywasm,

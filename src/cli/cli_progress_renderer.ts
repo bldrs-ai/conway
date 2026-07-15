@@ -1,41 +1,46 @@
-import { ProgressEvent, ProgressPhase } from '../core/progress'
+import { ProgressEvent } from '../core/progress'
+import { LoadLogAccumulator, ModelInfo } from '../core/progress_log'
 
 
-const PHASE_LABELS: Record<ProgressPhase, string> = {
-  headerParse: 'Parsing header',
-  dataParse: 'Parsing model data',
-  geometry: 'Extracting geometry',
-  sceneBuild: 'Building scene',
-  serialize: 'Writing output',
-}
-
-const PERCENT = 100
 const DEFAULT_NON_TTY_INTERVAL_MS = 2000
-const MS_PER_SECOND = 1000
 
 /**
- * Renders load progress events on a terminal.
+ * Renders load progress on a terminal using the shared normalized load-log
+ * format (core/progress_log.ts) — the same text rendition Share mirrors to
+ * the browser console, so a pasted CLI run and a pasted browser log read
+ * identically. Format spec: Share design/new/load-log-format.md.
  *
- * Writes to stderr so stdout stays clean for data output (query tables,
- * piped GLB paths — issue #301). On a TTY it repaints a single status line
- * with carriage returns; when redirected (CI logs) it prints a plain line on
- * phase changes and at most once per nonTtyIntervalMs so logs stay readable.
+ * Writes to stderr so stdout stays clean for data output. On a TTY the
+ * current stage's line repaints in place and freezes (newline) when the
+ * stage completes; when redirected (CI logs) it prints the live line at
+ * most once per nonTtyIntervalMs plus every frozen stage line.
  */
 export class CliProgressRenderer {
 
+  private readonly log = new LoadLogAccumulator()
   private lastLineLength = 0
   private lastPrintTime = 0
-  private lastPhase: ProgressPhase | undefined
 
   /**
    * Construct this against an output stream.
    *
    * @param out The stream to render to (default stderr).
-   * @param nonTtyIntervalMs Minimum ms between lines when not a TTY.
+   * @param nonTtyIntervalMs Minimum ms between live lines when not a TTY.
    */
   public constructor(
     private readonly out: NodeJS.WriteStream = process.stderr,
     private readonly nonTtyIntervalMs: number = DEFAULT_NON_TTY_INTERVAL_MS ) {}
+
+  /**
+   * Print the early model line (from header info).
+   *
+   * @param info The model header info.
+   */
+  public onModelInfo( info: ModelInfo ): void {
+    const line = this.log.setModelInfo( info )
+
+    this.freezeLine( line )
+  }
 
   /**
    * Progress callback — bound as an arrow so it can be handed directly to a
@@ -45,72 +50,67 @@ export class CliProgressRenderer {
    */
   public readonly onProgress = ( event: ProgressEvent ): void => {
 
-    const now = Date.now()
-    const phaseChanged = event.phase !== this.lastPhase
+    const closedLine = this.log.onProgress( event )
 
-    if ( !this.out.isTTY &&
-      !phaseChanged &&
-      now - this.lastPrintTime < this.nonTtyIntervalMs ) {
+    if ( closedLine !== void 0 ) {
+      this.freezeLine( closedLine )
+    }
+
+    const currentLine = this.log.currentLine()
+
+    if ( currentLine === void 0 ) {
       return
     }
 
-    this.lastPhase = event.phase
-    this.lastPrintTime = now
+    const now = Date.now()
 
-    const line = this.format( event )
+    if ( !this.out.isTTY && now - this.lastPrintTime < this.nonTtyIntervalMs ) {
+      return
+    }
+
+    this.lastPrintTime = now
 
     if ( this.out.isTTY ) {
 
-      const padded = line.padEnd( this.lastLineLength )
+      const padded = currentLine.padEnd( this.lastLineLength )
 
-      this.lastLineLength = line.length
+      this.lastLineLength = currentLine.length
       this.out.write( `\r${padded}` )
     } else {
 
-      this.out.write( `${line}\n` )
+      this.out.write( `${currentLine}\n` )
     }
   }
 
   /**
-   * Finish rendering — terminates the TTY status line so subsequent output
-   * (log table, statistics) starts on a fresh line.
+   * Finish rendering: freeze any running stage's line and print the
+   * separate before/after Total line.
    */
   public done(): void {
 
-    if ( this.out.isTTY && this.lastLineLength > 0 ) {
-      this.out.write( '\n' )
+    const closedLine = this.log.closeCurrentStage()
+
+    if ( closedLine !== void 0 ) {
+      this.freezeLine( closedLine )
     }
 
-    this.lastLineLength = 0
-    this.lastPhase = void 0
+    this.freezeLine( this.log.totalLine() )
   }
 
   /**
-   * Format one event as a status line.
+   * Print a line permanently, replacing any animated line on a TTY.
    *
-   * @param event The progress event.
-   * @return {string} e.g. "Extracting geometry 42% (3800/9000 products) 12.4s 512MB"
+   * @param line The line to freeze.
    */
-  private format( event: ProgressEvent ): string {
+  private freezeLine( line: string ): void {
 
-    const label = PHASE_LABELS[ event.phase ] ?? event.phase
-    const elapsedSeconds = ( event.elapsedMs / MS_PER_SECOND ).toFixed( 1 )
-
-    let counts: string
-
-    if ( event.total !== void 0 && event.total > 0 ) {
-
-      const percent = Math.floor( ( event.completed / event.total ) * PERCENT )
-
-      counts = `${percent}% (${event.completed}/${event.total} ${event.unit})`
+    if ( this.out.isTTY && this.lastLineLength > 0 ) {
+      // Overwrite the animated line in place, then commit with a newline.
+      this.out.write( `\r${line.padEnd( this.lastLineLength )}\n` )
     } else {
-
-      counts = `${event.completed} ${event.unit}`
+      this.out.write( `${line}\n` )
     }
 
-    const memory = event.memoryMb !== void 0 ?
-      ` ${Math.round( event.memoryMb )}MB` : ''
-
-    return `${label} ${counts} ${elapsedSeconds}s${memory}`
+    this.lastLineLength = 0
   }
 }

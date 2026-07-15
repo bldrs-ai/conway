@@ -5,7 +5,7 @@
 // only the first segment (major) is meaningful and is the one CI carries forward.
 // Must stay in `vN.N.N` shape: the CI stamp regex, scripts/updateVersion.mjs, and
 // statistics.ts all match `v\d+\.\d+\.\d+`.
-const versionString: string = 'Conway Web-Ifc Shim v1.0.0'
+const versionString: string = 'Conway v1.0.0'
 
 
 export {versionString}
