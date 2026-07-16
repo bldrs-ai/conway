@@ -566,6 +566,17 @@ jobs:
             -C engines/cand --strip-components=1
           BASE_TGZ=$(npm pack @bldrs-ai/conway@latest --silent)
           tar -xzf "$BASE_TGZ" -C engines/base --strip-components=1
+          # npm tarballs ship no node_modules, but the CLIs import runtime
+          # deps (yargs, gl-matrix, three, seedrandom) at startup — without
+          # this every export dies on ERR_MODULE_NOT_FOUND. legacy-peer-deps
+          # because the shipped package.json's devDependencies carry a
+          # typedoc/typescript peer conflict npm would otherwise refuse on
+          # (even with --omit=dev); ignore-scripts skips the husky prepare
+          # hook, which isn't in the tarball.
+          (cd engines/cand && npm install --omit=dev --legacy-peer-deps \
+            --ignore-scripts --no-audit --no-fund --silent)
+          (cd engines/base && npm install --omit=dev --legacy-peer-deps \
+            --ignore-scripts --no-audit --no-fund --silent)
 
       - name: Restore Test Models Cache
         id: cache-test-models
@@ -589,7 +600,7 @@ jobs:
           node scripts/visual_diff_report.cjs \
             --models abs_models.txt \
             --base engines/base --cand engines/cand \
-            --out vdout --max 16
+            --out vdout --max 24
 
       - name: Publish images to assets branch
         id: assets
