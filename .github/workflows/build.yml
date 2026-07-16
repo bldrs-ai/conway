@@ -218,6 +218,9 @@ jobs:
       # Resolved test-models commit SHA, so perf-three-public pins the exact
       # same model set this job diffed against.
       test_models_sha: ${{ steps.tmsha.outputs.sha }}
+      # Number of models whose digest CSVs changed vs the pinned test-models
+      # commit; gates the visual-diff job.
+      visual_diff_count: ${{ steps.vdiff.outputs.count }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -420,6 +423,54 @@ jobs:
           echo "$PERF_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      # The batch run above left regenerated digest CSVs in the test-models
+      # working tree; any tracked CSV that differs from the pinned commit is a
+      # model whose geometry changed under this PR's engine. Model paths are
+      # recorded relative to the test-models root so the visual-diff job (a
+      # different workspace) can re-anchor them.
+      - name: Collect digest-changed models for visual diff
+        id: vdiff
+        run: |
+          python3 - "$PWD/test-models" "${{ steps.tmsha.outputs.sha }}" <<'EOF'
+          import os, subprocess, sys
+          root, sha = sys.argv[1], sys.argv[2]
+          out = subprocess.run(
+              ['git', 'diff', '--name-only', sha, '--', 'regression/test_models'],
+              cwd=root, capture_output=True, text=True, check=True).stdout
+          # Per-run report files churn on every run (env-specific paths,
+          # counters) — only per-model digest CSVs identify changed geometry.
+          meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv'}
+          stems = set()
+          for line in out.splitlines():
+              base = os.path.basename(line)
+              if base.endswith('.csv') and base not in meta:
+                  stems.add(base[:-4])
+          models, found = [], set()
+          for top in ('ifc', 'step'):
+              for dirpath, _, files in os.walk(os.path.join(root, top)):
+                  for f in files:
+                      stem, ext = os.path.splitext(f)
+                      if (stem in stems and stem not in found and
+                              ext.lower() in ('.ifc', '.step', '.stp')):
+                          found.add(stem)
+                          models.append(
+                              os.path.relpath(os.path.join(dirpath, f), root))
+          with open('changed_models.txt', 'w') as fh:
+              fh.write('\n'.join(sorted(models)) + ('\n' if models else ''))
+          print(f'{len(models)} digest-changed model(s)')
+          for m in models:
+              print(f'  {m}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f'count={len(models)}\n')
+          EOF
+
+      - name: Upload changed-model list
+        if: steps.vdiff.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diff-models-${{ github.run_id }}
+          path: changed_models.txt
+
       - name: Create NPM Package
         id: npm_pack
         run: |
@@ -464,6 +515,134 @@ jobs:
             The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.
             Download it from [this run's artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
             (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
+
+  # ---------------------------------------------------------------------------
+  # Visual diff: render before/after images for every model whose regression
+  # digest changed, so digest churn is reviewable as pictures instead of hex.
+  # Base engine = the published @bldrs-ai/conway (what main ships today);
+  # candidate = this run's tarball. Rendering is scripts/render_glb.cjs, a
+  # pure-JS rasterizer — no headless-gl, no Xvfb, no Node pin — so this runs
+  # on a stock runner. Each pair shares one camera (framed on the union of
+  # both bounds): a geometry regression that moves the bounds reads as an
+  # obvious scale/shape difference. Images are pushed to the
+  # visual-diff-assets branch because PR comments can only embed hosted
+  # files; the comment links them by commit SHA so rows stay immutable.
+  # ---------------------------------------------------------------------------
+  visual-diff:
+    needs: run-ifc-regression
+    if: github.event_name == 'pull_request' && needs.run-ifc-regression.outputs.visual_diff_count != '0'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: write       # push rendered PNGs to visual-diff-assets
+      pull-requests: write  # post the before/after comment
+    steps:
+      - name: Checkout conway (render scripts)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download candidate tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.run-ifc-regression.outputs.package_tgz }}
+          path: artifacts
+
+      - name: Download changed-model list
+        uses: actions/download-artifact@v4
+        with:
+          name: visual-diff-models-${{ github.run_id }}
+
+      - name: Unpack candidate + fetch base package
+        run: |
+          mkdir -p engines/cand engines/base
+          tar -xzf "artifacts/${{ needs.run-ifc-regression.outputs.package_tgz }}" \
+            -C engines/cand --strip-components=1
+          BASE_TGZ=$(npm pack @bldrs-ai/conway@latest --silent)
+          tar -xzf "$BASE_TGZ" -C engines/base --strip-components=1
+
+      - name: Restore Test Models Cache
+        id: cache-test-models
+        uses: actions/cache/restore@v4
+        with:
+          path: test-models
+          key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
+
+      - name: Checkout Test Models Repo if Not Cached
+        if: steps.cache-test-models.outputs.cache-hit != 'true'
+        run: |
+          SHA="${{ needs.run-ifc-regression.outputs.test_models_sha }}"
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$SHA"
+          git -C test-models checkout "$SHA"
+
+      - name: Render before/after pairs
+        run: |
+          sed "s|^|$PWD/test-models/|" changed_models.txt > abs_models.txt
+          node scripts/visual_diff_report.cjs \
+            --models abs_models.txt \
+            --base engines/base --cand engines/cand \
+            --out vdout --max 16
+
+      - name: Publish images to assets branch
+        id: assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          DEST="pr-${{ github.event.pull_request.number }}/${{ github.run_id }}"
+          if git clone --depth 1 --branch visual-diff-assets "$REPO_URL" assets 2>/dev/null; then
+            cd assets
+          else
+            # First ever visual diff: the assets branch doesn't exist yet.
+            mkdir assets && cd assets
+            git init -b visual-diff-assets
+            git remote add origin "$REPO_URL"
+          fi
+          mkdir -p "$DEST"
+          cp ../vdout/*.png "$DEST"/ 2>/dev/null || true
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Visual diff assets for PR #${{ github.event.pull_request.number }} (run ${{ github.run_id }})" \
+            || true
+          # Another PR's visual-diff job can push between our clone and push;
+          # rebase (assets commits never conflict — disjoint run-id dirs).
+          for i in 1 2 3; do
+            git push origin visual-diff-assets && break
+            git pull --rebase origin visual-diff-assets || true
+            sleep $((i * 2))
+          done
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "dest=$DEST" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize report
+        run: |
+          RAW="https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.assets.outputs.sha }}/${{ steps.assets.outputs.dest }}"
+          sed "s|RAW_URL_BASE|$RAW|g" vdout/report.md > report_final.md
+          {
+            echo "## Visual Diff (digest-changed models)"
+            echo ""
+            echo "Base: published \`@bldrs-ai/conway\` (main). Candidate: this PR's build."
+            echo "Each row shares one camera framed on the union of both bounds — scale differences are real."
+            echo ""
+            cat report_final.md
+          } > comment.md
+
+      - name: Comment on Pull Request
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: comment.md
 
   # ---------------------------------------------------------------------------
   # Headless-three perf benchmark (public models).
