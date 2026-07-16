@@ -594,6 +594,26 @@ jobs:
           git -C test-models fetch --depth 1 origin "$SHA"
           git -C test-models checkout "$SHA"
 
+      # Model files under ifc/ and step/ are git-lfs objects; a manual
+      # fetch/checkout (and a cache seeded from one) can leave 132-byte
+      # pointer stubs, which parse as "no geometry" in both engines.
+      # Materialize whatever is still a pointer before rendering.
+      - name: Materialize LFS model files
+        run: |
+          cd test-models
+          STUBS=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
+          echo "LFS pointer stubs remaining: $STUBS"
+          if [ "$STUBS" != "0" ]; then
+            git lfs install --local
+            git lfs pull --include="ifc/**,step/**"
+            LEFT=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
+            echo "stubs after lfs pull: $LEFT"
+            if [ "$LEFT" != "0" ]; then
+              echo "::error::test-models still has $LEFT LFS pointer stubs; renders would be empty."
+              exit 1
+            fi
+          fi
+
       - name: Render before/after pairs
         run: |
           sed "s|^|$PWD/test-models/|" changed_models.txt > abs_models.txt

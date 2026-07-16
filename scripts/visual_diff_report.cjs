@@ -56,6 +56,7 @@ function cliFor(modelPath) {
 function exportGlb(packageRoot, modelPath, scratchDir) {
   fs.mkdirSync(scratchDir, { recursive: true })
   const cli = path.join(packageRoot, cliFor(modelPath))
+  let diagnostic = ''
   try {
     execFileSync(
         process.execPath,
@@ -64,17 +65,20 @@ function exportGlb(packageRoot, modelPath, scratchDir) {
     )
   } catch (err) {
     // Fall through to the GLB scan: some models exit non-zero after still
-    // writing usable geometry (per-element extraction errors).
+    // writing usable geometry (per-element extraction errors). Keep the
+    // last stderr line so a total failure is diagnosable from the report.
+    const stderr = (err.stderr || '').toString().trim()
+    diagnostic = stderr.split('\n').filter(Boolean).pop() || String(err.code || err.signal || '')
   }
   const glbs = fs.readdirSync(scratchDir)
       .filter((f) => f.endsWith('.glb') && !f.includes('draco'))
       .map((f) => path.join(scratchDir, f))
   if (glbs.length === 0) {
-    return null
+    return { glb: null, diagnostic }
   }
   // Multi-GLB exports (chunked models) are rare; take the largest.
   glbs.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)
-  return glbs[0]
+  return { glb: glbs[0], diagnostic }
 }
 
 function slugify(name) {
@@ -98,13 +102,18 @@ function main() {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), `vdiff-${slug}-`))
     process.stderr.write(`visual-diff: ${name}\n`)
 
-    const baseGlb = exportGlb(opts.base, model, path.join(work, 'base'))
-    const candGlb = exportGlb(opts.cand, model, path.join(work, 'cand'))
+    const base = exportGlb(opts.base, model, path.join(work, 'base'))
+    const cand = exportGlb(opts.cand, model, path.join(work, 'cand'))
+    const baseGlb = base.glb
+    const candGlb = cand.glb
 
     if (!baseGlb || !candGlb) {
       const which = !baseGlb && !candGlb ? 'both engines' :
           (!baseGlb ? 'base engine' : 'candidate engine')
-      rows.push(`| \`${name}\` | _no geometry from ${which}_ | |`)
+      const why = (base.diagnostic || cand.diagnostic || '')
+          .replace(/\|/g, '\\|').slice(0, 200)
+      rows.push(`| \`${name}\` | _no geometry from ${which}_` +
+          `${why ? ` — \`${why}\`` : ''} | |`)
       fs.rmSync(work, { recursive: true, force: true })
       continue
     }
