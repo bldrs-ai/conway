@@ -36,6 +36,14 @@ function parseArgs() {
     opts[args[i].replace(/^--/, '')] = args[i + 1]
   }
   opts.max = parseInt(opts.max, 10)
+  // The exporter children run with cwd set to a scratch dir, so a relative
+  // --base/--cand (as the workflow passes) would make Node resolve the CLI
+  // entry point against the scratch dir and die with ERR_MODULE_NOT_FOUND.
+  for (const key of ['models', 'base', 'cand', 'out']) {
+    if (opts[key]) {
+      opts[key] = path.resolve(opts[key])
+    }
+  }
   return opts
 }
 
