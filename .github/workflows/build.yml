@@ -531,7 +531,11 @@ jobs:
   visual-diff:
     needs: run-ifc-regression
     if: github.event_name == 'pull_request' && needs.run-ifc-regression.outputs.visual_diff_count != '0'
-    runs-on: ubuntu-22.04
+    # Same large runner as every other job that executes the conway CLIs:
+    # the MT WASM engine reserves multi-GB (shared) memory at startup, and on
+    # the standard 4-vcpu runner every export died with an uncaught allocation
+    # crash (only the "Node.js vX.Y.Z" report footer reached the PR table).
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     timeout-minutes: 30
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
