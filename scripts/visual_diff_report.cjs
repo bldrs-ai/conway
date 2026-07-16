@@ -73,20 +73,8 @@ function exportGlb(packageRoot, modelPath, scratchDir) {
     )
   } catch (err) {
     // Fall through to the GLB scan: some models exit non-zero after still
-    // writing usable geometry (per-element extraction errors). Keep a
-    // meaningful stderr line so a total failure is diagnosable from the
-    // report — prefer the first error-ish line over the last line, which
-    // for an uncaught exception is just the "Node.js vX.Y.Z" crash footer.
-    const stderr = (err.stderr || '').toString().trim()
-    const lines = stderr.split('\n').filter(Boolean)
-    diagnostic = lines.find((l) => /error|cannot|not found|bad option|unexpected/i.test(l)) ||
-        lines.pop() || String(err.code || err.signal || '')
-    // Full child stderr into our own stderr so the CI job log has the
-    // complete stack when the one-line diagnostic isn't enough.
-    if (stderr) {
-      process.stderr.write(
-          `--- exporter stderr (${path.basename(String(modelPath))}) ---\n${stderr}\n---\n`)
-    }
+    // writing usable geometry (per-element extraction errors).
+    diagnostic = childFailureDiagnostic(err, `exporter (${path.basename(String(modelPath))})`)
   }
   const glbs = fs.readdirSync(scratchDir)
       .filter((f) => f.endsWith('.glb') && !f.includes('draco'))
@@ -97,6 +85,22 @@ function exportGlb(packageRoot, modelPath, scratchDir) {
   // Multi-GLB exports (chunked models) are rare; take the largest.
   glbs.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)
   return { glb: glbs[0], diagnostic }
+}
+
+/**
+ * One meaningful line from a failed child's stderr — prefer the first
+ * error-ish line over the last line, which for an uncaught exception is
+ * just the "Node.js vX.Y.Z" crash footer. Also echoes the full child
+ * stderr into our own stderr so the CI job log has the complete stack.
+ */
+function childFailureDiagnostic(err, label) {
+  const stderr = (err.stderr || '').toString().trim()
+  if (stderr) {
+    process.stderr.write(`--- ${label} stderr ---\n${stderr}\n---\n`)
+  }
+  const lines = stderr.split('\n').filter(Boolean)
+  return lines.find((l) => /error|cannot|not found|bad option|unexpected/i.test(l)) ||
+      lines.pop() || String(err.code || err.signal || '')
 }
 
 function slugify(name) {
@@ -146,7 +150,13 @@ function main() {
           `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
           `| ![after](RAW_URL_BASE/${slug}-after.png) |`)
     } catch (err) {
-      rows.push(`| \`${name}\` | _render failed_ | |`)
+      // Seen in practice: conway's GLB writer emits a truncated JSON chunk
+      // for some partial-geometry models (supercap*, nist_ftc_08) and the
+      // parse dies — name the reason so the row isn't a dead end.
+      const why = childFailureDiagnostic(err, `render (${name})`)
+          .replace(/\|/g, '\\|').slice(0, 200)
+      rows.push(`| \`${name}\` | _render failed_` +
+          `${why ? ` — \`${why}\`` : ''} | |`)
     }
     fs.rmSync(work, { recursive: true, force: true })
   }
