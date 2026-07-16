@@ -305,9 +305,10 @@ function renderToPixels(tris, bounds, size) {
         if (w0 < 0 || w1 < 0 || w2 < 0) {
           continue
         }
-        // Perspective-free interpolation: w1 weights vertex c, w2 weights a,
-        // w0 weights b (edge-function convention above).
-        const z = a[2] * w2 + b[2] * w0 + c[2] * w1
+        // Perspective-free interpolation. Edge-function convention above:
+        // w0 vanishes on edge ab (weights c), w1 on bc (weights a),
+        // w2 on ca (weights b).
+        const z = a[2] * w1 + b[2] * w2 + c[2] * w0
         const di = y * size + x
         if (z <= depth[di]) {
           continue
