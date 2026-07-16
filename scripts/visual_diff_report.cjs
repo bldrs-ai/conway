@@ -65,10 +65,20 @@ function exportGlb(packageRoot, modelPath, scratchDir) {
     )
   } catch (err) {
     // Fall through to the GLB scan: some models exit non-zero after still
-    // writing usable geometry (per-element extraction errors). Keep the
-    // last stderr line so a total failure is diagnosable from the report.
+    // writing usable geometry (per-element extraction errors). Keep a
+    // meaningful stderr line so a total failure is diagnosable from the
+    // report — prefer the first error-ish line over the last line, which
+    // for an uncaught exception is just the "Node.js vX.Y.Z" crash footer.
     const stderr = (err.stderr || '').toString().trim()
-    diagnostic = stderr.split('\n').filter(Boolean).pop() || String(err.code || err.signal || '')
+    const lines = stderr.split('\n').filter(Boolean)
+    diagnostic = lines.find((l) => /error|cannot|not found|bad option|unexpected/i.test(l)) ||
+        lines.pop() || String(err.code || err.signal || '')
+    // Full child stderr into our own stderr so the CI job log has the
+    // complete stack when the one-line diagnostic isn't enough.
+    if (stderr) {
+      process.stderr.write(
+          `--- exporter stderr (${path.basename(String(modelPath))}) ---\n${stderr}\n---\n`)
+    }
   }
   const glbs = fs.readdirSync(scratchDir)
       .filter((f) => f.endsWith('.glb') && !f.includes('draco'))
