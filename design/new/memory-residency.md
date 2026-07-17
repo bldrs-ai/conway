@@ -2,8 +2,9 @@
 
 **Status:** Living doc. Geometry/allocator arc **shipped** (see
 `emsdk-upgrade-scalable-allocator.md`); parse-index + property-source
-residency **shipped through conway 1.374.1181**; next conway-side lever
-(roots-only property iteration) **proposed, not started**.
+residency **shipped through conway 1.374.1181**; roots-only property
+iteration **shipped (#383)**; next lever is the constant-memory parse
+track (shape TBD).
 
 **Owner:** Pablo (with Claude).
 
@@ -16,6 +17,8 @@ primitives conway exposes to make that possible. Read them together.
 - conway #372 — SoA entity descriptors (parse-index residency). *shipped 1.372*
 - conway #373 — `getSpatialStructure(_, 'names')` + `ReleaseEntityCache`. *shipped 1.373*
 - conway #374 — windowed `StepBufferProvider` + OPFS source spill. *shipped 1.374*
+- conway #383 — roots-only express ID iteration (`expressIDsOfTypes` /
+  `RootExpressIDs`). *merged; Share consumption feature-detected*
 - conway #360 / conway-geom #139 — AFTP tessellation arena (see allocator doc). *shipped*
 - Share #1588, #1589 — the consumers of #373/#374 on the Share side.
 
@@ -124,15 +127,19 @@ property capture — has finished.
 
 ## Priorities / what's next (conway side)
 
-1. **Roots-only / GlobalId-filtered iteration (proposed).** The Share
-   streaming property capture (Share #1589) does a linear scan calling
-   `getLine` on **every** parsed entity (9.7 M on PSB) just to find the
-   ~341 k `IfcRoot`-derived entities it keeps — materialising, then
-   dropping, ~9.4 M geometric-primitive descriptors. If conway exposed an
-   iterator that yields only entities with a `GlobalId` (or by a type-code
-   predicate) straight off the parse columns, the consumer would skip the
-   geometric backbone entirely. This is the highest-leverage remaining
-   conway-side property-memory (and time) lever. **Not started.**
+1. **Roots-only / GlobalId-filtered iteration — SHIPPED (#383).** The
+   Share streaming property capture (Share #1589) did a linear scan
+   calling `getLine` on **every** parsed entity (9.7 M on PSB) just to
+   find the ~341 k `IfcRoot`-derived entities it keeps — materialising,
+   then dropping, ~9.4 M geometric-primitive descriptors.
+   `StepModelBase.expressIDsOfTypes(...types)` now yields express IDs
+   straight from the type index + express ID column (no descriptor
+   materialisation, no source-buffer reads — safe on a spilled source),
+   surfaced to consumers as `IfcAPI.RootExpressIDs(modelID)` (undefined
+   on AP214 / missing models → callers fall back to the full walk).
+   Bench (SKYLARK, 7.8 M entities): 3,647 root ids in ~4 ms with zero
+   heap growth, vs 11.6 s to materialise the all-lines vector. Share's
+   sweep-1 consumption is feature-detected (branch `roots-only-sweep`).
 2. **`ensureResident` batch/prefetch for closure walks.** `getLine(id,
    recursive=true)` on a spilled model follows references synchronously and
    only the root record is ensured; recursive flattening needs the closure
@@ -149,8 +156,9 @@ property capture — has finished.
 - Draco / mesh compression — that's the *geometry-bytes* lever, tracked on
   the Share side, not a conway-residency concern.
 - A formal public API for the adapter internals the streaming capture
-  reaches (`getPassthrough().model[0]`). Acknowledged coupling; the
-  roots-only iterator (item 1) is the chance to formalise it.
+  reaches (`getPassthrough().model[0]`). Acknowledged coupling —
+  `RootExpressIDs` (#383) removed the *iteration* reach-in, but sweep 2
+  (`getLine` per record) still goes through the passthrough proxy.
 
 
 ## Cross-references
