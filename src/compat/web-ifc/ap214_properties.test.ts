@@ -182,3 +182,47 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     expect( await surface.getPropertySets( root.expressID ) ).toEqual( [] )
   } )
 } )
+
+
+describe( 'getItemProperties arbitrary-entity fallback (anonymous geometry)', () => {
+
+  test( 'resolves a non-tree solid id to its STEP type and body name', async () => {
+
+    // Body1 (#431) is a solid inside the widget product's representation —
+    // never a tree node unless the ephemeral solid layer is requested, so it
+    // exercises the express-id-index fallback a picked anonymous piece takes.
+    const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
+    const solidExpressId = 431
+
+    const item: any = await surface.getItemProperties( solidExpressId )
+
+    expect( item.expressID ).toBe( solidExpressId )
+    expect( item.type ).toBe( 'MANIFOLD_SOLID_BREP' )
+    expect( item.Name.value ).toBe( 'Body1' )
+  } )
+
+  test( 'resolves an anonymous face id to its STEP type (label seed for #387)', async () => {
+
+    // NEMA face #29 has the placeholder name 'NONE' in-file; the type name is
+    // what lets a consumer synthesize "Face #29" for a picked face with no
+    // tree identity.
+    const surface = compatSurfaceFor( 'data/nema-23-76mm.step' )
+    const faceExpressId = 29
+
+    const item: any = await surface.getItemProperties( faceExpressId )
+
+    expect( item.expressID ).toBe( faceExpressId )
+    expect( item.type ).toBe( 'ADVANCED_FACE' )
+  } )
+
+  test( 'an unknown id still returns the bare identity shape', async () => {
+
+    const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
+
+    const item: any = await surface.getItemProperties( 999999 )
+
+    expect( item.expressID ).toBe( 999999 )
+    expect( item.type ).toBe( void 0 )
+    expect( item.Name.value ).toBe( '' )
+  } )
+} )

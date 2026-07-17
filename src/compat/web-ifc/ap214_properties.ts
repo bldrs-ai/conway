@@ -198,9 +198,48 @@ export class AP214Properties {
       }
     }
 
+    const nodeName = this.nodeNameByExpressID_!.get( id )
+
+    if ( nodeName !== void 0 ) {
+      return {
+        expressID: id,
+        Name: valueHandle( nodeName ),
+      }
+    }
+
+    // Arbitrary-entity fallback: an id that is neither a property single nor
+    // a tree node — e.g. an *anonymous* solid or face a viewer picked
+    // (geometry below the ephemeral solid layer, issue #387). Resolve it
+    // through the model's O(1) express-id index and surface the STEP entity
+    // type name plus the item's own name (usually empty for anonymous
+    // geometry), so a consumer can synthesize a label like "Face #6321"
+    // without any tree or persisted state.
+    const element = this.api.StepModel.getElementByExpressID( id )
+
+    if ( element !== void 0 ) {
+
+      let itemName = ''
+
+      try {
+        const candidate = ( element as { name?: unknown } ).name
+
+        if ( typeof candidate === 'string' ) {
+          itemName = candidate
+        }
+      } catch {
+        // Malformed name attribute — the type name still identifies the item.
+      }
+
+      return {
+        expressID: id,
+        type: EntityTypesAP214[ element.type ],
+        Name: valueHandle( itemName ),
+      }
+    }
+
     return {
       expressID: id,
-      Name: valueHandle( this.nodeNameByExpressID_!.get( id ) ?? '' ),
+      Name: valueHandle( '' ),
     }
   }
 
