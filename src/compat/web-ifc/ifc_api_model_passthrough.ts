@@ -45,4 +45,12 @@ export interface IfcApiModelPassthrough {
    * synchronous read succeeds. Fast no-op while fully resident.
    */
   ensureLineResident?( expressID: number ): Promise< void >
+
+  /**
+   * Optional: lazily iterate the express IDs of all root-derived
+   * (GlobalId-bearing) entities via the type index, without
+   * materialising entities or touching the source buffer.
+   * Multi-mapped entities may repeat; callers should dedupe.
+   */
+  rootExpressIDs?(): IterableIterator< number >
 }

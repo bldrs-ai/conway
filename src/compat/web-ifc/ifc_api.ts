@@ -421,6 +421,35 @@ export class IfcAPI {
   }
 
   /**
+   * Conway extension: lazily iterate the express IDs of all root-derived
+   * (GlobalId-bearing) entities — products, relationships, property sets,
+   * quantities — straight from the type index. No entity descriptors are
+   * materialised and the source buffer is never touched, so this is safe
+   * and cheap even after SpillModelSource, and lets property sweeps skip
+   * the geometric-resource records that dominate large models.
+   *
+   * Multi-mapped entities may be yielded once per mapping; callers that
+   * need distinct IDs should dedupe. Returns undefined when the model
+   * doesn't exist or its schema has no root-type notion (e.g. AP214).
+   *
+   * @param modelID The model to iterate.
+   * @return {IterableIterator<number> | undefined} Lazy express ID
+   * iterator, or undefined when unsupported.
+   */
+  RootExpressIDs(modelID: number): IterableIterator<number> | undefined {
+
+    const result = this.models.get(modelID)
+
+    if (result === void 0) {
+
+      Logger.error('[RootExpressIDs]: model === undefined')
+      return void 0
+    }
+
+    return result.rootExpressIDs?.()
+  }
+
+  /**
    *
    * @param modelID
    * @return {Vector<LoaderError>}
