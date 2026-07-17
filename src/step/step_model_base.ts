@@ -892,6 +892,50 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * Iterate the express IDs of entities of a set of types (including sub-types)
+   * without materializing entity descriptors or touching the source buffer —
+   * only the type index and the express ID column are read, so this stays cheap
+   * and safe even when the model source has been spilled to an external store.
+   *
+   * Multi-mapped elements (e.g. complex/multi-entity mappings) may be yielded
+   * once per matching mapping, so callers that need distinct IDs should dedupe.
+   *
+   * @param types The list of types to iterate.
+   * @return {IterableIterator} A lazy iterator of express IDs for matching entities.
+   * @yields {number} The express ID of each matching entity.
+   */
+  public* expressIDsOfTypes<T extends StepEntityConstructorAbstract<EntityTypeIDs>[]>(
+      ...types: T ): IterableIterator<number> {
+    const distinctTypes = types.length === 1 ? (types[0].query) :
+      (new Set(types.flatMap((type) => type.query)))
+
+    const cursor             = this.typeIndex.cursor(...distinctTypes)
+    const expressIDs         = this.expressID_
+    const firstInlineElement = this.firstInlineElement_
+
+    try {
+      while (cursor.step()) {
+        const high = cursor.high
+        let low = cursor.low
+
+        while (low !== 0) {
+          const lowestOneHot = extractOneHotLow(low)
+
+          low ^= (1 << lowestOneHot)
+
+          const localID = (high | lowestOneHot)
+
+          if (localID < firstInlineElement) {
+            yield expressIDs[ localID ]
+          }
+        }
+      }
+    } finally {
+      cursor.free()
+    }
+  }
+
+  /**
    * Get the non empty type IDs for this.
    *
    * @return {Set} The unique set of non empty type IDs for this model.

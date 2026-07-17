@@ -34,7 +34,7 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
-import { IfcProduct } from '../../ifc/ifc4_gen'
+import { IfcProduct, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 
 /**
@@ -758,6 +758,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   async ensureLineResident(expressID: number): Promise<void> {
     await this.model[0].ensureResidentByExpressID(expressID)
+  }
+
+  /**
+   * Lazily iterate the express IDs of all IfcRoot-derived entities
+   * (products, relationships, property sets, quantities — everything
+   * carrying a GlobalId) straight from the type index, without
+   * materialising entity descriptors or touching the source buffer.
+   *
+   * This lets property sweeps skip the ~96% of records in large models
+   * that are geometric resources, and stays safe on a spilled source.
+   * Multi-mapped entities may repeat, so callers should dedupe.
+   *
+   * @return {IterableIterator<number>} Express IDs of IfcRoot subtypes.
+   */
+  rootExpressIDs(): IterableIterator<number> {
+    return this.model[0].expressIDsOfTypes(IfcRoot)
   }
 
   /**
