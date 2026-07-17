@@ -227,3 +227,86 @@ describe( 'AP214 as1-oc-214 occurrence geometry', () => {
     expect( new Set( geometryPaths ).size ).toBe( geometryPaths.length )
   } )
 } )
+
+
+/**
+ * SolidWorks writes an assembly-placement relationship parent-first —
+ * `REPRESENTATION_RELATIONSHIP(rep_1 = parent SR, rep_2 = child SR)` — the
+ * opposite of as1's (child, parent) ordering above. The geometry walk orients
+ * each CDSR edge by its NAUO (relating = parent product, related = child), so
+ * both conventions must yield NAUO-prefixed occurrence paths and one placement
+ * per NAUO. Before that check, this fixture's walk came out inverted: the part
+ * representation became a walk root, every path collapsed to the multibody
+ * SRR's own id (`[6611]`, joining with no tree node), and the screw's four
+ * NAUOs emitted a single placement.
+ *
+ * Fixture: the NEMA 23 stepper from issue #351 — a multibody motor part
+ * (10 named solids behind a plain SRR) + one screw part reused across four
+ * NAUOs.
+ */
+describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () => {
+
+  const NEMA_FIXTURE = 'data/nema-23-76mm.step'
+  const MOTOR_NAUO = 14107
+  // eslint-disable-next-line no-magic-numbers
+  const SCREW_NAUOS = [ 14108, 14109, 14110, 14111 ]
+  const MOTOR_MULTIBODY_SRR = 6611
+  const SCREW_MULTIBODY_SRR = 10234
+
+  let nemaScene: AP214SceneBuilder
+
+  beforeAll( async () => {
+
+    const parser = AP214StepParser.Instance
+    const buffer = new ParsingBuffer( fs.readFileSync( NEMA_FIXTURE ) )
+
+    expect( parser.parseHeader( buffer )[1] ).toBe( ParseResult.COMPLETE )
+
+    const [ , parsed ] = parser.parseDataToModel( buffer )
+
+    expect( parsed ).not.toBe( void 0 )
+
+    const [ result, sceneBuilder ] =
+      new AP214GeometryExtraction( conwayGeometry, parsed! ).extractAP214GeometryData()
+
+    expect( result ).toBe( ExtractResult.COMPLETE )
+    nemaScene = sceneBuilder
+  } )
+
+  test( 'every geometry instance path is rooted at a NAUO', () => {
+
+    const treeNauos = new Set( [ MOTOR_NAUO, ...SCREW_NAUOS ] )
+    let instances = 0
+
+    for ( const [ , path ] of nemaScene.geometryOccurrences() ) {
+      expect( path.length ).toBeGreaterThan( 0 )
+      expect( treeNauos.has( path[ 0 ] ) ).toBe( true )
+      ++instances
+    }
+
+    expect( instances ).toBeGreaterThan( 0 )
+  } )
+
+  test( 'a part reused across NAUOs instances once per NAUO (the four screws)', () => {
+
+    const screwPaths = [ ...nemaScene.geometryOccurrences() ]
+        .map( ( [ , path ] ) => path )
+        .filter( ( path ) => path[ path.length - 1 ] === SCREW_MULTIBODY_SRR )
+
+    expect( screwPaths.map( ( p ) => JSON.stringify( p ) ).sort() ).toEqual(
+        SCREW_NAUOS.map( ( nauo ) => JSON.stringify( [ nauo, SCREW_MULTIBODY_SRR ] ) ) )
+  } )
+
+  test( 'the multibody motor solids all carry the motor occurrence prefix', () => {
+
+    const motorPaths = [ ...nemaScene.geometryOccurrences() ]
+        .map( ( [ , path ] ) => path )
+        .filter( ( path ) => path[ 0 ] === MOTOR_NAUO )
+
+    expect( motorPaths.length ).toBeGreaterThan( 1 )
+
+    for ( const path of motorPaths ) {
+      expect( path ).toEqual( [ MOTOR_NAUO, MOTOR_MULTIBODY_SRR ] )
+    }
+  } )
+} )

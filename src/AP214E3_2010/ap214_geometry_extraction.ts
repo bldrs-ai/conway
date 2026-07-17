@@ -105,6 +105,7 @@ import {
   mapped_item,
   mechanical_design_geometric_presentation_area,
   mechanical_design_geometric_presentation_representation,
+  next_assembly_usage_occurrence,
   over_riding_styled_item,
   parameter_value,
   pcurve,
@@ -113,6 +114,8 @@ import {
   polyline,
   presentation_layer_assignment,
   product,
+  product_definition,
+  product_definition_shape,
   property_definition,
   ratio_measure,
   rational_b_spline_curve,
@@ -4256,19 +4259,77 @@ export class AP214GeometryExtraction {
 
       const contextDependentShapeRepresentations = model.types(context_dependent_shape_representation)
 
-      const shapeRepresentationRelationshipsSeen = new Set<number>() 
+      const shapeRepresentationRelationshipsSeen = new Set<number>()
 
-      for ( const contextDependentShapeRepresentation of 
+      // Representation → product_definition (via each SDR's PDS), used to
+      // orient CDSR assembly edges semantically below.
+      const productDefLocalIDByRep = new Map<number, number>()
+
+      for ( const sdr of model.types( shape_definition_representation ) ) {
+        try {
+          const usedRepresentation = sdr.used_representation
+          const definition = sdr.definition
+          const productDef =
+            definition instanceof product_definition_shape ? definition.definition : void 0
+
+          if ( usedRepresentation?.localID !== void 0 &&
+              productDef instanceof product_definition ) {
+            productDefLocalIDByRep.set( usedRepresentation.localID, productDef.localID )
+          }
+        } catch {
+          // Malformed SDR reference — the rep just stays un-mapped and the
+          // orientation check below keeps the legacy reading for it.
+        }
+      }
+
+      for ( const contextDependentShapeRepresentation of
         contextDependentShapeRepresentations ) {
 
         const assembly = contextDependentShapeRepresentation.represented_product_relation
         const owningLocalID = assembly.localID
         const shapeRelationship = contextDependentShapeRepresentation.representation_relation
         shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
-        const sourceShape = shapeRelationship.rep_1
-        const targetShape = shapeRelationship.rep_2
 
-        const [transform, isContinue] = this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
+        /* Exporters disagree on the rep_1/rep_2 order of an assembly
+         * placement relationship: as1-style files write (child, parent),
+         * SolidWorks writes (parent, child). Reading it wrong inverts the
+         * whole walk — the part representation becomes a walk root, its
+         * geometry loses the NAUO occurrence segment (breaking NavTree↔scene
+         * selection downstream), and a part reused across several NAUOs
+         * collapses to a single placement (the NEMA 23 screws). The CDSR's
+         * own NAUO is the authority: `relating` is the parent product,
+         * `related` the child — orient the edge by matching each rep's
+         * SDR-bound product definition against them, and keep the legacy
+         * (child, parent) reading when the match is ambiguous/unresolvable.
+         */
+        let sourceShape = shapeRelationship.rep_1
+        let targetShape = shapeRelationship.rep_2
+        let orientationFlipped = false
+
+        try {
+          const nauo = assembly.definition
+
+          if ( nauo instanceof next_assembly_usage_occurrence ) {
+
+            const relatingLocalID = nauo.relating_product_definition?.localID
+            const relatedLocalID = nauo.related_product_definition?.localID
+            const rep1ProductDef = productDefLocalIDByRep.get( sourceShape.localID )
+            const rep2ProductDef = productDefLocalIDByRep.get( targetShape.localID )
+
+            if ( relatingLocalID !== void 0 && relatedLocalID !== void 0 &&
+                relatingLocalID !== relatedLocalID &&
+                rep1ProductDef === relatingLocalID && rep2ProductDef === relatedLocalID ) {
+              sourceShape = shapeRelationship.rep_2
+              targetShape = shapeRelationship.rep_1
+              orientationFlipped = true
+            }
+          }
+        } catch {
+          // Malformed NAUO/PDS reference — keep the legacy orientation.
+        }
+
+        const [transform, isContinue] = this.doTransforms(
+            shapeRelationship, sourceShape, targetShape, owningLocalID, orientationFlipped)
         if (isContinue) {
           continue
         }
@@ -4470,16 +4531,24 @@ export class AP214GeometryExtraction {
    * @param sourceShape The source shape.
    * @param targetShape The target shape.
    * @param owningLocalID The owning local ID.
+   * @param flipTransformItems When the caller swapped the relationship's
+   * rep_1/rep_2 reading (a parent-first assembly placement — see the CDSR
+   * orientation check), the item_defined_transformation's placement pair must
+   * swap with it: transform_item_1 lives in rep_1's context and
+   * transform_item_2 in rep_2's, and the composed transform must always map
+   * the child (source) frame into the parent (target) frame.
    * @return The transform and a boolean indicating if the processing should continue inside the loop.
    */
-  doTransforms(shapeRelationship: shape_representation_relationship, sourceShape: shape_representation, targetShape: shape_representation, owningLocalID: number): [NativeTransform4x4 | undefined, boolean] {
+  doTransforms(shapeRelationship: shape_representation_relationship, sourceShape: shape_representation, targetShape: shape_representation, owningLocalID: number, flipTransformItems: boolean = false): [NativeTransform4x4 | undefined, boolean] {
     const transformInstance = shapeRelationship.findVariant( representation_relationship_with_transformation )
     let transform: NativeTransform4x4 | undefined = void 0
     if ( transformInstance !== void 0 ) {
       const transformOperator = transformInstance.transformation_operator
       if ( transformOperator instanceof item_defined_transformation ) {
-        const placement1 = transformOperator.transform_item_1
-        const placement2 = transformOperator.transform_item_2
+        const placement1 = flipTransformItems ?
+          transformOperator.transform_item_2 : transformOperator.transform_item_1
+        const placement2 = flipTransformItems ?
+          transformOperator.transform_item_1 : transformOperator.transform_item_2
         if( !(placement1 instanceof placement) || !(placement2 instanceof placement) ) {
           return [void 0, true]
         }
