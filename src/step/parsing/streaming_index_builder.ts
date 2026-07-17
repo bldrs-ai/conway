@@ -61,9 +61,11 @@ export interface StreamingIndexResult<TypeIDType> {
  * The window slides only once the cursor passes `pool / 2`, bounding the
  * memmove frequency; a record up to `pool / 2` bytes always fits after a
  * slide. If a single record exceeds that (never on the current corpus, whose
- * largest STEP record is ~25 KB), the window grows to `2 × record` and the
- * build restarts from the last boundary — correctness over the pathological
- * case, at the cost of a re-read.
+ * largest STEP record is ~25 KB), the whole parse restarts from the
+ * beginning with the window doubled, and repeats until every record fits —
+ * correctness over the pathological case, at the cost of a re-scan. (M1's
+ * production path will instead grow in place / restart from the last
+ * boundary; from-scratch keeps the spike simple.)
  *
  * @param source The byte source.
  * @param parser The STEP parser (typed to the schema).
