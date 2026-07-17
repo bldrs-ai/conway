@@ -22,6 +22,18 @@ on:
   # on a branch without merging. auto-publish stays push:main-only.
   workflow_dispatch:
 
+# Cancel superseded runs so a rapid series of pushes to the same PR doesn't
+# leave N full build+regression(+visual-diff) pipelines running to completion
+# in parallel on the 8-vcpu runners — only the newest commit's result matters.
+# Grouped by ref (refs/pull/<n>/merge is unique per PR) so PRs never cancel
+# each other. cancel-in-progress is scoped to pull_request ONLY: push-to-main
+# runs must run to completion — auto-publish tags + publishes to npm, and each
+# main commit ships its own version, so cancelling a main run mid-publish (or
+# skipping a commit's release) is not acceptable.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   EMSDK_VERSION: '6.0.2'
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
