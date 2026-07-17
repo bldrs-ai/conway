@@ -308,18 +308,38 @@ browser problem instead of a loader problem:
 
 Deliberately small first step; each has a measurable exit.
 
-- **M0 — Streaming-input spike (go/no-go).** Feed
+- **M0 — Streaming-input spike (go/no-go). ✅ DONE — GO.** Fed
   `parseDataBlockIncremental` from a moving window over a `ByteSource`
-  with straddle carry; parse SKYLARK + PSB from a stream. Run the pool-
-  size sweep: **128 KB, 1 MB, and 64 MB pools, comparing wall-clock** —
-  very-low-memory index building should be *correct and not horrible*,
-  and the sweep tells us where the knee is (expectation: throughput is
-  dominated by the linear lex, so 1 MB ≈ 64 MB within noise and even
-  128 KB degrades only via straddle-carry frequency; if that expectation
-  breaks, we learn it in the spike, not in production). Exit: identical
-  index columns (byte-for-byte vs. buffer parse) on the corpus **at all
-  three pool sizes**; peak JS heap during PSB parse < index + pool +
-  slack; sweep table recorded in this doc. No API changes.
+  with straddle carry, sliding the window at top-level record boundaries
+  (`ParsingBuffer.rebaseWindow` + a boundary hook on the parse
+  generator; coordinator in `streaming_index_builder.ts`). The one
+  subtlety: the parser recorded `address` as the raw buffer cursor,
+  which is only file-absolute when `initialOffset` is 0 — changed the
+  record-start capture to `input.address` (a no-op for every resident
+  caller, file-absolute under a sliding window). Verified byte-identical
+  index (address/length/typeID/expressID over top-level + inline + multi
+  entries) against the resident parse.
+
+  **Pool sweep (SKYLARK, 400 MB, 7.82 M records; node fd source, so the
+  source is never JS-resident):**
+
+  | mode | index checksum | parse | slides | window | RSS |
+  | --- | --- | --- | --- | --- | --- |
+  | resident (whole-buffer) | `2955602042` | 17.6 s | — | 382 MB | 1531 MB |
+  | stream, 128 KB pool | `2955602042` | 6.9 s | 6081 | 0.1 MB | 713 MB |
+  | stream, 1 MB pool | `2955602042` | 6.5 s | 762 | 1.0 MB | 758 MB |
+  | stream, 64 MB pool | `2955602042` | 6.2 s | 10 | 64 MB | 720 MB |
+
+  Hypothesis confirmed: pool size costs only ~10 % wall-clock (128 KB
+  vs 64 MB), dominated by the linear lex; the sliding memmove is cheap
+  even at 6081 slides. Byte-identical index at all three pool sizes.
+  Peak memory is bounded by `index + pool`: the ~382 MB source drops out
+  of RSS entirely (1531 → ~720 MB), and the residual is the O(entities)
+  element-object index — the same term the resident parse holds, and
+  the one M1/M3 later compact to SoA columns. Largest single record on
+  the corpus: 25.7 KB (so 128 KB never needs the grow-restart valve,
+  which is unit-tested separately). Exit criteria all met; no public API
+  changes (the shim is untouched; the added surface is internal).
 - **M1 — Write-through open path.** `OpenModelStream(source)` in the shim:
   stream → OPFS write-through → windowed provider from t=0; delete the
   post-parse spill step in Share. Exit: PSB opens with no full-source

@@ -137,6 +137,46 @@ export default class ParsingBuffer {
   }
 
   /**
+   * Streaming support: repoint this buffer at a fresh window over the same
+   * logical stream while keeping `address` file-absolute.
+   *
+   * A moving-window parse holds only a slice of the source in memory at a
+   * time. Between top-level records (where the rewind stack is empty) the
+   * driver slides the window forward: it copies the unconsumed tail to the
+   * front of a reused buffer, appends freshly-read bytes, and calls this to
+   * repoint the parser. `addressBase` is the file offset that window index 0
+   * now corresponds to; we store it as a negative initial offset so
+   * `address` ( = cursor − initialOffset ) stays the file-absolute value the
+   * non-streaming parse would have produced.
+   *
+   * Must only be called with the rewind stack empty (i.e. at a record
+   * boundary) — the stack holds window-relative cursors that a slide would
+   * invalidate. Throws otherwise.
+   *
+   * @param buffer The new window buffer.
+   * @param cursorInWindow The cursor position within the new window.
+   * @param endInWindow The count of valid bytes in the new window.
+   * @param addressBase The file offset that window index 0 maps to.
+   */
+  public rebaseWindow(
+      buffer: Uint8Array,
+      cursorInWindow: number,
+      endInWindow: number,
+      addressBase: number ): void {
+
+    if ( this.rewindStack_.length !== 0 ) {
+      throw Error( 'rebaseWindow called mid-transaction (rewind stack non-empty)' )
+    }
+
+    (this.buffer as Uint8Array) = buffer
+
+    this.cursor_        = cursorInWindow
+    this.initialOffset_ = -addressBase;
+
+    (this.end as number) = endInWindow
+  }
+
+  /**
    * Construct this with a buffer, initial offset into the buffer and an end offset.
    *
    * @param buffer Input datasource.

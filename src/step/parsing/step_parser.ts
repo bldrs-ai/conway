@@ -457,6 +457,38 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   }
 
   /**
+   * Streaming driver over parseDataBlockIncremental: identical parse (same
+   * generator body) but invokes `onRecordBoundary` at every top-level record
+   * boundary so a caller feeding the parser from a moving window can slide
+   * that window forward while the rewind stack is empty. See
+   * streaming_index_builder.ts for the coordinator that owns the window.
+   *
+   * @param input The input parsing buffer, positioned at the data section.
+   * @param onRecordBoundary Called at each top-level record boundary with the
+   * buffer; the callback may rebase the buffer's window in place.
+   * @param onProgress Optional byte-cursor progress callback.
+   * @return {BlockParseResult} The parsing result, including the index and result enum.
+   */
+  public parseDataBlockStreamed(
+      input: ParsingBuffer,
+      onRecordBoundary: ( input: ParsingBuffer ) => void,
+      onProgress?: ParseProgressCallback ): BlockParseResult<TypeIDType> {
+
+    const parser = this.parseDataBlockIncremental( input, onRecordBoundary )
+
+    while ( true ) {
+
+      const next = parser.next()
+
+      if ( next.done === true ) {
+        return next.value
+      }
+
+      onProgress?.( next.value )
+    }
+  }
+
+  /**
    * Cooperative variant of parseDataBlock: identical parse (same generator
    * body), but periodically awaits a macrotask so the event loop can run —
    * browsers repaint progress UI, watchdog timers fire, and the tab is not
@@ -505,7 +537,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    * @yields {number} The current byte cursor within the input buffer.
    * @return {BlockParseResult} The parsing result, including the index and result enum.
    */
-  private* parseDataBlockIncremental(input: ParsingBuffer):
+  private* parseDataBlockIncremental(
+      input: ParsingBuffer,
+      onRecordBoundary?: ( input: ParsingBuffer ) => void ):
       Generator<number, BlockParseResult<TypeIDType>, undefined> {
 
     const indexResult: StepIndex<TypeIDType> = { elements: [] }
@@ -563,7 +597,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
       whitespace()
 
-      const startElement = input.cursor
+      // File-absolute (== input.cursor when initialOffset is 0, i.e. every
+      // resident parse; file-absolute under a streaming moving window so the
+      // recorded address/length stay stable as the window slides).
+      const startElement = input.address
       let stackDepth = 1
 
       const savedInlineElements = inlineElements
@@ -706,6 +743,12 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         yield input.cursor
       }
 
+      // Top-level record boundary: the rewind stack is empty and the cursor
+      // sits at the next record's leading whitespace/`#`. A streaming driver
+      // uses this to slide its moving window forward (see
+      // streaming_index_builder.ts). No-op on the resident path.
+      onRecordBoundary?.( input )
+
       if (!charws(HASH)) {
         if (tokenws(END_SECTION)) {
           return parseResult(ParseResult.COMPLETE)
@@ -740,7 +783,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
         inlineElements = void 0
 
-        const startElement = input.cursor
+        // File-absolute (== input.cursor when initialOffset is 0, i.e. every
+      // resident parse; file-absolute under a streaming moving window so the
+      // recorded address/length stay stable as the window slides).
+      const startElement = input.address
 
         // todo, loop and read inline then add them to a special "External Mapping" node.
         while ( !charws( CLOSE_PAREN ) ) {
@@ -787,7 +833,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
       whitespace()
 
-      const startElement = input.cursor
+      // File-absolute (== input.cursor when initialOffset is 0, i.e. every
+      // resident parse; file-absolute under a streaming moving window so the
+      // recorded address/length stay stable as the window slides).
+      const startElement = input.address
       let stackDepth = 1
 
       inlineElements = void 0
