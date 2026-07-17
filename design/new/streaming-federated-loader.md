@@ -108,6 +108,28 @@ smaller buffer, it's *not doing the work* until a viewport/query asks.
         └──────────────────────────────────────┘  not model state
 ```
 
+### API surface: new engine API, not more shim
+
+The streaming loader is where conway's API **moves out of the web-ifc
+compat shim**. Everything above ships as a new first-class surface —
+working names:
+
+```ts
+conway.openStream(source: ByteSource, opts): ModelStream
+modelStream.on(types, handler)            // record / readiness events
+modelStream.index                          // incremental SoA + type index
+modelStream.demand                         // geometry work queue handle
+modelStream.budget                         // window pool + wasm budgets
+```
+
+The shim (`IfcAPI.OpenModel`, `GetLine`, and the transitional extensions
+we added along the way — `SpillModelSource`, `RootExpressIDs`,
+`ensureLineResident`) remains as a **compat facade implemented on top of
+this engine API**, for web-ifc-shaped consumers and for Share until it
+migrates. New capabilities land on the engine API only; the shim gets no
+new surface. (This is the formalisation `memory-residency.md` promised
+when it acknowledged the `getPassthrough().model[0]` coupling.)
+
 Three architectural commitments, in decreasing order of certainty:
 
 ### 1. Streaming parse (constant-memory index build)
@@ -196,6 +218,33 @@ becomes a **cache fill** keyed by product (or product-tile):
   so revisits are `O(1)` loads. Today's whole-model GLB is the degenerate
   single-tile case.
 
+**Parallelism / multi-core.** The work queue is also the engine's
+scheduler, and the thread plan is **workers for everything — the main
+thread is already overloaded and is reserved for UI**:
+
+- **Parse/index worker** (one): owns the ByteSource, the OPFS
+  sync-access handle (which *requires* a worker anyway), the window
+  pool, and the index build. Emits record/readiness events and
+  transferable index snapshots to subscribers.
+- **Geometry worker pool** (N ≈ cores − 2): each holds a conway-geom
+  wasm instance (the MT/pthreads builds exist today) with its own
+  budgeted arena; the demand queue dispatches products to idle workers.
+  Products are naturally independent at tessellation time, so this
+  parallelises without shared mutable state — the AFTP arena work
+  already proved ~2.8× on this shape of parallelism.
+- **Main thread**: UI, scene graph, GPU uploads (transferables /
+  `postMessage` of vertex buffers), demand-priority computation from the
+  camera. Never lexing, never tessellating, never sweeping.
+- Index columns are typed arrays, so sharing them read-only with
+  consumer threads via `SharedArrayBuffer` (COOP/COEP permitting) or
+  transferable snapshots is a packaging decision, not an architectural
+  one — start with transferables, upgrade hot paths to SAB if profiles
+  demand.
+- Staging: the worker split lands **with M1's open path** (the OPFS
+  write-through wants the sync handle, hence a worker, on day one);
+  the geometry pool lands with M3. The main-thread cooperative driver
+  survives for node/tests only.
+
 ## Stretch goals
 
 ### S1 — Zero-copy resident path
@@ -261,10 +310,16 @@ Deliberately small first step; each has a measurable exit.
 
 - **M0 — Streaming-input spike (go/no-go).** Feed
   `parseDataBlockIncremental` from a moving window over a `ByteSource`
-  with straddle carry; parse SKYLARK + PSB from a stream with a 64 MB
-  pool. Exit: identical index columns (byte-for-byte vs. buffer parse) on
-  the corpus; peak JS heap during PSB parse < index + pool + slack. No
-  API changes.
+  with straddle carry; parse SKYLARK + PSB from a stream. Run the pool-
+  size sweep: **128 KB, 1 MB, and 64 MB pools, comparing wall-clock** —
+  very-low-memory index building should be *correct and not horrible*,
+  and the sweep tells us where the knee is (expectation: throughput is
+  dominated by the linear lex, so 1 MB ≈ 64 MB within noise and even
+  128 KB degrades only via straddle-carry frequency; if that expectation
+  breaks, we learn it in the spike, not in production). Exit: identical
+  index columns (byte-for-byte vs. buffer parse) on the corpus **at all
+  three pool sizes**; peak JS heap during PSB parse < index + pool +
+  slack; sweep table recorded in this doc. No API changes.
 - **M1 — Write-through open path.** `OpenModelStream(source)` in the shim:
   stream → OPFS write-through → windowed provider from t=0; delete the
   post-parse spill step in Share. Exit: PSB opens with no full-source
@@ -294,36 +349,82 @@ identical, which keeps the visual-diff harness authoritative. M4/M5 add
 new surface and need new test rigs (range-request mock server; two-file
 fixture project).
 
-## Key design decisions to settle early
+## Key design decisions (settled with Pablo, 2026-07)
 
-1. **Where does the lexer live?** Today JS. Streaming doesn't change
-   that, but S1/S2 tempt a wasm lexer. Decision: keep JS through M2
-   (generator machinery + progress plumbing already there, and the lexer
-   has never been the bottleneck); revisit with profiles after M3.
-2. **Worker placement.** Parse+index on a worker with the byte store, or
-   on-main with cooperative yields (today's model)? The scheduling.js
-   throttling lesson says: background-tab robustness favors a worker;
-   OPFS sync-access handles *require* a worker. Lean worker-first for the
-   M1 open path, keep the main-thread driver for tests/node.
-3. **Eviction unit for geometry** — product, representation-item, or
-   spatial tile? Product is the natural IFC unit and matches the element
-   map; tiles composite better for dense storeys. Start product-level
-   (M3), tile later if draw-call/eviction overhead demands.
-4. **Sidecar format**: version-stamped, little-endian typed-array dump of
-   the SoA columns + serialized MultiIndexSet + skeleton + roots + extern
-   refs, gzip'd. Explicitly *not* a public interchange format at first —
-   it's a cache with a hash handshake; we can stabilise it once exporters
-   care.
+1. **Lexer stays TS/JS.** ✓ Decided — primarily for ease of working in
+   TS with the schemas we generate from EXPRESS + antlr; the generated
+   type/query machinery is TS-native and the lexer has never been the
+   bottleneck. Long-term a C++ lexer remains possible (S1/S2 might
+   motivate it) but is explicitly not this arc.
+2. **Workers for everything.** ✓ Decided — main thread is already
+   overloaded and is reserved for UI. Staged as necessary: parse/index
+   worker lands with M1 (the OPFS sync-access handle requires it),
+   geometry worker pool with M3. See "Parallelism / multi-core" above.
+   Main-thread cooperative driver survives for node/tests only.
+3. **Eviction unit = product.** ✓ Decided — the natural IFC unit, and
+   deliberately the same unit as **editing** (see "Toward editing"
+   below): the boundary where referential integrity is strongest should
+   be the boundary for both eviction and CRUD. Tiles can composite
+   products later if draw-call/eviction overhead demands.
+4. **Sidecar format**: ✓ version-stamped, little-endian typed-array dump
+   of the SoA columns + serialized MultiIndexSet + skeleton + roots +
+   extern refs, gzip'd. Explicitly *not* a public interchange format at
+   first — it's a cache with a hash handshake; stabilise it once
+   exporters care.
 5. **Multi-mapped/complex records** (the AP214 multibody work, #376):
-   record events carry localID + mapping, and consumers must tolerate
+   ✓ record events carry localID + mapping, and consumers must tolerate
    one-address-many-entities — the same contract `expressIDsOfTypes`
-   documents. Bake this into the event payload from day one.
+   documents. Baked into the event payload from day one.
+
+
+## Toward editing: product-level CRUD
+
+Read-mostly, not read-only. The browser architecture should *contemplate*
+editing from the start, because the right edit unit is the same product
+boundary the demand/eviction system is built on — where referential
+integrity is strongest. Scoping posture (design constraints now,
+implementation a later arc):
+
+- **Unit of edit = product**, with **cut/copy/paste as the primitive
+  semantics**. Cut/copy is the read side: extract a product's closure
+  (the entity subgraph it owns — representation, placement, psets)
+  *minus* shared resources (materials, profiles, contexts), which are
+  referenced, not copied — the same ownership analysis the props capture
+  already does with `GEOMETRIC_FIELD_NAMES` and the ref-closure walk.
+  Paste/delete is the write side: **unlinking** a product means editing
+  the small set of relationship records that point at it
+  (`IfcRelContainedInSpatialStructure`, `IfcRelAggregates`,
+  `IfcRelDefines*`), not touching the bulk.
+- **Edits are an overlay, not a rewrite.** The source bytes stay
+  immutable (they may be remote, range-fetched, shared); the index gains
+  a mutable overlay: tombstones for deleted/unlinked records, an append
+  journal for new/modified records (new express IDs from a reserved
+  range), and patched relationship rows. Every reader (events, demand
+  queue, props) sees index ∘ overlay. This composes with everything
+  above — sidecars describe the base file; overlays are per-session (or
+  per-user, persisted like the GLB cache) and are what a future sync
+  layer would exchange.
+- **Federation makes this natural**: paste-across-models is the same
+  operation as paste-within — copy a closure, rebind shared-resource
+  references to the target model's equivalents (or import them), link
+  into the target's spatial structure. The model-URI + expressID
+  addressing already names both ends.
+- **Serialisation back to STEP** (materialising base + overlay as a new
+  file) is the eventual export path; it's append-friendly by
+  construction since STEP records are independent lines. Full-fidelity
+  round-trip of *unmodified* regions is trivially exact — they're the
+  original bytes.
 
 ## Non-goals
 
 - Replacing the GLB cache path — it remains the fast revisit path; tiles
   extend it rather than replace it.
-- Writing/round-tripping STEP — read-only browser semantics throughout.
+- *Implementing* editing in this arc. But NOT read-only-forever: the
+  architecture must support product-level CRUD via the index overlay
+  (see "Toward editing") — decisions in M0–M5 that would preclude the
+  overlay (e.g. assuming the index is immutable, or that express IDs are
+  dense) are bugs against this doc. Whole-file STEP re-serialisation is
+  deferred to the editing arc as its export step.
 - A generic HDF5 driver now — S2's design keeps the door open (range
   reads + chunk index are HDF5-shaped); implementation waits for a real
   corpus.
