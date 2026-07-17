@@ -10,6 +10,7 @@ import IfcStepExternalMapping from './ifc_step_external_mapping'
 import IfcModelCurves from './ifc_model_curves'
 import { CsgMemoization } from '../core/csg_operations'
 import { IfcMaterialCache } from './ifc_material_cache'
+import { StepBufferProvider } from '../step/step_buffer_provider'
 
 
 const indexerInstance = new StepTypeIndexer< EntityTypesIfc >( EntityTypesIfcCount )
@@ -34,13 +35,16 @@ export default class IfcStepModel extends StepModelBase< EntityTypesIfc > {
    * Construct this model given a buffer containing the data and the parsed data index on that,
    * adding the typeIndex on top of that.
    *
-   * @param buffer The buffer to values from.
+   * @param buffer The buffer to values from, or `undefined` with `provider`
+   * set for a windowed (streaming) source.
    * @param elementIndex The parsed index to elements in the STEP.
+   * @param provider Optional pre-built buffer provider (windowed source).
    */
   constructor(
-      buffer: Uint8Array,
-      elementIndex: StepIndexEntry< EntityTypesIfc >[] ) {
-    super( SchemaIfc, buffer, elementIndex )
+      buffer: Uint8Array | undefined,
+      elementIndex: StepIndexEntry< EntityTypesIfc >[],
+      provider?: StepBufferProvider ) {
+    super( SchemaIfc, buffer, elementIndex, provider )
 
     this.typeIndex = indexerInstance.create( elementIndex )
   }
