@@ -98,15 +98,22 @@ implements Iterable<BaseEntity>, Model {
    * Construct this step model with its matching schema, a buffer to read from and an element index.
    *
    * @param schema The Step schema this is based on.
-   * @param buffer_ The buffer to read this from.
+   * @param buffer_ The buffer to read this from. Pass `undefined` together
+   * with `provider` to build a model whose source is windowed from
+   * construction (e.g. a streaming open — see buildModelStreaming); the
+   * synchronous read paths (geometry extraction) then require the relevant
+   * ranges to be resident, exactly as after `spillSourceToExternalStore`.
    * @param elementIndex The element index for this, parsed or deserialized - note this takes
    * ownership of this array in the sense it will modify values/unfold inline elements etc.
+   * @param provider Optional pre-built buffer provider. When omitted, a
+   * resident provider over `buffer_` is used (the classic path).
    */
   constructor(
     public readonly schema: StepEntitySchema< EntityTypeIDs, BaseEntity >,
-    private buffer_: Uint8Array | undefined, elementIndex: StepIndexEntry<EntityTypeIDs>[]) {
+    private buffer_: Uint8Array | undefined, elementIndex: StepIndexEntry<EntityTypeIDs>[],
+    provider?: StepBufferProvider ) {
 
-    this.bufferProvider_ = new ResidentStepBufferProvider( buffer_ as Uint8Array )
+    this.bufferProvider_ = provider ?? new ResidentStepBufferProvider( buffer_ as Uint8Array )
 
     const localElementIndex: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity>[] =
       elementIndex

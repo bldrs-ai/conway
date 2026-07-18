@@ -344,6 +344,25 @@ Deliberately small first step; each has a measurable exit.
   stream → OPFS write-through → windowed provider from t=0; delete the
   post-parse spill step in Share. Exit: PSB opens with no full-source
   moment (heap-snapshot verified); regression corpus byte-identical.
+
+  *Scope note (decided 2026-07): the "no full-source moment" collides
+  with the synchronous geometry-extraction pass, which needs its record
+  ranges resident and accesses records across the whole file — that
+  residency is M3's demand-driven rework. M1 is therefore split:*
+  - **M1a — engine core (in progress).** `IfcStepParser.parseStreamToModel(
+    source, store)` — stream the index (M0, bounded parse memory) and back
+    the model with a windowed provider over `store` instead of a resident
+    buffer, so the source is never held fully resident. `source` is the
+    synchronous parse feed (OPFS sync-access handle on a worker; fd/buffer
+    in node); `store` is the async model-access store (OPFS `File.slice()`).
+    Property/index access works via `ensureResident` + the async surfaces;
+    geometry still needs residency until M3. `StepModelBase`/`IfcStepModel`
+    gained an optional pre-built-provider constructor arg for this.
+    Byte-identical record decode vs the resident parse (test).
+  - **M1b — Share open path (#1602).** OPFS write-through from t=0 + the
+    parse/index worker + drop the post-parse spill. Lands the shim
+    `OpenModelStream`. Full "no full-source moment" for the geometry phase
+    waits on M3.
 - **M2 — Record events + incremental consumers.** Event bus with type-set
   subscription; type index, names skeleton, roots registry, header become
   incremental consumers; `ON_MODEL_INFO` fires from first window. Exit:
