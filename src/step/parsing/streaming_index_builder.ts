@@ -70,12 +70,25 @@ export interface StreamingIndexResult<TypeIDType> {
  * @param source The byte source.
  * @param parser The STEP parser (typed to the schema).
  * @param pool Target window size in bytes.
+ * @param onRecordIndexed Optional per-record event, invoked live as each
+ * top-level record is indexed with its (localID, expressID, typeID) — the
+ * seam for incremental semantic consumers (M2). localIDs are dense and
+ * assigned in parse order from 0. On the rare grow-and-restart (a single
+ * record larger than the window — never on real files, whose largest STEP
+ * record is ~25 KB), the parse re-runs from the start and records re-fire
+ * from localID 0; consumers must therefore be idempotent by localID /
+ * expressID (the standard consumers — type index keyed by localID, roots
+ * registry keyed by expressID — are). Must be synchronous and cheap;
+ * expensive work belongs on a demand queue, not the parse path.
  * @return {StreamingIndexResult} The index, header, result and diagnostics.
  */
 export function buildIndexStreaming<TypeIDType>(
     source: ByteSource,
     parser: StepParser<TypeIDType>,
-    pool: number ): StreamingIndexResult<TypeIDType> {
+    pool: number,
+    onRecordIndexed?:
+      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void ):
+    StreamingIndexResult<TypeIDType> {
 
   const fileSize = source.byteLength
 
@@ -156,7 +169,8 @@ export function buildIndexStreaming<TypeIDType>(
       ++slides
     }
 
-    const [ index, result ] = parser.parseDataBlockStreamed( input, onRecordBoundary )
+    const [ index, result ] =
+      parser.parseDataBlockStreamed( input, onRecordBoundary, onRecordIndexed )
 
     // A parse that stopped short of true EOF, with the window not spanning to
     // EOF, means a single record overflowed the window: grow and retry.

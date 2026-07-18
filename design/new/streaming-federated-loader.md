@@ -369,6 +369,25 @@ Deliberately small first step; each has a measurable exit.
   spatial tree UI populates while PSB still parsing; props capture works
   pre-geometry. (First task: scope conway-geom per-product native
   geometry free — it gates M3.)
+  - **M2a — event core (in progress).** The streaming parse now emits a
+    per-record event `(localID, expressID, typeID)` live as each top-level
+    record is indexed (`parseDataBlockStreamed` / `buildIndexStreaming`
+    `onRecordIndexed` hook). `StreamingRecordDispatcher` routes events to
+    consumers subscribed by type set — the subtype closure via the
+    generated constructor `query` (#383), so `on([IfcRoot], …)` matches
+    products, rels, psets, quantities and future subtypes. Handlers run
+    sync in the parse path (cheap only). localIDs are dense/ascending;
+    a grow-restart re-fires from 0, so consumers must be idempotent by
+    localID/expressID (the standard ones are). Verified: a roots registry
+    built live from the stream equals `expressIDsOfTypes(IfcRoot)` on the
+    finished model. External-mapping records (typeID 0) reach `onAnyRecord`
+    only; concrete-type resolution for them is the incremental type-index
+    consumer (M2b).
+  - **M2b — standard consumers (next).** Incremental type index
+    (multi-mapping-aware), spatial names skeleton, property-roots + header
+    consumers; wire `ON_MODEL_INFO` from the first window. This is where
+    the "spatial tree populates while parsing" exit criterion lands, plus
+    the conway-geom per-product-free scoping that gates M3.
 - **M3 — Demand-driven geometry.** Work queue + budgeted arena +
   per-product wasm reclaim; load-time progressive materialisation
   (viewport-ordered). Exit: PSB time-to-first-pixel < 25 % of full-load
