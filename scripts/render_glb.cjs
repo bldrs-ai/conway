@@ -11,10 +11,14 @@
  * accessors.
  *
  * Usage:
- *   render_glb.cjs <in.glb> <out.png> [--size N]
- *   render_glb.cjs --pair <before.glb> <after.glb> <outPrefix> [--size N]
+ *   render_glb.cjs <in.glb[,in2.glb...]> <out.png> [--size N]
+ *   render_glb.cjs --pair <before.glb[,...]> <after.glb[,...]> <outPrefix> [--size N]
  *
- * Pair mode renders both files with ONE camera framed on the union of
+ * Each side is a comma-separated list of GLBs merged into one scene —
+ * conway's CLI splits large models into multiple chunk files (jet engine),
+ * and rendering only one chunk silently drops the rest of the model.
+ *
+ * Pair mode renders both sides with ONE camera framed on the union of
  * the two bounding boxes (writes <outPrefix>-before.png and
  * <outPrefix>-after.png). That shared framing is the point: a geometry
  * regression that moves the bounds (e.g. a stray spike) shows up as an
@@ -380,9 +384,26 @@ function writePng(path, pixels, size) {
 // CLI
 // ---------------------------------------------------------------------------
 
-function loadTriangles(glbPath) {
-  const { json, bin } = parseGlb(fs.readFileSync(glbPath))
-  return collectTriangles(json, bin)
+/** Load one comma-separated GLB list into a single world-space soup. */
+function loadTriangles(glbPathList) {
+  const soups = glbPathList.split(',').map((glbPath) => {
+    const { json, bin } = parseGlb(fs.readFileSync(glbPath))
+    return collectTriangles(json, bin)
+  })
+  if (soups.length === 1) {
+    return soups[0]
+  }
+  let total = 0
+  for (const s of soups) {
+    total += s.length
+  }
+  const merged = new Float64Array(total)
+  let at = 0
+  for (const s of soups) {
+    merged.set(s, at)
+    at += s.length
+  }
+  return merged
 }
 
 function main() {

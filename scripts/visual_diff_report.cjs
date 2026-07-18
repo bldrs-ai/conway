@@ -58,8 +58,10 @@ function cliFor(modelPath) {
 
 /**
  * Export a model to GLB with one engine. Runs the CLI in a scratch cwd
- * (the exporter writes output files into cwd) and returns the path of the
- * non-Draco GLB, or null if the export produced nothing.
+ * (the exporter writes output files into cwd) and returns ALL non-Draco
+ * GLB chunk paths (large models export as several chunk files that only
+ * form the whole model together — rendering just one silently drops the
+ * rest), or an empty list if the export produced nothing.
  */
 function exportGlb(packageRoot, modelPath, scratchDir) {
   fs.mkdirSync(scratchDir, { recursive: true })
@@ -79,12 +81,8 @@ function exportGlb(packageRoot, modelPath, scratchDir) {
   const glbs = fs.readdirSync(scratchDir)
       .filter((f) => f.endsWith('.glb') && !f.includes('draco'))
       .map((f) => path.join(scratchDir, f))
-  if (glbs.length === 0) {
-    return { glb: null, diagnostic }
-  }
-  // Multi-GLB exports (chunked models) are rare; take the largest.
-  glbs.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)
-  return { glb: glbs[0], diagnostic }
+      .sort()
+  return { glbs, diagnostic }
 }
 
 /**
@@ -126,38 +124,64 @@ function main() {
 
     const base = exportGlb(opts.base, model, path.join(work, 'base'))
     const cand = exportGlb(opts.cand, model, path.join(work, 'cand'))
-    const baseGlb = base.glb
-    const candGlb = cand.glb
 
-    if (!baseGlb || !candGlb) {
-      const which = !baseGlb && !candGlb ? 'both engines' :
-          (!baseGlb ? 'base engine' : 'candidate engine')
+    if (base.glbs.length === 0 && cand.glbs.length === 0) {
       const why = (base.diagnostic || cand.diagnostic || '')
           .replace(/\|/g, '\\|').slice(0, 200)
-      rows.push(`| \`${name}\` | _no geometry from ${which}_` +
+      rows.push(`| \`${name}\` | _no geometry from both engines_` +
           `${why ? ` — \`${why}\`` : ''} | |`)
       fs.rmSync(work, { recursive: true, force: true })
       continue
     }
 
-    try {
-      execFileSync(process.execPath, [
-        renderScript, '--pair', baseGlb, candGlb,
-        path.join(opts.out, slug),
-      ], { stdio: 'pipe', timeout: 5 * 60 * 1000 })
-      rows.push(
-          `| \`${name}\` ` +
-          `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
-          `| ![after](RAW_URL_BASE/${slug}-after.png) |`)
-    } catch (err) {
-      // Seen in practice: conway's GLB writer emits a truncated JSON chunk
-      // for some partial-geometry models (supercap*, nist_ftc_08) and the
-      // parse dies — name the reason so the row isn't a dead end.
-      const why = childFailureDiagnostic(err, `render (${name})`)
-          .replace(/\|/g, '\\|').slice(0, 200)
-      rows.push(`| \`${name}\` | _render failed_` +
-          `${why ? ` — \`${why}\`` : ''} | |`)
+    /**
+     * Render one side alone (auto-framed on itself). Returns the markdown
+     * cell: an image on success, the failure reason otherwise.
+     */
+    const renderSingle = (side, sideName, suffix) => {
+      if (side.glbs.length === 0) {
+        const why = (side.diagnostic || '').replace(/\|/g, '\\|').slice(0, 200)
+        return `_no geometry from ${sideName} engine_${why ? ` — \`${why}\`` : ''}`
+      }
+      try {
+        execFileSync(process.execPath, [
+          renderScript, side.glbs.join(','),
+          path.join(opts.out, `${slug}-${suffix}.png`),
+        ], { stdio: 'pipe', timeout: 5 * 60 * 1000 })
+        return `![${suffix}](RAW_URL_BASE/${slug}-${suffix}.png)`
+      } catch (err) {
+        const why = childFailureDiagnostic(err, `render ${suffix} (${name})`)
+            .replace(/\|/g, '\\|').slice(0, 200)
+        return `_render failed_${why ? ` — \`${why}\`` : ''}`
+      }
     }
+
+    if (base.glbs.length > 0 && cand.glbs.length > 0) {
+      try {
+        execFileSync(process.execPath, [
+          renderScript, '--pair', base.glbs.join(','), cand.glbs.join(','),
+          path.join(opts.out, slug),
+        ], { stdio: 'pipe', timeout: 5 * 60 * 1000 })
+        rows.push(
+            `| \`${name}\` ` +
+            `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
+            `| ![after](RAW_URL_BASE/${slug}-after.png) |`)
+        fs.rmSync(work, { recursive: true, force: true })
+        continue
+      } catch (err) {
+        // One side's GLB can be unloadable (seen in practice: conway's GLB
+        // writer used to emit truncated JSON for partial-geometry models —
+        // supercap*, nist_ftc_08). Fall through and render each side on its
+        // own so the healthy build still gets a picture; the cameras are no
+        // longer shared, so the pair loses scale comparability.
+        childFailureDiagnostic(err, `pair render (${name})`)
+      }
+    }
+
+    rows.push(
+        `| \`${name}\` ` +
+        `| ${renderSingle(base, 'base', 'before')} ` +
+        `| ${renderSingle(cand, 'candidate', 'after')} |`)
     fs.rmSync(work, { recursive: true, force: true })
   }
 
