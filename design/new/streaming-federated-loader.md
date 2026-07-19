@@ -462,7 +462,7 @@ not stubbed:
 | **M1a** | `parseStreamToModel` (windowed-source model) | M1b: Share OPFS worker |
 | **M2a** | record events + type-set dispatcher | — |
 | **M2b** | incremental type index | multi-mapping (typeID 0) attribution |
-| **M3** | demand-geometry queue (budget + eviction) | conway-geom per-product native free |
+| **M3** | demand-geometry queue (budget + eviction); chunked tile pool + refcounted assets (`src/core/mem/`) | conway-geom C++ tile-pool twin (surface narrowed — see "Resident memory: two regimes") |
 | **M4a** | index sidecar + `RangeByteSource` | M4b: Share sidecar cache + index-first open |
 | **M5a** | model-URI, shared budget, registry, cross-ref, composition | M5b: loader registration, budget wiring, UI links |
 
@@ -499,6 +499,85 @@ Share OPFS/HTTP integration (gates M1b/M4b).
    ✓ record events carry localID + mapping, and consumers must tolerate
    one-address-many-entities — the same contract `expressIDsOfTypes`
    documents. Baked into the event payload from day one.
+6. **Resident geometry = explicit chunked pool, not per-product `free()`.**
+   ✓ Decided 2026-07-19 — see "Resident memory: two regimes" below. This
+   resolves the M3 blocker's allocation question and narrows the
+   conway-geom C++ surface to a small tile pool.
+
+
+## Resident memory: two regimes (settled with Pablo, 2026-07-19)
+
+The M3 blocker ("conway-geom needs a per-product native free") hid an
+allocation-policy question: free *into what*? The answer decides whether
+eviction actually returns memory.
+
+**Why the general allocator is the wrong tool here.** Wasm linear memory
+grows and never shrinks — `free()` returns bytes to mimalloc's freelists,
+not to the browser, and there is no page decommit (`madvise`/decommit are
+native-allocator tools wasm doesn't have; `memory.discard` isn't shipped).
+So the tab pays the heap's **high-water mark forever**, and external
+fragmentation under evict/refill churn isn't a throughput nuisance, it's a
+permanent leak: one live allocation above a sea of freed tile space keeps
+it all committed. Per-product `free()` into the general heap — the "modern
+allocators are good now" answer that works natively — fails here.
+
+**The two regimes.** Geometry memory has two structured flows with
+different lifetime shapes, and each gets the allocator that matches:
+
+- **Phase-bounded scratch** (tessellation temporaries): lives for one
+  product's extraction, dies at commit. Already engineered: the AFTP
+  per-thread bump arenas with chunked growth and exact-size commits.
+  Bump/reset, never freed piecemeal. Unchanged by this design.
+- **Demand-bounded residents** (committed tiles, alive until evicted):
+  lifetime is driven by the viewport, unbounded and interleaved — the
+  regime where pools historically break down and people punt to malloc.
+  Instead: **one dedicated region carved into fixed-size chunks**
+  (order 256 KB–1 MB) with a freelist. Commit copies exact-size results
+  from the scratch arena into acquired chunks (the copy already exists —
+  AFTP phase 2 — just redirected); evict pushes chunks back. High-water
+  mark **is the budget by construction**; fragmentation reduces to
+  bounded internal waste in each asset's last chunk.
+
+The general allocator keeps only the residual it is actually good at:
+small, messy-lifetime control structures. Engineer the 95 % with
+structure; punt the 5 % without.
+
+**The abstraction ladder (`src/core/mem/`).** This is high-value code
+we expect to reuse (property caches, sidecar caches, texture-like data),
+so the system is layered general → narrow, with the general layers kept
+deliberately domain-free:
+
+    ChunkedPool        chunks and bytes: budget, freelist, chunk-rounding
+    SharedAssetPool    refcounted *assets* resident in those chunks
+    GeometryTilePool   the geometry narrowing (src/core/): products ⇄ assets
+    DemandGeometryQueue  demand ordering + logical budget (M3, unchanged)
+
+The **instance ⇄ asset** relationship in `SharedAssetPool` is the general
+form of product ⇄ representation (the definition/occurrence split that
+recurs across CAD — AP214 literally says "occurrence"). Storage is keyed
+and refcounted on the asset, so the mapped-item correctness rule holds
+structurally: evicting product A can never free the representation
+product B still renders; chunks return only on the last release.
+
+**Accounting: two views, one invariant.** The queue charges each
+instance the full chunk-rounded cost of every asset it references
+(sharing double-charged — deliberately conservative), while the pool
+counts physical chunks (shared assets stored once). Summed logical
+charges therefore always cover physical use, so with queue budget ≤ pool
+budget an acquire can never fail mid-extract — an invariant the composed
+tests pin. Heavy sharing under-utilises the logical budget; widen it
+once measured, safe direction first.
+
+**The narrowed C++ surface (conway-geom).** What M3 production actually
+needs from wasm shrinks to a mechanical tile pool mirroring the TS spec:
+`tilePool.init(budgetBytes, chunkBytes)` /
+`commitTile(assetID, scratchPtr, byteSize) → chunks` /
+`retainTile(assetID)` / `releaseTile(assetID)` — plus the existing
+extract-into-scratch. No allocator surgery, no arena changes. The TS
+classes are the executable spec and policy layer; the C++ twin owns the
+bytes. GPU-side buffers (three.js) are outside the wasm heap and already
+reclaim on delete — the grow-only trap this design defuses is wasm-side
+specifically.
 
 
 ## Toward editing: product-level CRUD
