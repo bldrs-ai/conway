@@ -12,10 +12,14 @@ import IfcStepParser from '../../ifc/ifc_step_parser'
 import { StepIndexEntry } from './step_parser'
 import {
   deserializeIndexSidecar,
+  deserializeIndexSidecarToColumns,
   hashSource,
   serializeIndexSidecar,
+  serializeIndexSidecarFromColumns,
   sidecarMatchesSource,
 } from './index_sidecar'
+import { BufferByteSource } from './byte_source'
+import { buildColumnarIndexStreaming } from './streaming_index_builder'
 
 /**
  * Parse index.ifc resident and return its top-level element index plus the
@@ -132,5 +136,43 @@ describe( 'index sidecar', () => {
       deserializeIndexSidecar<number>( serializeIndexSidecar( [], 0, 0 ) )
 
     expect( decoded.elements.length ).toBe( 0 )
+  } )
+
+  test( 'columns-form serialize is byte-identical to the object-form blob (M7)', () => {
+    const { bytes, elements } = residentIndex()
+    const hash = hashSource( bytes )
+
+    const { columns } = buildColumnarIndexStreaming(
+        new BufferByteSource( bytes ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ( IfcStepParser as any ).Instance, 4096 )
+
+    const fromObjects = serializeIndexSidecar( elements, bytes.byteLength, hash )
+    const fromColumns =
+      serializeIndexSidecarFromColumns( columns, bytes.byteLength, hash )
+
+    expect( fromColumns ).toEqual( fromObjects )
+  } )
+
+  test( 'deserializes straight to columns for the index-first open (M7)', () => {
+    const { bytes, elements } = residentIndex()
+    const hash = hashSource( bytes )
+
+    const blob = serializeIndexSidecar( elements, bytes.byteLength, hash )
+    const restored = deserializeIndexSidecarToColumns<number>( blob )
+
+    expect( restored.sourceByteLength ).toBe( bytes.byteLength )
+    expect( restored.sourceHash ).toBe( hash )
+    expect( restored.columns.count ).toBe( elements.length )
+    expect( restored.columns.firstInlineElement ).toBe( elements.length )
+    expect( restored.columns.expressIdsSorted ).toBe( true )
+
+    for ( let where = 0; where < elements.length; ++where ) {
+      expect( restored.columns.address[ where ] ).toBe( elements[ where ].address )
+      expect( restored.columns.length[ where ] ).toBe( elements[ where ].length )
+      expect( restored.columns.expressID[ where ] ).toBe( elements[ where ].expressID )
+      expect( restored.columns.typeID[ where ] )
+          .toBe( elements[ where ].typeID ?? -1 )
+    }
   } )
 } )

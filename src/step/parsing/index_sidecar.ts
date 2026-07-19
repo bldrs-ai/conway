@@ -1,3 +1,4 @@
+import { StepIndexColumns } from './columnar_index'
 import { StepIndexEntry } from './step_parser'
 
 
@@ -195,6 +196,138 @@ export function deserializeIndexSidecar<TypeIDType extends number>(
   }
 
   return { version, sourceByteLength, sourceHash, elements, hasChildren }
+}
+
+
+/**
+ * Serialise a columnar index (M7) to a sidecar blob — same format as
+ * {@link serializeIndexSidecar}, byte for byte, but read straight off the SoA
+ * columns so no object index is needed. Only the top-level range is carried
+ * (the v1 format; inline rows re-materialise from record bytes on demand).
+ *
+ * @param columns The columnar index.
+ * @param sourceByteLength The length of the source it was built from.
+ * @param sourceHash The source hash (see {@link hashSource}).
+ * @return {Uint8Array} The sidecar bytes.
+ */
+export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
+    columns: StepIndexColumns<TypeIDType>,
+    sourceByteLength: number,
+    sourceHash: number ): Uint8Array {
+
+  const recordCount = columns.firstInlineElement
+
+  const total =
+    HEADER_BYTES +
+    recordCount * ( ADDRESS_BYTES + LENGTH_BYTES + TYPEID_BYTES + EXPRESSID_BYTES )
+
+  const bytes = new Uint8Array( total )
+  const view = new DataView( bytes.buffer )
+
+  let offset = 0
+
+  view.setUint32( offset, MAGIC, true ); offset += 4
+  view.setUint32( offset, VERSION, true ); offset += 4
+  view.setFloat64( offset, sourceByteLength, true ); offset += 8
+  view.setUint32( offset, sourceHash >>> 0, true ); offset += 4
+  view.setUint32( offset, recordCount, true ); offset += 4
+
+  for ( let where = 0; where < recordCount; ++where ) {
+    view.setFloat64( offset, columns.address[ where ], true ); offset += ADDRESS_BYTES
+  }
+  for ( let where = 0; where < recordCount; ++where ) {
+    view.setUint32( offset, columns.length[ where ], true ); offset += LENGTH_BYTES
+  }
+  for ( let where = 0; where < recordCount; ++where ) {
+    // The column already uses the sidecar's −1 sentinel for undefined.
+    view.setInt32( offset, columns.typeID[ where ], true ); offset += TYPEID_BYTES
+  }
+  for ( let where = 0; where < recordCount; ++where ) {
+    view.setUint32( offset, columns.expressID[ where ], true ); offset += EXPRESSID_BYTES
+  }
+
+  return bytes
+}
+
+
+/**
+ * Deserialise a sidecar blob straight to a columnar index (M7) — the
+ * index-first open path: no per-record objects at any point between the
+ * sidecar bytes and a constructed model. Top-level rows only (v1 sidecars
+ * carry no inline rows), so `count === firstInlineElement`.
+ *
+ * @param bytes The sidecar bytes.
+ * @return {{ sourceByteLength: number, sourceHash: number,
+ *  columns: StepIndexColumns }} Source identity + the columnar index.
+ */
+export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
+    bytes: Uint8Array ): {
+  sourceByteLength: number,
+  sourceHash: number,
+  columns: StepIndexColumns<TypeIDType>,
+} {
+
+  const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
+
+  let offset = 0
+
+  const magic = view.getUint32( offset, true ); offset += 4
+
+  if ( magic !== MAGIC ) {
+    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
+  }
+
+  const version = view.getUint32( offset, true ); offset += 4
+
+  if ( version !== VERSION ) {
+    throw new Error( `Unsupported sidecar version ${version}` )
+  }
+
+  const sourceByteLength = view.getFloat64( offset, true ); offset += 8
+  const sourceHash = view.getUint32( offset, true ); offset += 4
+  const recordCount = view.getUint32( offset, true ); offset += 4
+
+  const address = new Uint32Array( recordCount )
+  const length = new Uint32Array( recordCount )
+  const typeID = new Int32Array( recordCount )
+  const expressID = new Uint32Array( recordCount )
+
+  let sorted = true
+  let previous = 0
+
+  for ( let where = 0; where < recordCount; ++where ) {
+    address[ where ] = view.getFloat64( offset, true ); offset += ADDRESS_BYTES
+  }
+  for ( let where = 0; where < recordCount; ++where ) {
+    length[ where ] = view.getUint32( offset, true ); offset += LENGTH_BYTES
+  }
+  for ( let where = 0; where < recordCount; ++where ) {
+    typeID[ where ] = view.getInt32( offset, true ); offset += TYPEID_BYTES
+  }
+  for ( let where = 0; where < recordCount; ++where ) {
+    const id = view.getUint32( offset, true ); offset += EXPRESSID_BYTES
+    expressID[ where ] = id
+
+    if ( id < previous ) {
+      sorted = false
+    }
+
+    previous = id
+  }
+
+  return {
+    sourceByteLength,
+    sourceHash,
+    columns: {
+      address,
+      length,
+      typeID,
+      expressID,
+      count: recordCount,
+      firstInlineElement: recordCount,
+      expressIdsSorted: sorted,
+    },
+  }
 }
 
 

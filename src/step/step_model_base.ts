@@ -1,4 +1,5 @@
 import { StepIndexEntry } from './parsing/step_parser'
+import { StepIndexColumns } from './parsing/columnar_index'
 import { releaseScratchParsingBuffer } from './parsing/step_deserialization_functions'
 import {
   ResidentStepBufferProvider,
@@ -110,10 +111,51 @@ implements Iterable<BaseEntity>, Model {
    */
   constructor(
     public readonly schema: StepEntitySchema< EntityTypeIDs, BaseEntity >,
-    private buffer_: Uint8Array | undefined, elementIndex: StepIndexEntry<EntityTypeIDs>[],
+    private buffer_: Uint8Array | undefined,
+    elementIndex: StepIndexEntry<EntityTypeIDs>[] | StepIndexColumns<EntityTypeIDs>,
     provider?: StepBufferProvider ) {
 
     this.bufferProvider_ = provider ?? new ResidentStepBufferProvider( buffer_ as Uint8Array )
+
+    if ( !Array.isArray( elementIndex ) ) {
+      // Columns path (M7): the parse produced the SoA columns directly (see
+      // columnar_index.ts) — adopt them, build the lookup tables straight off
+      // the columns, and skip the object walk entirely. Inline entities are
+      // already unfolded into [firstInlineElement, count) in the same order
+      // the object path would have produced.
+      const columns = elementIndex
+      const firstInline = columns.firstInlineElement
+      const inlineCount = columns.count - firstInline
+
+      const inlineElementTable = new Uint32Array( inlineCount << 1 )
+
+      for ( let where = 0; where < inlineCount; ++where ) {
+        inlineElementTable[ where << 1 ] = firstInline + where
+        inlineElementTable[ ( where << 1 ) + 1 ] = columns.address[ firstInline + where ]
+      }
+
+      this.inlineAddressMap_ = new InterpolationSearchTable32( inlineElementTable, true )
+
+      const expressIdTable = new Uint32Array( firstInline << 1 )
+
+      for ( let where = 0; where < firstInline; ++where ) {
+        expressIdTable[ where << 1 ] = where
+        expressIdTable[ ( where << 1 ) + 1 ] = columns.expressID[ where ]
+      }
+
+      this.expressIDMap_ =
+        new InterpolationSearchTable32( expressIdTable, columns.expressIdsSorted )
+
+      this.address_            = columns.address
+      this.length_             = columns.length
+      this.typeID_             = columns.typeID
+      this.expressID_          = columns.expressID
+      this.count_              = columns.count
+      this.firstInlineElement_ = firstInline
+      this.complexEntries_     = columns.complexEntries as unknown as
+        Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined
+      return
+    }
 
     const localElementIndex: StepEntityInternalReferencePrivate<EntityTypeIDs, BaseEntity>[] =
       elementIndex

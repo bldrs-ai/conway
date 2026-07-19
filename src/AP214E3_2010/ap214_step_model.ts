@@ -2,6 +2,7 @@ import EntityTypesAP214, {EntityTypesAP214Count} from './AP214E3_2010_gen/entity
 import StepModelBase from '../step/step_model_base'
 import SchemaAP214 from './AP214E3_2010_gen/schema_ap214.gen'
 import {StepIndexEntry} from '../step/parsing/step_parser'
+import {StepIndexColumns} from '../step/parsing/columnar_index'
 import {StepTypeIndexer} from '../step/indexing/step_type_indexer'
 import {MultiIndexSet} from '../indexing/multi_index_set'
 import { AP214ModelGeometry } from './ap214_model_geometry'
@@ -36,9 +37,9 @@ export default class AP214StepModel extends StepModelBase< EntityTypesAP214 > {
    */
   constructor(
       buffer: Uint8Array,
-      elementIndex: StepIndexEntry< EntityTypesAP214 >[] ) {
+      elementIndex: StepIndexEntry< EntityTypesAP214 >[] | StepIndexColumns< EntityTypesAP214 > ) {
     super( SchemaAP214, buffer, elementIndex )
 
-    this.typeIndex = indexerInstance.create( elementIndex )
+    this.typeIndex = indexerInstance.createFor( elementIndex )
   }
 }

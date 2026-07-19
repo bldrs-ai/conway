@@ -1,9 +1,11 @@
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { ByteSource } from './byte_source'
+import { ColumnarIndexSink, StepIndexColumns } from './columnar_index'
 import StepParser, {
   ParseResult,
   StepHeader,
   StepIndexEntry,
+  StepIndexSink,
 } from './step_parser'
 
 
@@ -87,7 +89,8 @@ export function buildIndexStreaming<TypeIDType>(
     parser: StepParser<TypeIDType>,
     pool: number,
     onRecordIndexed?:
-      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void ):
+      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+    sink?: StepIndexSink<TypeIDType> ):
     StreamingIndexResult<TypeIDType> {
 
   const fileSize = source.byteLength
@@ -170,7 +173,8 @@ export function buildIndexStreaming<TypeIDType>(
     }
 
     const [ index, result ] =
-      parser.parseDataBlockStreamed( input, onRecordBoundary, onRecordIndexed )
+      parser.parseDataBlockStreamed(
+          input, onRecordBoundary, onRecordIndexed, void 0, sink )
 
     // A parse that stopped short of true EOF, with the window not spanning to
     // EOF, means a single record overflowed the window: grow and retry.
@@ -179,6 +183,7 @@ export function buildIndexStreaming<TypeIDType>(
 
     if ( stoppedShort && notAtEof ) {
       windowBytes *= 2
+      sink?.reset()
       continue
     }
 
@@ -203,3 +208,47 @@ export function buildIndexStreaming<TypeIDType>(
 // many slides on a small fixture; the pool sweep uses ≥ 128 KB anyway.
 // eslint-disable-next-line no-magic-numbers
 const MIN_WINDOW = 4 * 1024
+
+
+/**
+ * The output of a columnar streaming index build: the index in its SoA
+ * column form (no object phase — see columnar_index.ts), plus the header and
+ * window diagnostics.
+ */
+export interface StreamingColumnarIndexResult<TypeIDType> {
+  header: StepHeader
+  columns: StepIndexColumns<TypeIDType>
+  result: ParseResult
+  stats: StreamingIndexStats
+}
+
+
+/**
+ * Build the entity index by streaming, **directly into typed-array columns**
+ * (M7): identical parse and window behaviour to {@link buildIndexStreaming},
+ * but completed records are encoded straight into a {@link ColumnarIndexSink}
+ * so the per-record object index never materialises. Peak JS heap for the
+ * index build becomes `window + columns` — the object phase (the dominant
+ * heap cost on large models) is gone.
+ *
+ * @param source The byte source.
+ * @param parser The STEP parser (typed to the schema).
+ * @param pool Target window size in bytes.
+ * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
+ * @return {StreamingColumnarIndexResult} Columns, header, result, stats.
+ */
+export function buildColumnarIndexStreaming<TypeIDType extends number>(
+    source: ByteSource,
+    parser: StepParser<TypeIDType>,
+    pool: number,
+    onRecordIndexed?:
+      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void ):
+    StreamingColumnarIndexResult<TypeIDType> {
+
+  const sink = new ColumnarIndexSink<TypeIDType>()
+
+  const { header, result, stats } =
+    buildIndexStreaming( source, parser, pool, onRecordIndexed, sink )
+
+  return { header, columns: sink.finalize(), result, stats }
+}

@@ -2,6 +2,7 @@ import EntityTypesIfc, {EntityTypesIfcCount} from './ifc4_gen/entity_types_ifc.g
 import StepModelBase from '../step/step_model_base'
 import SchemaIfc from './ifc4_gen/schema_ifc.gen'
 import {StepIndexEntry} from '../step/parsing/step_parser'
+import {StepIndexColumns} from '../step/parsing/columnar_index'
 import {StepTypeIndexer} from '../step/indexing/step_type_indexer'
 import {MultiIndexSet} from '../indexing/multi_index_set'
 import { IfcModelGeometry } from './ifc_model_geometry'
@@ -42,10 +43,10 @@ export default class IfcStepModel extends StepModelBase< EntityTypesIfc > {
    */
   constructor(
       buffer: Uint8Array | undefined,
-      elementIndex: StepIndexEntry< EntityTypesIfc >[],
+      elementIndex: StepIndexEntry< EntityTypesIfc >[] | StepIndexColumns< EntityTypesIfc >,
       provider?: StepBufferProvider ) {
     super( SchemaIfc, buffer, elementIndex, provider )
 
-    this.typeIndex = indexerInstance.create( elementIndex )
+    this.typeIndex = indexerInstance.createFor( elementIndex )
   }
 }
