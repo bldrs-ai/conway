@@ -396,9 +396,49 @@ Deliberately small first step; each has a measurable exit.
 - **M4 — Range ByteSource + index sidecar.** S2. Exit: second visit to a
   remote PSB with sidecar reaches first pixel without fetching > 10 % of
   the file; property panel opens with < 1 MB fetched.
+  - **M4a — sidecar + range source (engine core, landed).** A
+    version-stamped binary sidecar (`index_sidecar.ts`) serialises the
+    top-level SoA columns (address / length / typeID / expressID,
+    column-major) with a source-length + hash header; deserialise
+    reconstructs the entity index byte-identically (round-trip test vs a
+    resident parse of `index.ifc`). The sidecar is a **cache, not an
+    interchange format** — `sidecarMatchesSource` gates trust on the
+    hash+length handshake and falls back to a cold scan on any mismatch
+    (the placeholder FNV-1a hash swaps for SHA-256 as a version bump, not
+    a reshape). Inline / multi-mapping children are a v2 extension
+    (`hasChildren` flags the records the v1 format under-describes).
+    `RangeByteSource` (a `StepExternalByteStore`) models an HTTP-Range /
+    block store: it returns exactly the requested bytes while accounting
+    for the wider block-aligned fetch it would really incur, so
+    index-first open can read back from `stats` how little of the file it
+    touched. *Remaining for M4b: the OPFS/HTTP sidecar cache round-trip in
+    Share and the wired index-first open path over `RangeByteSource`.*
 - **M5 — Federation MVP.** Two cross-referenced files, shared budgets,
   link navigation, composed skeleton. Exit: a 2-file project browses
   under the same memory budget as either file alone.
+  - **M5a — addressing + registry + composition (engine core, landed).**
+    The addressing spine and the cross-file read side, all engine-side
+    and pure TS. `model_uri.ts` — the universal `modelURI#expressID`
+    {@link EntityAddress}, with format/parse and relative-reference
+    resolution (an `IfcExternalReference.Location` like `../shared/grid.ifc`
+    resolves against the containing model's URI). `shared_byte_budget.ts` —
+    the **per-browser** `SharedByteBudget` every model's queue/pool draws
+    from, so N federated files stay bounded (reserve/release/`overageFor`);
+    this is the invariant that keeps federation from re-growing memory
+    O(N). `model_registry.ts` — `ModelRegistry` keying open models by URI
+    and resolving an address to `(model, expressID)` (an unregistered URI
+    is the cue to open a sibling loader). `cross_reference_registry.ts` —
+    a streaming consumer that collects a model's outbound reference
+    entities (`IfcExternalReference` subtype closure) via the M2
+    dispatcher, then resolves their `Location`s into navigable
+    `CrossReferenceLink`s once readable (two-phase: identify while
+    parsing, resolve on demand — the event stream carries IDs, not
+    attribute strings). `composed_model_skeleton.ts` — `ComposedModelSkeleton`
+    fans a type query across every registered model and yields universal
+    addresses, so "every `IfcWall` in the project" spans files. *Remaining
+    for M5b: register streamed models here from the loader, wire the
+    shared budget into M3's `DemandGeometryQueue`, merge cross-file spatial
+    containment, and the UI link layer.*
 
 M0–M2 are conway-internal and regression-gated (byte-identical index and
 GLB output are the invariants CI already checks). M3 changes *when* work
@@ -406,6 +446,32 @@ happens, not *what* it produces — the per-product mesh digests must stay
 identical, which keeps the visual-diff harness authoritative. M4/M5 add
 new surface and need new test rigs (range-request mock server; two-file
 fixture project).
+
+### Landed engine-core stack (for sequential review)
+
+The whole sequence is up as a **stack of PRs**, each branch based on the
+previous, each a self-contained tested increment — reviewable and mergeable
+in order. Every part is engine-side and pure TS (no wasm, no Share
+dependency), so each rests on the invariants CI already enforces; the
+subsystem-coupled halves (the `Xb` items above) are scoped and deferred,
+not stubbed:
+
+| Milestone | Landed core | Deferred (subsystem-coupled) |
+|-----------|-------------|------------------------------|
+| **M0** | streaming window parse, byte-identical index | — |
+| **M1a** | `parseStreamToModel` (windowed-source model) | M1b: Share OPFS worker |
+| **M2a** | record events + type-set dispatcher | — |
+| **M2b** | incremental type index | multi-mapping (typeID 0) attribution |
+| **M3** | demand-geometry queue (budget + eviction) | conway-geom per-product native free |
+| **M4a** | index sidecar + `RangeByteSource` | M4b: Share sidecar cache + index-first open |
+| **M5a** | model-URI, shared budget, registry, cross-ref, composition | M5b: loader registration, budget wiring, UI links |
+
+The recurring shape: **settle the deterministic engine policy against a
+mock/synthetic backend now, so the queue/format/addressing is correct and
+reviewable independently of the wasm and Share work it will later drive.**
+The two named blockers on the critical path are the conway-geom
+per-product native reclaim (gates M3's production `GeometryTiles`) and the
+Share OPFS/HTTP integration (gates M1b/M4b).
 
 ## Key design decisions (settled with Pablo, 2026-07)
 
