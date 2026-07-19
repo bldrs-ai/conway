@@ -466,15 +466,21 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    * @param input The input parsing buffer, positioned at the data section.
    * @param onRecordBoundary Called at each top-level record boundary with the
    * buffer; the callback may rebase the buffer's window in place.
+   * @param onRecordIndexed Called as each top-level record is indexed, with
+   * its localID, expressID and typeID (0 for external-mapping records) — the
+   * seam for incremental semantic consumers (type index, roots registry,
+   * names skeleton). Must be synchronous and cheap; expensive work belongs on
+   * a demand queue, not the parse path.
    * @param onProgress Optional byte-cursor progress callback.
    * @return {BlockParseResult} The parsing result, including the index and result enum.
    */
   public parseDataBlockStreamed(
       input: ParsingBuffer,
       onRecordBoundary: ( input: ParsingBuffer ) => void,
+      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
       onProgress?: ParseProgressCallback ): BlockParseResult<TypeIDType> {
 
-    const parser = this.parseDataBlockIncremental( input, onRecordBoundary )
+    const parser = this.parseDataBlockIncremental( input, onRecordBoundary, onRecordIndexed )
 
     while ( true ) {
 
@@ -539,7 +545,8 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    */
   private* parseDataBlockIncremental(
       input: ParsingBuffer,
-      onRecordBoundary?: ( input: ParsingBuffer ) => void ):
+      onRecordBoundary?: ( input: ParsingBuffer ) => void,
+      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void ):
       Generator<number, BlockParseResult<TypeIDType>, undefined> {
 
     const indexResult: StepIndex<TypeIDType> = { elements: [] }
@@ -809,6 +816,8 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           return syntaxError()
         }
 
+        onRecordIndexed?.( indexResult.elements.length, expressID, 0 as TypeIDType )
+
         indexResult.elements.push(
             {
               address: startElement,
@@ -948,6 +957,8 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       if (!charws(SEMICOLON)) {
         return syntaxError()
       }
+
+      onRecordIndexed?.( indexResult.elements.length, expressID, foundItem )
 
       indexResult.elements.push(
           {
