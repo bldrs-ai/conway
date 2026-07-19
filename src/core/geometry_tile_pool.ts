@@ -124,12 +124,17 @@ export class GeometryTilePool<AssetID> implements GeometryTiles {
         this.assets_.retain( asset.assetID, asset.byteSize )
 
       if ( !retained ) {
-        // Unwind references already taken so a failed extract has no effect.
+        // Unwind references already taken so a failed extract has no effect —
+        // keeping the materialize/discard pairing: an asset this unwind takes
+        // to zero references must be discarded like any other last release.
         for ( const taken of assets ) {
           if ( taken === asset ) {
             break
           }
-          this.assets_.release( taken.assetID )
+
+          if ( this.assets_.release( taken.assetID ) ) {
+            this.source_.discard( taken.assetID )
+          }
         }
 
         throw new Error(

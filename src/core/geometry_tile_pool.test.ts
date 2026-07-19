@@ -91,6 +91,45 @@ describe( 'GeometryTilePool', () => {
     expect( tiles.assets.pool.bytesInUse ).toBe( 300 )
   } )
 
+  test( 'a failed extract unwinds cleanly, discarding what it materialised', () => {
+    // Asset a fits; asset b cannot (pool holds 2 chunks, b needs 3). The
+    // extract must throw, and the unwind must keep the materialize/discard
+    // pairing for a (which it took to zero references) and leave the pool
+    // exactly as before — a failed extract has no effect.
+    const { source, materialized, discarded } = mockSource( {
+      1: [ { assetID: 'a', byteSize: 100 }, { assetID: 'b', byteSize: 300 } ],
+    } )
+    const pool = new ChunkedPool( 200, 100 )
+    const tiles = new GeometryTilePool( pool, source )
+
+    expect( () => tiles.extract( 1 ) ).toThrow( /exhausted/ )
+
+    expect( materialized ).toEqual( [ 'a' ] )
+    expect( discarded ).toEqual( [ 'a' ] )
+    expect( pool.bytesInUse ).toBe( 0 )
+    expect( tiles.assets.isResident( 'a' ) ).toBe( false )
+  } )
+
+  test( 'a failed extract never discards an asset another instance still holds', () => {
+    // Instance 1 holds shared. Instance 2 wants shared + big; big fails.
+    // The unwind drops 2's reference on shared but must NOT discard it —
+    // instance 1 still renders it.
+    const { source, discarded } = mockSource( {
+      1: [ { assetID: 'shared', byteSize: 100 } ],
+      2: [ { assetID: 'shared', byteSize: 100 }, { assetID: 'big', byteSize: 300 } ],
+    } )
+    const pool = new ChunkedPool( 200, 100 )
+    const tiles = new GeometryTilePool( pool, source )
+
+    tiles.extract( 1 )
+    expect( () => tiles.extract( 2 ) ).toThrow( /exhausted/ )
+
+    expect( discarded ).toEqual( [] )
+    expect( tiles.assets.isResident( 'shared' ) ).toBe( true )
+    expect( tiles.assets.refCountOf( 'shared' ) ).toBe( 1 )
+    expect( pool.bytesInUse ).toBe( 100 )
+  } )
+
   test( 'double extract and unmatched release are errors', () => {
     const { source } = mockSource( { 1: [ { assetID: 'a', byteSize: 10 } ] } )
     const tiles = new GeometryTilePool( new ChunkedPool( 1000, 100 ), source )
