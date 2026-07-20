@@ -465,6 +465,30 @@ not stubbed:
 | **M3** | demand-geometry queue (budget + eviction); chunked tile pool + refcounted assets (`src/core/mem/`) | conway-geom C++ tile-pool twin (surface narrowed — see "Resident memory: two regimes") |
 | **M4a** | index sidecar + `RangeByteSource` | M4b: Share sidecar cache + index-first open |
 | **M5a** | model-URI, shared budget, registry, cross-ref, composition | M5b: loader registration, budget wiring, UI links |
+| **M7** | columns-first index build (no object phase); sidecar ⇄ columns identity | resident `parseDataToModel` still object-form (unchanged by design — CI byte-parity anchor) |
+
+**M7 — columns-first index (landed).** The corpus sweep exposed the last
+structural memory problem on the parse plane: the streamed build still
+materialised the index as one JS object per record (~90 B each) before the
+model compacted them to SoA columns — ~1 GB of transient objects on a
+PSB-class file to produce ~200 MB of columns. M7 gives the parser an
+optional `StepIndexSink`; `ColumnarIndexSink` encodes each completed
+top-level record **straight into chunked-segment typed-array columns**
+(the rare records with inline children / multi-mappings keep their object
+form, exactly the set the model retains today), and `StepModelBase` /
+`StepTypeIndexer` gained from-columns construction that adopts the
+columns without any object walk. `parseStreamToModel` now uses this path.
+Parity is pinned test-for-test against the object path — byte-identical
+internal columns and type index on IFC and on AP214 inline/multi-mapping
+fixtures. The sidecar converged with the in-memory layout: serialize
+reads columns directly (blob byte-identical to the object-form
+serializer) and `deserializeIndexSidecarToColumns` restores columns with
+**no per-record objects anywhere between sidecar bytes and a constructed
+model** — the zero-rebuild index-first open. Sweep (retained heap, GC'd):
+Arty 90.6 → 44.5 MB, Schependomlaan 107.6 → 32.5 MB vs the object-streamed
+path; columnar is also the fastest build on Arty. Extrapolated PSB-class:
+index build working set drops from ~1 GB to roughly the columns
+themselves (~200 MB).
 
 The recurring shape: **settle the deterministic engine policy against a
 mock/synthetic backend now, so the queue/format/addressing is correct and

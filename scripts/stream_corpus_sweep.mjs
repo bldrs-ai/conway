@@ -57,6 +57,9 @@ async function parserFor( filePath ) {
 }
 
 function peakHeapMB() {
+  // Collect before measuring so the number is the phase's *retained* heap
+  // (its true working set), not transient garbage awaiting GC.
+  globalThis.gc?.()
   const usage = process.memoryUsage()
   return ( usage.heapUsed + usage.arrayBuffers ) / ( 1024 * 1024 )
 }
@@ -83,6 +86,17 @@ async function streamedIndex( filePath ) {
   return { ...r, ms }
 }
 
+async function columnarIndex( filePath ) {
+  const { buildColumnarIndexStreaming } = await import( '../compiled/src/step/parsing/streaming_index_builder.js' )
+  const parser = await parserFor( filePath )
+  const source = new FdByteSource( filePath )
+  const t0 = performance.now()
+  const r = buildColumnarIndexStreaming( source, parser, POOL_BYTES )
+  const ms = performance.now() - t0
+  source.close()
+  return { ...r, ms }
+}
+
 async function runChild( phase, filePath ) {
   if ( phase === 'resident' ) {
     const r = await residentIndex( filePath )
@@ -102,11 +116,23 @@ async function runChild( phase, filePath ) {
     return
   }
 
-  // verify: byte-identical index + sidecar round-trip.
+  if ( phase === 'columnar' ) {
+    const r = await columnarIndex( filePath )
+    console.log( JSON.stringify( {
+      records: r.columns.firstInlineElement, rows: r.columns.count,
+      result: r.result, ms: r.ms, peakMB: peakHeapMB(),
+    } ) )
+    return
+  }
+
+  // verify: byte-identical index (object-streamed AND columnar) + sidecar
+  // round-trip.
   const resident = await residentIndex( filePath )
   const streamed = await streamedIndex( filePath )
+  const columnar = await columnarIndex( filePath )
 
   let identical = resident.elements.length === streamed.elements.length
+  let columnsIdentical = resident.elements.length === columnar.columns.firstInlineElement
   let firstDiff = -1
 
   if ( identical ) {
@@ -117,6 +143,18 @@ async function runChild( phase, filePath ) {
           a.typeID !== b.typeID || a.expressID !== b.expressID ) {
         identical = false
         firstDiff = i
+        break
+      }
+    }
+  }
+
+  if ( columnsIdentical ) {
+    const c = columnar.columns
+    for ( let i = 0; i < resident.elements.length; ++i ) {
+      const a = resident.elements[ i ]
+      if ( a.address !== c.address[ i ] || a.length !== c.length[ i ] ||
+          ( a.typeID ?? -1 ) !== c.typeID[ i ] || a.expressID !== c.expressID[ i ] ) {
+        columnsIdentical = false
         break
       }
     }
@@ -150,14 +188,14 @@ async function runChild( phase, filePath ) {
   const rejects = !sidecarMatchesSource( decoded, mutated.byteLength, hashSource( mutated ) )
 
   console.log( JSON.stringify( {
-    records: resident.elements.length, identical, firstDiff,
+    records: resident.elements.length, identical, columnsIdentical, firstDiff,
     sidecarBytes: blob.byteLength, sidecarOK, handshakeRejects: rejects,
   } ) )
 }
 
 function spawnChild( phase, filePath ) {
   const out = execFileSync( process.execPath, [
-    process.argv[ 1 ], '--child', phase, filePath,
+    '--expose-gc', process.argv[ 1 ], '--child', phase, filePath,
   ], { encoding: 'utf8', maxBuffer: 1 << 24, cwd: path.dirname( path.dirname( new URL( import.meta.url ).pathname ) ) } )
   const lines = out.trim().split( '\n' )
   return JSON.parse( lines[ lines.length - 1 ] )
@@ -182,6 +220,7 @@ async function main() {
 
     const resident = spawnChild( 'resident', full )
     const stream = spawnChild( 'stream', full )
+    const columnar = spawnChild( 'columnar', full )
     const verify = spawnChild( 'verify', full )
 
     rows.push( {
@@ -190,23 +229,25 @@ async function main() {
       records: resident.records,
       residentMs: resident.ms.toFixed( 0 ),
       streamMs: stream.ms.toFixed( 0 ),
+      columnarMs: columnar.ms.toFixed( 0 ),
       residentPeakMB: resident.peakMB.toFixed( 1 ),
       streamPeakMB: stream.peakMB.toFixed( 1 ),
-      slides: stream.slides,
+      columnarPeakMB: columnar.peakMB.toFixed( 1 ),
       identical: verify.identical,
-      sidecarMB: ( verify.sidecarBytes / ( 1024 * 1024 ) ).toFixed( 2 ),
+      columnsOK: verify.columnsIdentical,
       sidecarOK: verify.sidecarOK && verify.handshakeRejects,
     } )
   }
 
   console.table( rows )
 
-  const bad = rows.filter( ( r ) => !r.identical || !r.sidecarOK )
+  const bad = rows.filter( ( r ) => !r.identical || !r.columnsOK || !r.sidecarOK )
   if ( bad.length > 0 ) {
     console.error( `FAIL: ${bad.map( ( r ) => r.model ).join( ', ' )}` )
     process.exit( 1 )
   }
-  console.error( 'All models: byte-identical streamed index + sidecar round-trip OK' )
+  console.error(
+      'All models: byte-identical streamed + columnar index, sidecar round-trip OK' )
 }
 
 main().catch( ( e ) => {

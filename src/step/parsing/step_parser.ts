@@ -44,6 +44,30 @@ export interface StepIndex<TypeIDType> {
 
 }
 
+/**
+ * A consumer of completed top-level index entries, used to divert the parse
+ * away from accumulating the object-form `StepIndex` — the columnar sink
+ * (columnar_index.ts) encodes each entry into typed-array columns and drops
+ * the object unless it carries children. When a sink is supplied, the parse's
+ * returned `StepIndex.elements` stays empty; the sink holds the index.
+ */
+export interface StepIndexSink<TypeIDType> {
+
+  /**
+   * Consume one completed top-level entry (its inlineEntities / multiMapping,
+   * when present, are attached and complete).
+   *
+   * @param entry The completed entry. Ownership transfers to the sink.
+   */
+  pushTopLevel( entry: StepIndexEntry<TypeIDType> ): void
+
+  /**
+   * Rewind to empty — the streaming builder's grow-and-restart re-parses from
+   * the start and re-pushes every record.
+   */
+  reset(): void
+}
+
 export interface Argument {
   type: number
   value: any
@@ -478,9 +502,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       input: ParsingBuffer,
       onRecordBoundary: ( input: ParsingBuffer ) => void,
       onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
-      onProgress?: ParseProgressCallback ): BlockParseResult<TypeIDType> {
+      onProgress?: ParseProgressCallback,
+      sink?: StepIndexSink<TypeIDType> ): BlockParseResult<TypeIDType> {
 
-    const parser = this.parseDataBlockIncremental( input, onRecordBoundary, onRecordIndexed )
+    const parser =
+      this.parseDataBlockIncremental( input, onRecordBoundary, onRecordIndexed, sink )
 
     while ( true ) {
 
@@ -546,10 +572,23 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   private* parseDataBlockIncremental(
       input: ParsingBuffer,
       onRecordBoundary?: ( input: ParsingBuffer ) => void,
-      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void ):
+      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+      sink?: StepIndexSink<TypeIDType> ):
       Generator<number, BlockParseResult<TypeIDType>, undefined> {
 
     const indexResult: StepIndex<TypeIDType> = { elements: [] }
+
+    // With a sink, completed top-level entries are diverted instead of
+    // accumulated — the object index never materialises (columnar path).
+    let topLevelCount = 0
+
+    const pushEntry = sink !== void 0 ?
+      ( entry: StepIndexEntry<TypeIDType> ) => {
+        sink.pushTopLevel( entry )
+      } :
+      ( entry: StepIndexEntry<TypeIDType> ) => {
+        indexResult.elements.push( entry )
+      }
 
     const match = input.match
     const comment = () => match(commentParser)
@@ -816,9 +855,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           return syntaxError()
         }
 
-        onRecordIndexed?.( indexResult.elements.length, expressID, 0 as TypeIDType )
+        onRecordIndexed?.( topLevelCount, expressID, 0 as TypeIDType )
+        ++topLevelCount
 
-        indexResult.elements.push(
+        pushEntry(
             {
               address: startElement,
               length: input.address - startElement,
@@ -958,9 +998,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return syntaxError()
       }
 
-      onRecordIndexed?.( indexResult.elements.length, expressID, foundItem )
+      onRecordIndexed?.( topLevelCount, expressID, foundItem )
+      ++topLevelCount
 
-      indexResult.elements.push(
+      pushEntry(
           {
             address: startElement,
             length: input.address - startElement,

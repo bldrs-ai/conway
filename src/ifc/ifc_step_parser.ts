@@ -4,7 +4,7 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import EntitTypesIfcSearch from './ifc4_gen/entity_types_search.gen'
 import IfcStepModel from './ifc_step_model'
 import { ByteSource } from '../step/parsing/byte_source'
-import { buildIndexStreaming } from '../step/parsing/streaming_index_builder'
+import { buildColumnarIndexStreaming } from '../step/parsing/streaming_index_builder'
 import {
   StepExternalByteStore,
   WindowedStepBufferProvider,
@@ -106,12 +106,14 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
           `source byteLength ${source.byteLength}` )
     }
 
-    const { elements, result } =
-      buildIndexStreaming( source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES )
+    // Columnar build (M7): the index goes straight into SoA columns — the
+    // per-record object phase never exists, so peak heap is window + columns.
+    const { columns, result } =
+      buildColumnarIndexStreaming( source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES )
 
     const provider =
       new WindowedStepBufferProvider( store, opts?.chunkBytes, opts?.maxResidentChunks )
 
-    return [result, new IfcStepModel( void 0, elements, provider )]
+    return [result, new IfcStepModel( void 0, columns, provider )]
   }
 }
