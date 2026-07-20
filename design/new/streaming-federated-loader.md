@@ -466,6 +466,7 @@ not stubbed:
 | **M4a** | index sidecar + `RangeByteSource` | M4b: Share sidecar cache + index-first open |
 | **M5a** | model-URI, shared budget, registry, cross-ref, composition | M5b: loader registration, budget wiring, UI links |
 | **M7** | columns-first index build (no object phase); sidecar ⇄ columns identity | resident `parseDataToModel` still object-form (unchanged by design — CI byte-parity anchor) |
+| **Phase B** | wasm tile-pool bindings typing + `createWasmTileBackend` (TS accounting over the physical pool, budgets mirrored) + `DemandResidencyPump` (async `ensureResident` → sync extract admission) + segment-walk payload reader | B2: `TileAssetExtractor` over the real extraction pipeline (per-product wasm extract → `commitGeometryTile`); Phase C: Share camera priorities + GPU upload/dispose |
 
 **M7 — columns-first index (landed).** The corpus sweep exposed the last
 structural memory problem on the parse plane: the streamed build still
