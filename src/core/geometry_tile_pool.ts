@@ -116,7 +116,14 @@ export class GeometryTilePool<AssetID> implements GeometryTiles {
     const assets = this.source_.assetsOf( instanceID )
     const pool = this.assets_.pool
 
+    // Validate and price every asset BEFORE taking any references, so a bad
+    // byte size (a source bug) throws at zero state instead of mid-extract
+    // with references already taken. chunkRound throws on negatives.
     let logicalBytes = 0
+
+    for ( const asset of assets ) {
+      logicalBytes += pool.chunkRound( asset.byteSize )
+    }
 
     for ( const asset of assets ) {
 
@@ -145,8 +152,6 @@ export class GeometryTilePool<AssetID> implements GeometryTiles {
       if ( wasAbsent ) {
         this.source_.materialize( asset.assetID )
       }
-
-      logicalBytes += pool.chunkRound( asset.byteSize )
     }
 
     this.held_.set( instanceID, assets )

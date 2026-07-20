@@ -139,6 +139,21 @@ describe( 'GeometryTilePool', () => {
     expect( () => tiles.release( 2 ) ).toThrow( /un-extracted/ )
   } )
 
+  test( 'a malformed byte size throws before any state changes', () => {
+    // A buggy source returning a negative size must fail at zero state —
+    // no references taken, nothing materialised, pool untouched.
+    const { source, materialized } = mockSource( {
+      1: [ { assetID: 'ok', byteSize: 100 }, { assetID: 'bad', byteSize: -5 } ],
+    } )
+    const pool = new ChunkedPool( 1000, 100 )
+    const tiles = new GeometryTilePool( pool, source )
+
+    expect( () => tiles.extract( 1 ) ).toThrow( /Invalid byte size/ )
+    expect( materialized ).toEqual( [] )
+    expect( pool.bytesInUse ).toBe( 0 )
+    expect( tiles.assets.isResident( 'ok' ) ).toBe( false )
+  } )
+
   test( 'composed with the demand queue: budget holds, shared reps survive eviction', () => {
     // 20 products all sharing one heavy rep, each with a light unique rep —
     // the mapped-item shape (fixtures, repeated windows).
