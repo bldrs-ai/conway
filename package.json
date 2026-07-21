@@ -23,6 +23,21 @@
       "import": "./compiled/src/index.js"
     },
     "./src/*": "./compiled/src/*.js",
+    "./stream": {
+      "types": "./compiled/src/stream/index.d.ts",
+      "require": "./compiled/src/stream/index.js",
+      "import": "./compiled/src/stream/index.js"
+    },
+    "./demand": {
+      "types": "./compiled/src/demand/index.d.ts",
+      "require": "./compiled/src/demand/index.js",
+      "import": "./compiled/src/demand/index.js"
+    },
+    "./mem": {
+      "types": "./compiled/src/mem/index.d.ts",
+      "require": "./compiled/src/mem/index.js",
+      "import": "./compiled/src/mem/index.js"
+    },
     "./web-ifc": {
       "types": "./compiled/src/compat/web-ifc/index.d.ts",
       "require": "./compiled/src/compat/web-ifc/index.js",
