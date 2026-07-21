@@ -269,6 +269,46 @@ export class IfcAPI {
   }
 
   /**
+   * Streamed-open variant of OpenModelAsync (conway extension;
+   * feature-detect with typeof api.OpenModelStreamed === 'function').
+   * IFC input parses through the streaming columnar indexer, so the
+   * model's record index is columnar from birth and the classic
+   * per-record object phase — the dominant JS-heap cost of parsing
+   * large models — never exists. Everything downstream is identical to
+   * OpenModelAsync: same cooperative geometry extraction, same
+   * meshes/properties surface, and SpillModelSource works afterwards
+   * as usual.
+   *
+   * Never does worse than OpenModelAsync: non-IFC formats and any
+   * streamed-parse failure fall back to the classic path internally,
+   * so -1 here means the classic open would have failed too.
+   *
+   * @param data containing IFC data (bytes)
+   * @param settings settings for loading the model
+   * @return {Promise<number>} model ID
+   */
+  async OpenModelStreamed(data: Uint8Array, settings?: Loadersettings): Promise<number> {
+
+    // Reserve the ID before the first await — see OpenModelAsync.
+    const modelIdResult = this.globalModelIDCounter++
+
+    const result =
+      await IfcApiModelPassthroughFactory.fromStreamed(
+          modelIdResult,
+          data,
+          this.wasmModule,
+          settings)
+
+    if ( result === void 0 ) {
+      return -1
+    }
+
+    this.models.set( modelIdResult, result )
+
+    return modelIdResult
+  }
+
+  /**
    * Set conway's console-echo log threshold, web-ifc compatible surface
    * (numeric LogLevel enum). Embedders (e.g. Share) use this to quiet a
    * clean load's console down to warnings/errors — conway issue #301.

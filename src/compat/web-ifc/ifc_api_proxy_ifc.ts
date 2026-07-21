@@ -26,6 +26,10 @@ import { formatModelLine } from '../../core/progress_log'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
+import { BufferByteSource } from '../../step/parsing/byte_source'
+import {
+  buildColumnarIndexStreaming,
+} from '../../step/parsing/streaming_index_builder'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
@@ -36,6 +40,12 @@ import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
+
+/* Moving-window size for the streamed columnar parse (matches the
+ * ifc_stream_open default; the window bounds parse-time scratch, not
+ * the source buffer, which the model keeps resident here). */
+// eslint-disable-next-line no-magic-numbers
+const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
@@ -265,6 +275,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
 
     const loadState = await IfcApiProxyIfc.parseAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings)
+
+    return new IfcApiProxyIfc(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Streamed-open construction (conway extension, used by
+   * OpenModelStreamed): the parse runs through the streaming columnar
+   * indexer, so the model's index is columnar from birth and the
+   * per-record object phase — the dominant JS-heap cost of the classic
+   * parse on large models — never exists. Geometry extraction is the
+   * same cooperative path OpenModelAsync uses, and everything
+   * downstream (meshes, properties, SpillModelSource) behaves
+   * identically to a classic open.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The IFC data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcApiProxyIfc>} The constructed proxy.
+   */
+  public static async createStreamed(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
+
+    const loadState = await IfcApiProxyIfc.parseColumnarAndExtractAsync(
         modelID, data, new ConwayGeometry(wasmModule), settings)
 
     return new IfcApiProxyIfc(modelID, data, wasmModule, settings, loadState)
@@ -507,6 +545,117 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (extractionResult !== ExtractResult.COMPLETE) {
       Logger.error('[OpenModel]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    statistics?.setProductCount(model.typeCount(IfcProduct))
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
+  }
+
+  /**
+   * Streamed twin of parseAndExtractAsync: the data parse runs through
+   * the streaming columnar indexer over a moving window instead of the
+   * per-record object parse, so the index is columnar from birth (no
+   * object phase). The source buffer stays resident behind the model —
+   * extraction and synchronous property reads behave exactly like a
+   * classic open, and `spillSourceToExternalStore` works afterwards as
+   * usual.
+   *
+   * The columnar build is a single synchronous pass (no mid-parse
+   * yields yet), so the 'dataParse' progress phase reports its
+   * boundaries without intermediate ticks; extraction remains
+   * cooperative. Throws when the streamed parse is anything but
+   * COMPLETE — the caller (OpenModelStreamed) falls back to the
+   * classic path, which tolerates recoverable parses.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The IFC data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarAndExtractAsync(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = IfcStepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    // Header parsed standalone first so the model line fires before the
+    // full parse, exactly like the classic path (the columnar build
+    // re-reads the tiny header internally; the cost is negligible).
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyIfc.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseStartTime = Date.now()
+
+    const { columns, result } = buildColumnarIndexStreaming(
+        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES)
+
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStreamed]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const model = new IfcStepModel(data, columns)
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
+
+    tracker?.beginPhase('geometry', 'products')
+
+    const geometryTick = tracker !== void 0 ?
+      (completed: number, total: number) => {
+        tracker.setPhaseTotal(total)
+        tracker.update(completed)
+      } : void 0
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      await conwayGeometry.extractIFCGeometryDataAsync(geometryTick)
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModelStreamed]: Error extracting geometry, exiting...')
       statistics?.setLoadStatus('FAIL')
       throw new Error( 'Couldn\'t extract model' )
     }

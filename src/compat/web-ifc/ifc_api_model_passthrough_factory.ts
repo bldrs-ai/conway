@@ -99,6 +99,48 @@ export class IfcApiModelPassthroughFactory {
   }
 
   /**
+   * Streamed-open twin of fromAsync (used by OpenModelStreamed): IFC
+   * models parse through the streaming columnar indexer (no per-record
+   * object phase — see IfcApiProxyIfc.createStreamed); everything else
+   * behaves like fromAsync. Non-IFC formats and any streamed-open
+   * failure fall back to the classic cooperative path, so this never
+   * does worse than fromAsync — the safety net behind embedder
+   * feature flags.
+   *
+   * @param modelID
+   * @param data
+   * @param wasmModule
+   * @param settings
+   * @return {Promise<IfcApiModelPassthrough | undefined>}
+   */
+  public static async fromStreamed(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
+
+    if ( modelFormat === ModelFormatType.IFC ) {
+
+      try {
+
+        return await IfcApiProxyIfc.createStreamed(modelID, data, wasmModule, settings)
+
+      } catch ( e ) {
+
+        const message = e instanceof Error ? e.message : String( e )
+
+        Logger.warning(
+            `Streamed open failed for model ${modelID}, ` +
+            `falling back to classic open: ${message}`)
+      }
+    }
+
+    return IfcApiModelPassthroughFactory.fromAsync(modelID, data, wasmModule, settings)
+  }
+
+  /**
    * Cooperative twin of from() (used by OpenModelAsync): the data parse
    * runs with periodic event-loop yields so progress UI can repaint
    * (issue #301 §2) for IFC and AP214/AP203/AP242 alike. IFC geometry
