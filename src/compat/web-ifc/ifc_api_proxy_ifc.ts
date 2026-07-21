@@ -28,8 +28,11 @@ import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource } from '../../step/parsing/byte_source'
 import {
-  buildColumnarIndexStreamingAsync,
+  buildIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
+import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import { StreamedPreviewChannel } from './streamed_preview_channel'
+import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
@@ -61,6 +64,9 @@ interface IfcProxyLoadState {
   conwaywasm: ConwayGeometry
   /** True when opened without extraction (createDeferred). */
   deferred?: boolean
+  /** Coordination matrix the parse-time preview channel derived (slice
+   * A2) — adopted by the durable capture so both share one frame. */
+  previewCoordinationMatrix?: glmatrix.mat4
   allTimeStart: number
   stepHeader: StepHeader
   model: IfcStepModel
@@ -106,6 +112,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
+
+  /**
+   * Coordination matrix the deferred capture derived (or adopted from
+   * the parse-time preview channel). Kept OFF the model tuple's slot 5
+   * deliberately: classic streamAllMeshes derives its coordination into
+   * a local and getCoordinationMatrix therefore returns identity —
+   * consumers (Share) stamp that result onto the assembled model, so a
+   * deferred open must present the same identity or coordination would
+   * apply twice. This field is only the pump's internal multi-call
+   * memory.
+   */
+  private demandCoordination_?: glmatrix.mat4
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -247,6 +265,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // save settings
     this.settings = settings
+
+    // Deferred opens whose preview channel already established the
+    // coordination frame: adopt it, so the durable capture skips its own
+    // derivation and places exactly where the preview did. (Internal
+    // only — getCoordinationMatrix stays identity, see
+    // demandCoordination_.)
+    if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
+      this.demandCoordination_ = loadState.previewCoordinationMatrix
+      this._isCoordinated = true
+    }
 
     let FILE_NAME = stepHeader.headers.get('FILE_NAME')
 
@@ -683,9 +711,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const parseStartTime = Date.now()
 
-    const { columns, result } = await buildColumnarIndexStreamingAsync(
-        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
-        void 0, parseTick)
+    // Inline twin of buildColumnarIndexStreamingAsync — the sink is created
+    // here so the parse-time preview channel (slice A2) can watch it grow
+    // and snapshot prefix models between the parse's cooperative yields.
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+
+    const previewChannel =
+      deferGeometry && settings?.ON_PREVIEW_MESH !== void 0 ?
+        new StreamedPreviewChannel(
+            data, conwaywasm, sink,
+            settings.COORDINATE_TO_ORIGIN === true,
+            settings.ON_PREVIEW_MESH ) : void 0
+
+    previewChannel?.start()
+
+    let result: ParseResult
+
+    try {
+      ( { result } = await buildIndexStreamingAsync(
+          new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+          void 0, sink, parseTick) )
+    } finally {
+      previewChannel?.stop()
+    }
+
+    const columns = sink.finalize()
 
     const parseEndTime = Date.now()
 
@@ -716,6 +766,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
+        // Pin the durable pump's coordination to the preview channel's
+        // (derived from the same first instance with the same math), so
+        // preview payloads and durable meshes share one frame.
+        previewCoordinationMatrix: previewChannel?.coordinationMatrix,
         allTimeStart,
         stepHeader,
         model,
@@ -1382,9 +1436,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * entity's FULL vector, so getFlatMesh stays whole-model correct).
    *
    * Also fixes a latent multi-call bug: the derived coordination
-   * matrix is stored back to the model tuple, so later batches place
+   * matrix is remembered (demandCoordination_), so later batches place
    * with the SAME coordination the first batch established
-   * (streamAllMeshes never needed this — it runs once).
+   * (streamAllMeshes never needed this — it runs once). It is NOT
+   * exposed through getCoordinationMatrix, which keeps the classic
+   * identity contract consumers stamp onto assembled models.
    *
    * @param meshCallback Receives one delta FlatMesh per entity that
    * gained instances this call.
@@ -1394,7 +1450,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix = this.demandCoordination_ ?? glmatrix.mat4.create()
     const seenThisPass = new Map<number, number>()
     const deltas = new Map<number, PlacedGeometry[]>()
 
@@ -1475,8 +1531,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         glmatrix.mat4.multiply(coordinationMatrix, this.NormalizeMat, coordinationMatrix)
         glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
 
-        // Persist for every later batch (and getCoordinationMatrix).
-        this.model[5] = coordinationMatrix
+        // Persist for every later batch (internal only — see
+        // demandCoordination_'s identity-contract note).
+        this.demandCoordination_ = coordinationMatrix
         this._isCoordinated = true
       }
 

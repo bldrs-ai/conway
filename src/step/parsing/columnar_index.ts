@@ -150,6 +150,24 @@ implements StepIndexSink<TypeIDType> {
   }
 
   /**
+   * Snapshot the columns pushed SO FAR into a self-contained prefix index,
+   * without disturbing the sink — the parse can keep pushing afterwards and
+   * a later snapshot/finalize sees the full data. Safe to call between the
+   * cooperative parse's yields (the parser only suspends at top-level
+   * record boundaries, where the sink is consistent). Top-level localIDs
+   * are stable across snapshots (dense parse order), so consumers can carry
+   * per-localID cursors from one snapshot to the next; inline-range
+   * localIDs are NOT stable (the inline tail re-packs after the growing
+   * top-level range) and must not be carried across snapshots.
+   *
+   * @return {StepIndexColumns} A prefix columnar index over the records
+   * pushed so far.
+   */
+  public snapshot(): StepIndexColumns<TypeIDType> {
+    return this.assemble_()
+  }
+
+  /**
    * Assemble the final columns: concatenate the top-level segments (one
    * column at a time, bounding transient overhead to a single column's
    * segments) and unfold retained inline entities into the inline range in
@@ -158,6 +176,16 @@ implements StepIndexSink<TypeIDType> {
    * @return {StepIndexColumns} The finished columnar index.
    */
   public finalize(): StepIndexColumns<TypeIDType> {
+    return this.assemble_()
+  }
+
+  /**
+   * Shared assembly behind {@link snapshot} and {@link finalize} — pure
+   * over the sink's current state.
+   *
+   * @return {StepIndexColumns} The assembled columnar index.
+   */
+  private assemble_(): StepIndexColumns<TypeIDType> {
 
     const topLevel = this.count_
 
