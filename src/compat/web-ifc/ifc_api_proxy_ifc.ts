@@ -41,6 +41,10 @@ import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 
+// Batch size used when a whole-model consumer (streamAllMeshes) drains
+// a deferred model's remaining products synchronously.
+const DEFERRED_DRAIN_BATCH = 256
+
 /* Moving-window size for the streamed columnar parse (matches the
  * ifc_stream_open default; the window bounds parse-time scratch, not
  * the source buffer, which the model keeps resident here). */
@@ -89,6 +93,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Deferred-mode product worklist (file order), lazily enumerated. */
   private demandProducts_?: number[]
+
+  /**
+   * Deferred capture watermarks: entity localID -> how many of its
+   * placed instances (in scene-walk order) have been captured. Shared
+   * (mapped) geometry attributes instances to an entity from OTHER
+   * products' extractions, so an entity's instance set grows across
+   * batches - the watermark makes each instance captured exactly once,
+   * in the same order the classic single walk would process it.
+   */
+  private readonly demandCapturedCounts_ = new Map<number, number>()
 
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
@@ -1336,52 +1350,68 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         this.demandCursor_ + Math.max(batchSize, 1),
         this.demandProducts_.length)
 
-    const batch = new Set<number>()
+    let extracted = 0
 
     for (; this.demandCursor_ < end; ++this.demandCursor_) {
 
       const localID = this.demandProducts_[this.demandCursor_]
 
       if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-        batch.add(localID)
+        ++extracted
       }
     }
 
-    if (meshCallback !== void 0 && batch.size > 0) {
-      this.streamMeshesForEntities_(batch, meshCallback)
+    if (meshCallback !== void 0) {
+      this.streamNewMeshes_(meshCallback)
     }
 
     return {
-      extracted: batch.size,
+      extracted,
       remaining: this.demandProducts_.length - this.demandCursor_,
     }
   }
 
   /**
-   * Walk the scene and emit FlatMeshes for the given entities only —
-   * the filtered core of streamAllMeshes with identical placed-geometry
-   * math. Also fixes a latent multi-call bug: the derived coordination
+   * Walk the scene and emit every not-yet-captured placed instance as
+   * per-entity DELTA FlatMeshes — the incremental core of
+   * streamAllMeshes with identical placed-geometry math, processed in
+   * walk order exactly once per instance (per-entity watermarks). An
+   * entity re-emits with only its NEW instances when shared/mapped
+   * geometry attributes more to it in later batches; consumers render
+   * deltas additively (the shared meshMap still accumulates each
+   * entity's FULL vector, so getFlatMesh stays whole-model correct).
+   *
+   * Also fixes a latent multi-call bug: the derived coordination
    * matrix is stored back to the model tuple, so later batches place
    * with the SAME coordination the first batch established
    * (streamAllMeshes never needed this — it runs once).
    *
-   * @param entityFilter Entity localIDs whose meshes to emit.
-   * @param meshCallback Receives one FlatMesh per matched entity.
+   * @param meshCallback Receives one delta FlatMesh per entity that
+   * gained instances this call.
    */
-  private streamMeshesForEntities_(
-      entityFilter: Set<number>,
+  private streamNewMeshes_(
       meshCallback: (mesh: FlatMesh) => void ): void {
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
     let coordinationMatrix = this.model[5]
-    const emitted = new Set<number>()
+    const seenThisPass = new Map<number, number>()
+    const deltas = new Map<number, PlacedGeometry[]>()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
 
-      if (entity?.localID === void 0 || !entityFilter.has(entity.localID) ||
-          entity.expressID === void 0) {
+      if (entity?.localID === void 0 || entity.expressID === void 0) {
+        continue
+      }
+
+      // Per-entity walk position vs watermark: instances before the
+      // watermark were captured in an earlier call (append-only walk
+      // order makes the count a stable cursor).
+      const walkIndex = seenThisPass.get(entity.localID) ?? 0
+      seenThisPass.set(entity.localID, walkIndex + 1)
+
+      if (walkIndex < (this.demandCapturedCounts_.get(entity.localID) ?? 0)) {
         continue
       }
 
@@ -1501,19 +1531,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       mesh[0].push(placed)
       mesh[1].geometries = mesh[0]
-      emitted.add(entity.expressID)
+
+      this.demandCapturedCounts_.set(
+          entity.localID,
+          (this.demandCapturedCounts_.get(entity.localID) ?? 0) + 1)
+
+      let delta = deltas.get(entity.expressID)
+      if (delta === void 0) {
+        delta = []
+        deltas.set(entity.expressID, delta)
+      }
+      delta.push(placed)
     }
 
     const vectorFlatMesh = this.model[4]
 
-    for (const expressID of emitted) {
+    for (const [expressID, placedList] of deltas) {
 
-      const mesh = meshMap.get(expressID)
-
-      if (mesh !== void 0) {
-        vectorFlatMesh.push(mesh[1])
-        meshCallback(mesh[1])
+      const placedVector: Vector<PlacedGeometry> = {
+        get: (index: number) => placedList[index] ?? placedList[0],
+        size: () => placedList.length,
+        push: (parameter: PlacedGeometry) => {
+          placedList.push(parameter)
+        },
       }
+      const deltaMesh: FlatMesh = {geometries: placedVector, expressID}
+
+      vectorFlatMesh.push(deltaMesh)
+      meshCallback(deltaMesh)
     }
   }
 
@@ -1523,6 +1568,30 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback
    */
   streamAllMeshes( meshCallback: (mesh: FlatMesh) => void) {
+
+    // Deferred models: the delta capture has already populated (or will
+    // populate) the shared meshMap — re-running the classic walk would
+    // push every instance a second time. Pump any remainder to
+    // completion and serve the accumulated full per-entity meshes.
+    if (this.deferredMode_) {
+
+      const noCallback = void 0
+
+      while (this.extractGeometryBatch(
+          DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
+        // draining
+      }
+      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+
+      const [, , meshMap, , vectorFlatMesh] = this.model
+
+      meshMap.forEach((mesh) => {
+        vectorFlatMesh.push(mesh[1])
+        meshCallback(mesh[1])
+      })
+
+      return
+    }
 
     const [model,
       scene,

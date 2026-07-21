@@ -792,6 +792,13 @@ export class IfcAPI {
    * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly
    * until `remaining` is 0.
    *
+   * DELTA CONTRACT: an entity may be emitted again in a LATER call with
+   * a FlatMesh containing only its NEW placed instances (shared/mapped
+   * geometry attributes instances to an entity from other products'
+   * extractions). Consumers must render/accumulate deltas additively —
+   * never key emissions by expressID with overwrite semantics. Each
+   * placed instance is emitted exactly once across all calls.
+   *
    * @param modelID handle retrieved by OpenModelStreamed
    * @param batchSize max products to extract this call
    * @param meshCallback receives each newly-extracted product's mesh

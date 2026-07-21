@@ -22,9 +22,10 @@ let buffer: Uint8Array
  * @param mesh The mesh.
  * @return {object} Plain comparable form.
  */
-function flatten( mesh: FlatMesh ): object {
+function flatten( mesh: FlatMesh, previous?: object ): object {
 
-  const geometries: object[] = []
+  const geometries: object[] =
+    ( previous as { geometries?: object[] } | undefined )?.geometries ?? []
 
   for ( let where = 0; where < mesh.geometries.size(); ++where ) {
 
@@ -65,14 +66,9 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
 
     expect( deferredID ).toBeGreaterThanOrEqual( 0 )
 
-    // Nothing extracted yet: the scene walk yields no meshes.
-    const before: number[] = []
-    api.StreamAllMeshes( deferredID, ( mesh ) => {
-      before.push( mesh.expressID )
-    } )
-    expect( before ).toHaveLength( 0 )
-
     // Pump in deliberately small batches; collect incremental meshes.
+    // (Deltas: an entity may re-emit with only its NEW instances —
+    // `flatten` accumulation in the map below must be additive.)
     const streamed = new Map<number, object>()
     let firstBatchCount = 0
     let rounds = 0
@@ -81,7 +77,9 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
 
       const { extracted, remaining } = api.ExtractGeometryBatch(
           deferredID, 7, ( mesh ) => {
-            streamed.set( mesh.expressID, flatten( mesh ) )
+            streamed.set(
+                mesh.expressID,
+                flatten( mesh, streamed.get( mesh.expressID ) ) )
           } )
 
       if ( rounds === 0 ) {
@@ -103,6 +101,34 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     // Exact parity per entity: ids, colors, transforms.
     for ( const [ expressID, mesh ] of classic ) {
       expect( streamed.get( expressID ) ).toEqual( mesh )
+    }
+
+    api.CloseModel( classicID )
+    api.CloseModel( deferredID )
+  }, 240000 )
+
+  test( 'StreamAllMeshes on a deferred model drains the pump and matches classic', async () => {
+
+    const classicID = api.OpenModel( buffer, SETTINGS )
+    const classic = new Map<number, object>()
+
+    api.StreamAllMeshes( classicID, ( mesh ) => {
+      classic.set( mesh.expressID, flatten( mesh ) )
+    } )
+
+    const deferredID = await api.OpenModelStreamed(
+        buffer, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    // No pump calls at all — the whole-model consumer must still get
+    // the complete mesh set (the shim drains internally).
+    const drained = new Map<number, object>()
+    api.StreamAllMeshes( deferredID, ( mesh ) => {
+      drained.set( mesh.expressID, flatten( mesh ) )
+    } )
+
+    expect( drained.size ).toBe( classic.size )
+    for ( const [ expressID, mesh ] of classic ) {
+      expect( drained.get( expressID ) ).toEqual( mesh )
     }
 
     api.CloseModel( classicID )
