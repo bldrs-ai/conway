@@ -55,6 +55,8 @@ const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
  */
 interface IfcProxyLoadState {
   conwaywasm: ConwayGeometry
+  /** True when opened without extraction (createDeferred). */
+  deferred?: boolean
   allTimeStart: number
   stepHeader: StepHeader
   model: IfcStepModel
@@ -78,6 +80,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       Vector<FlatMesh>, glmatrix.mat4]
   conwaywasm: ConwayGeometry
+
+  /** The extraction behind this model (drives the deferred batch pump). */
+  private conwayGeometry_: IfcGeometryExtraction
+
+  /** Was this model opened without extraction (DEFER_GEOMETRY)? */
+  private deferredMode_: boolean = false
+
+  /** Deferred-mode product worklist (file order), lazily enumerated. */
+  private demandProducts_?: number[]
+
+  /** Cursor into demandProducts_ — products before it are extracted. */
+  private demandCursor_ = 0
+
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
   identity: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -115,6 +130,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       IfcApiProxyIfc.parseAndExtract(modelID, data, new ConwayGeometry(wasmModule), settings)
 
     this.conwaywasm = loadState.conwaywasm
+    this.conwayGeometry_ = loadState.conwayGeometry
+    this.deferredMode_ = loadState.deferred === true
 
     const statistics = Logger.getStatistics(modelID)
 
@@ -304,6 +321,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const loadState = await IfcApiProxyIfc.parseColumnarAndExtractAsync(
         modelID, data, new ConwayGeometry(wasmModule), settings)
+
+    return new IfcApiProxyIfc(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Deferred-geometry streamed open (conway extension; slice A of
+   * Share's demand/tiled rendering — design doc
+   * demand-tiled-rendering.md): identical streamed columnar parse, but
+   * NO geometry extraction happens at open. The proxy registers with an
+   * empty scene wired to the demand-extraction seam; callers then pump
+   * {@link extractGeometryBatch} to extract products in file-order
+   * batches, receiving each batch's meshes incrementally — the scene,
+   * properties, and spatial structure work from the first batch.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The IFC data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS is honored for parse).
+   * @return {Promise<IfcApiProxyIfc>} The constructed proxy.
+   */
+  public static async createDeferred(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
+
+    const loadState = await IfcApiProxyIfc.parseColumnarAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings, true)
 
     return new IfcApiProxyIfc(modelID, data, wasmModule, settings, loadState)
   }
@@ -590,7 +635,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       modelID: number,
       data: Uint8Array,
       conwaywasm: ConwayGeometry,
-      settings?: Loadersettings ): Promise<IfcProxyLoadState> {
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
 
     const tracker = IfcApiProxyIfc.makeTracker(settings)
 
@@ -642,6 +688,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     statistics?.setParseTime(parseEndTime - parseStartTime)
 
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
+
+    // Deferred mode (createDeferred): no extraction now — prime the
+    // per-product demand seam and hand back the (empty) live scene the
+    // batch pump populates. `scene` is the same object streamAllMeshes
+    // walks, so meshes appear to consumers as batches extract.
+    if (deferGeometry) {
+
+      conwayGeometry.prepareDemandExtraction()
+
+      statistics?.setProductCount(model.typeCount(IfcProduct))
+
+      return {
+        conwaywasm,
+        deferred: true,
+        allTimeStart,
+        stepHeader,
+        model,
+        scene: conwayGeometry.scene,
+        conwayGeometry,
+        geometryTimeInMs: 0,
+      }
+    }
 
     tracker?.beginPhase('geometry', 'products')
 
@@ -1222,6 +1290,231 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   closeModel() {
     // Null operation.
+  }
+
+  /**
+   * Deferred-mode batch pump (conway extension; Share demand/tiled
+   * rendering slice A): extract the next `batchSize` products (file
+   * order) through the per-product demand seam and emit THIS BATCH's
+   * meshes through `meshCallback` — the incremental twin of
+   * streamAllMeshes. Placed-geometry math (coordination, scaling,
+   * centering) is identical; the shared meshMap is updated so
+   * getFlatMesh keeps working. Call repeatedly until `remaining` is 0.
+   *
+   * Requires a model opened with deferred geometry
+   * (`OpenModelStreamed(data, {..., DEFER_GEOMETRY: true})`); on a
+   * fully-extracted model this is a no-op returning remaining 0.
+   *
+   * @param batchSize Max products to extract this call (min 1).
+   * @param meshCallback Receives each newly-extracted product's mesh.
+   * @return {object} `{extracted, remaining}` — products processed this
+   * call and products still pending.
+   */
+  extractGeometryBatch(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
+
+    // Fully-extracted opens have nothing to pump — re-running the
+    // per-product extraction on them would duplicate scene work.
+    if (!this.deferredMode_) {
+      return {extracted: 0, remaining: 0}
+    }
+
+    if (this.demandProducts_ === void 0) {
+
+      const products: number[] = []
+
+      for (const product of this.model[0].types(IfcProduct)) {
+        products.push(product.localID)
+      }
+
+      this.demandProducts_ = products
+      this.demandCursor_ = 0
+    }
+
+    const end = Math.min(
+        this.demandCursor_ + Math.max(batchSize, 1),
+        this.demandProducts_.length)
+
+    const batch = new Set<number>()
+
+    for (; this.demandCursor_ < end; ++this.demandCursor_) {
+
+      const localID = this.demandProducts_[this.demandCursor_]
+
+      if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+        batch.add(localID)
+      }
+    }
+
+    if (meshCallback !== void 0 && batch.size > 0) {
+      this.streamMeshesForEntities_(batch, meshCallback)
+    }
+
+    return {
+      extracted: batch.size,
+      remaining: this.demandProducts_.length - this.demandCursor_,
+    }
+  }
+
+  /**
+   * Walk the scene and emit FlatMeshes for the given entities only —
+   * the filtered core of streamAllMeshes with identical placed-geometry
+   * math. Also fixes a latent multi-call bug: the derived coordination
+   * matrix is stored back to the model tuple, so later batches place
+   * with the SAME coordination the first batch established
+   * (streamAllMeshes never needed this — it runs once).
+   *
+   * @param entityFilter Entity localIDs whose meshes to emit.
+   * @param meshCallback Receives one FlatMesh per matched entity.
+   */
+  private streamMeshesForEntities_(
+      entityFilter: Set<number>,
+      meshCallback: (mesh: FlatMesh) => void ): void {
+
+    const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
+
+    let coordinationMatrix = this.model[5]
+    const emitted = new Set<number>()
+
+    // eslint-disable-next-line no-unused-vars
+    for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
+
+      if (entity?.localID === void 0 || !entityFilter.has(entity.localID) ||
+          entity.expressID === void 0) {
+        continue
+      }
+
+      if (geometry.type !== CanonicalMeshType.BUFFER_GEOMETRY || geometry.temporary) {
+        continue
+      }
+
+      const material_: CanonicalMaterial = material ?? {
+        name: '',
+        // eslint-disable-next-line no-magic-numbers
+        baseColor: [0.8, 0.8, 0.8, 1],
+        // eslint-disable-next-line no-magic-numbers
+        legacyColor: [0.8, 0.8, 0.8, 1],
+        doubleSided: true,
+        blend: 0,
+      }
+
+      let nativePt: Vector3
+      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        nativePt = geometry.geometry.getPoint(0)
+      }
+
+      const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
+      const center = geometry.geometry.normalize()
+
+      geomCenter[0] = center.x
+      geomCenter[1] = center.y
+      geomCenter[2] = center.z
+
+      const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
+      glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
+
+      const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
+
+      const geometryTransform = nativeTransform?.getValues()
+      let newMatrix: glmatrix.mat4
+
+      if (geometryTransform !== void 0) {
+        newMatrix = glmatrix.mat4.fromValues(
+            ...(geometryTransform as unknown as Parameters<typeof glmatrix.mat4.fromValues>))
+      } else {
+        newMatrix = glmatrix.mat4.create()
+      }
+
+      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+
+        const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
+        const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
+        glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix)
+
+        coordinationMatrix = glmatrix.mat4.create()
+        glmatrix.mat4.fromTranslation(coordinationMatrix,
+            [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
+
+        const scaleMatrix = glmatrix.mat4.create()
+        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
+            this.linearScalingFactor,
+            this.linearScalingFactor)
+
+        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
+        glmatrix.mat4.multiply(coordinationMatrix, this.NormalizeMat, coordinationMatrix)
+        glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
+
+        // Persist for every later batch (and getCoordinationMatrix).
+        this.model[5] = coordinationMatrix
+        this._isCoordinated = true
+      }
+
+      const newTransform = glmatrix.mat4.create()
+      const scaleMatrix = glmatrix.mat4.create()
+      const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
+          this.linearScalingFactor,
+          this.linearScalingFactor)
+
+      glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
+      glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
+      glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
+
+      const newTransformArr = Array.from(newTransform)
+
+      geometryMaterialTransformMap.set(expressID,
+          [geometry.geometry, material_, newTransformArr])
+
+      const color = {
+        x: material_.legacyColor[0],
+        y: material_.legacyColor[1],
+        z: material_.legacyColor[2],
+        w: material_.legacyColor[3],
+      }
+
+      const placed: PlacedGeometry = {
+        color,
+        geometryExpressID: expressID,
+        flatTransformation: newTransformArr,
+      }
+
+      let mesh = meshMap.get(entity.expressID)
+
+      if (mesh === void 0) {
+
+        const placedArray = new Array<PlacedGeometry>()
+        const placedVector: Vector<PlacedGeometry> = {
+          get: (index: number) => placedArray[index] ?? placed,
+          size: () => placedArray.length,
+          push: (parameter: PlacedGeometry) => {
+            placedArray.push(parameter)
+          },
+        }
+        const flatMesh: FlatMesh = {
+          geometries: placedVector,
+          expressID: entity.expressID,
+        }
+
+        mesh = [placedVector, flatMesh]
+        meshMap.set(entity.expressID, mesh)
+      }
+
+      mesh[0].push(placed)
+      mesh[1].geometries = mesh[0]
+      emitted.add(entity.expressID)
+    }
+
+    const vectorFlatMesh = this.model[4]
+
+    for (const expressID of emitted) {
+
+      const mesh = meshMap.get(expressID)
+
+      if (mesh !== void 0) {
+        vectorFlatMesh.push(mesh[1])
+        meshCallback(mesh[1])
+      }
+    }
   }
 
   /**

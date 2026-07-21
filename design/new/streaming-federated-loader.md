@@ -679,3 +679,36 @@ implementation a later arc):
   `design/new/step-regression.md`
 - Compat surface these APIs land on: `design/new/web-ifc-compat-surface.md`
 - Share consumers & product goals: [Share `design/new/lazy-properties-memory.md`](https://github.com/bldrs-ai/Share/blob/main/design/new/lazy-properties-memory.md)
+
+
+## Status addendum — 2026-07-21 (post-launch + browser-MT spike)
+
+**Shipped and launched.** The parse/index plane (M0–M2, M4, M7) and the
+demand machinery (M3, mem system, C++ TilePool + bindings, per-product
+extraction seam, `IfcTileAssetExtractor`, residency pump) are merged and
+released. Share consumes the streamed columnar open in production
+(default-on `OpenModelStreamed` via the compat shim, `disableStreamOpen`
+revert). Packaging landed as plane namespaces —
+`@bldrs-ai/conway/stream`, `/demand`, `/mem` — with the shim reframed as
+a retiring adapter. PSB (860 MB, 9.7 M records) measured on the shipped
+path: parse 13.4 s / +376 MB where the object phase used to blow up the
+heap; whole clean-tab load 52.6 s.
+
+**Browser-MT finding (Share #1610, conway-geom #148).** The assumption
+that flipping cross-origin isolation would buy ~2.8× on load-time
+geometry is refuted for the browser: profiled on PSB, that phase is
+~75 % serial JS extraction driver (record deserialization, parameter
+marshalling, dedup hashing) — the wasm the pthread pool can parallelize
+is a minority slice — and the MT build pays a ~35 % main-thread tax,
+netting zero-to-negative on real machines. Node/CLI keeps a ~1.5× MT
+win. Isolation infrastructure is proven and parked (Share #1612).
+
+**Consequence — milestone reordering.** Demand-driven, budgeted
+extraction (this doc's M3 plane consumed by the renderer) is promoted
+from memory work to the primary *performance* milestone: it deletes
+load-time whole-model extraction and the merged-geometry build instead
+of accelerating them. Revised order: (1) demand/tiled rendering in
+Share; (2) OPFS-windowed open from birth (needs the cooperative native
+open, #420); (3) JS extraction-driver shrink (conway-geom #148);
+(4) sidecar revisit path; (5) extraction off the main thread;
+(6) revisit browser MT/isolation after (3)/(5).
