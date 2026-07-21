@@ -521,6 +521,55 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   }
 
   /**
+   * Cooperative variant of parseDataBlockStreamed: identical parse and
+   * window-slide behaviour (same generator body, same boundary callback),
+   * but periodically awaits a macrotask so the event loop can run —
+   * browsers repaint progress UI during a large streamed parse instead of
+   * flagging the tab as stalled. Issue #301 §2 for the streamed path.
+   *
+   * @param input The input parsing buffer, positioned at the data section.
+   * @param onRecordBoundary Called at each top-level record boundary with the
+   * buffer; the callback may rebase the buffer's window in place.
+   * @param onRecordIndexed Called as each top-level record is indexed — see
+   * parseDataBlockStreamed.
+   * @param onProgress Optional byte-cursor progress callback.
+   * @param sink Optional index sink (columnar builds).
+   * @param yieldIntervalMs Minimum ms between event-loop yields.
+   * @return {Promise<BlockParseResult>} The parsing result, including the
+   * index and result enum.
+   */
+  public async parseDataBlockStreamedAsync(
+      input: ParsingBuffer,
+      onRecordBoundary: ( input: ParsingBuffer ) => void,
+      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+      onProgress?: ParseProgressCallback,
+      sink?: StepIndexSink<TypeIDType>,
+      yieldIntervalMs: number = DEFAULT_PARSE_YIELD_INTERVAL_MS ):
+      Promise<BlockParseResult<TypeIDType>> {
+
+    const parser =
+      this.parseDataBlockIncremental( input, onRecordBoundary, onRecordIndexed, sink )
+
+    let lastYield = Date.now()
+
+    while ( true ) {
+
+      const next = parser.next()
+
+      if ( next.done === true ) {
+        return next.value
+      }
+
+      onProgress?.( next.value )
+
+      if ( Date.now() - lastYield >= yieldIntervalMs ) {
+        await yieldToEventLoop()
+        lastYield = Date.now()
+      }
+    }
+  }
+
+  /**
    * Cooperative variant of parseDataBlock: identical parse (same generator
    * body), but periodically awaits a macrotask so the event loop can run —
    * browsers repaint progress UI, watchdog timers fire, and the tab is not
