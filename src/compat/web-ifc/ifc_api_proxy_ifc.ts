@@ -41,6 +41,10 @@ import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 
+// Batch size used when a whole-model consumer (streamAllMeshes) drains
+// a deferred model's remaining products synchronously.
+const DEFERRED_DRAIN_BATCH = 256
+
 /* Moving-window size for the streamed columnar parse (matches the
  * ifc_stream_open default; the window bounds parse-time scratch, not
  * the source buffer, which the model keeps resident here). */
@@ -1564,6 +1568,30 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback
    */
   streamAllMeshes( meshCallback: (mesh: FlatMesh) => void) {
+
+    // Deferred models: the delta capture has already populated (or will
+    // populate) the shared meshMap — re-running the classic walk would
+    // push every instance a second time. Pump any remainder to
+    // completion and serve the accumulated full per-entity meshes.
+    if (this.deferredMode_) {
+
+      const noCallback = void 0
+
+      while (this.extractGeometryBatch(
+          DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
+        // draining
+      }
+      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+
+      const [, , meshMap, , vectorFlatMesh] = this.model
+
+      meshMap.forEach((mesh) => {
+        vectorFlatMesh.push(mesh[1])
+        meshCallback(mesh[1])
+      })
+
+      return
+    }
 
     const [model,
       scene,
