@@ -68,11 +68,21 @@ export class IfcTileAssetExtractor implements TileAssetExtractor {
   }
 
   /**
-   * The assets (produced meshes) for a product, extracting it on first ask.
+   * The assets (meshes) a product references, extracting it on first ask.
+   *
+   * Attribution walks the product's **representation-item closure**
+   * (recursing through mapped items into their shared source
+   * representations) and claims every item that has an extracted mesh —
+   * NOT a before/after diff of the mesh set. The distinction is the
+   * mapped-item case: a shared source's meshes already exist when the
+   * second product asks, so a diff would omit them and its tile would not
+   * hold references to geometry it renders. Closure attribution is
+   * extraction-order independent.
    *
    * @param productLocalID The product's local ID.
-   * @return {GeometryAsset<number>[]} One asset per produced mesh, keyed by
-   * the mesh's representation-item localID, sized at exact reified cost.
+   * @return {GeometryAsset<number>[]} One asset per referenced mesh, keyed
+   * by the mesh's representation-item localID (shared across products for
+   * mapped sources), sized at exact reified cost.
    */
   public assetsOf( productLocalID: number ): GeometryAsset<number>[] {
 
@@ -82,31 +92,17 @@ export class IfcTileAssetExtractor implements TileAssetExtractor {
       return cached
     }
 
-    const geometry = this.extraction_.model.geometry
-
-    // Snapshot existing mesh keys so this product's contribution is the
-    // difference. O(meshes) per first ask — acceptable for the demand path;
-    // an extraction-side "produced meshes" report can replace it if
-    // profiling ever flags it.
-    const before = new Set<number>()
-
-    for ( const mesh of geometry ) {
-      before.add( mesh.localID )
-    }
-
     this.extraction_.extractProductGeometryByLocalID( productLocalID )
 
+    const geometry = this.extraction_.model.geometry
     const assets: GeometryAsset<number>[] = []
 
-    for ( const mesh of geometry ) {
+    for ( const itemLocalID of this.representationItemIDs_( productLocalID ) ) {
 
-      if ( before.has( mesh.localID ) ) {
-        continue
-      }
+      const mesh = geometry.getByLocalID( itemLocalID )
 
-      const wasmGeometry =
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ( mesh as any ).geometry
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wasmGeometry = ( mesh as any )?.geometry
 
       if ( wasmGeometry === void 0 ||
         typeof wasmGeometry.GetVertexDataSize !== 'function' ) {
@@ -117,12 +113,63 @@ export class IfcTileAssetExtractor implements TileAssetExtractor {
         wasmGeometry.GetVertexDataSize() * FLOAT_BYTES +
         wasmGeometry.GetIndexDataSize() * INDEX_BYTES
 
-      assets.push( { assetID: mesh.localID, byteSize } )
+      assets.push( { assetID: itemLocalID, byteSize } )
     }
 
     this.assetsByProduct_.set( productLocalID, assets )
 
     return assets
+  }
+
+  /**
+   * The localIDs of every representation item in a product's Body /
+   * Facetation representations, recursing through mapped items into their
+   * (shared) source representations — the key space extraction stores
+   * meshes under.
+   *
+   * @param productLocalID The product's local ID.
+   * @return {Set<number>} The representation-item localIDs.
+   */
+  private representationItemIDs_( productLocalID: number ): Set<number> {
+
+    const ids = new Set<number>()
+    const element = this.extraction_.model.getElementByLocalID( productLocalID )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const representations = ( element as any )?.Representation?.Representations
+
+    if ( representations === void 0 || representations === null ) {
+      return ids
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const addItems = ( items: any[] ): void => {
+      for ( const item of items ) {
+
+        ids.add( item.localID )
+
+        // Mapped item: recurse into the shared source representation.
+        const source = item.MappingSource?.MappedRepresentation?.Items
+
+        if ( source !== void 0 && source !== null ) {
+          addItems( source )
+        }
+      }
+    }
+
+    for ( const representation of representations ) {
+
+      const identifier = representation.RepresentationIdentifier
+
+      if ( identifier !== null && identifier !== 'Body' &&
+        identifier !== 'Facetation' ) {
+        continue
+      }
+
+      addItems( representation.Items )
+    }
+
+    return ids
   }
 
   /**
