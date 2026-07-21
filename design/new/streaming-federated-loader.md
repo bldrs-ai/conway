@@ -712,3 +712,17 @@ Share; (2) OPFS-windowed open from birth (needs the cooperative native
 open, #420); (3) JS extraction-driver shrink (conway-geom #148);
 (4) sidecar revisit path; (5) extraction off the main thread;
 (6) revisit browser MT/isolation after (3)/(5).
+
+**Parse-time preview channel (slice A2).** Durable extraction cannot
+run mid-parse: relationship records (rel-voids, rel-materials, styled
+items) extend to ~92–97 % of real files' depth, so any prefix
+extraction can miss openings/materials. The shipped design accepts
+that: `ColumnarIndexSink.snapshot()` produces prefix columns between
+the cooperative parse's yields, and a `StreamedPreviewChannel`
+(deferred opens with `ON_PREVIEW_MESH`) builds throwaway prefix
+models/extractions in growing generations, emitting self-contained,
+byte-capped payload copies — first meshes within the first second of a
+large parse (measured: 583 ms into Schependomlaan's 1.2 s parse). The
+post-parse durable pump re-extracts everything and replaces the
+preview, so final parity is untouched; the channel pins the
+coordination frame the pump then adopts.

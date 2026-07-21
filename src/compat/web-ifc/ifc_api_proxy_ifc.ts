@@ -28,8 +28,11 @@ import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource } from '../../step/parsing/byte_source'
 import {
-  buildColumnarIndexStreamingAsync,
+  buildIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
+import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import { StreamedPreviewChannel } from './streamed_preview_channel'
+import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
@@ -61,6 +64,9 @@ interface IfcProxyLoadState {
   conwaywasm: ConwayGeometry
   /** True when opened without extraction (createDeferred). */
   deferred?: boolean
+  /** Coordination matrix the parse-time preview channel derived (slice
+   * A2) — adopted by the durable capture so both share one frame. */
+  previewCoordinationMatrix?: glmatrix.mat4
   allTimeStart: number
   stepHeader: StepHeader
   model: IfcStepModel
@@ -247,6 +253,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // save settings
     this.settings = settings
+
+    // Deferred opens whose preview channel already established the
+    // coordination frame: adopt it, so the durable capture skips its own
+    // derivation and places exactly where the preview did.
+    if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
+      this.model[5] = loadState.previewCoordinationMatrix
+      this._isCoordinated = true
+    }
 
     let FILE_NAME = stepHeader.headers.get('FILE_NAME')
 
@@ -683,9 +697,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const parseStartTime = Date.now()
 
-    const { columns, result } = await buildColumnarIndexStreamingAsync(
-        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
-        void 0, parseTick)
+    // Inline twin of buildColumnarIndexStreamingAsync — the sink is created
+    // here so the parse-time preview channel (slice A2) can watch it grow
+    // and snapshot prefix models between the parse's cooperative yields.
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+
+    const previewChannel =
+      deferGeometry && settings?.ON_PREVIEW_MESH !== void 0 ?
+        new StreamedPreviewChannel(
+            data, conwaywasm, sink,
+            settings.COORDINATE_TO_ORIGIN === true,
+            settings.ON_PREVIEW_MESH ) : void 0
+
+    previewChannel?.start()
+
+    let result: ParseResult
+
+    try {
+      ( { result } = await buildIndexStreamingAsync(
+          new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+          void 0, sink, parseTick) )
+    } finally {
+      previewChannel?.stop()
+    }
+
+    const columns = sink.finalize()
 
     const parseEndTime = Date.now()
 
@@ -716,6 +752,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
+        // Pin the durable pump's coordination to the preview channel's
+        // (derived from the same first instance with the same math), so
+        // preview payloads and durable meshes share one frame.
+        previewCoordinationMatrix: previewChannel?.coordinationMatrix,
         allTimeStart,
         stepHeader,
         model,

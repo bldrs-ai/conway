@@ -11,6 +11,9 @@ import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiModelPassthroughFactory } from './ifc_api_model_passthrough_factory'
 import { Properties } from './properties'
+import type { PreviewMeshPayload } from './streamed_preview_channel'
+
+export type { PreviewMeshPayload } from './streamed_preview_channel'
 
 
 export * from './ifc2x4'
@@ -61,6 +64,18 @@ export interface Loadersettings {
    * classic open paths and by the internal streamed→classic fallback.
    */
   DEFER_GEOMETRY?: boolean
+
+  /**
+   * Conway extension (OpenModelStreamed + DEFER_GEOMETRY only; demand/tiled
+   * rendering slice A2): receive PREVIEW mesh payloads while the parse is
+   * still running — self-contained (geometry copied out of the wasm heap),
+   * so they can be uploaded before the model exists. Preview quality:
+   * relationship records (voids, materials) live near the end of real IFC
+   * files, so previews can miss openings/materials; the durable batch pump
+   * re-extracts every product after the parse and REPLACES the preview.
+   * Consumers must treat these as disposable. Ignored everywhere else.
+   */
+  ON_PREVIEW_MESH?: ( mesh: PreviewMeshPayload ) => void
 }
 
 /**
