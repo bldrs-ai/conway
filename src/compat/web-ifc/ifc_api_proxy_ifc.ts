@@ -113,6 +113,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
 
+  /**
+   * Coordination matrix the deferred capture derived (or adopted from
+   * the parse-time preview channel). Kept OFF the model tuple's slot 5
+   * deliberately: classic streamAllMeshes derives its coordination into
+   * a local and getCoordinationMatrix therefore returns identity —
+   * consumers (Share) stamp that result onto the assembled model, so a
+   * deferred open must present the same identity or coordination would
+   * apply twice. This field is only the pump's internal multi-call
+   * memory.
+   */
+  private demandCoordination_?: glmatrix.mat4
+
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
   identity: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -256,9 +268,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // Deferred opens whose preview channel already established the
     // coordination frame: adopt it, so the durable capture skips its own
-    // derivation and places exactly where the preview did.
+    // derivation and places exactly where the preview did. (Internal
+    // only — getCoordinationMatrix stays identity, see
+    // demandCoordination_.)
     if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
-      this.model[5] = loadState.previewCoordinationMatrix
+      this.demandCoordination_ = loadState.previewCoordinationMatrix
       this._isCoordinated = true
     }
 
@@ -1422,9 +1436,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * entity's FULL vector, so getFlatMesh stays whole-model correct).
    *
    * Also fixes a latent multi-call bug: the derived coordination
-   * matrix is stored back to the model tuple, so later batches place
+   * matrix is remembered (demandCoordination_), so later batches place
    * with the SAME coordination the first batch established
-   * (streamAllMeshes never needed this — it runs once).
+   * (streamAllMeshes never needed this — it runs once). It is NOT
+   * exposed through getCoordinationMatrix, which keeps the classic
+   * identity contract consumers stamp onto assembled models.
    *
    * @param meshCallback Receives one delta FlatMesh per entity that
    * gained instances this call.
@@ -1434,7 +1450,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix = this.demandCoordination_ ?? glmatrix.mat4.create()
     const seenThisPass = new Map<number, number>()
     const deltas = new Map<number, PlacedGeometry[]>()
 
@@ -1515,8 +1531,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         glmatrix.mat4.multiply(coordinationMatrix, this.NormalizeMat, coordinationMatrix)
         glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
 
-        // Persist for every later batch (and getCoordinationMatrix).
-        this.model[5] = coordinationMatrix
+        // Persist for every later batch (internal only — see
+        // demandCoordination_'s identity-contract note).
+        this.demandCoordination_ = coordinationMatrix
         this._isCoordinated = true
       }
 

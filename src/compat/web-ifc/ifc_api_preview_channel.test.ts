@@ -219,23 +219,23 @@ describe( 'StreamedPreviewChannel', () => {
       expect( carrier.indexData!.length ).toBeGreaterThan( 0 )
     }
 
-    // The channel's pinned coordination frame is the durable pump's:
-    // classic StreamAllMeshes never persists its derived matrix (single
-    // walk), but the deferred pump does — and the preview must place in
-    // exactly that frame so the swap is seamless.
+    // The channel derived and pinned a coordination frame (proved
+    // equivalent to classic's by the transform parity above), and the
+    // deferred open must keep the classic GetCoordinationMatrix
+    // contract: identity, because placed transforms are premultiplied
+    // and consumers stamp the result onto assembled models — a
+    // non-identity return would coordinate twice.
+    expect( channel.coordinationMatrix ).toBeDefined()
+
     const deferredID = await api.OpenModelStreamed(
         data, { ...SETTINGS, DEFER_GEOMETRY: true } )
 
     api.StreamAllMeshes( deferredID, () => { /* drain */ } )
 
-    const pumpCoordination = api.GetCoordinationMatrix( deferredID )
+    const classicCoordination = api.GetCoordinationMatrix( classicID )
+    const deferredCoordination = api.GetCoordinationMatrix( deferredID )
 
-    expect( channel.coordinationMatrix ).toBeDefined()
-
-    for ( let where = 0; where < 16; ++where ) {
-      expect( channel.coordinationMatrix![ where ] )
-          .toBeCloseTo( pumpCoordination[ where ], 6 )
-    }
+    expect( deferredCoordination ).toEqual( classicCoordination )
 
     api.CloseModel( classicID )
     api.CloseModel( deferredID )
