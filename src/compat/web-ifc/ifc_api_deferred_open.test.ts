@@ -135,6 +135,66 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api.CloseModel( deferredID )
   }, 240000 )
 
+  test( 'deferred GetGeometry serves byte-identical vertex content to classic', async () => {
+
+    // The build multiplies GetGeometry FLOAT vertices by captured
+    // transforms, and the float mirror's frame must match the scene
+    // transforms (frozen at mesh add — see IfcModelGeometry.add). A
+    // per-geometry frame shift here renders as scattered pieces even
+    // with perfect transform parity, which transform-only assertions
+    // cannot catch.
+    //
+    // Fresh IfcAPI: CloseModel destroys the shared wasm processor, and
+    // models opened after ANY close serve empty geometry payloads (a
+    // long-standing multi-open shim quirk — browsers open one model per
+    // page). The shared `api` has closed models by the time this runs.
+    const api2 = new IfcAPI()
+    await api2.Init()
+
+    const classicID = api2.OpenModel( buffer, SETTINGS )
+    const geometryIDs = new Set<number>()
+
+    api2.StreamAllMeshes( classicID, ( mesh ) => {
+      for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+        geometryIDs.add( mesh.geometries.get( where ).geometryExpressID )
+      }
+    } )
+
+    const deferredID = await api2.OpenModelStreamed(
+        buffer, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    api2.StreamAllMeshes( deferredID, () => { /* drain */ } )
+
+    let compared = 0
+
+    for ( const geometryID of geometryIDs ) {
+
+      const classicGeometry = api2.GetGeometry( classicID, geometryID )
+      const deferredGeometry = api2.GetGeometry( deferredID, geometryID )
+
+      const classicSize = classicGeometry.GetVertexDataSize()
+
+      if ( classicSize === 0 ) {
+        continue
+      }
+
+      expect( deferredGeometry.GetVertexDataSize() ).toBe( classicSize )
+
+      const classicVertices =
+        api2.GetVertexArray( classicGeometry.GetVertexData(), classicSize )
+      const deferredVertices =
+        api2.GetVertexArray( deferredGeometry.GetVertexData(), classicSize )
+
+      expect( deferredVertices ).toEqual( classicVertices )
+      ++compared
+    }
+
+    expect( compared ).toBeGreaterThan( 0 )
+
+    api2.CloseModel( classicID )
+    api2.CloseModel( deferredID )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )
