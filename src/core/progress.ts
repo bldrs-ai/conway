@@ -52,9 +52,35 @@ export const DEFAULT_PROGRESS_INTERVAL_MS = 100
  * repaint progress UI and timers (e.g. stall watchdogs) can fire. Used by the
  * *Async load variants between progress ticks.
  *
- * @return {Promise<void>} A promise resolved on the next timer turn.
+ * Not timer-based where avoidable: background tabs clamp setTimeout to >=1s,
+ * which would collapse a cooperative parse to a ~5% duty cycle the moment
+ * the tab loses focus. scheduler.yield() (and the MessageChannel fallback)
+ * post ordinary tasks, which are not clamped — loads keep their CPU in
+ * backgrounded tabs. setTimeout remains as the last-resort fallback for
+ * environments without either (where throttling doesn't apply anyway).
+ *
+ * @return {Promise<void>} A promise resolved on the next event-loop task.
  */
 export function yieldToEventLoop(): Promise<void> {
+
+  const scheduler =
+    ( globalThis as { scheduler?: { yield?: () => Promise<void> } } ).scheduler
+
+  if ( typeof scheduler?.yield === 'function' ) {
+    return scheduler.yield()
+  }
+
+  if ( typeof MessageChannel === 'function' ) {
+    return new Promise<void>( ( resolve ) => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        channel.port1.close()
+        resolve()
+      }
+      channel.port2.postMessage( null )
+    } )
+  }
+
   return new Promise<void>( ( resolve ) => {
     setTimeout( resolve, 0 )
   } )

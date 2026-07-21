@@ -85,15 +85,25 @@ describe( 'ProgressTracker', () => {
 
 describe( 'yieldToEventLoop', () => {
 
-  test( 'lets queued macrotasks run', async () => {
+  test( 'does not starve queued timers', async () => {
 
+    // The yield posts an ordinary task (scheduler.yield / MessageChannel —
+    // deliberately NOT a timer, so background tabs' >=1s setTimeout clamp
+    // cannot collapse a cooperative parse). Message tasks can be serviced
+    // ahead of the timer queue, so a due timer is not guaranteed to run
+    // within ONE yield — the contract is that repeated yielding lets due
+    // timers fire promptly (stall watchdogs stay live during a parse).
     let timerRan = false
 
     setTimeout( () => {
       timerRan = true
     }, 0 )
 
-    await yieldToEventLoop()
+    const MAX_YIELDS = 50
+
+    for ( let where = 0; where < MAX_YIELDS && !timerRan; ++where ) {
+      await yieldToEventLoop()
+    }
 
     expect( timerRan ).toBe( true )
   } )

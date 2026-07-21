@@ -52,9 +52,25 @@ export class IfcModelGeometry implements ModelGeometry {
   /**
    * Add a mesh to the geometry cache.
    *
+   * Freezes the native float vertex mirror at add time (one
+   * GetVertexData call): consumers (the compat GetGeometry surface)
+   * read float vertices whose frame must match the scene transforms,
+   * which are authored against the geometry AS CREATED. Later native
+   * mutations that keep the vertex count (normalize's centering)
+   * deliberately do NOT refresh the mirror, so every extraction path —
+   * whole-model walk, per-product demand pump, parse-time preview —
+   * serves the same creation-frame floats. Without this, paths that
+   * first read vertices only after a centering mutation serve
+   * per-geometry-shifted vertices against unshifted transforms
+   * (Share's demand-path "scatter").
+   *
    * @param mesh
    */
   public add(mesh: CanonicalMesh) {
+
+    if (mesh.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+      mesh.geometry.GetVertexData()
+    }
 
     this.meshes_.set(mesh.localID, mesh)
   }
