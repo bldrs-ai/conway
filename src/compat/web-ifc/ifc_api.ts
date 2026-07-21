@@ -1,4 +1,5 @@
 import { ConwayGeometry, FileHandlerFunction as FileHandlerCallback,
+  setModulePrefix,
  } from '../../index'
 import {versionString} from '../../version/version'
 import Logger, { LogLevel as ConwayLogLevel } from '../../logging/logger'
@@ -70,6 +71,39 @@ const CONWAY_LOG_LEVEL_BY_WEBIFC: Record<LogLevel, ConwayLogLevel> = {
   [LogLevel.LOG_LEVEL_WARN]: ConwayLogLevel.WARNING,
   [LogLevel.LOG_LEVEL_ERROR]: ConwayLogLevel.ERROR,
   [LogLevel.LOG_LEVEL_OFF]: ConwayLogLevel.OFF,
+}
+
+// The directory conway-geom's web init locates wasm from when no
+// embedder path is configured — also the conventional serve location
+// (Share copies Dist/* there at build time).
+const DEFAULT_WEB_WASM_DIRECTORY = '/static/js/'
+
+/**
+ * Normalize an embedder wasm directory (the SetWasmPath value) to the
+ * absolute site path the web engine modules are served from — the
+ * runtime module prefix isolated (multithreaded) contexts import the
+ * engine from. Web wasm paths are site-root-relative by convention
+ * ('./static/js/'); missing input falls back to the same '/static/js/'
+ * directory conway-geom's web init already uses to locate wasm.
+ *
+ * @param wasmPath The embedder-configured wasm directory, if any.
+ * @return {string} Absolute directory with a trailing slash.
+ */
+export function webWasmDirectory(wasmPath: string | undefined): string {
+
+  let directory = wasmPath ?? ''
+
+  if (directory === '') {
+    return DEFAULT_WEB_WASM_DIRECTORY
+  }
+
+  if (directory.startsWith('./')) {
+    directory = directory.substring(1)
+  } else if (!directory.startsWith('/')) {
+    directory = `/${directory}`
+  }
+
+  return directory.endsWith('/') ? directory : `${directory}/`
 }
 
 export interface Vector<T> {
@@ -178,6 +212,20 @@ export class IfcAPI {
     Environment.checkEnvironment()
     Logger.initializeWasmCallbacks()
     Logger.info(versionString)
+
+    // Cross-origin-isolated web contexts select the multithreaded wasm,
+    // whose pthread workers resolve their worker script from the engine
+    // module's own import.meta.url. A bundler-inlined copy of the glue
+    // gives workers a wrong URL (the worker script 404s and MT init dies
+    // with a bare error Event — Share #1610). Setting a runtime module
+    // prefix makes conway-geom import the engine module from the
+    // directory it is actually served from, so import.meta.url — and
+    // therefore the worker script URL — is correct. Web wasm paths are
+    // site-root-relative by convention; no-op outside isolated windows.
+    if (typeof window !== 'undefined' &&
+        (window as { crossOriginIsolated?: boolean }).crossOriginIsolated === true) {
+      setModulePrefix(webWasmDirectory(this.wasmPath))
+    }
     const locateFileHandler: LocateFileHandlerFn = (path, prefix) => {
       // when the wasm module requests the wasm file, we redirect to include the user specified path
       if (path.endsWith('.wasm')) {
