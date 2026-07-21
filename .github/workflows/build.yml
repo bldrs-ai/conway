@@ -6,7 +6,8 @@ on:
     # Skip the heavy build + IFC regression on doc-only PRs. paths-ignore
     # skips the workflow only when EVERY changed file matches — a PR that
     # also touches code/config still runs the full suite. Push-to-main
-    # (auto-publish, perf) is intentionally left unfiltered below.
+    # (auto-publish) and rc-tag pushes (perf) are intentionally left
+    # unfiltered below.
     # NOTE: if `build` / `run-ifc-regression` are *required* status checks
     # in branch protection, a path-skipped run reports nothing and the PR
     # waits forever — switch to a per-job `if:` gate instead (a skipped-by-if
@@ -17,9 +18,19 @@ on:
       - 'docs/**'
   push:
     branches: [main]
+    # Release-candidate tags trigger the EXTENDED suite (the perf-three-*
+    # benchmarks). Those benchmarks used to run on every merge — the largest
+    # CI cost line (~38 large-runner-min/merge, mostly the 24-min private H3
+    # run) — but per-commit perf is redundant while perf is actively reviewed
+    # per-model at PR time. Now a full perf sweep runs only when a human
+    # blesses a prod-worthy point by pushing an `rc-*` tag. auto-publish's
+    # own `<version>` tags are numeric (e.g. 1.399.1234) and do NOT match
+    # `rc-*`, so continuous-release tagging never triggers this path.
+    tags:
+      - 'rc-*'
   # Manual runs from any branch (Actions > CI > Run workflow) so the
-  # perf jobs — normally push-to-main only — can be exercised and debugged
-  # on a branch without merging. auto-publish stays push:main-only.
+  # perf jobs — normally rc-tag only — can be exercised and debugged on a
+  # branch without cutting a tag. auto-publish stays push:main-only.
   workflow_dispatch:
 
 # Cancel superseded runs so a rapid series of pushes to the same PR doesn't
@@ -709,7 +720,12 @@ jobs:
   # ---------------------------------------------------------------------------
   perf-three-public:
     needs: run-ifc-regression
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    # Extended suite: runs on an `rc-*` release-candidate tag (a manual
+    # prod-blessing) or on-demand via workflow_dispatch — NOT on plain merges
+    # to main. build + run-ifc-regression (ungated) still run on the tag, so
+    # the candidate tarball this job benchmarks is produced; auto-publish is
+    # main-branch-only and does not fire on a tag ref.
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
@@ -1016,7 +1032,12 @@ jobs:
   # ---------------------------------------------------------------------------
   perf-three-private:
     needs: run-ifc-regression
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    # Extended suite: runs on an `rc-*` release-candidate tag (a manual
+    # prod-blessing) or on-demand via workflow_dispatch — NOT on plain merges
+    # to main. build + run-ifc-regression (ungated) still run on the tag, so
+    # the candidate tarball this job benchmarks is produced; auto-publish is
+    # main-branch-only and does not fire on a tag ref.
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     timeout-minutes: 60
     permissions:
