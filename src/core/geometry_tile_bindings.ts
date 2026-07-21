@@ -112,6 +112,11 @@ export function createWasmTileBackend(
     budgetBytes: number,
     chunkBytes: number ): WasmTileBackend {
 
+  // TS pool first: if the config is invalid on the TS side (non-integer or
+  // degenerate chunking), fail before touching the wasm pool so no
+  // initialized-but-unowned wasm region is left behind.
+  const pool = new ChunkedPool( budgetBytes, chunkBytes )
+
   if ( !bindings.initGeometryTilePool( budgetBytes, chunkBytes ) ) {
     throw new Error(
         `Wasm tile pool rejected init (budget ${budgetBytes}, ` +
@@ -127,8 +132,6 @@ export function createWasmTileBackend(
       bindings.releaseGeometryTile( assetID )
     },
   }
-
-  const pool = new ChunkedPool( budgetBytes, chunkBytes )
 
   return { pool, tiles: new GeometryTilePool<number>( pool, source ) }
 }
