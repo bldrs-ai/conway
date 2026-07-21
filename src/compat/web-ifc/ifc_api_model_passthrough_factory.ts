@@ -125,7 +125,9 @@ export class IfcApiModelPassthroughFactory {
 
       try {
 
-        return await IfcApiProxyIfc.createStreamed(modelID, data, wasmModule, settings)
+        return settings?.DEFER_GEOMETRY === true ?
+          await IfcApiProxyIfc.createDeferred(modelID, data, wasmModule, settings) :
+          await IfcApiProxyIfc.createStreamed(modelID, data, wasmModule, settings)
 
       } catch ( e ) {
 

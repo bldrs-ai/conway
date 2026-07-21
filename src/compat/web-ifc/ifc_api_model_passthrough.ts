@@ -11,6 +11,13 @@ export interface IfcApiModelPassthrough {
   loadAllGeometry(): Vector<FlatMesh>
   streamAllMeshesWithTypes(types: number[], meshCallback: (mesh: FlatMesh) => void): void
   streamAllMeshes(meshCallback: (mesh: FlatMesh) => void): void
+  /**
+   * Deferred-mode batch pump (IFC proxies opened with DEFER_GEOMETRY) —
+   * see IfcApiProxyIfc.extractGeometryBatch.
+   */
+  extractGeometryBatch?(
+    batchSize: number,
+    meshCallback?: (mesh: FlatMesh) => void): {extracted: number, remaining: number}
   getCoordinationMatrix(): number[]
   getAllLines(): Vector<number>
   getLineIDsWithType(type: number): Vector<number>

@@ -50,6 +50,17 @@ export interface Loadersettings {
    * embedders can print the model line as early as possible (issue #301).
    */
   ON_MODEL_INFO?: ( info: ModelInfo ) => void
+
+  /**
+   * Conway extension (OpenModelStreamed only; Share demand/tiled
+   * rendering slice A): open with NO geometry extraction — the model
+   * registers with an empty scene and the embedder pumps
+   * `ExtractGeometryBatch` to extract products in file-order batches,
+   * receiving each batch's meshes incrementally. Properties and the
+   * spatial structure work from the first batch. Ignored by the
+   * classic open paths and by the internal streamed→classic fallback.
+   */
+  DEFER_GEOMETRY?: boolean
 }
 
 /**
@@ -771,6 +782,35 @@ export class IfcAPI {
     Logger.info(`[CloseModel]: Closing model ${modelID}`)
     this.models.delete(modelID)
     this.conwaywasm.destroy()
+  }
+
+  /**
+   * Conway extension (Share demand/tiled rendering slice A): on a model
+   * opened with `OpenModelStreamed(data, {DEFER_GEOMETRY: true})`,
+   * extract the next `batchSize` products and emit this batch's meshes —
+   * the incremental twin of StreamAllMeshes. Feature-detect with
+   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly
+   * until `remaining` is 0.
+   *
+   * @param modelID handle retrieved by OpenModelStreamed
+   * @param batchSize max products to extract this call
+   * @param meshCallback receives each newly-extracted product's mesh
+   * @return {object} `{extracted, remaining}`; `{extracted: 0,
+   * remaining: 0}` for unknown models or models without the deferred
+   * pump (non-IFC / fully-extracted opens).
+   */
+  ExtractGeometryBatch(
+      modelID: number,
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
+
+    const result = this.models.get(modelID)
+
+    if (result?.extractGeometryBatch === void 0) {
+      return {extracted: 0, remaining: 0}
+    }
+
+    return result.extractGeometryBatch(batchSize, meshCallback)
   }
 
   /**
