@@ -28,7 +28,7 @@ import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource } from '../../step/parsing/byte_source'
 import {
-  buildColumnarIndexStreaming,
+  buildColumnarIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
@@ -572,12 +572,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * classic open, and `spillSourceToExternalStore` works afterwards as
    * usual.
    *
-   * The columnar build is a single synchronous pass (no mid-parse
-   * yields yet), so the 'dataParse' progress phase reports its
-   * boundaries without intermediate ticks; extraction remains
-   * cooperative. Throws when the streamed parse is anything but
-   * COMPLETE — the caller (OpenModelStreamed) falls back to the
-   * classic path, which tolerates recoverable parses.
+   * The columnar build is cooperative (periodic event-loop yields, like
+   * the classic parseDataBlockAsync) with absolute byte-cursor progress
+   * ticks, and extraction is cooperative too — the streamed open keeps
+   * the repaint/no-stall property of OpenModelAsync (#301 §2). Throws
+   * when the streamed parse is anything but COMPLETE — the caller
+   * (OpenModelStreamed) falls back to the classic path, which tolerates
+   * recoverable parses.
    *
    * @param modelID The model ID being opened.
    * @param data The IFC data buffer.
@@ -617,10 +618,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
     const parseStartTime = Date.now()
 
-    const { columns, result } = buildColumnarIndexStreaming(
-        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES)
+    const { columns, result } = await buildColumnarIndexStreamingAsync(
+        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+        void 0, parseTick)
 
     const parseEndTime = Date.now()
 

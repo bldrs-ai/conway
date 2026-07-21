@@ -34,7 +34,16 @@ export {
 // --- Streaming / demand-geometry surface (epic #390; design doc
 // design/new/streaming-federated-loader.md). The release-facing API for
 // fixed-memory opens and demand-driven residency.
+//
+// Canonical homes are the plane subpath modules — `@bldrs-ai/conway/stream`,
+// `/demand`, and `/mem` — which is where new conway-native APIs land (the
+// web-ifc compat shim stays an adapter and is headed for retirement). The
+// flat re-exports below are kept for root-import compatibility.
 export { openStreamedIfcModel, StreamedIfcOpen, StreamedIfcOpenOptions } from './ifc/ifc_stream_open'
+export {
+  buildColumnarIndexStreaming,
+  buildColumnarIndexStreamingAsync,
+} from './step/parsing/streaming_index_builder'
 export { ByteSource, BufferByteSource } from './step/parsing/byte_source'
 export {
   StepExternalByteStore,

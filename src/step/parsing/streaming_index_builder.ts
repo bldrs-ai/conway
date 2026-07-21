@@ -211,6 +211,138 @@ const MIN_WINDOW = 4 * 1024
 
 
 /**
+ * Cooperative twin of {@link buildIndexStreaming}: identical parse, window
+ * and grow-and-restart behaviour (mirrored the same way the parser mirrors
+ * parseDataBlock/parseDataBlockAsync), but the parse periodically yields to
+ * the event loop so browsers repaint progress UI mid-parse instead of
+ * flagging the tab as stalled (issue #301 §2 for the streamed path).
+ *
+ * @param source The byte source.
+ * @param parser The STEP parser (typed to the schema).
+ * @param pool Target window size in bytes.
+ * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
+ * @param sink Optional index sink (columnar builds).
+ * @param onProgress Optional progress callback with the ABSOLUTE source byte
+ * cursor (unlike the parser's window-relative cursor), so callers can report
+ * `cursor / source.byteLength` directly.
+ * @param yieldIntervalMs Minimum ms between event-loop yields.
+ * @return {Promise<StreamingIndexResult>} The index, header, result and
+ * diagnostics.
+ */
+export async function buildIndexStreamingAsync<TypeIDType>(
+    source: ByteSource,
+    parser: StepParser<TypeIDType>,
+    pool: number,
+    onRecordIndexed?:
+      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+    sink?: StepIndexSink<TypeIDType>,
+    onProgress?: ( absoluteByteCursor: number ) => void,
+    yieldIntervalMs?: number ):
+    Promise<StreamingIndexResult<TypeIDType>> {
+
+  const fileSize = source.byteLength
+
+  let windowBytes = Math.max( pool, MIN_WINDOW )
+
+  for ( ; ; ) {
+
+    const window = new Uint8Array( windowBytes )
+
+    let windowStartFile = 0
+    let windowLen = source.read( 0, windowBytes, window, 0 )
+    let bytesRead = windowLen
+
+    const input = new ParsingBuffer( window, 0, windowLen )
+
+    const [ header, headerResult ] = parser.parseHeader( input )
+
+    if ( headerResult !== ParseResult.COMPLETE ) {
+      return {
+        header,
+        elements: [],
+        result: headerResult,
+        stats: { pool, windowBytes, slides: 0, maxRecordLen: 0, bytesRead },
+      }
+    }
+
+    const slideThreshold = windowBytes >> 1
+
+    let slides = 0
+    let maxRecordLen = 0
+    let prevBoundaryFile = windowStartFile + input.cursor
+
+    const onRecordBoundary = ( buffer: ParsingBuffer ): void => {
+
+      const cursor = buffer.cursor
+      const recordFileStart = windowStartFile + cursor
+
+      const recordLen = recordFileStart - prevBoundaryFile
+
+      if ( recordLen > maxRecordLen ) {
+        maxRecordLen = recordLen
+      }
+
+      prevBoundaryFile = recordFileStart
+
+      if ( windowStartFile + windowLen >= fileSize ) {
+        return
+      }
+
+      if ( cursor < slideThreshold ) {
+        return
+      }
+
+      const tail = windowLen - cursor
+
+      window.copyWithin( 0, cursor, windowLen )
+
+      const want = windowBytes - tail
+      const got = source.read( windowStartFile + windowLen, want, window, tail )
+
+      bytesRead += got
+      windowLen = tail + got
+      windowStartFile = recordFileStart
+
+      buffer.rebaseWindow( window, 0, windowLen, windowStartFile )
+
+      ++slides
+    }
+
+    // Translate the parser's window-relative cursor to an absolute source
+    // cursor (windowStartFile advances as the window slides).
+    const progressTick = onProgress !== void 0 ?
+      ( cursor: number ) => onProgress( windowStartFile + cursor ) : void 0
+
+    const [ index, result ] =
+      await parser.parseDataBlockStreamedAsync(
+          input, onRecordBoundary, onRecordIndexed, progressTick, sink, yieldIntervalMs )
+
+    const stoppedShort = result !== ParseResult.COMPLETE
+    const notAtEof = windowStartFile + windowLen < fileSize
+
+    if ( stoppedShort && notAtEof ) {
+      windowBytes *= 2
+      sink?.reset()
+      continue
+    }
+
+    const lastRecordLen = ( windowStartFile + input.cursor ) - prevBoundaryFile
+
+    if ( lastRecordLen > maxRecordLen ) {
+      maxRecordLen = lastRecordLen
+    }
+
+    return {
+      header,
+      elements: index.elements,
+      result,
+      stats: { pool, windowBytes, slides, maxRecordLen, bytesRead },
+    }
+  }
+}
+
+
+/**
  * The output of a columnar streaming index build: the index in its SoA
  * column form (no object phase — see columnar_index.ts), plus the header and
  * window diagnostics.
@@ -249,6 +381,40 @@ export function buildColumnarIndexStreaming<TypeIDType extends number>(
 
   const { header, result, stats } =
     buildIndexStreaming( source, parser, pool, onRecordIndexed, sink )
+
+  return { header, columns: sink.finalize(), result, stats }
+}
+
+
+/**
+ * Cooperative twin of {@link buildColumnarIndexStreaming}: identical
+ * columnar build, but the parse periodically yields to the event loop (see
+ * {@link buildIndexStreamingAsync}) and reports absolute byte-cursor
+ * progress — the browser-facing variant for large models.
+ *
+ * @param source The byte source.
+ * @param parser The STEP parser (typed to the schema).
+ * @param pool Target window size in bytes.
+ * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
+ * @param onProgress Optional absolute byte-cursor progress callback.
+ * @param yieldIntervalMs Minimum ms between event-loop yields.
+ * @return {Promise<StreamingColumnarIndexResult>} Columns, header, result,
+ * stats.
+ */
+export async function buildColumnarIndexStreamingAsync<TypeIDType extends number>(
+    source: ByteSource,
+    parser: StepParser<TypeIDType>,
+    pool: number,
+    onRecordIndexed?:
+      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+    onProgress?: ( absoluteByteCursor: number ) => void,
+    yieldIntervalMs?: number ):
+    Promise<StreamingColumnarIndexResult<TypeIDType>> {
+
+  const sink = new ColumnarIndexSink<TypeIDType>()
+
+  const { header, result, stats } = await buildIndexStreamingAsync(
+      source, parser, pool, onRecordIndexed, sink, onProgress, yieldIntervalMs )
 
   return { header, columns: sink.finalize(), result, stats }
 }
