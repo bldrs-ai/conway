@@ -49,6 +49,11 @@ const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 // finishes a deferred model synchronously.
 const DEFERRED_DRAIN_BATCH_AP214 = 256
 
+// Divisor mapping consumer batch sizes (tuned for IFC's per-product
+// granularity) onto AP214's chunkier per-part units — see
+// extractGeometryBatch.
+const AP214_UNITS_PER_PRODUCT_BATCH = 16
+
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
  * (mesh vectors, statistics) consumes — precomputed by createAsync so the
@@ -1191,7 +1196,14 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const extraction = this.conwayGeometry_
 
-    const extracted = extraction.extractDemandUnitBatch(batchSize)
+    // Consumers tune batchSize for IFC's fine-grained products (Share
+    // pumps 64); AP214 units are whole parts/subassemblies — orders of
+    // magnitude chunkier (Arty: ~57 units for ~12s of geometry). Scale
+    // the requested batch down so STEP loads stay progressive without
+    // any consumer knowing the schema.
+    const units = Math.max(1, Math.floor(batchSize / AP214_UNITS_PER_PRODUCT_BATCH))
+
+    const extracted = extraction.extractDemandUnitBatch(units)
     const remaining = extraction.demandUnitCount - extraction.demandUnitCursor
 
     if (remaining === 0 && !this.demandFinished_) {
