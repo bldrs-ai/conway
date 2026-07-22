@@ -4101,38 +4101,57 @@ export class AP214GeometryExtraction {
    * @return {[ExtractResult, AP214SceneBuilder]} - Enum indicating extraction result
    * + Geometry array
    */
-  extractAP214GeometryData(logTime: boolean = false):
-    [ExtractResult, AP214SceneBuilder, AP214ProductShapeMap] {
+  /**
+   * Prepare per-unit demand extraction (STEP demand parity phase 2)
+   * without executing any geometry work: builds the assembly tree and
+   * thunks exactly like the whole-model walk, but the root executions
+   * are captured as an ordered list of UNITS — a childless root is one
+   * unit; a root with children is flattened one level (one unit per
+   * immediate child, in order, then one for the root's own items), so
+   * single-root assemblies still pump progressively per part. Executing
+   * every unit in order then calling {@link finishDemandExtraction}
+   * reproduces the whole-model walk exactly — the classic
+   * {@link extractAP214GeometryData} runs through this same path.
+   * Idempotent.
+   */
+  // eslint-disable-next-line max-lines-per-function
+  public prepareDemandExtraction(): void {
 
-    let result: ExtractResult = ExtractResult.INCOMPLETE
-
-    const startTime = Date.now()
-
-    //  this.extractLinearScalingFactor()
-    const previousMemoizationState = this.model.elementMemoization
-
-    // populate relMaterialsMap
-    // const relAssociatesMaterials = this.model.types(AP214RelAssociatesMaterial)
+    if ( this.demandUnits_ !== void 0 ) {
+      return
+    }
 
     const model = this.model
-  
+
     type MappedSceneNode = {
       children?: [number, number, NativeTransform4x4?][];
       parents?: number;
       thunk?: ( owningLocalID?: number, transform?: NativeTransform4x4 ) => void;
       node?: AP214SceneTransform;
       processed?: boolean;
+      rep?: shape_representation;
+      owningLocalID?: number;
+    }
+
+    type ThunkSlice = {
+      childStart: number;
+      childEnd: number;
+      includeItems: boolean;
     }
 
     const treeMap = new Map<number, MappedSceneNode>()
 
-    const makeThunk = ( representation: shape_representation, owningElementLocalID?: number, mappedTreeNode?: MappedSceneNode ) => {
+    const makeThunk = (
+        representation: shape_representation,
+        owningElementLocalID?: number,
+        mappedTreeNode?: MappedSceneNode,
+        slice?: ThunkSlice ) => {
 
       return ( owningLocalID?: number, parentTransform?: NativeTransform4x4 ) => {
 
         owningLocalID ??= owningElementLocalID
 
-        const mappedItem = mappedTreeNode !== void 0 || parentTransform !== void 0 
+        const mappedItem = mappedTreeNode !== void 0 || parentTransform !== void 0
 
         const entryTransformDepth = this.scene.stackLength
         const currentParent = this.scene.currentParent
@@ -4143,10 +4162,15 @@ export class AP214GeometryExtraction {
             parentTransform,
             true,
           )
-        } 
+        }
 
-        if ( mappedTreeNode?.children !== void 0 ) {
-          for ( const [childLocalID, childOwningLocalID, childTransform] of mappedTreeNode.children ) {
+        if ( mappedTreeNode?.children !== void 0 &&
+            ( slice === void 0 || slice.childStart !== slice.childEnd ) ) {
+          const sliceChildren = slice !== void 0 ?
+            mappedTreeNode.children.slice( slice.childStart, slice.childEnd ) :
+            mappedTreeNode.children
+
+          for ( const [childLocalID, childOwningLocalID, childTransform] of sliceChildren ) {
             const mappedChild = treeMap.get( childLocalID )!
             const enterChildStackDepth = this.scene.stackLength
             const enterChildParent = this.scene.currentParent
@@ -4199,9 +4223,11 @@ export class AP214GeometryExtraction {
           }
         }
                 
-        for ( const item of representation.items ) {
+        const includeItems = slice?.includeItems ?? true
 
-          try {             
+        for ( const item of includeItems ? representation.items : [] ) {
+
+          try {
             if ( item instanceof placement ) {
               this.extractPlacement( item, mappedItem )
               continue
@@ -4242,14 +4268,26 @@ export class AP214GeometryExtraction {
       }
     }
 
-    try {
+    // Roots the whole-model walk would execute, in execution order —
+    // expanded into units at the end of preparation (children arrays
+    // are final only once every edge loop has run).
+    const pendingRoots: {
+      node: MappedSceneNode,
+      scaleTransform?: NativeTransform4x4,
+    }[] = []
 
+    {
       this.scene.clearParentStack()
 
       // 256 meg limit for memoization - smaller models get a big
       // win from memoization, but much larger models it uses far too much heap.
-       
+
       const MEMOIZATION_THRESHOLD = 256 * 1024 * 1024
+
+      // Remembered for finishDemandExtraction / the classic wrapper's
+      // finally — the pump spans many calls, so restoration cannot live
+      // in a single method's finally anymore.
+      this.demandMemoizationRestore_ = this.model.elementMemoization
 
       if ( this.lowMemoryMode || model.bufferBytesize > MEMOIZATION_THRESHOLD ) {
         this.model.elementMemoization = false
@@ -4342,6 +4380,8 @@ export class AP214GeometryExtraction {
           sourceNode = { parents: 1 }
           treeMap.set( sourceID, sourceNode )
           sourceNode.thunk = makeThunk( sourceShape, owningLocalID, sourceNode )
+          sourceNode.rep = sourceShape
+          sourceNode.owningLocalID = owningLocalID
         } else {
           sourceNode.parents ??= 0
           ++sourceNode.parents
@@ -4393,6 +4433,8 @@ export class AP214GeometryExtraction {
         }
 
         sourceNode.thunk = makeThunk( sourceShape, owningLocalID, sourceNode )
+        sourceNode.rep = sourceShape
+        sourceNode.owningLocalID = owningLocalID
 
         let targetNode = treeMap.get( targetID )       
         if ( targetNode === void 0 ) {
@@ -4428,6 +4470,8 @@ export class AP214GeometryExtraction {
         const mappedTreeNode = treeNode
         const thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
         mappedTreeNode.thunk = thunk
+        mappedTreeNode.rep = shapeRepresentation
+        mappedTreeNode.owningLocalID = owningElementLocalID
 
         if ( !hasMappedNode ) {
           mappedTreeNode.processed = true
@@ -4444,8 +4488,14 @@ export class AP214GeometryExtraction {
               this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
           }
 
-          // not an assembly mapped item, just extract the representation
-          thunk( void 0, scaleTransform )
+          // not an assembly mapped item — capture as a pending root
+          // instead of executing inline (these nodes are childless by
+          // construction: they were absent from the tree before this
+          // loop, and all edges were added by the earlier loops).
+          pendingRoots.push( {
+            node: mappedTreeNode,
+            scaleTransform,
+          } )
           continue
         }
       }
@@ -4470,14 +4520,15 @@ export class AP214GeometryExtraction {
         const mappedTreeNode = treeNode
         const owningElementLocalID = shapeRepresentation.localID
         mappedTreeNode.thunk = makeThunk( shapeRepresentation, owningElementLocalID, mappedTreeNode )
+        mappedTreeNode.rep = shapeRepresentation
+        mappedTreeNode.owningLocalID = owningElementLocalID
       }
 
-      // All thunks are set, now we can execute the full
-      // assembly tree.
+      // All thunks are set — capture remaining assembly-tree roots as
+      // pending roots in the exact order the whole-model walk executed
+      // them.
       for ( const [sourceID, mappedNode] of treeMap.entries() ) {
         if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
-
-          //this.scene.clearParentStack()
 
           const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
           const sourceShapeContext = 
@@ -4492,34 +4543,169 @@ export class AP214GeometryExtraction {
               this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
           }
 
-          // not an assembly mapped item, just extract the representation
-          mappedNode.thunk( void 0, scaleTransform )
+          pendingRoots.push( { node: mappedNode, scaleTransform } )
         }
       }
-      
-      // Run any deferred face tessellation across the native thread pool
-      // before geometry can be read or temporaries freed.
-      this.finalizeStagedFaces()
 
-      if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
-        this.model.geometry.deleteTemporaries()
+      // Expand pending roots into ordered execution units: childless
+      // roots run their original thunk whole; roots with children are
+      // flattened one level — one unit per immediate child (in order),
+      // then one for the root's own representation items, matching the
+      // thunk body's children-then-items order exactly.
+      const units: ( () => void )[] = []
+
+      for ( const root of pendingRoots ) {
+
+        const node = root.node
+        const scaleTransform = root.scaleTransform
+        const childCount = node.children?.length ?? 0
+
+        if ( childCount === 0 || node.rep === void 0 ) {
+          units.push( () => node.thunk!( void 0, scaleTransform ) )
+          continue
+        }
+
+        for ( let child = 0; child < childCount; ++child ) {
+          const sliced = makeThunk( node.rep, node.owningLocalID, node,
+              { childStart: child, childEnd: child + 1, includeItems: false } )
+          units.push( () => sliced( void 0, scaleTransform ) )
+        }
+
+        const itemsOnly = makeThunk( node.rep, node.owningLocalID, node,
+            { childStart: 0, childEnd: 0, includeItems: true } )
+        units.push( () => itemsOnly( void 0, scaleTransform ) )
       }
 
-      result = ExtractResult.COMPLETE
+      this.demandUnits_ = units
+    }
+  }
 
-      // free buffer at the end if you don't need it anymore
-      if (this.pointBuffer?.pointer) {
-        this.wasmModule._free(this.pointBuffer.pointer)
-        this.pointBuffer = null
+  // Ordered pending execution units built by prepareDemandExtraction;
+  // demandCursor_ tracks how many have run (the pump's progress).
+  private demandUnits_?: ( () => void )[]
+  private demandCursor_ = 0
+  private demandMemoizationRestore_?: boolean
+
+  /**
+   * Total demand units (see prepareDemandExtraction).
+   *
+   * @return {number} The unit count (0 before preparation).
+   */
+  public get demandUnitCount(): number {
+    return this.demandUnits_?.length ?? 0
+  }
+
+  /**
+   * Units already executed by extractDemandUnitBatch.
+   *
+   * @return {number} The cursor.
+   */
+  public get demandUnitCursor(): number {
+    return this.demandCursor_
+  }
+
+  /**
+   * Execute the next `count` demand units (STEP demand parity phase 2)
+   * — the per-unit pump behind the shim's ExtractGeometryBatch for
+   * AP214 models. Staged face tessellation is finalized after every
+   * batch so captured geometry is complete and readable.
+   *
+   * @param count Max units to execute this call (min 1).
+   * @return {number} Units actually executed.
+   */
+  public extractDemandUnitBatch( count: number ): number {
+
+    const units = this.demandUnits_
+
+    if ( units === void 0 ) {
+      return 0
+    }
+
+    const end = Math.min( this.demandCursor_ + Math.max( count, 1 ), units.length )
+    let executed = 0
+
+    for ( ; this.demandCursor_ < end; ++this.demandCursor_ ) {
+      try {
+        units[ this.demandCursor_ ]()
+        ++executed
+      } catch ( ex ) {
+        if ( ex instanceof Error ) {
+          Logger.error( `Error processing demand unit: \n\t${ex.name}\n\t${ex.message}` )
+        } else {
+          Logger.error( `Unknown exception processing demand unit (${ex})` )
+        }
       }
-      return [result, this.scene, this.productShapeMap]
+    }
+
+    // Deferred face tessellation must land before geometry is read.
+    this.finalizeStagedFaces()
+
+    return executed
+  }
+
+  /**
+   * Complete a demand extraction after every unit has run: final staged
+   * tessellation, temporaries cleanup, point-buffer release and
+   * memoization restore — the tail the whole-model walk runs.
+   *
+   * @return {[ExtractResult, AP214SceneBuilder, AP214ProductShapeMap]}
+   * The completed extraction result.
+   */
+  public finishDemandExtraction():
+    [ExtractResult, AP214SceneBuilder, AP214ProductShapeMap] {
+
+    this.finalizeStagedFaces()
+
+    if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
+      this.model.geometry.deleteTemporaries()
+    }
+
+    if (this.pointBuffer?.pointer) {
+      this.wasmModule._free(this.pointBuffer.pointer)
+      this.pointBuffer = null
+    }
+
+    if ( this.demandMemoizationRestore_ !== void 0 ) {
+      this.model.elementMemoization = this.demandMemoizationRestore_
+      this.demandMemoizationRestore_ = void 0
+    }
+
+    return [ExtractResult.COMPLETE, this.scene, this.productShapeMap]
+  }
+
+  /**
+   * Whole-model extraction: prepare + run every demand unit + finish —
+   * a single code path with the per-unit pump, so pumped and classic
+   * extractions are identical by construction.
+   *
+   * @param logTime Unused (kept for call compatibility).
+   * @return {[ExtractResult, AP214SceneBuilder, AP214ProductShapeMap]}
+   * The completed extraction result.
+   */
+  // eslint-disable-next-line no-unused-vars
+  extractAP214GeometryData(logTime: boolean = false):
+    [ExtractResult, AP214SceneBuilder, AP214ProductShapeMap] {
+
+    try {
+
+      this.prepareDemandExtraction()
+
+      while ( this.demandCursor_ < this.demandUnitCount ) {
+        this.extractDemandUnitBatch( this.demandUnitCount )
+      }
+
+      return this.finishDemandExtraction()
 
     } finally {
       // Ensure no staged face jobs outlive extraction (their target
       // geometry may be freed once the model is invalidated), even if
       // extraction exits through an exception.
       this.finalizeStagedFaces()
-      this.model.elementMemoization = previousMemoizationState
+
+      if ( this.demandMemoizationRestore_ !== void 0 ) {
+        this.model.elementMemoization = this.demandMemoizationRestore_
+        this.demandMemoizationRestore_ = void 0
+      }
     }
   }
 

@@ -20,10 +20,20 @@ export class AP214ModelGeometry implements ModelGeometry {
   /**
    * Add a mesh to this geometry collection.
    *
+   * Freezes the native float vertex mirror at add time, exactly like
+   * IfcModelGeometry.add (see its note): consumers read float vertices
+   * whose frame must match the scene transforms, which are authored
+   * against the geometry AS CREATED — later count-preserving native
+   * mutations (normalize's centering) must not shift the served frame.
+   *
    * @param mesh
    * @param parentLocalID
    */
   public add( mesh: CanonicalMesh, parentLocalID? : number ): void {
+
+    if ( mesh.type === CanonicalMeshType.BUFFER_GEOMETRY ) {
+      mesh.geometry.GetVertexData()
+    }
 
     this.meshes_.set( mesh.localID, mesh )
 

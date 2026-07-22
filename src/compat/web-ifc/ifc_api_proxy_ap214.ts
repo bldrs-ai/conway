@@ -32,6 +32,27 @@ import { ProgressTracker } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { StepHeader } from '../../step/parsing/step_parser'
+import { BufferByteSource } from '../../step/parsing/byte_source'
+import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import {
+  buildIndexStreamingAsync,
+} from '../../step/parsing/streaming_index_builder'
+import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+
+/* Moving-window size for the streamed columnar parse (matches the IFC
+ * proxy; the window bounds parse-time scratch, not the source buffer,
+ * which the model keeps resident here). */
+// eslint-disable-next-line no-magic-numbers
+const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
+
+// Units drained per call when a whole-model consumer (streamAllMeshes)
+// finishes a deferred model synchronously.
+const DEFERRED_DRAIN_BATCH_AP214 = 256
+
+// Divisor mapping consumer batch sizes (tuned for IFC's per-product
+// granularity) onto AP214's chunkier per-part units — see
+// extractGeometryBatch.
+const AP214_UNITS_PER_PRODUCT_BATCH = 16
 
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
@@ -41,6 +62,8 @@ import { StepHeader } from '../../step/parsing/step_parser'
  */
 interface Ap214ProxyLoadState {
   conwaywasm: ConwayGeometry
+  /** True when opened without extraction (createDeferred). */
+  deferred?: boolean
   allTimeStart: number
   stepHeader: StepHeader
   model: AP214StepModel
@@ -62,6 +85,30 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       Map<number, [GeometryObject, CanonicalMaterial, number[]]>,
       Vector<FlatMesh>, glmatrix.mat4]
   conwaywasm: ConwayGeometry
+
+  /** The extraction behind this model (drives the deferred unit pump). */
+  private conwayGeometry_!: AP214GeometryExtraction
+
+  /** Was this model opened without extraction (DEFER_GEOMETRY)? */
+  private deferredMode_: boolean = false
+
+  /** Has finishDemandExtraction run (deferred models, once)? */
+  private demandFinished_: boolean = false
+
+  /**
+   * Deferred capture watermarks: entity localID -> how many of its
+   * placed instances (scene-walk order) have been captured — mirrors
+   * the IFC proxy's delta capture; see its demandCapturedCounts_ note.
+   */
+  private readonly demandCapturedCounts_ = new Map<number, number>()
+
+  /**
+   * Coordination matrix the deferred capture derived. Internal
+   * multi-call memory only — getCoordinationMatrix keeps the classic
+   * identity contract (see the IFC proxy's demandCoordination_ note).
+   */
+  private demandCoordination_?: glmatrix.mat4
+
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
   identity: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -161,6 +208,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       IfcApiProxyAP214.parseAndExtract(modelID, data, new ConwayGeometry(wasmModule), settings)
 
     this.conwaywasm = loadState.conwaywasm
+    this.conwayGeometry_ = loadState.conwayGeometry
+    this.deferredMode_ = loadState.deferred === true
 
     const statistics = Logger.getStatistics(modelID)
 
@@ -327,6 +376,186 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         modelID, data, new ConwayGeometry(wasmModule), settings)
 
     return new IfcApiProxyAP214(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Streamed columnar construction (conway extension, used by
+   * OpenModelStreamed): the data parse runs through the streaming
+   * columnar indexer over a moving window instead of the per-record
+   * object parse, so the index is columnar from birth — the AP214 twin
+   * of IfcApiProxyIfc.createStreamed (STEP demand parity phase 1).
+   * Geometry extraction stays the classic whole-model thunk-tree walk;
+   * the deferred pump and preview channel follow in later phases.
+   * Throws when the streamed parse is anything but COMPLETE — the
+   * factory falls back to the classic open.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<IfcApiProxyAP214>} The constructed proxy.
+   */
+  public static async createStreamed(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyAP214> {
+
+    const loadState = await IfcApiProxyAP214.parseColumnarAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings)
+
+    return new IfcApiProxyAP214(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Deferred streamed construction (STEP demand parity phase 2): the
+   * streamed columnar parse runs, the assembly tree is prepared, but NO
+   * geometry units execute — the batch pump (extractGeometryBatch)
+   * extracts them progressively afterwards. The AP214 twin of
+   * IfcApiProxyIfc.createDeferred.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<IfcApiProxyAP214>} The constructed proxy.
+   */
+  public static async createDeferred(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyAP214> {
+
+    const loadState = await IfcApiProxyAP214.parseColumnarAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings, true)
+
+    return new IfcApiProxyAP214(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Streamed twin of parseAndExtractAsync: cooperative columnar index
+   * build (periodic event-loop yields, absolute byte-cursor progress),
+   * then the model adopts the columns directly — no per-record object
+   * phase. Mirrors IfcApiProxyIfc.parseColumnarAndExtractAsync minus
+   * the deferred branch.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<Ap214ProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarAndExtractAsync(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<Ap214ProxyLoadState> {
+
+    const tracker = IfcApiProxyAP214.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = AP214StepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    // Header parsed standalone first so the model line fires before the
+    // full parse (the columnar build re-reads the tiny header
+    // internally; the cost is negligible).
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyAP214.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+
+    const sink = new ColumnarIndexSink<EntityTypesAP214>()
+
+    const { result } = await buildIndexStreamingAsync(
+        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+        void 0, sink, parseTick)
+
+    const columns = sink.finalize()
+
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStreamed]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const model = new AP214StepModel(data, columns)
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new AP214GeometryExtraction(conwaywasm, model)
+
+    // Deferred mode (createDeferred): build the assembly tree and the
+    // ordered unit list but execute nothing — the batch pump populates
+    // the scene progressively. `scene` is the same object the deferred
+    // capture walks, so meshes appear to consumers as units extract.
+    if (deferGeometry) {
+
+      conwayGeometry.prepareDemandExtraction()
+
+      return {
+        conwaywasm,
+        deferred: true,
+        allTimeStart,
+        stepHeader,
+        model,
+        scene: conwayGeometry.scene,
+        conwayGeometry,
+        geometryTimeInMs: 0,
+      }
+    }
+
+    // Heartbeat only: the AP214 thunk-tree extraction has no flat
+    // product loop to tick from yet.
+    tracker?.beginPhase('geometry', 'products')
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      conwayGeometry.extractAP214GeometryData()
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModelStreamed]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
   }
 
   /**
@@ -944,7 +1173,255 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * @param modelID
    * @param meshCallback
    */
+  /**
+   * Deferred-mode unit pump (STEP demand parity phase 2; conway
+   * extension consumed through ExtractGeometryBatch): execute the next
+   * `batchSize` assembly-tree units and emit THIS BATCH's meshes as
+   * per-entity DELTA FlatMeshes — the AP214 twin of the IFC proxy's
+   * pump, same delta contract. On a fully-extracted model this is a
+   * no-op returning remaining 0.
+   *
+   * @param batchSize Max units to execute this call (min 1).
+   * @param meshCallback Receives each newly-captured delta mesh.
+   * @return {object} `{extracted, remaining}` — units executed this
+   * call and units still pending.
+   */
+  extractGeometryBatch(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
+
+    if (!this.deferredMode_) {
+      return {extracted: 0, remaining: 0}
+    }
+
+    const extraction = this.conwayGeometry_
+
+    // Consumers tune batchSize for IFC's fine-grained products (Share
+    // pumps 64); AP214 units are whole parts/subassemblies — orders of
+    // magnitude chunkier (Arty: ~57 units for ~12s of geometry). Scale
+    // the requested batch down so STEP loads stay progressive without
+    // any consumer knowing the schema.
+    const units = Math.max(1, Math.floor(batchSize / AP214_UNITS_PER_PRODUCT_BATCH))
+
+    const extracted = extraction.extractDemandUnitBatch(units)
+    const remaining = extraction.demandUnitCount - extraction.demandUnitCursor
+
+    if (remaining === 0 && !this.demandFinished_) {
+      this.demandFinished_ = true
+      extraction.finishDemandExtraction()
+    }
+
+    if (meshCallback !== void 0) {
+      this.streamNewMeshes_(meshCallback)
+    }
+
+    return {extracted, remaining}
+  }
+
+  /**
+   * Walk the scene and emit every not-yet-captured placed instance as
+   * per-entity DELTA FlatMeshes — the incremental core of
+   * streamAllMeshes with identical placed-geometry math (bare
+   * coordination x nativeTransform composition, occurrence paths),
+   * processed in walk order exactly once per instance. The shared
+   * meshMap accumulates each entity's FULL vector so getFlatMesh stays
+   * whole-model correct; the derived coordination matrix is remembered
+   * across calls (demandCoordination_) without leaking through
+   * getCoordinationMatrix (classic identity contract).
+   *
+   * @param meshCallback Receives one delta FlatMesh per entity that
+   * gained instances this call.
+   */
+  private streamNewMeshes_(
+      meshCallback: (mesh: FlatMesh) => void ): void {
+
+    const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
+
+    let coordinationMatrix = this.demandCoordination_ ?? glmatrix.mat4.create()
+    const seenThisPass = new Map<number, number>()
+    const deltas = new Map<number, PlacedGeometry[]>()
+    const deltaExpressIDs = new Map<number, number>()
+
+    // eslint-disable-next-line no-unused-vars
+    for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
+      of scene.walkWithOccurrence()) {
+
+      if (entity?.localID === void 0 || entity.expressID === void 0) {
+        continue
+      }
+
+      const walkIndex = seenThisPass.get(entity.localID) ?? 0
+      seenThisPass.set(entity.localID, walkIndex + 1)
+
+      if (walkIndex < (this.demandCapturedCounts_.get(entity.localID) ?? 0)) {
+        continue
+      }
+
+      this.demandCapturedCounts_.set(entity.localID, walkIndex + 1)
+
+      if (geometry.type !== CanonicalMeshType.BUFFER_GEOMETRY || geometry.temporary) {
+        continue
+      }
+
+      const material_: CanonicalMaterial = material ?? {
+        name: '',
+        // eslint-disable-next-line no-magic-numbers
+        baseColor: [0.8, 0.8, 0.8, 1],
+        // eslint-disable-next-line no-magic-numbers
+        legacyColor: [0.8, 0.8, 0.8, 1],
+        doubleSided: true,
+        blend: 0,
+      }
+
+      let nativePt: Vector3
+      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        nativePt = geometry.geometry.getPoint(0)
+      }
+
+      const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
+
+      const geometryTransform = nativeTransform?.getValues()
+      let newMatrix: glmatrix.mat4
+
+      if (geometryTransform !== void 0) {
+        newMatrix = glmatrix.mat4.fromValues(
+            ...(geometryTransform as unknown as
+              Parameters<typeof glmatrix.mat4.fromValues>))
+      } else {
+        newMatrix = glmatrix.mat4.create()
+      }
+
+      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+
+        const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
+        glmatrix.vec4.transformMat4(
+            transformedPt,
+            [nativePt!.x, nativePt!.y, nativePt!.z, 1],
+            newMatrix)
+
+        coordinationMatrix = glmatrix.mat4.create()
+        glmatrix.mat4.fromTranslation(coordinationMatrix,
+            [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
+
+        const scaleMatrix = glmatrix.mat4.create()
+        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
+            this.linearScalingFactor,
+            this.linearScalingFactor)
+
+        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
+        glmatrix.mat4.multiply(coordinationMatrix, this.NormalizeMat, coordinationMatrix)
+        glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
+
+        this.demandCoordination_ = coordinationMatrix
+        this._isCoordinated = true
+      }
+
+      // Bare composition — no per-leaf recenter (issue #308: AP214
+      // instances share one geometry buffer), matching streamAllMeshes.
+      const newTransform = glmatrix.mat4.create()
+      glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
+
+      const newTransformArr = Array.from(newTransform)
+
+      geometryMaterialTransformMap.set(expressID,
+          [geometry.geometry, material_, newTransformArr])
+
+      const color = {
+        x: material_.legacyColor[0],
+        y: material_.legacyColor[1],
+        z: material_.legacyColor[2],
+        w: material_.legacyColor[3],
+      }
+
+      const placed: PlacedGeometry = {
+        color,
+        geometryExpressID: expressID,
+        flatTransformation: newTransformArr,
+        occurrencePath,
+      }
+
+      let mesh = meshMap.get(entity.localID)
+
+      if (mesh === void 0) {
+
+        const placedArray = new Array<PlacedGeometry>()
+        const placedVector: Vector<PlacedGeometry> = {
+          get: (index: number) => placedArray[index] ?? placed,
+          size: () => placedArray.length,
+          push: (parameter: PlacedGeometry) => {
+            placedArray.push(parameter)
+          },
+        }
+        const flatMesh: FlatMesh = {
+          geometries: placedVector,
+          expressID: entity.expressID,
+        }
+
+        mesh = [placedVector, flatMesh]
+        meshMap.set(entity.localID, mesh)
+      }
+
+      mesh[0].push(placed)
+      mesh[1].geometries = mesh[0]
+
+      let delta = deltas.get(entity.localID)
+      if (delta === void 0) {
+        delta = []
+        deltas.set(entity.localID, delta)
+        deltaExpressIDs.set(entity.localID, entity.expressID)
+      }
+      delta.push(placed)
+    }
+
+    const vectorFlatMesh = this.model[4]
+
+    for (const [localID, placedList] of deltas) {
+
+      const placedVector: Vector<PlacedGeometry> = {
+        get: (index: number) => placedList[index] ?? placedList[0],
+        size: () => placedList.length,
+        push: (parameter: PlacedGeometry) => {
+          placedList.push(parameter)
+        },
+      }
+      const deltaMesh: FlatMesh = {
+        geometries: placedVector,
+        expressID: deltaExpressIDs.get(localID)!,
+      }
+
+      vectorFlatMesh.push(deltaMesh)
+      meshCallback(deltaMesh)
+    }
+  }
+
+  /**
+   *
+   * @param meshCallback
+   */
   streamAllMeshes( meshCallback: (mesh: FlatMesh) => void) {
+
+    // Deferred models: pump any remainder to completion and serve the
+    // accumulated full per-entity meshes — re-running the classic walk
+    // would push every instance a second time (mirrors the IFC proxy).
+    if (this.deferredMode_) {
+
+      const noCallback = void 0
+
+      while (this.extractGeometryBatch(
+          DEFERRED_DRAIN_BATCH_AP214, noCallback).remaining > 0) {
+        // draining
+      }
+      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+
+      const [, , meshMap, , vectorFlatMesh] = this.model
+
+      meshMap.forEach((mesh) => {
+        vectorFlatMesh.push(mesh[1])
+        meshCallback(mesh[1])
+      })
+
+      return
+    }
 
     const [model,
       scene,

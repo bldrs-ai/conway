@@ -139,6 +139,31 @@ export class IfcApiModelPassthroughFactory {
       }
     }
 
+    // STEP demand parity: AP214 (and the AP203/AP242 fall-throughs)
+    // get the streamed columnar open — index columnar from birth, no
+    // per-record object phase — and, with DEFER_GEOMETRY, the deferred
+    // assembly-tree unit pump (phase 2), so STEP models stream
+    // progressively through ExtractGeometryBatch just like IFC.
+    if ( modelFormat === ModelFormatType.AP214 ||
+      modelFormat === ModelFormatType.AP203 ||
+      modelFormat === ModelFormatType.AP242 ) {
+
+      try {
+
+        return settings?.DEFER_GEOMETRY === true ?
+          await IfcApiProxyAP214.createDeferred(modelID, data, wasmModule, settings) :
+          await IfcApiProxyAP214.createStreamed(modelID, data, wasmModule, settings)
+
+      } catch ( e ) {
+
+        const message = e instanceof Error ? e.message : String( e )
+
+        Logger.warning(
+            `Streamed STEP open failed for model ${modelID}, ` +
+            `falling back to classic open: ${message}`)
+      }
+    }
+
     return IfcApiModelPassthroughFactory.fromAsync(modelID, data, wasmModule, settings)
   }
 
