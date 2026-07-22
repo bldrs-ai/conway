@@ -31,7 +31,10 @@ import {
   buildIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
-import { StreamedPreviewChannel } from './streamed_preview_channel'
+import {
+  ifcPreviewAdapter,
+  StreamedPreviewChannel,
+} from './streamed_preview_channel'
 import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
@@ -719,7 +722,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const previewChannel =
       deferGeometry && settings?.ON_PREVIEW_MESH !== void 0 ?
         new StreamedPreviewChannel(
-            data, conwaywasm, sink,
+            data, conwaywasm, sink, ifcPreviewAdapter(),
             settings.COORDINATE_TO_ORIGIN === true,
             settings.ON_PREVIEW_MESH ) : void 0
 

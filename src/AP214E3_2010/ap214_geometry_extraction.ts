@@ -4605,6 +4605,24 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Advance the unit cursor WITHOUT executing (parse-time preview
+   * generations resume a global ordinal on a fresh prefix extraction —
+   * earlier units were already emitted from earlier generations).
+   *
+   * @param count Units to skip.
+   */
+  public skipDemandUnits( count: number ): void {
+
+    const units = this.demandUnits_
+
+    if ( units === void 0 ) {
+      return
+    }
+
+    this.demandCursor_ = Math.min( this.demandCursor_ + Math.max( count, 0 ), units.length )
+  }
+
+  /**
    * Execute the next `count` demand units (STEP demand parity phase 2)
    * — the per-unit pump behind the shim's ExtractGeometryBatch for
    * AP214 models. Staged face tessellation is finalized after every

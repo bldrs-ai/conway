@@ -4,7 +4,10 @@ import { CanonicalMeshType } from '../../index'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import { IfcProduct } from '../../ifc/ifc4_gen'
-import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
+import {
+  AP214GeometryExtraction,
+} from '../../AP214E3_2010/ap214_geometry_extraction'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import * as glmatrix from 'gl-matrix'
@@ -26,11 +29,11 @@ const FIRST_GENERATION_MIN_RECORDS = 1024
  * snapshot (bounds snapshot copies to O(GROWTH/(GROWTH-1)) of the file). */
 const GENERATION_GROWTH_FACTOR = 1.5
 
-/** Default cap on products the preview channel ever extracts. Preview
+/** Default cap on units the preview channel ever extracts. Preview
  * generations are throwaway extractions whose native geometry is not
  * reclaimed until page teardown (the shim never frees classic scenes
  * either — see closeModel), so the cap bounds that one-time cost. */
-const DEFAULT_MAX_PREVIEW_PRODUCTS = 4096
+const DEFAULT_MAX_PREVIEW_UNITS = 4096
 
 /** Default cap on total payload bytes copied out to the consumer. */
 const DEFAULT_MAX_PREVIEW_BYTES = 48 * 1024 * 1024
@@ -39,7 +42,7 @@ const FLOATS_PER_VERTEX = 6
 const BYTES_PER_FLOAT = 4
 const DEFAULT_COLOR: [number, number, number, number] = [0.8, 0.8, 0.8, 1]
 
-// Matches the shim proxy's NormalizeMat (Z-up -> Y-up).
+// Matches the shim proxies' NormalizeMat (Z-up -> Y-up).
 const NORMALIZE_MAT: glmatrix.mat4 = glmatrix.mat4.fromValues(
     1, 0, 0, 0,
     0, 0, -1, 0,
@@ -66,30 +69,192 @@ export interface PreviewMeshPayload {
 }
 
 /**
- * Parse-time preview channel (demand/tiled rendering slice A2): while the
- * deferred streamed open is still parsing, periodically snapshot the growing
- * columnar index into a PREFIX model, extract a bounded number of products
- * through a throwaway extraction, and emit self-contained mesh payloads —
- * first pixels within the first seconds of a large parse instead of after
- * it.
+ * A throwaway prefix extraction built by a {@link PreviewSchemaAdapter} —
+ * one preview "generation" over a snapshot of the growing columnar index.
+ */
+export interface PreviewPrefixGeneration {
+
+  /** Scene the capture walks (canonical placed-instance tuples — the
+   * exact tuple shape is schema-specific; the capture narrows it). */
+  scene: { walk(): IterableIterator<unknown> }
+
+  /** Total pumpable units in this prefix. */
+  unitCount: number
+
+  /** Scaling factor for the capture math. */
+  linearScalingFactor: number
+
+  /**
+   * Execute units [from, from+count) — cheap per unit, exceptions per
+   * unit swallowed by the adapter (mid-parse forward references).
+   *
+   * @param from First unit ordinal to execute.
+   * @param count Max units.
+   * @return {number} Units actually executed.
+   */
+  runUnits( from: number, count: number ): number
+
+  /**
+   * ExpressID identifying a walked geometry (payload identity / dedup).
+   *
+   * @param geometryLocalID The canonical mesh's localID.
+   * @return {number | undefined} The geometry's expressID.
+   */
+  geometryExpressID( geometryLocalID: number ): number | undefined
+
+  /**
+   * Whether the capture math recenters geometry (IFC's classic
+   * normalize + center re-add) or uses bare coordination x placement
+   * composition (AP214 — instances share one geometry buffer, issue
+   * #308).
+   */
+  recenter: boolean
+}
+
+/**
+ * Builds throwaway prefix generations for one schema — the only piece of
+ * the preview channel that knows what a "model" or a "unit" is.
+ */
+export interface PreviewSchemaAdapter {
+
+  /**
+   * Build a generation over the given prefix columns.
+   *
+   * @param data The (fully resident) source buffer.
+   * @param conwaywasm The shared geometry wasm wrapper.
+   * @param columns A prefix snapshot of the columnar index.
+   * @return {PreviewPrefixGeneration | undefined} The generation, or
+   * undefined when the prefix cannot build one yet (throw is also
+   * tolerated — the channel retries on a later, larger prefix).
+   */
+  buildGeneration(
+    data: Uint8Array,
+    conwaywasm: ConwayGeometry,
+    columns: unknown,
+  ): PreviewPrefixGeneration | undefined
+}
+
+/**
+ * IFC adapter: units are IfcProducts in localID order (stable across
+ * prefix growth), extracted through the per-product demand seam.
  *
- * Preview quality, by construction: IFC relationship records
- * (IfcRelVoidsElement, IfcRelAssociatesMaterial, styled items) spread to the
- * very end of real files (measured ~92–97% depth), so a prefix extraction
- * can miss openings and materials. That is why these extractions are
- * throwaway: the durable batch pump after the parse re-extracts every
- * product with the full model and REPLACES the preview — final geometry
- * parity is untouched by this channel.
+ * @return {PreviewSchemaAdapter} The adapter.
+ */
+export function ifcPreviewAdapter(): PreviewSchemaAdapter {
+  return {
+    buildGeneration( data, conwaywasm, columns ) {
+
+      const model = new IfcStepModel(
+          data, columns as ConstructorParameters<typeof IfcStepModel>[1] )
+
+      const products: number[] = []
+
+      for ( const product of model.types( IfcProduct ) ) {
+        products.push( product.localID )
+      }
+
+      if ( products.length === 0 ) {
+        return void 0
+      }
+
+      const extraction = new IfcGeometryExtraction( conwaywasm, model )
+
+      return {
+        scene: extraction.scene,
+        unitCount: products.length,
+        get linearScalingFactor() {
+          return extraction.getLinearScalingFactor()
+        },
+        runUnits: ( from, count ) => {
+          const end = Math.min( from + count, products.length )
+          let executed = 0
+          for ( let where = from; where < end; ++where ) {
+            try {
+              if ( extraction.extractProductGeometryByLocalID( products[ where ] ) ) {
+                ++executed
+              }
+            } catch {
+              // Unparsed forward reference — the durable pump extracts
+              // this product from the full model later.
+            }
+          }
+          return executed
+        },
+        geometryExpressID: ( geometryLocalID ) =>
+          model.getElementByLocalID( geometryLocalID )?.expressID,
+        recenter: true,
+      }
+    },
+  }
+}
+
+/**
+ * AP214 adapter: units are assembly-tree units (see
+ * AP214GeometryExtraction.prepareDemandExtraction). Unit ordinals are
+ * only approximately stable across prefix growth (a root's child list
+ * can grow, shifting later ordinals) — for a preview that is
+ * acceptable: a shifted ordinal re-emits an instance at an identical
+ * placement (invisible overlap) or skips one (the durable pump renders
+ * it later).
  *
- * Scheduling: the cooperative parse yields to the event loop via macrotasks
- * every ~50ms; each pump tick runs in one of those gaps under a hard time
- * budget, so the parse keeps the bulk of the main thread.
+ * @return {PreviewSchemaAdapter} The adapter.
+ */
+export function ap214PreviewAdapter(): PreviewSchemaAdapter {
+  return {
+    buildGeneration( data, conwaywasm, columns ) {
+
+      const model = new AP214StepModel(
+          data, columns as ConstructorParameters<typeof AP214StepModel>[1] )
+
+      const extraction = new AP214GeometryExtraction( conwaywasm, model )
+
+      extraction.prepareDemandExtraction()
+
+      if ( extraction.demandUnitCount === 0 ) {
+        return void 0
+      }
+
+      return {
+        scene: extraction.scene,
+        unitCount: extraction.demandUnitCount,
+        get linearScalingFactor() {
+          return extraction.getLinearScalingFactor()
+        },
+        runUnits: ( from, count ) => {
+          if ( extraction.demandUnitCursor < from ) {
+            extraction.skipDemandUnits( from - extraction.demandUnitCursor )
+          }
+          return extraction.extractDemandUnitBatch( count )
+        },
+        geometryExpressID: ( geometryLocalID ) =>
+          model.getElementByLocalID( geometryLocalID )?.expressID,
+        recenter: false,
+      }
+    },
+  }
+}
+
+/**
+ * Parse-time preview channel (demand/tiled rendering slice A2): while a
+ * deferred streamed open is still parsing, periodically snapshot the
+ * growing columnar index into a PREFIX model, extract a bounded number of
+ * units through a throwaway extraction, and emit self-contained mesh
+ * payloads — first pixels within the first seconds of a large parse
+ * instead of after it. Schema knowledge lives in the
+ * {@link PreviewSchemaAdapter}; the channel owns scheduling, generations,
+ * watermarks, payload copies, caps and the coordination pin.
  *
- * Product cursor: top-level localIDs are stable across snapshots (dense
- * parse order) and `types(IfcProduct)` iterates in localID order, so a
- * single ordinal cursor advances across generations without re-extracting.
- * Products whose extraction throws mid-parse (unparsed forward references)
- * are skipped — the durable pump extracts them correctly later.
+ * Preview quality, by construction: relationship records (IFC voids,
+ * materials, styled items) spread to the very end of real files
+ * (measured ~92–97% depth), so a prefix extraction can miss
+ * openings and materials. That is why these extractions are throwaway:
+ * the durable batch pump after the parse re-extracts every unit with the
+ * full model and REPLACES the preview — final geometry parity is
+ * untouched by this channel.
+ *
+ * Scheduling: the cooperative parse yields to the event loop via
+ * macrotasks every ~50ms; each pump tick runs in one of those gaps under
+ * a hard time budget, so the parse keeps the bulk of the main thread.
  */
 export class StreamedPreviewChannel {
 
@@ -101,23 +266,20 @@ export class StreamedPreviewChannel {
   private stopped_ = false
   private timer_?: ReturnType<typeof setTimeout>
 
-  private emittedProducts_ = 0
+  private emittedUnits_ = 0
   private emittedBytes_ = 0
 
-  /** Ordinal cursor into the (append-stable) product list. */
-  private productOrdinal_ = 0
+  /** Ordinal cursor into the unit list (see the adapter's stability
+   * notes). */
+  private unitOrdinal_ = 0
 
   /** Geometry expressIDs whose payload has been emitted (cross-generation
    * dedup for mapped/shared geometry). */
   private readonly emittedGeometry_ = new Set<number>()
 
   private generation_?: {
-    model: IfcStepModel
-    extraction: IfcGeometryExtraction
-    products: number[]
-    nextIndex: number
+    generation: PreviewPrefixGeneration
     capturedCounts: Map<number, number>
-    snapshotRecords: number
   }
 
   private lastSnapshotRecords_ = 0
@@ -128,9 +290,10 @@ export class StreamedPreviewChannel {
    * — ticks run between parse yields, never concurrently with the durable
    * extraction, which is created after the parse completes).
    * @param sink The live columnar sink the streamed parse is filling.
+   * @param adapter The schema adapter building prefix generations.
    * @param coordinateToOrigin The open's COORDINATE_TO_ORIGIN setting.
    * @param onMesh Consumer callback for each preview payload.
-   * @param maxProducts Cap on products ever preview-extracted.
+   * @param maxUnits Cap on units ever preview-extracted.
    * @param maxBytes Cap on total payload bytes copied out.
    * @param firstGenerationMinRecords Records required before the first
    * snapshot (tests lower it for tiny fixtures).
@@ -138,10 +301,11 @@ export class StreamedPreviewChannel {
   constructor(
       private readonly data: Uint8Array,
       private readonly conwaywasm: ConwayGeometry,
-      private readonly sink: ColumnarIndexSink<EntityTypesIfc>,
+      private readonly sink: ColumnarIndexSink<number>,
+      private readonly adapter: PreviewSchemaAdapter,
       private readonly coordinateToOrigin: boolean,
       private readonly onMesh: (mesh: PreviewMeshPayload) => void,
-      private readonly maxProducts: number = DEFAULT_MAX_PREVIEW_PRODUCTS,
+      private readonly maxUnits: number = DEFAULT_MAX_PREVIEW_UNITS,
       private readonly maxBytes: number = DEFAULT_MAX_PREVIEW_BYTES,
       private readonly firstGenerationMinRecords: number =
       FIRST_GENERATION_MIN_RECORDS ) {
@@ -168,7 +332,7 @@ export class StreamedPreviewChannel {
 
   /** True when a cap was hit and the channel retired itself early. */
   public get capped(): boolean {
-    return this.emittedProducts_ >= this.maxProducts ||
+    return this.emittedUnits_ >= this.maxUnits ||
       this.emittedBytes_ >= this.maxBytes
   }
 
@@ -195,7 +359,7 @@ export class StreamedPreviewChannel {
   }
 
   /**
-   * One pump tick: ensure a generation with pending products exists, then
+   * One pump tick: ensure a generation with pending units exists, then
    * extract + capture under the time budget.
    */
   private tick_(): void {
@@ -206,46 +370,38 @@ export class StreamedPreviewChannel {
       return
     }
 
-    const generation = this.generation_!
-    const { extraction, products } = generation
+    const active = this.generation_!
+    const { generation } = active
 
     let extractedThisTick = 0
 
-    while (generation.nextIndex < products.length &&
-        this.emittedProducts_ + extractedThisTick < this.maxProducts &&
+    while (this.unitOrdinal_ < generation.unitCount &&
+        this.emittedUnits_ + extractedThisTick < this.maxUnits &&
         Date.now() < deadline) {
 
-      const localID = products[generation.nextIndex++]
-      ++this.productOrdinal_
-
-      try {
-        if (extraction.extractProductGeometryByLocalID(localID)) {
-          ++extractedThisTick
-        }
-      } catch {
-        // Unparsed forward reference (or any other mid-parse gap): skip.
-        // The durable pump extracts this product from the full model.
-      }
+      const executed = generation.runUnits(this.unitOrdinal_, 1)
+      ++this.unitOrdinal_
+      extractedThisTick += executed
     }
 
     if (extractedThisTick > 0) {
       this.captureNewInstances_()
-      this.emittedProducts_ += extractedThisTick
+      this.emittedUnits_ += extractedThisTick
     }
   }
 
   /**
-   * Ensure a generation with pending products: keep the current one while
-   * it has work; otherwise snapshot a fresh prefix model once the index has
-   * grown enough to be worth the copy.
+   * Ensure a generation with pending units: keep the current one while
+   * it has work; otherwise snapshot a fresh prefix model once the index
+   * has grown enough to be worth the copy.
    *
-   * @return {boolean} True when a generation with pending products exists.
+   * @return {boolean} True when a generation with pending units exists.
    */
   private ensureGeneration_(): boolean {
 
-    const generation = this.generation_
+    const active = this.generation_
 
-    if (generation !== void 0 && generation.nextIndex < generation.products.length) {
+    if (active !== void 0 && this.unitOrdinal_ < active.generation.unitCount) {
       return true
     }
 
@@ -255,59 +411,71 @@ export class StreamedPreviewChannel {
       return false
     }
 
-    if (generation !== void 0 &&
+    if (active !== void 0 &&
         records < this.lastSnapshotRecords_ * GENERATION_GROWTH_FACTOR) {
       return false
     }
 
     const columns = this.sink.snapshot()
-    const model = new IfcStepModel(this.data, columns)
+    const generation =
+      this.adapter.buildGeneration(this.data, this.conwaywasm, columns)
 
-    const products: number[] = []
+    this.lastSnapshotRecords_ = records
 
-    for (const product of model.types(IfcProduct)) {
-      products.push(product.localID)
-    }
-
-    if (products.length <= this.productOrdinal_) {
-      // Prefix grew but produced no new products — wait for more records.
-      this.lastSnapshotRecords_ = records
+    if (generation === void 0 || generation.unitCount <= this.unitOrdinal_) {
+      // Prefix grew but produced no new units — wait for more records.
       return false
     }
 
-    const extraction = new IfcGeometryExtraction(this.conwaywasm, model)
-
     this.generation_ = {
-      model,
-      extraction,
-      products,
-      nextIndex: this.productOrdinal_,
+      generation,
       capturedCounts: new Map<number, number>(),
-      snapshotRecords: records,
     }
-    this.lastSnapshotRecords_ = records
 
     return true
   }
 
   /**
    * Walk the current generation's scene and emit every not-yet-captured
-   * placed instance as a payload — the preview twin of the shim's durable
-   * delta capture, with the same placed-geometry math (normalize, scaling,
-   * coordination) so preview and durable placements coincide, but copying
-   * geometry OUT of the wasm heap instead of retaining native references.
+   * placed instance as a payload — the preview twin of the durable delta
+   * captures, with the same placed-geometry math per schema (recentering
+   * for IFC, bare composition for AP214) so preview and durable
+   * placements coincide, but copying geometry OUT of the wasm heap
+   * instead of retaining native references.
    */
   private captureNewInstances_(): void {
 
-    const generation = this.generation_!
-    const { model, extraction, capturedCounts } = generation
-    const scene = extraction.scene
+    const active = this.generation_!
+    const { generation, capturedCounts } = active
+    const { scene, recenter } = generation
 
-    const linearScalingFactor = extraction.getLinearScalingFactor()
+    const linearScalingFactor = generation.linearScalingFactor
     const seenThisPass = new Map<number, number>()
 
-    // eslint-disable-next-line no-unused-vars
-    for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
+    type WalkTuple = [
+      unknown,
+      { getValues(): number[] | Float32Array | Float64Array } | undefined,
+      {
+        type: number,
+        temporary?: boolean,
+        localID: number,
+        geometry: {
+          getPoint( index: number ): Vector3,
+          normalize(): Vector3,
+          GetVertexData(): number,
+          GetVertexDataSize(): number,
+          GetIndexData(): number,
+          GetIndexDataSize(): number,
+        },
+      },
+      CanonicalMaterial | undefined,
+      { localID?: number, expressID?: number } | undefined,
+    ]
+
+    for (const walked of scene.walk()) {
+
+      const [, nativeTransform, geometry, material, entity] =
+        walked as WalkTuple
 
       if (entity?.localID === void 0 || entity.expressID === void 0) {
         continue
@@ -340,18 +508,21 @@ export class StreamedPreviewChannel {
         nativePt = geometry.geometry.getPoint(0)
       }
 
-      const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
-      const center = geometry.geometry.normalize()
-
-      geomCenter[0] = center.x
-      geomCenter[1] = center.y
-      geomCenter[2] = center.z
-
       const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-      glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
+
+      if (recenter) {
+        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
+        const center = geometry.geometry.normalize()
+
+        geomCenter[0] = center.x
+        geomCenter[1] = center.y
+        geomCenter[2] = center.z
+
+        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
+      }
 
       const geometryExpressID =
-        model.getElementByLocalID(geometry.localID)?.expressID as number
+        generation.geometryExpressID(geometry.localID) as number
 
       const geometryTransform = nativeTransform?.getValues()
       let newMatrix: glmatrix.mat4
@@ -390,13 +561,20 @@ export class StreamedPreviewChannel {
       const coordination = this.coordinationMatrix ?? glmatrix.mat4.create()
 
       const newTransform = glmatrix.mat4.create()
-      const scaleMatrix = glmatrix.mat4.create()
-      const scaleVec = glmatrix.vec3.fromValues(
-          linearScalingFactor, linearScalingFactor, linearScalingFactor)
 
-      glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-      glmatrix.mat4.multiply(newTransform, coordination, newMatrix)
-      glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
+      if (recenter) {
+        const scaleMatrix = glmatrix.mat4.create()
+        const scaleVec = glmatrix.vec3.fromValues(
+            linearScalingFactor, linearScalingFactor, linearScalingFactor)
+
+        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
+        glmatrix.mat4.multiply(newTransform, coordination, newMatrix)
+        glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
+      } else {
+        // Bare composition — no per-leaf recenter (AP214 instances share
+        // one geometry buffer, issue #308), matching its durable capture.
+        glmatrix.mat4.multiply(newTransform, coordination, newMatrix)
+      }
 
       const payload: PreviewMeshPayload = {
         expressID: entity.expressID,
@@ -443,7 +621,7 @@ export class StreamedPreviewChannel {
 
   /**
    * Test seam: run generation building + extraction + capture synchronously
-   * until either every product currently in the sink is attempted or a cap
+   * until either every unit currently in the sink is attempted or a cap
    * is hit — what the timer-driven ticks do, without the timers.
    */
   public drainForTest(): void {
@@ -454,26 +632,18 @@ export class StreamedPreviewChannel {
         return
       }
 
-      const generation = this.generation_!
+      const active = this.generation_!
 
-      if (generation.nextIndex >= generation.products.length) {
+      if (this.unitOrdinal_ >= active.generation.unitCount) {
         return
       }
 
-      const localID = generation.products[generation.nextIndex++]
-      ++this.productOrdinal_
+      const executed = active.generation.runUnits(this.unitOrdinal_, 1)
+      ++this.unitOrdinal_
 
-      let extracted = false
-
-      try {
-        extracted = generation.extraction.extractProductGeometryByLocalID(localID)
-      } catch {
-        // Skip — mirrors tick_.
-      }
-
-      if (extracted) {
+      if (executed > 0) {
         this.captureNewInstances_()
-        ++this.emittedProducts_
+        ++this.emittedUnits_
       }
     }
   }
