@@ -38,6 +38,10 @@ import {
   buildIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import {
+  ap214PreviewAdapter,
+  StreamedPreviewChannel,
+} from './streamed_preview_channel'
 
 /* Moving-window size for the streamed columnar parse (matches the IFC
  * proxy; the window bounds parse-time scratch, not the source buffer,
@@ -64,6 +68,9 @@ interface Ap214ProxyLoadState {
   conwaywasm: ConwayGeometry
   /** True when opened without extraction (createDeferred). */
   deferred?: boolean
+  /** Coordination matrix the parse-time preview channel derived —
+   * adopted by the durable capture so both share one frame. */
+  previewCoordinationMatrix?: glmatrix.mat4
   allTimeStart: number
   stepHeader: StepHeader
   model: AP214StepModel
@@ -312,6 +319,15 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // save settings
     this.settings = settings
 
+    // Deferred opens whose preview channel already established the
+    // coordination frame: adopt it so the durable capture places
+    // exactly where the preview did (internal only — see
+    // demandCoordination_).
+    if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
+      this.demandCoordination_ = loadState.previewCoordinationMatrix
+      this._isCoordinated = true
+    }
+
     let FILE_NAME = stepHeader.headers.get('FILE_NAME')
 
     if (FILE_NAME !== void 0) {
@@ -485,9 +501,27 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const sink = new ColumnarIndexSink<EntityTypesAP214>()
 
-    const { result } = await buildIndexStreamingAsync(
-        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
-        void 0, sink, parseTick)
+    // Parse-time preview channel (slice A2, STEP demand parity phase
+    // 3): ticks between the cooperative parse's yields, emitting
+    // preview payloads from throwaway prefix extractions.
+    const previewChannel =
+      deferGeometry && settings?.ON_PREVIEW_MESH !== void 0 ?
+        new StreamedPreviewChannel(
+            data, conwaywasm, sink, ap214PreviewAdapter(),
+            settings.COORDINATE_TO_ORIGIN === true,
+            settings.ON_PREVIEW_MESH ) : void 0
+
+    previewChannel?.start()
+
+    let result: ParseResult
+
+    try {
+      ( { result } = await buildIndexStreamingAsync(
+          new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+          void 0, sink, parseTick) )
+    } finally {
+      previewChannel?.stop()
+    }
 
     const columns = sink.finalize()
 
@@ -518,6 +552,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
+        previewCoordinationMatrix: previewChannel?.coordinationMatrix,
         allTimeStart,
         stepHeader,
         model,

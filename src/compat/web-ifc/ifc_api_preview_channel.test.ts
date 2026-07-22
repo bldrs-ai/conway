@@ -21,6 +21,7 @@ import { ParseResult, StepIndexSink } from '../../step/parsing/step_parser'
 import { buildIndexStreaming } from '../../step/parsing/streaming_index_builder'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import {
+  ifcPreviewAdapter,
   PreviewMeshPayload,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
@@ -174,8 +175,8 @@ describe( 'StreamedPreviewChannel', () => {
     const payloads: PreviewMeshPayload[] = []
 
     const channel = new StreamedPreviewChannel(
-        data, conwayGeometry, sink, true, ( mesh ) => payloads.push( mesh ),
-        void 0, void 0, 1 )
+        data, conwayGeometry, sink, ifcPreviewAdapter(), true,
+        ( mesh ) => payloads.push( mesh ), void 0, void 0, 1 )
 
     channel.drainForTest()
 

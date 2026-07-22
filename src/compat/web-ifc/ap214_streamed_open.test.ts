@@ -205,6 +205,77 @@ describe( 'OpenModelStreamed on AP214 STEP input', () => {
         // degrades later opens (pre-existing multi-open quirk).
       }, 240000 )
 
+  test( 'ON_PREVIEW_MESH emits classic-parity payloads for STEP (phase 3)', async () => {
+
+    // The gear parses in one cooperative slice, so the timer-driven
+    // channel never fires during a real open here — drive the channel
+    // directly over a finished sink (prefix == whole file), like the
+    // IFC channel test: a full drain must reproduce the classic
+    // instance set with the AP214 capture math (bare composition).
+    const fs2 = await import( 'fs' )
+    const { ConwayGeometry } = await import( '../../../dependencies/conway-geom' )
+    const { buildIndexStreaming } =
+      await import( '../../step/parsing/streaming_index_builder' )
+    const { ColumnarIndexSink } = await import( '../../step/parsing/columnar_index' )
+    const { BufferByteSource } = await import( '../../step/parsing/byte_source' )
+    const AP214StepParser =
+      ( await import( '../../AP214E3_2010/ap214_step_parser' ) ).default
+    const { ap214PreviewAdapter, StreamedPreviewChannel } =
+      await import( './streamed_preview_channel' )
+
+    const data = new Uint8Array( fs2.readFileSync( FIXTURES[ 1 ] ) )
+
+    const classicID = api.OpenModel( data, SETTINGS )
+    const classic = capture( classicID )
+
+    let classicTotal = 0
+
+    for ( const list of classic.values() ) {
+      classicTotal += list.length
+    }
+
+    expect( classicTotal ).toBeGreaterThan( 0 )
+
+    const conwayGeometry = new ConwayGeometry()
+    expect( await conwayGeometry.initialize() ).toBe( true )
+
+    const sink = new ColumnarIndexSink<number>()
+    const { result } = buildIndexStreaming(
+        new BufferByteSource( data ), AP214StepParser.Instance,
+        1024 * 1024, void 0, sink )
+
+    expect( result ).toBe( 0 )
+
+    const payloads: { expressID: number, geometryExpressID: number,
+      flatTransformation: number[], vertexData?: Float32Array }[] = []
+
+    const channel = new StreamedPreviewChannel(
+        data, conwayGeometry, sink, ap214PreviewAdapter(), true,
+        ( mesh ) => payloads.push( mesh ), void 0, void 0, 1 )
+
+    channel.drainForTest()
+
+    expect( payloads.length ).toBe( classicTotal )
+
+    for ( const payload of payloads ) {
+
+      const candidates = classic.get( payload.expressID )
+
+      expect( candidates ).toBeDefined()
+
+      const matchIndex = candidates!.findIndex( ( candidate ) =>
+        candidate.geometryExpressID === payload.geometryExpressID &&
+        candidate.flatTransformation.every( ( value, where ) =>
+          Math.abs( value - payload.flatTransformation[ where ] ) < 1e-6 ) )
+
+      expect( matchIndex ).toBeGreaterThanOrEqual( 0 )
+    }
+
+    const carriers = payloads.filter( ( payload ) => payload.vertexData !== void 0 )
+
+    expect( carriers.length ).toBeGreaterThan( 0 )
+  }, 240000 )
+
   test( 'StreamAllMeshes on a deferred STEP model drains the pump and matches classic', async () => {
 
     const data = new Uint8Array( fs.readFileSync( FIXTURES[ 0 ] ) )
