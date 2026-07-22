@@ -5982,8 +5982,25 @@ export class IfcGeometryExtraction {
    * whole-model walk: populates the shared extraction maps so
    * {@link extractProductGeometryByLocalID} can extract any single product.
    * Idempotent; the whole-model walk shares the same preparation.
+   *
+   * @param lightweightPreview Preview-only preparation (parse-time
+   * preview generations): skips the relationship sweeps
+   * (rel-materials, rel-voids) whose entity materialization dominates
+   * preparation cost on large models — extracted products then miss
+   * openings and rel-bound materials, which preview consumers accept
+   * by contract. Styled-item and material-definition maps are kept
+   * (colors), as is the linear scaling factor.
    */
-  public prepareDemandExtraction(): void {
+  public prepareDemandExtraction( lightweightPreview: boolean = false ): void {
+
+    if ( lightweightPreview && !this.extractionMapsPrepared_ ) {
+      this.extractionMapsPrepared_ = true
+      this.extractLinearScalingFactor()
+      this.populateMaterialDefinitionsMap()
+      this.populateStyledItemsMap()
+      return
+    }
+
     this.prepareExtractionMaps_()
   }
 
