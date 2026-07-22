@@ -1209,6 +1209,47 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * @param meshCallback
    */
   /**
+   * Free this model's native geometry (conway extension) — the AP214
+   * twin of the IFC proxy's releaseGeometry; see its note.
+   *
+   * @return {boolean} True when geometry was released.
+   */
+  releaseGeometry(): boolean {
+
+    if (this.deferredMode_ && !this.demandFinished_ &&
+        this.conwayGeometry_.demandUnitCursor < this.conwayGeometry_.demandUnitCount) {
+      Logger.warning(
+          '[ReleaseModelGeometry]: deferred pump not drained — not releasing')
+      return false
+    }
+
+    const model = this.model[0]
+    const localIDs: number[] = []
+
+    for (const mesh of model.geometry) {
+      localIDs.push((mesh as {localID: number}).localID)
+    }
+
+    for (const localID of localIDs) {
+      try {
+        model.geometry.delete(localID)
+      } catch {
+        // Never let a free break a loaded model.
+      }
+    }
+
+    this.model[3].clear()
+
+    this.released_ = true
+
+    return true
+  }
+
+  /** Native geometry freed (releaseGeometry) — scene walks would touch
+   * freed objects, so mesh serving degrades to the accumulated maps. */
+  private released_ = false
+
+  /**
    * Deferred-mode unit pump (STEP demand parity phase 2; conway
    * extension consumed through ExtractGeometryBatch): execute the next
    * `batchSize` assembly-tree units and emit THIS BATCH's meshes as
@@ -1269,6 +1310,12 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    */
   private streamNewMeshes_(
       meshCallback: (mesh: FlatMesh) => void ): void {
+
+    // Released models: the scene's natives are freed — nothing new can
+    // exist to capture, and walking would touch freed objects.
+    if (this.released_) {
+      return
+    }
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
@@ -1434,6 +1481,20 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * @param meshCallback
    */
   streamAllMeshes( meshCallback: (mesh: FlatMesh) => void) {
+
+    // Released models: the natives behind the scene are freed — serve
+    // the accumulated per-entity meshes instead of re-walking.
+    if (this.released_ && !this.deferredMode_) {
+
+      const [, , meshMap, , vectorFlatMesh] = this.model
+
+      meshMap.forEach((mesh) => {
+        vectorFlatMesh.push(mesh[1])
+        meshCallback(mesh[1])
+      })
+
+      return
+    }
 
     // Deferred models: pump any remainder to completion and serve the
     // accumulated full per-entity meshes — re-running the classic walk

@@ -195,6 +195,55 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api2.CloseModel( deferredID )
   }, 240000 )
 
+  test( 'ReleaseModelGeometry frees served geometry, keeps meshes, refuses undrained pumps', async () => {
+
+    // Fresh IfcAPI (CloseModel poisons later opens — see the content
+    // parity test's note).
+    const api3 = new IfcAPI()
+    await api3.Init()
+
+    // Undrained deferred pump: refuse (releasing would break the
+    // remaining extraction).
+    const deferredID = await api3.OpenModelStreamed(
+        buffer, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    api3.ExtractGeometryBatch( deferredID, 1 )
+
+    expect( api3.ReleaseModelGeometry( deferredID ) ).toBe( false )
+
+    // Classic model: release frees GetGeometry serving, keeps captured
+    // mesh data, double-release stays safe.
+    const classicID = api3.OpenModel( buffer, SETTINGS )
+    const geometryIDs: number[] = []
+    let meshes = 0
+
+    api3.StreamAllMeshes( classicID, ( mesh ) => {
+      ++meshes
+      for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+        geometryIDs.push( mesh.geometries.get( where ).geometryExpressID )
+      }
+    } )
+
+    expect( meshes ).toBeGreaterThan( 0 )
+    expect( api3.GetGeometry( classicID, geometryIDs[ 0 ] ).GetVertexDataSize() )
+        .toBeGreaterThan( 0 )
+
+    expect( api3.ReleaseModelGeometry( classicID ) ).toBe( true )
+
+    // Served geometry degrades to the empty dummy; mesh data survives.
+    expect( api3.GetGeometry( classicID, geometryIDs[ 0 ] ).GetVertexDataSize() )
+        .toBe( 0 )
+
+    let meshesAfter = 0
+    api3.StreamAllMeshes( classicID, () => {
+      ++meshesAfter
+    } )
+    expect( meshesAfter ).toBeGreaterThan( 0 )
+
+    expect( api3.ReleaseModelGeometry( classicID ) ).toBe( true )
+    expect( api3.ReleaseModelGeometry( 9999 ) ).toBe( false )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )

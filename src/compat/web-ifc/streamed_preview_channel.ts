@@ -109,6 +109,13 @@ export interface PreviewPrefixGeneration {
    * #308).
    */
   recenter: boolean
+
+  /**
+   * Free the generation's native geometry (payloads are copies, so a
+   * retired generation holds nothing anyone can reference). Called by
+   * the channel when a generation is replaced and at stop().
+   */
+  dispose(): void
 }
 
 /**
@@ -183,8 +190,37 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
         geometryExpressID: ( geometryLocalID ) =>
           model.getElementByLocalID( geometryLocalID )?.expressID,
         recenter: true,
+        dispose: () => {
+          releaseModelGeometry( model.geometry )
+        },
       }
     },
+  }
+}
+
+/**
+ * Free every buffer-geometry canonical mesh a model geometry cache
+ * holds (native embind objects), leaving the cache empty. Safe on an
+ * already-released cache.
+ *
+ * @param geometry The model geometry cache (iterable of canonical
+ * meshes with a delete(localID)).
+ */
+function releaseModelGeometry(
+    geometry: Iterable<{ localID: number }> & { delete( localID: number ): void } ): void {
+
+  const localIDs: number[] = []
+
+  for ( const mesh of geometry ) {
+    localIDs.push( mesh.localID )
+  }
+
+  for ( const localID of localIDs ) {
+    try {
+      geometry.delete( localID )
+    } catch {
+      // Never let a free break a load — leaked is better than crashed.
+    }
   }
 }
 
@@ -229,6 +265,9 @@ export function ap214PreviewAdapter(): PreviewSchemaAdapter {
         geometryExpressID: ( geometryLocalID ) =>
           model.getElementByLocalID( geometryLocalID )?.expressID,
         recenter: false,
+        dispose: () => {
+          releaseModelGeometry( model.geometry )
+        },
       }
     },
   }
@@ -328,6 +367,16 @@ export class StreamedPreviewChannel {
       clearTimeout(this.timer_)
       this.timer_ = void 0
     }
+
+    // Payloads are copies — a stopped channel's throwaway scenes hold
+    // nothing anyone can reference. Free them so repeated loads in one
+    // tab reuse the wasm pages instead of stacking preview scenes.
+    try {
+      this.generation_?.generation.dispose()
+    } catch {
+      // Never let a free break the open.
+    }
+    this.generation_ = void 0
   }
 
   /** True when a cap was hit and the channel retired itself early. */
@@ -421,6 +470,17 @@ export class StreamedPreviewChannel {
       this.adapter.buildGeneration(this.data, this.conwaywasm, columns)
 
     this.lastSnapshotRecords_ = records
+
+    // The outgoing generation's instances are all captured (a
+    // generation is only replaced once exhausted + captured) — free its
+    // native scenes before adopting the new one.
+    if (generation !== void 0 && generation.unitCount > this.unitOrdinal_) {
+      try {
+        active?.generation.dispose()
+      } catch {
+        // Never let a free break the open.
+      }
+    }
 
     if (generation === void 0 || generation.unitCount <= this.unitOrdinal_) {
       // Prefix grew but produced no new units — wait for more records.
