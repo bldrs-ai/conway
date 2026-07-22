@@ -19,6 +19,9 @@ export interface IfcApiModelPassthrough {
    * (conway extension) — see the proxies' releaseGeometry. */
   releaseGeometry?(): boolean
 
+  /** Metres per model unit (see IfcAPI.GetLinearScalingFactor). */
+  linearScalingFactor?: number
+
   extractGeometryBatch?(
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void): {extracted: number, remaining: number}
