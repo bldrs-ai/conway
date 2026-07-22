@@ -242,7 +242,8 @@ implements StepIndexSink<TypeIDType> {
 
     for ( const [ localID, entry ] of this.retained_ ) {
       if ( entry.multiMapping !== void 0 ) {
-        ( complexEntries ??= new Map() ).set( localID, entry )
+        ( complexEntries ??= new Map() ).set(
+            localID, cloneIndexEntry( entry ) as StepIndexEntry<TypeIDType> )
       }
     }
 
@@ -257,6 +258,54 @@ implements StepIndexSink<TypeIDType> {
       expressIdsSorted: this.expressIdsSorted_,
     }
   }
+}
+
+
+/**
+ * Clone an index entry (and its multiMapping sub-entries, which models
+ * also stamp) down to the persistent index fields.
+ *
+ * Models materialise complex entries by writing lazy parse state —
+ * vtable views, buffer references, entity instances — onto the entry
+ * objects IN PLACE (see StepModelBase.invalidate, which clears exactly
+ * those fields). Handing every snapshot/finalize the same retained
+ * object therefore let one model poison every other model built over
+ * the same sink: a throwaway prefix model (parse-time preview channel)
+ * stamped its own vtable views, and the durable model's short-circuit
+ * (`vtableIndex !== undefined`) then read stale views — "Value in STEP
+ * was incorrectly typed" on AP214's complex-instance transforms.
+ * Cloning per assembly keeps each model's lazy state private.
+ * `inlineEntities` stays shared: inline records are unfolded into
+ * column scalars above and their objects are never stamped.
+ *
+ * @param entry The retained entry to clone.
+ * @return {StepIndexEntryBase} A fresh holder with persistent fields only.
+ */
+function cloneIndexEntry<TypeIDType>(
+    entry: StepIndexEntryBase<TypeIDType> ): StepIndexEntryBase<TypeIDType> {
+
+  const clone: StepIndexEntryBase<TypeIDType> = {
+    address: entry.address,
+    length: entry.length,
+  }
+
+  if ( entry.typeID !== void 0 ) {
+    clone.typeID = entry.typeID
+  }
+
+  if ( entry.expressID !== void 0 ) {
+    clone.expressID = entry.expressID
+  }
+
+  if ( entry.inlineEntities !== void 0 ) {
+    clone.inlineEntities = entry.inlineEntities
+  }
+
+  if ( entry.multiMapping !== void 0 ) {
+    clone.multiMapping = entry.multiMapping.map( cloneIndexEntry )
+  }
+
+  return clone
 }
 
 
