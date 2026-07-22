@@ -359,50 +359,109 @@ jobs:
         run: |
           cd test-models/regression/test_models
 
-          # Process failed.csv with Python CSV parsing
-          if [ -f failed.csv ]; then
-            FAILED_OUTPUT=$(python - <<'EOF'
-          import csv
-          with open('failed.csv', newline='') as csvfile:
-              reader = list(csv.reader(csvfile))
-          if len(reader) <= 1:
-              print("No failures :white_check_mark:")
+          # Summarize failed.csv / errors.csv as diffs against the versions
+          # tracked at the pinned test-models commit. The full tables repeat a
+          # couple dozen pages of long-standing, already-triaged output on
+          # every PR; what a reviewer needs is the delta. Row counts always
+          # show; full rows only for entries added or resolved vs the
+          # baseline (failed.csv additionally prints all current rows when
+          # non-empty - hard failures are rare and always worth reading).
+          cat > /tmp/regression_summary.py <<'EOF'
+          import csv, io, subprocess, sys
+          from collections import Counter
+
+          sha, name, empty_msg, mode = sys.argv[1:5]
+
+          def parse(text):
+              rows = list(csv.reader(io.StringIO(text)))
+              if not rows:
+                  return [], []
+              body = [
+                  tuple(
+                      field.replace("\n", " ").replace("\r", " ").replace("|", "\\|")
+                      for field in row
+                  )
+                  for row in rows[1:]
+              ]
+              return rows[0], body
+
+          def table(header, rows, limit=50):
+              out = ["| " + " | ".join(header) + " |", "|" + " --- |" * len(header)]
+              for row in rows[:limit]:
+                  out.append("| " + " | ".join(row) + " |")
+              if len(rows) > limit:
+                  out.append("")
+                  out.append(f"_...and {len(rows) - limit} more row(s); full CSV in the run artifacts._")
+              return "\n".join(out)
+
+          def details(summary, body):
+              return f"<details><summary>{summary}</summary>\n\n{body}\n\n</details>"
+
+          try:
+              with open(name, newline="") as f:
+                  current_text = f.read()
+          except FileNotFoundError:
+              print(f"No {name} found.")
+              sys.exit(0)
+
+          header, current = parse(current_text)
+
+          baseline_run = subprocess.run(
+              ["git", "-C", "../..", "show", f"{sha}:regression/test_models/{name}"],
+              capture_output=True, text=True)
+          has_baseline = baseline_run.returncode == 0
+          baseline = parse(baseline_run.stdout)[1] if has_baseline else []
+
+          current_counts, baseline_counts = Counter(current), Counter(baseline)
+          added = list((current_counts - baseline_counts).elements())
+          resolved = list((baseline_counts - current_counts).elements())
+
+          lines = []
+
+          if not current:
+              lines.append(empty_msg)
           else:
-              header = reader[0]
-              header_line = "| " + " | ".join(header) + " |"
-              separator_line = "|" + " --- |" * len(header)
-              print(header_line)
-              print(separator_line)
-              for row in reader[1:]:
-                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
-                print("| " + " | ".join(sanitized_row) + " |")
+              lines.append(f"**{len(current)}** row(s) (baseline **{len(baseline)}**).")
+
+          if not has_baseline:
+              lines.append(f"_No {name} at the pinned test-models commit - every row counts as new._")
+
+          if current and mode == "full":
+              lines.append("")
+              lines.append(table(header, current))
+
+          if added or resolved:
+              summary_bits = []
+              if added:
+                  summary_bits.append(f"{len(added)} new")
+              if resolved:
+                  summary_bits.append(f"{len(resolved)} resolved")
+              lines.append("")
+              lines.append(f"**Changes vs baseline:** {', '.join(summary_bits)}.")
+              if added:
+                  lines.append("")
+                  lines.append(details(f"New ({len(added)})", table(header, added)))
+              if resolved:
+                  lines.append("")
+                  lines.append(details(f"Resolved ({len(resolved)})", table(header, resolved)))
+          elif current:
+              lines.append("No changes vs baseline.")
+
+          print("\n".join(lines))
           EOF
-          )
+
+          if FAILED_OUTPUT=$(python /tmp/regression_summary.py \
+              "${{ steps.tmsha.outputs.sha }}" failed.csv "No failures :white_check_mark:" full); then
+            :
           else
-            FAILED_OUTPUT="No failed.csv found."
+            FAILED_OUTPUT="Failed to summarize failed.csv (see job log)."
           fi
 
-          # Process errors.csv with Python CSV parsing
-          if [ -f errors.csv ]; then
-            ERRORS_OUTPUT=$(python - <<'EOF'
-          import csv
-          with open('errors.csv', newline='') as csvfile:
-              reader = list(csv.reader(csvfile))
-          if len(reader) <= 1:
-              print("No errors found.")
-          else:
-              header = reader[0]
-              header_line = "| " + " | ".join(header) + " |"
-              separator_line = "|" + " --- |" * len(header)
-              print(header_line)
-              print(separator_line)
-              for row in reader[1:]:
-                sanitized_row = [field.replace("\n", " ").replace("\r", " ") for field in row]
-                print("| " + " | ".join(sanitized_row) + " |")
-          EOF
-          )
+          if ERRORS_OUTPUT=$(python /tmp/regression_summary.py \
+              "${{ steps.tmsha.outputs.sha }}" errors.csv "No errors found." diff); then
+            :
           else
-            ERRORS_OUTPUT="No errors.csv found."
+            ERRORS_OUTPUT="Failed to summarize errors.csv (see job log)."
           fi
 
           echo "failed_output<<EOF" >> $GITHUB_OUTPUT
