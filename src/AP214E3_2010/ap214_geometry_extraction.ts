@@ -4323,9 +4323,22 @@ export class AP214GeometryExtraction {
       for ( const contextDependentShapeRepresentation of
         contextDependentShapeRepresentations ) {
 
-        const assembly = contextDependentShapeRepresentation.represented_product_relation
+        // Per-record containment: reference getters throw on
+        // malformed/dangling records (a mid-parse PREFIX model — the
+        // preview channel's snapshots — always has a truncated tail).
+        // One bad edge record skips, it must not abort the whole
+        // preparation.
+        let assembly
+        let shapeRelationship
+
+        try {
+          assembly = contextDependentShapeRepresentation.represented_product_relation
+          shapeRelationship = contextDependentShapeRepresentation.representation_relation
+        } catch {
+          continue
+        }
+
         const owningLocalID = assembly.localID
-        const shapeRelationship = contextDependentShapeRepresentation.representation_relation
         shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
 
         /* Exporters disagree on the rep_1/rep_2 order of an assembly
@@ -4340,8 +4353,16 @@ export class AP214GeometryExtraction {
          * SDR-bound product definition against them, and keep the legacy
          * (child, parent) reading when the match is ambiguous/unresolvable.
          */
-        let sourceShape = shapeRelationship.rep_1
-        let targetShape = shapeRelationship.rep_2
+        let sourceShape
+        let targetShape
+
+        try {
+          sourceShape = shapeRelationship.rep_1
+          targetShape = shapeRelationship.rep_2
+        } catch {
+          continue
+        }
+
         let orientationFlipped = false
 
         try {
@@ -4366,8 +4387,17 @@ export class AP214GeometryExtraction {
           // Malformed NAUO/PDS reference — keep the legacy orientation.
         }
 
-        const [transform, isContinue] = this.doTransforms(
-            shapeRelationship, sourceShape, targetShape, owningLocalID, orientationFlipped)
+        let transform
+        let isContinue
+
+        try {
+          [transform, isContinue] = this.doTransforms(
+              shapeRelationship, sourceShape, targetShape, owningLocalID, orientationFlipped)
+        } catch {
+          // Malformed transform record (prefix truncation) — skip the edge.
+          continue
+        }
+
         if (isContinue) {
           continue
         }
@@ -4412,10 +4442,23 @@ export class AP214GeometryExtraction {
          * source and rep_2 is the target, whereas in
          * context_dependent_shape_representation, the relationship is inverted.
          */
-        const sourceShape = shapeRelationship.rep_2
-        const targetShape = shapeRelationship.rep_1
-        
-        const [transform, isContinue] = this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
+        let sourceShape
+        let targetShape
+        let transform
+        let isContinue
+
+        try {
+          sourceShape = shapeRelationship.rep_2
+          targetShape = shapeRelationship.rep_1;
+
+          [transform, isContinue] =
+            this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
+        } catch {
+          // Malformed relationship/transform record (prefix truncation)
+          // — skip the edge.
+          continue
+        }
+
         if (isContinue) {
           continue
         }
@@ -4449,14 +4492,25 @@ export class AP214GeometryExtraction {
       const shapeDefinitions = model.types( shape_definition_representation )
       
       for ( const shapeDefinitionRepresentation of shapeDefinitions ) {
-        const shapeRepresentation = shapeDefinitionRepresentation.used_representation
-        if ( !( shapeRepresentation instanceof shape_representation ) ) {
+
+        let shapeRepresentation
+        let definition
+
+        try {
+          shapeRepresentation = shapeDefinitionRepresentation.used_representation
+
+          if ( !( shapeRepresentation instanceof shape_representation ) ) {
+            continue
+          }
+
+          definition = shapeDefinitionRepresentation.definition
+        } catch {
+          // Malformed SDR record (prefix truncation) — skip it.
           continue
         }
 
         //this.scene.clearParentStack()
 
-        const definition = shapeDefinitionRepresentation.definition
         const owningElementLocalID = definition.localID
         let treeNode = treeMap.get( shapeRepresentation.localID )
         const hasMappedNode = treeNode !== void 0
@@ -4475,17 +4529,22 @@ export class AP214GeometryExtraction {
 
         if ( !hasMappedNode ) {
           mappedTreeNode.processed = true
-            
-          const sourceShapeContext = 
-            shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
 
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
-          if ( sourceShapeContext !== void 0 ) {
-            const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-            scaleTransform =
-              this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
+          try {
+            const sourceShapeContext =
+              shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+              find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+            if ( sourceShapeContext !== void 0 ) {
+              const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
+              scaleTransform =
+                this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
+            }
+          } catch {
+            // Malformed unit context (prefix truncation) — no unit scale.
+            scaleTransform = void 0
           }
 
           // not an assembly mapped item — capture as a pending root
@@ -4530,17 +4589,22 @@ export class AP214GeometryExtraction {
       for ( const [sourceID, mappedNode] of treeMap.entries() ) {
         if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
 
-          const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
-          const sourceShapeContext = 
-            shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-            find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
-          if ( sourceShapeContext !== void 0 ) {
-            const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-            scaleTransform =
-              this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
+          try {
+            const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
+            const sourceShapeContext =
+              shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+              find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
+
+            if ( sourceShapeContext !== void 0 ) {
+              const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
+              scaleTransform =
+                this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
+            }
+          } catch {
+            // Malformed unit context (prefix truncation) — no unit scale.
+            scaleTransform = void 0
           }
 
           pendingRoots.push( { node: mappedNode, scaleTransform } )

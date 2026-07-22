@@ -132,6 +132,20 @@ export interface PreviewPrefixGeneration {
 export interface PreviewSchemaAdapter {
 
   /**
+   * Retry semantics for schemas whose unit list is FIXED up front while
+   * the geometry those units reference arrives throughout the file
+   * (AP214: the assembly tree sits at the head, solids follow). Without
+   * this, the first generation "consumes" every unit against a prefix
+   * that has no geometry yet and later, richer generations report no
+   * new units — the channel then never emits anything. With it, the
+   * channel re-runs units that emitted no instances against each new
+   * generation, and marks a unit done only once it captures something.
+   * Leave unset for schemas whose units keep appearing with the parse
+   * (IFC products) — re-running those would be quadratic for no gain.
+   */
+  readonly retryEmptyUnits?: boolean
+
+  /**
    * Build a generation over the given prefix columns.
    *
    * @param data The (fully resident) source buffer.
@@ -252,6 +266,7 @@ function releaseModelGeometry(
  */
 export function ap214PreviewAdapter(): PreviewSchemaAdapter {
   return {
+    retryEmptyUnits: true,
     buildGeneration( data, conwaywasm, columns ) {
 
       const model = new AP214StepModel(
@@ -327,6 +342,14 @@ export class StreamedPreviewChannel {
    * notes). */
   private unitOrdinal_ = 0
 
+  /** Retry mode (adapter.retryEmptyUnits): ordinals that captured ≥ 1
+   * instance — done for good, skipped on later generations. */
+  private readonly completedUnits_ = new Set<number>()
+
+  /** Retry mode: scan position within the CURRENT generation (resets to
+   * 0 on every new generation so empty units get re-run). */
+  private retryScan_ = 0
+
   /** Geometry expressIDs whose payload has been emitted (cross-generation
    * dedup for mapped/shared geometry). */
   private readonly emittedGeometry_ = new Set<number>()
@@ -337,6 +360,11 @@ export class StreamedPreviewChannel {
   }
 
   private lastSnapshotRecords_ = 0
+
+  /** Records at the last snapshot whose generation build THREW (a
+   * structurally incomplete prefix) — gates retries to index growth so a
+   * throwing prefix build can't hot-loop every tick. */
+  private lastFailedSnapshotRecords_ = 0
 
   /**
    * @param data The (fully resident) source buffer the parse is indexing.
@@ -473,6 +501,33 @@ export class StreamedPreviewChannel {
     const active = this.generation_!
     const { generation } = active
 
+    if (this.adapter.retryEmptyUnits === true) {
+
+      // Retry mode: scan the fixed unit list, skipping units that
+      // already captured instances on an earlier (or this) generation.
+      // Capture runs per unit so completion can be attributed — unit
+      // counts here are small by construction (assembly roots).
+      while (this.retryScan_ < generation.unitCount &&
+          this.emittedUnits_ < this.maxUnits &&
+          Date.now() < deadline) {
+
+        const ordinal = this.retryScan_++
+
+        if (this.completedUnits_.has(ordinal)) {
+          continue
+        }
+
+        const executed = generation.runUnits(ordinal, 1)
+
+        if (executed > 0 && this.captureNewInstances_() > 0) {
+          this.completedUnits_.add(ordinal)
+          ++this.emittedUnits_
+        }
+      }
+
+      return
+    }
+
     let extractedThisTick = 0
 
     while (this.unitOrdinal_ < generation.unitCount &&
@@ -501,7 +556,7 @@ export class StreamedPreviewChannel {
 
     const active = this.generation_
 
-    if (active !== void 0 && this.unitOrdinal_ < active.generation.unitCount) {
+    if (active !== void 0 && this.hasPendingUnits_(active.generation)) {
       return true
     }
 
@@ -516,26 +571,62 @@ export class StreamedPreviewChannel {
       return false
     }
 
-    const columns = this.sink.snapshot()
-    const generation =
-      this.adapter.buildGeneration(this.data, this.conwaywasm, columns)
+    if (records < this.lastFailedSnapshotRecords_ * GENERATION_GROWTH_FACTOR) {
+      return false
+    }
 
+    const columns = this.sink.snapshot()
+
+    let generation: PreviewPrefixGeneration | undefined
+
+    try {
+      generation =
+        this.adapter.buildGeneration(this.data, this.conwaywasm, columns)
+    } catch {
+      // A mid-parse prefix can be structurally incomplete — dangling
+      // references throw schema-typed errors (AP214's assembly-tree
+      // prep especially; a bad prefix killed the whole STEP preview
+      // before this catch). That retires THIS attempt, not the
+      // channel: the growth gate above retries once the index has
+      // grown enough for a materially different prefix.
+      this.lastFailedSnapshotRecords_ = records
+      return false
+    }
+
+    this.lastFailedSnapshotRecords_ = 0
     this.lastSnapshotRecords_ = records
+
+    if (generation === void 0) {
+      // Prefix grew but cannot build yet — wait for more records.
+      return false
+    }
+
+    const newGenerationPending = this.adapter.retryEmptyUnits === true ?
+      generation.unitCount > 0 &&
+        this.completedUnits_.size < generation.unitCount :
+      generation.unitCount > this.unitOrdinal_
+
+    if (!newGenerationPending) {
+      // Nothing this prefix can add — free it and wait for more records.
+      // (The active generation, if any, keeps its scan state untouched.)
+      try {
+        generation.dispose()
+      } catch {
+        // Never let a free break the open.
+      }
+      return false
+    }
+
+    // Retry mode: a fresh generation re-runs every not-yet-captured unit.
+    this.retryScan_ = 0
 
     // The outgoing generation's instances are all captured (a
     // generation is only replaced once exhausted + captured) — free its
     // native scenes before adopting the new one.
-    if (generation !== void 0 && generation.unitCount > this.unitOrdinal_) {
-      try {
-        active?.generation.dispose()
-      } catch {
-        // Never let a free break the open.
-      }
-    }
-
-    if (generation === void 0 || generation.unitCount <= this.unitOrdinal_) {
-      // Prefix grew but produced no new units — wait for more records.
-      return false
+    try {
+      active?.generation.dispose()
+    } catch {
+      // Never let a free break the open.
     }
 
     this.generation_ = {
@@ -547,14 +638,35 @@ export class StreamedPreviewChannel {
   }
 
   /**
+   * Does the given generation still have units this channel would run —
+   * retry mode: not-yet-captured ordinals ahead of the scan; classic
+   * mode: ordinals beyond the global forward-only cursor.
+   *
+   * @param generation The generation to check.
+   * @return {boolean} True when a tick can make progress on it.
+   */
+  private hasPendingUnits_(generation: PreviewPrefixGeneration): boolean {
+
+    if (this.adapter.retryEmptyUnits === true) {
+      return this.retryScan_ < generation.unitCount &&
+        this.completedUnits_.size < generation.unitCount
+    }
+
+    return this.unitOrdinal_ < generation.unitCount
+  }
+
+  /**
    * Walk the current generation's scene and emit every not-yet-captured
    * placed instance as a payload — the preview twin of the durable delta
    * captures, with the same placed-geometry math per schema (recentering
    * for IFC, bare composition for AP214) so preview and durable
    * placements coincide, but copying geometry OUT of the wasm heap
    * instead of retaining native references.
+   *
+   * @return {number} Instances emitted by this pass (retry mode uses
+   * this to attribute unit completion).
    */
-  private captureNewInstances_(): void {
+  private captureNewInstances_(): number {
 
     const active = this.generation_!
     const { generation, capturedCounts } = active
@@ -562,6 +674,8 @@ export class StreamedPreviewChannel {
 
     const linearScalingFactor = generation.linearScalingFactor
     const seenThisPass = new Map<number, number>()
+
+    let emitted = 0
 
     type WalkTuple = [
       unknown,
@@ -723,11 +837,14 @@ export class StreamedPreviewChannel {
       }
 
       this.onMesh(payload)
+      ++emitted
 
       if (this.emittedBytes_ >= this.maxBytes) {
-        return
+        return emitted
       }
     }
+
+    return emitted
   }
 
   /**

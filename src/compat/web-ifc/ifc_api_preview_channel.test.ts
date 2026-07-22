@@ -277,4 +277,138 @@ describe( 'StreamedPreviewChannel', () => {
     api.CloseModel( classicID )
     api.CloseModel( deferredID )
   }, 240000 )
+
+  test( 'a throwing prefix build retires the attempt, not the channel', () => {
+
+    // Mid-parse prefixes can be structurally incomplete and the adapter's
+    // generation build can THROW (AP214's assembly-tree prep does on
+    // dangling references — this killed the whole STEP preview). The
+    // channel must swallow the attempt and succeed on a later, larger
+    // prefix. The sink is complete here, so growth is simulated by
+    // inflating the reported record count past the retry gate.
+    const sink = buildSink()
+    const realRecords = sink.topLevelCount
+
+    let reportedRecords = realRecords
+    const growingSink = {
+      get topLevelCount() {
+        return reportedRecords
+      },
+      snapshot: () => sink.snapshot(),
+    } as unknown as ColumnarIndexSink<number>
+
+    let buildAttempts = 0
+    const inner = ifcPreviewAdapter()
+    const flakyAdapter = {
+      buildGeneration: (
+          source: Uint8Array,
+          wasm: ConwayGeometry,
+          columns: StepIndexColumns<number> ) => {
+        if ( buildAttempts++ === 0 ) {
+          throw new Error( 'structurally incomplete prefix' )
+        }
+        return inner.buildGeneration( source, wasm, columns )
+      },
+    }
+
+    const payloads: PreviewMeshPayload[] = []
+
+    const channel = new StreamedPreviewChannel(
+        data, conwayGeometry, growingSink, flakyAdapter, true,
+        ( mesh ) => payloads.push( mesh ), void 0, void 0, 1 )
+
+    // First drain: the build throws — no payloads, but the channel
+    // survives the attempt.
+    channel.drainForTest()
+
+    expect( buildAttempts ).toBe( 1 )
+    expect( payloads.length ).toBe( 0 )
+
+    // Same record count: the failure gate must hold the retry.
+    channel.drainForTest()
+    expect( buildAttempts ).toBe( 1 )
+
+    // The index "grows" past the gate: the retry builds and drains fully.
+    reportedRecords = realRecords * 4
+    channel.drainForTest()
+
+    expect( buildAttempts ).toBe( 2 )
+    expect( payloads.length ).toBeGreaterThan( 0 )
+  }, 240000 )
+
+  test( 'retryEmptyUnits re-runs empty units on later generations', () => {
+
+    // AP214-style schema: the unit list is fixed up front but the
+    // geometry units reference arrives later in the file. The channel
+    // must re-run units that captured nothing against each richer
+    // generation, and stop retrying a unit once it captures.
+    const UNIT_COUNT = 3
+    const runsPerGeneration: number[][] = []
+
+    let reportedRecords = 2048
+    const fakeSink = {
+      get topLevelCount() {
+        return reportedRecords
+      },
+      snapshot: () => ( {} ),
+    } as unknown as ColumnarIndexSink<number>
+
+    const disposed: number[] = []
+
+    const makeGeneration = ( generationIndex: number ) => {
+      const runs: number[] = []
+      runsPerGeneration.push( runs )
+      return {
+        // Empty scene: units "execute" but never capture, so no unit
+        // ever completes and every generation re-runs all of them.
+        scene: { *walk() { /* no instances */ } },
+        unitCount: UNIT_COUNT,
+        linearScalingFactor: 1,
+        runUnits: ( from: number ) => {
+          runs.push( from )
+          return 1
+        },
+        geometryExpressID: () => void 0,
+        recenter: false,
+        dispose: () => disposed.push( generationIndex ),
+      }
+    }
+
+    let generationIndex = 0
+    const adapter = {
+      retryEmptyUnits: true,
+      buildGeneration: () => makeGeneration( generationIndex++ ),
+    }
+
+    const channel = new StreamedPreviewChannel(
+        data, conwayGeometry, fakeSink, adapter, false,
+        () => { /* no payloads expected */ }, void 0, void 0, 1 )
+
+    const forceTick = () => {
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      ( channel as any ).lastInlineTick_ = 0;
+      ( channel as any ).tickIntervalMs_ = 0
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+      channel.maybeTickInline()
+    }
+
+    // Generation 1: all units run once (none capture).
+    forceTick()
+    expect( runsPerGeneration[ 0 ] ).toEqual( [ 0, 1, 2 ] )
+
+    // Same record count: growth-gated, no rebuild, no re-runs.
+    forceTick()
+    expect( runsPerGeneration.length ).toBe( 1 )
+    expect( runsPerGeneration[ 0 ] ).toEqual( [ 0, 1, 2 ] )
+
+    // Records double: a fresh generation re-runs every empty unit and
+    // the outgoing generation is disposed.
+    reportedRecords *= 4
+    forceTick()
+    expect( runsPerGeneration.length ).toBe( 2 )
+    expect( runsPerGeneration[ 1 ] ).toEqual( [ 0, 1, 2 ] )
+    expect( disposed ).toContain( 0 )
+
+    channel.stop()
+  }, 240000 )
 } )
