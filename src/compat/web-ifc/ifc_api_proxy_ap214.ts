@@ -513,12 +513,21 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     previewChannel?.start()
 
+    // Channel ticks ride the parse's own progress callback (see
+    // maybeTickInline) — timer ticks alone starve under the parse's
+    // scheduler-priority yields in browsers.
+    const parseProgress = previewChannel !== void 0 ?
+      (cursorBytes: number) => {
+        parseTick?.(cursorBytes)
+        previewChannel.maybeTickInline()
+      } : parseTick
+
     let result: ParseResult
 
     try {
       ( { result } = await buildIndexStreamingAsync(
           new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
-          void 0, sink, parseTick) )
+          void 0, sink, parseProgress) )
     } finally {
       previewChannel?.stop()
     }

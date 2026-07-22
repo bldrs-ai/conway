@@ -851,6 +851,19 @@ export class IfcAPI {
    * @param modelID handle retrieved by OpenModel/OpenModelStreamed
    * @return {boolean} True when geometry was released.
    */
+  /**
+   * Conway extension: the model's linear scaling factor to metres
+   * (1 = metres, 0.001 = millimetres, 0.0254 = inches), derived from
+   * the model's unit assignment during extraction. Feature-detect with
+   * `typeof`. Returns 1 for unknown models.
+   *
+   * @param modelID handle retrieved by OpenModel/OpenModelStreamed
+   * @return {number} metres per model unit.
+   */
+  GetLinearScalingFactor(modelID: number): number {
+    return this.models.get(modelID)?.linearScalingFactor ?? 1
+  }
+
   ReleaseModelGeometry(modelID: number): boolean {
 
     const result = this.models.get(modelID)

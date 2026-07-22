@@ -9,13 +9,20 @@ import {
   AP214GeometryExtraction,
 } from '../../AP214E3_2010/ap214_geometry_extraction'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import { cursorIterator } from '../../indexing/cursor_utilities'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import * as glmatrix from 'gl-matrix'
 
 /* eslint-disable no-magic-numbers */
 
-/** Ms between preview pump ticks (interleaves with the parse's yields). */
+/** Initial ms between preview pump ticks (interleaves with the parse's
+ * yields). The interval decays (TICK_INTERVAL_GROWTH per tick, capped at
+ * TICK_INTERVAL_MAX_MS): dense ticking in the first seconds delivers the
+ * immediate-feedback wow, then the channel backs off so a long parse
+ * isn't taxed all the way through. */
 const TICK_INTERVAL_MS = 150
+const TICK_INTERVAL_MAX_MS = 600
+const TICK_INTERVAL_GROWTH = 1.1
 
 /** Extraction + capture time budget per tick, so the parse keeps most of
  * the main thread (~25/150 ≈ 17% worst-case preview share). */
@@ -27,7 +34,7 @@ const FIRST_GENERATION_MIN_RECORDS = 1024
 
 /** A new generation only when the index grew this much past the previous
  * snapshot (bounds snapshot copies to O(GROWTH/(GROWTH-1)) of the file). */
-const GENERATION_GROWTH_FACTOR = 1.5
+const GENERATION_GROWTH_FACTOR = 2.0
 
 /** Default cap on units the preview channel ever extracts. Preview
  * generations are throwaway extractions whose native geometry is not
@@ -154,10 +161,14 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
       const model = new IfcStepModel(
           data, columns as ConstructorParameters<typeof IfcStepModel>[1] )
 
+      // Enumerate product localIDs straight off the type index — NO
+      // entity materialization (a per-generation sweep of 50k+ product
+      // entities was a dominant channel cost on PSB-class models).
       const products: number[] = []
 
-      for ( const product of model.types( IfcProduct ) ) {
-        products.push( product.localID )
+      for ( const localID of cursorIterator(
+          model.typeIndex.cursor( ...IfcProduct.query ) ) ) {
+        products.push( localID )
       }
 
       if ( products.length === 0 ) {
@@ -165,6 +176,10 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
       }
 
       const extraction = new IfcGeometryExtraction( conwaywasm, model )
+
+      // Preview-only preparation: skip the relationship sweeps whose
+      // entity materialization dominates per-generation cost.
+      extraction.prepareDemandExtraction( true )
 
       return {
         scene: extraction.scene,
@@ -350,9 +365,45 @@ export class StreamedPreviewChannel {
       FIRST_GENERATION_MIN_RECORDS ) {
   }
 
+  private lastInlineTick_ = 0
+  private tickIntervalMs_ = TICK_INTERVAL_MS
+
   /** Begin ticking (call just before awaiting the parse). */
   public start(): void {
     this.schedule_()
+  }
+
+  /**
+   * Tick inline if one is due — called from the parse's own progress
+   * callback, so the channel keeps its cadence even when the event
+   * loop's timer queue is starved (browser: the cooperative parse
+   * yields via scheduler.yield / MessageChannel, whose continuations
+   * outrank setTimeout; the 150ms timer ticks barely ran on PSB-class
+   * parses, starving the preview until parse end). The timer remains
+   * as a fallback for gaps between progress calls.
+   */
+  public maybeTickInline(): void {
+
+    if (this.stopped_ || this.capped) {
+      return
+    }
+
+    const now = Date.now()
+
+    if (now - this.lastInlineTick_ < this.tickIntervalMs_) {
+      return
+    }
+
+    this.lastInlineTick_ = now
+    this.tickIntervalMs_ =
+      Math.min(this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS)
+
+    try {
+      this.tick_()
+    } catch {
+      // A preview failure must never break the open.
+      this.stopped_ = true
+    }
   }
 
   /**
@@ -404,7 +455,7 @@ export class StreamedPreviewChannel {
       }
 
       this.schedule_()
-    }, TICK_INTERVAL_MS)
+    }, this.tickIntervalMs_)
   }
 
   /**
