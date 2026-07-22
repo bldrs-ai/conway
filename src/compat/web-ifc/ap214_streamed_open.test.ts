@@ -130,23 +130,100 @@ describe( 'OpenModelStreamed on AP214 STEP input', () => {
     // and poisons later opens (pre-existing multi-open quirk).
   }, 240000 )
 
-  test( 'DEFER_GEOMETRY on STEP input is accepted; the pump is a no-op', async () => {
+  test.each( FIXTURES )(
+      'deferred unit pump to completion matches classic exactly: %s', async ( fixture ) => {
+
+        const data = new Uint8Array( fs.readFileSync( fixture ) )
+
+        const classicID = api.OpenModel( data, SETTINGS )
+        const classic = capture( classicID )
+
+        expect( classic.size ).toBeGreaterThan( 0 )
+
+        const deferredID = await api.OpenModelStreamed(
+            data, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+        expect( deferredID ).toBeGreaterThanOrEqual( 0 )
+
+        // Pump in deliberately small unit batches, accumulating delta
+        // emissions additively per entity.
+        const pumped =
+          new Map<number, { geometryExpressID: number, flatTransformation: number[] }[]>()
+        let rounds = 0
+
+        for ( ; ; ) {
+
+          const { extracted, remaining } = api.ExtractGeometryBatch(
+              deferredID, 2, ( mesh ) => {
+
+                const list = pumped.get( mesh.expressID ) ?? []
+
+                for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+                  const placed = mesh.geometries.get( where )
+                  list.push( {
+                    geometryExpressID: placed.geometryExpressID,
+                    flatTransformation: [ ...placed.flatTransformation ],
+                  } )
+                }
+
+                pumped.set( mesh.expressID, list )
+              } )
+
+          ++rounds
+
+          if ( remaining === 0 && extracted === 0 ) {
+            break
+          }
+        }
+
+        expect( rounds ).toBeGreaterThan( 1 )
+        expect( pumped.size ).toBe( classic.size )
+
+        for ( const [ expressID, classicList ] of classic ) {
+
+          const pumpedList = pumped.get( expressID )
+
+          expect( pumpedList ).toBeDefined()
+          expect( pumpedList!.length ).toBe( classicList.length )
+
+          // Instance sets match (order may differ across unit batches):
+          // every classic instance has an exactly-matching pumped one.
+          const unmatched = pumpedList!.map( ( entry ) => entry )
+
+          for ( const reference of classicList ) {
+            const matchIndex = unmatched.findIndex( ( candidate ) =>
+              candidate.geometryExpressID === reference.geometryExpressID &&
+              candidate.flatTransformation.every( ( value, where ) =>
+                Math.abs( value - reference.flatTransformation[ where ] ) < 1e-9 ) )
+
+            expect( matchIndex ).toBeGreaterThanOrEqual( 0 )
+            unmatched.splice( matchIndex, 1 )
+          }
+        }
+
+        // No CloseModel: closing destroys the shared wasm processor and
+        // degrades later opens (pre-existing multi-open quirk).
+      }, 240000 )
+
+  test( 'StreamAllMeshes on a deferred STEP model drains the pump and matches classic', async () => {
 
     const data = new Uint8Array( fs.readFileSync( FIXTURES[ 0 ] ) )
+
+    const classicID = api.OpenModel( data, SETTINGS )
+    const classic = capture( classicID )
 
     const deferredID = await api.OpenModelStreamed(
         data, { ...SETTINGS, DEFER_GEOMETRY: true } )
 
-    expect( deferredID ).toBeGreaterThanOrEqual( 0 )
+    // No pump calls at all — the whole-model consumer must still get
+    // the complete mesh set (the proxy drains internally).
+    const drained = capture( deferredID )
 
-    // STEP extraction is not deferred yet (phase 2): the pump no-ops
-    // and whole-model consumers use StreamAllMeshes, exactly the
-    // contract Share's demand branch falls back on.
-    expect( api.ExtractGeometryBatch( deferredID, 8 ) )
-        .toEqual( { extracted: 0, remaining: 0 } )
+    expect( drained.size ).toBe( classic.size )
 
-    const captured = capture( deferredID )
+    for ( const [ expressID, classicList ] of classic ) {
+      expect( drained.get( expressID )?.length ).toBe( classicList.length )
+    }
 
-    expect( captured.size ).toBeGreaterThan( 0 )
   }, 240000 )
 } )

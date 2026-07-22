@@ -139,21 +139,20 @@ export class IfcApiModelPassthroughFactory {
       }
     }
 
-    // STEP demand parity phase 1: AP214 (and the AP203/AP242
-    // fall-throughs) get the streamed columnar open — index columnar
-    // from birth, no per-record object phase. Extraction is still the
-    // whole-model walk (DEFER_GEOMETRY is accepted but not yet deferred
-    // for STEP; the pump no-ops and consumers fall back to
-    // StreamAllMeshes), so the deferred pump and preview channel can
-    // follow without a surface change.
+    // STEP demand parity: AP214 (and the AP203/AP242 fall-throughs)
+    // get the streamed columnar open — index columnar from birth, no
+    // per-record object phase — and, with DEFER_GEOMETRY, the deferred
+    // assembly-tree unit pump (phase 2), so STEP models stream
+    // progressively through ExtractGeometryBatch just like IFC.
     if ( modelFormat === ModelFormatType.AP214 ||
       modelFormat === ModelFormatType.AP203 ||
       modelFormat === ModelFormatType.AP242 ) {
 
       try {
 
-        return await IfcApiProxyAP214.createStreamed(
-            modelID, data, wasmModule, settings)
+        return settings?.DEFER_GEOMETRY === true ?
+          await IfcApiProxyAP214.createDeferred(modelID, data, wasmModule, settings) :
+          await IfcApiProxyAP214.createStreamed(modelID, data, wasmModule, settings)
 
       } catch ( e ) {
 
