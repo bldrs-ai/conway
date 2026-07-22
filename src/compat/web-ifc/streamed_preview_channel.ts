@@ -274,6 +274,11 @@ export function ap214PreviewAdapter(): PreviewSchemaAdapter {
 
       const extraction = new AP214GeometryExtraction( conwaywasm, model )
 
+      // Prefix extractions hit dangling records by construction —
+      // don't let their expected per-record errors flood the report
+      // (Arty: 5k+ styled-item warnings across generations).
+      extraction.quietRecoverableLogging = true
+
       extraction.prepareDemandExtraction()
 
       if ( extraction.demandUnitCount === 0 ) {
