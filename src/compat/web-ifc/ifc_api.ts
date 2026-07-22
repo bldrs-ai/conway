@@ -836,6 +836,33 @@ export class IfcAPI {
   }
 
   /**
+   * Conway extension: free a model's native geometry once the consumer
+   * has built its own scene from the meshes — every canonical mesh the
+   * extraction produced plus the GetGeometry map. Subsequent
+   * GetGeometry calls return an empty dummy; placed transforms, the
+   * spatial structure and properties are untouched. Feature-detect with
+   * `typeof api.ReleaseModelGeometry === 'function'`.
+   *
+   * The wasm heap never shrinks, but freed pages are reused — repeated
+   * loads in one tab plateau instead of stacking whole model scenes.
+   * On a deferred model whose pump has not drained this is a safe
+   * no-op returning false.
+   *
+   * @param modelID handle retrieved by OpenModel/OpenModelStreamed
+   * @return {boolean} True when geometry was released.
+   */
+  ReleaseModelGeometry(modelID: number): boolean {
+
+    const result = this.models.get(modelID)
+
+    if (result?.releaseGeometry === void 0) {
+      return false
+    }
+
+    return result.releaseGeometry()
+  }
+
+  /**
    *
    * @param modelID
    * @param meshCallback

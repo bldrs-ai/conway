@@ -1364,6 +1364,58 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Free this model's native geometry (conway extension): every
+   * canonical mesh the extraction produced plus the GetGeometry map.
+   * Call AFTER the consumer has built its own scene from the meshes —
+   * subsequent GetGeometry calls return an empty dummy. On a deferred
+   * model whose pump has not drained, this is a no-op (releasing would
+   * break the remaining extraction).
+   *
+   * The wasm heap never shrinks, but freed pages are reused: repeated
+   * loads in one tab plateau instead of stacking whole model scenes
+   * (the multi-load crash).
+   *
+   * @return {boolean} True when geometry was released.
+   */
+  releaseGeometry(): boolean {
+
+    if (this.deferredMode_ &&
+        this.demandProducts_ !== void 0 &&
+        this.demandCursor_ < this.demandProducts_.length) {
+      Logger.warning(
+          '[ReleaseModelGeometry]: deferred pump not drained — not releasing')
+      return false
+    }
+
+    const model = this.model[0]
+    const localIDs: number[] = []
+
+    for (const mesh of model.geometry) {
+      localIDs.push((mesh as {localID: number}).localID)
+    }
+
+    for (const localID of localIDs) {
+      try {
+        model.geometry.delete(localID)
+      } catch {
+        // Never let a free break a loaded model.
+      }
+    }
+
+    // The GetGeometry map holds references to the now-freed natives —
+    // clear it so lookups degrade to the dummy instead of touching them.
+    this.model[3].clear()
+
+    this.released_ = true
+
+    return true
+  }
+
+  /** Native geometry freed (releaseGeometry) — scene walks would touch
+   * freed objects, so mesh serving degrades to the accumulated maps. */
+  private released_ = false
+
+  /**
    * Deferred-mode batch pump (conway extension; Share demand/tiled
    * rendering slice A): extract the next `batchSize` products (file
    * order) through the per-product demand seam and emit THIS BATCH's
@@ -1450,6 +1502,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private streamNewMeshes_(
       meshCallback: (mesh: FlatMesh) => void ): void {
+
+    // Released models: the scene's natives are freed — nothing new can
+    // exist to capture, and walking would touch freed objects.
+    if (this.released_) {
+      return
+    }
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
@@ -1628,6 +1686,20 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback
    */
   streamAllMeshes( meshCallback: (mesh: FlatMesh) => void) {
+
+    // Released models: the natives behind the scene are freed — serve
+    // the accumulated per-entity meshes instead of re-walking.
+    if (this.released_ && !this.deferredMode_) {
+
+      const [, , meshMap, , vectorFlatMesh] = this.model
+
+      meshMap.forEach((mesh) => {
+        vectorFlatMesh.push(mesh[1])
+        meshCallback(mesh[1])
+      })
+
+      return
+    }
 
     // Deferred models: the delta capture has already populated (or will
     // populate) the shared meshMap — re-running the classic walk would

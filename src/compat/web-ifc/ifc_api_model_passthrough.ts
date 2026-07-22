@@ -15,6 +15,10 @@ export interface IfcApiModelPassthrough {
    * Deferred-mode batch pump (IFC proxies opened with DEFER_GEOMETRY) —
    * see IfcApiProxyIfc.extractGeometryBatch.
    */
+  /** Free the model's native geometry after the consumer's scene build
+   * (conway extension) — see the proxies' releaseGeometry. */
+  releaseGeometry?(): boolean
+
   extractGeometryBatch?(
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void): {extracted: number, remaining: number}
