@@ -3328,13 +3328,28 @@ export class AP214GeometryExtraction {
    */
   extractSurfaceOfLinearExtrusion(from: surface_of_linear_extrusion, nativeSurface: SurfaceObject) {
 
-    const profile = this.extractProfile( from.swept_curve )
+    // AP214's swept_curve is a bare curve, not a profile_def, so it goes
+    // through extractCurve + createNativeIfcProfile like the revolution
+    // path does. extractProfile() never fills nativeProfile for bare
+    // curves, which silently dropped every linear-extrusion face (1,370
+    // faces on the Jetenginestep compressor shaft alone).
+    const nativeCurve = this.extractCurve( from.swept_curve )
 
-    if (profile?.nativeProfile === void 0) {
+    if ( nativeCurve === void 0 ) {
 
       Logger.warning('Couldn\'t get curve profile for linear extrusion surface')
       return
     }
+
+    const parameters: ParamsCreateNativeIfcProfile = {
+      curve: nativeCurve,
+      holes: this.nativeVectorCurve(),
+      isConvex: false,
+      isComposite: false,
+      profiles: this.nativeVectorProfile(),
+    }
+
+    const nativeProfile = this.conwayModel.createNativeIfcProfile(parameters)
 
     const extrusionAxis = from.extrusion_axis
     const depth = extrusionAxis.magnitude
@@ -3348,7 +3363,7 @@ export class AP214GeometryExtraction {
         y: directionCoords[1],
         z: directionCoords[2],
       },
-      profile: profile?.nativeProfile,
+      profile: nativeProfile,
     }
   }
 
