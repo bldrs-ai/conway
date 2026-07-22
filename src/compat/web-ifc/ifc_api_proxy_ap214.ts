@@ -32,6 +32,18 @@ import { ProgressTracker } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { StepHeader } from '../../step/parsing/step_parser'
+import { BufferByteSource } from '../../step/parsing/byte_source'
+import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import {
+  buildIndexStreamingAsync,
+} from '../../step/parsing/streaming_index_builder'
+import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+
+/* Moving-window size for the streamed columnar parse (matches the IFC
+ * proxy; the window bounds parse-time scratch, not the source buffer,
+ * which the model keeps resident here). */
+// eslint-disable-next-line no-magic-numbers
+const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
@@ -327,6 +339,140 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         modelID, data, new ConwayGeometry(wasmModule), settings)
 
     return new IfcApiProxyAP214(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Streamed columnar construction (conway extension, used by
+   * OpenModelStreamed): the data parse runs through the streaming
+   * columnar indexer over a moving window instead of the per-record
+   * object parse, so the index is columnar from birth — the AP214 twin
+   * of IfcApiProxyIfc.createStreamed (STEP demand parity phase 1).
+   * Geometry extraction stays the classic whole-model thunk-tree walk;
+   * the deferred pump and preview channel follow in later phases.
+   * Throws when the streamed parse is anything but COMPLETE — the
+   * factory falls back to the classic open.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<IfcApiProxyAP214>} The constructed proxy.
+   */
+  public static async createStreamed(
+      modelID: number,
+      data: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyAP214> {
+
+    const loadState = await IfcApiProxyAP214.parseColumnarAndExtractAsync(
+        modelID, data, new ConwayGeometry(wasmModule), settings)
+
+    return new IfcApiProxyAP214(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * Streamed twin of parseAndExtractAsync: cooperative columnar index
+   * build (periodic event-loop yields, absolute byte-cursor progress),
+   * then the model adopts the columns directly — no per-record object
+   * phase. Mirrors IfcApiProxyIfc.parseColumnarAndExtractAsync minus
+   * the deferred branch.
+   *
+   * @param modelID The model ID being opened.
+   * @param data The STEP data buffer.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS / ON_MODEL_INFO honored).
+   * @return {Promise<Ap214ProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarAndExtractAsync(
+      modelID: number,
+      data: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings ): Promise<Ap214ProxyLoadState> {
+
+    const tracker = IfcApiProxyAP214.makeTracker(settings)
+
+    const allTimeStart = Date.now()
+    const parser = AP214StepParser.Instance
+    const bufferInput = new ParsingBuffer(data)
+
+    tracker?.beginPhase('headerParse', 'bytes', data.length)
+
+    // Header parsed standalone first so the model line fires before the
+    // full parse (the columnar build re-reads the tiny header
+    // internally; the cost is negligible).
+    const [stepHeader, result0] = parser.parseHeader(bufferInput)
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyAP214.reportHeaderParseResult(result0, bufferInput, modelID)
+
+    const modelInfo = extractModelInfo(stepHeader, data.length)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.beginPhase('dataParse', 'bytes', data.length)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+
+    const sink = new ColumnarIndexSink<EntityTypesAP214>()
+
+    const { result } = await buildIndexStreamingAsync(
+        new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+        void 0, sink, parseTick)
+
+    const columns = sink.finalize()
+
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(data.length)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStreamed]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const model = new AP214StepModel(data, columns)
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new AP214GeometryExtraction(conwaywasm, model)
+
+    // Heartbeat only: the AP214 thunk-tree extraction has no flat
+    // product loop to tick from yet.
+    tracker?.beginPhase('geometry', 'products')
+
+    const startTime = Date.now()
+    const [extractionResult, scene] =
+      conwayGeometry.extractAP214GeometryData()
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    if (extractionResult !== ExtractResult.COMPLETE) {
+      Logger.error('[OpenModelStreamed]: Error extracting geometry, exiting...')
+      statistics?.setLoadStatus('FAIL')
+      throw new Error( 'Couldn\'t extract model' )
+    }
+
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
   }
 
   /**

@@ -139,6 +139,32 @@ export class IfcApiModelPassthroughFactory {
       }
     }
 
+    // STEP demand parity phase 1: AP214 (and the AP203/AP242
+    // fall-throughs) get the streamed columnar open — index columnar
+    // from birth, no per-record object phase. Extraction is still the
+    // whole-model walk (DEFER_GEOMETRY is accepted but not yet deferred
+    // for STEP; the pump no-ops and consumers fall back to
+    // StreamAllMeshes), so the deferred pump and preview channel can
+    // follow without a surface change.
+    if ( modelFormat === ModelFormatType.AP214 ||
+      modelFormat === ModelFormatType.AP203 ||
+      modelFormat === ModelFormatType.AP242 ) {
+
+      try {
+
+        return await IfcApiProxyAP214.createStreamed(
+            modelID, data, wasmModule, settings)
+
+      } catch ( e ) {
+
+        const message = e instanceof Error ? e.message : String( e )
+
+        Logger.warning(
+            `Streamed STEP open failed for model ${modelID}, ` +
+            `falling back to classic open: ${message}`)
+      }
+    }
+
     return IfcApiModelPassthroughFactory.fromAsync(modelID, data, wasmModule, settings)
   }
 
