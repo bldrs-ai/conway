@@ -270,6 +270,15 @@ export class AP214GeometryExtraction {
    * or the maximum level for CSG memoization if it is not.
    * @param lowMemoryMode Whether to enable low memory mode for geometry extraction.
    */
+  /** When true, per-record recoverable errors (dangling styled items,
+   * child-representation failures, stack mismatches) are not logged.
+   * Set by the parse-time preview channel's throwaway PREFIX
+   * extractions, where truncated-tail records make those errors
+   * expected by construction — several generations over a large STEP
+   * file otherwise flood the load report with thousands of warnings
+   * (Arty: 5k+). Durable extractions keep full logging. */
+  public quietRecoverableLogging: boolean
+
   constructor(
     private readonly conwayModel: ConwayGeometry,
     public readonly model: AP214StepModel,
@@ -278,6 +287,7 @@ export class AP214GeometryExtraction {
     private readonly lowMemoryMode: boolean = false ) {
 
     this.csgMemoization = !this.lowMemoryMode
+    this.quietRecoverableLogging = false
 
     this.materials = model.materials
     this.scene = new AP214SceneBuilder(model, conwayModel, this.materials)
@@ -3982,7 +3992,9 @@ export class AP214GeometryExtraction {
           styledItemMap.set( styledItem.item.localID, styledItem.localID )
         }
       } catch (error) {
-        Logger.error(`Error populating styled item map for item ${styledItem.localID}: ${error}`)
+        if ( !this.quietRecoverableLogging ) {
+          Logger.error(`Error populating styled item map for item ${styledItem.localID}: ${error}`)
+        }
       }
     }
     
@@ -3993,7 +4005,9 @@ export class AP214GeometryExtraction {
           styledItemMap.set( overridingStyledItem.item.localID, overridingStyledItem.localID )
         }
       } catch (error) {
-        Logger.error(`Error populating styled item map for item ${overridingStyledItem.localID}: ${error}`)
+        if ( !this.quietRecoverableLogging ) {
+          Logger.error(`Error populating styled item map for item ${overridingStyledItem.localID}: ${error}`)
+        }
       }
     }
   }
@@ -4204,7 +4218,9 @@ export class AP214GeometryExtraction {
             try {
               mappedChild.thunk!( childOwningLocalID, childTransform )
             } catch ( ex ) {
-              if ( ex instanceof Error ) {
+              if ( this.quietRecoverableLogging ) {
+                // Preview prefix: dangling children are expected — skip quietly.
+              } else if ( ex instanceof Error ) {
                 Logger.error( `Error processing child shape_representation: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
               } else {
                 Logger.error( `Unknown exception processing child shape_representation (${ex}) expressID: #${this.model.getExpressIDByLocalID( childLocalID )}` )
@@ -4217,7 +4233,8 @@ export class AP214GeometryExtraction {
               this.scene.popTransform()
             }
 
-            if( this.scene.stackLength !== enterChildStackDepth || this.scene.currentParent !== enterChildParent ) {
+            if( ( this.scene.stackLength !== enterChildStackDepth ||
+                this.scene.currentParent !== enterChildParent ) && !this.quietRecoverableLogging ) {
               Logger.error( `Stack length mismatch after processing child shape_representation ${this.scene.currentParent} ${enterChildParent} expressID: #${representation.expressID}` )
             }
           }
@@ -4262,7 +4279,8 @@ export class AP214GeometryExtraction {
           this.scene.popTransform()
         }
 
-        if( this.scene.stackLength !== entryTransformDepth || this.scene.currentParent !== currentParent ) {
+        if( ( this.scene.stackLength !== entryTransformDepth ||
+            this.scene.currentParent !== currentParent ) && !this.quietRecoverableLogging ) {
           Logger.error( `Stack length mismatch after processing shape_representation  ${this.scene.currentParent} ${currentParent} expressID: #${representation.expressID}` )
         }
       }
@@ -4711,7 +4729,10 @@ export class AP214GeometryExtraction {
         units[ this.demandCursor_ ]()
         ++executed
       } catch ( ex ) {
-        if ( ex instanceof Error ) {
+        if ( this.quietRecoverableLogging ) {
+          // Preview prefix: failing units are expected — retried on a
+          // richer generation, and the durable extraction re-runs all.
+        } else if ( ex instanceof Error ) {
           Logger.error( `Error processing demand unit: \n\t${ex.name}\n\t${ex.message}` )
         } else {
           Logger.error( `Unknown exception processing demand unit (${ex})` )
