@@ -149,7 +149,10 @@ describe('AP214 Geometry Extraction', () => {
   })
 
   test('tubeGeometryArrayLength()', () => {
-    const testParameter:number = 9108
+    // Dropped from 9108 with conway-geom#153: cylindrical faces CDT their
+    // trim loops in a (theta, z) unwrap instead of refining earcut chords
+    // until the triangle budget ran out.
+    const testParameter:number = 828
     expect(getTubeMeshSize()).toBe(testParameter)
 
   })
