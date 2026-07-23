@@ -16,6 +16,7 @@ import {
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import * as glmatrix from 'gl-matrix'
+import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 import Logger from '../../logging/logger'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { ExtractResult } from '../../index'
@@ -70,7 +71,7 @@ interface Ap214ProxyLoadState {
   deferred?: boolean
   /** Coordination matrix the parse-time preview channel derived —
    * adopted by the durable capture so both share one frame. */
-  previewCoordinationMatrix?: glmatrix.mat4
+  previewCoordinationMatrix?: number[]
   allTimeStart: number
   stepHeader: StepHeader
   model: AP214StepModel
@@ -114,7 +115,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * multi-call memory only — getCoordinationMatrix keeps the classic
    * identity contract (see the IFC proxy's demandCoordination_ note).
    */
-  private demandCoordination_?: glmatrix.mat4
+  private demandCoordination_?: number[]
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -1328,7 +1329,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
-    let coordinationMatrix = this.demandCoordination_ ?? glmatrix.mat4.create()
+    let coordinationMatrix: ArrayLike<number> =
+      this.demandCoordination_ ?? glmatrix.mat4.create()
     const seenThisPass = new Map<number, number>()
     const deltas = new Map<number, PlacedGeometry[]>()
     const deltaExpressIDs = new Map<number, number>()
@@ -1371,48 +1373,24 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
       const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+      // Full-precision float64 placement straight from the wasm boundary
+      // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+      // the recentre math runs in double precision (see coordination_f64).
       const geometryTransform = nativeTransform?.getValues()
-      let newMatrix: glmatrix.mat4
-
-      if (geometryTransform !== void 0) {
-        newMatrix = glmatrix.mat4.fromValues(
-            ...(geometryTransform as unknown as
-              Parameters<typeof glmatrix.mat4.fromValues>))
-      } else {
-        newMatrix = glmatrix.mat4.create()
-      }
 
       if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
 
-        const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-        glmatrix.vec4.transformMat4(
-            transformedPt,
-            [nativePt!.x, nativePt!.y, nativePt!.z, 1],
-            newMatrix)
+        const derived = deriveCoordinationF64(
+            geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
 
-        coordinationMatrix = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(coordinationMatrix,
-            [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-        const scaleMatrix = glmatrix.mat4.create()
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-        glmatrix.mat4.multiply(coordinationMatrix, this.NormalizeMat, coordinationMatrix)
-        glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
-
-        this.demandCoordination_ = coordinationMatrix
+        coordinationMatrix = derived
+        this.demandCoordination_ = derived
         this._isCoordinated = true
       }
 
       // Bare composition — no per-leaf recenter (issue #308: AP214
       // instances share one geometry buffer), matching streamAllMeshes.
-      const newTransform = glmatrix.mat4.create()
-      glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-
-      const newTransformArr = Array.from(newTransform)
+      const newTransformArr = composeTransformF64(coordinationMatrix, geometryTransform)
 
       geometryMaterialTransformMap.set(expressID,
           [geometry.geometry, material_, newTransformArr])
@@ -1534,7 +1512,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.model[5]
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
@@ -1564,95 +1542,27 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+        // Full-precision float64 placement straight from the wasm boundary
+        // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+        // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
-        let newMatrix: glmatrix.mat4 | undefined
-        if (geometryTransform !== void 0) {
-          newMatrix = glmatrix.mat4.fromValues(
-              geometryTransform[0],
-              geometryTransform[1],
-              geometryTransform[2],
-              geometryTransform[3],
-              geometryTransform[4],
-              geometryTransform[5],
-              geometryTransform[6],
-              geometryTransform[7],
-              geometryTransform[8],
-              geometryTransform[9],
-              geometryTransform[10],
-              geometryTransform[11],
-              geometryTransform[12],
-              geometryTransform[13],
-              geometryTransform[14],
-              geometryTransform[15],
-          )
-        } else {
-          // set to identity if no transform found
-          newMatrix = glmatrix.mat4.create()
-        }
 
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
-          // coordinate the geometry to the origin
-          const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
-
-          // Transform the point by the matrix.
-          const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-          glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix!)
-
-          // Create the translation matrix.
-          coordinationMatrix = glmatrix.mat4.create()
-
-          glmatrix.mat4.fromTranslation(coordinationMatrix,
-              [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-          const scaleMatrix = glmatrix.mat4.create()
-
-          // Create a 3D vector for scaling factors
-          const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-              this.linearScalingFactor,
-              this.linearScalingFactor)
-
-          // Scale the matrix
-          glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-          glmatrix.mat4.multiply(coordinationMatrix,
-              this.NormalizeMat,
-              coordinationMatrix)
-          glmatrix.mat4.multiply(coordinationMatrix,
-              scaleMatrix,
-              coordinationMatrix)
-
+          coordinationMatrix = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           this._isCoordinated = true
         }
 
-        // extract color
-        const newTransform = glmatrix.mat4.create()
-
-        // Create a 4x4 identity matrix
-        const scaleMatrix = glmatrix.mat4.create()
-
-        // Create a 3D vector for scaling factors
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        // Scale the matrix
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
         // Compose the world transform from the engine's scene transform
-        // (newMatrix = nativeTransform). Geometry vertices stay in their
-        // source-unit local space; nativeTransform maps them to metre world
-        // space — the same bare composition the native consumer
-        // geometry_aggregator uses. The per-leaf geometry.normalize() recenter
-        // was removed: AP214 instances/mapped-items share one geometry buffer,
-        // so normalize() mutated it once and later instances lost their offset
-        // and collapsed toward the origin (issue #308 "port cluster"). The
-        // global coordinationMatrix still carries Y-up + COORDINATE_TO_ORIGIN.
-        if (newMatrix !== void 0) {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-        } else {
-          glmatrix.mat4.copy(newTransform, coordinationMatrix)
-        }
-        const newTransformArr = Array.from(newTransform)
+        // (nativeTransform). Geometry vertices stay in their source-unit local
+        // space; nativeTransform maps them to metre world space — the same
+        // bare composition the native consumer geometry_aggregator uses. The
+        // per-leaf geometry.normalize() recenter was removed: AP214
+        // instances/mapped-items share one geometry buffer, so normalize()
+        // mutated it once and later instances lost their offset and collapsed
+        // toward the origin (issue #308 "port cluster"). The global
+        // coordinationMatrix still carries Y-up + COORDINATE_TO_ORIGIN.
+        const newTransformArr = composeTransformF64(coordinationMatrix, geometryTransform)
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_, newTransformArr])
 
@@ -1765,7 +1675,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.model[5]
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
@@ -1795,95 +1705,28 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+        // Full-precision float64 placement straight from the wasm boundary
+        // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+        // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
-        let newMatrix: glmatrix.mat4 | undefined
-        if (geometryTransform !== void 0) {
-          newMatrix = glmatrix.mat4.fromValues(
-              geometryTransform[0],
-              geometryTransform[1],
-              geometryTransform[2],
-              geometryTransform[3],
-              geometryTransform[4],
-              geometryTransform[5],
-              geometryTransform[6],
-              geometryTransform[7],
-              geometryTransform[8],
-              geometryTransform[9],
-              geometryTransform[10],
-              geometryTransform[11],
-              geometryTransform[12],
-              geometryTransform[13],
-              geometryTransform[14],
-              geometryTransform[15],
-          )
-        }
 
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
-          // coordinate the geometry to the origin
-          // Assuming geom.GetPoint(0) returns a glm::dvec3, i.e., a 3D vector.
-          // In TypeScript, you can represent it as number[] or Float64Array.
           Logger.info('Setting up coordinationMatrix')
-          const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
-
-          // Transform the point by the matrix.
-          const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-          glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix!)
-
-          // Create the translation matrix.
-          coordinationMatrix = glmatrix.mat4.create()
-
-          glmatrix.mat4.fromTranslation(coordinationMatrix,
-              [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-          const scaleMatrix = glmatrix.mat4.create()
-
-          // Create a 3D vector for scaling factors
-          const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-              this.linearScalingFactor,
-              this.linearScalingFactor)
-
-          // Scale the matrix
-          glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-          glmatrix.mat4.multiply(coordinationMatrix,
-              this.NormalizeMat,
-              coordinationMatrix)
-          glmatrix.mat4.multiply(coordinationMatrix,
-              scaleMatrix,
-              coordinationMatrix)
-
+          coordinationMatrix = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           this._isCoordinated = true
         }
 
-        // extract color
-        const newTransform = glmatrix.mat4.create()
-
-        // Create a 4x4 identity matrix
-        const scaleMatrix = glmatrix.mat4.create()
-
-        // Create a 3D vector for scaling factors
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        // Scale the matrix
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
         // Compose the world transform from the engine's scene transform
-        // (newMatrix = nativeTransform). Geometry vertices stay in their
-        // source-unit local space; nativeTransform maps them to metre world
-        // space — the same bare composition the native consumer
-        // geometry_aggregator uses. The per-leaf geometry.normalize() recenter
-        // was removed: AP214 instances/mapped-items share one geometry buffer,
-        // so normalize() mutated it once and later instances lost their offset
-        // and collapsed toward the origin (issue #308 "port cluster"). The
-        // global coordinationMatrix still carries Y-up + COORDINATE_TO_ORIGIN.
-        if (newMatrix !== void 0) {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-        } else {
-          glmatrix.mat4.copy(newTransform, coordinationMatrix)
-        }
-        const newTransformArr = Array.from(newTransform)
+        // (nativeTransform). Geometry vertices stay in their source-unit local
+        // space; nativeTransform maps them to metre world space — the same
+        // bare composition the native consumer geometry_aggregator uses. The
+        // per-leaf geometry.normalize() recenter was removed: AP214
+        // instances/mapped-items share one geometry buffer, so normalize()
+        // mutated it once and later instances lost their offset and collapsed
+        // toward the origin (issue #308 "port cluster"). The global
+        // coordinationMatrix still carries Y-up + COORDINATE_TO_ORIGIN.
+        const newTransformArr = composeTransformF64(coordinationMatrix, geometryTransform)
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_, newTransformArr])
 

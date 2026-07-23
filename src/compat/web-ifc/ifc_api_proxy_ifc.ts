@@ -19,6 +19,7 @@ import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
+import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker } from '../../core/progress'
@@ -69,7 +70,7 @@ interface IfcProxyLoadState {
   deferred?: boolean
   /** Coordination matrix the parse-time preview channel derived (slice
    * A2) — adopted by the durable capture so both share one frame. */
-  previewCoordinationMatrix?: glmatrix.mat4
+  previewCoordinationMatrix?: number[]
   allTimeStart: number
   stepHeader: StepHeader
   model: IfcStepModel
@@ -126,7 +127,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * apply twice. This field is only the pump's internal multi-call
    * memory.
    */
-  private demandCoordination_?: glmatrix.mat4
+  private demandCoordination_?: number[]
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -1520,7 +1521,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const [model, scene, meshMap, geometryMaterialTransformMap] = this.model
 
-    let coordinationMatrix = this.demandCoordination_ ?? glmatrix.mat4.create()
+    let coordinationMatrix: ArrayLike<number> =
+      this.demandCoordination_ ?? glmatrix.mat4.create()
     const seenThisPass = new Map<number, number>()
     const deltas = new Map<number, PlacedGeometry[]>()
 
@@ -1560,64 +1562,32 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         nativePt = geometry.geometry.getPoint(0)
       }
 
-      const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
+      // normalize() recenters the shared geometry buffer (side effect)
+      // and returns the local centre used to place it.
       const center = geometry.geometry.normalize()
-
-      geomCenter[0] = center.x
-      geomCenter[1] = center.y
-      geomCenter[2] = center.z
-
-      const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-      glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
 
       const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+      // Full-precision float64 placement straight from the wasm boundary
+      // (glm::dmat4). NOT re-truncated through a gl-matrix Float32Array —
+      // the recentre math runs in double precision (see coordination_f64).
       const geometryTransform = nativeTransform?.getValues()
-      let newMatrix: glmatrix.mat4
-
-      if (geometryTransform !== void 0) {
-        newMatrix = glmatrix.mat4.fromValues(
-            ...(geometryTransform as unknown as Parameters<typeof glmatrix.mat4.fromValues>))
-      } else {
-        newMatrix = glmatrix.mat4.create()
-      }
 
       if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
 
-        const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
-        const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-        glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix)
+        const derived = deriveCoordinationF64(
+            geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
 
-        coordinationMatrix = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(coordinationMatrix,
-            [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-        const scaleMatrix = glmatrix.mat4.create()
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-        glmatrix.mat4.multiply(coordinationMatrix, this.NormalizeMat, coordinationMatrix)
-        glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
+        coordinationMatrix = derived
 
         // Persist for every later batch (internal only — see
         // demandCoordination_'s identity-contract note).
-        this.demandCoordination_ = coordinationMatrix
+        this.demandCoordination_ = derived
         this._isCoordinated = true
       }
 
-      const newTransform = glmatrix.mat4.create()
-      const scaleMatrix = glmatrix.mat4.create()
-      const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-          this.linearScalingFactor,
-          this.linearScalingFactor)
-
-      glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-      glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-      glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-
-      const newTransformArr = Array.from(newTransform)
+      const newTransformArr =
+          composeTransformF64(coordinationMatrix, geometryTransform, center)
 
       geometryMaterialTransformMap.set(expressID,
           [geometry.geometry, material_, newTransformArr])
@@ -1740,7 +1710,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.model[5]
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
@@ -1766,105 +1736,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // extract center
-        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
+        // normalize() recenters the geometry buffer (side effect) and
+        // returns the local centre used to place it.
         const center = geometry.geometry.normalize()
-
-
-        geomCenter[0] = center.x
-        geomCenter[1] = center.y
-        geomCenter[2] = center.z
-
-        // Create a translation matrix from geom.min
-        const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+        // Full-precision float64 placement straight from the wasm boundary
+        // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+        // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
-        let newMatrix: glmatrix.mat4 | undefined
-        if (geometryTransform !== void 0) {
-          newMatrix = glmatrix.mat4.fromValues(
-              geometryTransform[0],
-              geometryTransform[1],
-              geometryTransform[2],
-              geometryTransform[3],
-              geometryTransform[4],
-              geometryTransform[5],
-              geometryTransform[6],
-              geometryTransform[7],
-              geometryTransform[8],
-              geometryTransform[9],
-              geometryTransform[10],
-              geometryTransform[11],
-              geometryTransform[12],
-              geometryTransform[13],
-              geometryTransform[14],
-              geometryTransform[15],
-          )
-        } else {
-          // set to identity if no transform found
-          newMatrix = glmatrix.mat4.create()
-        }
 
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
-          // coordinate the geometry to the origin
-          const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
-
-          // Transform the point by the matrix.
-          const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-          glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix!)
-
-          // Create the translation matrix.
-          coordinationMatrix = glmatrix.mat4.create()
-
-          glmatrix.mat4.fromTranslation(coordinationMatrix,
-              [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-          const scaleMatrix = glmatrix.mat4.create()
-
-          // Create a 3D vector for scaling factors
-          const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-              this.linearScalingFactor,
-              this.linearScalingFactor)
-
-          // Scale the matrix
-          glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-          glmatrix.mat4.multiply(coordinationMatrix,
-              this.NormalizeMat,
-              coordinationMatrix)
-          glmatrix.mat4.multiply(coordinationMatrix,
-              scaleMatrix,
-              coordinationMatrix)
-
+          coordinationMatrix = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           this._isCoordinated = true
         }
 
-        // extract color
-        const newTransform = glmatrix.mat4.create()
-
-        // Create a 4x4 identity matrix
-        const scaleMatrix = glmatrix.mat4.create()
-
-        // Create a 3D vector for scaling factors
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        // Scale the matrix
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-        // Perform the matrix multiplications
-        if (newMatrix !== void 0) {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-        } else {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newTransform)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-        }
-        const newTransformArr = Array.from(newTransform)
+        const newTransformArr =
+            composeTransformF64(coordinationMatrix, geometryTransform, center)
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -1966,7 +1857,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.model[5]
 
     const conwayTypesArray: number[] = []
     types.forEach((type) => {
@@ -2009,108 +1900,27 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // extract center
-        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
+        // normalize() recenters the geometry buffer (side effect) and
+        // returns the local centre used to place it.
         const center = geometry.geometry.normalize()
-
-
-        geomCenter[0] = center.x
-        geomCenter[1] = center.y
-        geomCenter[2] = center.z
-
-        // Create a translation matrix from geom.min
-        const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+        // Full-precision float64 placement straight from the wasm boundary
+        // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+        // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
-        let newMatrix: glmatrix.mat4 | undefined
-        if (geometryTransform !== void 0) {
-          newMatrix = glmatrix.mat4.fromValues(
-              geometryTransform[0],
-              geometryTransform[1],
-              geometryTransform[2],
-              geometryTransform[3],
-              geometryTransform[4],
-              geometryTransform[5],
-              geometryTransform[6],
-              geometryTransform[7],
-              geometryTransform[8],
-              geometryTransform[9],
-              geometryTransform[10],
-              geometryTransform[11],
-              geometryTransform[12],
-              geometryTransform[13],
-              geometryTransform[14],
-              geometryTransform[15],
-          )
-        }
 
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
-          // coordinate the geometry to the origin
-          // Assuming geom.GetPoint(0) returns a glm::dvec3, i.e., a 3D vector.
-          // In TypeScript, you can represent it as number[] or Float64Array.
           Logger.info('Setting up coordinationMatrix')
-
-
-          // const nativePt = geometry.geometry.GetPoint(0)
-          const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
-
-          // Transform the point by the matrix.
-          const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-          glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix!)
-
-          // Create the translation matrix.
-          coordinationMatrix = glmatrix.mat4.create()
-
-          glmatrix.mat4.fromTranslation(coordinationMatrix,
-              [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-          const scaleMatrix = glmatrix.mat4.create()
-
-          // Create a 3D vector for scaling factors
-          const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-              this.linearScalingFactor,
-              this.linearScalingFactor)
-
-          // Scale the matrix
-          glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-          glmatrix.mat4.multiply(coordinationMatrix,
-              this.NormalizeMat,
-              coordinationMatrix)
-          glmatrix.mat4.multiply(coordinationMatrix,
-              scaleMatrix,
-              coordinationMatrix)
-
+          coordinationMatrix = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           this._isCoordinated = true
         }
 
-        // extract color
-        const newTransform = glmatrix.mat4.create()
-
-        // Create a 4x4 identity matrix
-        const scaleMatrix = glmatrix.mat4.create()
-
-        // Create a 3D vector for scaling factors
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        // Scale the matrix
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-        // Perform the matrix multiplications
-        if (newMatrix !== void 0) {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-        } else {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newTransform)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-        }
-        const newTransformArr = Array.from(newTransform)
+        const newTransformArr =
+            composeTransformF64(coordinationMatrix, geometryTransform, center)
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -2210,7 +2020,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.model[5]
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
@@ -2236,108 +2046,27 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // extract center
-        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
+        // normalize() recenters the geometry buffer (side effect) and
+        // returns the local centre used to place it.
         const center = geometry.geometry.normalize()
-
-
-        geomCenter[0] = center.x
-        geomCenter[1] = center.y
-        geomCenter[2] = center.z
-
-        // Create a translation matrix from geom.min
-        const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
+        // Full-precision float64 placement straight from the wasm boundary
+        // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+        // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
-        let newMatrix: glmatrix.mat4 | undefined
-        if (geometryTransform !== void 0) {
-          newMatrix = glmatrix.mat4.fromValues(
-              geometryTransform[0],
-              geometryTransform[1],
-              geometryTransform[2],
-              geometryTransform[3],
-              geometryTransform[4],
-              geometryTransform[5],
-              geometryTransform[6],
-              geometryTransform[7],
-              geometryTransform[8],
-              geometryTransform[9],
-              geometryTransform[10],
-              geometryTransform[11],
-              geometryTransform[12],
-              geometryTransform[13],
-              geometryTransform[14],
-              geometryTransform[15],
-          )
-        }
 
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
-          // coordinate the geometry to the origin
-          // Assuming geom.GetPoint(0) returns a glm::dvec3, i.e., a 3D vector.
-          // In TypeScript, you can represent it as number[] or Float64Array.
           Logger.info('Setting up coordinationMatrix')
-
-
-          const pt: number[] = [nativePt!.x, nativePt!.y, nativePt!.z]
-
-          // Transform the point by the matrix.
-          const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-          glmatrix.vec4.transformMat4(transformedPt, [pt[0], pt[1], pt[2], 1], newMatrix!)
-
-          // Create the translation matrix.
-          coordinationMatrix = glmatrix.mat4.create()
-
-          glmatrix.mat4.fromTranslation(coordinationMatrix,
-              [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-          const scaleMatrix = glmatrix.mat4.create()
-
-          // Create a 3D vector for scaling factors
-          const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-              this.linearScalingFactor,
-              this.linearScalingFactor)
-
-          // Scale the matrix
-          glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-          glmatrix.mat4.multiply(coordinationMatrix,
-              this.NormalizeMat,
-              coordinationMatrix)
-          glmatrix.mat4.multiply(coordinationMatrix,
-              scaleMatrix,
-              coordinationMatrix)
-
+          coordinationMatrix = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           this._isCoordinated = true
         }
 
-
-        // extract color
-        const newTransform = glmatrix.mat4.create()
-
-        // Create a 4x4 identity matrix
-        const scaleMatrix = glmatrix.mat4.create()
-
-        // Create a 3D vector for scaling factors
-        const scaleVec = glmatrix.vec3.fromValues(this.linearScalingFactor,
-            this.linearScalingFactor,
-            this.linearScalingFactor)
-
-        // Scale the matrix
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-
-        // Perform the matrix multiplications
-        if (newMatrix !== void 0) {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newMatrix)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-        } else {
-          glmatrix.mat4.multiply(newTransform, coordinationMatrix, newTransform)
-          glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-        }
-        const newTransformArr = Array.from(newTransform)
+        const newTransformArr =
+            composeTransformF64(coordinationMatrix, geometryTransform, center)
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 

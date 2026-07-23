@@ -12,6 +12,7 @@ import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { cursorIterator } from '../../indexing/cursor_utilities'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import * as glmatrix from 'gl-matrix'
+import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 
 /* eslint-disable no-magic-numbers */
 
@@ -191,6 +192,11 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
 
       const extraction = new IfcGeometryExtraction( conwaywasm, model )
 
+      // Prefix extractions hit representation items whose style/select
+      // references aren't parsed yet — expected on a truncated tail;
+      // don't flood the report (DOWA: 1164 styled-item errors).
+      extraction.quietRecoverableLogging = true
+
       // Preview-only preparation: skip the relationship sweeps whose
       // entity materialization dominates per-generation cost.
       extraction.prepareDemandExtraction( true )
@@ -335,7 +341,7 @@ export class StreamedPreviewChannel {
   /** Coordination matrix pinned from the first captured instance, exactly
    * the derivation the durable capture would perform — the proxy adopts it
    * so preview and durable placements share one frame. */
-  public coordinationMatrix?: glmatrix.mat4
+  public coordinationMatrix?: number[]
 
   private stopped_ = false
   private timer_?: ReturnType<typeof setTimeout>
@@ -738,73 +744,28 @@ export class StreamedPreviewChannel {
         nativePt = geometry.geometry.getPoint(0)
       }
 
-      const translationMatrixGeomMin: glmatrix.mat4 = glmatrix.mat4.create()
-
-      if (recenter) {
-        const geomCenter: glmatrix.vec3 = glmatrix.vec3.create()
-        const center = geometry.geometry.normalize()
-
-        geomCenter[0] = center.x
-        geomCenter[1] = center.y
-        geomCenter[2] = center.z
-
-        glmatrix.mat4.fromTranslation(translationMatrixGeomMin, geomCenter)
-      }
+      // normalize() recenters the geometry buffer (side effect) and returns
+      // the local centre; only the per-leaf recenter path (IFC) applies it —
+      // AP214 shares one buffer and composes bare (issue #308).
+      const center = recenter ? geometry.geometry.normalize() : undefined
 
       const geometryExpressID =
         generation.geometryExpressID(geometry.localID) as number
 
+      // Full-precision float64 placement straight from the wasm boundary
+      // (glm::dmat4) — never truncated through a gl-matrix Float32Array;
+      // the recentre math runs in double precision (see coordination_f64).
       const geometryTransform = nativeTransform?.getValues()
-      let newMatrix: glmatrix.mat4
-
-      if (geometryTransform !== void 0) {
-        newMatrix = glmatrix.mat4.fromValues(
-            ...(geometryTransform as unknown as
-              Parameters<typeof glmatrix.mat4.fromValues>))
-      } else {
-        newMatrix = glmatrix.mat4.create()
-      }
 
       if (this.coordinationMatrix === void 0 && this.coordinateToOrigin) {
-
-        const transformedPt: glmatrix.vec4 = glmatrix.vec4.create()
-        glmatrix.vec4.transformMat4(
-            transformedPt,
-            [nativePt!.x, nativePt!.y, nativePt!.z, 1],
-            newMatrix)
-
-        const coordinationMatrix = glmatrix.mat4.create()
-        glmatrix.mat4.fromTranslation(coordinationMatrix,
-            [-transformedPt[0], -transformedPt[1], -transformedPt[2]])
-
-        const scaleMatrix = glmatrix.mat4.create()
-        const scaleVec = glmatrix.vec3.fromValues(
-            linearScalingFactor, linearScalingFactor, linearScalingFactor)
-
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-        glmatrix.mat4.multiply(coordinationMatrix, NORMALIZE_MAT, coordinationMatrix)
-        glmatrix.mat4.multiply(coordinationMatrix, scaleMatrix, coordinationMatrix)
-
-        this.coordinationMatrix = coordinationMatrix
+        this.coordinationMatrix = deriveCoordinationF64(
+            geometryTransform, nativePt!, NORMALIZE_MAT, linearScalingFactor)
       }
 
       const coordination = this.coordinationMatrix ?? glmatrix.mat4.create()
 
-      const newTransform = glmatrix.mat4.create()
-
-      if (recenter) {
-        const scaleMatrix = glmatrix.mat4.create()
-        const scaleVec = glmatrix.vec3.fromValues(
-            linearScalingFactor, linearScalingFactor, linearScalingFactor)
-
-        glmatrix.mat4.scale(scaleMatrix, scaleMatrix, scaleVec)
-        glmatrix.mat4.multiply(newTransform, coordination, newMatrix)
-        glmatrix.mat4.multiply(newTransform, newTransform, translationMatrixGeomMin)
-      } else {
-        // Bare composition — no per-leaf recenter (AP214 instances share
-        // one geometry buffer, issue #308), matching its durable capture.
-        glmatrix.mat4.multiply(newTransform, coordination, newMatrix)
-      }
+      const newTransform =
+          composeTransformF64(coordination, geometryTransform, center)
 
       const payload: PreviewMeshPayload = {
         expressID: entity.expressID,
