@@ -1,0 +1,50 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('aggregate_master_voids.ifc','2026-07-23T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* Minimal synthetic model exercising the rel-aggregates master-voids
+   second pass: an IfcElementAssembly (no own representation) carries an
+   IfcRelVoidsElement opening, and aggregates an IfcBuildingElementPart
+   whose box body must be CUT by that opening on the whole-model walk's
+   second product pass (and, for parity, by the deferred demand pump). */
+#1=IFCPROJECT('0hF0kSTOX3ovkcpuOhkPrX',$,'AggregateMasterVoids',$,$,$,$,(#20),#10);
+#10=IFCUNITASSIGNMENT((#11));
+#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-05,#21,$);
+#21=IFCAXIS2PLACEMENT3D(#22,$,$);
+#22=IFCCARTESIANPOINT((0.,0.,0.));
+#23=IFCDIRECTION((0.,0.,1.));
+#24=IFCDIRECTION((1.,0.,0.));
+/* Assembly: relating object of both the rel-voids and the aggregate. */
+#100=IFCELEMENTASSEMBLY('1hF0kSTOX3ovkcpuOhkPrX',$,'Assembly',$,$,#101,$,$,$,.NOTDEFINED.);
+#101=IFCLOCALPLACEMENT($,#21);
+/* Part: 1m x 1m x 1m box, spanning (0,0,0)..(1,1,1). */
+#200=IFCBUILDINGELEMENTPART('2hF0kSTOX3ovkcpuOhkPrX',$,'Part',$,$,#201,#210,$,$);
+#201=IFCLOCALPLACEMENT(#101,#21);
+#210=IFCPRODUCTDEFINITIONSHAPE($,$,(#211));
+#211=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#212));
+#212=IFCEXTRUDEDAREASOLID(#213,#216,#23,1.);
+#213=IFCRECTANGLEPROFILEDEF(.AREA.,$,#214,1.,1.);
+#214=IFCAXIS2PLACEMENT2D(#215,$);
+#215=IFCCARTESIANPOINT((0.5,0.5));
+#216=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Opening: 0.4m x 0.4m column through the part, z from -0.5 to 1.5. */
+#300=IFCOPENINGELEMENT('3hF0kSTOX3ovkcpuOhkPrX',$,'Opening',$,$,#301,#310,$,$);
+#301=IFCLOCALPLACEMENT(#101,#21);
+#310=IFCPRODUCTDEFINITIONSHAPE($,$,(#311));
+#311=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#312));
+#312=IFCEXTRUDEDAREASOLID(#313,#316,#23,2.);
+#313=IFCRECTANGLEPROFILEDEF(.AREA.,$,#314,0.4,0.4);
+#314=IFCAXIS2PLACEMENT2D(#315,$);
+#315=IFCCARTESIANPOINT((0.5,0.5));
+#316=IFCAXIS2PLACEMENT3D(#317,$,$);
+#317=IFCCARTESIANPOINT((0.,0.,-0.5));
+/* The opening voids the ASSEMBLY (the relating object), not the part. */
+#400=IFCRELVOIDSELEMENT('4hF0kSTOX3ovkcpuOhkPrX',$,$,$,#100,#300);
+/* The assembly aggregates the part. */
+#500=IFCRELAGGREGATES('5hF0kSTOX3ovkcpuOhkPrX',$,$,$,#100,(#200));
+ENDSEC;
+END-ISO-10303-21;

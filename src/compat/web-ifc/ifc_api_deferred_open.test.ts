@@ -244,6 +244,87 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     expect( api3.ReleaseModelGeometry( 9999 ) ).toBe( false )
   }, 240000 )
 
+  test( 'pump applies the rel-aggregates master-voids pass (cut parity)', async () => {
+
+    // Classic's whole-model walk follows its product loop with a second
+    // pass re-extracting every IfcRelAggregates related product with
+    // the RELATING object's rel-voids, REPLACING the canonical mesh
+    // under the same localID — aggregate parts whose parent carries
+    // openings end up cut. A pump that only ran the per-product pass
+    // served the UNCUT content classic never exposes (field reports:
+    // wrong shapes + flicker on faceset-heavy vyzn models). The
+    // synthetic fixture is an assembly voided by an opening,
+    // aggregating a box part the opening must cut.
+    //
+    // Fresh IfcAPI (CloseModel poisons later opens — see the content
+    // parity test's note).
+    const api4 = new IfcAPI()
+    await api4.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/aggregate_master_voids.ifc' ) )
+
+    const classicID = api4.OpenModel( fixture, SETTINGS )
+    const classicInstances: number[] = []
+
+    api4.StreamAllMeshes( classicID, ( mesh ) => {
+      for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+        classicInstances.push( mesh.geometries.get( where ).geometryExpressID )
+      }
+    } )
+
+    // The second pass re-extracts the part: two placed instances of the
+    // (cut) part geometry — the fixture must exercise the seam at all.
+    expect( classicInstances.length ).toBe( 2 )
+
+    const deferredID = await api4.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+    const pumpedInstances: number[] = []
+
+    for ( ; ; ) {
+
+      const { extracted, remaining } = api4.ExtractGeometryBatch(
+          deferredID, 1, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              pumpedInstances.push(
+                  mesh.geometries.get( where ).geometryExpressID )
+            }
+          } )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    // Instance parity: the pump must emit the re-extracted instance too.
+    expect( pumpedInstances.sort() ).toEqual( classicInstances.sort() )
+
+    // Content parity: GetGeometry must serve the CUT part, byte-identical
+    // to classic (the uncut box has strictly fewer vertices).
+    for ( const geometryID of new Set( classicInstances ) ) {
+
+      const classicGeometry = api4.GetGeometry( classicID, geometryID )
+      const deferredGeometry = api4.GetGeometry( deferredID, geometryID )
+
+      const classicSize = classicGeometry.GetVertexDataSize()
+
+      expect( classicSize ).toBeGreaterThan( 0 )
+      expect( deferredGeometry.GetVertexDataSize() ).toBe( classicSize )
+      expect( deferredGeometry.GetIndexDataSize() )
+          .toBe( classicGeometry.GetIndexDataSize() )
+
+      const classicVertices =
+        api4.GetVertexArray( classicGeometry.GetVertexData(), classicSize )
+      const deferredVertices =
+        api4.GetVertexArray( deferredGeometry.GetVertexData(), classicSize )
+
+      expect( deferredVertices ).toEqual( classicVertices )
+    }
+
+    api4.CloseModel( classicID )
+    api4.CloseModel( deferredID )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )
