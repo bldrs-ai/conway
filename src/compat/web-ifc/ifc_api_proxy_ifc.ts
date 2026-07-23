@@ -118,6 +118,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandCursor_ = 0
 
   /**
+   * Has the pump run the rel-aggregates master-voids pass? Classic's
+   * whole-model walk follows its product loop with a second pass that
+   * re-extracts every IfcRelAggregates related product using the
+   * relating object's rel-voids (extractRelAggregatesGeometry), which
+   * REPLACES the canonical mesh under the same localID — aggregate
+   * parts whose parent carries openings end up cut. The pump must run
+   * that same pass once after its last product batch or GetGeometry
+   * serves the uncut content classic never exposes.
+   */
+  private demandAggregatesDone_ = false
+
+  /**
    * Coordination matrix the deferred capture derived (or adopted from
    * the parse-time preview channel). Kept OFF the model tuple's slot 5
    * deliberately: classic streamAllMeshes derives its coordination into
@@ -1478,6 +1490,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
         ++extracted
       }
+    }
+
+    // Classic parity: once the product walk completes, run the
+    // whole-model walk's second (rel-aggregates master-voids) pass in
+    // the SAME call, so this call's delta capture already emits the
+    // re-extracted instances and the GetGeometry map's last writer for
+    // every replaced mesh matches classic exactly (see
+    // demandAggregatesDone_).
+    if (this.demandCursor_ >= this.demandProducts_.length &&
+        !this.demandAggregatesDone_) {
+
+      this.demandAggregatesDone_ = true
+      this.conwayGeometry_.extractRelAggregatesGeometry()
     }
 
     if (meshCallback !== void 0) {

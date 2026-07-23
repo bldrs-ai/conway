@@ -6019,10 +6019,12 @@ export class IfcGeometryExtraction {
    * path's entry (Phase B2). Requires {@link prepareDemandExtraction} (or a
    * prior whole-model walk) so the shared maps exist.
    *
-   * Note: products that are targets of IfcRelAggregates whose relating
-   * object carries rel-voids get those master voids only on the whole-model
-   * walk; the demand path extracts the product's own voids. The parity gate
-   * for this seam is the whole-model digest CI.
+   * Note: this extracts a single product with its OWN voids. Products that
+   * are targets of IfcRelAggregates whose relating object carries rel-voids
+   * additionally need the whole-model walk's second pass
+   * ({@link extractRelAggregatesGeometry}) — the demand pump runs it once
+   * after the last product batch so pumped extractions converge to the
+   * classic walk exactly.
    *
    * @param localID The product's local ID.
    * @return {boolean} True if the local ID was an IfcProduct and was
@@ -6041,6 +6043,78 @@ export class IfcGeometryExtraction {
     this.extractProductGeometry( element )
 
     return true
+  }
+
+  /**
+   * The whole-model walk's SECOND product pass, shared with the demand
+   * pump: for every IfcRelAggregates, re-extract the related products
+   * with the relating object's rel-voids as a master override. This
+   * re-extraction REPLACES the canonical mesh cached under each
+   * representation item's localID (the scene resolves geometry by
+   * localID at walk time), so aggregate parts whose parent carries
+   * openings end up CUT — a demand pump that only ran the per-product
+   * pass would leave them uncut and serve different GetGeometry content
+   * than the classic walk (the vyzn romana/DOWA scatter). Call exactly
+   * once, after every product has been extracted.
+   */
+  public extractRelAggregatesGeometry(): void {
+
+    const relAggregates = this.model.types(IfcRelAggregates)
+
+    for ( const relAggregate of relAggregates ) {
+
+      this.extractRelAggregateGeometry_( relAggregate )
+    }
+  }
+
+  /**
+   * Extract one IfcRelAggregates' related products with the relating
+   * object's ("master") rel-voids — the shared per-item body of the
+   * whole-model walk's rel-aggregates loop and
+   * {@link extractRelAggregatesGeometry}.
+   *
+   * @param relAggregate The rel-aggregates relationship to process.
+   */
+  private extractRelAggregateGeometry_( relAggregate: IfcRelAggregates ): void {
+
+    try {
+
+      // Note, this is required because the relating object
+      // can be where the rel-void is applied, so we
+      // used this as a top level over-ride for a rel-void.
+      // for all objects in the aggregate - CS
+      const relatingObject = relAggregate.RelatingObject
+
+      const masterRelVoids =
+        relatingObject instanceof IfcProduct ?
+          this.extractRelVoids( relatingObject ) :
+          void 0
+
+      const relatedObjects = relAggregate.RelatedObjects
+
+      for ( const productRepresentation of relatedObjects ) {
+
+        if ( productRepresentation instanceof IfcProduct ) {
+
+          this.extractProductGeometry( productRepresentation, masterRelVoids )
+        }
+      }
+
+      if ( masterRelVoids !== void 0 ) {
+        masterRelVoids[ 0 ].delete()
+      }
+    } catch (ex) {
+      if (ex instanceof Error) {
+        if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+          Logger.error('Error processing relAggregate\n\t' +
+            `error: ${ex.message}\n\t express ID: #${relAggregate.expressID}`)
+        } else {
+          throw ex
+        }
+      } else {
+        Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
+      }
+    }
   }
 
   /**
@@ -6368,44 +6442,7 @@ export class IfcGeometryExtraction {
 
         yield [++completedItems, totalItems]
 
-        try {
-
-          // Note, this is required because the relating object
-          // can be where the rel-void is applied, so we
-          // used this as a top level over-ride for a rel-void.
-          // for all objects in the aggregate - CS
-          const relatingObject = relAggregate.RelatingObject
-
-          const masterRelVoids =
-            relatingObject instanceof IfcProduct ?
-              this.extractRelVoids( relatingObject ) :
-              void 0
-
-          const relatedObjects = relAggregate.RelatedObjects
-
-          for ( const productRepresentation of relatedObjects ) {
-
-            if ( productRepresentation instanceof IfcProduct ) {
-
-              this.extractProductGeometry( productRepresentation, masterRelVoids )
-            }
-          }
-
-          if ( masterRelVoids !== void 0 ) {
-            masterRelVoids[ 0 ].delete()
-          }
-        } catch (ex) {
-          if (ex instanceof Error) {
-            if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
-              Logger.error('Error processing relAggregate\n\t' +
-                `error: ${ex.message}\n\t express ID: #${relAggregate.expressID}`)
-            } else {
-              throw ex
-            }
-          } else {
-            Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
-          }
-        }
+        this.extractRelAggregateGeometry_( relAggregate )
       }
 
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
