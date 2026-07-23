@@ -191,6 +191,11 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
 
       const extraction = new IfcGeometryExtraction( conwaywasm, model )
 
+      // Prefix extractions hit representation items whose style/select
+      // references aren't parsed yet — expected on a truncated tail;
+      // don't flood the report (DOWA: 1164 styled-item errors).
+      extraction.quietRecoverableLogging = true
+
       // Preview-only preparation: skip the relationship sweeps whose
       // entity materialization dominates per-generation cost.
       extraction.prepareDemandExtraction( true )

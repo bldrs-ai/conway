@@ -391,6 +391,15 @@ export class IfcGeometryExtraction {
    * or the maximum level for CSG memoization if it is not.
    * @param lowMemoryMode Whether to enable low memory mode for geometry extraction.
    */
+  /** When true, per-record recoverable extraction errors (a
+   * representation item whose style/select references aren't populated
+   * yet) are not logged. Set by the parse-time preview channel's
+   * throwaway PREFIX extractions, where a truncated-tail prefix makes
+   * those errors expected by construction — a large IFC otherwise
+   * floods the load report with thousands of them (DOWA: 1164). The
+   * durable extraction keeps full logging. Mirrors AP214's flag. */
+  public quietRecoverableLogging!: boolean
+
   constructor(
     private readonly conwayModel: ConwayGeometry,
     public readonly model: IfcStepModel,
@@ -399,6 +408,7 @@ export class IfcGeometryExtraction {
     private readonly lowMemoryMode: boolean = false ) {
 
     this.csgMemoization = !this.lowMemoryMode
+    this.quietRecoverableLogging = false
 
     this.materials = model.materials
     this.scene = new IfcSceneBuilder(model, conwayModel, this.materials)
@@ -6130,7 +6140,9 @@ export class IfcGeometryExtraction {
               }
             } catch ( error ) {
 
-              if ( error instanceof Error ) {
+              if ( this.quietRecoverableLogging ) {
+                // Preview prefix: expected on a truncated tail — skip.
+              } else if ( error instanceof Error ) {
 
                 Logger.error( `Error extracting representation item\n\t${error.message}\n\tExpress ID: #${item.expressID}`)
               } else {
@@ -6199,7 +6211,9 @@ export class IfcGeometryExtraction {
               }
             } catch ( error ) {
 
-              if ( error instanceof Error ) {
+              if ( this.quietRecoverableLogging ) {
+                // Preview prefix: expected on a truncated tail — skip.
+              } else if ( error instanceof Error ) {
 
                 Logger.error( `Error extracting representation item\n\t${error.message}\n\t${error.stack}\n\tExpress ID: #${item.localID}`)
               } else {
