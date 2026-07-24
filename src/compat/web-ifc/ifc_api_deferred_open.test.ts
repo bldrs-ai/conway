@@ -273,21 +273,32 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       }
     } )
 
-    // The second pass re-extracts the part: two placed instances of the
-    // (cut) part geometry — the fixture must exercise the seam at all.
-    expect( classicInstances.length ).toBe( 2 )
+    // Aggregate targets are extracted ONLY by the second pass now
+    // (aggregateTargetLocalIDs): exactly ONE placed instance of the cut
+    // part. (Historically 2 — the first-pass uncut node plus the
+    // pass-two re-extraction node coinciding, a duplicate that
+    // z-fought and, on the pump, delivered stale uncut content.)
+    expect( classicInstances.length ).toBe( 1 )
 
     const deferredID = await api4.OpenModelStreamed(
         fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
     const pumpedInstances: number[] = []
+    const pumpedTrisAtDelivery: number[] = []
 
     for ( ; ; ) {
 
       const { extracted, remaining } = api4.ExtractGeometryBatch(
           deferredID, 1, ( mesh ) => {
             for ( let where = 0; where < mesh.geometries.size(); ++where ) {
-              pumpedInstances.push(
-                  mesh.geometries.get( where ).geometryExpressID )
+              const geometryID =
+                mesh.geometries.get( where ).geometryExpressID
+              pumpedInstances.push( geometryID )
+              // Content-at-delivery: what an incremental consumer
+              // copies the moment the instance is emitted.
+              const geometry = api4.GetGeometry( deferredID, geometryID )
+              pumpedTrisAtDelivery.push(
+                  // eslint-disable-next-line no-magic-numbers
+                  ( geometry.GetIndexDataSize() / 3 ) | 0 )
             }
           } )
 
@@ -296,8 +307,22 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       }
     }
 
-    // Instance parity: the pump must emit the re-extracted instance too.
+    // Instance parity: same single cut instance as classic.
     expect( pumpedInstances.sort() ).toEqual( classicInstances.sort() )
+
+    // The #1640 invariant (Share bldrs-ai/Share#1640): the content an
+    // incremental consumer copies AT DELIVERY equals the final content
+    // — the pump must never mutate a geometry after emitting instances
+    // that reference it.
+    for ( let where = 0; where < pumpedInstances.length; ++where ) {
+
+      const finalGeometry =
+        api4.GetGeometry( deferredID, pumpedInstances[ where ] )
+
+      expect( pumpedTrisAtDelivery[ where ] )
+          // eslint-disable-next-line no-magic-numbers
+          .toBe( ( finalGeometry.GetIndexDataSize() / 3 ) | 0 )
+    }
 
     // Content parity: GetGeometry must serve the CUT part, byte-identical
     // to classic (the uncut box has strictly fewer vertices).

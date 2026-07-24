@@ -45,7 +45,7 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
-import { IfcProduct, IfcRoot } from '../../ifc/ifc4_gen'
+import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 
 // Batch size used when a whole-model consumer (streamAllMeshes) drains
@@ -118,16 +118,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandCursor_ = 0
 
   /**
-   * Has the pump run the rel-aggregates master-voids pass? Classic's
-   * whole-model walk follows its product loop with a second pass that
-   * re-extracts every IfcRelAggregates related product using the
-   * relating object's rel-voids (extractRelAggregatesGeometry), which
-   * REPLACES the canonical mesh under the same localID — aggregate
-   * parts whose parent carries openings end up cut. The pump must run
-   * that same pass once after its last product batch or GetGeometry
-   * serves the uncut content classic never exposes.
+   * Deferred-mode rel-aggregates worklist, pumped batch-by-batch AFTER
+   * the product cursor completes. Classic's whole-model walk follows
+   * its product loop with a second pass extracting every
+   * IfcRelAggregates related product using the relating object's
+   * rel-voids. Aggregate-target products are EXCLUDED from
+   * demandProducts_ (see aggregateTargetLocalIDs) so this pass is their
+   * first and only extraction — content is final when their instances
+   * are captured, and no placement is ever appended over an
+   * already-delivered one (the ILNA missing-facades / 388_4
+   * duplicate-placement class).
    */
-  private demandAggregatesDone_ = false
+  private demandAggregates_?: IfcRelAggregates[]
+
+  /** Cursor into demandAggregates_ — items before it are extracted. */
+  private demandAggregatesCursor_ = 0
 
   /**
    * Coordination matrix the deferred capture derived (or adopted from
@@ -1403,7 +1408,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (this.deferredMode_ &&
         this.demandProducts_ !== void 0 &&
-        this.demandCursor_ < this.demandProducts_.length) {
+        (this.demandCursor_ < this.demandProducts_.length ||
+          this.demandAggregatesCursor_ <
+            (this.demandAggregates_?.length ?? 0))) {
       Logger.warning(
           '[ReleaseModelGeometry]: deferred pump not drained — not releasing')
       return false
@@ -1467,18 +1474,41 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (this.demandProducts_ === void 0) {
 
+      // Aggregate-target products are extracted ONLY by the
+      // rel-aggregates pass below (with the relating object's master
+      // rel-voids), never by the per-product pass: extracting them here
+      // first would emit their instances with the uncut/placeholder
+      // content and the pass's later replacement would never reach an
+      // incremental consumer (it copies at delivery), while the pass's
+      // second scene instance would draw over the first (see
+      // aggregateTargetLocalIDs).
+      const aggregateTargets = this.conwayGeometry_.aggregateTargetLocalIDs()
+
       const products: number[] = []
 
       for (const product of this.model[0].types(IfcProduct)) {
+
+        if (aggregateTargets.has(product.localID)) {
+          continue
+        }
         products.push(product.localID)
       }
 
+      const aggregates: IfcRelAggregates[] = []
+
+      for (const relAggregate of this.model[0].types(IfcRelAggregates)) {
+        aggregates.push(relAggregate)
+      }
+
       this.demandProducts_ = products
+      this.demandAggregates_ = aggregates
       this.demandCursor_ = 0
+      this.demandAggregatesCursor_ = 0
     }
 
+    const budget = Math.max(batchSize, 1)
     const end = Math.min(
-        this.demandCursor_ + Math.max(batchSize, 1),
+        this.demandCursor_ + budget,
         this.demandProducts_.length)
 
     let extracted = 0
@@ -1492,17 +1522,27 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
-    // Classic parity: once the product walk completes, run the
-    // whole-model walk's second (rel-aggregates master-voids) pass in
-    // the SAME call, so this call's delta capture already emits the
-    // re-extracted instances and the GetGeometry map's last writer for
-    // every replaced mesh matches classic exactly (see
-    // demandAggregatesDone_).
-    if (this.demandCursor_ >= this.demandProducts_.length &&
-        !this.demandAggregatesDone_) {
+    // Classic parity: once the product walk completes, pump the
+    // whole-model walk's second (rel-aggregates master-voids) pass with
+    // the same per-call budget — batch-by-batch, not as one end-of-load
+    // stall — so aggregate parts stream in cut, exactly once, with
+    // final content (see demandAggregates_).
+    const aggregates = this.demandAggregates_ ?? []
 
-      this.demandAggregatesDone_ = true
-      this.conwayGeometry_.extractRelAggregatesGeometry()
+    if (this.demandCursor_ >= this.demandProducts_.length &&
+        this.demandAggregatesCursor_ < aggregates.length) {
+
+      const aggregatesEnd = Math.min(
+          this.demandAggregatesCursor_ + (budget - extracted),
+          aggregates.length)
+
+      for (; this.demandAggregatesCursor_ < aggregatesEnd;
+        ++this.demandAggregatesCursor_) {
+
+        this.conwayGeometry_.extractRelAggregateGeometry(
+            aggregates[this.demandAggregatesCursor_])
+        ++extracted
+      }
     }
 
     if (meshCallback !== void 0) {
@@ -1511,7 +1551,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     return {
       extracted,
-      remaining: this.demandProducts_.length - this.demandCursor_,
+      remaining: (this.demandProducts_.length - this.demandCursor_) +
+        (aggregates.length - this.demandAggregatesCursor_),
     }
   }
 
