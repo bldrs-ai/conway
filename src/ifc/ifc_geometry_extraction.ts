@@ -5922,6 +5922,59 @@ export class IfcGeometryExtraction {
   // walk can both trigger it without duplicating work.
   private extractionMapsPrepared_ = false
 
+  // Lazy cache for aggregateTargetLocalIDs().
+  private aggregateTargetLocalIDs_?: Set<number>
+
+  /**
+   * Local IDs of every IfcProduct that is a RelatedObject of any
+   * IfcRelAggregates — the exact set the rel-aggregates pass
+   * ({@link extractRelAggregateGeometry}) re-extracts with the relating
+   * object's master rel-voids.
+   *
+   * Both product walks SKIP these in their first pass and extract them
+   * only in the aggregates pass, for two invariants consumers rely on:
+   *   1. one scene instance per placement (the first-pass node plus the
+   *      re-extraction node used to coincide exactly — a duplicate draw
+   *      that z-fights), and
+   *   2. a part's canonical mesh content is never REPLACED after its
+   *      instances were already emitted — incremental consumers copy
+   *      content at delivery time, so a first-pass emission served the
+   *      uncut (or empty) content and the later replacement never
+   *      reached the screen (the ILNA missing-facades class).
+   *
+   * @return {Set<number>} product localIDs deferred to the aggregates
+   * pass; empty for models without IfcRelAggregates.
+   */
+  public aggregateTargetLocalIDs(): Set<number> {
+
+    if ( this.aggregateTargetLocalIDs_ !== void 0 ) {
+      return this.aggregateTargetLocalIDs_
+    }
+
+    const targets = new Set<number>()
+
+    for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
+
+      try {
+
+        for ( const related of relAggregate.RelatedObjects ) {
+
+          if ( related instanceof IfcProduct ) {
+            targets.add( related.localID )
+          }
+        }
+      } catch {
+        // Malformed relationship rows are tolerated exactly like the
+        // aggregates pass itself tolerates them (permissive catch) —
+        // their targets simply stay in the first-pass walk.
+      }
+    }
+
+    this.aggregateTargetLocalIDs_ = targets
+
+    return targets
+  }
+
   /**
    * One-time extraction setup shared by the whole-model walk and the
    * per-product demand path (Phase B2): linear scaling factor and the
@@ -6063,7 +6116,7 @@ export class IfcGeometryExtraction {
 
     for ( const relAggregate of relAggregates ) {
 
-      this.extractRelAggregateGeometry_( relAggregate )
+      this.extractRelAggregateGeometry( relAggregate )
     }
   }
 
@@ -6071,11 +6124,13 @@ export class IfcGeometryExtraction {
    * Extract one IfcRelAggregates' related products with the relating
    * object's ("master") rel-voids — the shared per-item body of the
    * whole-model walk's rel-aggregates loop and
-   * {@link extractRelAggregatesGeometry}.
+   * {@link extractRelAggregatesGeometry}. Public so the deferred pump
+   * can run the pass incrementally (batch-budgeted) instead of as one
+   * end-of-load stall.
    *
    * @param relAggregate The rel-aggregates relationship to process.
    */
-  private extractRelAggregateGeometry_( relAggregate: IfcRelAggregates ): void {
+  public extractRelAggregateGeometry( relAggregate: IfcRelAggregates ): void {
 
     try {
 
@@ -6429,9 +6484,19 @@ export class IfcGeometryExtraction {
         this.model.typeCount(IfcProduct) + this.model.typeCount(IfcRelAggregates)
       let completedItems = 0
 
+      // Products the aggregates pass re-extracts are SKIPPED here and
+      // extracted exactly once, below, with the master rel-voids — one
+      // scene instance per placement and no content replacement after
+      // emission (see aggregateTargetLocalIDs).
+      const aggregateTargets = this.aggregateTargetLocalIDs()
+
       for (const product of products) {
 
         yield [++completedItems, totalItems]
+
+        if ( aggregateTargets.has( product.localID ) ) {
+          continue
+        }
 
         this.extractProductGeometry(product)
       }
@@ -6442,7 +6507,7 @@ export class IfcGeometryExtraction {
 
         yield [++completedItems, totalItems]
 
-        this.extractRelAggregateGeometry_( relAggregate )
+        this.extractRelAggregateGeometry( relAggregate )
       }
 
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
