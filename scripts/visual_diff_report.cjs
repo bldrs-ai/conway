@@ -36,6 +36,13 @@ function parseArgs() {
     opts[args[i].replace(/^--/, '')] = args[i + 1]
   }
   opts.max = parseInt(opts.max, 10)
+  // Minimum fraction of pixels that must differ between the before/after
+  // render for a row to be shown. The digest gate and the visual-diff base
+  // (published npm) use different baselines, so a flagged model can render
+  // identically here — this drops those no-op rows. Default 0.05% (~205px
+  // at 640^2); tune via --diff-threshold.
+  opts.diffThreshold = opts['diff-threshold'] !== undefined ?
+    parseFloat(opts['diff-threshold']) : 0.0005
   // The exporter children run with cwd set to a scratch dir, so a relative
   // --base/--cand (as the workflow passes) would make Node resolve the CLI
   // entry point against the scratch dir and die with ERR_MODULE_NOT_FOUND.
@@ -45,6 +52,34 @@ function parseArgs() {
     }
   }
   return opts
+}
+
+/**
+ * Parse render_glb.cjs's pair diff metric (a single JSON line on stdout).
+ * Returns null when no parseable metric is present — an older render, or a
+ * crash — so the caller falls back to SHOWING the row: a metrics glitch
+ * must never silently hide a real diff.
+ *
+ * @param {string} stdout render_glb.cjs --pair stdout
+ * @return {{changedFraction:number,maxDelta:number}|null}
+ */
+function parseMetric(stdout) {
+  const lines = String(stdout).trim().split('\n').filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; --i) {
+    const line = lines[i].trim()
+    if (!line.startsWith('{')) {
+      continue
+    }
+    try {
+      const parsed = JSON.parse(line)
+      if (typeof parsed.changedFraction === 'number') {
+        return parsed
+      }
+    } catch {
+      // Not the metric line; keep scanning older output.
+    }
+  }
+  return null
 }
 
 /** Model file → the CLI entry point (relative to a package root) for it. */
@@ -113,6 +148,9 @@ function main() {
 
   const renderScript = path.join(__dirname, 'render_glb.cjs')
   const rows = []
+  // Models whose shared-camera render differed below the threshold — shown
+  // as a tally, not rows, so the comment carries only reviewable diffs.
+  const unchanged = []
   const skipped = models.length > opts.max ? models.slice(opts.max) : []
   const selected = models.slice(0, opts.max)
 
@@ -129,7 +167,7 @@ function main() {
       const why = (base.diagnostic || cand.diagnostic || '')
           .replace(/\|/g, '\\|').slice(0, 200)
       rows.push(`| \`${name}\` | _no geometry from both engines_` +
-          `${why ? ` — \`${why}\`` : ''} | |`)
+          `${why ? ` — \`${why}\`` : ''} | | — |`)
       fs.rmSync(work, { recursive: true, force: true })
       continue
     }
@@ -158,14 +196,29 @@ function main() {
 
     if (base.glbs.length > 0 && cand.glbs.length > 0) {
       try {
-        execFileSync(process.execPath, [
+        const renderOut = execFileSync(process.execPath, [
           renderScript, '--pair', base.glbs.join(','), cand.glbs.join(','),
           path.join(opts.out, slug),
         ], { stdio: 'pipe', timeout: 5 * 60 * 1000 })
-        rows.push(
-            `| \`${name}\` ` +
-            `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
-            `| ![after](RAW_URL_BASE/${slug}-after.png) |`)
+
+        const metric = parseMetric(renderOut.toString())
+        // Suppress no-op rows: the render base is the published package, so
+        // a digest-flagged model can render identically here (the change
+        // already shipped). A missing/garbled metric (older render, crash)
+        // falls back to SHOWING the row — never hide a real diff on a glitch.
+        if (metric && metric.changedFraction < opts.diffThreshold) {
+          fs.rmSync(path.join(opts.out, `${slug}-before.png`), { force: true })
+          fs.rmSync(path.join(opts.out, `${slug}-after.png`), { force: true })
+          unchanged.push(name)
+        } else {
+          const badge = metric ?
+            `${(metric.changedFraction * 100).toFixed(2)}% (Δmax ${metric.maxDelta})` : 'n/a'
+          rows.push(
+              `| \`${name}\` ` +
+              `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
+              `| ![after](RAW_URL_BASE/${slug}-after.png) ` +
+              `| ${badge} |`)
+        }
         fs.rmSync(work, { recursive: true, force: true })
         continue
       } catch (err) {
@@ -178,21 +231,39 @@ function main() {
       }
     }
 
+    // Independently-framed fallback (pair render failed): the two cameras
+    // are no longer shared, so the images aren't pixel-comparable and the
+    // threshold doesn't apply — always shown.
     rows.push(
         `| \`${name}\` ` +
         `| ${renderSingle(base, 'base', 'before')} ` +
-        `| ${renderSingle(cand, 'candidate', 'after')} |`)
+        `| ${renderSingle(cand, 'candidate', 'after')} | n/a |`)
     fs.rmSync(work, { recursive: true, force: true })
   }
 
-  let report = '| model | base (main) | candidate (this PR) |\n| --- | --- | --- |\n'
+  let report = '| model | base (main) | candidate (this PR) | Δ pixels |\n' +
+      '| --- | --- | --- | --- |\n'
   report += rows.join('\n') + '\n'
+  if (unchanged.length > 0) {
+    report += `\n_${unchanged.length} digest-changed model(s) rendered below the ` +
+        `${(opts.diffThreshold * 100).toFixed(2)}% pixel-diff threshold ` +
+        `(no visible change vs the base engine; not shown): ` +
+        `${unchanged.join(', ')}_\n`
+  }
   if (skipped.length > 0) {
     report += `\n_${skipped.length} more changed model(s) not rendered ` +
         `(cap ${opts.max}): ${skipped.map((m) => path.basename(m)).join(', ')}_\n`
   }
   fs.writeFileSync(path.join(opts.out, 'report.md'), report)
-  process.stderr.write(`visual-diff: wrote ${rows.length} row(s)\n`)
+  process.stderr.write(
+      `visual-diff: wrote ${rows.length} row(s), ` +
+      `${unchanged.length} below threshold\n`)
 }
 
-main()
+// Run as a CLI, but stay require()-able so parseMetric can be unit-tested
+// without executing main().
+if (require.main === module) {
+  main()
+}
+
+module.exports = { parseMetric }
