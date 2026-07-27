@@ -709,7 +709,8 @@ jobs:
           node scripts/visual_diff_report.cjs \
             --models abs_models.txt \
             --base engines/base --cand engines/cand \
-            --out vdout --max 24
+            --out vdout --max 24 \
+            --diff-threshold 0.0005
 
       - name: Publish images to assets branch
         id: assets

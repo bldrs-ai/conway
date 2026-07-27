@@ -328,6 +328,50 @@ function renderToPixels(tris, bounds, size) {
   return pixels
 }
 
+/**
+ * Per-pixel difference between two equal-size RGB buffers.
+ *
+ * The rasterizer is deterministic and anti-aliasing-free, so identical
+ * geometry rendered under the shared pair camera yields byte-identical
+ * pixels — a truly-unchanged pair reports changedPixels === 0. Any real
+ * geometry difference (including a bounds-moving spike, which the shared
+ * union camera amplifies) lights up pixels here. Callers threshold on
+ * changedFraction to suppress no-op rows.
+ *
+ * @param {Buffer} a RGB bytes (before)
+ * @param {Buffer} b RGB bytes (after), same length as a
+ * @returns {{changedPixels:number,totalPixels:number,changedFraction:number,maxDelta:number}}
+ */
+function diffPixels(a, b) {
+  if (a.length !== b.length) {
+    // Different geometry can't change the raster dimensions (size is
+    // fixed), so a length mismatch is a bug, not a diff — surface it as
+    // maximally-changed rather than silently comparing a prefix.
+    return { changedPixels: -1, totalPixels: 0, changedFraction: 1, maxDelta: 255 }
+  }
+  const totalPixels = a.length / 3
+  let changedPixels = 0
+  let maxDelta = 0
+  for (let i = 0; i < a.length; i += 3) {
+    const d = Math.max(
+        Math.abs(a[i] - b[i]),
+        Math.abs(a[i + 1] - b[i + 1]),
+        Math.abs(a[i + 2] - b[i + 2]))
+    if (d > 0) {
+      ++changedPixels
+    }
+    if (d > maxDelta) {
+      maxDelta = d
+    }
+  }
+  return {
+    changedPixels,
+    totalPixels,
+    changedFraction: totalPixels > 0 ? changedPixels / totalPixels : 0,
+    maxDelta,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // PNG encoding (RGB8, filter 0, zlib) — no dependencies
 // ---------------------------------------------------------------------------
@@ -422,8 +466,14 @@ function main() {
     const after = loadTriangles(afterGlb)
     const bounds = unionBounds(
         projectedBounds(before, basis), projectedBounds(after, basis))
-    writePng(`${outPrefix}-before.png`, renderToPixels(before, bounds, size), size)
-    writePng(`${outPrefix}-after.png`, renderToPixels(after, bounds, size), size)
+    const beforePixels = renderToPixels(before, bounds, size)
+    const afterPixels = renderToPixels(after, bounds, size)
+    writePng(`${outPrefix}-before.png`, beforePixels, size)
+    writePng(`${outPrefix}-after.png`, afterPixels, size)
+    // The pair's diff metric on stdout (single JSON line) — the caller
+    // thresholds on it to drop no-op rows. Kept as the only stdout
+    // output so a caller can parse it directly.
+    process.stdout.write(JSON.stringify(diffPixels(beforePixels, afterPixels)) + '\n')
   } else {
     const [glbPath, outPath] = args
     const tris = loadTriangles(glbPath)
@@ -431,4 +481,10 @@ function main() {
   }
 }
 
-main()
+// Run as a CLI, but stay require()-able so diffPixels can be unit-tested
+// without executing main().
+if (require.main === module) {
+  main()
+}
+
+module.exports = { diffPixels }
