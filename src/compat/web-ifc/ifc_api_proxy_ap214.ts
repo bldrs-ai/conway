@@ -16,7 +16,8 @@ import {
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import * as glmatrix from 'gl-matrix'
-import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import { LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y, TRANSLATION_Z,
+  composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 import Logger from '../../logging/logger'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { ExtractResult } from '../../index'
@@ -116,6 +117,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * identity contract (see the IFC proxy's demandCoordination_ note).
    */
   private demandCoordination_?: number[]
+
+  /** Unvalidated adopted preview frame — see the IFC proxy twin. */
+  private demandCoordinationFromPreview_: boolean = false
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -327,6 +331,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
       this.demandCoordination_ = loadState.previewCoordinationMatrix
       this._isCoordinated = true
+      // Adopted, not derived — validated against the durable walk's
+      // first geometry (see the IFC proxy's demandCoordinationFromPreview_).
+      this.demandCoordinationFromPreview_ = true
     }
 
     let FILE_NAME = stepHeader.headers.get('FILE_NAME')
@@ -1171,6 +1178,18 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     return Array.from(coordinationMatrix)
   }
 
+
+  /**
+   * The coordination frame actually applied to emitted placements —
+   * the derived (or validated adopted) recenter, identity when no
+   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   *
+   * @return {Array<number>} column-major mat4
+   */
+  getAppliedCoordination(): Array<number> {
+    return [...(this.demandCoordination_ ?? this.identity)]
+  }
+
   /**
    *
    * @param ptr
@@ -1366,8 +1385,12 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         blend: 0,
       }
 
+      const validatePreviewFrame = this.demandCoordinationFromPreview_ &&
+        this.settings?.COORDINATE_TO_ORIGIN === true
+
       let nativePt: Vector3
-      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+      if ((!this._isCoordinated || validatePreviewFrame) &&
+          this.settings?.COORDINATE_TO_ORIGIN) {
         nativePt = geometry.geometry.getPoint(0)
       }
 
@@ -1386,6 +1409,28 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         coordinationMatrix = derived
         this.demandCoordination_ = derived
         this._isCoordinated = true
+      } else if (validatePreviewFrame) {
+        // One-shot adopted-frame validation — see the IFC proxy twin
+        // (Share#1634). Bare composition here: AP214 has no per-leaf
+        // recenter (issue #308).
+        this.demandCoordinationFromPreview_ = false
+
+        const probe = composeTransformF64(coordinationMatrix, geometryTransform)
+        const magnitude = Math.max(
+            Math.abs(probe[TRANSLATION_X]),
+            Math.abs(probe[TRANSLATION_Y]),
+            Math.abs(probe[TRANSLATION_Z]))
+
+        if (magnitude > LARGE_COORDINATE_BUDGET_M) {
+          const derived = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+
+          coordinationMatrix = derived
+          this.demandCoordination_ = derived
+          Logger.info(
+              `[deferred] preview coordination frame rejected (first durable ` +
+              `placement at ${Math.round(magnitude)}m); re-derived from the durable anchor`)
+        }
       }
 
       // Bare composition — no per-leaf recenter (issue #308: AP214

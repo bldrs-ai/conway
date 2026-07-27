@@ -26,6 +26,16 @@ export interface IfcApiModelPassthrough {
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void): {extracted: number, remaining: number}
   getCoordinationMatrix(): number[]
+
+  /**
+   * Optional: the coordination frame the open ACTUALLY applied to
+   * emitted placements (COORDINATE_TO_ORIGIN recenter). Unlike
+   * getCoordinationMatrix — whose classic identity contract consumers
+   * stamp onto assembled models — this reports the real offset, so
+   * embedders can map rendered points back to source-world coordinates
+   * (Share#1634 acceptance).
+   */
+  getAppliedCoordination?(): number[]
   getAllLines(): Vector<number>
   getLineIDsWithType(type: number): Vector<number>
   getRawLineData(expressID: number): RawLineData
