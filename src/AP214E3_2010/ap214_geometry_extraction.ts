@@ -3087,17 +3087,40 @@ export class AP214GeometryExtraction {
               }
             }
 
+            // EDGE_CURVE.same_sense: does the edge's start→end direction agree
+            // with the basis curve's parametrisation? For same_sense=false the
+            // edge sweeps from edge_start to edge_end AGAINST the curve
+            // parameter. The native circle/ellipse trim (getAP214Circle) always
+            // sweeps the positive parametric arc from trim1 to trim2 (its
+            // senseAgreement=false path mis-negates the sweep), so ignoring
+            // same_sense selects the COMPLEMENT arc — e.g. Onshape AP242
+            // exports write near-straight edges as shallow arcs of large
+            // circles, and the complement is a ~340° loop that explodes the
+            // face boundary (Right_Hand.step spikes; the CDT "Intersecting
+            // constraint edges" cascade). Normalise instead of forwarding the
+            // flag: swap the trim ends so the positive sweep is the correct
+            // arc, leaving the extracted (memoised) curve running edge_end →
+            // edge_start; the orientation check below compensates.
+            const sameSense = edgeElement.same_sense
+
             const trimmingArguments: TrimmingArguments = {
               exist: !!((trimmingStart !== void 0 && trimmingEnd !== void 0)),
-              start: trimmingStart,
-              end: trimmingEnd,
+              start: sameSense ? trimmingStart : trimmingEnd,
+              end: sameSense ? trimmingEnd : trimmingStart,
             }
 
             const curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
 
             if (curve !== void 0) {
 
-              if ( !edge.orientation ) {
+              // The memoised curve runs edge_start→edge_end when same_sense
+              // held, edge_end→edge_start when the trims were swapped above
+              // (and, for untrimmed basis curves like full B-splines, native
+              // point order is parametric order — reversed relative to the
+              // edge exactly when same_sense is false). Traversal for this
+              // ORIENTED_EDGE must run with `orientation`, so invert on the
+              // XOR of the two flags rather than orientation alone.
+              if ( edge.orientation !== sameSense ) {
                 // reverse curve
                 // Logger.info("edge orientation == true, inverting curve")
                 const invertedCurve = curve.clone()
