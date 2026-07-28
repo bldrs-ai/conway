@@ -1,0 +1,253 @@
+name: Re-bless regression baselines
+
+# Regenerate the committed digest baselines in the test-models repos with
+# conway's PINNED toolchain and open a PR in each repo with the result.
+#
+# WHY THIS EXISTS
+# The digest baselines live in the test-models repos at
+# `regression/test_models/*.csv`. Every PR's `run-ifc-regression` job diffs
+# freshly-regenerated digests against those committed baselines. When the
+# engine changes but the baseline isn't refreshed, the baseline drifts and
+# every PR shows the same phantom "changed" models (the noise the visual-diff
+# threshold in build.yml papers over). This workflow refreshes the baseline
+# so the changed-set once again means "this PR moved geometry".
+#
+# WHY IT MIRRORS run-ifc-regression's BUILD
+# The blessed digests MUST be byte-reproducible by a future PR's
+# `run-ifc-regression`, or the baseline drifts again immediately. That job
+# builds conway from source and restores the WASM Dist from a cache keyed on
+# the conway-geom submodule SHA. This workflow restores the SAME cache (same
+# key) and runs the SAME batch CLI, so its digests are identical to what any
+# later run at that submodule SHA produces. Do NOT switch this to install the
+# published npm package instead — that can lag main's conway-geom SHA and
+# reintroduce drift.
+#
+# MANUAL ONLY: re-blessing is a deliberate human action. Cut it when main is
+# stable, review the resulting per-repo PR (the diff IS the churn), and merge.
+#
+# NOTE: the "Run workflow" button only appears once this file is on the
+# default branch (main) — merge the PR that adds it first.
+#
+# PREREQUISITE — secret `REBLESS_TOKEN`
+# A PAT or GitHub App token with `contents: write` + `pull_requests: write` on
+# BOTH bldrs-ai/test-models and bldrs-ai/test-models-private. The default
+# GITHUB_TOKEN is scoped to conway only and cannot push to those repos. Until
+# this secret is set the workflow fails fast on the first step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Which baselines to re-bless'
+        type: choice
+        options: [both, public, private]
+        default: both
+
+env:
+  EMSDK_VERSION: '6.0.2'
+  EMSDK_CACHE_FOLDER: 'cache/emsdk'
+
+jobs:
+  # Build the matrix from the `targets` input. Done in a job (not a job-level
+  # `if` on the matrix) because the `matrix` context is NOT available in a
+  # job-level `if` — referencing it there is a workflow-validation error.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      # Fail here (cheap runner) before the 8-vcpu matrix jobs allocate, so a
+      # missing secret doesn't burn large-runner minutes.
+      - name: Fail fast if REBLESS_TOKEN missing
+        env:
+          TOKEN_PRESENT: ${{ secrets.REBLESS_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_PRESENT" != "true" ]; then
+            echo "::error::REBLESS_TOKEN secret is not set. It needs contents:write + pull_requests:write on bldrs-ai/test-models and bldrs-ai/test-models-private."
+            exit 1
+          fi
+
+      - name: Pick target repos
+        id: pick
+        env:
+          TARGETS: ${{ github.event.inputs.targets }}
+        run: |
+          PUBLIC='{"name":"public","repo":"bldrs-ai/test-models"}'
+          PRIVATE='{"name":"private","repo":"bldrs-ai/test-models-private"}'
+          case "$TARGETS" in
+            public)  MATRIX="[$PUBLIC]" ;;
+            private) MATRIX="[$PRIVATE]" ;;
+            *)       MATRIX="[$PUBLIC,$PRIVATE]" ;;
+          esac
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Re-blessing: $MATRIX"
+
+  rebless:
+    needs: setup
+    # One entry per selected test-models repo; public and private run in
+    # parallel. The list is already filtered by the setup job, so no per-job
+    # skipping is needed.
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    # Same heavy runner as run-ifc-regression: the batch drives the MT WASM
+    # engine over ~100 models with --parallel and reserves multi-GB shared.
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    timeout-minutes: 90
+    steps:
+      # --- Build conway from source (identical to run-ifc-regression) ---
+      - name: Checkout conway
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Same cache key as build.yml -> hits the Dist that job populated for
+      # this conway-geom SHA, so the digests match run-ifc-regression exactly
+      # and (on a hit) no WASM rebuild happens.
+      - name: Restore WASM build cache
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      # --- WASM build fallback on cache miss (mirrors build.yml) ---
+      - name: Restore GENie cache
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        id: genie-cache
+        uses: actions/cache@v4
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      - name: Build GENie
+        if: steps.wasm-cache.outputs.cache-hit != 'true' && steps.genie-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/bkaradzic/GENie.git GENie
+          (cd GENie && make)
+          mkdir -p bin/linux
+          cp GENie/bin/linux/genie bin/linux/genie
+
+      - name: Cache Emscripten system libraries
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.EMSDK_CACHE_FOLDER }}
+          key: ${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
+
+      - name: Export EMSDK paths for subsequent steps
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> "$GITHUB_ENV"
+
+      - name: Extract WASM build dependencies
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn extract-wasm-dependencies
+
+      - name: Build WASM
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn build-GHA-all
+
+      - name: TypeScript build
+        run: yarn build-incremental
+
+      # --- Regenerate the target repo's baseline ---
+      # Checkout the models repo into `models` with LFS materialized (the batch
+      # reads the real model bytes, not pointer stubs). REBLESS_TOKEN so the
+      # later create-pull-request can push a branch to it.
+      - name: Checkout ${{ matrix.target.repo }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.target.repo }}
+          token: ${{ secrets.REBLESS_TOKEN }}
+          lfs: true
+          path: models
+
+      # Regenerate every digest CSV (+ main/errors/failed) in place, exactly as
+      # run-ifc-regression does: same exclude, same parallelism. `-t HEAD`
+      # points the batch's changes summary at the current committed baseline.
+      # NOT --dryrun: dryrun git-checkouts the output folder back, discarding
+      # the regeneration — we want it to persist so the PR carries it.
+      - name: Regenerate baseline digests
+        run: |
+          node --experimental-specifier-resolution=node \
+            ./compiled/src/ifc/ifc_regression_batch_main.js \
+            -e "sp-.*\.ifc" \
+            -t HEAD \
+            models \
+            models/regression/test_models \
+            --parallel --mem-utilization 90
+
+      # The batch always writes regression/test_models/changes.csv via a git
+      # diff whose pathspec is relative to the model folder, so under this
+      # layout it resolves to nothing and the file comes out empty. It's a
+      # throwaway diff artifact, NOT part of the blessed baseline (main/errors/
+      # failed + the per-model digests are). Restore the committed copy if there
+      # is one, else drop the empty new file, so the PR carries only real churn.
+      - name: Drop the derived changes.csv
+        run: |
+          cd models
+          git checkout -- regression/test_models/changes.csv 2>/dev/null \
+            || rm -f regression/test_models/changes.csv
+
+      # Summarize the churn in the job log before opening the PR.
+      - name: Summarize baseline changes
+        run: |
+          cd models
+          echo "### Re-bless diff for ${{ matrix.target.repo }}" >> "$GITHUB_STEP_SUMMARY"
+          CHANGED=$(git status --porcelain -- regression/test_models | wc -l | tr -d ' ')
+          echo "Changed baseline files: ${CHANGED}" >> "$GITHUB_STEP_SUMMARY"
+          git -c color.ui=never diff --stat -- regression/test_models | tail -40 >> "$GITHUB_STEP_SUMMARY" || true
+
+      # Open (or update) a PR in the target repo with only the baseline diff.
+      # add-paths scopes the commit to regression/test_models so nothing else
+      # in the checkout (e.g. LFS smudge artifacts) can leak in.
+      - name: Open re-bless PR in ${{ matrix.target.repo }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.REBLESS_TOKEN }}
+          path: models
+          add-paths: regression/test_models
+          branch: rebless/${{ github.run_id }}
+          base: main
+          commit-message: "Re-bless regression baselines (conway ${{ github.sha }})"
+          title: "Re-bless regression baselines"
+          body: |
+            Regenerated digest baselines under `regression/test_models/` using
+            conway's pinned toolchain at
+            [`${{ github.repository }}@${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            (run [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})).
+
+            The diff below is the baseline drift being blessed. Every changed
+            digest reflects the current engine's output for that model; merging
+            makes it the new comparison point for future `run-ifc-regression`
+            runs, so their changed-set again means "this PR moved geometry".
+
+            Generated by conway's `rebless-regression` workflow.
