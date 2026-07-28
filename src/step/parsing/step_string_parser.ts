@@ -1,6 +1,6 @@
 import ParsingConstants from '../../parsing/parsing_constants'
 import ParsingDfa16Table from '../../parsing/parsing_dfa_16table'
-import { decodeUtf8, installResizableTextDecoderShim } from './decode_utf8'
+import { decodeStepString, installResizableTextDecoderShim } from './decode_utf8'
 
 // Emscripten 6's browser wasm heap is a resizable ArrayBuffer, on which strict
 // browsers' TextDecoder.decode() throws — including the glue's own UTF8ToString
@@ -123,7 +123,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               result ??= ''
 
               if (cursor > reificationIndex) {
-                result += decodeUtf8(input.subarray(reificationIndex, cursor - 1))
+                result += decodeStepString(input.subarray(reificationIndex, cursor - 1))
               }
 
               result += '\''
@@ -133,7 +133,7 @@ export default class StepStringParser extends ParsingDfa16Table {
             } else {
               result ??= ''
 
-              result += decodeUtf8(input.subarray(reificationIndex, cursor))
+              result += decodeStepString(input.subarray(reificationIndex, cursor))
 
               return result
             }
@@ -171,7 +171,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
               if (nextChar2 !== BSLASH) {
                 result ??= ''
-                result += decodeUtf8(input.subarray(reificationIndex, cursor))
+                result += decodeStepString(input.subarray(reificationIndex, cursor))
                 cursor = nextCursor2 + 1
                 break
               }
@@ -189,7 +189,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               }
 
               result ??= ''
-              result += decodeUtf8(input.subarray(reificationIndex, cursor))
+              result += decodeStepString(input.subarray(reificationIndex, cursor))
 
               codePage = nextChar3 - A
 
@@ -208,7 +208,7 @@ export default class StepStringParser extends ParsingDfa16Table {
 
               if (nextChar2 !== BSLASH) {
                 result ??= ''
-                result += decodeUtf8(input.subarray(reificationIndex, cursor))
+                result += decodeStepString(input.subarray(reificationIndex, cursor))
                 cursor = nextCursor2 + 1
                 break
               }
@@ -222,7 +222,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               const nextChar3 = input[nextCursor3]
 
               result ??= ''
-              result += decodeUtf8(input.subarray(reificationIndex, cursor))
+              result += decodeStepString(input.subarray(reificationIndex, cursor))
 
               /* eslint-disable no-magic-numbers */
               if (nextChar3 < 0x7F) {
@@ -248,7 +248,7 @@ export default class StepStringParser extends ParsingDfa16Table {
               const nextChar2 = input[nextCursor2]
 
               result ??= ''
-              result += decodeUtf8(input.subarray(reificationIndex, cursor))
+              result += decodeStepString(input.subarray(reificationIndex, cursor))
 
               const hexParserTil0 = (count: number) => {
 

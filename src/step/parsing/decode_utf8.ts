@@ -60,6 +60,38 @@ export function decodeUtf8(view: Uint8Array): string {
   return decoder.decode(decodeNeedsCopy(view.buffer) ? view.slice() : view)
 }
 
+const strictUtf8Decoder = new TextDecoder('utf-8', {fatal: true})
+
+/**
+ * Decode the raw byte run of a STEP string literal.
+ *
+ * ISO 10303-21 says raw (non-\X\-escaped) bytes are ISO 8859-1, but modern
+ * exporters routinely write UTF-8 (and some, like Onshape's ST-Developer,
+ * write outright invalid sequences). The lenient default decoder mapped every
+ * non-UTF-8 byte to U+FFFD, so a spec-conformant latin-1 'Küche' surfaced as
+ * 'K�che' in product names and titles. Decode as strict UTF-8 first (the
+ * common modern case, and unambiguous when it validates), and fall back to
+ * exact ISO 8859-1 (byte = code point, which cannot fail) when it doesn't.
+ *
+ * @param view The bytes of the string literal's raw run.
+ * @return The decoded string.
+ */
+export function decodeStepString(view: Uint8Array): string {
+  const bytes = decodeNeedsCopy(view.buffer) ? view.slice() : view
+
+  try {
+    return strictUtf8Decoder.decode(bytes)
+  } catch {
+    let result = ''
+
+    for (let where = 0; where < bytes.length; ++where) {
+      result += String.fromCharCode(bytes[where])
+    }
+
+    return result
+  }
+}
+
 let shimInstalled = false
 
 /**
