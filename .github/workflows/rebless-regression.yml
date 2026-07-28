@@ -56,6 +56,17 @@ jobs:
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
     steps:
+      # Fail here (cheap runner) before the 8-vcpu matrix jobs allocate, so a
+      # missing secret doesn't burn large-runner minutes.
+      - name: Fail fast if REBLESS_TOKEN missing
+        env:
+          TOKEN_PRESENT: ${{ secrets.REBLESS_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_PRESENT" != "true" ]; then
+            echo "::error::REBLESS_TOKEN secret is not set. It needs contents:write + pull_requests:write on bldrs-ai/test-models and bldrs-ai/test-models-private."
+            exit 1
+          fi
+
       - name: Pick target repos
         id: pick
         env:
@@ -85,15 +96,6 @@ jobs:
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     timeout-minutes: 90
     steps:
-      - name: Fail fast if REBLESS_TOKEN missing
-        env:
-          TOKEN_PRESENT: ${{ secrets.REBLESS_TOKEN != '' }}
-        run: |
-          if [ "$TOKEN_PRESENT" != "true" ]; then
-            echo "::error::REBLESS_TOKEN secret is not set. It needs contents:write + pull_requests:write on ${{ matrix.target.repo }}."
-            exit 1
-          fi
-
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway
         uses: actions/checkout@v4
@@ -202,6 +204,18 @@ jobs:
             models \
             models/regression/test_models \
             --parallel --mem-utilization 90
+
+      # The batch always writes regression/test_models/changes.csv via a git
+      # diff whose pathspec is relative to the model folder, so under this
+      # layout it resolves to nothing and the file comes out empty. It's a
+      # throwaway diff artifact, NOT part of the blessed baseline (main/errors/
+      # failed + the per-model digests are). Restore the committed copy if there
+      # is one, else drop the empty new file, so the PR carries only real churn.
+      - name: Drop the derived changes.csv
+        run: |
+          cd models
+          git checkout -- regression/test_models/changes.csv 2>/dev/null \
+            || rm -f regression/test_models/changes.csv
 
       # Summarize the churn in the job log before opening the PR.
       - name: Summarize baseline changes
