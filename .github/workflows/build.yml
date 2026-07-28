@@ -227,9 +227,13 @@ jobs:
           path: tierA-goldens/*.csv
 
   # ---------------------------------------------------------------------------
-  # Regression: consumes build's WASM cache (no rebuild). Posts results to PR.
-  # Kept on a separate job (vs steps in build) so its 5-10 min runtime doesn't
-  # block the build-job status from showing once the fast feedback finishes.
+  # Regression (SMOKE subset): consumes build's WASM cache (no rebuild), runs
+  # the digest batch over regression/smoke_models.txt only, gates on failures,
+  # posts results to the PR, and packs the npm tarball the perf jobs consume.
+  # The FULL public+private corpus runs once per release candidate in
+  # rc-regression.yml (rc-* tag) — its baseline-PR diff is the release's
+  # regression report. Kept on a separate job (vs steps in build) so its
+  # runtime doesn't block the build-job status once fast feedback finishes.
   # ---------------------------------------------------------------------------
   run-ifc-regression:
     needs: build
@@ -340,19 +344,61 @@ jobs:
           git -C test-models fetch --depth 1 origin "$SHA"
           git -C test-models checkout "$SHA"
 
+      # This job runs the SMOKE subset only (regression/smoke_models.txt) —
+      # the full public+private corpus runs once per release candidate in
+      # rc-regression.yml, whose baseline-PR diff is the release's regression
+      # report. The batch CLI only has an EXCLUDE regex, so build one that
+      # excludes every model file whose basename is NOT in the smoke list.
+      # The regex must only ever match model FILES (extension-anchored):
+      # the batch's directory walk applies the same regex to directories,
+      # and a broader pattern would stop recursion entirely.
+      - name: Build smoke-subset exclude regex
+        id: smoke
+        run: |
+          python3 - <<'EOF'
+          import os, re
+          names = [l.strip() for l in open('regression/smoke_models.txt')
+                   if l.strip() and not l.strip().startswith('#')]
+          assert names, 'smoke_models.txt selected no models'
+          alts = '|'.join(re.escape(n) for n in names)
+          regex = (rf"^(?!.*/(?:{alts})$)"
+                   r".*\.(?:[iI][fF][cC]|[sS][tT][eE][pP]|[sS][tT][pP])$")
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+            fh.write(f'regex={regex}\n')
+          print(f'{len(names)} smoke models; exclude regex: {regex}')
+          EOF
+
       # Perf CSV lands OUTSIDE the diffed test_models folder so machine-specific
       # timings don't show up as "changes" against test-models's checked-in
       # baselines. The aggregate is uploaded as a workflow artifact below and
-      # summarised in the PR comment.
-      - name: Run IFC Regression Batch Script
+      # summarised in the PR comment. NOTE these timings come from a --parallel
+      # run (models contend), so they're a smoke signal only — the clean
+      # per-model perf record is the rc-gated perf-three-* jobs.
+      - name: Run IFC Regression Batch Script (smoke subset)
+        env:
+          SMOKE_EXCLUDE: ${{ steps.smoke.outputs.regex }}
         run: |
           node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
-            -e "sp-.*\.ifc" \
+            -e "$SMOKE_EXCLUDE" \
             -t ${{ steps.tmsha.outputs.sha }} \
             --perf "${GITHUB_WORKSPACE}/perf.csv" \
             test-models \
             test-models/regression/test_models \
             --parallel --mem-utilization 90
+
+      # Hard gate: a smoke model that fails to parse/extract blocks the PR.
+      # Digest CHANGES stay informational (intended geometry changes are
+      # reviewed via the visual diff and blessed at the rc), but a crash is
+      # never intended.
+      - name: Fail on smoke regression failures
+        run: |
+          FAILED=test-models/regression/test_models/failed.csv
+          if [ -f "$FAILED" ] && [ "$(wc -l < "$FAILED")" -gt 1 ]; then
+            echo "::error::Smoke regression failures:"
+            cat "$FAILED"
+            exit 1
+          fi
+          echo "No smoke failures."
 
       - name: Gather Regression Results
         id: regression_results
@@ -580,9 +626,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
           body: |
-            ## Regression Results (IFC + STEP)
+            ## Regression Results (smoke subset, IFC + STEP)
 
-            **Models:** `test-models` @ `${{ steps.tmsha.outputs.sha }}` (ref `${{ env.TEST_MODELS_REF }}`)
+            **Models:** smoke subset (`regression/smoke_models.txt`) of `test-models` @ `${{ steps.tmsha.outputs.sha }}` (ref `${{ env.TEST_MODELS_REF }}`).
+            The full public+private corpus runs once per release candidate (`rc-*` tag, see `rc-regression.yml`).
 
             **Failed.csv:**
             ${{ steps.regression_results.outputs.failed_output }}

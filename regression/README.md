@@ -2,6 +2,14 @@
 
 Conway has a built in regression testing framework that is designed to be run as a batch process for release checking, but also supports spot and verbose output to track down where regressions are.
 
+### CI tiering
+
+CI runs the framework at three escalating scopes, so full-corpus cost is paid once per release instead of per push:
+
+1. **Every PR / merge** — unit tests plus the in-repo `data/` goldens (Tier A in `build.yml`), and the digest batch over the **smoke subset** in `regression/smoke_models.txt`. A smoke model that fails to parse blocks the PR; digest *changes* are informational and reviewed via the visual diff.
+2. **Release candidate (`rc-*` tag)** — `rc-regression.yml` runs the batch over the **entire public and private corpora**, goes red on any failure, and opens a baseline PR in each test-models repo. That PR's diff is the release's regression report; merging it blesses the baselines so they track releases exactly.
+3. **Perf** — the headless-three benchmarks also run per `rc-*` tag (`perf-three-*` in `build.yml`); timings from the parallel smoke batch are contended and only a coarse signal.
+
  ### Individual models
 
 Conway can run produce regression dump output, designed to be diffed against the dumps of previous versions. This is done by the individual regression testing console application, which has a manifest digest mode (which produces a CSV hash manifest of all the curve, profile and mesh components of an IFC file) and a verbose mode (produces OBJ files for all the same components in a directory).
