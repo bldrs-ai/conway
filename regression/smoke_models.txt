@@ -1,0 +1,26 @@
+# PR-time regression smoke subset.
+#
+# One model filename per line (basename with extension, matched against the
+# test-models tree; lines starting with '#' are ignored). Every PR's
+# run-ifc-regression job runs the digest batch over ONLY these models — the
+# full public+private corpus runs once per release candidate (rc-* tag) in
+# rc-regression.yml, whose baseline-PR diff is the release's regression
+# report.
+#
+# Curation intent: small/fast models, a spread of schemas and exporters,
+# both IFC and STEP, plus one chronically error-producing model (supercap)
+# so error-churn regressions surface at PR time too. Each entry must have a
+# committed baseline CSV in test-models regression/test_models/. Slow models
+# (SKYLARK, Snowdon, Arty_Z7, Jetenginestep, DSA2, nist_ftc_08...) are
+# deliberately excluded — they belong to the RC pass.
+index.ifc
+duplex.ifc
+AC20-FZK-Haus.ifc
+ISSUE_005_haus.ifc
+ISSUE_021_Mini Project.ifc
+MB-Khaya.ifc
+nist_ctc_01_asme1_rd.stp
+nist_ctc_02_asme1_rc.stp
+create-a-tube.step
+supercap.step
+driver board.step
