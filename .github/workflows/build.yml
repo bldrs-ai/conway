@@ -574,9 +574,14 @@ jobs:
 
       # The batch run above left regenerated digest CSVs in the test-models
       # working tree; any tracked CSV that differs from the pinned commit is a
-      # model whose geometry changed under this PR's engine. Model paths are
-      # recorded relative to the test-models root so the visual-diff job (a
-      # different workspace) can re-anchor them.
+      # model whose geometry changed under this PR's engine, and any UNTRACKED
+      # digest CSV is a model newly added to the smoke subset (no committed
+      # baseline yet — `git diff` can't see it, which is how new smoke models
+      # used to miss their visual diff entirely). New models are marked with a
+      # tab-separated `new` field; the report always shows their rows, since a
+      # first-time model must be eyeballed before its digest gets blessed.
+      # Model paths are recorded relative to the test-models root so the
+      # visual-diff job (a different workspace) can re-anchor them.
       - name: Collect digest-changed models for visual diff
         id: vdiff
         run: |
@@ -586,14 +591,24 @@ jobs:
           out = subprocess.run(
               ['git', 'diff', '--name-only', sha, '--', 'regression/test_models'],
               cwd=root, capture_output=True, text=True, check=True).stdout
+          untracked = subprocess.run(
+              ['git', 'ls-files', '--others', '--exclude-standard', '--',
+               'regression/test_models'],
+              cwd=root, capture_output=True, text=True, check=True).stdout
           # Per-run report files churn on every run (env-specific paths,
           # counters) — only per-model digest CSVs identify changed geometry.
           meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv'}
-          stems = set()
-          for line in out.splitlines():
-              base = os.path.basename(line)
-              if base.endswith('.csv') and base not in meta:
-                  stems.add(base[:-4])
+
+          def digest_stems(listing):
+              stems = set()
+              for line in listing.splitlines():
+                  base = os.path.basename(line)
+                  if base.endswith('.csv') and base not in meta:
+                      stems.add(base[:-4])
+              return stems
+
+          new_stems = digest_stems(untracked)
+          stems = digest_stems(out) | new_stems
           models, found = [], set()
           for top in ('ifc', 'step'):
               for dirpath, _, files in os.walk(os.path.join(root, top)):
@@ -602,11 +617,12 @@ jobs:
                       if (stem in stems and stem not in found and
                               ext.lower() in ('.ifc', '.step', '.stp')):
                           found.add(stem)
+                          rel = os.path.relpath(os.path.join(dirpath, f), root)
                           models.append(
-                              os.path.relpath(os.path.join(dirpath, f), root))
+                              f'{rel}\tnew' if stem in new_stems else rel)
           with open('changed_models.txt', 'w') as fh:
               fh.write('\n'.join(sorted(models)) + ('\n' if models else ''))
-          print(f'{len(models)} digest-changed model(s)')
+          print(f'{len(models)} digest-changed/new model(s)')
           for m in models:
               print(f'  {m}')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
@@ -818,7 +834,7 @@ jobs:
           RAW="https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.assets.outputs.sha }}/${{ steps.assets.outputs.dest }}"
           sed "s|RAW_URL_BASE|$RAW|g" vdout/report.md > report_final.md
           {
-            echo "## Visual Diff (digest-changed models)"
+            echo "## Visual Diff (digest-changed & new models)"
             echo ""
             echo "Base: published \`@bldrs-ai/conway\` (main). Candidate: this PR's build."
             echo "Each row shares one camera framed on the union of both bounds — scale differences are real."

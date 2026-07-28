@@ -158,7 +158,12 @@ describe('AP214 Geometry Extraction', () => {
   })
 
   test('gearGeometryArrayLength()', () => {
-    const testParameter:number = 48108
+    // Raised from 48108 with the extent-relative deflection thresholds
+    // (conway-geom relativeCurveDeflectionSquared): the gear's involute
+    // flank splines are a few mm across, so the old absolute 1mm chord
+    // tolerance sampled them with ~3 chords per flank; 0.1%-of-extent
+    // tolerance resolves the involute curvature the profile actually has.
+    const testParameter:number = 154644
     expect(getGearMeshSize()).toBe(testParameter)
 
   })

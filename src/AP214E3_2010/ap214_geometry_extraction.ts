@@ -73,6 +73,7 @@ import {
   cartesian_transformation_operator_2d,
   cartesian_transformation_operator_3d,
   circle,
+  colour,
   colour_rgb,
   composite_curve,
   composite_curve_segment,
@@ -112,6 +113,7 @@ import {
   placement, plane,
   poly_loop,
   polyline,
+  pre_defined_colour,
   presentation_layer_assignment,
   product,
   product_definition,
@@ -168,6 +170,20 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
  */
 export function extractColorRGBPremultiplied(from: colour_rgb, alpha: number = 1): ColorRGBA {
   return [from.red * alpha, from.green * alpha, from.blue * alpha, alpha]
+}
+
+// RGB values for the ISO 10303-46 pre-defined draughting colour names
+// (draughting_pre_defined_colour / pre_defined_colour), which carry a name
+// instead of components.
+const PRE_DEFINED_COLOUR_RGB: Record<string, [number, number, number]> = {
+  'red': [1, 0, 0],
+  'green': [0, 1, 0],
+  'blue': [0, 0, 1],
+  'yellow': [1, 1, 0],
+  'magenta': [1, 0, 1],
+  'cyan': [0, 1, 1],
+  'black': [0, 0, 0],
+  'white': [1, 1, 1],
 }
 
 /**
@@ -1216,23 +1232,48 @@ export class AP214GeometryExtraction {
             if ( fillAreaColor !== void 0 ) {
 
               try {
-                const fillColor = fillAreaColor.fill_colour
+                // `fill_colour` is the schema's colour select, but AP214
+                // gives pre_defined_colour TWO supertypes (colour AND
+                // pre_defined_item) and the single-inheritance generator
+                // kept only pre_defined_item — so the typed getter throws
+                // "incorrectly typed" for e.g.
+                // DRAUGHTING_PRE_DEFINED_COLOUR('white') (Onshape exports).
+                // Re-extract the same field (offset 1) under the type the
+                // generator did keep, and map the name to RGB.
+                let surfaceColor: ColorRGBA | undefined
 
-                if ( !(fillColor instanceof colour_rgb ) ) {
+                let fillColor: colour | undefined
+
+                try {
+                  fillColor = fillAreaColor.fill_colour
+                } catch {
+                  const preDefined = fillAreaColor.extractElement(
+                      1, 0, 0, true, pre_defined_colour )
+                  const rgb =
+                    PRE_DEFINED_COLOUR_RGB[ preDefined?.name?.toLowerCase() ?? '' ]
+
+                  if ( rgb !== void 0 ) {
+                    surfaceColor = [rgb[ 0 ], rgb[ 1 ], rgb[ 2 ], 1]
+                  }
+                }
+
+                if ( fillColor instanceof colour_rgb ) {
+                  surfaceColor = extractColorRGBPremultiplied(fillColor, 1)
+                }
+
+                if ( surfaceColor === void 0 ) {
 
                   continue
                 }
 
-                const surfaceColor = extractColorRGBPremultiplied(fillColor, 1)
-
                 newMaterial.baseColor   = surfaceColor
                 newMaterial.legacyColor = surfaceColor
-                newMaterial.roughness   = 1            
+                newMaterial.roughness   = 1
               }
               catch ( error ) {
                 Logger.warning(
-                    `Error extracting fill area style color for expressID: 
-                  #${from.expressID} - type: 
+                    `Error extracting fill area style color for expressID:
+                  #${from.expressID} - type:
                   ${EntityTypesAP214[style.type]} - error: ${error}`)
               }
             }
@@ -1506,11 +1547,22 @@ export class AP214GeometryExtraction {
 
     let stepCurve: CurveObject | undefined
 
-    stepCurve = this.curves.get( from.localID )
+    // Edge-supplied trims are specific to one EDGE_CURVE, but `from` is the
+    // shared basis curve — memoising a trimmed extraction under the basis
+    // curve's localID would hand the first edge's arc to every other edge
+    // sharing that curve. Trimmed extractions are memoised by the caller
+    // under the EDGE_CURVE's localID instead (see extractAdvancedFace);
+    // untrimmed extractions stay memoised here.
+    const hasEdgeTrims = trimmingArguments?.exist === true
 
-    if ( stepCurve !== void 0 ) {
-      
-      return stepCurve
+    if ( !hasEdgeTrims ) {
+
+      stepCurve = this.curves.get( from.localID )
+
+      if ( stepCurve !== void 0 ) {
+
+        return stepCurve
+      }
     }
 
       // console.log("[extractCurve]: curve express ID: "
@@ -1639,12 +1691,15 @@ export class AP214GeometryExtraction {
     } 
     
     if ( stepCurve === void 0 ) {
- 
+
       Logger.warning(`Unsupported Curve! Type: ${EntityTypesAP214[from.type]}`)
       return
     }
 
-    this.curves.add( from.localID, stepCurve )
+    if ( !hasEdgeTrims ) {
+
+      this.curves.add( from.localID, stepCurve )
+    }
 
     return stepCurve
   }
@@ -2977,6 +3032,12 @@ export class AP214GeometryExtraction {
 
    const bound3DVector = this.nativeBound3DVector()
 
+   // Loop curves are collected before bound creation so the outer-bound
+   // heuristic below can compare their extents across the whole face.
+   const loopCurves: CurveObject[] = []
+   const loopIsOuter: boolean[] = []
+   const loopOrientations: boolean[] = []
+
    for ( const bound of bounds ) {
 
       let vec3Array: StdVector< Vector3 >
@@ -3087,17 +3148,57 @@ export class AP214GeometryExtraction {
               }
             }
 
+            // EDGE_CURVE.same_sense: does the edge's start→end direction agree
+            // with the basis curve's parametrisation? For same_sense=false the
+            // edge sweeps from edge_start to edge_end AGAINST the curve
+            // parameter. The native circle/ellipse trim (getAP214Circle) always
+            // sweeps the positive parametric arc from trim1 to trim2 (its
+            // senseAgreement=false path mis-negates the sweep), so ignoring
+            // same_sense selects the COMPLEMENT arc — e.g. Onshape AP242
+            // exports write near-straight edges as shallow arcs of large
+            // circles, and the complement is a ~340° loop that explodes the
+            // face boundary (Right_Hand.step spikes; the CDT "Intersecting
+            // constraint edges" cascade). Normalise instead of forwarding the
+            // flag: swap the trim ends so the positive sweep is the correct
+            // arc, leaving the extracted (memoised) curve running edge_end →
+            // edge_start; the orientation check below compensates.
+            const sameSense = edgeElement.same_sense
+
             const trimmingArguments: TrimmingArguments = {
               exist: !!((trimmingStart !== void 0 && trimmingEnd !== void 0)),
-              start: trimmingStart,
-              end: trimmingEnd,
+              start: sameSense ? trimmingStart : trimmingEnd,
+              end: sameSense ? trimmingEnd : trimmingStart,
             }
 
-            const curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
+            // Trimmed extractions are memoised under THIS edge's localID —
+            // not the basis curve's — so edges sharing one basis curve with
+            // different trims each get their own arc, while the second
+            // ORIENTED_EDGE user of this edge (the adjacent face) still
+            // reuses the extraction. extractCurve skips its basis-curve
+            // memo whenever edge trims exist (see hasEdgeTrims there); the
+            // shared this.curves container keeps ownership either way.
+            let curve = this.curves.get( edgeElement.localID )
+
+            if ( curve === void 0 ) {
+
+              curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
+
+              if ( curve !== void 0 && trimmingArguments.exist ) {
+
+                this.curves.add( edgeElement.localID, curve )
+              }
+            }
 
             if (curve !== void 0) {
 
-              if ( !edge.orientation ) {
+              // The memoised curve runs edge_start→edge_end when same_sense
+              // held, edge_end→edge_start when the trims were swapped above
+              // (and, for untrimmed basis curves like full B-splines, native
+              // point order is parametric order — reversed relative to the
+              // edge exactly when same_sense is false). Traversal for this
+              // ORIENTED_EDGE must run with `orientation`, so invert on the
+              // XOR of the two flags rather than orientation alone.
+              if ( edge.orientation !== sameSense ) {
                 // reverse curve
                 // Logger.info("edge orientation == true, inverting curve")
                 const invertedCurve = curve.clone()
@@ -3172,9 +3273,13 @@ export class AP214GeometryExtraction {
         }
       } else {
           Logger.warning(`Unsupported bound ${bound.bound}`)
-          // Free this iteration's edge-curve vector and the face's partial
-          // bound vector before bailing out, or they leak per bad face.
+          // Free this iteration's edge-curve vector, previously collected
+          // loop curves and the face's partial bound vector before bailing
+          // out, or they leak per bad face.
           nativeEdgeCurves.delete()
+          for ( const loopCurve of loopCurves ) {
+            loopCurve.delete()
+          }
           bound3DVector.delete()
           return
       }
@@ -3183,15 +3288,73 @@ export class AP214GeometryExtraction {
         points: vec3Array,
         edges: nativeEdgeCurves,
       }
-     
+
       // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
       const curve: CurveObject = this.conwayModel.getLoop(parameters)
 
-      // create bound vector
+      loopCurves.push( curve )
+      loopIsOuter.push( bound.type === EntityTypesAP214.FACE_OUTER_BOUND )
+      loopOrientations.push( bound.orientation )
+
+      vec3Array.delete()
+      nativeEdgeCurves.delete()
+    }
+
+    // STEP allows a face's loops to all be plain FACE_BOUNDs; without a
+    // FACE_OUTER_BOUND the native triangulators would warn ("Expected outer
+    // bound, using fallback tesselation") and treat loops[0] as outer, which
+    // is only right by luck (Onshape AP242 exports order hole loops first on
+    // some faces). A face's outer loop strictly contains its holes, so tag
+    // the loop with the largest bounding-box diagonal as the outer one.
+    if ( loopCurves.length > 1 && !loopIsOuter.includes( true ) ) {
+
+      let largestIndex = 0
+      let largestDiagonal2 = -1
+
+      for ( let loopIndex = 0; loopIndex < loopCurves.length; ++loopIndex ) {
+
+        const loopCurve = loopCurves[ loopIndex ]
+        const pointCount = loopCurve.getPointsSize()
+
+        let minX = Infinity
+        let minY = Infinity
+        let minZ = Infinity
+        let maxX = -Infinity
+        let maxY = -Infinity
+        let maxZ = -Infinity
+
+        for ( let where = 0; where < pointCount; ++where ) {
+
+          const point = loopCurve.get3d( where )
+
+          minX = Math.min( minX, point.x )
+          minY = Math.min( minY, point.y )
+          minZ = Math.min( minZ, point.z )
+          maxX = Math.max( maxX, point.x )
+          maxY = Math.max( maxY, point.y )
+          maxZ = Math.max( maxZ, point.z )
+        }
+
+        const diagonal2 =
+          ( ( maxX - minX ) * ( maxX - minX ) ) +
+          ( ( maxY - minY ) * ( maxY - minY ) ) +
+          ( ( maxZ - minZ ) * ( maxZ - minZ ) )
+
+        if ( pointCount > 0 && diagonal2 > largestDiagonal2 ) {
+          largestDiagonal2 = diagonal2
+          largestIndex = loopIndex
+        }
+      }
+
+      loopIsOuter[ largestIndex ] = true
+    }
+
+    for ( let loopIndex = 0; loopIndex < loopCurves.length; ++loopIndex ) {
+
       const parametersCreateBounds3D: ParamsCreateBound3D = {
-        curve: curve,
-        orientation: bound.orientation,
-        type: (bound.type === EntityTypesAP214.FACE_OUTER_BOUND) ? 0 : 1,
+        curve: loopCurves[ loopIndex ],
+        orientation: loopOrientations[ loopIndex ],
+        type: loopIsOuter[ loopIndex ] ? 0 : 1,
       }
 
       const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
@@ -3202,9 +3365,7 @@ export class AP214GeometryExtraction {
       // bound wrapper are temporaries that must be freed to avoid leaking
       // native memory on every face bound.
       bound3D.delete()
-      curve.delete()
-      vec3Array.delete()
-      nativeEdgeCurves.delete()
+      loopCurves[ loopIndex ].delete()
     }
 
     const surface = from.face_geometry

@@ -14,7 +14,10 @@
  *   visual_diff_report.cjs --models <changed_models.txt> \
  *     --base <package root> --cand <package root> --out <dir> [--max N]
  *
- * <changed_models.txt>: one absolute model path per line.
+ * <changed_models.txt>: one absolute model path per line, optionally
+ * followed by a tab and `new` for models whose digest has no committed
+ * baseline yet (first appearance in the smoke subset) — their rows are
+ * always shown, never threshold-suppressed.
  * <package root>: a directory containing compiled/src/... (an unpacked npm
  * package or a built working tree).
  *
@@ -142,8 +145,17 @@ function slugify(name) {
 
 function main() {
   const opts = parseArgs()
+  // Each line is `<model path>` or `<model path>\tnew` — the workflow marks
+  // models whose digest CSV is untracked (first appearance in the smoke
+  // subset, no committed baseline). New models bypass the below-threshold
+  // suppression: a first-time model must be eyeballed before its digest is
+  // blessed, even when both engines render it identically.
   const models = fs.readFileSync(opts.models, 'utf8')
       .split('\n').map((l) => l.trim()).filter(Boolean)
+      .map((line) => {
+        const [file, marker] = line.split('\t')
+        return { file, isNew: marker === 'new' }
+      })
   fs.mkdirSync(opts.out, { recursive: true })
 
   const renderScript = path.join(__dirname, 'render_glb.cjs')
@@ -154,8 +166,9 @@ function main() {
   const skipped = models.length > opts.max ? models.slice(opts.max) : []
   const selected = models.slice(0, opts.max)
 
-  for (const model of selected) {
+  for (const { file: model, isNew } of selected) {
     const name = path.basename(model)
+    const nameCell = isNew ? `\`${name}\` _(new)_` : `\`${name}\``
     const slug = slugify(name)
     const work = fs.mkdtempSync(path.join(os.tmpdir(), `vdiff-${slug}-`))
     process.stderr.write(`visual-diff: ${name}\n`)
@@ -166,7 +179,7 @@ function main() {
     if (base.glbs.length === 0 && cand.glbs.length === 0) {
       const why = (base.diagnostic || cand.diagnostic || '')
           .replace(/\|/g, '\\|').slice(0, 200)
-      rows.push(`| \`${name}\` | _no geometry from both engines_` +
+      rows.push(`| ${nameCell} | _no geometry from both engines_` +
           `${why ? ` — \`${why}\`` : ''} | | — |`)
       fs.rmSync(work, { recursive: true, force: true })
       continue
@@ -206,7 +219,8 @@ function main() {
         // a digest-flagged model can render identically here (the change
         // already shipped). A missing/garbled metric (older render, crash)
         // falls back to SHOWING the row — never hide a real diff on a glitch.
-        if (metric && metric.changedFraction < opts.diffThreshold) {
+        // New smoke models are never suppressed (see the models parse above).
+        if (!isNew && metric && metric.changedFraction < opts.diffThreshold) {
           fs.rmSync(path.join(opts.out, `${slug}-before.png`), { force: true })
           fs.rmSync(path.join(opts.out, `${slug}-after.png`), { force: true })
           unchanged.push(name)
@@ -214,7 +228,7 @@ function main() {
           const badge = metric ?
             `${(metric.changedFraction * 100).toFixed(2)}% (Δmax ${metric.maxDelta})` : 'n/a'
           rows.push(
-              `| \`${name}\` ` +
+              `| ${nameCell} ` +
               `| ![before](RAW_URL_BASE/${slug}-before.png) ` +
               `| ![after](RAW_URL_BASE/${slug}-after.png) ` +
               `| ${badge} |`)
@@ -235,7 +249,7 @@ function main() {
     // are no longer shared, so the images aren't pixel-comparable and the
     // threshold doesn't apply — always shown.
     rows.push(
-        `| \`${name}\` ` +
+        `| ${nameCell} ` +
         `| ${renderSingle(base, 'base', 'before')} ` +
         `| ${renderSingle(cand, 'candidate', 'after')} | n/a |`)
     fs.rmSync(work, { recursive: true, force: true })
@@ -252,7 +266,7 @@ function main() {
   }
   if (skipped.length > 0) {
     report += `\n_${skipped.length} more changed model(s) not rendered ` +
-        `(cap ${opts.max}): ${skipped.map((m) => path.basename(m)).join(', ')}_\n`
+        `(cap ${opts.max}): ${skipped.map((m) => path.basename(m.file)).join(', ')}_\n`
   }
   fs.writeFileSync(path.join(opts.out, 'report.md'), report)
   process.stderr.write(
