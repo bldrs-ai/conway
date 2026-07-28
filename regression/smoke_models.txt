@@ -24,3 +24,9 @@ nist_ctc_02_asme1_rc.stp
 create-a-tube.step
 supercap.step
 driver board.step
+# Metre-unit Onshape AP242 assembly (rational B-splines, same_sense=.F.
+# edges, pre-defined colours) — the exporter family the
+# step-small-model-fidelity fixes target; ~2s end-to-end. No committed
+# baseline yet: first smoke run's digest lands as new and gets blessed
+# with the next baseline PR.
+Right_Hand.step
