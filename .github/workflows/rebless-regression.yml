@@ -25,11 +25,14 @@ name: Re-bless regression baselines
 # MANUAL ONLY: re-blessing is a deliberate human action. Cut it when main is
 # stable, review the resulting per-repo PR (the diff IS the churn), and merge.
 #
+# NOTE: the "Run workflow" button only appears once this file is on the
+# default branch (main) — merge the PR that adds it first.
+#
 # PREREQUISITE — secret `REBLESS_TOKEN`
 # A PAT or GitHub App token with `contents: write` + `pull_requests: write` on
 # BOTH bldrs-ai/test-models and bldrs-ai/test-models-private. The default
 # GITHUB_TOKEN is scoped to conway only and cannot push to those repos. Until
-# this secret is set the workflow fails fast on the checkout step.
+# this secret is set the workflow fails fast on the first step.
 
 on:
   workflow_dispatch:
@@ -45,18 +48,38 @@ env:
   EMSDK_CACHE_FOLDER: 'cache/emsdk'
 
 jobs:
+  # Build the matrix from the `targets` input. Done in a job (not a job-level
+  # `if` on the matrix) because the `matrix` context is NOT available in a
+  # job-level `if` — referencing it there is a workflow-validation error.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Pick target repos
+        id: pick
+        env:
+          TARGETS: ${{ github.event.inputs.targets }}
+        run: |
+          PUBLIC='{"name":"public","repo":"bldrs-ai/test-models"}'
+          PRIVATE='{"name":"private","repo":"bldrs-ai/test-models-private"}'
+          case "$TARGETS" in
+            public)  MATRIX="[$PUBLIC]" ;;
+            private) MATRIX="[$PRIVATE]" ;;
+            *)       MATRIX="[$PUBLIC,$PRIVATE]" ;;
+          esac
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Re-blessing: $MATRIX"
+
   rebless:
-    # One matrix entry per test-models repo; the job self-skips the entries
-    # not selected by the `targets` input. Public and private run in parallel.
+    needs: setup
+    # One entry per selected test-models repo; public and private run in
+    # parallel. The list is already filtered by the setup job, so no per-job
+    # skipping is needed.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: public
-            repo: bldrs-ai/test-models
-          - name: private
-            repo: bldrs-ai/test-models-private
-    if: ${{ github.event.inputs.targets == 'both' || github.event.inputs.targets == matrix.name }}
+        target: ${{ fromJSON(needs.setup.outputs.matrix) }}
     # Same heavy runner as run-ifc-regression: the batch drives the MT WASM
     # engine over ~100 models with --parallel and reserves multi-GB shared.
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
@@ -67,7 +90,7 @@ jobs:
           TOKEN_PRESENT: ${{ secrets.REBLESS_TOKEN != '' }}
         run: |
           if [ "$TOKEN_PRESENT" != "true" ]; then
-            echo "::error::REBLESS_TOKEN secret is not set. It needs contents:write + pull_requests:write on ${{ matrix.repo }}."
+            echo "::error::REBLESS_TOKEN secret is not set. It needs contents:write + pull_requests:write on ${{ matrix.target.repo }}."
             exit 1
           fi
 
@@ -157,10 +180,10 @@ jobs:
       # Checkout the models repo into `models` with LFS materialized (the batch
       # reads the real model bytes, not pointer stubs). REBLESS_TOKEN so the
       # later create-pull-request can push a branch to it.
-      - name: Checkout ${{ matrix.repo }}
+      - name: Checkout ${{ matrix.target.repo }}
         uses: actions/checkout@v4
         with:
-          repository: ${{ matrix.repo }}
+          repository: ${{ matrix.target.repo }}
           token: ${{ secrets.REBLESS_TOKEN }}
           lfs: true
           path: models
@@ -184,7 +207,7 @@ jobs:
       - name: Summarize baseline changes
         run: |
           cd models
-          echo "### Re-bless diff for ${{ matrix.repo }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Re-bless diff for ${{ matrix.target.repo }}" >> "$GITHUB_STEP_SUMMARY"
           CHANGED=$(git status --porcelain -- regression/test_models | wc -l | tr -d ' ')
           echo "Changed baseline files: ${CHANGED}" >> "$GITHUB_STEP_SUMMARY"
           git -c color.ui=never diff --stat -- regression/test_models | tail -40 >> "$GITHUB_STEP_SUMMARY" || true
@@ -192,7 +215,7 @@ jobs:
       # Open (or update) a PR in the target repo with only the baseline diff.
       # add-paths scopes the commit to regression/test_models so nothing else
       # in the checkout (e.g. LFS smudge artifacts) can leak in.
-      - name: Open re-bless PR in ${{ matrix.repo }}
+      - name: Open re-bless PR in ${{ matrix.target.repo }}
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.REBLESS_TOKEN }}
