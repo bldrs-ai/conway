@@ -1,7 +1,33 @@
+# scripts/
+
+Check this index before writing new tooling — most of what a geometry or
+performance investigation needs already exists here.
+
+| Script | Use |
+|---|---|
+| [`debug/model_report.mjs`](debug/README.md) | Why does *this* model look wrong — probes the geometry pipeline and names the entities responsible |
+| `render_glb.cjs` | GLB → PNG with a pure-JS software rasterizer. No browser, no native deps, bit-deterministic across machines. `--pair` renders before/after with one shared camera |
+| `visual_diff_report.cjs` | Per-model before/after image comparison for a PR's regression run |
+| `gen_delta_csv.cjs`, `run_gen_deltas.cjs` | Digest CSV deltas between two conway versions |
+| `benchmark.cjs` | Timing sweep over a model corpus |
+| `generate_flame_graph.cjs` | Flame graph from a `yarn cli-profile` run |
+| `stream_corpus_sweep.mjs` | Streaming-loader sweep across the corpus |
+| `step_nonproduct_survey.py` | Survey of non-product STEP entity usage across the corpus |
+| `setup-emsdk.sh`, `build-codex.sh`, `build-gha.sh` | Toolchain and build drivers |
+| `code-gen.cjs`, `gen-web-ifc-types.cjs` | Schema code generation |
+| `extract-wasm-dependencies.cjs`, `fetch-prebuilt-wasm.cjs`, `fd-patch.cjs` | Build plumbing |
+| `firestore_*.py`, `upload_to_firestore.py`, `updateVersion.mjs` | Release and corpus-data plumbing |
+
+Scripts here are not covered by `yarn lint`, which runs over `src` only.
+
 # Performance Test
 
 This document provides detailed instructions on how to set up and run the
 performance tests for the project.
+
+> Note: the `performance_test.sh` driver below is no longer in this
+> directory; the surrounding setup (headless-three cross-linking, the
+> `benchmarks/` output layout) still describes how performance runs work.
 
 ## Prerequisites
 

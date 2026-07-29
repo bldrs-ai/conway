@@ -33,7 +33,12 @@ isolate*.log
 scripts/*.csv
 scripts/app.json
 scripts/test_runs/
+# Blanket-ignore script output directories (perf runs write per-model dumps
+# next to the scripts), then re-include the ones holding checked-in tooling.
+# The directory itself has to be re-included, not just its files — git does
+# not descend into an excluded directory looking for negations.
 scripts/*/
+!scripts/debug/
 benchmarks/*private
 
 #external
