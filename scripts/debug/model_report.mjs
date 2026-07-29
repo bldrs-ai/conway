@@ -25,12 +25,14 @@
  * ## Two hazards this tool exists to remove
  *
  * 1. **A probe that never fires looks exactly like a clean model.** Every
- *    stage reports its `fired` count and the run exits non-zero if a
- *    requested probe never fired. During the AmazingHand investigation,
- *    ad-hoc tracers twice reported "0 outliers" because they were
- *    attached to a seam the model did not take — hours attributed to the
- *    wrong subsystem. A zero here is only meaningful next to a non-zero
- *    `fired`.
+ *    stage reports its `fired` count, and a silent stage says so instead
+ *    of reporting "no outliers". The run exits 2 when a stage named on
+ *    --stage was silent, or when every stage was; under the default
+ *    all-stages run a single silent stage is routine and does not fail
+ *    the process. During the AmazingHand investigation, ad-hoc tracers
+ *    twice reported "0 outliers" because they were attached to a seam
+ *    the model did not take — hours attributed to the wrong subsystem. A
+ *    zero here is only meaningful next to a non-zero `fired`.
  *
  * 2. **Reading wasm memory directly goes stale.** Vertex data is read
  *    through `getPoint()` / `get3d()`, never through a cached `HEAPF32`
@@ -104,6 +106,21 @@ function parseArgs(argv) {
     model: undefined,
   }
 
+  // A mistyped numeric option must not degrade into a quiet wrong answer:
+  // `--limit x` would otherwise make every `value > NaN` comparison false
+  // and report "no outliers" with every probe firing — a false clean
+  // result arriving through the argument parser, which is the one failure
+  // mode this tool exists to rule out.
+  const number = (flag, raw) => {
+    const parsed = Number(raw)
+
+    if (!Number.isFinite(parsed)) {
+      throw new Error(`${flag} needs a number, got: ${raw ?? '(nothing)'}`)
+    }
+
+    return parsed
+  }
+
   for (let i = 0; i < argv.length; ++i) {
     const arg = argv[i]
 
@@ -113,16 +130,16 @@ function parseArgs(argv) {
         options.stagesExplicit = true
         break
       case '--limit':
-        options.limit = Number(argv[++i])
+        options.limit = number(arg, argv[++i])
         break
       case '--factor':
-        options.factor = Number(argv[++i])
+        options.factor = number(arg, argv[++i])
         break
       case '--top':
-        options.top = Number(argv[++i])
+        options.top = number(arg, argv[++i])
         break
       case '--csg-depth':
-        options.csgDepth = Number(argv[++i])
+        options.csgDepth = number(arg, argv[++i])
         break
       case '--json':
         options.json = true
@@ -186,6 +203,7 @@ class Stage {
     }
 
     this.values.push(value)
+    this.sorted = undefined
 
     const worst = this.top[this.top.length - 1]
 
@@ -215,10 +233,36 @@ class Stage {
       return 0
     }
 
+    // Invalidated by record(); every observation is in before anything is
+    // reported today, but a caller that interleaved the two would otherwise
+    // get a stale baseline with no sign that anything was wrong.
     this.sorted ??= [...this.values].sort((a, b) => a - b)
 
     return this.sorted[Math.min(this.sorted.length - 1,
         Math.floor(this.sorted.length * quantile))]
+  }
+
+  /**
+   * How many observations exceed a threshold.
+   *
+   * Counted over every observation, not over the retained `top` records:
+   * `top` is capped, so counting there would silently cap the reported
+   * blast radius of a defect at `capacity` — understating a model with
+   * hundreds of runaway faces as if it had sixty.
+   *
+   * @param {number} threshold The outlier threshold
+   * @return {number} The number of observations strictly above it
+   */
+  countAbove(threshold) {
+    let count = 0
+
+    for (const value of this.values) {
+      if (value > threshold) {
+        count += 1
+      }
+    }
+
+    return count
   }
 }
 
@@ -567,7 +611,8 @@ function reportStage(stage, options) {
   const median = stage.quantile(0.5)
   const p90 = stage.quantile(0.9)
   const threshold = options.limit ?? median * options.factor
-  const outliers = stage.top.filter((row) => row.value > threshold)
+  const outlierCount = stage.countAbove(threshold)
+  const rows = stage.top.filter((row) => row.value > threshold)
 
   say(`\n## ${stage.name}`)
 
@@ -595,11 +640,11 @@ function reportStage(stage, options) {
         `under 3 points: ${stage.extra.degenerate}`)
   }
 
-  if (outliers.length === 0) {
+  if (outlierCount === 0) {
     say('  no outliers')
   }
 
-  for (const row of outliers.slice(0, options.top)) {
+  for (const row of rows.slice(0, options.top)) {
     const {value, ...rest} = row
     const detail = Object.entries(rest)
       .filter(([, v]) => v !== undefined && v !== false)
@@ -609,8 +654,15 @@ function reportStage(stage, options) {
     say(`  ${fmt(value).padStart(12)}  ${detail}`)
   }
 
-  if (outliers.length > options.top) {
-    say(`  ... ${outliers.length - options.top} more above threshold`)
+  const shown = Math.min(rows.length, options.top)
+
+  if (outlierCount > shown) {
+    say(`  ... ${outlierCount - shown} more above threshold` +
+      // Beyond `capacity` the rows themselves were never retained, so
+      // --top cannot show them; only the count is recoverable. Say which
+      // limit is biting rather than letting the reader assume --top.
+      `${outlierCount > stage.capacity ? ' (only the count survives past ' +
+        `${stage.capacity} retained rows — raise --top to retain more)` : ''}`)
   }
 
   return {
@@ -620,7 +672,8 @@ function reportStage(stage, options) {
     median,
     p90,
     threshold,
-    outliers: outliers.slice(0, options.top),
+    outlierCount,
+    outliers: rows.slice(0, options.top),
     extra: stage.extra,
   }
 }
@@ -741,10 +794,17 @@ async function main() {
   const reports = [...stages.values()].map((stage) => reportStage(stage, options))
 
   if (messages.size > 0) {
-    say('\n## conway diagnostics')
+    const ranked = [...messages].sort((a, b) => b[1] - a[1])
+    const total = ranked.reduce((sum, [, count]) => sum + count, 0)
 
-    for (const [message, count] of [...messages].sort((a, b) => b[1] - a[1]).slice(0, options.top)) {
+    say(`\n## conway diagnostics (${total} messages, ${messages.size} distinct)`)
+
+    for (const [message, count] of ranked.slice(0, options.top)) {
       say(`  ${String(count).padStart(6)}x  ${message}`)
+    }
+
+    if (ranked.length > options.top) {
+      say(`  ... ${ranked.length - options.top} more distinct messages`)
     }
   }
 
