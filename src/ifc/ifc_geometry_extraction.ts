@@ -333,6 +333,17 @@ export function extractColorOrFactorMultiply(
  * Starting capacities for the reused polygonal-faceset sinks: enough that a
  * typical faceset never reallocates, while still growing for outliers.
  */
+/**
+ * Vtable coordinates of IfcPolygonalFaceSet.Faces and
+ * IfcIndexedPolygonalFace.CoordIndex, mirroring their generated
+ * getters. The equivalence test in uint32_sink.test.ts fails loudly if
+ * codegen ever moves them.
+ */
+const FACES_FIELD_OFFSET = 2
+const FACES_FIELD_BASE_OFFSET = 1
+const FACES_FIELD_DEPTH = 4
+const COORD_INDEX_FIELD_OFFSET = 0
+
 const POLYGONAL_INDEX_SINK_CAPACITY = 65536
 const POLYGONAL_FACE_SINK_CAPACITY = 16384
 
@@ -935,84 +946,29 @@ export class IfcGeometryExtraction {
   }
 
   /**
-   * @param entity
-   * @param temporary
-   * @param isRelVoid
-   * @return {ExtractResult}
+   * Hand a faceset's accumulated indices to wasm and register the
+   * resulting mesh. Shared by the fast reference-level path and the
+   * generated-getter fallback so they cannot diverge.
+   *
+   * @param entity The faceset.
+   * @param temporary Is this a temporary (preview//operand) extraction?
+   * @param isRelVoid Is this geometry a rel-void operand?
+   * @param indicesPerFace Index count of the last face processed.
+   * @param allIndices Face indices, concatenated.
+   * @param allStartIndices Per-face start indices.
+   * @param polygonalFaceBufferOffsets Per-face offsets into allIndices.
+   * @param startIndicesBufferOffsets Per-face offsets into allStartIndices.
+   * @return {ExtractResult} The extraction result.
    */
-  private extractPolygonalFaceSet(entity: IfcPolygonalFaceSet,
-      temporary: boolean = false,
-      isRelVoid: boolean = false): ExtractResult {
-    const result: ExtractResult = ExtractResult.COMPLETE
-
-    // Reusable typed sinks. A tessellated model can carry millions of
-    // IfcIndexedPolygonalFace records, and the boxed `Array< number >`
-    // this loop used to build per face — which the generated CoordIndex
-    // getter also cached on the face, keeping it alive — dominated both
-    // GC time and retained heap during extraction. Indices are parsed
-    // straight from the STEP buffer into these instead, reused across
-    // facesets.
-    // The sinks are extractor-scoped, so a nested faceset extraction
-    // reached from inside this one would silently clobber them. Nothing
-    // in the window between reset and the wasm copies below recurses
-    // today (the face loop only parses), so this guards the invariant
-    // rather than a live bug — fail loudly if that ever changes.
-    if ( this.polygonalSinksInUse_ ) {
-      throw new Error(
-          'extractPolygonalFaceSet re-entered: the shared index sinks are already in use' )
-    }
-
-    this.polygonalSinksInUse_ = true
-
-    const allIndices = this.polygonalIndexSink_
-    const allStartIndices = this.polygonalStartIndexSink_
-    const polygonalFaceBufferOffsets = this.polygonalFaceOffsetSink_
-    const startIndicesBufferOffsets = this.polygonalStartOffsetSink_
-
-    allIndices.reset()
-    allStartIndices.reset()
-    polygonalFaceBufferOffsets.reset()
-    startIndicesBufferOffsets.reset()
-
-    let indicesPerFace: number = -1
-
-    // Prepare indices and start indices for all faces
-    entity.Faces.forEach((polygonalFace) => {
-
-      // set the offets for the memory buffers so we can rebuild the
-      // indexed polygonal face vector later
-      polygonalFaceBufferOffsets.push(allIndices.length)
-      startIndicesBufferOffsets.push(allStartIndices.length)
-
-      let coordIndex:number = 0
-
-      if (polygonalFace instanceof IfcIndexedPolygonalFaceWithVoids) {
-        // Voided faces are rare; keep the straightforward getter path.
-        indicesPerFace = polygonalFace.CoordIndex.length
-
-        allStartIndices.push(0)
-        coordIndex += indicesPerFace
-
-        for (const index of polygonalFace.CoordIndex) {
-          allIndices.push(index)
-        }
-
-        polygonalFace.InnerCoordIndices.forEach((innerIndices) => {
-          allStartIndices.push(coordIndex)
-
-          for (const index of innerIndices) {
-            allIndices.push(index)
-          }
-
-          coordIndex += innerIndices.length
-        })
-      } else {
-        // CoordIndex is vtable offset 0 on IfcIndexedPolygonalFace (see
-        // its generated getter) — parsed in place, never allocated or cached.
-        indicesPerFace = polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
-        allStartIndices.push(0)
-      }
-    })
+  private finishPolygonalFaceSet_(
+      entity: IfcPolygonalFaceSet,
+      temporary: boolean,
+      isRelVoid: boolean,
+      indicesPerFace: number,
+      allIndices: Uint32Sink,
+      allStartIndices: Uint32Sink,
+      polygonalFaceBufferOffsets: Uint32Sink,
+      startIndicesBufferOffsets: Uint32Sink ): ExtractResult {
 
     // Add the final entry
     polygonalFaceBufferOffsets.push(allIndices.length)
@@ -1038,8 +994,6 @@ export class IfcGeometryExtraction {
         startIndicesBufferOffsetsArrayPtr,
         startIndicesBufferOffsetsArray.length)
 
-    // Sink contents are now copied into wasm; the sinks are free again.
-    this.polygonalSinksInUse_ = false
 
     const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
@@ -1091,8 +1045,178 @@ export class IfcGeometryExtraction {
       this.model.voidGeometry.add(canonicalMesh)
     }
 
+    return ExtractResult.COMPLETE
+  }
+
+
+  /**
+   * Extract a polygonal faceset.
+   *
+   * The index sinks are extractor-scoped, so a nested faceset extraction
+   * reached from inside this one would silently clobber them. Nothing
+   * recurses there today, so this guards the invariant rather than a
+   * live bug — but the release must survive a throw: per-record
+   * extraction errors are caught upstream and are expected on malformed
+   * models, and a leaked flag would turn one bad record into a failure
+   * for every remaining faceset.
+   *
+   * @param entity The faceset.
+   * @param temporary Is this a temporary (preview/operand) extraction?
+   * @param isRelVoid Is this geometry a rel-void operand?
+   * @return {ExtractResult} The extraction result.
+   */
+  private extractPolygonalFaceSet(entity: IfcPolygonalFaceSet,
+      temporary: boolean = false,
+      isRelVoid: boolean = false): ExtractResult {
+
+    if ( this.polygonalSinksInUse_ ) {
+      throw new Error(
+          'extractPolygonalFaceSet re-entered: the shared index sinks are already in use' )
+    }
+
+    this.polygonalSinksInUse_ = true
+
+    try {
+      return this.extractPolygonalFaceSetGuarded_( entity, temporary, isRelVoid )
+    } finally {
+      this.polygonalSinksInUse_ = false
+    }
+  }
+
+
+  /**
+   * @param entity
+   * @param temporary
+   * @param isRelVoid
+   * @return {ExtractResult}
+   */
+  private extractPolygonalFaceSetGuarded_(entity: IfcPolygonalFaceSet,
+      temporary: boolean,
+      isRelVoid: boolean): ExtractResult {
+    const result: ExtractResult = ExtractResult.COMPLETE
+
+    // Reusable typed sinks. A tessellated model can carry millions of
+    // IfcIndexedPolygonalFace records, and the boxed `Array< number >`
+    // this loop used to build per face — which the generated CoordIndex
+    // getter also cached on the face, keeping it alive — dominated both
+    // GC time and retained heap during extraction. Indices are parsed
+    // straight from the STEP buffer into these instead, reused across
+    // facesets.
+    const allIndices = this.polygonalIndexSink_
+    const allStartIndices = this.polygonalStartIndexSink_
+    const polygonalFaceBufferOffsets = this.polygonalFaceOffsetSink_
+    const startIndicesBufferOffsets = this.polygonalStartOffsetSink_
+
+    allIndices.reset()
+    allStartIndices.reset()
+    polygonalFaceBufferOffsets.reset()
+    startIndicesBufferOffsets.reset()
+
+    let indicesPerFace: number = -1
+
+    // Fast path: read each face's CoordIndex straight from its record,
+    // never constructing the 9M+ IfcIndexedPolygonalFace entities a
+    // large tessellated model would otherwise materialise (and retain,
+    // since the generated Faces getter caches them). It handles only
+    // plain, single-class IFCINDEXEDPOLYGONALFACE records; anything
+    // else (voided faces, inline elements, multi-mapped records)
+    // abandons the whole faceset back to the getter path below, so
+    // correctness never depends on the fast path's coverage.
+    let fastPathOk = true
+
+    const facesWalked = entity.forEachReferenceInField(
+        FACES_FIELD_OFFSET,
+        FACES_FIELD_BASE_OFFSET,
+        FACES_FIELD_DEPTH,
+        (expressID) => {
+
+          if (expressID === void 0) {
+            fastPathOk = false
+            return false
+          }
+
+          const count = this.model.extractIntegerArrayByExpressIDInto(
+              expressID,
+              COORD_INDEX_FIELD_OFFSET,
+              EntityTypesIfc.IFCINDEXEDPOLYGONALFACE,
+              allIndices)
+
+          if (count === void 0) {
+            fastPathOk = false
+            return false
+          }
+
+          polygonalFaceBufferOffsets.push(allIndices.length - count)
+          startIndicesBufferOffsets.push(allStartIndices.length)
+          allStartIndices.push(0)
+          indicesPerFace = count
+
+          return true
+        })
+
+    if (fastPathOk && facesWalked) {
+      this.finishPolygonalFaceSet_(
+          entity, temporary, isRelVoid, indicesPerFace,
+          allIndices, allStartIndices,
+          polygonalFaceBufferOffsets, startIndicesBufferOffsets)
+
+      return result
+    }
+
+    // Fallback: something in this faceset needs the generated getters.
+    allIndices.reset()
+    allStartIndices.reset()
+    polygonalFaceBufferOffsets.reset()
+    startIndicesBufferOffsets.reset()
+    indicesPerFace = -1
+
+    // Prepare indices and start indices for all faces
+    entity.Faces.forEach((polygonalFace) => {
+
+      // set the offets for the memory buffers so we can rebuild the
+      // indexed polygonal face vector later
+      polygonalFaceBufferOffsets.push(allIndices.length)
+      startIndicesBufferOffsets.push(allStartIndices.length)
+
+      let coordIndex:number = 0
+
+      if (polygonalFace instanceof IfcIndexedPolygonalFaceWithVoids) {
+        // Voided faces are rare; keep the straightforward getter path.
+        indicesPerFace = polygonalFace.CoordIndex.length
+
+        allStartIndices.push(0)
+        coordIndex += indicesPerFace
+
+        for (const index of polygonalFace.CoordIndex) {
+          allIndices.push(index)
+        }
+
+        polygonalFace.InnerCoordIndices.forEach((innerIndices) => {
+          allStartIndices.push(coordIndex)
+
+          for (const index of innerIndices) {
+            allIndices.push(index)
+          }
+
+          coordIndex += innerIndices.length
+        })
+      } else {
+        // CoordIndex is vtable offset 0 on IfcIndexedPolygonalFace (see
+        // its generated getter) — parsed in place, never allocated or cached.
+        indicesPerFace = polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
+        allStartIndices.push(0)
+      }
+    })
+
+    this.finishPolygonalFaceSet_(
+        entity, temporary, isRelVoid, indicesPerFace,
+        allIndices, allStartIndices,
+        polygonalFaceBufferOffsets, startIndicesBufferOffsets)
+
     return result
   }
+
+
 
   /**
    * @param array

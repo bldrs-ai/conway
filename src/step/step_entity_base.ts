@@ -17,7 +17,7 @@ import {
   stepExtractReference,
   stepExtractString,
 } from './parsing/step_deserialization_functions'
-import { Uint32Sink } from './parsing/uint32_sink'
+import { Uint32Sink, extractIntegerArrayAt } from './parsing/uint32_sink'
 import { stepBufferBase } from './step_buffer_provider'
 import { StepEntityConstructorAbstract } from './step_entity_constructor'
 import StepEntityInternalReference,
@@ -902,43 +902,68 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @return {number} How many values were appended (0 when the field is
    * unset/optional-null).
    */
-  public extractIntegerArrayInto(
+  /**
+   * Walk a reference-list field, handing each element's express ID to
+   * `onReference` without resolving it to an entity.
+   *
+   * Lets hot loops decide per element how to read the referenced record
+   * (see StepModelBase.extractIntegerArrayByExpressIDInto) instead of
+   * paying for an entity per element the way the generated list getters
+   * do. Inline (non-reference) elements yield `undefined`, and
+   * `onReference` returning false aborts the walk — together those let
+   * a caller bail out to the generated getter for anything it is not
+   * prepared to handle.
+   *
+   * @param offset The offset in the vtable to extract from.
+   * @param baseOffset The base offset of the class in the vtable.
+   * @param depth The depth in the inheritance hierarchy.
+   * @param onReference Receives each element's express ID, or undefined
+   * for an inline element; return false to abort.
+   * @return {boolean} False if the walk was aborted, true otherwise.
+   */
+  public forEachReferenceInField(
       offset: number,
       baseOffset: number,
       depth: number,
-      sink: Uint32Sink ): number {
+      onReference: ( expressID: number | undefined ) => boolean ): boolean {
 
     let   cursor    = this.getOffsetCursor( offset, baseOffset, depth )
     const buffer    = this.buffer
     const endCursor = buffer.length
 
     if ( stepExtractOptional( buffer, cursor, endCursor ) === null ) {
-      return 0
+      return true
     }
 
-    let count         = 0
     let signedCursor0 = stepExtractArrayBegin( buffer, cursor, endCursor )
 
     cursor = Math.abs( signedCursor0 )
 
     while ( signedCursor0 >= 0 ) {
 
-      const value = stepExtractNumber( buffer, cursor, endCursor )
-
-      if ( value === void 0 ) {
-        throw new Error( 'Value in STEP was incorrectly typed' )
+      if ( !onReference( stepExtractReference( buffer, cursor, endCursor ) ) ) {
+        return false
       }
 
-      cursor = skipValue( buffer, cursor, endCursor )
-
-      sink.push( value )
-      ++count
-
+      cursor        = skipValue( buffer, cursor, endCursor )
       signedCursor0 = stepExtractArrayToken( buffer, cursor, endCursor )
       cursor        = Math.abs( signedCursor0 )
     }
 
-    return count
+    return true
+  }
+
+
+  public extractIntegerArrayInto(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      sink: Uint32Sink ): number {
+
+    const cursor = this.getOffsetCursor( offset, baseOffset, depth )
+    const buffer = this.buffer
+
+    return extractIntegerArrayAt( buffer, cursor, buffer.length, sink )
   }
 
 
