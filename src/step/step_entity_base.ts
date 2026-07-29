@@ -843,6 +843,47 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * @param optional
    * @return {boolean} True if this extracts, false (usually because this is optional)
    */
+  public extractParseBuffer(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      result: ParseBuffer,
+      module: WasmModule,
+      optional: boolean ): boolean {
+    
+    offset -= this.multiReference_ !== void 0 ? baseOffset : 0    
+
+    const internalReference = this.guaranteeVTable( depth )
+
+    if ( offset >= internalReference.vtableCount ) {
+      throw new Error( 'Couldn\'t read field due to too few fields in record' )
+    }
+
+    // Read through the SAME reference the vtable cursors came from —
+    // with a windowed provider, `this.buffer` and a multi-class
+    // reference's buffer can be different windows.
+    const buffer     = internalReference.buffer
+    const vtableSlot = internalReference.vtableIndex + offset
+    const cursor     = internalReference.vtable[ vtableSlot ]
+    const nextSlot   = vtableSlot + 1
+    const endCursor  =
+      nextSlot < internalReference.vtableCount ?
+        ( internalReference.vtable[ nextSlot ] - 1 ) :
+        internalReference.endCursor
+
+    if ( optional && stepExtractOptional( buffer, cursor, endCursor ) === null ) {
+
+      return false
+    }
+
+    const dataPtr = result.resize( endCursor - cursor )
+
+    module.HEAPU8.set( buffer.subarray( cursor, endCursor ), dataPtr )
+
+    return true
+  }
+
+
   /**
    * Append an unsigned-integer list field straight from the STEP buffer
    * into `sink`, without materialising an intermediate `Array< number >`.
@@ -898,47 +939,6 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     }
 
     return count
-  }
-
-
-  public extractParseBuffer(
-      offset: number,
-      baseOffset: number,
-      depth: number,
-      result: ParseBuffer,
-      module: WasmModule,
-      optional: boolean ): boolean {
-    
-    offset -= this.multiReference_ !== void 0 ? baseOffset : 0    
-
-    const internalReference = this.guaranteeVTable( depth )
-
-    if ( offset >= internalReference.vtableCount ) {
-      throw new Error( 'Couldn\'t read field due to too few fields in record' )
-    }
-
-    // Read through the SAME reference the vtable cursors came from —
-    // with a windowed provider, `this.buffer` and a multi-class
-    // reference's buffer can be different windows.
-    const buffer     = internalReference.buffer
-    const vtableSlot = internalReference.vtableIndex + offset
-    const cursor     = internalReference.vtable[ vtableSlot ]
-    const nextSlot   = vtableSlot + 1
-    const endCursor  =
-      nextSlot < internalReference.vtableCount ?
-        ( internalReference.vtable[ nextSlot ] - 1 ) :
-        internalReference.endCursor
-
-    if ( optional && stepExtractOptional( buffer, cursor, endCursor ) === null ) {
-
-      return false
-    }
-
-    const dataPtr = result.resize( endCursor - cursor )
-
-    module.HEAPU8.set( buffer.subarray( cursor, endCursor ), dataPtr )
-
-    return true
   }
 
 

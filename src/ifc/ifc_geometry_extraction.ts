@@ -344,6 +344,9 @@ export class IfcGeometryExtraction {
   private readonly polygonalFaceOffsetSink_ = new Uint32Sink( POLYGONAL_FACE_SINK_CAPACITY )
   private readonly polygonalStartOffsetSink_ = new Uint32Sink( POLYGONAL_FACE_SINK_CAPACITY )
 
+  /* Guards the sinks against a re-entrant faceset extraction. */
+  private polygonalSinksInUse_ = false
+
 
    
   private readonly TWO_DIMENSIONS: number = 2
@@ -949,6 +952,18 @@ export class IfcGeometryExtraction {
     // GC time and retained heap during extraction. Indices are parsed
     // straight from the STEP buffer into these instead, reused across
     // facesets.
+    // The sinks are extractor-scoped, so a nested faceset extraction
+    // reached from inside this one would silently clobber them. Nothing
+    // in the window between reset and the wasm copies below recurses
+    // today (the face loop only parses), so this guards the invariant
+    // rather than a live bug — fail loudly if that ever changes.
+    if ( this.polygonalSinksInUse_ ) {
+      throw new Error(
+          'extractPolygonalFaceSet re-entered: the shared index sinks are already in use' )
+    }
+
+    this.polygonalSinksInUse_ = true
+
     const allIndices = this.polygonalIndexSink_
     const allStartIndices = this.polygonalStartIndexSink_
     const polygonalFaceBufferOffsets = this.polygonalFaceOffsetSink_
@@ -1022,6 +1037,9 @@ export class IfcGeometryExtraction {
         polygonalFaceBufferOffsetsArray.length,
         startIndicesBufferOffsetsArrayPtr,
         startIndicesBufferOffsetsArray.length)
+
+    // Sink contents are now copied into wasm; the sinks are free again.
+    this.polygonalSinksInUse_ = false
 
     const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
