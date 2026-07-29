@@ -994,8 +994,6 @@ export class IfcGeometryExtraction {
         startIndicesBufferOffsetsArrayPtr,
         startIndicesBufferOffsetsArray.length)
 
-    // Sink contents are now copied into wasm; the sinks are free again.
-    this.polygonalSinksInUse_ = false
 
     const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
@@ -1052,14 +1050,49 @@ export class IfcGeometryExtraction {
 
 
   /**
+   * Extract a polygonal faceset.
+   *
+   * The index sinks are extractor-scoped, so a nested faceset extraction
+   * reached from inside this one would silently clobber them. Nothing
+   * recurses there today, so this guards the invariant rather than a
+   * live bug — but the release must survive a throw: per-record
+   * extraction errors are caught upstream and are expected on malformed
+   * models, and a leaked flag would turn one bad record into a failure
+   * for every remaining faceset.
+   *
+   * @param entity The faceset.
+   * @param temporary Is this a temporary (preview/operand) extraction?
+   * @param isRelVoid Is this geometry a rel-void operand?
+   * @return {ExtractResult} The extraction result.
+   */
+  private extractPolygonalFaceSet(entity: IfcPolygonalFaceSet,
+      temporary: boolean = false,
+      isRelVoid: boolean = false): ExtractResult {
+
+    if ( this.polygonalSinksInUse_ ) {
+      throw new Error(
+          'extractPolygonalFaceSet re-entered: the shared index sinks are already in use' )
+    }
+
+    this.polygonalSinksInUse_ = true
+
+    try {
+      return this.extractPolygonalFaceSetGuarded_( entity, temporary, isRelVoid )
+    } finally {
+      this.polygonalSinksInUse_ = false
+    }
+  }
+
+
+  /**
    * @param entity
    * @param temporary
    * @param isRelVoid
    * @return {ExtractResult}
    */
-  private extractPolygonalFaceSet(entity: IfcPolygonalFaceSet,
-      temporary: boolean = false,
-      isRelVoid: boolean = false): ExtractResult {
+  private extractPolygonalFaceSetGuarded_(entity: IfcPolygonalFaceSet,
+      temporary: boolean,
+      isRelVoid: boolean): ExtractResult {
     const result: ExtractResult = ExtractResult.COMPLETE
 
     // Reusable typed sinks. A tessellated model can carry millions of
@@ -1069,18 +1102,6 @@ export class IfcGeometryExtraction {
     // GC time and retained heap during extraction. Indices are parsed
     // straight from the STEP buffer into these instead, reused across
     // facesets.
-    // The sinks are extractor-scoped, so a nested faceset extraction
-    // reached from inside this one would silently clobber them. Nothing
-    // in the window between reset and the wasm copies below recurses
-    // today (the face loop only parses), so this guards the invariant
-    // rather than a live bug — fail loudly if that ever changes.
-    if ( this.polygonalSinksInUse_ ) {
-      throw new Error(
-          'extractPolygonalFaceSet re-entered: the shared index sinks are already in use' )
-    }
-
-    this.polygonalSinksInUse_ = true
-
     const allIndices = this.polygonalIndexSink_
     const allStartIndices = this.polygonalStartIndexSink_
     const polygonalFaceBufferOffsets = this.polygonalFaceOffsetSink_
