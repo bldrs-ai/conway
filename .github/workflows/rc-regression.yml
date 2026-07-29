@@ -5,7 +5,12 @@ name: RC regression (full corpus + baseline bless)
 # PINNED toolchain, gates on failures, and opens a baseline PR in each
 # test-models repo whose diff IS the release's regression report:
 #
-#   - failed.csv rows            -> this workflow goes RED, the rc is bad.
+#   - NEW failed.csv rows        -> this workflow goes RED, the rc is bad. A
+#                                   model already failing in the committed
+#                                   baseline (a known-failer that still loads
+#                                   in prod, or a not-yet-fixed input) does NOT
+#                                   block the rc — otherwise no rc could ever go
+#                                   green while any known-failer exists.
 #   - digest/errors churn        -> shows up as the baseline PR diff; review
 #                                   it (with the per-PR visual evidence that
 #                                   motivated the change) and MERGE to bless.
@@ -209,18 +214,93 @@ jobs:
             models/regression/test_models \
             --parallel --mem-utilization 90
 
-      # Hard gate: any model that failed to parse/extract makes this rc RED.
-      # Digest/errors churn is NOT gated here — it lands in the baseline PR
-      # diff below, where a human reviews and blesses it.
-      - name: Fail on regression failures
+      # Hard gate: fail the rc only on NEW parse/extract failures — models that
+      # were NOT already failing in the committed baseline. Pre-existing,
+      # already-blessed failures (a model that crashes here but loads in prod,
+      # or a known-bad input we haven't fixed yet) must NOT block every future
+      # rc; gating on failed.csv being non-empty means no rc can ever go green
+      # while any known-failer exists.
+      #
+      # The baseline is the failed.csv committed at the target repo's HEAD — the
+      # regeneration above overwrote the working copy in place, so `git show
+      # HEAD:` still yields the pre-run committed set. The diff is keyed on the
+      # `file` column, so a model is simply "failing" or not: robust to a
+      # known-failer's exact exit code/signal wobbling between runs (e.g. an OOM
+      # kill, which surfaces as an empty code/signal here). A brand-new failing
+      # model reds the rc; resolved failures are reported (and drop out of
+      # failed.csv in the baseline PR below) but never gate. Digest/errors churn
+      # is likewise not gated here — it lands in the baseline PR diff, where a
+      # human reviews and blesses it.
+      - name: Fail on NEW regression failures
         run: |
-          FAILED=models/regression/test_models/failed.csv
-          if [ -f "$FAILED" ] && [ "$(wc -l < "$FAILED")" -gt 1 ]; then
-            echo "::error::${{ matrix.target.repo }} has regression failures — this rc is bad:"
-            cat "$FAILED"
-            exit 1
-          fi
-          echo "No failures."
+          cd models/regression/test_models
+          python3 - "${{ matrix.target.repo }}" <<'EOF'
+          import csv, io, subprocess, sys
+          from collections import Counter
+
+          repo = sys.argv[1]
+
+          def read_csv(text):
+              rows = list(csv.reader(io.StringIO(text)))
+              if not rows:
+                  return [], []
+              return rows[0], [r for r in rows[1:] if r]
+
+          # Current (freshly regenerated) failed.csv.
+          try:
+              with open("failed.csv", newline="") as f:
+                  cur_header, current = read_csv(f.read())
+          except FileNotFoundError:
+              cur_header, current = [], []
+
+          # Committed baseline at the target repo's HEAD.
+          base_run = subprocess.run(
+              ["git", "-C", "../..", "show", "HEAD:regression/test_models/failed.csv"],
+              capture_output=True, text=True)
+          has_baseline = base_run.returncode == 0
+          base_header, baseline = read_csv(base_run.stdout) if has_baseline else ([], [])
+
+          def file_of(row, header):
+              if header and "file" in header:
+                  idx = header.index("file")
+                  return row[idx] if len(row) > idx else ""
+              return row[0] if row else ""
+
+          # Keep a representative full row per failing file for readable output.
+          cur_rows = {}
+          for r in current:
+              cur_rows.setdefault(file_of(r, cur_header), r)
+
+          cur_files = Counter(file_of(r, cur_header) for r in current)
+          base_files = Counter(file_of(r, base_header) for r in baseline)
+
+          new_failures = sorted((cur_files - base_files).elements())
+          resolved = sorted((base_files - cur_files).elements())
+          preexisting = sorted((cur_files & base_files).elements())
+
+          print(f"Failing models in {repo} — current: {len(list(cur_files.elements()))}, "
+                f"baseline: {len(list(base_files.elements()))}")
+          if not has_baseline:
+              print("  (no failed.csv at the target repo's HEAD — every failure counts as new)")
+          print(f"  pre-existing (blessed): {len(preexisting)}")
+          print(f"  resolved since baseline: {len(resolved)}")
+          print(f"  NEW: {len(new_failures)}")
+
+          if resolved:
+              print("\nResolved (no longer failing — drops from failed.csv on bless):")
+              for name in resolved:
+                  print(f"  - {name}")
+
+          if new_failures:
+              print(f"\n::error::{repo} has NEW regression failures "
+                    "(not in the blessed baseline) — this rc is bad.")
+              print("New failures (file,code,signal):")
+              for name in new_failures:
+                  print("  " + ",".join(cur_rows.get(name, [name])))
+              sys.exit(1)
+
+          print("\nNo new failures. Pre-existing known-failers do not block the rc.")
+          EOF
 
       # The batch always writes regression/test_models/changes.csv via a git
       # diff whose pathspec is relative to the model folder, so under this
@@ -263,9 +343,12 @@ jobs:
 
             **This diff is the release candidate's regression report.** Every
             changed digest is a model whose geometry differs from the last
-            blessed baseline. No failures were detected (the generating
-            workflow gates on `failed.csv`). Review the churn and merge to
-            bless — from then on, per-PR smoke diffs in conway mean "this PR
-            moved geometry", not accumulated drift.
+            blessed baseline. No NEW parse/extract failures were detected (the
+            generating workflow gates on failures added vs the committed
+            `failed.csv`; pre-existing known-failers do not block the rc, and
+            any that this run resolved drop out of `failed.csv` in this diff).
+            Review the churn and merge to bless — from then on, per-PR smoke
+            diffs in conway mean "this PR moved geometry", not accumulated
+            drift.
 
             Generated by conway's `rc-regression` workflow.
