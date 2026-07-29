@@ -189,3 +189,18 @@ export function composeTransformF64(
 
   return out
 }
+
+// Column-major mat4 translation component indices.
+export const TRANSLATION_X = 12
+export const TRANSLATION_Y = 13
+export const TRANSLATION_Z = 14
+
+/**
+ * Placement-magnitude budget (metres) above which a coordination frame
+ * has failed to recentre a model: float32 (the GPU vertex format and
+ * BatchedMesh matrix texture) quantizes at ~1mm per 1e4 m of
+ * coordinate, the visible-jitter threshold established in Share#1631.
+ * Used to validate an adopted preview coordination frame against the
+ * durable walk's first geometry (Share#1634).
+ */
+export const LARGE_COORDINATE_BUDGET_M = 1e4

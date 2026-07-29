@@ -19,7 +19,8 @@ import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
-import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import { LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y, TRANSLATION_Z,
+  composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker } from '../../core/progress'
@@ -145,6 +146,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * memory.
    */
   private demandCoordination_?: number[]
+
+  /**
+   * True while an adopted preview-channel coordination frame is still
+   * unvalidated against the durable walk's first geometry. A model can
+   * carry geometry in more than one frame (ISSUE_129: a local-scale
+   * annotation previews first while the body is georeferenced at
+   * ~8.3e6 m), so a frame anchored on the wrong unit leaves the body
+   * raw — the Share#1634 browser-vs-node divergence, which was really
+   * preview-vs-no-preview. streamNewMeshes_ clears this on its first
+   * geometry, re-deriving from it when the adopted frame fails the
+   * large-coordinate budget.
+   */
+  private demandCoordinationFromPreview_: boolean = false
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -295,6 +309,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
       this.demandCoordination_ = loadState.previewCoordinationMatrix
       this._isCoordinated = true
+      // Adopted, not derived: validate against the durable walk's first
+      // geometry before trusting it (see demandCoordinationFromPreview_).
+      this.demandCoordinationFromPreview_ = true
     }
 
     let FILE_NAME = stepHeader.headers.get('FILE_NAME')
@@ -1348,6 +1365,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     return Array.from(coordinationMatrix)
   }
 
+
+  /**
+   * The coordination frame actually applied to emitted placements —
+   * the derived (or validated adopted) recenter, identity when no
+   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   *
+   * @return {Array<number>} column-major mat4
+   */
+  getAppliedCoordination(): Array<number> {
+    return [...(this.demandCoordination_ ?? this.identity)]
+  }
+
   /**
    *
    * @param ptr
@@ -1623,8 +1652,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         blend: 0,
       }
 
+      const validatePreviewFrame = this.demandCoordinationFromPreview_ &&
+        this.settings?.COORDINATE_TO_ORIGIN === true
+
       let nativePt: Vector3
-      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+      if ((!this._isCoordinated || validatePreviewFrame) &&
+          this.settings?.COORDINATE_TO_ORIGIN) {
         nativePt = geometry.geometry.getPoint(0)
       }
 
@@ -1650,6 +1683,32 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // demandCoordination_'s identity-contract note).
         this.demandCoordination_ = derived
         this._isCoordinated = true
+      } else if (validatePreviewFrame) {
+        // One-shot check of an adopted preview frame against the durable
+        // walk's first geometry: when the composed placement still lands
+        // beyond the large-coordinate budget, the preview anchored in a
+        // different frame than the model body (Share#1634) — re-derive
+        // from this geometry, the classic path's anchor. The throwaway
+        // preview scene may briefly disagree; the durable model must
+        // place like the classic open.
+        this.demandCoordinationFromPreview_ = false
+
+        const probe = composeTransformF64(coordinationMatrix, geometryTransform, center)
+        const magnitude = Math.max(
+            Math.abs(probe[TRANSLATION_X]),
+            Math.abs(probe[TRANSLATION_Y]),
+            Math.abs(probe[TRANSLATION_Z]))
+
+        if (magnitude > LARGE_COORDINATE_BUDGET_M) {
+          const derived = deriveCoordinationF64(
+              geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+
+          coordinationMatrix = derived
+          this.demandCoordination_ = derived
+          Logger.info(
+              `[deferred] preview coordination frame rejected (first durable ` +
+              `placement at ${Math.round(magnitude)}m); re-derived from the durable anchor`)
+        }
       }
 
       const newTransformArr =
@@ -1817,6 +1876,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+          // Persisted for getAppliedCoordination (Share#1634): report
+          // the real applied frame, not the classic silent identity.
+          this.demandCoordination_ = Array.from(coordinationMatrix)
           this._isCoordinated = true
         }
 
@@ -1982,6 +2044,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+          // Persisted for getAppliedCoordination (Share#1634).
+          this.demandCoordination_ = Array.from(coordinationMatrix)
           this._isCoordinated = true
         }
 
@@ -2128,6 +2192,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+          // Persisted for getAppliedCoordination (Share#1634).
+          this.demandCoordination_ = Array.from(coordinationMatrix)
           this._isCoordinated = true
         }
 

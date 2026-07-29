@@ -751,6 +751,30 @@ export class IfcAPI {
   }
 
   /**
+   * Conway extension: the coordination frame the open ACTUALLY applied
+   * to emitted placements (the COORDINATE_TO_ORIGIN recenter), identity
+   * when none ran. GetCoordinationMatrix keeps its classic identity
+   * contract (consumers stamp it onto assembled models); this is the
+   * explicit report of the real offset so embedders can map rendered
+   * points back to source-world coordinates (Share#1634 acceptance).
+   * Feature-detect: typeof api.GetAppliedCoordinationMatrix.
+   *
+   * @param modelID
+   * @return {Array<number>} column-major mat4
+   */
+  GetAppliedCoordinationMatrix(modelID: number): Array<number> {
+
+    const result = this.models.get(modelID)
+
+    if (result !== void 0 && result.getAppliedCoordination !== void 0) {
+
+      return result.getAppliedCoordination()
+    }
+
+    return Array.from(glmatrix.mat4.create())
+  }
+
+  /**
    *
    * @param ptr
    * @param size
