@@ -1,3 +1,11 @@
+import {
+  skipValue,
+  stepExtractArrayBegin,
+  stepExtractArrayToken,
+  stepExtractNumber,
+  stepExtractOptional,
+} from './step_deserialization_functions'
+
 /**
  * Growable Uint32Array append sink.
  *
@@ -59,4 +67,53 @@ export class Uint32Sink {
 
     this.data_[ this.length_++ ] = value
   }
+}
+
+
+/**
+ * Parse a STEP integer list at `cursor` into `sink`, appending in order.
+ *
+ * The single implementation shared by the entity-level and
+ * reference-level fast paths, so they cannot drift from each other or
+ * from the generated array getters they stand in for (same optional
+ * handling, same element extraction, same "incorrectly typed" error).
+ *
+ * @param buffer The record's buffer window.
+ * @param cursor Start of the field.
+ * @param endCursor End bound for extraction.
+ * @param sink Receives the appended values.
+ * @return {number} How many values were appended (0 when unset/optional-null).
+ */
+export function extractIntegerArrayAt(
+    buffer: Uint8Array,
+    cursor: number,
+    endCursor: number,
+    sink: Uint32Sink ): number {
+
+  if ( stepExtractOptional( buffer, cursor, endCursor ) === null ) {
+    return 0
+  }
+
+  let count         = 0
+  let signedCursor0 = stepExtractArrayBegin( buffer, cursor, endCursor )
+  let readCursor    = Math.abs( signedCursor0 )
+
+  while ( signedCursor0 >= 0 ) {
+
+    const value = stepExtractNumber( buffer, readCursor, endCursor )
+
+    if ( value === void 0 ) {
+      throw new Error( 'Value in STEP was incorrectly typed' )
+    }
+
+    readCursor = skipValue( buffer, readCursor, endCursor )
+
+    sink.push( value )
+    ++count
+
+    signedCursor0 = stepExtractArrayToken( buffer, readCursor, endCursor )
+    readCursor    = Math.abs( signedCursor0 )
+  }
+
+  return count
 }

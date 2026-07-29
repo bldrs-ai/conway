@@ -7,9 +7,11 @@ import * as fs from 'fs'
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
 import { IfcAPI } from '../../compat/web-ifc/ifc_api'
+import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import {
   IfcIndexedPolygonalFace,
   IfcIndexedPolygonalFaceWithVoids,
+  IfcPolygonalFaceSet,
 } from '../../ifc/ifc4_gen/index'
 import { Uint32Sink } from './uint32_sink'
 
@@ -113,5 +115,128 @@ describe( 'extractIntegerArrayInto', () => {
     }
 
     expect( Array.from( sink.view ) ).toEqual( expected )
+  }, 120000 )
+} )
+
+
+// The reference-level path the faceset extraction uses to avoid
+// constructing an entity per face. It must agree with the generated
+// getters exactly, and must report failure (rather than guess) whenever
+// its preconditions don't hold, because the caller's fallback depends on
+// that signal.
+describe( 'reference-level faceset fast path', () => {
+
+  const FACES_OFFSET = 2
+  const FACES_BASE_OFFSET = 1
+  const FACES_DEPTH = 4
+  const COORD_INDEX_OFFSET = 0
+
+  let api: IfcAPI
+  let modelID: number
+
+  /**
+   * @return {object} The StepModel behind the passthrough tuple.
+   */
+  function stepModel(): any {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return ( api as any ).models.get( modelID ).model[ 0 ]
+  }
+
+  /**
+   * @return {IfcPolygonalFaceSet[]} The fixture's facesets.
+   */
+  function faceSets(): IfcPolygonalFaceSet[] {
+    return Array.from( stepModel().types( IfcPolygonalFaceSet ) ) as IfcPolygonalFaceSet[]
+  }
+
+  beforeAll( async () => {
+    api = new IfcAPI()
+    await api.Init()
+
+    modelID = api.OpenModel(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true } )
+  }, 120000 )
+
+  test( 'forEachReferenceInField yields exactly the express IDs the Faces getter resolves', () => {
+
+    const sets = faceSets()
+
+    expect( sets.length ).toBeGreaterThan( 0 )
+
+    for ( const faceSet of sets ) {
+
+      const walked: ( number | undefined )[] = []
+
+      const completed = faceSet.forEachReferenceInField(
+          FACES_OFFSET, FACES_BASE_OFFSET, FACES_DEPTH,
+          ( expressID ) => {
+            walked.push( expressID )
+            return true
+          } )
+
+      expect( completed ).toBe( true )
+      expect( walked ).toEqual( faceSet.Faces.map( ( face ) => face.expressID ) )
+    }
+  }, 120000 )
+
+  test( 'forEachReferenceInField stops when the callback returns false', () => {
+
+    const faceSet = faceSets()[ 0 ]
+    const walked: ( number | undefined )[] = []
+
+    const completed = faceSet.forEachReferenceInField(
+        FACES_OFFSET, FACES_BASE_OFFSET, FACES_DEPTH,
+        ( expressID ) => {
+          walked.push( expressID )
+          return false
+        } )
+
+    expect( completed ).toBe( false )
+    expect( walked.length ).toBe( 1 )
+  }, 120000 )
+
+  test( 'extractIntegerArrayByExpressIDInto matches the generated CoordIndex getter', () => {
+
+    const model = stepModel()
+    const sink = new Uint32Sink( 4 )
+
+    for ( const faceSet of faceSets() ) {
+      for ( const face of faceSet.Faces ) {
+
+        if ( face instanceof IfcIndexedPolygonalFaceWithVoids ) {
+          continue
+        }
+
+        sink.reset()
+
+        const count = model.extractIntegerArrayByExpressIDInto(
+            face.expressID,
+            COORD_INDEX_OFFSET,
+            EntityTypesIfc.IFCINDEXEDPOLYGONALFACE,
+            sink )
+
+        expect( count ).toBe( face.CoordIndex.length )
+        expect( Array.from( sink.view ) ).toEqual( face.CoordIndex )
+      }
+    }
+  }, 120000 )
+
+  test( 'reports failure for an unknown express ID and for a type mismatch', () => {
+
+    const model = stepModel()
+    const sink = new Uint32Sink( 4 )
+    const face = faceSets()[ 0 ].Faces[ 0 ]
+
+    // Unknown record: the caller must fall back, not read something else.
+    expect( model.extractIntegerArrayByExpressIDInto(
+        0xFFFFFFF, COORD_INDEX_OFFSET, EntityTypesIfc.IFCINDEXEDPOLYGONALFACE, sink ) )
+        .toBeUndefined()
+
+    // Right record, wrong expected type: field offsets would not be
+    // comparable, so this must refuse rather than misread the record.
+    expect( model.extractIntegerArrayByExpressIDInto(
+        face.expressID, COORD_INDEX_OFFSET, EntityTypesIfc.IFCPOLYGONALFACESET, sink ) )
+        .toBeUndefined()
   }, 120000 )
 } )

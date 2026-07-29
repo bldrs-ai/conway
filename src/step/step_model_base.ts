@@ -10,6 +10,7 @@ import {
 import StepVtableBuilder from './parsing/step_vtable_builder'
 import StepEntityBase from './step_entity_base'
 import StepEntitySchema from './step_entity_schema'
+import { Uint32Sink, extractIntegerArrayAt } from './parsing/uint32_sink'
 import StepEntityInternalReference, { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
 import { IIndexSetCursor } from '../core/i_index_set_cursor'
 import { extractOneHotLow } from '../indexing/bit_operations'
@@ -398,6 +399,68 @@ implements Iterable<BaseEntity>, Model {
    * @param element The raw elment to populate the vtable entry for.
    * @return {boolean} Did the vtable entry populate correctly?
    */
+  /**
+   * Append a referenced record's unsigned-integer list field into `sink`
+   * without materialising the referenced entity.
+   *
+   * This is the reference-level twin of
+   * `StepEntityBase.extractIntegerArrayInto`, for hot loops that walk
+   * millions of small records (tessellated facesets) where constructing
+   * an entity per record dominates. It deliberately handles only the
+   * simple case and reports failure otherwise, so callers keep a
+   * correct fallback rather than this growing subtle special cases:
+   * the reference must resolve, be single-class (no multi-mapping),
+   * and be exactly `expectedTypeID` — which is what makes reading
+   * `offset` as a plain vtable slot equivalent to the generated
+   * getter's `getOffsetCursor( offset, _, _ )` (that only subtracts a
+   * base offset for multi-mapped records).
+   *
+   * @param expressID The referenced record's express ID.
+   * @param offset The field's vtable offset within the record.
+   * @param expectedTypeID The type the record must be.
+   * @param sink Receives the appended values.
+   * @return {number | undefined} Count appended, or undefined when the
+   * fast path does not apply and the caller must fall back.
+   */
+  public extractIntegerArrayByExpressIDInto(
+      expressID: number,
+      offset: number,
+      expectedTypeID: EntityTypeIDs,
+      sink: Uint32Sink ): number | undefined {
+
+    const localID = this.expressIDMap_.get( expressID )
+
+    if ( localID === void 0 || localID >= this.count_ ) {
+      return void 0
+    }
+
+    const element = this.entry( localID )
+
+    // Multi-mapped records need per-depth base offsets; leave them to
+    // the generated getters.
+    if ( element.multiMapping !== void 0 || element.typeID !== expectedTypeID ) {
+      return void 0
+    }
+
+    if ( element.vtableIndex === void 0 && !this.populateVtableEntryRaw( element ) ) {
+      return void 0
+    }
+
+    const vtable = element.vtable
+    const buffer = element.buffer
+
+    if ( vtable === void 0 || buffer === void 0 ||
+      offset >= ( element.vtableCount ?? 0 ) ) {
+      return void 0
+    }
+
+    // Same window the vtable cursors were recorded against, and the
+    // same end bound the generated array getters use.
+    return extractIntegerArrayAt(
+        buffer, vtable[ ( element.vtableIndex as number ) + offset ], buffer.length, sink )
+  }
+
+
   public populateVtableEntryRaw(
     element: StepEntityInternalReference< EntityTypeIDs > ): boolean {
     if (element.vtableIndex !== void 0 || element.typeID === 0 ) {
