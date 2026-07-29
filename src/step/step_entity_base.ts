@@ -4,7 +4,10 @@ import { EntityDescription, EntityFieldsDescription } from '../core/entity_descr
 import { EntityFieldDescription } from '../core/entity_field_description'
 import { WasmModule } from '../core/native_types'
 import {
+  skipValue,
   stepExtractArray,
+  stepExtractArrayBegin,
+  stepExtractArrayToken,
   stepExtractBinary,
   stepExtractBoolean,
   stepExtractInlineElemement,
@@ -14,6 +17,7 @@ import {
   stepExtractReference,
   stepExtractString,
 } from './parsing/step_deserialization_functions'
+import { Uint32Sink } from './parsing/uint32_sink'
 import { stepBufferBase } from './step_buffer_provider'
 import { StepEntityConstructorAbstract } from './step_entity_constructor'
 import StepEntityInternalReference,
@@ -877,6 +881,64 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     module.HEAPU8.set( buffer.subarray( cursor, endCursor ), dataPtr )
 
     return true
+  }
+
+
+  /**
+   * Append an unsigned-integer list field straight from the STEP buffer
+   * into `sink`, without materialising an intermediate `Array< number >`.
+   *
+   * Semantically identical to the generated array getters (same
+   * optional handling, same element extraction, same "incorrectly
+   * typed" error), but it neither allocates nor caches a per-record
+   * array — the caller owns one reusable sink for the whole batch. On
+   * tessellated models this removes millions of short-lived arrays and
+   * the retained heap that goes with them; see Uint32Sink.
+   *
+   * @param offset The offset in the vtable to extract from.
+   * @param baseOffset The base offset of the class in the vtable.
+   * @param depth The depth in the inheritance hierarchy.
+   * @param sink Receives the appended values.
+   * @return {number} How many values were appended (0 when the field is
+   * unset/optional-null).
+   */
+  public extractIntegerArrayInto(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      sink: Uint32Sink ): number {
+
+    let   cursor    = this.getOffsetCursor( offset, baseOffset, depth )
+    const buffer    = this.buffer
+    const endCursor = buffer.length
+
+    if ( stepExtractOptional( buffer, cursor, endCursor ) === null ) {
+      return 0
+    }
+
+    let count         = 0
+    let signedCursor0 = stepExtractArrayBegin( buffer, cursor, endCursor )
+
+    cursor = Math.abs( signedCursor0 )
+
+    while ( signedCursor0 >= 0 ) {
+
+      const value = stepExtractNumber( buffer, cursor, endCursor )
+
+      if ( value === void 0 ) {
+        throw new Error( 'Value in STEP was incorrectly typed' )
+      }
+
+      cursor = skipValue( buffer, cursor, endCursor )
+
+      sink.push( value )
+      ++count
+
+      signedCursor0 = stepExtractArrayToken( buffer, cursor, endCursor )
+      cursor        = Math.abs( signedCursor0 )
+    }
+
+    return count
   }
 
 
