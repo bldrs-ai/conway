@@ -51,6 +51,7 @@ import {
   NativeTransform3x3,
   FlattenedPointsResult,
 } from '../../dependencies/conway-geom'
+import { Uint32Sink } from '../step/parsing/uint32_sink'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { CanonicalProfile } from '../core/canonical_profile'
@@ -328,7 +329,21 @@ export function extractColorOrFactorMultiply(
  * Handles Geometry data extraction from a populated IfcStepModel
  * Can export to OBJ, GLTF (Draco), GLB (Draco)
  */
+/**
+ * Starting capacities for the reused polygonal-faceset sinks: enough that a
+ * typical faceset never reallocates, while still growing for outliers.
+ */
+const POLYGONAL_INDEX_SINK_CAPACITY = 65536
+const POLYGONAL_FACE_SINK_CAPACITY = 16384
+
+
 export class IfcGeometryExtraction {
+  /* Reused across polygonal-faceset extractions; see extractPolygonalFaceSet. */
+  private readonly polygonalIndexSink_ = new Uint32Sink( POLYGONAL_INDEX_SINK_CAPACITY )
+  private readonly polygonalStartIndexSink_ = new Uint32Sink( POLYGONAL_FACE_SINK_CAPACITY )
+  private readonly polygonalFaceOffsetSink_ = new Uint32Sink( POLYGONAL_FACE_SINK_CAPACITY )
+  private readonly polygonalStartOffsetSink_ = new Uint32Sink( POLYGONAL_FACE_SINK_CAPACITY )
+
 
    
   private readonly TWO_DIMENSIONS: number = 2
@@ -927,11 +942,23 @@ export class IfcGeometryExtraction {
       isRelVoid: boolean = false): ExtractResult {
     const result: ExtractResult = ExtractResult.COMPLETE
 
-    // Temporary storage for indices and start indices
-    const allIndices: number[] = []
-    const allStartIndices: number[] = []
-    const polygonalFaceBufferOffsets:number[] = []
-    const startIndicesBufferOffsets:number[] = []
+    // Reusable typed sinks. A tessellated model can carry millions of
+    // IfcIndexedPolygonalFace records, and the boxed `Array< number >`
+    // this loop used to build per face — which the generated CoordIndex
+    // getter also cached on the face, keeping it alive — dominated both
+    // GC time and retained heap during extraction. Indices are parsed
+    // straight from the STEP buffer into these instead, reused across
+    // facesets.
+    const allIndices = this.polygonalIndexSink_
+    const allStartIndices = this.polygonalStartIndexSink_
+    const polygonalFaceBufferOffsets = this.polygonalFaceOffsetSink_
+    const startIndicesBufferOffsets = this.polygonalStartOffsetSink_
+
+    allIndices.reset()
+    allStartIndices.reset()
+    polygonalFaceBufferOffsets.reset()
+    startIndicesBufferOffsets.reset()
+
     let indicesPerFace: number = -1
 
     // Prepare indices and start indices for all faces
@@ -945,21 +972,30 @@ export class IfcGeometryExtraction {
       let coordIndex:number = 0
 
       if (polygonalFace instanceof IfcIndexedPolygonalFaceWithVoids) {
+        // Voided faces are rare; keep the straightforward getter path.
         indicesPerFace = polygonalFace.CoordIndex.length
 
         allStartIndices.push(0)
         coordIndex += indicesPerFace
-        allIndices.push(...polygonalFace.CoordIndex)
+
+        for (const index of polygonalFace.CoordIndex) {
+          allIndices.push(index)
+        }
+
         polygonalFace.InnerCoordIndices.forEach((innerIndices) => {
           allStartIndices.push(coordIndex)
-          allIndices.push(...innerIndices)
+
+          for (const index of innerIndices) {
+            allIndices.push(index)
+          }
 
           coordIndex += innerIndices.length
         })
       } else {
-        indicesPerFace = polygonalFace.CoordIndex.length
+        // CoordIndex is vtable offset 0 on IfcIndexedPolygonalFace (see
+        // its generated getter) — parsed in place, never allocated or cached.
+        indicesPerFace = polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
         allStartIndices.push(0)
-        allIndices.push(...polygonalFace.CoordIndex)
       }
     })
 
@@ -968,14 +1004,14 @@ export class IfcGeometryExtraction {
     startIndicesBufferOffsets.push(allStartIndices.length)
 
 
-    // Convert to typed arrays for transfer to WebAssembly
-    const indicesArray = new Uint32Array(allIndices)
+    // Views over exactly the appended elements — no intermediate copy.
+    const indicesArray = allIndices.view
     const indicesArrayPtr = this.arrayToWasmHeap(indicesArray)
-    const startIndicesArray = new Uint32Array(allStartIndices)
+    const startIndicesArray = allStartIndices.view
     const startIndicesArrayPtr = this.arrayToWasmHeap(startIndicesArray)
-    const polygonalFaceBufferOffsetsArray = new Uint32Array(polygonalFaceBufferOffsets)
+    const polygonalFaceBufferOffsetsArray = polygonalFaceBufferOffsets.view
     const polygonalFaceBufferOffsetsArrayPtr = this.arrayToWasmHeap(polygonalFaceBufferOffsetsArray)
-    const startIndicesBufferOffsetsArray = new Uint32Array(startIndicesBufferOffsets)
+    const startIndicesBufferOffsetsArray = startIndicesBufferOffsets.view
     const startIndicesBufferOffsetsArrayPtr = this.arrayToWasmHeap(startIndicesBufferOffsetsArray)
 
     const polygonalFaceVector = this.wasmModule.buildIndexedPolygonalFaceVector(
@@ -983,9 +1019,9 @@ export class IfcGeometryExtraction {
         indicesArray.length,
         startIndicesArrayPtr,
         polygonalFaceBufferOffsetsArrayPtr,
-        polygonalFaceBufferOffsets.length,
+        polygonalFaceBufferOffsetsArray.length,
         startIndicesBufferOffsetsArrayPtr,
-        startIndicesBufferOffsets.length)
+        startIndicesBufferOffsetsArray.length)
 
     const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
@@ -1052,7 +1088,10 @@ export class IfcGeometryExtraction {
 
     // Create a new Uint8Array view on the Wasm memory buffer, then set the array to it
     const arrayWasm = new Uint8Array(this.wasmModule.HEAPU8.buffer, arrayPtr, numBytes)
-    arrayWasm.set(new Uint8Array(array.buffer))
+    // Honour the view's own window: subarray() results share their parent's
+    // backing buffer, so copying `array.buffer` wholesale would read the
+    // wrong bytes (and the wrong length) for a view.
+    arrayWasm.set(new Uint8Array(array.buffer, array.byteOffset, numBytes))
 
     return arrayPtr
   }
