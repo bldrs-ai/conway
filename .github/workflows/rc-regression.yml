@@ -103,7 +103,13 @@ jobs:
     # Same heavy runner as run-ifc-regression: the batch drives the MT WASM
     # engine over ~100 models with --parallel and reserves multi-GB shared.
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
-    timeout-minutes: 90
+    # ~3x a healthy run (build from the warm WASM cache + LFS checkout +
+    # concurrency-2 regen land well under 30 min). Caps quota burn if the
+    # batch ever wedges again instead of letting it ride the old 90-min
+    # ceiling. The batch also self-exits and per-model work is timeout-bounded;
+    # this is the outer backstop. A cold WASM-cache build can approach this —
+    # bump it if a legitimate rebuild is ever cancelled here.
+    timeout-minutes: 45
     steps:
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway

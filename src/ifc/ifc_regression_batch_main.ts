@@ -58,8 +58,17 @@ async function safeExecWithCancellation(
 
     // Set up the timeout promise.
     const timeoutHandle = setTimeout(() => {
-      // Timeout occurred: kill the child process.
-      child.kill()
+      // Timeout occurred: SIGKILL (not the default SIGTERM) so a child stuck
+      // in a wasm compute loop is force-killed. A model exceeding the timeout
+      // is not expected once batch concurrency is bounded — this is a safety
+      // net. The explicit process.exit at the end of the run guarantees the
+      // batch still terminates promptly even if a killed child leaves a
+      // grandchild behind holding an open pipe.
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // Already gone.
+      }
       resolve({
         type: 'Failed',
         name: 'TimeoutError',
@@ -767,6 +776,14 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const overallEnd = Date.now()
           const totalSec = ((overallEnd - overallStart) / divisor).toFixed(fixedPoint)
           console.log(`\nAll tasks completed. Total runtime: ${totalSec} seconds.`)
+
+          // All work is done and every CSV is written. Exit explicitly rather
+          // than waiting for the event loop to drain: a child that had to be
+          // force-killed (or any lingering wasm worker handle) can otherwise
+          // keep this process alive long after the run, hanging the CI step
+          // for the rest of the job timeout. console.log to a pipe is
+          // synchronous on Linux, so the line above is already flushed.
+          process.exit(0)
         },
     )
     .help().argv
