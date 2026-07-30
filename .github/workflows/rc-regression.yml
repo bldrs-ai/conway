@@ -204,12 +204,26 @@ jobs:
       # points the batch's changes summary at the current committed baseline.
       # NOT --dryrun: dryrun git-checkouts the output folder back, discarding
       # the regeneration — we want it to persist so the PR carries it.
+      #
+      # --concurrency 2 (down from the os.cpus() default): each child is itself
+      # multi-threaded, so one child per core heavily oversubscribes the CPUs.
+      # The largest models' wall-clock then balloons to several times their
+      # standalone time — the biggest private model parses + fully extracts in
+      # ~80s alone but blew past the old 150s per-model timeout under that
+      # contention, landing in failed.csv as a bogus timeout (empty
+      # code/signal), not a real crash. Two children at a time keep the cores
+      # busy without starving the big models; --timeout 600000 (10 min) is
+      # insurance on top of that. Both stay well inside the 90-min job budget.
+      # Digests are deterministic regardless of concurrency, so this changes
+      # only reliability, not the blessed output.
       - name: Regenerate baseline digests
         run: |
           node --experimental-specifier-resolution=node \
             ./compiled/src/ifc/ifc_regression_batch_main.js \
             -e "sp-.*\.ifc" \
             -t HEAD \
+            --concurrency 2 \
+            --timeout 600000 \
             models \
             models/regression/test_models \
             --parallel --mem-utilization 90
