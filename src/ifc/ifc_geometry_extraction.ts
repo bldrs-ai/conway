@@ -5922,15 +5922,47 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Handle an error raised while building the cross-product extraction
+   * maps. Each map sweep reads references off relationship entities
+   * (materials, styled items, rel-voids); a single malformed reference in
+   * a large real-world model (STEP where an entity reference is expected)
+   * must not abort the whole model's extraction. Both the whole-model walk
+   * and the demand path depend on map prep being tolerant here — the
+   * browser demand pump swallows per-batch extraction throws, so a model
+   * that renders in prod would otherwise hard-fail the headless regression
+   * batch. Honours the strict-mode escape hatch so a strict run still
+   * surfaces the error.
+   *
+   * @param context Short label for the relationship being processed.
+   * @param expressID The offending record's express ID (may be undefined).
+   * @param ex The caught value.
+   */
+  private handleMapPrepError_(
+      context: string, expressID: number | undefined, ex: unknown ): void {
+    if (ex instanceof Error) {
+      if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+        Logger.error(`Error processing ${context} expressID: ${expressID}, error: ${ex.message}`)
+      } else {
+        throw ex
+      }
+    } else {
+      Logger.error(`Unknown exception processing ${context}.`)
+    }
+  }
+
+  /**
    *
    */
   populateStyledItemsMap() {
     const styledItems = this.model.types(IfcStyledItem)
 
     for (const styledItem of styledItems) {
-
-      if (styledItem.Item !== null) {
-        this.materials.styledItemMap.set(styledItem.Item.localID, styledItem.localID)
+      try {
+        if (styledItem.Item !== null) {
+          this.materials.styledItemMap.set(styledItem.Item.localID, styledItem.localID)
+        }
+      } catch (ex) {
+        this.handleMapPrepError_('IfcStyledItem', styledItem.expressID, ex)
       }
     }
   }
@@ -5943,14 +5975,18 @@ export class IfcGeometryExtraction {
     const materialDefinitionRepresentations = this.model.types(IfcMaterialDefinitionRepresentation)
 
     for (const materialDefinitionRep of materialDefinitionRepresentations) {
-
-      for (const representation of materialDefinitionRep.Representations) {
-        for (let itemIndex = 0; itemIndex < representation.Items.length; ++itemIndex) {
-          // save mapping of IfcMaterial --> IfcStyledItem
-          this.materials.materialDefinitionsMap.set(
-              materialDefinitionRep.RepresentedMaterial.localID,
-              representation.Items[itemIndex].localID)
+      try {
+        for (const representation of materialDefinitionRep.Representations) {
+          for (let itemIndex = 0; itemIndex < representation.Items.length; ++itemIndex) {
+            // save mapping of IfcMaterial --> IfcStyledItem
+            this.materials.materialDefinitionsMap.set(
+                materialDefinitionRep.RepresentedMaterial.localID,
+                representation.Items[itemIndex].localID)
+          }
         }
+      } catch (ex) {
+        this.handleMapPrepError_(
+            'IfcMaterialDefinitionRepresentation', materialDefinitionRep.expressID, ex)
       }
     }
   }
@@ -5962,19 +5998,23 @@ export class IfcGeometryExtraction {
     // populate relvoids map
     const relVoids = this.model.types(IfcRelVoidsElement)
     for (const relVoid of relVoids) {
-      // map product --> relvoids opening elements
-      const geometryLocalIDArray =
-        this.productToVoidGeometryMap.get(relVoid.RelatingBuildingElement.localID)
+      try {
+        // map product --> relvoids opening elements
+        const geometryLocalIDArray =
+          this.productToVoidGeometryMap.get(relVoid.RelatingBuildingElement.localID)
 
-      if (geometryLocalIDArray === void 0) {
-        const localIDArray: number[] = []
-        localIDArray.push(relVoid.RelatedOpeningElement.localID)
-        this.productToVoidGeometryMap.set(relVoid.RelatingBuildingElement.localID, localIDArray)
-      } else {
-        // append to it
-        geometryLocalIDArray.push(relVoid.RelatedOpeningElement.localID)
-        this.productToVoidGeometryMap.set(
-            relVoid.RelatingBuildingElement.localID, geometryLocalIDArray)
+        if (geometryLocalIDArray === void 0) {
+          const localIDArray: number[] = []
+          localIDArray.push(relVoid.RelatedOpeningElement.localID)
+          this.productToVoidGeometryMap.set(relVoid.RelatingBuildingElement.localID, localIDArray)
+        } else {
+          // append to it
+          geometryLocalIDArray.push(relVoid.RelatedOpeningElement.localID)
+          this.productToVoidGeometryMap.set(
+              relVoid.RelatingBuildingElement.localID, geometryLocalIDArray)
+        }
+      } catch (ex) {
+        this.handleMapPrepError_('IfcRelVoidsElement', relVoid.expressID, ex)
       }
     }
   }
@@ -6176,8 +6216,15 @@ export class IfcGeometryExtraction {
     const relAssociatesMaterials = this.model.types(IfcRelAssociatesMaterial)
 
     for (const relAssociateMaterial of relAssociatesMaterials) {
-      const relatingMaterial = relAssociateMaterial.RelatingMaterial
       try {
+        // Read RelatingMaterial INSIDE the guard: a malformed material
+        // reference (e.g. a value where an entity ref is expected) throws
+        // "Value in STEP was incorrectly typed", and pulling this read above
+        // the try let one bad relationship abort the whole model's extraction
+        // instead of being tolerated like every other malformed relationship
+        // here. The rel-aggregates loop below already reads its RelatingObject
+        // inside its own try for exactly this reason.
+        const relatingMaterial = relAssociateMaterial.RelatingMaterial
         const relatedObjects = relAssociateMaterial.RelatedObjects
         for (const relatedObject of relatedObjects) {
           const product = relatedObject
@@ -6198,16 +6245,10 @@ export class IfcGeometryExtraction {
           }
         }
       } catch (ex) {
-        if (ex instanceof Error) {
-          if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
-            Logger.error('Error processing relatingMaterial expressID: ' +
-              `${relatingMaterial.expressID}, error: ${ex.message}`)
-          } else {
-            throw ex
-          }
-        } else {
-          Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
-        }
+        // Reference the relationship record, not RelatingMaterial: the
+        // latter may be exactly what threw and would be undefined here.
+        this.handleMapPrepError_(
+            'IfcRelAssociatesMaterial', relAssociateMaterial.expressID, ex)
       }
     }
 
@@ -6679,7 +6720,28 @@ export class IfcGeometryExtraction {
           continue
         }
 
-        this.extractProductGeometry(product)
+        try {
+          this.extractProductGeometry(product)
+        } catch (ex) {
+          // A single malformed product must not abort the whole model. A
+          // reference field carrying a value where an entity is expected
+          // throws "Value in STEP was incorrectly typed" deep in material/
+          // representation extraction; the rel-aggregates pass below already
+          // tolerates this per-relationship, and the browser demand pump
+          // swallows per-product throws, so a model that renders in prod
+          // would otherwise hard-fail the headless regression batch. Skip
+          // the offending product and continue; strict mode re-throws.
+          if (ex instanceof Error) {
+            if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+              Logger.error(`Error extracting product expressID: ${product.expressID}, ` +
+                `error: ${ex.message}`)
+            } else {
+              throw ex
+            }
+          } else {
+            Logger.error('Unknown exception extracting product.')
+          }
+        }
       }
 
       const relAggregates = this.model.types(IfcRelAggregates)

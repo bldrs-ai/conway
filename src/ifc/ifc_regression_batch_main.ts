@@ -58,8 +58,17 @@ async function safeExecWithCancellation(
 
     // Set up the timeout promise.
     const timeoutHandle = setTimeout(() => {
-      // Timeout occurred: kill the child process.
-      child.kill()
+      // Timeout occurred: SIGKILL (not the default SIGTERM) so a child stuck
+      // in a wasm compute loop is force-killed. A model exceeding the timeout
+      // is not expected once batch concurrency is bounded — this is a safety
+      // net. The explicit process.exit at the end of the run guarantees the
+      // batch still terminates promptly even if a killed child leaves a
+      // grandchild behind holding an open pipe.
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // Already gone.
+      }
       resolve({
         type: 'Failed',
         name: 'TimeoutError',
@@ -426,6 +435,7 @@ function getSystemMemoryUsagePercent(): number {
  * @param failedLines
  * @param memUtilization
  * @param maxTimeout
+ * @param concurrency Max children processed at once (>= 1).
  * @param perfDir If set, the child writes its perf CSV here as <basename>.perf.csv.
  */
 async function processIFCFilesInParallel(
@@ -436,10 +446,11 @@ async function processIFCFilesInParallel(
     failedLines: string[],
     memUtilization: number,
     maxTimeout:number,
+    concurrency: number,
     perfDir?: string,
 ): Promise<void> {
-  const concurrencyLimit = os.cpus().length
-  console.log(`Concurrency: ${concurrencyLimit} threads - Max Timeout: ${maxTimeout} ms`)
+  const concurrencyLimit = Math.max(1, concurrency)
+  console.log(`Concurrency: ${concurrencyLimit} children - Max Timeout: ${maxTimeout} ms`)
 
   const limit = pLimit(concurrencyLimit)
   const taskTimeout = 2000
@@ -610,11 +621,23 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           })
           // only relevant if parallel is enabled
           yargs2.option('mem-utilization', {
-             
+
             describe: 'Memory utilization threshold percentage for parallel processing (1-100, default: 95)',
             type: 'number',
             alias: 'm',
             default: 95,
+          })
+          // only relevant if parallel is enabled
+          yargs2.option('concurrency', {
+            describe:
+              'Max IFC files processed at once in parallel mode. Each child ' +
+              'is itself multi-threaded, so os.cpus() children heavily ' +
+              'oversubscribe the cores: the largest models\' wall-clock then ' +
+              'balloons (spurious timeouts) and per-model perf numbers become ' +
+              'noise. Lower this for steady timings. Default: CPU core count.',
+            type: 'number',
+            alias: 'j',
+            default: 0,
           })
           // Validate mem-utilization only if parallel mode is active
           yargs2.check((argv) => {
@@ -668,6 +691,10 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const doParallel = (argv['parallel'] as boolean) ?? false // <--- read the parallel flag
           const memUtilization = (argv['mem-utilization'] as number)
           const maxTimeout = (argv['timeout'] as number)
+          // 0 (the default) means "auto": one child per core.
+          const concurrencyArg = (argv['concurrency'] as number)
+          const concurrency =
+            concurrencyArg && concurrencyArg > 0 ? Math.floor(concurrencyArg) : os.cpus().length
           const perfOutputPath = ((argv['perf'] as string) ?? '').trim()
 
           if (changes.length === 0) {
@@ -712,6 +739,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
                 failedLines,
                 memUtilization,
                 maxTimeout,
+                concurrency,
                 perfTmpDir,
             )
           } else {
@@ -748,6 +776,14 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const overallEnd = Date.now()
           const totalSec = ((overallEnd - overallStart) / divisor).toFixed(fixedPoint)
           console.log(`\nAll tasks completed. Total runtime: ${totalSec} seconds.`)
+
+          // All work is done and every CSV is written. Exit explicitly rather
+          // than waiting for the event loop to drain: a child that had to be
+          // force-killed (or any lingering wasm worker handle) can otherwise
+          // keep this process alive long after the run, hanging the CI step
+          // for the rest of the job timeout. console.log to a pipe is
+          // synchronous on Linux, so the line above is already flushed.
+          process.exit(0)
         },
     )
     .help().argv
