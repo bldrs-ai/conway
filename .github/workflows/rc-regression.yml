@@ -104,13 +104,13 @@ jobs:
     # engine over ~100 models with --parallel and reserves multi-GB shared.
     runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
     # Outer backstop against a wedged run (down from an old 90). A healthy run
-    # is build-from-warm-cache + LFS checkout + concurrency-2 regen + the
-    # serial perf pass over the tracked models, comfortably under ~40 min; 60
-    # leaves headroom (incl. a cold WASM-cache rebuild) while still cancelling
-    # a hang far sooner than the old ceiling. The batch also self-exits and
-    # per-model work is timeout-bounded, so this rarely fires. Bump it if a
-    # legitimate cold rebuild is ever cancelled here.
-    timeout-minutes: 60
+    # is build-from-warm-cache + LFS checkout + the serial (--concurrency 1)
+    # regen, comfortably under ~30 min; the regen step has its own tighter
+    # 20-min cap, the batch self-exits, and per-model work is timeout-bounded,
+    # so this rarely fires. 45 leaves headroom for a cold WASM-cache rebuild
+    # while still cancelling a hang far sooner than the old ceiling. Bump it if
+    # a legitimate cold rebuild is ever cancelled here.
+    timeout-minutes: 45
     steps:
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway
@@ -212,25 +212,40 @@ jobs:
       # NOT --dryrun: dryrun git-checkouts the output folder back, discarding
       # the regeneration — we want it to persist so the PR carries it.
       #
-      # --concurrency 2 (down from the os.cpus() default): each child is itself
-      # multi-threaded, so one child per core heavily oversubscribes the CPUs.
-      # The largest models' wall-clock then balloons to several times their
-      # standalone time — the biggest private model parses + fully extracts in
-      # ~80s alone but blew past the old 150s per-model timeout under that
-      # contention, landing in failed.csv as a bogus timeout (empty
-      # code/signal), not a real crash. Two children at a time keep the cores
-      # busy without starving the big models; --timeout 600000 (10 min) is
-      # insurance on top of that. Both stay well inside the 90-min job budget.
-      # Digests are deterministic regardless of concurrency, so this changes
-      # only reliability, not the blessed output.
+      # --concurrency 1: run ONE model at a time. Each child is itself
+      # multi-threaded, so any concurrency oversubscribes the cores — and that
+      # co-scheduling is not just slow, it's unreliable: on the 8-vcpu runner a
+      # geometry-dense model (ISSUE_159, ~18.5k triangulated items) that
+      # extracts in ~12s ALONE ran past a 600s per-model timeout while sharing
+      # cores at --concurrency 2, landing in failed.csv as a bogus timeout
+      # (empty code/signal) and reddening the rc. Running each model alone
+      # removes the co-scheduling entirely: every model gets the full cores and
+      # its true standalone time (all well under the timeout), and the per-model
+      # numbers become steady enough to record (see --perf below). Digests are
+      # deterministic regardless of concurrency, so the blessed output is
+      # unchanged; the wall-clock barely moves, since a --concurrency 2 slot was
+      # being wasted on the livelocked model anyway.
+      #
+      # --timeout 300000 (5 min): generous over the slowest model's true
+      # standalone time (~80s) now that nothing is starved, and catches a
+      # genuine hang faster than the old 600s.
+      #
+      # --perf: with the run already serial, capture every model's steady
+      # parse/geometry/total + RSS in one pass. Written to the conway workspace
+      # root (NOT the models checkout, so it never touches the diffed baseline)
+      # — actions/hashFiles only matches paths under GITHUB_WORKSPACE, so the
+      # upload step below can gate on it. No separate perf pass needed. This is
+      # conway-native load timing, distinct from the perf-three-* render jobs.
       - name: Regenerate baseline digests
+        timeout-minutes: 20
         run: |
           node --experimental-specifier-resolution=node \
             ./compiled/src/ifc/ifc_regression_batch_main.js \
             -e "sp-.*\.ifc" \
             -t HEAD \
-            --concurrency 2 \
-            --timeout 600000 \
+            --concurrency 1 \
+            --timeout 300000 \
+            --perf "${GITHUB_WORKSPACE}/perf.csv" \
             models \
             models/regression/test_models \
             --parallel --mem-utilization 90
@@ -323,70 +338,42 @@ jobs:
           print("\nNo new failures. Pre-existing known-failers do not block the rc.")
           EOF
 
-      # Steady conway-native perf: re-run ONLY the tracked models
-      # (regression/perf_models.txt) through the batch at --concurrency 1 —
-      # one child at a time, full cores each — so parse/geometry/total + RSS
-      # are steady run-over-run. The parallel regen above oversubscribes the
-      # cores (os.cpus() multi-threaded children), which is fine for the
-      # deterministic digests but makes its timings noise. This is conway-
-      # native load timing, distinct from the headless-three perf-three-*
-      # jobs (end-to-end render path).
-      #
-      # Output goes to a throwaway temp folder so this re-extraction never
-      # touches the blessed baseline the regen just produced; only perf.csv is
-      # harvested. The batch CLI only excludes, so (as in build.yml's smoke
-      # job) build a regex that excludes every model NOT in the perf set. A
-      # given corpus only matches its own entries; the rest are simply absent.
-      - name: Build perf-set exclude regex
-        id: perfset
+      # Summarize + upload the steady per-model perf the regen captured (one
+      # model at a time, full cores). Runs even when the gate failed — a new
+      # failure elsewhere shouldn't cost us the timing data — hence
+      # `if: ${{ !cancelled() }}` (skips only on an explicit cancel). The top
+      # slowest rows go to the job summary; the full CSV is an artifact.
+      - name: Summarize steady conway-native perf
+        if: ${{ !cancelled() }}
         run: |
-          python3 - <<'EOF'
-          import os, re
-          names = [l.strip() for l in open('regression/perf_models.txt')
-                   if l.strip() and not l.strip().startswith('#')]
-          alts = '|'.join(re.escape(n) for n in names)
-          regex = (rf"^(?!.*/(?:{alts})$)"
-                   r".*\.(?:[iI][fF][cC]|[sS][tT][eE][pP]|[sS][tT][pP])$")
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-            fh.write(f'regex={regex}\n')
-          print(f'{len(names)} tracked perf models; exclude-others regex: {regex}')
+          PERF="${GITHUB_WORKSPACE}/perf.csv"
+          echo "### Steady conway-native perf (${{ matrix.target.repo }}, --concurrency 1)" >> "$GITHUB_STEP_SUMMARY"
+          if [ ! -f "$PERF" ]; then
+            echo "_No perf.csv produced._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 - "$PERF" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import csv, sys
+          rows = list(csv.DictReader(open(sys.argv[1], newline="")))
+          def ms(r):
+              try: return float(r.get("totalTimeMs") or 0)
+              except ValueError: return 0.0
+          rows.sort(key=ms, reverse=True)
+          print(f"\n{len(rows)} models timed. Top 15 by total time:\n")
+          print("| model | parse ms | geometry ms | total ms | RSS MB |")
+          print("| --- | ---: | ---: | ---: | ---: |")
+          for r in rows[:15]:
+              print(f"| {r.get('file','')} | {r.get('parseTimeMs','')} | "
+                    f"{r.get('geometryTimeMs','')} | {r.get('totalTimeMs','')} | "
+                    f"{r.get('rssMb','')} |")
           EOF
 
-      # The batch's built-in runDiff runs `git diff -- <outputFolder>` with cwd
-      # inside the models repo; a pathspec OUTSIDE that repo is a fatal git
-      # error, so the throwaway output MUST live inside models. Keep it OUT of
-      # regression/test_models so it can't leak into the bless PR (whose commit
-      # is add-paths-scoped to that folder) and drop it afterwards.
-      - name: Steady conway-native perf (tracked models, serial)
-        env:
-          PERF_EXCLUDE: ${{ steps.perfset.outputs.regex }}
-        run: |
-          rm -rf models/.perf-tmp
-          node --experimental-specifier-resolution=node \
-            ./compiled/src/ifc/ifc_regression_batch_main.js \
-            -e "$PERF_EXCLUDE" \
-            --concurrency 1 \
-            --timeout 600000 \
-            --perf "${RUNNER_TEMP}/perf-serial.csv" \
-            models \
-            models/.perf-tmp \
-            --parallel --mem-utilization 90
-          rm -rf models/.perf-tmp
-          echo "### Steady conway-native perf (${{ matrix.target.repo }}, serial)" >> "$GITHUB_STEP_SUMMARY"
-          if [ -f "${RUNNER_TEMP}/perf-serial.csv" ]; then
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            cat "${RUNNER_TEMP}/perf-serial.csv" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "_No perf rows produced (no tracked models present in this corpus)._" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Upload steady perf CSV
-        if: hashFiles(format('{0}/perf-serial.csv', runner.temp)) != ''
+        if: ${{ !cancelled() && hashFiles('perf.csv') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: perf-serial-${{ matrix.target.name }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/perf-serial.csv
+          path: perf.csv
 
       # The batch always writes regression/test_models/changes.csv via a git
       # diff whose pathspec is relative to the model folder, so under this
