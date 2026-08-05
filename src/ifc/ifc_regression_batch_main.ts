@@ -338,6 +338,48 @@ async function runForFile(filePath: string,
   }
 }
 
+
+/**
+ * Run a file's digest, retrying ONCE if the first attempt times out.
+ *
+ * A per-model timeout is not a deterministic parse/geometry failure — it
+ * surfaces as a failed.csv row with an empty code AND empty signal (the
+ * TimeoutError path sets neither) and, historically, has come from transient
+ * core oversubscription on the CI runner rather than the model itself.
+ * ISSUE_159_kleine_Wohnung_R22.ifc (a geometry-dense ~18.5k-item model) has
+ * reddened the rc-regression gate this way twice: first co-scheduled at
+ * --concurrency 2, then again running ALONE at --concurrency 1, so serializing
+ * the batch was not enough to make it reliable.
+ *
+ * Digest regeneration is idempotent, so a second attempt is safe: a transient
+ * timeout clears on the retry, while a genuine hang times out both times and
+ * still lands in failed.csv — the gate keeps its protective value against a
+ * model that truly never loads. Only timeouts are retried; a real non-zero
+ * exit or signal is returned immediately (those ARE deterministic).
+ *
+ * @param filePath   Model file to digest.
+ * @param outputPath Digest output path (without extension).
+ * @param maxTimeout Per-attempt timeout in ms.
+ * @param perfPath   Optional path the child writes its one-row perf CSV to.
+ * @return The first attempt's result, or the retry's result on a timeout.
+ */
+async function runForFileWithTimeoutRetry(filePath: string,
+    outputPath: string, maxTimeout: number, perfPath?: string): Promise<RunResults> {
+  const timedOut = (r: RunResults): boolean =>
+    r.type === 'Failed' && r.message === 'Execution timed out'
+
+  const first = await runForFile(filePath, outputPath, maxTimeout, perfPath)
+  if (!timedOut(first)) {
+    return first
+  }
+
+  console.log(
+      `"${path.basename(filePath)}" timed out; retrying once ` +
+      `(a transient timeout clears, a true hang times out again).`,
+  )
+  return runForFile(filePath, outputPath, maxTimeout, perfPath)
+}
+
 // Model files the regression harness understands: IFC plus STEP AP214.
 const SUPPORTED_MODEL_EXTENSIONS = ['.ifc', '.stp', '.step']
 
@@ -472,7 +514,7 @@ async function processIFCFilesInParallel(
       const perfChildPath = perfDir ?
         path.join(perfDir, `${path.parse(ifcPath).name}.perf.csv`) :
         undefined
-      const fileResults = await runForFile(
+      const fileResults = await runForFileWithTimeoutRetry(
           ifcPath,
           path.join(outputPath, path.parse(ifcPath).name),
           maxTimeout,
@@ -552,7 +594,7 @@ async function recursiveWalk(
       const perfChildPath = perfDir ?
         path.join(perfDir, `${path.parse(resolved).name}.perf.csv`) :
         undefined
-      const fileResults = await runForFile(
+      const fileResults = await runForFileWithTimeoutRetry(
           resolved,
           path.join(outputPath, path.parse(resolved).name),
           maxTimeout,
