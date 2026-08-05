@@ -24,7 +24,11 @@ files are most prone to. Read §"The digest" before writing any code.
   `test-models/regression/test_models/`; any drift surfaces as the
   failed.csv / errors.csv the PR comment shows.
 - CI (`.github/workflows/build.yml`, `run-ifc-regression` job) clones
-  `test-models` at a pinned SHA, runs the batch, and posts the diff.
+  `test-models` at a pinned SHA, runs the batch, and posts the diff. Note the
+  batch is **tiered**: per-PR it runs only the smoke subset, and the full
+  corpus runs once per `rc-*` tag — see
+  [`ci-regression-cost.md`](ci-regression-cost.md). The STEP digest below
+  applies at whichever scope the model sits in.
 
 The IFC digest hashes geometry **per entity, before scene assembly**. That
 is correct for IFC, where the bug surface is per-item mesh generation.
