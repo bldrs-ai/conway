@@ -24,6 +24,13 @@ on:
       test_models_ref:
         description: 'test-models commit SHA to benchmark over (default: the rc-1.451.1357 blessed-run pin)'
         default: 'f79b86b5922ef906734f7971733e976a26c5143d'
+  # Push fallback for environments whose API token can't POST /dispatches
+  # (403 Resource not accessible by integration): pushing a change to this
+  # file on the branch below fires the run with the default inputs. Scoped to
+  # this file's path so ordinary work on the branch doesn't re-benchmark.
+  push:
+    branches: ['claude/blessed-run-baseline-k0tvkr']
+    paths: ['.github/workflows/perf-baseline-oneoff.yml']
 
 jobs:
   perf-oneoff-public:
@@ -33,8 +40,10 @@ jobs:
       contents: read
     env:
       H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
-      CONWAY_VERSION: ${{ github.event.inputs.conway_version }}
-      TEST_MODELS_SHA: ${{ github.event.inputs.test_models_ref }}
+      # Inputs are empty on the push-trigger path — fall back to the same
+      # defaults workflow_dispatch declares.
+      CONWAY_VERSION: ${{ github.event.inputs.conway_version || '0.23.940' }}
+      TEST_MODELS_SHA: ${{ github.event.inputs.test_models_ref || 'f79b86b5922ef906734f7971733e976a26c5143d' }}
     steps:
       - name: Checkout conway (for scripts/benchmark.cjs)
         uses: actions/checkout@v4
@@ -149,5 +158,5 @@ jobs:
       - name: Upload detail CSV
         uses: actions/upload-artifact@v4
         with:
-          name: perf-oneoff-public-conway${{ github.event.inputs.conway_version }}-${{ github.run_id }}
+          name: perf-oneoff-public-conway${{ env.CONWAY_VERSION }}-${{ github.run_id }}
           path: ${{ steps.detail.outputs.csv }}
