@@ -133,6 +133,11 @@ jobs:
           CSV=$(find "${{ runner.temp }}/bench-oneoff" -name performance-detail.csv -type f | head -1)
           test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
           echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
+          # Echo the full CSV into the job log: artifact blobs and step
+          # summaries aren't reachable from every API client, but job logs are.
+          echo "::group::performance-detail.csv"
+          cat "$CSV"
+          echo "::endgroup::"
 
       - name: Summarize
         env:
