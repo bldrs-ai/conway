@@ -49,8 +49,17 @@ runs:
             repo: context.repo.repo,
             per_page: 100,
           });
+          // Snapshot artifacts are named <prefix><run_id>, so require exactly
+          // digits after the prefix. A bare startsWith(prefix) also matches the
+          // sibling `perf-three-public-benchdir-<run_id>` debug artifact, which
+          // is uploaded `if: always()` — i.e. even from a FAILED benchmark run,
+          // whose partial performance-detail.csv would then silently become the
+          // next delta's baseline. The plain snapshot only uploads on success,
+          // so anchoring to it keeps the baseline a completed run's data.
+          const snapshotName = new RegExp(
+            '^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\d+$');
           const prior = arts
-            .filter(a => a.name.startsWith(prefix) && !a.expired && a.workflow_run.id !== context.runId)
+            .filter(a => snapshotName.test(a.name) && !a.expired && a.workflow_run.id !== context.runId)
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
           if (prior) {
             core.setOutput('found', 'true');
