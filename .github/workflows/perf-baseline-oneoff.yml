@@ -47,7 +47,8 @@ on:
   # taken from `[versions:...]` / `[targets:...]` tags in the head commit
   # message, falling back to the dispatch defaults. GitHub occasionally drops
   # a push event (a commit landed here with no run created); the fix is simply
-  # another edit to this file carrying the same tags.
+  # another edit to this file carrying the same tags. If pushes keep being
+  # dropped, fire manually via workflow_dispatch in the Actions UI.
   push:
     branches: ['claude/blessed-run-baseline-k0tvkr']
     paths: ['.github/workflows/perf-baseline-oneoff.yml']
