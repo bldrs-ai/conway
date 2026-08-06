@@ -230,6 +230,15 @@ jobs:
       # standalone time (~80s) now that nothing is starved, and catches a
       # genuine hang faster than the old 600s.
       #
+      # Serializing was still not enough on its own: ISSUE_159 timed out AGAIN
+      # running alone at --concurrency 1, reddening the rc with the same bogus
+      # empty-code/signal row. A per-model timeout is a nondeterministic infra
+      # event, not a reproducible parse/geometry failure, so the batch now
+      # retries a timed-out model ONCE before recording it (idempotent digest
+      # regen makes the retry safe). A transient timeout clears on the retry; a
+      # genuine hang times out both times and still lands in failed.csv, so the
+      # gate keeps its teeth against a model that truly never loads.
+      #
       # --perf: with the run already serial, capture every model's steady
       # parse/geometry/total + RSS in one pass. Written to the conway workspace
       # root (NOT the models checkout, so it never touches the diffed baseline)
