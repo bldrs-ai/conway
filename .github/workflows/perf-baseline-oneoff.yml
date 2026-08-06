@@ -45,7 +45,9 @@ on:
   # file on the branch below fires the run. Scoped to this file's path so
   # ordinary work on the branch doesn't re-benchmark. Versions/targets are
   # taken from `[versions:...]` / `[targets:...]` tags in the head commit
-  # message, falling back to the dispatch defaults.
+  # message, falling back to the dispatch defaults. GitHub occasionally drops
+  # a push event (a commit landed here with no run created); the fix is simply
+  # another edit to this file carrying the same tags.
   push:
     branches: ['claude/blessed-run-baseline-k0tvkr']
     paths: ['.github/workflows/perf-baseline-oneoff.yml']
