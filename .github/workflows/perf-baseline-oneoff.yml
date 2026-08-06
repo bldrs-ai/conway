@@ -54,8 +54,15 @@ jobs:
   # Resolve the (corpus, version) matrices from dispatch inputs or, on the
   # push path, from commit-message tags. Done in a job because the matrix
   # context is not available in a job-level `if`.
+  #
+  # Same runner label as the benchmark jobs: a firing from this repo saw its
+  # setup job queue on `ubuntu-latest` for 15 minutes without ever being
+  # assigned a runner (then cancelled), while the larger-runner pool picked
+  # jobs up immediately. Seconds of bash on the big runner costs less than a
+  # stuck pipeline.
   setup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    timeout-minutes: 10
     outputs:
       public_versions: ${{ steps.pick.outputs.public_versions }}
       private_versions: ${{ steps.pick.outputs.private_versions }}
