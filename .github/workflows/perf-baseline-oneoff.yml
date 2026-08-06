@@ -1,0 +1,153 @@
+name: Perf baseline one-off (published conway on CI runner)
+
+# On-demand H3 benchmark of a PUBLISHED @bldrs-ai/conway version on the same
+# runner class the rc perf jobs use. Purpose: put a historical engine (e.g.
+# 0.23.940, the last committed benchmark-gallery series, measured June 2025 on
+# an arm64 Mac) onto CI hardware so its numbers are directly comparable to the
+# blessed rc snapshots — separating hardware drift from engine drift.
+#
+# Mirrors perf-three-public's environment exactly (runner, Node 20, H3 pin,
+# xvfb/GL, canvas deps); the only intended difference is WHERE conway comes
+# from: the npm registry instead of the candidate tarball.
+#
+# The artifact is named perf-oneoff-* on purpose. It must NEVER match the
+# `perf-three-public-<digits>` snapshot pattern that .github/actions/perf-delta
+# anchors rc deltas to — a historical baseline masquerading as the most recent
+# snapshot would corrupt the next rc's delta.
+
+on:
+  workflow_dispatch:
+    inputs:
+      conway_version:
+        description: 'Published @bldrs-ai/conway version to benchmark'
+        default: '0.23.940'
+      test_models_ref:
+        description: 'test-models commit SHA to benchmark over (default: the rc-1.451.1357 blessed-run pin)'
+        default: 'f79b86b5922ef906734f7971733e976a26c5143d'
+
+jobs:
+  perf-oneoff-public:
+    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
+      CONWAY_VERSION: ${{ github.event.inputs.conway_version }}
+      TEST_MODELS_SHA: ${{ github.event.inputs.test_models_ref }}
+    steps:
+      - name: Checkout conway (for scripts/benchmark.cjs)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      # Node 20 for the same reason as perf-three-public: prebuilt gl/canvas.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Clone headless-three at pinned SHA
+        run: |
+          git clone https://github.com/bldrs-ai/headless-three.git h3
+          git -C h3 checkout "$H3_SHA"
+
+      - name: Override conway via yarn resolutions (published version)
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('h3/package.json', 'utf8'));
+            p.resolutions = Object.assign({}, p.resolutions, { '@bldrs-ai/conway': process.env.CONWAY_VERSION });
+            fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install canvas native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config build-essential \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev libpixman-1-dev
+
+      - name: Install H3 + build
+        working-directory: h3
+        run: |
+          yarn install
+          yarn build
+          # Same wasm-resolution symlink perf-three-public needs.
+          test -d node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist \
+            || { echo "::error::conway@$CONWAY_VERSION package has no compiled/dependencies/conway-geom/Dist — layout changed, symlink trick won't work."; exit 1; }
+          ln -sfn node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist Dist
+
+      - name: Verify requested conway version is resolved in H3
+        run: |
+          ACTUAL=$(node -p "require('./h3/node_modules/@bldrs-ai/conway/package.json').version")
+          echo "Requested conway: $CONWAY_VERSION"
+          echo "Resolved conway:  $ACTUAL"
+          if [ "$CONWAY_VERSION" != "$ACTUAL" ]; then
+            echo "::error::yarn resolutions override did not take effect. Requested '$CONWAY_VERSION', got '$ACTUAL'."
+            exit 1
+          fi
+
+      - name: Install Xvfb + GL libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb pkg-config build-essential \
+            libxi-dev libglu1-mesa-dev libglew-dev
+
+      - name: GL smoke test (rebuild gl from source if prebuilt is broken)
+        working-directory: h3
+        run: |
+          SMOKE='const gl=require("gl")(8,8); if(!gl){throw new Error("gl context creation returned null")}; console.log("gl OK:", gl.getParameter(gl.VERSION))'
+          if ! xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"; then
+            echo "::warning::Prebuilt gl failed to initialize; rebuilding from source."
+            npm rebuild gl --build-from-source
+            xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"
+          fi
+
+      - name: Checkout test-models at pinned SHA
+        run: |
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$TEST_MODELS_SHA"
+          git -C test-models checkout "$TEST_MODELS_SHA"
+
+      - name: Run H3 benchmark (public)
+        env:
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-oneoff
+        run: |
+          xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
+            node scripts/benchmark.cjs ./h3 ./test-models
+
+      - name: Locate detail CSV
+        id: detail
+        run: |
+          CSV=$(find "${{ runner.temp }}/bench-oneoff" -name performance-detail.csv -type f | head -1)
+          test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
+          echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize
+        env:
+          CSV_PATH: ${{ steps.detail.outputs.csv }}
+        run: |
+          {
+            echo "### conway@$CONWAY_VERSION on CI runner (test-models@$TEST_MODELS_SHA)"
+            python3 - "$CSV_PATH" <<'EOF'
+          import csv, sys
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          rows.sort(key=lambda r: r.get('filename',''))
+          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','rssMb','heapUsedMb']
+          print("| " + " | ".join(cols) + " |")
+          print("|" + " --- |" * len(cols))
+          for r in rows:
+              print("| " + " | ".join(str(r.get(c,'')) for c in cols) + " |")
+          print()
+          print(f"_Total: {len(rows)} models._")
+          EOF
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # NOT perf-three-public-<digits>: must stay invisible to perf-delta.
+      - name: Upload detail CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-oneoff-public-conway${{ github.event.inputs.conway_version }}-${{ github.run_id }}
+          path: ${{ steps.detail.outputs.csv }}
