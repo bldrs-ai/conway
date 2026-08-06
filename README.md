@@ -185,14 +185,25 @@ git merge -X rename-threshold=25 --no-commit
 
 # CI and Testing
 
+CI is **tiered** so full-corpus regression + performance cost is paid once per
+release candidate, not on every push. Full architecture, cost rationale, and
+the rc/re-bless/LFS runbook: [design/new/ci-regression-cost.md](design/new/ci-regression-cost.md).
+
 Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`, and a Tier-A geometry-digest check of the in-repo `data/` models against committed goldens. |
-| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch against the public `test-models` ref (`TEST_MODELS_REF`, default `main`), pinned per-run to the resolved commit SHA; posts a per-PR comment with the resolved SHA + `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
+| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch over the **smoke subset** (`regression/smoke_models.txt`) of the public `test-models` ref (`TEST_MODELS_REF`, default `main`), pinned per-run to the resolved commit SHA. Fails on any `failed.csv` row; digest *changes* are informational (reviewed via the visual-diff comment, blessed at the rc). Posts a per-PR comment with the resolved SHA + smoke-scoped `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
 
-A merge to `main` re-runs those two jobs and then chains into `auto-publish` (see [Releases](#releases) below).
+A `concurrency` group cancels superseded PR runs (main runs are never
+cancelled, so releases always complete). A merge to `main` re-runs those two
+jobs and then chains into `auto-publish` (see [Releases](#releases) below).
+
+**The full public+private corpus runs once per release candidate** — push an
+`rc-*` tag and `rc-regression.yml` regenerates every baseline (opening a
+reviewable baseline PR per test-models repo) while the `perf-three-*` jobs run
+the full benchmark. See the runbook in the CI-cost doc linked above.
 
 ## Regression batch
 
@@ -209,8 +220,11 @@ The `build` job also runs a fast, hermetic geometry gate over every `data/*.ifc`
 **Tier 1 — Conway-only perf in CI (live).** Every regression run emits a `perf.csv` of `parseTimeMs / geometryTimeMs / totalTimeMs / rssMb / heapUsedMb / heapTotalMb` per model. The top-10 slowest are posted in the PR comment; the full CSV is uploaded as a workflow artifact. This piggybacks on the existing regression batch so cost is ~0 extra runner minutes.
 
 **Tier 2 — full headless-three perf in CI (live).** Two jobs,
-`perf-three-public` and `perf-three-private`, run on `push: main`
-(`needs: run-ifc-regression`). Each downloads the candidate Conway tarball
+`perf-three-public` and `perf-three-private`, run on `rc-*` tags and
+`workflow_dispatch` (`needs: run-ifc-regression`) — once per release
+candidate, not per merge, so per-model timings stay low-variance on the
+isolated runner (see [ci-regression-cost.md](design/new/ci-regression-cost.md)
+for why frequency, not runner size, is the cost lever). Each downloads the candidate Conway tarball
 that the regression job packed, clones [headless-three](https://github.com/bldrs-ai/headless-three)
 at a pinned `H3_SHA`, and forces the whole H3 → adapter → conway chain onto
 the candidate via a yarn `resolutions` override (no `yarn link`), then runs
@@ -305,23 +319,23 @@ npm dist-tag add @bldrs-ai/conway@<VERSION> stable
 
 # Roadmap
 
-The CI / release pipeline is continuous and complete: `build` gates
-`run-ifc-regression`, which gates the headless-three perf jobs, and every
-green merge to `main` auto-publishes (see [Releases](#releases)). The
+The CI / release pipeline is continuous and **tiered**: `build` (fixtures) and
+`run-ifc-regression` (smoke subset) gate every PR; the full public+private
+corpus and the headless-three perf jobs run once per `rc-*` release candidate;
+every green merge to `main` auto-publishes (see [Releases](#releases)). The
+architecture, cost rationale, and rc/re-bless/LFS runbook are in
+[design/new/ci-regression-cost.md](design/new/ci-regression-cost.md). Regression
+renders (the visual-diff comment) and per-model perf-in-CI shipped; the
 umbrella waterfall (#316) and performance-in-CI (#314) issues are closed.
-The optional follow-ups below remain.
 
-### Headless-three perf on PRs
+### Open follow-ups
 
-The `perf-three-public` / `perf-three-private` jobs run on `push: main`
-only — to keep PR wall-time down and to keep the private-models token off
-PR events (forks can't be trusted with it). Running them per-PR, behind a
-gate that withholds the private job from fork PRs, would catch H3
-render-time regressions before merge instead of just after.
-
-### Golden `errors.csv` diffing + regression renders (#288)
-
-Fail a PR when its `errors.csv` diverges from a checked-in golden — "New
-errors detected. Copy errors.csv to golden/errors.csv to accept changes"
-— and attach per-model renders to the regression comment so geometry
-regressions are visible without downloading artifacts.
+- **Errors as a hard gate.** `errors.csv` is regenerated and reviewed (and,
+  at the rc, blessed into the baseline), but a PR is not *failed* on unexpected
+  new errors — only on parse/extract failures (`failed.csv`). A golden-errors
+  gate could fail smoke-scoped error churn that isn't an intended change.
+- **Smoke-list curation.** The smoke subset (`regression/smoke_models.txt`)
+  is a hand-picked spread; as the engine's failure surface shifts, revisit
+  which models best catch regressions cheaply.
+- **Perf-threshold gating.** The `perf-three-*` jobs post deltas but don't
+  fail an rc on a regression; a threshold could turn perf into a release gate.

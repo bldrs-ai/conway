@@ -59,6 +59,7 @@ Check `scripts/` before building tooling — see
 | What is in `scripts/`, and performance testing | [scripts/README.md](scripts/README.md) |
 | Geometry-quality signals, and which ones Share should surface to users | [design/new/model-diagnostics.md](design/new/model-diagnostics.md) |
 | Regression corpus, digest CSVs, smoke subset vs RC pass | [regression/README.md](regression/README.md), [design/new/step-regression.md](design/new/step-regression.md) |
+| CI tiering, cost rationale, rc/re-bless/LFS runbook | [design/new/ci-regression-cost.md](design/new/ci-regression-cost.md) |
 | STEP support: schemas, coverage, known gaps | [design/new/step-support.md](design/new/step-support.md) |
 | STEP product structure and metadata (the AP242 wrinkle, NIST) | [design/new/step-metadata-nist.md](design/new/step-metadata-nist.md) |
 | Native GLB export from the CLI | [design/new/glb-native-export.md](design/new/glb-native-export.md) |
