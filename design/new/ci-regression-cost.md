@@ -138,6 +138,19 @@ shipped). That churn is baseline drift, not a PR regression — which is why:
 changed-set again means "this PR moved geometry." That happens as part of the
 rc pass (below) — merging its baseline PRs *is* the bless.
 
+**Perf baselines are artifact-anchored, not committed.** The `perf-three-*`
+jobs diff against the most recent prior `perf-three-{public,private}-<run_id>`
+snapshot artifact (see `.github/actions/perf-delta`) — after a blessed rc,
+that is the blessed run's numbers until the next rc/dispatch run replaces
+them. Only the exact `<prefix><run_id>` snapshot counts (the `-benchdir-`
+debug artifact is excluded: it uploads even from failed runs). Two
+consequences: artifacts expire after ~90 days, so an rc gap longer than that
+degrades the next run to a snapshot-only comment (no delta, by design,
+non-fatal); and the baseline is "last successful run", not "last *blessed*
+run" — a workflow_dispatch perf run between rcs becomes the new comparison
+point. The serial conway-native load timings from `rc-regression.yml`
+(`perf-serial-*` artifacts) are informational only; nothing diffs them yet.
+
 
 ## Release-candidate runbook
 
