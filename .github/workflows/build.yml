@@ -58,7 +58,7 @@ jobs:
   build:
     # Heavy runner matches ifc-regression. The WASM toolchain (genie +
     # emcc) needs the headroom; the default 2-vCPU runner fails the compile.
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     steps:
       - name: Checkout
         uses: actions/checkout@v4
