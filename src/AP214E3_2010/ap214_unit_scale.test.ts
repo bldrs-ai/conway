@@ -61,11 +61,9 @@ beforeAll( async () => {
  * where the root unit scale actually lands (vertices stay in file
  * coordinates).
  *
- * @param applyTransform When false, bounds are taken from the raw
- * vertices instead, giving the model's size in its own file units.
  * @return The size along x, y and z.
  */
-function sceneSize( applyTransform: boolean ): number[] {
+function worldSize(): number[] {
 
   const mins = [ Infinity, Infinity, Infinity ]
   const maxs = [ -Infinity, -Infinity, -Infinity ]
@@ -90,7 +88,7 @@ function sceneSize( applyTransform: boolean ): number[] {
       const y = vertexData[ where + 1 ]
       const z = vertexData[ where + 2 ]
 
-      const point = ( applyTransform && transform !== void 0 ) ? [
+      const point = transform !== void 0 ? [
         ( transform[ 0 ] * x ) + ( transform[ 4 ] * y ) + ( transform[ 8 ] * z ) + transform[ 12 ],
         ( transform[ 1 ] * x ) + ( transform[ 5 ] * y ) + ( transform[ 9 ] * z ) + transform[ 13 ],
         ( transform[ 2 ] * x ) + ( transform[ 6 ] * y ) + ( transform[ 10 ] * z ) + transform[ 14 ],
@@ -112,7 +110,7 @@ describe( 'AP214 root unit scale', () => {
 
   test( 'a millimetre model lands in world space in metres (issue #458)', () => {
 
-    const size = sceneSize( true )
+    const size = worldSize()
 
     EXPECTED_FILE_SIZE_MM.forEach( ( millimetres, axis ) => {
 
@@ -127,16 +125,30 @@ describe( 'AP214 root unit scale', () => {
 
     // The bug this pins was a sign-of-exponent error, not a missing
     // conversion: the root transform scaled by 1/unitInM, so a millimetre
-    // model came out 1000x too LARGE rather than 1000x too small. Asserting
-    // the ratio between world and file coordinates catches that direction
-    // even if the fixture is swapped for a differently sized part, which an
-    // absolute size assertion alone would not.
-    const fileSize = sceneSize( false )
-    const worldSize = sceneSize( true )
+    // model came out 1000x too LARGE rather than 1000x too small. Reading
+    // the scale straight off the absolute transform's basis keeps that
+    // direction pinned independently of how big the fixture happens to be.
+    //
+    // Measured per mesh from the basis rather than from a bounds ratio:
+    // the surrounding tests invite swapping FIXTURE for an assembly, and
+    // instance placements move parts around, so a whole-scene bounds ratio
+    // would start failing on correct code the moment the fixture gains a
+    // second occurrence. Placements are rigid, so the column norm is the
+    // unit scale alone either way.
+    let meshCount = 0
 
-    worldSize.forEach( ( world, axis ) => {
+    for ( const [ transform ] of scene.walk() ) {
 
-      expect( world / fileSize[ axis ] ).toBeCloseTo( MM_IN_M )
-    } )
+      expect( transform ).toBeDefined()
+
+      const basisColumnLength =
+        Math.hypot( transform![ 0 ], transform![ 1 ], transform![ 2 ] )
+
+      expect( basisColumnLength ).toBeCloseTo( MM_IN_M, 6 )
+      ++meshCount
+    }
+
+    // A scene that walked nothing would pass the loop vacuously.
+    expect( meshCount ).toBeGreaterThan( 0 )
   } )
 } )
