@@ -4149,6 +4149,47 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * The root transform taking a shape representation's own length unit
+   * into conway's world space.
+   *
+   * World space is METRES. That convention is set by the IFC path, which
+   * folds `linearScalingFactor` — metres per file unit — into its
+   * coordination matrix (`compat/web-ifc/coordination_f64.ts`). STEP
+   * geometry is emitted in raw file coordinates instead, so the
+   * whole-model unit conversion has to ride on this root transform.
+   *
+   * The factor is therefore metres-per-file-unit itself: a millimetre
+   * file scales by 1e-3. It is NOT the reciprocal — using `1 / unitInM`
+   * put every millimetre STEP model into world space 1e6x too large,
+   * and 1e6x out of step with any IFC model federated beside it. That
+   * went unseen because Share frames the camera from the model's own
+   * bounds, which absorbs a uniform scale error, and because the
+   * regression digests hash geometry in file coordinates, which this
+   * transform never touches.
+   * See https://github.com/bldrs-ai/conway/issues/458.
+   *
+   * @param shapeRepresentation The representation whose unit context to read.
+   * @return The scale transform, or undefined if no length unit is declared.
+   */
+  private rootUnitScaleTransform(
+      shapeRepresentation: shape_representation ): NativeTransform4x4 | undefined {
+
+    const sourceShapeContext =
+      shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
+        find( ( unit ) => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as
+          length_unit | undefined
+
+    if ( sourceShapeContext === void 0 ) {
+
+      return void 0
+    }
+
+    const sourceUnitInM = this.convertToMetres( sourceShapeContext ) ?? 1.0
+
+    return this.uniformScaleAffine( this.identity3DNativeMatrix, sourceUnitInM )
+  }
+
+  /**
    *
    */
   populateStyledItemsMap() {
@@ -4727,15 +4768,7 @@ export class AP214GeometryExtraction {
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
           try {
-            const sourceShapeContext =
-              shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-              find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-
-            if ( sourceShapeContext !== void 0 ) {
-              const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-              scaleTransform =
-                this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
-            }
+            scaleTransform = this.rootUnitScaleTransform( shapeRepresentation )
           } catch {
             // Malformed unit context (prefix truncation) — no unit scale.
             scaleTransform = void 0
@@ -4787,15 +4820,7 @@ export class AP214GeometryExtraction {
 
           try {
             const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
-            const sourceShapeContext =
-              shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
-              find( unit => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as length_unit | undefined
-
-            if ( sourceShapeContext !== void 0 ) {
-              const sourceUnitInM = ( this.convertToMetres( sourceShapeContext ) ?? 1.0 )
-              scaleTransform =
-                this.uniformScaleAffine( this.identity3DNativeMatrix, 1.0 / sourceUnitInM )
-            }
+            scaleTransform = this.rootUnitScaleTransform( shapeRepresentation )
           } catch {
             // Malformed unit context (prefix truncation) — no unit scale.
             scaleTransform = void 0
