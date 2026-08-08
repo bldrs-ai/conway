@@ -102,7 +102,7 @@ jobs:
         target: ${{ fromJSON(needs.setup.outputs.matrix) }}
     # Same heavy runner as run-ifc-regression: the batch drives the MT WASM
     # engine over ~100 models with --parallel and reserves multi-GB shared.
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Outer backstop against a wedged run (down from an old 90). A healthy run
     # is build-from-warm-cache + LFS checkout + the serial (--concurrency 1)
     # regen, comfortably under ~30 min; the regen step has its own tighter
