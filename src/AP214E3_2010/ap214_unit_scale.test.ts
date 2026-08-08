@@ -129,12 +129,18 @@ describe( 'AP214 root unit scale', () => {
     // the scale straight off the absolute transform's basis keeps that
     // direction pinned independently of how big the fixture happens to be.
     //
-    // Measured per mesh from the basis rather than from a bounds ratio:
-    // the surrounding tests invite swapping FIXTURE for an assembly, and
-    // instance placements move parts around, so a whole-scene bounds ratio
-    // would start failing on correct code the moment the fixture gains a
-    // second occurrence. Placements are rigid, so the column norm is the
-    // unit scale alone either way.
+    // Measured per mesh from the basis rather than from a bounds ratio,
+    // because instance placements move parts around: a whole-scene bounds
+    // ratio starts failing on correct code the moment the fixture gains a
+    // second occurrence. Placements are rigid, so the column norm carries
+    // the unit scale alone.
+    //
+    // This expects ONE scale across the scene, which holds because the
+    // fixture is single-unit. A mixed-unit assembly is a different case —
+    // there `doTransforms` reconciles each child into its parent's unit,
+    // so a metre-declared sub-part legitimately ends up at basis norm 1.0
+    // — and swapping FIXTURE for one would need the expectation taken per
+    // representation's own declared unit rather than as a constant.
     let meshCount = 0
 
     for ( const [ transform ] of scene.walk() ) {
