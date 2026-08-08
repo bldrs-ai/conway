@@ -3377,6 +3377,13 @@ export class AP214GeometryExtraction {
 
     nativeSurface.sameSense = from.same_sense
 
+    // Declares the flag above as real, so the tessellator may orient the
+    // face against the surface normal. Extractors that leave this false
+    // (the IFC path today) keep the older projection-based orientation
+    // rather than having a default-constructed sense read as an answer.
+    // See https://github.com/bldrs-ai/conway/issues/459.
+    nativeSurface.sameSenseKnown = true
+
     const parameters: ParamsAddFaceToGeometry = {
       boundsArray: bound3DVector,
       advancedBrep: true,
