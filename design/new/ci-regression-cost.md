@@ -40,8 +40,8 @@ visually (the visual-diff comment) and **blessed at the rc**, not at PR time.
 
 ## Why it's tiered this way (the cost rationale)
 
-Every heavy job runs on the `ubuntu-22.04-8vcpu-32gb-300gbssd` runner, billed
-as **Actions Linux 16-core at $0.042/min** — that line item is ~100% of the
+Every heavy job runs on the `ubuntu-24.04-4vcpu-8gb-150gbssd` runner, billed
+as **Actions Linux 16-core at $0.012/min** — that line item is ~100% of the
 metered spend (the 2-core `Actions Linux` rows bill $0 inside the included
 allotment). So cost ≈ **large-runner minutes**, and the levers are *how often*
 and *how many* jobs hit that runner.
