@@ -429,6 +429,23 @@ export class IfcGeometryExtraction {
    * durable extraction keeps full logging. Mirrors AP214's flag. */
   public quietRecoverableLogging!: boolean
 
+  /** When true, a product whose ObjectPlacement — or any record in its
+   * placement chain — is a dangling forward reference is treated as not
+   * yet extractable (the extraction throws, and the caller skips the
+   * product) instead of being silently extracted UNPLACED.
+   *
+   * Set by the parse-time preview channel's PREFIX extractions. A
+   * mid-parse prefix nulls dangling optional references
+   * (`nullOnErrors`), so a product whose placement record sits beyond
+   * the prefix — Revit writes placements near the end of the file, e.g.
+   * Snowdon's first door is record #5014 with its IFCLOCALPLACEMENT at
+   * #789283 — read as "no placement" and extracted at the origin. On a
+   * georeferenced model the preview then composed
+   * coordination x identity, emitting geometry ~425km from the model
+   * (Share#1744). The durable extraction runs on the full model, where
+   * nothing dangles, and keeps the classic lenient read. */
+  public deferDanglingPlacements: boolean = false
+
   constructor(
     private readonly conwayModel: ConwayGeometry,
     public readonly model: IfcStepModel,
@@ -5557,6 +5574,52 @@ export class IfcGeometryExtraction {
    * @param from
    * @param isRelVoid
    */
+  /**
+   * Resolve and extract a product's placement with dangling references
+   * treated as errors (deferDanglingPlacements mode).
+   *
+   * The model's `nullOnErrors` (default true) turns a reference to an
+   * unindexed record into a silent null, which is indistinguishable from
+   * a genuinely absent (`$`) optional attribute. On a mid-parse prefix
+   * that conflation is exactly wrong: "placement record not indexed
+   * yet" must defer the product, while "product has no placement" may
+   * extract unplaced, matching the classic path. Flipping
+   * `nullOnErrors` off for the duration makes the step layer throw on
+   * the dangling read (`extractElement`), anywhere in the chain —
+   * IFCLOCALPLACEMENT ancestors and their axis/point records included,
+   * since `extractPlacement` resolves them through the same layer.
+   *
+   * The throw intentionally propagates: the demand seam
+   * (`extractProductGeometryByLocalID` callers, the preview adapter's
+   * per-unit catch) already treats a throwing product as
+   * not-yet-extractable and leaves it to a later prefix or the durable
+   * pump. Nothing is memoized on the throwing path — the generated
+   * getters only cache on successful extraction — so a later, longer
+   * prefix re-reads cleanly.
+   *
+   * @param product The product whose placement to resolve.
+   */
+  private extractPlacementStrict_(product: IfcProduct): void {
+
+    const model = this.model
+    const priorNullOnErrors = model.nullOnErrors
+
+    model.nullOnErrors = false
+
+    try {
+
+      const objectPlacement = product.ObjectPlacement
+
+      if (objectPlacement !== null) {
+
+        this.extractPlacement(objectPlacement)
+      }
+    } finally {
+
+      model.nullOnErrors = priorNullOnErrors
+    }
+  }
+
   extractPlacement(from: IfcObjectPlacement, isRelVoid: boolean = false) {
 
     let result: IfcSceneTransform | undefined
@@ -6418,11 +6481,24 @@ export class IfcGeometryExtraction {
           product instanceof IfcSpace ||
           product instanceof IfcOpeningStandardCase
 
-    const objectPlacement = product.ObjectPlacement
+    if (this.deferDanglingPlacements) {
 
-    if (objectPlacement !== null) {
+      // Strict placement resolution for prefix extractions: dangling
+      // references throw here (see extractPlacementStrict_) and the
+      // demand seam reports the product as not-yet-extractable, so a
+      // later, longer prefix retries it — instead of extracting the
+      // product unplaced. This read must be the entity's FIRST
+      // ObjectPlacement access: the generated getters memoize, and a
+      // lenient read would cache null for a dangling reference.
+      this.extractPlacementStrict_(product)
+    } else {
 
-      this.extractPlacement(objectPlacement)
+      const objectPlacement = product.ObjectPlacement
+
+      if (objectPlacement !== null) {
+
+        this.extractPlacement(objectPlacement)
+      }
     }
 
     const representations = product.Representation

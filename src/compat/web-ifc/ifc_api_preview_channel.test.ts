@@ -411,4 +411,152 @@ describe( 'StreamedPreviewChannel', () => {
 
     channel.stop()
   }, 240000 )
+
+  test( 'a product whose placement is beyond the prefix defers instead of extracting unplaced', () => {
+
+    // Revit writes placements near the end of the file, so a mid-parse
+    // prefix can hold a product and its geometry while the product's
+    // IFCLOCALPLACEMENT is still unparsed. Lenient reads null that
+    // dangling reference — indistinguishable from "no placement" — and
+    // the product extracted at the origin: on a georeferenced model the
+    // preview payloads then sat a whole site-offset from the model
+    // (Share#1744, Snowdon door #5014, 88 payloads ~425km out).
+    //
+    // Model the file shape directly: move one product's placement
+    // record to the end of the data section (record order carries no
+    // meaning in STEP) and snapshot the prefix just before it.
+    const DEFERRED_PRODUCT = 396
+    const PLACEMENT_RECORD = '#334='
+
+    const text = new TextDecoder().decode( data )
+    const lines = text.split( '\n' )
+
+    const placementIndex =
+      lines.findIndex( ( line ) => line.startsWith( PLACEMENT_RECORD ) )
+    expect( placementIndex ).toBeGreaterThanOrEqual( 0 )
+
+    const [ placementLine ] = lines.splice( placementIndex, 1 )
+
+    let endsecIndex = -1
+    for ( let where = lines.length - 1; where >= 0; --where ) {
+      if ( lines[ where ].startsWith( 'ENDSEC' ) ) {
+        endsecIndex = where
+        break
+      }
+    }
+    expect( endsecIndex ).toBeGreaterThanOrEqual( 0 )
+
+    lines.splice( endsecIndex, 0, placementLine )
+    const reordered = new TextEncoder().encode( lines.join( '\n' ) )
+
+    const parse = ( wrap?: ( sink: ColumnarIndexSink<EntityTypesIfc> ) =>
+      StepIndexSink<EntityTypesIfc> ): ColumnarIndexSink<EntityTypesIfc> => {
+
+      const sink = new ColumnarIndexSink<EntityTypesIfc>()
+      const { result } = buildIndexStreaming(
+          new BufferByteSource( reordered ),
+          IfcStepParser.Instance,
+          POOL,
+          void 0,
+          wrap !== void 0 ? wrap( sink ) : sink )
+      expect( result ).toBe( ParseResult.COMPLETE )
+      return sink
+    }
+
+    const totalRecords = parse().topLevelCount
+
+    // The moved placement is the final record: a prefix of every record
+    // but the last holds the product + geometry, not the placement.
+    let prefix: StepIndexColumns<EntityTypesIfc> | undefined
+    const fullColumns = parse( ( inner ) => ( {
+      pushTopLevel: ( entry ) => {
+        inner.pushTopLevel( entry )
+        if ( inner.topLevelCount === totalRecords - 1 ) {
+          prefix = inner.snapshot()
+        }
+      },
+      reset: () => inner.reset(),
+    } ) ).finalize()
+
+    expect( prefix ).toBeDefined()
+
+    // Entity expressID -> parent native transforms of its walked
+    // instances, for one generation over the given columns.
+    const placedInstances = (
+        bytes: Uint8Array,
+        columns: StepIndexColumns<EntityTypesIfc> ): Map<number, number[][]> => {
+
+      const generation =
+        ifcPreviewAdapter().buildGeneration( bytes, conwayGeometry, columns )
+      expect( generation ).toBeDefined()
+
+      generation!.runUnits( 0, generation!.unitCount )
+
+      const instances = new Map<number, number[][]>()
+
+      for ( const walked of generation!.scene.walk() ) {
+
+        const [ , nativeTransform, , , entity ] = walked as [
+          unknown,
+          { getValues(): Float64Array | number[] } | undefined,
+          unknown,
+          unknown,
+          { expressID?: number } | undefined,
+        ]
+
+        if ( entity?.expressID === void 0 ) {
+          continue
+        }
+
+        const list = instances.get( entity.expressID ) ?? []
+        list.push( nativeTransform !== void 0 ? [ ...nativeTransform.getValues() ] : [] )
+        instances.set( entity.expressID, list )
+      }
+
+      generation!.dispose()
+      return instances
+    }
+
+    const prefixInstances = placedInstances( reordered, prefix! )
+
+    // Other products still preview from the prefix...
+    expect( prefixInstances.size ).toBeGreaterThan( 0 )
+
+    // ...but the dangling-placement product emitted NOTHING. Before the
+    // fix it extracted with an identity parent — these are exactly the
+    // mis-placed payloads Share#1744 chased.
+    expect( prefixInstances.has( DEFERRED_PRODUCT ) ).toBe( false )
+
+    // A full-file prefix extracts it, placed identically to the
+    // original record order — deferral changes WHEN the product
+    // extracts, never WHERE.
+    const fullInstances = placedInstances( reordered, fullColumns )
+    const reorderedTransforms = fullInstances.get( DEFERRED_PRODUCT )
+
+    expect( reorderedTransforms ).toBeDefined()
+    expect( reorderedTransforms!.length ).toBeGreaterThan( 0 )
+    expect( reorderedTransforms![ 0 ].length ).toBe( 16 )
+
+    const originalSink = new ColumnarIndexSink<EntityTypesIfc>()
+    const { result: originalResult } = buildIndexStreaming(
+        new BufferByteSource( data ),
+        IfcStepParser.Instance,
+        POOL,
+        void 0,
+        originalSink )
+    expect( originalResult ).toBe( ParseResult.COMPLETE )
+
+    const originalInstances = placedInstances( data, originalSink.finalize() )
+    const originalTransforms = originalInstances.get( DEFERRED_PRODUCT )
+
+    expect( originalTransforms ).toBeDefined()
+    expect( reorderedTransforms!.length ).toBe( originalTransforms!.length )
+
+    for ( let where = 0; where < originalTransforms!.length; ++where ) {
+      for ( let component = 0; component < 16; ++component ) {
+        expect( reorderedTransforms![ where ][ component ] )
+            .toBeCloseTo( originalTransforms![ where ][ component ], 10 )
+      }
+    }
+  }, 240000 )
 } )

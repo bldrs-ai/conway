@@ -197,6 +197,19 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
       // don't flood the report (DOWA: 1164 styled-item errors).
       extraction.quietRecoverableLogging = true
 
+      // A product whose placement records sit beyond this prefix must
+      // defer, not extract unplaced: Revit writes placements near the
+      // end of the file, so an early product can reference a placement
+      // the index does not hold yet. Lenient reads null the dangling
+      // reference and the product extracts at the origin — on a
+      // georeferenced model the emitted payloads then sit a site-offset
+      // away from the model (Share#1744: Snowdon's door #5014 put 88
+      // payloads ~425km out, and the camera follow framed them). The
+      // per-unit catch below already treats a throwing product as
+      // not-yet-extractable; this makes a dangling placement throw like
+      // any other unparsed forward reference.
+      extraction.deferDanglingPlacements = true
+
       // Preview-only preparation: skip the relationship sweeps whose
       // entity materialization dominates per-generation cost.
       extraction.prepareDemandExtraction( true )
