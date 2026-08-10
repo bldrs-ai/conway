@@ -5570,11 +5570,6 @@ export class IfcGeometryExtraction {
   }
 
   /**
-   *
-   * @param from
-   * @param isRelVoid
-   */
-  /**
    * Resolve and extract a product's placement with dangling references
    * treated as errors (deferDanglingPlacements mode).
    *
@@ -5592,10 +5587,12 @@ export class IfcGeometryExtraction {
    * The throw intentionally propagates: the demand seam
    * (`extractProductGeometryByLocalID` callers, the preview adapter's
    * per-unit catch) already treats a throwing product as
-   * not-yet-extractable and leaves it to a later prefix or the durable
-   * pump. Nothing is memoized on the throwing path — the generated
-   * getters only cache on successful extraction — so a later, longer
-   * prefix re-reads cleanly.
+   * not-yet-extractable and leaves it to the durable pump — the IFC
+   * channel's forward-only unit cursor does not re-run passed
+   * ordinals. Nothing is memoized on the throwing path — the generated
+   * getters only cache on successful extraction — so an adapter mode
+   * that does retry (AP214's retryEmptyUnits, or a future IFC
+   * equivalent) re-reads cleanly against its longer prefix.
    *
    * @param product The product whose placement to resolve.
    */
@@ -5620,6 +5617,11 @@ export class IfcGeometryExtraction {
     }
   }
 
+  /**
+   *
+   * @param from
+   * @param isRelVoid
+   */
   extractPlacement(from: IfcObjectPlacement, isRelVoid: boolean = false) {
 
     let result: IfcSceneTransform | undefined
@@ -6485,11 +6487,16 @@ export class IfcGeometryExtraction {
 
       // Strict placement resolution for prefix extractions: dangling
       // references throw here (see extractPlacementStrict_) and the
-      // demand seam reports the product as not-yet-extractable, so a
-      // later, longer prefix retries it — instead of extracting the
-      // product unplaced. This read must be the entity's FIRST
-      // ObjectPlacement access: the generated getters memoize, and a
-      // lenient read would cache null for a dangling reference.
+      // demand seam reports the product as not-yet-extractable —
+      // instead of extracting the product unplaced. The IFC preview
+      // channel's forward-only cursor does not re-run a passed unit, so
+      // a deferred product simply never previews and the durable pump
+      // renders it; that is the existing contract for every product
+      // whose extraction throws on an unparsed forward reference, and
+      // an empty slot beats geometry at the wrong placement. This read
+      // must be the entity's FIRST ObjectPlacement access: the
+      // generated getters memoize, and a lenient read would cache null
+      // for a dangling reference.
       this.extractPlacementStrict_(product)
     } else {
 

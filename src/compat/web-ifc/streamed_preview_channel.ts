@@ -207,7 +207,10 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
       // payloads ~425km out, and the camera follow framed them). The
       // per-unit catch below already treats a throwing product as
       // not-yet-extractable; this makes a dangling placement throw like
-      // any other unparsed forward reference.
+      // any other unparsed forward reference. The classic-mode cursor
+      // does not re-run passed units, so a deferred product sits out
+      // the preview and the durable pump renders it — an empty slot,
+      // never geometry at the wrong placement.
       extraction.deferDanglingPlacements = true
 
       // Preview-only preparation: skip the relationship sweeps whose

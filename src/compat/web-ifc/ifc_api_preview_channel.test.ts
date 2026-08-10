@@ -34,19 +34,21 @@ let conwayGeometry: ConwayGeometry
 let data: Uint8Array
 
 /**
- * Parse index.ifc's data block into a fresh columnar sink.
+ * Parse an IFC data block into a fresh columnar sink.
  *
  * @param wrap Optional sink wrapper (snapshot triggers).
+ * @param bytes The source bytes (defaults to index.ifc).
  * @return {ColumnarIndexSink} The filled sink.
  */
 function buildSink(
     wrap?: ( sink: ColumnarIndexSink<EntityTypesIfc> ) =>
-      StepIndexSink<EntityTypesIfc> ): ColumnarIndexSink<EntityTypesIfc> {
+      StepIndexSink<EntityTypesIfc>,
+    bytes?: Uint8Array ): ColumnarIndexSink<EntityTypesIfc> {
 
   const sink = new ColumnarIndexSink<EntityTypesIfc>()
 
   const { result } = buildIndexStreaming(
-      new BufferByteSource( data ),
+      new BufferByteSource( bytes ?? data ),
       IfcStepParser.Instance,
       POOL,
       void 0,
@@ -449,26 +451,12 @@ describe( 'StreamedPreviewChannel', () => {
     lines.splice( endsecIndex, 0, placementLine )
     const reordered = new TextEncoder().encode( lines.join( '\n' ) )
 
-    const parse = ( wrap?: ( sink: ColumnarIndexSink<EntityTypesIfc> ) =>
-      StepIndexSink<EntityTypesIfc> ): ColumnarIndexSink<EntityTypesIfc> => {
-
-      const sink = new ColumnarIndexSink<EntityTypesIfc>()
-      const { result } = buildIndexStreaming(
-          new BufferByteSource( reordered ),
-          IfcStepParser.Instance,
-          POOL,
-          void 0,
-          wrap !== void 0 ? wrap( sink ) : sink )
-      expect( result ).toBe( ParseResult.COMPLETE )
-      return sink
-    }
-
-    const totalRecords = parse().topLevelCount
+    const totalRecords = buildSink( void 0, reordered ).topLevelCount
 
     // The moved placement is the final record: a prefix of every record
     // but the last holds the product + geometry, not the placement.
     let prefix: StepIndexColumns<EntityTypesIfc> | undefined
-    const fullColumns = parse( ( inner ) => ( {
+    const fullColumns = buildSink( ( inner ) => ( {
       pushTopLevel: ( entry ) => {
         inner.pushTopLevel( entry )
         if ( inner.topLevelCount === totalRecords - 1 ) {
@@ -476,7 +464,7 @@ describe( 'StreamedPreviewChannel', () => {
         }
       },
       reset: () => inner.reset(),
-    } ) ).finalize()
+    } ), reordered ).finalize()
 
     expect( prefix ).toBeDefined()
 
@@ -537,16 +525,7 @@ describe( 'StreamedPreviewChannel', () => {
     expect( reorderedTransforms!.length ).toBeGreaterThan( 0 )
     expect( reorderedTransforms![ 0 ].length ).toBe( 16 )
 
-    const originalSink = new ColumnarIndexSink<EntityTypesIfc>()
-    const { result: originalResult } = buildIndexStreaming(
-        new BufferByteSource( data ),
-        IfcStepParser.Instance,
-        POOL,
-        void 0,
-        originalSink )
-    expect( originalResult ).toBe( ParseResult.COMPLETE )
-
-    const originalInstances = placedInstances( data, originalSink.finalize() )
+    const originalInstances = placedInstances( data, buildSink().finalize() )
     const originalTransforms = originalInstances.get( DEFERRED_PRODUCT )
 
     expect( originalTransforms ).toBeDefined()
