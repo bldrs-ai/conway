@@ -64,7 +64,7 @@ jobs:
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
     steps:
-      # Fail here (cheap runner) before the 8-vcpu matrix jobs allocate, so a
+      # Fail here (cheap runner) before the matrix jobs allocate, so a
       # missing secret doesn't burn large-runner minutes.
       - name: Fail fast if REBLESS_TOKEN missing
         env:
@@ -214,7 +214,7 @@ jobs:
       #
       # --concurrency 1: run ONE model at a time. Each child is itself
       # multi-threaded, so any concurrency oversubscribes the cores — and that
-      # co-scheduling is not just slow, it's unreliable: on the 8-vcpu runner a
+      # co-scheduling is not just slow, it's unreliable: on the regression runner a
       # geometry-dense model (ISSUE_159, ~18.5k triangulated items) that
       # extracts in ~12s ALONE ran past a 600s per-model timeout while sharing
       # cores at --concurrency 2, landing in failed.csv as a bogus timeout

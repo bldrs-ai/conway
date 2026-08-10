@@ -35,7 +35,7 @@ on:
 
 # Cancel superseded runs so a rapid series of pushes to the same PR doesn't
 # leave N full build+regression(+visual-diff) pipelines running to completion
-# in parallel on the 8-vcpu runners — only the newest commit's result matters.
+# in parallel on the shared runners — only the newest commit's result matters.
 # Grouped by ref (refs/pull/<n>/merge is unique per PR) so PRs never cancel
 # each other. cancel-in-progress is scoped to pull_request ONLY: push-to-main
 # runs must run to completion — auto-publish tags + publishes to npm, and each
@@ -237,7 +237,7 @@ jobs:
   # ---------------------------------------------------------------------------
   run-ifc-regression:
     needs: build
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Expose the packed tarball name so downstream perf jobs can download the
     # artifact by name without re-packing conway.
     outputs:
@@ -701,7 +701,7 @@ jobs:
     # the MT WASM engine reserves multi-GB (shared) memory at startup, and on
     # the standard 4-vcpu runner every export died with an uncaught allocation
     # crash (only the "Node.js vX.Y.Z" report footer reached the PR table).
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 30
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
@@ -870,7 +870,7 @@ jobs:
     # the candidate tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
     timeout-minutes: 60
@@ -1182,7 +1182,7 @@ jobs:
     # the candidate tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1530,7 +1530,7 @@ jobs:
   auto-publish:
     needs: [build, run-ifc-regression]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     permissions:
       contents: write    # tag push
       id-token: write    # OIDC token for npm Trusted Publishing
