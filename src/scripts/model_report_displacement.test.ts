@@ -1,4 +1,6 @@
 import { describe, expect, test } from '@jest/globals'
+// @ts-expect-error -- an untyped .mjs helper beside the CLI it serves.
+import { robustCentre, worldCentre } from '../../../scripts/debug/displacement.mjs'
 
 /* eslint-disable no-magic-numbers -- these are synthetic coordinates and
    distances chosen to mirror the real model in conway#456. Naming each one
@@ -16,21 +18,10 @@ import { describe, expect, test } from '@jest/globals'
  *
  * These cases use synthetic centres rather than a model, because the
  * motivating file is 256 MB and private. What is worth pinning is the
- * scoring, and the scoring is pure.
+ * scoring, and the scoring is pure — which is why it lives in
+ * displacement.mjs rather than in the CLI script, whose module body runs
+ * the whole tool on import.
  */
-// Resolved from the repo root, not relative to this file: the test runs from
-// compiled/src/scripts, where a relative hop lands in compiled/scripts, which
-// does not exist (scripts/ is not part of the tsc build).
-const report = await import(
-    `file://${process.cwd()}/scripts/debug/model_report.mjs`) as unknown as {
-  robustCentre: (centres: number[][]) => number[]
-  worldCentre: (
-    geometry: { getPoint: (i: number) => { x: number, y: number, z: number } },
-    count: number,
-    transform?: number[]) => number[] | undefined
-}
-
-const { robustCentre, worldCentre } = report
 
 /**
  * Column-major 4x4 translation, matching the walk tuple's layout.
@@ -78,7 +69,7 @@ describe('displacement scoring', () => {
     expect(centre[0]).toBeLessThan(587)
     expect(centre[2]).toBeCloseTo(3, 6)
 
-    const distances = centres.map((each) =>
+    const distances = centres.map((each: number[]) =>
       Math.hypot(each[0] - centre[0], each[1] - centre[1], each[2] - centre[2]))
 
     const cluster = distances.slice(0, 9)
@@ -129,6 +120,16 @@ describe('displacement scoring', () => {
   test('non-finite vertex data yields no centre rather than a NaN score', () => {
 
     expect(worldCentre(geometryOf([[0, 0, 0], [NaN, 0, 0]]), 2, undefined))
+        .toBeUndefined()
+  })
+
+  test('a right-shaped transform holding NaN drops the mesh, and does not throw', () => {
+
+    // Data, not a programming error: one unusable placement must not take
+    // down the whole run and discard the other stages' reports.
+    const nanTransform = translation(NaN, 0, 0)
+
+    expect(worldCentre(geometryOf([[0, 0, 0], [2, 2, 2]]), 2, nanTransform))
         .toBeUndefined()
   })
 })

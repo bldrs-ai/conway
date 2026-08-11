@@ -76,6 +76,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import {robustCentre, worldCentre} from './displacement.mjs'
 
 const REPO_ROOT = new URL('../../', import.meta.url)
 
@@ -599,106 +600,6 @@ function collectMeshes(stage, model, scene) {
 
 
 /**
- * The middle value of a numeric list, by the lower of the two middles for
- * an even count. Sorts a copy — callers reuse their arrays.
- *
- * @param {number[]} values At least one value
- * @return {number} The median
- */
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b)
-
-  return sorted[Math.floor((sorted.length - 1) / 2)]
-}
-
-
-/**
- * The model's robust centre: the component-wise median of mesh centres.
- *
- * Median, not mean, and that choice is the whole point. A mean is dragged
- * toward the outliers being hunted, which shrinks their own scores and
- * inflates everyone else's — on a model with a handful of parts flung
- * kilometres away, a mean centre sits out in empty space and every honest
- * part scores as displaced.
- *
- * @param {number[][]} centres One [x, y, z] per mesh, at least one
- * @return {number[]} [x, y, z]
- */
-export function robustCentre(centres) {
-  return [0, 1, 2].map((axis) => median(centres.map((each) => each[axis])))
-}
-
-
-/**
- * A mesh's centre in WORLD space: the centre of its local bounds, placed by
- * its absolute transform.
- *
- * Bounds centre rather than vertex mean, so a face with a dense cluster of
- * vertices at one end does not drag the centre toward it — this is asking
- * where a part sits, not where its detail is.
- *
- * The transform is validated rather than trusted. A wrong walk-tuple index
- * hands this an object, every multiplication yields NaN, `Stage.record`
- * discards non-finite values, and the stage reports "N calls, 0 measured" —
- * a clean-looking result produced by a bug, which is hazard 1 in this file's
- * header arriving through the back door. It cost a debugging cycle here
- * already: conway#456 names the transform as `walked[1]`, and it is
- * `walked[0]`.
- *
- * @param {object} geometry A conway GeometryObject
- * @param {number} count Vertex count
- * @param {Float64Array|number[]|undefined} transform Column-major 4x4, or
- *   undefined for identity
- * @return {number[]|undefined} [x, y, z], or undefined if nothing was finite
- */
-export function worldCentre(geometry, count, transform) {
-  if (transform !== undefined &&
-      (typeof transform.length !== 'number' || transform.length < 16 ||
-       !Number.isFinite(transform[0]))) {
-    throw new Error(
-        'worldCentre: expected a column-major 4x4 transform or undefined, got ' +
-        `${Object.prototype.toString.call(transform)} — check the walk tuple index`)
-  }
-
-  const min = [Infinity, Infinity, Infinity]
-  const max = [-Infinity, -Infinity, -Infinity]
-
-  for (let i = 0; i < count; ++i) {
-    // getPoint(), never a held HEAPF32 view — see the hazards in the header.
-    const point = geometry.getPoint(i)
-    const axes = [point.x, point.y, point.z]
-
-    for (let axis = 0; axis < 3; ++axis) {
-      if (!Number.isFinite(axes[axis])) {
-        return undefined
-      }
-
-      min[axis] = Math.min(min[axis], axes[axis])
-      max[axis] = Math.max(max[axis], axes[axis])
-    }
-  }
-
-  if (!Number.isFinite(min[0])) {
-    return undefined
-  }
-
-  const local = [0, 1, 2].map((axis) => (min[axis] + max[axis]) / 2)
-
-  if (transform === undefined) {
-    return local
-  }
-
-  const [x, y, z] = local
-
-  return [
-    (transform[0] * x) + (transform[4] * y) + (transform[8] * z) + transform[12],
-    (transform[1] * x) + (transform[5] * y) + (transform[9] * z) + transform[13],
-    (transform[2] * x) + (transform[6] * y) + (transform[10] * z) + transform[14],
-  ]
-}
-
-
-/**
  * Record every mesh's distance from the model's robust centre.
  *
  * Two passes, because the metric is relative to the model: the centre is not
@@ -712,6 +613,12 @@ export function worldCentre(geometry, count, transform) {
  * the median distance is 38.6 and the three sky-arcing slivers sit at
  * 950-1377, which clears an 8x threshold by a wide margin.
  *
+ * One caveat that comes with reusing that threshold: distances here can be
+ * exactly zero, unlike an extent. A model where more than half the meshes
+ * sit at the robust centre — many identical items placed at one origin —
+ * gives median 0, hence threshold 0, hence every other mesh flagged. The
+ * report shows median 0 when that happens, and `--limit` is the escape.
+ *
  * @param {Stage} stage The stage to record into
  * @param {object} model The loaded model, for entity attribution
  * @param {object} scene The walkable scene
@@ -721,18 +628,25 @@ function collectDisplacement(stage, model, scene) {
     return
   }
 
-  const seen = new Set()
   const placed = []
+  let walkedMeshes = 0
 
   for (const walked of scene.walk()) {
     const mesh = walked[2]
     const geometry = mesh?.geometry
 
-    if (typeof geometry?.getVertexCount !== 'function' || seen.has(mesh.localID)) {
+    if (typeof geometry?.getVertexCount !== 'function') {
       continue
     }
 
-    seen.add(mesh.localID)
+    // NO dedup by localID, unlike collectMeshes. That stage measures local
+    // bounds, which are identical for every placement of a shared geometry,
+    // so deduping is free there. Here the placement IS the measurement:
+    // extractMappedItem (IFC) and the AP214 occurrence stack emit one walk
+    // entry per instance, and skipping the repeats would hide a flung-away
+    // instance of an otherwise well-placed window or fastener — and compute
+    // the robust centre from an unrepresentative sample besides.
+    ++walkedMeshes
 
     const count = geometry.getVertexCount()
 
@@ -749,9 +663,11 @@ function collectDisplacement(stage, model, scene) {
     placed.push({localID: mesh.localID, centre, vertices: count})
   }
 
-  // Set before the early return: a model that walked meshes but placed none
-  // has to read as "fired, no outliers" rather than as a dead probe.
-  stage.fired = placed.length
+  // Meshes WALKED, not meshes placed. `fired` answers "did this probe see
+  // anything", so counting only successes would report a model whose every
+  // placement was unusable as a dead probe — and would make fired identical
+  // to measured, hiding the skipped ones.
+  stage.fired = walkedMeshes
 
   if (placed.length === 0) {
     return
@@ -975,7 +891,14 @@ async function main() {
   }
 
   if (stages.has('displacement')) {
-    collectDisplacement(stages.get('displacement'), model, scene)
+    try {
+      collectDisplacement(stages.get('displacement'), model, scene)
+    } catch (err) {
+      // One stage's programming error must not discard the curve/loop/face/
+      // mesh reports this run already collected — they are usually the ones
+      // being read. Surfaced on the stage rather than swallowed.
+      stages.get('displacement').extra.error = String(err?.message ?? err)
+    }
   }
 
   say(`\n# ${path.basename(options.model)}`)
