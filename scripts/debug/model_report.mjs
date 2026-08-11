@@ -12,6 +12,20 @@
  *   loop   getLoop           per-loop extent + point spacing
  *   face   addFaceToGeometry vertices a single face contributed
  *   mesh   scene walk        per-mesh local bounds, attributed to entities
+ *   displacement            per-mesh distance from the model's robust centre
+ *
+ * `mesh` and `displacement` measure different things and neither subsumes
+ * the other. `mesh` reads vertices in MESH-LOCAL coordinates, so it catches
+ * a part that is internally huge — but on an export that writes geometry
+ * directly in site coordinates with identity placements (common for IFC
+ * `IfcFacetedBrep`), every honest part's "extent" is really its distance
+ * from the file origin, and the stage flags thousands of them. On
+ * `Wiesenplatz 7, 4057 Basel.ifc` that was 3,955 rows of which 3 were real
+ * (conway#456). `displacement` places each mesh with its transform and
+ * scores how far it sits from where the model actually is, which is the
+ * question "which parts are flung away from where they belong" — see
+ * design/new/model-diagnostics.md §"Extent outliers". On the same model it
+ * names 5 of 37,502.
  *
  * The stages are deliberately redundant: they bracket the pipeline, so
  * comparing them localises a defect. A model whose `mesh` stage shows a
@@ -42,7 +56,8 @@
  * Usage:
  *   node scripts/debug/model_report.mjs <model> [options]
  *
- *   --stage <list>   comma-separated: curve,loop,face,mesh (default all)
+ *   --stage <list>   comma-separated: curve,loop,face,mesh,displacement
+ *                    (default all)
  *   --limit <n>      absolute outlier threshold, in model units
  *   --factor <n>     outlier = value > factor x median (default 8)
  *   --top <n>        rows printed per stage (default 15)
@@ -61,6 +76,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import {localCentre, placeCentre, robustCentre} from './displacement.mjs'
 
 const REPO_ROOT = new URL('../../', import.meta.url)
 
@@ -73,7 +89,7 @@ const DEFAULT_TOP = 15
 /** Point-spacing histogram buckets, in model units, ascending. */
 const GAP_BUCKETS = [1e-8, 1e-7, 1e-6, 1e-5]
 
-const ALL_STAGES = ['curve', 'loop', 'face', 'mesh']
+const ALL_STAGES = ['curve', 'loop', 'face', 'mesh', 'displacement']
 
 const EXIT_PROBE_DEAD = 2
 const EXIT_USAGE = 1
@@ -584,6 +600,113 @@ function collectMeshes(stage, model, scene) {
 
 
 /**
+ * Record every mesh's distance from the model's robust centre.
+ *
+ * Two passes, because the metric is relative to the model: the centre is not
+ * known until every mesh has been placed. The robust centre is the
+ * component-wise median of mesh centres — a median rather than a mean
+ * precisely because the outliers being hunted would drag a mean toward
+ * themselves and shrink their own scores.
+ *
+ * Feeds raw distance into the ordinary Stage machinery, so the existing
+ * `factor x median` threshold applies unchanged: on the model in conway#456
+ * the median distance is 38.6 and the three sky-arcing slivers sit at
+ * 950-1377, which clears an 8x threshold by a wide margin.
+ *
+ * One caveat that comes with reusing that threshold: distances here can be
+ * exactly zero, unlike an extent. A model where more than half the meshes
+ * sit at the robust centre — many identical items placed at one origin —
+ * gives median 0, hence threshold 0, hence every other mesh flagged. The
+ * report shows median 0 when that happens, and `--limit` is the escape.
+ *
+ * @param {Stage} stage The stage to record into
+ * @param {object} model The loaded model, for entity attribution
+ * @param {object} scene The walkable scene
+ */
+function collectDisplacement(stage, model, scene) {
+  if (typeof scene?.walk !== 'function') {
+    return
+  }
+
+  const placed = []
+  const localCentres = new Map()
+  let walkedMeshes = 0
+
+  for (const walked of scene.walk()) {
+    const mesh = walked[2]
+    const geometry = mesh?.geometry
+
+    if (typeof geometry?.getVertexCount !== 'function') {
+      continue
+    }
+
+    // NO dedup by localID, unlike collectMeshes. That stage measures local
+    // bounds, which are identical for every placement of a shared geometry,
+    // so deduping is free there. Here the placement IS the measurement:
+    // extractMappedItem (IFC) and the AP214 occurrence stack emit one walk
+    // entry per instance, and skipping the repeats would hide a flung-away
+    // instance of an otherwise well-placed window or fastener — and compute
+    // the robust centre from an unrepresentative sample besides.
+    ++walkedMeshes
+
+    const count = geometry.getVertexCount()
+
+    if (count === 0) {
+      continue
+    }
+
+    // Local bounds are placement-invariant, so they are read once per
+    // geometry however many times it is instanced. Without this, dropping
+    // the dedup above would multiply the getPoint() wasm crossings by the
+    // instance count on exactly the large models this tool is for.
+    if (!localCentres.has(mesh.localID)) {
+      localCentres.set(mesh.localID, localCentre(geometry, count))
+    }
+
+    const local = localCentres.get(mesh.localID)
+
+    if (local === undefined) {
+      continue
+    }
+
+    const centre = placeCentre(local, walked[0])
+
+    if (centre === undefined) {
+      continue
+    }
+
+    // walked[4] is the owning product; mesh.localID names the shared
+    // representation item. With every placement now scored separately, the
+    // latter would print the same expressID on all N rows of an instanced
+    // geometry — and naming the product is what this stage is for.
+    placed.push({element: walked[4], centre, vertices: count})
+  }
+
+  // Meshes WALKED, not meshes placed. `fired` answers "did this probe see
+  // anything", so counting only successes would report a model whose every
+  // placement was unusable as a dead probe — and would make fired identical
+  // to measured, hiding the skipped ones.
+  stage.fired = walkedMeshes
+
+  if (placed.length === 0) {
+    return
+  }
+
+  const centre = robustCentre(placed.map((each) => each.centre))
+
+  for (const each of placed) {
+    const offset = [0, 1, 2].map((axis) => each.centre[axis] - centre[axis])
+
+    stage.record(Math.hypot(offset[0], offset[1], offset[2]), () => ({
+      ...describeEntity(each.element),
+      vertices: each.vertices,
+      centre: each.centre.map((value) => Number(value.toFixed(1))),
+    }))
+  }
+}
+
+
+/**
  * Format a number for a report column.
  *
  * @param {number} value The value
@@ -786,12 +909,40 @@ async function main() {
     collectMeshes(stages.get('mesh'), model, scene)
   }
 
+  let displacementError
+
+  if (stages.has('displacement')) {
+    try {
+      collectDisplacement(stages.get('displacement'), model, scene)
+    } catch (err) {
+      // One stage's programming error must not discard the curve/loop/face/
+      // mesh reports this run already collected — they are usually the ones
+      // being read.
+      //
+      // Printed HERE rather than stashed on stage.extra. A throw leaves
+      // `fired` at 0, so reportStage takes its dead branch and prints
+      // "PROBE NEVER FIRED ... Expected when the model uses no geometry of
+      // this kind" — which reads as an explanation rather than a failure,
+      // and drops `extra` from --json entirely. That is precisely the
+      // false-clean reading the guard in placeCentre exists to prevent, so
+      // it cannot be left to a channel the reporter might not show.
+      displacementError = String(err?.message ?? err)
+    }
+  }
+
   say(`\n# ${path.basename(options.model)}`)
   say(
       `  ${(data.length / 1024 / 1024).toFixed(2)} MB, loaded in ${elapsed} ms, ` +
       `${options.stages.join(',')}`)
 
   const reports = [...stages.values()].map((stage) => reportStage(stage, options))
+
+  if (displacementError !== undefined) {
+    say(
+        `\n## displacement\n  STAGE FAILED — ${displacementError}\n` +
+        '  This stage measured nothing because it threw, NOT because the\n' +
+        '  model is clean. The other stages above are unaffected.')
+  }
 
   if (messages.size > 0) {
     const ranked = [...messages].sort((a, b) => b[1] - a[1])

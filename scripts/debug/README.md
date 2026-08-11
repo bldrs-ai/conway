@@ -68,6 +68,7 @@ rest of the model.
 | `loop` | `ConwayGeometry.getLoop` | Per-loop extent, point-spacing histogram, wrap duplicates, sub-3-point loops |
 | `face` | `ConwayGeometry.addFaceToGeometry` | Vertices one face contributed, and how far out they landed |
 | `mesh` | scene walk after load | Per-mesh local bounds, attributed to the product entity |
+| `displacement` | scene walk after load | Per-mesh distance from the model's robust centre, in world space |
 
 They are deliberately redundant, and that redundancy is the diagnostic:
 the *narrowest dirty stage* is where the defect lives.
@@ -161,10 +162,23 @@ outliers" readings from probes attached to a seam the model did not take.
   model legitimately has parts of mixed scale and the flags are weak
   evidence — raise `--factor`. If p90 hugs the median, anything flagged is
   real.
-- **The `mesh` stage is the noisiest** of the four for exactly that
-  reason: an assembly with one large housing and forty small fasteners
-  will flag the housing every time. It is still the only stage that can
-  name the *product* a defect belongs to.
+- **The `mesh` stage is the noisiest** for exactly that reason: an
+  assembly with one large housing and forty small fasteners will flag the
+  housing every time. It is still the only stage that can name the
+  *product* a defect belongs to.
+- **Reach for `displacement` when `mesh` floods.** `mesh` reads
+  mesh-LOCAL coordinates, so on an export that writes geometry directly
+  in site coordinates with identity placements — common for IFC
+  `IfcFacetedBrep` — every honest part's "extent" is really its distance
+  from the file origin. `Wiesenplatz 7, 4057 Basel.ifc` flagged 3,955
+  meshes that way, of which 3 were real (conway#456). `displacement`
+  places each mesh with its transform and scores how far it sits from
+  where the model actually is, and names 5 of 37,502 on the same file.
+  The tell that you want it: median and p90 both large, with flagged rows
+  continuous above the threshold rather than separated from it.
+- **They do not subsume each other.** `mesh` still catches a part that is
+  internally huge but correctly placed; `displacement` scores that part
+  as ordinary. Run both.
 - **`wrap-duplicate loops` is usually not a finding.** Most exporters
   repeat the start point as the last point. It is reported because when
   combined with sub-micron gaps it identifies triangulation-failure
