@@ -7,12 +7,17 @@ on:
     # would sit with no regression result until the next push.
     #
     # converted_to_draft is the other half of that gate, and it works by
-    # cancellation rather than by starting anything: pushing a PR back to
-    # draft fires an event in the same concurrency group below, so
-    # cancel-in-progress kills the regression that is mid-flight and the run
-    # it schedules in its place skips (the PR is a draft again). Without it,
-    # a PR you have explicitly pulled back keeps burning a runner slot to
-    # completion.
+    # cancellation: pushing a PR back to draft fires an event in the same
+    # concurrency group below, so cancel-in-progress kills the run that is
+    # mid-flight. Without it, a PR you have explicitly pulled back keeps
+    # burning a runner slot to completion.
+    #
+    # Note what the replacement run does, since `build` here is ungated: it
+    # re-runs the full emscripten build, then stops before the regression.
+    # So withdrawing a PR trades a partial build plus a rebuild for the rest
+    # of a regression pass — worth it, because the regression is by far the
+    # longer of the two, but it is not free the way it is in Share (where
+    # every job is gated and the replacement run skips outright).
     #
     # reopened was missing before the draft gate landed. Leaving it out means
     # a reopened PR keeps whatever conclusions sat on its head SHA -- possibly
@@ -57,8 +62,18 @@ on:
 # runs must run to completion — auto-publish tags + publishes to npm, and each
 # main commit ships its own version, so cancelling a main run mid-publish (or
 # skipping a commit's release) is not acceptable.
+#
+# The key for non-PR events is the COMMIT, not the ref, and that is what
+# actually delivers the guarantee the paragraph above claims. Every push to
+# main shares one ref, so a ref-keyed group put them all in a single queue —
+# and `cancel-in-progress: false` does not mean "never cancel": GitHub cancels
+# any run still PENDING in a group when a newer one joins it. Merge three
+# commits inside one pipeline window and the middle one's run was cancelled
+# before it started, silently skipping that commit's release. Keying on
+# github.sha gives each main commit its own group, so they run in parallel and
+# none can evict another.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

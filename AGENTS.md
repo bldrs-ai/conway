@@ -60,7 +60,9 @@ order:
 `build` is deliberately left ungated: it is the cheap compile and
 unit-test signal you want while a draft is still moving.
 
-Two mechanics worth knowing before you edit `.github/workflows/build.yml`:
+Mechanics worth knowing before you edit `.github/workflows/build.yml`
+— each of these is load-bearing, so don't prune the list to make it
+tidier:
 
 - The gate is a **job-level `if:`**, not a trigger filter. A
   skipped-by-if job reports a conclusion and satisfies a required
@@ -73,7 +75,10 @@ Two mechanics worth knowing before you edit `.github/workflows/build.yml`:
   The second is what lets pulling a PR *back* to draft cancel a
   regression that is already mid-flight, via the workflow's
   `cancel-in-progress` group — otherwise it runs to completion for a PR
-  you have explicitly withdrawn.
+  you have explicitly withdrawn. Note the replacement run re-runs
+  `build` (which is ungated) before stopping, so withdrawing trades a
+  rebuild for the rest of a regression pass. Worth it here; free in
+  Share, where every job is gated.
 - The `github.event_name != 'pull_request' ||` clause in each gate is
   defensive, not load-bearing: Actions coerces mismatched `==` operands
   to numbers, so `null == false` is already true on push and
