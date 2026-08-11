@@ -2,7 +2,35 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # ready_for_review is what makes the draft gate on run-ifc-regression
+    # usable: without it, flipping a draft to ready fires no event and the PR
+    # would sit with no regression result until the next push.
+    #
+    # converted_to_draft is the other half of that gate, and it works by
+    # cancellation: pushing a PR back to draft fires an event in the same
+    # concurrency group below, so cancel-in-progress kills the run that is
+    # mid-flight. Without it, a PR you have explicitly pulled back keeps
+    # burning a runner slot to completion.
+    #
+    # Note what the replacement run does, since `build` here is ungated: it
+    # re-runs `build`, then stops before the regression. Usually cheap: every
+    # emsdk/GENie/emcc step is gated on the wasm cache key, so a hit means only
+    # a conway-geom submodule bump pays a real compile. The exception is
+    # withdrawing during a cold-cache build — the cancelled run never reaches
+    # the save step, so the replacement pays the full emcc compile.
+    #
+    # Whether that is worth it depends on when you withdraw. During the
+    # regression it clearly is: you stop the longer job and pay at most a
+    # rebuild. During `build` it is pure loss — `run-ifc-regression` needs
+    # `build`, so nothing had started yet and you have bought back nothing.
+    # Not free the way it is in Share, where every job is gated and the
+    # replacement run skips outright.
+    #
+    # reopened was missing before the draft gate landed. Leaving it out means
+    # a reopened PR keeps whatever conclusions sat on its head SHA -- possibly
+    # a `skipped` regression, which reads as passing -- with nothing to
+    # re-run it.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     # Skip the heavy build + IFC regression on doc-only PRs. paths-ignore
     # skips the workflow only when EVERY changed file matches — a PR that
     # also touches code/config still runs the full suite. Push-to-main
@@ -35,12 +63,32 @@ on:
 
 # Cancel superseded runs so a rapid series of pushes to the same PR doesn't
 # leave N full build+regression(+visual-diff) pipelines running to completion
-# in parallel on the 8-vcpu runners — only the newest commit's result matters.
+# in parallel on the shared runners — only the newest commit's result matters.
 # Grouped by ref (refs/pull/<n>/merge is unique per PR) so PRs never cancel
 # each other. cancel-in-progress is scoped to pull_request ONLY: push-to-main
 # runs must run to completion — auto-publish tags + publishes to npm, and each
 # main commit ships its own version, so cancelling a main run mid-publish (or
 # skipping a commit's release) is not acceptable.
+#
+# Keep this keyed on the REF for push:main, not on github.sha, even though the
+# ref key has a known cost. Because every main push shares one ref they all
+# land in one group and run one at a time — and `cancel-in-progress: false`
+# does not mean "never cancel": GitHub cancels a run still PENDING in a group
+# when a newer one joins, so merging three commits inside one pipeline window
+# drops the middle one's run and skips that commit's release.
+#
+# That is the lesser problem. The serialization is what keeps auto-publish's
+# versions monotonic: two main runs publishing concurrently can land out of
+# order, and the out-of-order path below (`npm publish --tag latest`, ~line
+# 1696) then deliberately drags npm's `latest` BACK onto the older commit,
+# shipping it to every consumer.
+#
+# Note the dropped commit's release is NOT simply re-runnable — re-running it
+# later computes a version below the one already published, which lands on
+# that same `--tag latest` branch and causes the exact regression the
+# serialization is here to prevent. Skip the release, or fix the publish step
+# to be ordering-safe (which is what making these parallel needs anyway).
+# Both tracked in conway#468.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -58,7 +106,7 @@ jobs:
   build:
     # Heavy runner matches ifc-regression. The WASM toolchain (genie +
     # emcc) needs the headroom; the default 2-vCPU runner fails the compile.
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -237,7 +285,26 @@ jobs:
   # ---------------------------------------------------------------------------
   run-ifc-regression:
     needs: build
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    # Draft PRs don't run the regression. It is by far the longest job here,
+    # and with several PRs in flight the draft pushes alone can saturate the
+    # 4-job concurrency cap and starve the PRs that are actually ready for
+    # review. `build` is deliberately NOT gated: it is comparatively cheap and
+    # it is the compile + unit-test signal you want while a draft is still
+    # being worked. See AGENTS.md "PR lifecycle".
+    #
+    # A job-level `if` rather than a trigger filter, for the reason spelled
+    # out in the paths-ignore note above: a skipped-by-if job satisfies a
+    # required status check, a workflow that never triggers does not.
+    #
+    # The event_name clause is defensive, not load-bearing. On push and
+    # workflow_dispatch `github.event.pull_request` is null, and Actions
+    # coerces both sides of `==` to a number when the types differ, so a bare
+    # `draft == false` would evaluate `0 == 0` and run anyway. Relying on that
+    # coercion would make merges -- and with them auto-publish, which needs
+    # this job -- hinge on a documented-but-obscure corner of the expression
+    # language. The clause states the intent instead.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Expose the packed tarball name so downstream perf jobs can download the
     # artifact by name without re-packing conway.
     outputs:
@@ -696,12 +763,19 @@ jobs:
   # ---------------------------------------------------------------------------
   visual-diff:
     needs: run-ifc-regression
-    if: github.event_name == 'pull_request' && needs.run-ifc-regression.outputs.visual_diff_count != '0'
+    # The draft clause is redundant today — a skipped `needs` job skips this
+    # one regardless — but it is stated so the draft rule is greppable from
+    # every job it governs, and so this stays correct if visual-diff ever
+    # gains an always()/!cancelled() guard.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      needs.run-ifc-regression.outputs.visual_diff_count != '0'
     # Same large runner as every other job that executes the conway CLIs:
     # the MT WASM engine reserves multi-GB (shared) memory at startup, and on
     # the standard 4-vcpu runner every export died with an uncaught allocation
     # crash (only the "Node.js vX.Y.Z" report footer reached the PR table).
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 30
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
@@ -870,7 +944,7 @@ jobs:
     # the candidate tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Full set locally takes ~10 min; H3 build + clone adds ~5-10 min. Cap at
     # 60 to bound runner-minute cost on a hung benchmark.
     timeout-minutes: 60
@@ -1182,7 +1256,7 @@ jobs:
     # the candidate tarball this job benchmarks is produced; auto-publish is
     # main-branch-only and does not fire on a tag ref.
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rc-')) || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1530,7 +1604,7 @@ jobs:
   auto-publish:
     needs: [build, run-ifc-regression]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04-8vcpu-32gb-300gbssd
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     permissions:
       contents: write    # tag push
       id-token: write    # OIDC token for npm Trusted Publishing
