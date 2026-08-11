@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals'
 // @ts-expect-error -- an untyped .mjs helper beside the CLI it serves.
-import { robustCentre, worldCentre } from '../../../scripts/debug/displacement.mjs'
+import { localCentre, placeCentre, robustCentre } from '../../../scripts/debug/displacement.mjs'
 
 /* eslint-disable no-magic-numbers -- these are synthetic coordinates and
    distances chosen to mirror the real model in conway#456. Naming each one
@@ -90,8 +90,10 @@ describe('displacement scoring', () => {
     // local coordinates would make these indistinguishable.
     const unitBox = [[-1, -1, -1], [1, 1, 1]]
 
-    const atOrigin = worldCentre(geometryOf(unitBox), 2, translation(0, 0, 0))
-    const farAway = worldCentre(geometryOf(unitBox), 2, translation(1000, 0, 0))
+    const local = localCentre(geometryOf(unitBox), 2)
+
+    const atOrigin = placeCentre(local, translation(0, 0, 0))
+    const farAway = placeCentre(local, translation(1000, 0, 0))
 
     expect(atOrigin).toEqual([0, 0, 0])
     expect(farAway).toEqual([1000, 0, 0])
@@ -99,7 +101,7 @@ describe('displacement scoring', () => {
 
   test('an undefined transform means identity, not a skipped mesh', () => {
 
-    expect(worldCentre(geometryOf([[2, 4, 6], [4, 8, 12]]), 2, undefined))
+    expect(placeCentre(localCentre(geometryOf([[2, 4, 6], [4, 8, 12]]), 2), undefined))
         .toEqual([3, 6, 9])
   })
 
@@ -113,14 +115,12 @@ describe('displacement scoring', () => {
     // script's own header, so it has to be loud.
     const notATransform = { someObject: true } as unknown as number[]
 
-    expect(() => worldCentre(geometryOf([[0, 0, 0]]), 1, notATransform))
-        .toThrow(/walk tuple index/)
+    expect(() => placeCentre([0, 0, 0], notATransform)).toThrow(/walk tuple index/)
   })
 
   test('non-finite vertex data yields no centre rather than a NaN score', () => {
 
-    expect(worldCentre(geometryOf([[0, 0, 0], [NaN, 0, 0]]), 2, undefined))
-        .toBeUndefined()
+    expect(localCentre(geometryOf([[0, 0, 0], [NaN, 0, 0]]), 2)).toBeUndefined()
   })
 
   test('a right-shaped transform holding NaN drops the mesh, and does not throw', () => {
@@ -129,7 +129,6 @@ describe('displacement scoring', () => {
     // down the whole run and discard the other stages' reports.
     const nanTransform = translation(NaN, 0, 0)
 
-    expect(worldCentre(geometryOf([[0, 0, 0], [2, 2, 2]]), 2, nanTransform))
-        .toBeUndefined()
+    expect(placeCentre([1, 1, 1], nanTransform)).toBeUndefined()
   })
 })

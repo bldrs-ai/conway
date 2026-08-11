@@ -76,7 +76,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import {robustCentre, worldCentre} from './displacement.mjs'
+import {localCentre, placeCentre, robustCentre} from './displacement.mjs'
 
 const REPO_ROOT = new URL('../../', import.meta.url)
 
@@ -629,6 +629,7 @@ function collectDisplacement(stage, model, scene) {
   }
 
   const placed = []
+  const localCentres = new Map()
   let walkedMeshes = 0
 
   for (const walked of scene.walk()) {
@@ -654,13 +655,31 @@ function collectDisplacement(stage, model, scene) {
       continue
     }
 
-    const centre = worldCentre(geometry, count, walked[0])
+    // Local bounds are placement-invariant, so they are read once per
+    // geometry however many times it is instanced. Without this, dropping
+    // the dedup above would multiply the getPoint() wasm crossings by the
+    // instance count on exactly the large models this tool is for.
+    if (!localCentres.has(mesh.localID)) {
+      localCentres.set(mesh.localID, localCentre(geometry, count))
+    }
+
+    const local = localCentres.get(mesh.localID)
+
+    if (local === undefined) {
+      continue
+    }
+
+    const centre = placeCentre(local, walked[0])
 
     if (centre === undefined) {
       continue
     }
 
-    placed.push({localID: mesh.localID, centre, vertices: count})
+    // walked[4] is the owning product; mesh.localID names the shared
+    // representation item. With every placement now scored separately, the
+    // latter would print the same expressID on all N rows of an instanced
+    // geometry — and naming the product is what this stage is for.
+    placed.push({element: walked[4], centre, vertices: count})
   }
 
   // Meshes WALKED, not meshes placed. `fired` answers "did this probe see
@@ -679,7 +698,7 @@ function collectDisplacement(stage, model, scene) {
     const offset = [0, 1, 2].map((axis) => each.centre[axis] - centre[axis])
 
     stage.record(Math.hypot(offset[0], offset[1], offset[2]), () => ({
-      ...describeEntity(model.getElementByLocalID?.(each.localID)),
+      ...describeEntity(each.element),
       vertices: each.vertices,
       centre: each.centre.map((value) => Number(value.toFixed(1))),
     }))
@@ -890,14 +909,24 @@ async function main() {
     collectMeshes(stages.get('mesh'), model, scene)
   }
 
+  let displacementError
+
   if (stages.has('displacement')) {
     try {
       collectDisplacement(stages.get('displacement'), model, scene)
     } catch (err) {
       // One stage's programming error must not discard the curve/loop/face/
       // mesh reports this run already collected — they are usually the ones
-      // being read. Surfaced on the stage rather than swallowed.
-      stages.get('displacement').extra.error = String(err?.message ?? err)
+      // being read.
+      //
+      // Printed HERE rather than stashed on stage.extra. A throw leaves
+      // `fired` at 0, so reportStage takes its dead branch and prints
+      // "PROBE NEVER FIRED ... Expected when the model uses no geometry of
+      // this kind" — which reads as an explanation rather than a failure,
+      // and drops `extra` from --json entirely. That is precisely the
+      // false-clean reading the guard in placeCentre exists to prevent, so
+      // it cannot be left to a channel the reporter might not show.
+      displacementError = String(err?.message ?? err)
     }
   }
 
@@ -907,6 +936,13 @@ async function main() {
       `${options.stages.join(',')}`)
 
   const reports = [...stages.values()].map((stage) => reportStage(stage, options))
+
+  if (displacementError !== undefined) {
+    say(
+        `\n## displacement\n  STAGE FAILED — ${displacementError}\n` +
+        '  This stage measured nothing because it threw, NOT because the\n' +
+        '  model is clean. The other stages above are unaffected.')
+  }
 
   if (messages.size > 0) {
     const ranked = [...messages].sort((a, b) => b[1] - a[1])

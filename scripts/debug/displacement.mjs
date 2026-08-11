@@ -40,39 +40,24 @@ export function robustCentre(centres) {
 
 
 /**
- * A mesh's centre in WORLD space: the centre of its local bounds, placed by
- * its absolute transform.
+ * A mesh's centre in its OWN coordinates: the centre of its local bounds.
  *
  * Bounds centre rather than vertex mean, so a face with a dense cluster of
  * vertices at one end does not drag the centre toward it — this is asking
  * where a part sits, not where its detail is.
  *
- * The transform is validated rather than trusted. A wrong walk-tuple index
- * hands this an object, every multiplication yields NaN, `Stage.record`
- * discards non-finite values, and the stage reports "N calls, 0 measured" —
- * a clean-looking result produced by a bug, which is hazard 1 in
- * model_report.mjs's header arriving through the back door. It cost a
- * debugging cycle already: conway#456 names the transform as `walked[1]`,
- * and it is `walked[0]`.
+ * Split from placement so a caller can compute this ONCE per geometry and
+ * apply it to every placement. Local bounds are placement-invariant, and
+ * instanced geometry is walked once per instance, so recomputing would
+ * re-read every vertex across the wasm boundary N times for an answer that
+ * cannot change.
  *
  * @param {object} geometry A conway GeometryObject
  * @param {number} count Vertex count
- * @param {Float64Array|number[]|undefined} transform Column-major 4x4, or
- *   undefined for identity
- * @return {number[]|undefined} [x, y, z], or undefined if any vertex or any
- *   resulting coordinate was not finite
+ * @return {number[]|undefined} [x, y, z], or undefined if any vertex was
+ *   not finite
  */
-export function worldCentre(geometry, count, transform) {
-  /** Elements in a column-major 4x4. */
-  const MATRIX_ELEMENTS = 16
-
-  if (transform !== undefined &&
-      (typeof transform.length !== 'number' || transform.length < MATRIX_ELEMENTS)) {
-    throw new Error(
-        'worldCentre: expected a column-major 4x4 transform or undefined, got ' +
-        `${Object.prototype.toString.call(transform)} — check the walk tuple index`)
-  }
-
+export function localCentre(geometry, count) {
   const min = [Infinity, Infinity, Infinity]
   const max = [-Infinity, -Infinity, -Infinity]
 
@@ -95,7 +80,37 @@ export function worldCentre(geometry, count, transform) {
     return undefined
   }
 
-  const local = [0, 1, 2].map((axis) => (min[axis] + max[axis]) / 2)
+  return [0, 1, 2].map((axis) => (min[axis] + max[axis]) / 2)
+}
+
+
+/**
+ * Place a local centre into world space with an absolute transform.
+ *
+ * The transform is validated rather than trusted. A wrong walk-tuple index
+ * hands this an object, every multiplication yields NaN, `Stage.record`
+ * discards non-finite values, and the stage reports "N calls, 0 measured" —
+ * a clean-looking result produced by a bug, which is hazard 1 in
+ * model_report.mjs's header arriving through the back door. It cost a
+ * debugging cycle already: conway#456 names the transform as `walked[1]`,
+ * and it is `walked[0]`.
+ *
+ * @param {number[]} local [x, y, z] in mesh coordinates
+ * @param {Float64Array|number[]|undefined} transform Column-major 4x4, or
+ *   undefined for identity
+ * @return {number[]|undefined} [x, y, z] in world space, or undefined if the
+ *   transform was the right shape but held non-finite values
+ */
+export function placeCentre(local, transform) {
+  /** Elements in a column-major 4x4. */
+  const MATRIX_ELEMENTS = 16
+
+  if (transform !== undefined &&
+      (typeof transform.length !== 'number' || transform.length < MATRIX_ELEMENTS)) {
+    throw new Error(
+        'placeCentre: expected a column-major 4x4 transform or undefined, got ' +
+        `${Object.prototype.toString.call(transform)} — check the walk tuple index`)
+  }
 
   if (transform === undefined) {
     return local
