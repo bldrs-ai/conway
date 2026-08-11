@@ -445,13 +445,46 @@ function writePng(path, pixels, size) {
  * @return {string[]} Paths to read, in order.
  */
 function resolveGlbPaths(spec) {
+  // A JSON array is the unambiguous form, and the only one that works for a
+  // comma-named model big enough to CHUNK: the literal-path rule below cannot
+  // help there, because no single file has that name. Programmatic callers
+  // (visual_diff_report.cjs) pass this; it survives execFileSync with no
+  // shell in the way. A real path never starts with '[' and parses as an
+  // array of strings, so this cannot capture one by accident.
+  if (spec.startsWith('[')) {
+    let parsed = null
+
+    try {
+      parsed = JSON.parse(spec)
+    } catch {
+      parsed = null
+    }
+
+    if (Array.isArray(parsed) && parsed.length > 0 &&
+        parsed.every((part) => typeof part === 'string')) {
+
+      const absent = parsed.filter((part) => !fs.existsSync(part))
+
+      if (absent.length > 0) {
+        throw new Error(
+            `No such GLB in chunk list: ` +
+            `${absent.map((part) => JSON.stringify(part)).join(', ')}`)
+      }
+
+      return parsed
+    }
+  }
+
   if (fs.existsSync(spec)) {
     return [spec]
   }
 
   const parts = spec.split(',').map((part) => part.trim()).filter(Boolean)
 
-  if (parts.length > 1 && parts.every((part) => fs.existsSync(part))) {
+  // `>= 1`, not `> 1`: a trailing comma from a shell-built list ("a.glb,")
+  // should still resolve, and a bare missing path has already failed the
+  // existsSync check above, so there is nothing to lose by trying.
+  if (parts.length >= 1 && parts.every((part) => fs.existsSync(part))) {
     return parts
   }
 
@@ -526,7 +559,23 @@ function main() {
 // Run as a CLI, but stay require()-able so diffPixels can be unit-tested
 // without executing main().
 if (require.main === module) {
-  main()
+  try {
+    main()
+  } catch (err) {
+    // Print the message and exit, rather than letting Node throw. An uncaught
+    // throw leads with a source code frame, and visual_diff_report.cjs's
+    // childFailureDiagnostic takes the FIRST stderr line matching
+    // /error|cannot|not found|bad option|unexpected/i -- which would be the
+    // frame's `throw new Error(` rather than anything describing the failure.
+    // The PR comment is where these diagnostics are actually read.
+    //
+    // The "Error:" prefix is load-bearing for that same regex: a message like
+    // "No such GLB: ..." matches none of its alternatives on its own and
+    // would fall through to lines.pop(), i.e. the last line of a multi-line
+    // message rather than its first.
+    process.stderr.write(`Error: ${err && err.message ? err.message : err}\n`)
+    process.exit(1)
+  }
 }
 
 module.exports = { diffPixels, resolveGlbPaths }

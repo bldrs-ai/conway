@@ -196,7 +196,7 @@ function main() {
       }
       try {
         execFileSync(process.execPath, [
-          renderScript, side.glbs.join(','),
+          renderScript, JSON.stringify(side.glbs),
           path.join(opts.out, `${slug}-${suffix}.png`),
         ], { stdio: 'pipe', timeout: 5 * 60 * 1000 })
         return `![${suffix}](RAW_URL_BASE/${slug}-${suffix}.png)`
@@ -210,7 +210,8 @@ function main() {
     if (base.glbs.length > 0 && cand.glbs.length > 0) {
       try {
         const renderOut = execFileSync(process.execPath, [
-          renderScript, '--pair', base.glbs.join(','), cand.glbs.join(','),
+          renderScript, '--pair',
+          JSON.stringify(base.glbs), JSON.stringify(cand.glbs),
           path.join(opts.out, slug),
         ], { stdio: 'pipe', timeout: 5 * 60 * 1000 })
 

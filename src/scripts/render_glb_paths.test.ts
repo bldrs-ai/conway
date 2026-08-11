@@ -68,6 +68,33 @@ describe('render_glb path resolution', () => {
     expect(resolveGlbPaths(chunks.join(','))).toEqual(chunks)
   })
 
+  test('a JSON array resolves chunks whose names contain commas', () => {
+
+    // The case the literal-path rule alone cannot reach: a comma-named model
+    // large enough that the CLI splits it, so no single file bears the name.
+    // visual_diff_report.cjs passes this form.
+    const chunks = [
+      path.join(workDir, COMMA_NAME),
+      path.join(workDir, 'chunk0.glb'),
+    ]
+
+    expect(resolveGlbPaths(JSON.stringify(chunks))).toEqual(chunks)
+  })
+
+  test('a JSON array with a missing member fails rather than rendering part', () => {
+
+    const chunks = [path.join(workDir, 'chunk0.glb'), path.join(workDir, 'gone.glb')]
+
+    expect(() => resolveGlbPaths(JSON.stringify(chunks))).toThrow(/gone\.glb/)
+  })
+
+  test('a trailing comma from a shell-built list still resolves', () => {
+
+    const target = path.join(workDir, 'chunk0.glb')
+
+    expect(resolveGlbPaths(`${target},`)).toEqual([target])
+  })
+
   test('a missing path names both readings rather than one fragment', () => {
 
     const missing = path.join(workDir, 'Nowhere 1, 2345 Somewhere.glb')
