@@ -2,7 +2,10 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    # ready_for_review is what makes the draft gate on run-ifc-regression
+    # usable: without it, flipping a draft to ready fires no event and the PR
+    # would sit with no regression result until the next push.
+    types: [opened, synchronize, ready_for_review]
     # Skip the heavy build + IFC regression on doc-only PRs. paths-ignore
     # skips the workflow only when EVERY changed file matches — a PR that
     # also touches code/config still runs the full suite. Push-to-main
@@ -237,6 +240,19 @@ jobs:
   # ---------------------------------------------------------------------------
   run-ifc-regression:
     needs: build
+    # Draft PRs don't run the regression. It is by far the longest job here,
+    # and with several PRs in flight the draft pushes alone can saturate the
+    # 4-job concurrency cap and starve the PRs that are actually ready for
+    # review. `build` is deliberately NOT gated: it is comparatively cheap and
+    # it is the compile + unit-test signal you want while a draft is still
+    # being worked. See AGENTS.md "PR lifecycle".
+    #
+    # A job-level `if` rather than a trigger filter, for the reason spelled
+    # out in the paths-ignore note above: a skipped-by-if job satisfies a
+    # required status check, a workflow that never triggers does not.
+    # The event_name guard keeps push:main and workflow_dispatch running,
+    # where github.event.pull_request is null.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Expose the packed tarball name so downstream perf jobs can download the
     # artifact by name without re-packing conway.
@@ -696,7 +712,14 @@ jobs:
   # ---------------------------------------------------------------------------
   visual-diff:
     needs: run-ifc-regression
-    if: github.event_name == 'pull_request' && needs.run-ifc-regression.outputs.visual_diff_count != '0'
+    # The draft clause is redundant today — a skipped `needs` job skips this
+    # one regardless — but it is stated so the draft rule is greppable from
+    # every job it governs, and so this stays correct if visual-diff ever
+    # gains an always()/!cancelled() guard.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      needs.run-ifc-regression.outputs.visual_diff_count != '0'
     # Same large runner as every other job that executes the conway CLIs:
     # the MT WASM engine reserves multi-GB (shared) memory at startup, and on
     # the standard 4-vcpu runner every export died with an uncaught allocation

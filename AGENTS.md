@@ -23,6 +23,58 @@ than rebuilding per edit.
 
 This repo uses yarn 1.22.22.
 
+## PR lifecycle
+
+Several PRs are usually in flight at once, and the CI runners are a
+shared, capped resource (4 concurrent jobs). A PR that runs the full
+suite on every push while it is still being reworked starves the PRs
+that are actually ready. So work moves through these five steps, in
+order:
+
+1. **Open the PR as a draft.** Not "open it and mark it draft" —
+   `create_pull_request` takes `draft: true`. Heavy CI is gated on
+   draft state (see below), so a draft costs a build, not a full
+   regression pass.
+2. **Leave it in draft until `/review` has run and every finding is
+   handled.** Handled means fixed, or answered in the PR thread with
+   why it is not a defect. Do not flip to ready with open findings.
+3. **Flip it out of draft** (`update_pull_request` with
+   `draft: false`). That fires `ready_for_review`, which is what
+   triggers the gated jobs — this is the point where CI actually runs.
+4. **Drive CI to green.** If fixing CI changed the diff in any way
+   beyond a trivial revert, `/review` again — the reviewed diff is not
+   the merged diff otherwise.
+5. **Then land it:** bring the PR description up to date with what the
+   change actually became, merge, and close or narrow the issues it
+   resolves. An issue that is only partly addressed gets a comment
+   saying what is left, not a close.
+
+### What the draft gate covers
+
+| Job | Draft PR | Ready PR |
+|---|---|---|
+| `build` (compile + unit tests) | runs | runs |
+| `run-ifc-regression` | **skipped** | runs |
+| `visual-diff` | **skipped** | runs (when digests changed) |
+
+`build` is deliberately left ungated: it is the cheap compile and
+unit-test signal you want while a draft is still moving.
+
+Two mechanics worth knowing before you edit `.github/workflows/build.yml`:
+
+- The gate is a **job-level `if:`**, not a trigger filter. A
+  skipped-by-if job reports a conclusion and satisfies a required
+  status check; a workflow that never triggers reports nothing and
+  leaves the PR waiting forever. This is the same trap the
+  `paths-ignore` note in that file warns about.
+- `ready_for_review` must stay in the `pull_request` `types:` list.
+  Without it, flipping a draft to ready fires no event at all and step
+  3 above silently does nothing.
+
+The same lifecycle and the same gate shape apply in
+[Share](https://github.com/bldrs-ai/Share) — see its `AGENTS.md` for
+which jobs are gated there.
+
 ## Debugging a bad model
 
 When a model renders wrong — spikes, missing parts, exploded assemblies —
