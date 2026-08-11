@@ -13,11 +13,12 @@ on:
     # burning a runner slot to completion.
     #
     # Note what the replacement run does, since `build` here is ungated: it
-    # re-runs the full emscripten build, then stops before the regression.
-    # So withdrawing a PR trades a partial build plus a rebuild for the rest
-    # of a regression pass — worth it, because the regression is by far the
-    # longer of the two, but it is not free the way it is in Share (where
-    # every job is gated and the replacement run skips outright).
+    # re-runs `build`, then stops before the regression. That is usually
+    # cheap — every emsdk/GENie/emcc step is gated on the wasm cache key, and
+    # the run just cancelled will have populated it, so only a conway-geom
+    # submodule bump pays a real compile. Either way it buys back the rest of
+    # a regression pass. Not quite free the way it is in Share, where every
+    # job is gated and the replacement run skips outright.
     #
     # reopened was missing before the draft gate landed. Leaving it out means
     # a reopened PR keeps whatever conclusions sat on its head SHA -- possibly
@@ -63,17 +64,22 @@ on:
 # main commit ships its own version, so cancelling a main run mid-publish (or
 # skipping a commit's release) is not acceptable.
 #
-# The key for non-PR events is the COMMIT, not the ref, and that is what
-# actually delivers the guarantee the paragraph above claims. Every push to
-# main shares one ref, so a ref-keyed group put them all in a single queue —
-# and `cancel-in-progress: false` does not mean "never cancel": GitHub cancels
-# any run still PENDING in a group when a newer one joins it. Merge three
-# commits inside one pipeline window and the middle one's run was cancelled
-# before it started, silently skipping that commit's release. Keying on
-# github.sha gives each main commit its own group, so they run in parallel and
-# none can evict another.
+# Keep this keyed on the REF for push:main, not on github.sha, even though the
+# ref key has a known cost. Because every main push shares one ref they all
+# land in one group and run one at a time — and `cancel-in-progress: false`
+# does not mean "never cancel": GitHub cancels a run still PENDING in a group
+# when a newer one joins, so merging three commits inside one pipeline window
+# drops the middle one's run and skips that commit's release.
+#
+# That is the lesser problem. The serialization is what keeps auto-publish's
+# versions monotonic: two main runs publishing concurrently can land out of
+# order, and the out-of-order path below (`npm publish --tag latest`, ~line
+# 1696) then deliberately drags npm's `latest` BACK onto the older commit. A
+# skipped release is recoverable by re-running the job; a `latest` pointing
+# backwards is shipped to every consumer. Making these parallel needs the
+# publish step to be ordering-safe first — see conway#468.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
