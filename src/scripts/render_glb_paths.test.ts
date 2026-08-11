@@ -1,6 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { execFileSync } from 'child_process'
 import { describe, expect, test, beforeAll, afterAll } from '@jest/globals'
 import { createRequire } from 'module'
 
@@ -103,6 +104,45 @@ describe('render_glb path resolution', () => {
     // surfaced as ENOENT on "Nowhere 1", a string the caller never typed.
     expect(() => resolveGlbPaths(missing)).toThrow(/No such GLB/)
     expect(() => resolveGlbPaths(missing)).toThrow(/2-chunk list/)
+  })
+
+  test('a CLI failure surfaces its own message to visual_diff_report', () => {
+
+    // This contract spans two files and has no other guard. render_glb.cjs
+    // prints "Error: <message>"; visual_diff_report.cjs's
+    // childFailureDiagnostic picks the FIRST stderr line matching its regex
+    // and puts it in the PR comment's table cell. Letting Node throw
+    // uncaught instead degrades every render-failure cell to a source code
+    // frame, with the whole suite otherwise green.
+    //
+    // Scope, honestly: this pins the END-TO-END result, not each mechanism.
+    // Removing the "Error:" prefix alone keeps it passing, because the stack
+    // printed after the message opens with an "Error:" line that matches the
+    // same regex. Both are kept because a non-Error throw has no stack.
+    const script = path.resolve(process.cwd(), 'scripts/render_glb.cjs')
+    const missing = path.join(workDir, 'Nowhere 1, 2345 Somewhere.glb')
+
+    let stderr = ''
+
+    try {
+      execFileSync(
+          process.execPath,
+          [script, missing, path.join(workDir, 'out.png')],
+          { stdio: 'pipe' })
+    } catch (err) {
+      stderr = ((err as { stderr?: Buffer }).stderr ?? '').toString()
+    }
+
+    // The regex is copied from visual_diff_report.cjs:138 deliberately — the
+    // point is to fail here if either side drifts.
+    const picked = stderr.split('\n').filter(Boolean).find(
+        (line) => /error|cannot|not found|bad option|unexpected/i.test(line))
+
+    expect(picked).toMatch(/No such GLB/)
+    expect(picked).toContain('Nowhere 1, 2345 Somewhere.glb')
+
+    // And the stack still reaches the job log, which is a separate consumer.
+    expect(stderr).toMatch(/at resolveGlbPaths/)
   })
 
   test('a chunk list with one missing member does not silently render the rest', () => {

@@ -11,15 +11,24 @@
  * accessors.
  *
  * Usage:
- *   render_glb.cjs <in.glb[,in2.glb...]> <out.png> [--size N]
- *   render_glb.cjs --pair <before.glb[,...]> <after.glb[,...]> <outPrefix> [--size N]
+ *   render_glb.cjs <in> <out.png> [--size N]
+ *   render_glb.cjs --pair <before> <after> <outPrefix> [--size N]
  *
- * Each side is a comma-separated list of GLBs merged into one scene —
- * conway's CLI splits large models into multiple chunk files (jet engine),
- * and rendering only one chunk silently drops the rest of the model. A path
- * that itself contains a comma is handled: an existing file wins over the
- * comma reading, so `"Wiesenplatz 7, 4057 Basel.glb"` works unquoted-by-luck
- * or not (conway#457).
+ * where <in> / <before> / <after> is one of:
+ *
+ *   a path                  "model.glb", or "Wiesenplatz 7, 4057 Basel.glb"
+ *   a comma-joined list     "model_test0.glb,model_test1.glb"
+ *   a JSON array           '["a b, c.glb","d.glb"]'
+ *
+ * Chunk lists exist because conway's CLI splits large models across files
+ * (jet engine), and rendering only one chunk silently drops the rest.
+ *
+ * The three forms are tried in the order above, which is what makes a
+ * comma-containing filename work: an existing file wins over the comma
+ * reading (conway#457). Quote it, of course — the shell splits on spaces
+ * before this script sees anything. The JSON form is the only one that can
+ * express a chunk list whose MEMBERS contain commas, since no single file
+ * bears that name; it is what visual_diff_report.cjs passes.
  *
  * Pair mode renders both sides with ONE camera framed on the union of
  * the two bounding boxes (writes <outPrefix>-before.png and
@@ -441,7 +450,9 @@ function writePng(path, pixels, size) {
  * (conway#457). Splitting is only a fallback, which is enough because a
  * chunk list's elements are separate files that each have to exist anyway.
  *
- * @param {string} spec The path, or a comma-joined list of chunk paths.
+ * @param {string} spec A path, a comma-joined list of chunk paths, or a JSON
+ *   array of paths. Tried in that order; see the file header. The JSON form
+ *   is the only one that can express chunk paths containing commas.
  * @return {string[]} Paths to read, in order.
  */
 function resolveGlbPaths(spec) {
@@ -569,11 +580,25 @@ if (require.main === module) {
     // frame's `throw new Error(` rather than anything describing the failure.
     // The PR comment is where these diagnostics are actually read.
     //
-    // The "Error:" prefix is load-bearing for that same regex: a message like
-    // "No such GLB: ..." matches none of its alternatives on its own and
-    // would fall through to lines.pop(), i.e. the last line of a multi-line
-    // message rather than its first.
+    // The "Error:" prefix is what makes the message match that regex at all:
+    // "No such GLB: ..." hits none of its alternatives on its own. In the
+    // common case the stack printed below also opens with "Error: ...", so
+    // the prefix is belt-and-braces there - but a non-Error throw (a bare
+    // string, or anything without .stack) has no such line, and the prefix
+    // is the only thing standing between that and a table cell reading
+    // whatever the last stderr line happened to be.
     process.stderr.write(`Error: ${err && err.message ? err.message : err}\n`)
+
+    // Stack after the message, not instead of it. visual_diff_report.cjs
+    // echoes the whole child stderr into the CI job log, so dropping the
+    // stack would lose the only pointer to a file and line for failures
+    // that are not about paths at all - a truncated GLB throws a RangeError
+    // deep in parseGlb. lines.find() takes the FIRST match, and stack frames
+    // match none of the regex alternatives, so this cannot displace the
+    // message in the PR table.
+    if (err && err.stack) {
+      process.stderr.write(`${err.stack}\n`)
+    }
     process.exit(1)
   }
 }
