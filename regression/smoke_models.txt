@@ -30,3 +30,19 @@ driver board.step
 # baseline yet: first smoke run's digest lands as new and gets blessed
 # with the next baseline PR.
 Right_Hand.step
+
+# EVIDENCE-BRANCH ONLY (bldrs-ai/conway#475) - not for merge.
+#
+# The revolution-CDT fix (conway-geom#165) trades trim fidelity for
+# termination: faces where TryResolve resolved an intersection correctly now
+# take the coarser swept-grid fallback. Locally FM_ARC_DigitalHub is where that
+# shows - same 2236 meshes, 99641 -> 120947 vertices - and it is NOT in the
+# subset above, so the first visual-diff run on this PR rendered six small STEP
+# models and never looked at the one model that actually changes. Adding it
+# here so visual-diff renders it and the tradeoff gets a visual verdict rather
+# than a vertex count.
+#
+# ISSUE_159 is deliberately NOT added: the base side of visual-diff renders the
+# published (unfixed) engine, where that model is the 35-90s runaway this fix
+# exists to remove, and it would likely hang or time out the base render.
+FM_ARC_DigitalHub.ifc
