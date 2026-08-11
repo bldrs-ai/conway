@@ -113,11 +113,24 @@ jobs:
           TARGETS="$IN_TARGETS"
           TM_REF="$IN_TM_REF"
           TM_PRIV_REF="$IN_TM_PRIV_REF"
+          # A directive is a line consisting ENTIRELY of tags. Prose that
+          # merely mentions the syntax must not reconfigure the run: the
+          # commit that added the `targets` validation below quoted
+          # "[targets: public ]" in its body as the typo example, and the
+          # old scan-the-whole-message grep read that as an instruction and
+          # silently skipped the private corpus. Anchoring to a tags-only
+          # line keeps the message writable prose.
           if [ -n "$COMMIT_MSG" ]; then
-            TAG_V=$(printf '%s' "$COMMIT_MSG" | grep -oP '\[versions:[^]]*\]' | head -1 | sed 's/^\[versions:\s*//; s/\]$//') || true
-            TAG_T=$(printf '%s' "$COMMIT_MSG" | grep -oP '\[targets:[^]]*\]' | head -1 | sed 's/^\[targets:\s*//; s/\]$//') || true
-            [ -n "$TAG_V" ] && VERSIONS="$TAG_V"
-            [ -n "$TAG_T" ] && TARGETS="$TAG_T"
+            DIRECTIVE=$(printf '%s\n' "$COMMIT_MSG" \
+              | grep -E '^[[:space:]]*(\[(versions|targets):[^]]*\][[:space:]]*)+$' \
+              | head -1) || true
+            if [ -n "$DIRECTIVE" ]; then
+              echo "Directive line: $DIRECTIVE"
+              TAG_V=$(printf '%s' "$DIRECTIVE" | grep -oP '\[versions:[^]]*\]' | head -1 | sed 's/^\[versions:\s*//; s/\]$//') || true
+              TAG_T=$(printf '%s' "$DIRECTIVE" | grep -oP '\[targets:[^]]*\]' | head -1 | sed 's/^\[targets:\s*//; s/\]$//') || true
+              if [ -n "$TAG_V" ]; then VERSIONS="$TAG_V"; fi
+              if [ -n "$TAG_T" ]; then TARGETS="$TAG_T"; fi
+            fi
           fi
           VERSIONS="${VERSIONS:-0.23.940}"
           TARGETS="${TARGETS:-both}"
