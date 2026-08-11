@@ -16,7 +16,10 @@
  *
  * Each side is a comma-separated list of GLBs merged into one scene —
  * conway's CLI splits large models into multiple chunk files (jet engine),
- * and rendering only one chunk silently drops the rest of the model.
+ * and rendering only one chunk silently drops the rest of the model. A path
+ * that itself contains a comma is handled: an existing file wins over the
+ * comma reading, so `"Wiesenplatz 7, 4057 Basel.glb"` works unquoted-by-luck
+ * or not (conway#457).
  *
  * Pair mode renders both sides with ONE camera framed on the union of
  * the two bounding boxes (writes <outPrefix>-before.png and
@@ -428,9 +431,48 @@ function writePng(path, pixels, size) {
 // CLI
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve one CLI path argument to the list of GLBs it names.
+ *
+ * A literal path wins over comma-splitting. Several models we ship are named
+ * with commas — `Wiesenplatz 7, 4057 Basel.ifc` and friends — and the CLI's
+ * `-g` output keeps the source basename, so splitting first tore a real path
+ * into pieces that don't exist and reported the first fragment as missing
+ * (conway#457). Splitting is only a fallback, which is enough because a
+ * chunk list's elements are separate files that each have to exist anyway.
+ *
+ * @param {string} spec The path, or a comma-joined list of chunk paths.
+ * @return {string[]} Paths to read, in order.
+ */
+function resolveGlbPaths(spec) {
+  if (fs.existsSync(spec)) {
+    return [spec]
+  }
+
+  const parts = spec.split(',').map((part) => part.trim()).filter(Boolean)
+
+  if (parts.length > 1 && parts.every((part) => fs.existsSync(part))) {
+    return parts
+  }
+
+  // Neither reading holds. Say so naming both, rather than letting the
+  // caller see ENOENT on a fragment they never typed — the failure this
+  // whole function exists to stop being confusing.
+  const missing = parts.filter((part) => !fs.existsSync(part))
+
+  throw new Error(
+      `No such GLB: ${JSON.stringify(spec)}\n` +
+      (parts.length > 1 ?
+        `  Also tried as a ${parts.length}-chunk list; missing: ` +
+          `${missing.map((part) => JSON.stringify(part)).join(', ')}\n` :
+        '') +
+      '  (A path containing a comma is treated as a literal path when it ' +
+      'exists.)')
+}
+
 /** Load one comma-separated GLB list into a single world-space soup. */
 function loadTriangles(glbPathList) {
-  const soups = glbPathList.split(',').map((glbPath) => {
+  const soups = resolveGlbPaths(glbPathList).map((glbPath) => {
     const { json, bin } = parseGlb(fs.readFileSync(glbPath))
     return collectTriangles(json, bin)
   })
@@ -487,4 +529,4 @@ if (require.main === module) {
   main()
 }
 
-module.exports = { diffPixels }
+module.exports = { diffPixels, resolveGlbPaths }
