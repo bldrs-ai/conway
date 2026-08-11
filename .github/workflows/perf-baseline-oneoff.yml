@@ -1,0 +1,500 @@
+name: Perf baseline one-off (published conway on CI runner)
+
+# On-demand H3 benchmark of PUBLISHED @bldrs-ai/conway versions on the same
+# runner class the rc perf jobs use. Purpose: put historical engines (e.g.
+# 0.23.940, the last committed benchmark-gallery series, measured June 2025 on
+# an arm64 Mac) onto CI hardware so their numbers are directly comparable to
+# the blessed rc snapshots — separating hardware drift from engine drift — and
+# to bisect a per-model regression across the published version history
+# without local builds (auto-publish ships every main merge to npm).
+#
+# COMPARABILITY — READ BEFORE TRUSTING A CROSS-RUN DELTA. The premise above
+# only holds for numbers measured on the SAME runner class, and that class has
+# already changed once: snapshots blessed before #464 ran on the now-retired
+# `ubuntu-22.04-8vcpu-32gb-300gbssd` (8 vcpu / 32 GB), everything after on
+# `ubuntu-24.04-4vcpu-8gb-150gbssd` (4 vcpu / 8 GB, plus a distro bump).
+# Halving the core count does not scale timings uniformly — parse and geometry
+# parallelize differently — so a delta spanning that boundary measures the
+# runner, not the engine. Always re-baseline every version you intend to
+# compare in one firing of this workflow, and record the runner label in the
+# provenance alongside the numbers. Same rule applies to the next runner
+# change: treat `runs-on` here as part of the experiment, not boilerplate.
+#
+# Runs a MATRIX of versions per corpus, one job per (corpus, version), in
+# parallel on separate runners. Mirrors perf-three-public / perf-three-private
+# environments exactly (runner class, Node 20, H3 pin, xvfb/GL, canvas deps,
+# BENCHMARK_ANONYMIZE for private); the only intended difference is WHERE
+# conway comes from: the npm registry instead of the candidate tarball.
+#
+# Cost note: ~12 min public / ~22 min private per job as measured on the old
+# 8-vcpu runner; budget longer on the 4-vcpu one. A 2-version both-corpora
+# firing was ~70 runner-minutes there. Size version lists accordingly.
+#
+# Artifacts are named perf-oneoff-* on purpose. They must NEVER match the
+# `perf-three-{public,private}-<digits>` snapshot pattern that
+# .github/actions/perf-delta anchors rc deltas to — a historical baseline
+# masquerading as the most recent snapshot would corrupt the next rc's delta.
+# Each job also echoes its detail CSV into the job log (anonymized for
+# private), so results are reachable by API clients that cannot fetch
+# artifact blobs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      conway_versions:
+        description: 'Space-separated published @bldrs-ai/conway versions to benchmark'
+        default: '0.23.940'
+      targets:
+        description: 'Which corpora to run'
+        type: choice
+        options: [both, public, private]
+        default: both
+      test_models_ref:
+        description: 'test-models commit SHA to benchmark over (default: the rc-1.451.1357 blessed-run pin)'
+        default: 'f79b86b5922ef906734f7971733e976a26c5143d'
+      # Pinning BOTH corpora matters as much as pinning the engine: an
+      # unpinned private corpus lets model churn between firings read as
+      # engine drift. `main` is the floating default only because the private
+      # repo has no blessed-run tag; whatever it resolves to is echoed into
+      # the job log and step summary so the provenance is recoverable.
+      test_models_private_ref:
+        description: 'test-models-private ref (branch, tag or SHA) to benchmark over'
+        default: 'main'
+  # Push fallback for environments whose API token can't POST /dispatches
+  # (403 Resource not accessible by integration): pushing a change to this
+  # file on the branch below fires the run. Scoped to this file's path so
+  # ordinary work on the branch doesn't re-benchmark. Versions/targets are
+  # taken from `[versions:...]` / `[targets:...]` tags in the head commit
+  # message, falling back to the dispatch defaults. Prefer workflow_dispatch
+  # from the Actions UI when you have the permission for it — the push path
+  # cannot express the two corpus refs and burns a commit per firing.
+  push:
+    branches: ['claude/blessed-run-baseline-k0tvkr']
+    paths: ['.github/workflows/perf-baseline-oneoff.yml']
+
+# A benchmark matrix is ~70 runner-minutes; a superseded firing is pure waste.
+# Keyed on the ref so a re-fire (or a corrected commit tag) cancels the run it
+# replaces rather than racing it to completion.
+concurrency:
+  group: perf-baseline-oneoff-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Resolve the (corpus, version) matrices from dispatch inputs or, on the
+  # push path, from commit-message tags. Done in a job because the matrix
+  # context is not available in a job-level `if`.
+  #
+  # Same runner label as the benchmark jobs on purpose. Not for speed: gating a
+  # ~70-runner-minute matrix behind a *different* pool would add a second,
+  # independent way for the whole firing to stall for seconds of bash. One pool
+  # has to be healthy either way, so depend on exactly that one.
+  setup:
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    timeout-minutes: 10
+    outputs:
+      public_versions: ${{ steps.pick.outputs.public_versions }}
+      private_versions: ${{ steps.pick.outputs.private_versions }}
+      test_models_ref: ${{ steps.pick.outputs.test_models_ref }}
+      test_models_private_ref: ${{ steps.pick.outputs.test_models_private_ref }}
+    steps:
+      - name: Pick versions and targets
+        id: pick
+        env:
+          IN_VERSIONS: ${{ github.event.inputs.conway_versions }}
+          IN_TARGETS: ${{ github.event.inputs.targets }}
+          IN_TM_REF: ${{ github.event.inputs.test_models_ref }}
+          IN_TM_PRIV_REF: ${{ github.event.inputs.test_models_private_ref }}
+          # Same repo-var fallback perf-three-private honours, so the push
+          # path (which has no inputs) tracks whatever the rc jobs benchmark.
+          VAR_TM_PRIV_REF: ${{ vars.TEST_MODELS_PRIVATE_TAG }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          VERSIONS="$IN_VERSIONS"
+          TARGETS="$IN_TARGETS"
+          TM_REF="$IN_TM_REF"
+          TM_PRIV_REF="$IN_TM_PRIV_REF"
+          # A directive is a line consisting ENTIRELY of tags. Prose that
+          # merely mentions the syntax must not reconfigure the run: the
+          # commit that added the `targets` validation below quoted
+          # "[targets: public ]" in its body as the typo example, and the
+          # old scan-the-whole-message grep read that as an instruction and
+          # silently skipped the private corpus. Anchoring to a tags-only
+          # line keeps the message writable prose.
+          if [ -n "$COMMIT_MSG" ]; then
+            DIRECTIVE=$(printf '%s\n' "$COMMIT_MSG" \
+              | grep -E '^[[:space:]]*(\[(versions|targets):[^]]*\][[:space:]]*)+$' \
+              | head -1) || true
+            if [ -n "$DIRECTIVE" ]; then
+              echo "Directive line: $DIRECTIVE"
+              TAG_V=$(printf '%s' "$DIRECTIVE" | grep -oP '\[versions:[^]]*\]' | head -1 | sed 's/^\[versions:\s*//; s/\]$//') || true
+              TAG_T=$(printf '%s' "$DIRECTIVE" | grep -oP '\[targets:[^]]*\]' | head -1 | sed 's/^\[targets:\s*//; s/\]$//') || true
+              if [ -n "$TAG_V" ]; then VERSIONS="$TAG_V"; fi
+              if [ -n "$TAG_T" ]; then TARGETS="$TAG_T"; fi
+            fi
+          fi
+          VERSIONS="${VERSIONS:-0.23.940}"
+          TARGETS="${TARGETS:-both}"
+          TM_REF="${TM_REF:-f79b86b5922ef906734f7971733e976a26c5143d}"
+          TM_PRIV_REF="${TM_PRIV_REF:-${VAR_TM_PRIV_REF:-main}}"
+
+          # Reject anything that isn't exactly one of the three known targets.
+          # The commit-tag path makes typos easy (`[targets: public ]`), and an
+          # unrecognized value used to fall through BOTH guards and silently
+          # run both corpora — the most expensive possible reading of a typo.
+          TARGETS=$(printf '%s' "$TARGETS" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+          case "$TARGETS" in
+            both|public|private) ;;
+            *)
+              echo "::error::targets must be one of both|public|private, got '$TARGETS'."
+              exit 1
+              ;;
+          esac
+
+          # Dedupe: the matrix keys artifact names on the version string, so a
+          # repeated version would 409 on upload after paying for the full
+          # benchmark. Repeat-sampling for noise is done by firing twice.
+          DEDUPED=$(printf '%s\n' $VERSIONS | grep . | awk '!seen[$0]++')
+          NRAW=$(printf '%s\n' $VERSIONS | grep -c . || true)
+          NDED=$(printf '%s\n' "$DEDUPED" | grep -c . || true)
+          if [ "$NRAW" -ne "$NDED" ]; then
+            echo "::warning::Dropped $((NRAW - NDED)) duplicate version(s); fire twice to repeat-sample."
+          fi
+          JSON=$(printf '%s\n' "$DEDUPED" | sed 's/.*/"&"/' | paste -sd, -)
+
+          PUB="[]"; PRIV="[]"
+          [ "$TARGETS" != "private" ] && PUB="[$JSON]"
+          [ "$TARGETS" != "public" ] && PRIV="[$JSON]"
+          echo "public_versions=$PUB" >> "$GITHUB_OUTPUT"
+          echo "private_versions=$PRIV" >> "$GITHUB_OUTPUT"
+          echo "test_models_ref=$TM_REF" >> "$GITHUB_OUTPUT"
+          echo "test_models_private_ref=$TM_PRIV_REF" >> "$GITHUB_OUTPUT"
+          echo "Benchmarking versions [$JSON]; public=$PUB private=$PRIV"
+          echo "Corpora: test-models@$TM_REF, test-models-private@$TM_PRIV_REF"
+
+  perf-oneoff-public:
+    needs: setup
+    if: needs.setup.outputs.public_versions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.setup.outputs.public_versions) }}
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
+      CONWAY_VERSION: ${{ matrix.version }}
+      TEST_MODELS_SHA: ${{ needs.setup.outputs.test_models_ref }}
+    steps:
+      - name: Checkout conway (for scripts/benchmark.cjs)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      # Node 20 for the same reason as perf-three-public: prebuilt gl/canvas.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Clone headless-three at pinned SHA
+        run: |
+          git clone https://github.com/bldrs-ai/headless-three.git h3
+          git -C h3 checkout "$H3_SHA"
+
+      - name: Override conway via yarn resolutions (published version)
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('h3/package.json', 'utf8'));
+            p.resolutions = Object.assign({}, p.resolutions, { '@bldrs-ai/conway': process.env.CONWAY_VERSION });
+            fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install canvas native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config build-essential \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev libpixman-1-dev
+
+      - name: Install H3 + build
+        working-directory: h3
+        run: |
+          yarn install
+          yarn build
+          # Same wasm-resolution symlink perf-three-public needs.
+          test -d node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist \
+            || { echo "::error::conway@$CONWAY_VERSION package has no compiled/dependencies/conway-geom/Dist — layout changed, symlink trick won't work."; exit 1; }
+          ln -sfn node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist Dist
+
+      - name: Verify requested conway version is resolved in H3
+        id: conway
+        run: |
+          ACTUAL=$(node -p "require('./h3/node_modules/@bldrs-ai/conway/package.json').version")
+          echo "Requested conway: $CONWAY_VERSION"
+          echo "Resolved conway:  $ACTUAL"
+          echo "resolved=$ACTUAL" >> "$GITHUB_OUTPUT"
+          # Only an exact version is expected to pin to itself. Ranges and
+          # dist-tags (`latest`, `^1.451.0`) resolve to something else BY
+          # DESIGN, so demanding equality would hard-fail a request that
+          # worked; for those the resolved version above is the provenance.
+          if printf '%s' "$CONWAY_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$'; then
+            if [ "$CONWAY_VERSION" != "$ACTUAL" ]; then
+              echo "::error::yarn resolutions override did not take effect. Requested '$CONWAY_VERSION', got '$ACTUAL'."
+              exit 1
+            fi
+          else
+            echo "::notice::'$CONWAY_VERSION' is a range or dist-tag, not an exact version; benchmarking resolved '$ACTUAL'."
+          fi
+
+      - name: Install Xvfb + GL libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb pkg-config build-essential \
+            libxi-dev libglu1-mesa-dev libglew-dev
+
+      - name: GL smoke test (rebuild gl from source if prebuilt is broken)
+        working-directory: h3
+        run: |
+          SMOKE='const gl=require("gl")(8,8); if(!gl){throw new Error("gl context creation returned null")}; console.log("gl OK:", gl.getParameter(gl.VERSION))'
+          if ! xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"; then
+            echo "::warning::Prebuilt gl failed to initialize; rebuilding from source."
+            npm rebuild gl --build-from-source
+            xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"
+          fi
+
+      # Same cache key shape as perf-three-public so the two jobs SHARE the
+      # entry: the corpus is ~335 MB of git-lfs objects billed against an
+      # org-wide metered quota that rc-regression also draws on, and a version
+      # matrix would otherwise re-pull it once per job.
+      - name: Restore Test Models Cache
+        id: cache-test-models
+        uses: actions/cache@v4
+        with:
+          path: test-models
+          key: ${{ runner.os }}-test-models-${{ needs.setup.outputs.test_models_ref }}
+
+      - name: Checkout test-models at pinned SHA
+        if: steps.cache-test-models.outputs.cache-hit != 'true'
+        run: |
+          git init test-models
+          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
+          git -C test-models fetch --depth 1 origin "$TEST_MODELS_SHA"
+          git -C test-models checkout "$TEST_MODELS_SHA"
+
+      - name: Run H3 benchmark (public)
+        env:
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-oneoff
+        run: |
+          xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
+            node scripts/benchmark.cjs ./h3 ./test-models
+
+      - name: Locate detail CSV
+        id: detail
+        run: |
+          CSV=$(find "${{ runner.temp }}/bench-oneoff" -name performance-detail.csv -type f | head -1)
+          test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
+          echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
+          # Echo the full CSV into the job log: artifact blobs and step
+          # summaries aren't reachable from every API client, but job logs are.
+          echo "::group::performance-detail.csv"
+          cat "$CSV"
+          echo "::endgroup::"
+
+      - name: Summarize
+        env:
+          CSV_PATH: ${{ steps.detail.outputs.csv }}
+          CONWAY_RESOLVED: ${{ steps.conway.outputs.resolved }}
+        run: |
+          {
+            # Runner label belongs in the provenance, not just the version:
+            # these numbers are only comparable to others measured on it.
+            echo "### conway@$CONWAY_RESOLVED (requested \`$CONWAY_VERSION\`)"
+            echo "_Runner \`${{ runner.os }}/ubuntu-24.04-4vcpu-8gb-150gbssd\`, H3 \`$H3_SHA\`, test-models@\`$TEST_MODELS_SHA\`._"
+            echo
+            python3 - "$CSV_PATH" <<'EOF'
+          import csv, sys
+          rows = list(csv.DictReader(open(sys.argv[1])))
+          rows.sort(key=lambda r: r.get('filename',''))
+          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','rssMb','heapUsedMb']
+          print("| " + " | ".join(cols) + " |")
+          print("|" + " --- |" * len(cols))
+          for r in rows:
+              print("| " + " | ".join(str(r.get(c,'')) for c in cols) + " |")
+          print()
+          print(f"_Total: {len(rows)} models._")
+          EOF
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # NOT perf-three-public-<digits>: must stay invisible to perf-delta.
+      - name: Upload detail CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-oneoff-public-conway${{ matrix.version }}-${{ github.run_id }}
+          path: ${{ steps.detail.outputs.csv }}
+
+      # Runs even when the benchmark died: a failed run's PNGs and rendering
+      # log are precisely what bisecting a per-model regression needs, and
+      # that is the case where they'd otherwise be discarded. Public corpus
+      # only — the private bench dir carries raw model names (see below).
+      - name: Upload bench dir (diagnostics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-oneoff-public-benchdir-conway${{ matrix.version }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-oneoff
+          if-no-files-found: ignore
+
+  # Private corpus. Mirrors perf-three-private: conway is a PUBLIC repo, so
+  # Actions logs and artifacts are world-readable — model identifiers are
+  # anonymized to stable path hashes (BENCHMARK_ANONYMIZE) everywhere the
+  # benchmark could surface them, and the raw bench dir is never uploaded.
+  # The hashes are deterministic (sha1 of the repo-relative path), so rows
+  # join across versions and can be de-anonymized inside the private repo.
+  perf-oneoff-private:
+    needs: setup
+    if: needs.setup.outputs.private_versions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.setup.outputs.private_versions) }}
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
+      CONWAY_VERSION: ${{ matrix.version }}
+      TEST_MODELS_PRIVATE_TAG: ${{ needs.setup.outputs.test_models_private_ref }}
+    steps:
+      - name: Fail fast if private models token missing
+        env:
+          TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
+        run: |
+          if [ "$TOKEN_PRESENT" != "true" ]; then
+            echo "::error::TEST_MODELS_PRIVATE_TOKEN secret is not set. Required to clone bldrs-ai/test-models-private."
+            exit 1
+          fi
+
+      - name: Checkout conway (for scripts/benchmark.cjs)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Clone headless-three at pinned SHA
+        run: |
+          git clone https://github.com/bldrs-ai/headless-three.git h3
+          git -C h3 checkout "$H3_SHA"
+
+      - name: Override conway via yarn resolutions (published version)
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('h3/package.json', 'utf8'));
+            p.resolutions = Object.assign({}, p.resolutions, { '@bldrs-ai/conway': process.env.CONWAY_VERSION });
+            fs.writeFileSync('h3/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Install canvas native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config build-essential \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev libpixman-1-dev
+
+      - name: Install H3 + build
+        working-directory: h3
+        run: |
+          yarn install
+          yarn build
+          test -d node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist \
+            || { echo "::error::conway@$CONWAY_VERSION package has no compiled/dependencies/conway-geom/Dist — layout changed, symlink trick won't work."; exit 1; }
+          ln -sfn node_modules/@bldrs-ai/conway/compiled/dependencies/conway-geom/Dist Dist
+
+      - name: Verify requested conway version is resolved in H3
+        id: conway
+        run: |
+          ACTUAL=$(node -p "require('./h3/node_modules/@bldrs-ai/conway/package.json').version")
+          echo "Requested conway: $CONWAY_VERSION"
+          echo "Resolved conway:  $ACTUAL"
+          echo "resolved=$ACTUAL" >> "$GITHUB_OUTPUT"
+          # Only an exact version is expected to pin to itself. Ranges and
+          # dist-tags (`latest`, `^1.451.0`) resolve to something else BY
+          # DESIGN, so demanding equality would hard-fail a request that
+          # worked; for those the resolved version above is the provenance.
+          if printf '%s' "$CONWAY_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$'; then
+            if [ "$CONWAY_VERSION" != "$ACTUAL" ]; then
+              echo "::error::yarn resolutions override did not take effect. Requested '$CONWAY_VERSION', got '$ACTUAL'."
+              exit 1
+            fi
+          else
+            echo "::notice::'$CONWAY_VERSION' is a range or dist-tag, not an exact version; benchmarking resolved '$ACTUAL'."
+          fi
+
+      - name: Install Xvfb + GL libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb pkg-config build-essential \
+            libxi-dev libglu1-mesa-dev libglew-dev
+
+      - name: GL smoke test (rebuild gl from source if prebuilt is broken)
+        working-directory: h3
+        run: |
+          SMOKE='const gl=require("gl")(8,8); if(!gl){throw new Error("gl context creation returned null")}; console.log("gl OK:", gl.getParameter(gl.VERSION))'
+          if ! xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"; then
+            echo "::warning::Prebuilt gl failed to initialize; rebuilding from source."
+            npm rebuild gl --build-from-source
+            xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" node -e "$SMOKE"
+          fi
+
+      - name: Clone private test models
+        id: private-corpus
+        env:
+          GH_TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+        run: |
+          # init+fetch rather than `clone --branch` so the ref may be a branch,
+          # tag OR a raw SHA. The default (`main`) floats, so the exact commit
+          # is resolved and echoed — without it a corpus change between two
+          # firings is indistinguishable from an engine regression.
+          git init test-models-private
+          git -C test-models-private remote add origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/bldrs-ai/test-models-private.git"
+          git -C test-models-private fetch --depth 1 origin "$TEST_MODELS_PRIVATE_TAG"
+          git -C test-models-private checkout FETCH_HEAD
+          RESOLVED=$(git -C test-models-private rev-parse HEAD)
+          echo "resolved=$RESOLVED" >> "$GITHUB_OUTPUT"
+          echo "test-models-private@$TEST_MODELS_PRIVATE_TAG resolved to $RESOLVED"
+
+      - name: Run H3 benchmark (private, anonymized)
+        env:
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/bench-oneoff-private
+          BENCHMARK_ANONYMIZE: '1'
+        run: |
+          xvfb-run -a --server-args="-screen 0 1024x768x24 +extension GLX +render -noreset" \
+            node scripts/benchmark.cjs ./h3 ./test-models-private
+
+      - name: Locate detail CSV
+        id: detail
+        run: |
+          CSV=$(find "${{ runner.temp }}/bench-oneoff-private" -name performance-detail.csv -type f | head -1)
+          test -n "$CSV" || { echo "::error::performance-detail.csv not produced"; exit 1; }
+          echo "csv=${CSV}" >> "$GITHUB_OUTPUT"
+          # Safe to echo: identifiers are anonymized path hashes.
+          echo "::group::performance-detail.csv (anonymized)"
+          cat "$CSV"
+          echo "::endgroup::"
+
+      # NOT perf-three-private-<digits>: must stay invisible to perf-delta.
+      # Carries only anonymized identifiers, so safe on this public repo.
+      - name: Upload detail CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-oneoff-private-conway${{ matrix.version }}-${{ github.run_id }}
+          path: ${{ steps.detail.outputs.csv }}
