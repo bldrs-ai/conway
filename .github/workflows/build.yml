@@ -17,10 +17,14 @@ on:
     # emsdk/GENie/emcc step is gated on the wasm cache key, so a hit means only
     # a conway-geom submodule bump pays a real compile. The exception is
     # withdrawing during a cold-cache build — the cancelled run never reaches
-    # the save step, so the replacement pays the full emcc compile. Either way
-    # it buys back the rest of a regression pass, which is the longer half. Not
-    # free the way it is in Share, where every job is gated and the replacement
-    # run skips outright.
+    # the save step, so the replacement pays the full emcc compile.
+    #
+    # Whether that is worth it depends on when you withdraw. During the
+    # regression it clearly is: you stop the longer job and pay at most a
+    # rebuild. During `build` it is pure loss — `run-ifc-regression` needs
+    # `build`, so nothing had started yet and you have bought back nothing.
+    # Not free the way it is in Share, where every job is gated and the
+    # replacement run skips outright.
     #
     # reopened was missing before the draft gate landed. Leaving it out means
     # a reopened PR keeps whatever conclusions sat on its head SHA -- possibly
