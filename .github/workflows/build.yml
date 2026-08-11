@@ -5,7 +5,20 @@ on:
     # ready_for_review is what makes the draft gate on run-ifc-regression
     # usable: without it, flipping a draft to ready fires no event and the PR
     # would sit with no regression result until the next push.
-    types: [opened, synchronize, ready_for_review]
+    #
+    # converted_to_draft is the other half of that gate, and it works by
+    # cancellation rather than by starting anything: pushing a PR back to
+    # draft fires an event in the same concurrency group below, so
+    # cancel-in-progress kills the regression that is mid-flight and the run
+    # it schedules in its place skips (the PR is a draft again). Without it,
+    # a PR you have explicitly pulled back keeps burning a runner slot to
+    # completion.
+    #
+    # reopened was missing before the draft gate landed. Leaving it out means
+    # a reopened PR keeps whatever conclusions sat on its head SHA -- possibly
+    # a `skipped` regression, which reads as passing -- with nothing to
+    # re-run it.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     # Skip the heavy build + IFC regression on doc-only PRs. paths-ignore
     # skips the workflow only when EVERY changed file matches — a PR that
     # also touches code/config still runs the full suite. Push-to-main
@@ -250,8 +263,14 @@ jobs:
     # A job-level `if` rather than a trigger filter, for the reason spelled
     # out in the paths-ignore note above: a skipped-by-if job satisfies a
     # required status check, a workflow that never triggers does not.
-    # The event_name guard keeps push:main and workflow_dispatch running,
-    # where github.event.pull_request is null.
+    #
+    # The event_name clause is defensive, not load-bearing. On push and
+    # workflow_dispatch `github.event.pull_request` is null, and Actions
+    # coerces both sides of `==` to a number when the types differ, so a bare
+    # `draft == false` would evaluate `0 == 0` and run anyway. Relying on that
+    # coercion would make merges -- and with them auto-publish, which needs
+    # this job -- hinge on a documented-but-obscure corner of the expression
+    # language. The clause states the intent instead.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Expose the packed tarball name so downstream perf jobs can download the

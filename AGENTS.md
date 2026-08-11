@@ -67,9 +67,18 @@ Two mechanics worth knowing before you edit `.github/workflows/build.yml`:
   status check; a workflow that never triggers reports nothing and
   leaves the PR waiting forever. This is the same trap the
   `paths-ignore` note in that file warns about.
-- `ready_for_review` must stay in the `pull_request` `types:` list.
-  Without it, flipping a draft to ready fires no event at all and step
-  3 above silently does nothing.
+- `ready_for_review` and `converted_to_draft` must stay in the
+  `pull_request` `types:` list. Without the first, flipping a draft to
+  ready fires no event at all and step 3 above silently does nothing.
+  The second is what lets pulling a PR *back* to draft cancel a
+  regression that is already mid-flight, via the workflow's
+  `cancel-in-progress` group — otherwise it runs to completion for a PR
+  you have explicitly withdrawn.
+- The `github.event_name != 'pull_request' ||` clause in each gate is
+  defensive, not load-bearing: Actions coerces mismatched `==` operands
+  to numbers, so `null == false` is already true on push and
+  `workflow_dispatch`. Keep it anyway — merges (and `auto-publish`,
+  which needs the regression) should not hinge on that coercion.
 
 The same lifecycle and the same gate shape apply in
 [Share](https://github.com/bldrs-ai/Share) — see its `AGENTS.md` for
