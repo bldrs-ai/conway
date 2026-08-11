@@ -76,9 +76,10 @@ tidier:
   regression that is already mid-flight, via the workflow's
   `cancel-in-progress` group — otherwise it runs to completion for a PR
   you have explicitly withdrawn. Note the replacement run re-runs
-  `build` (which is ungated) before stopping — usually cheap, since the
-  wasm cache key the cancelled run populated still hits. Free in Share,
-  where every job is gated.
+  `build` (which is ungated) before stopping — cheap on a wasm cache
+  hit, but a full emcc compile if you withdraw *during* a cold-cache
+  build, since `actions/cache` saves in a post-job step the cancelled
+  job never reaches. Free in Share, where every job is gated.
 - The `github.event_name != 'pull_request' ||` clause in each gate is
   defensive, not load-bearing: Actions coerces mismatched `==` operands
   to numbers, so `null == false` is already true on push and
