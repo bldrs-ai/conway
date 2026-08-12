@@ -6,6 +6,19 @@ const path = require('path');
 
 const ifcGenPath = path.resolve(__dirname, '../external/IFC-gen-internal');
 
+// The generator revision this repo's checked-in *.gen.ts were produced by.
+// Step it forward deliberately, in a PR that also carries the regenerated
+// output, so the two never disagree.
+//
+// This used to follow whatever the default branch happened to be, and that
+// silently rotted: main sat 14 months behind the branch that actually
+// generated our code (no multiReference support), so running `yarn code-gen`
+// would have rewritten ~966 files and DELETED that support, with nothing to
+// warn you. Verified at this SHA: regenerating both schemas reproduces the
+// checked-in output byte for byte, 1111 AP214 files and 1180 IFC4 files, zero
+// differences.
+const IFC_GEN_REVISION = '94ff4cc19399fa1baad9bb687cd1e2cde778b18c';
+
 function runCommand(command, options = {}) {
   try {
     execSync(command, { stdio: 'inherit', ...options });
@@ -32,6 +45,19 @@ function main() {
       console.log('Could not clone IFC-gen-internal. Please ensure you have access rights.');
       process.exit(0); // Exit gracefully
     }
+  }
+
+  // Pin every run, not just a fresh clone: an existing checkout is whatever
+  // the last person left it at, and generating from that is how the output
+  // drifts from what the pin claims produced it.
+  console.log(`Checking out IFC-gen-internal at ${IFC_GEN_REVISION}...`);
+
+  if (!runCommand(`git fetch --depth 1 origin ${IFC_GEN_REVISION}`, { cwd: ifcGenPath }) ||
+      !runCommand(`git checkout --detach ${IFC_GEN_REVISION}`, { cwd: ifcGenPath })) {
+    console.error(
+      `Could not check out IFC-gen-internal at ${IFC_GEN_REVISION}. ` +
+      'Refusing to generate from an unknown revision.');
+    process.exit(1);
   }
 
   // Run the code generation
