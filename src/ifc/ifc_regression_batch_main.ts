@@ -139,6 +139,51 @@ function csvSafeString( from: string ): string {
 }
 
 /**
+ * Read back the first field of a line written with csvSafeString.
+ *
+ * Naive `line.split(',')[0]` is wrong for exactly the inputs csvSafeString
+ * exists for: a model filename containing a comma comes back quoted, and
+ * splitting on ',' truncates it mid-name. The zero-geometry collision check
+ * keys on this field, so a truncated name silently changes which stems it
+ * thinks collide.
+ *
+ * @param line A CSV line whose first field was written by csvSafeString.
+ * @return {string} The unescaped first field.
+ */
+function csvFirstField( line: string ): string {
+
+  const trimmed = line.replace( /[\r\n]+$/, '' )
+
+  if ( !trimmed.startsWith( '"' ) ) {
+
+    return trimmed.split( ',' )[ 0 ]
+  }
+
+  let result = ''
+
+  for ( let cursor = 1; cursor < trimmed.length; ++cursor ) {
+
+    if ( trimmed[ cursor ] !== '"' ) {
+
+      result += trimmed[ cursor ]
+      continue
+    }
+
+    // A doubled quote is a literal one; a lone quote closes the field.
+    if ( trimmed[ cursor + 1 ] === '"' ) {
+
+      result += '"'
+      ++cursor
+      continue
+    }
+
+    break
+  }
+
+  return result
+}
+
+/**
  * Encapsulates a string in a CSV safe way, taking
  * file paths (assumed by directory characters / and \,
  * ) and shortening them to file names without ".csv".
@@ -829,24 +874,23 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const stemCounts = new Map<string, number>()
 
           for (const line of fileLines) {
-            const basename = line.split(',')[0].replaceAll('"', '')
-            const stem = path.parse(basename).name
+            const stem = path.parse(csvFirstField(line)).name
 
             stemCounts.set(stem, (stemCounts.get(stem) ?? 0) + 1)
           }
 
           const collidingStems =
-            [...stemCounts].filter(([, count]) => count > 1).map(([stem]) => stem)
+            new Set([...stemCounts].filter(([, count]) => count > 1).map(([stem]) => stem))
 
-          if (collidingStems.length > 0) {
+          if (collidingStems.size > 0) {
             console.warn(
-                `WARNING: ${collidingStems.length} digest stem(s) are written by more ` +
+                `WARNING: ${collidingStems.size} digest stem(s) are written by more ` +
                 `than one model, so their digests overwrite each other and their ` +
-                `zero-geometry status cannot be determined: ${collidingStems.join(', ')}`)
+                `zero-geometry status cannot be determined: ${[...collidingStems].join(', ')}`)
           }
 
           const reportableZeroGeometry = zeroGeometryLines.filter(
-              (line) => !collidingStems.includes(path.parse(line.trim().replaceAll('"', '')).name))
+              (line) => !collidingStems.has(path.parse(csvFirstField(line)).name))
 
           await fsPromises.writeFile(
               zeroGeometryPath, `file\n${  reportableZeroGeometry.join('')}`)
