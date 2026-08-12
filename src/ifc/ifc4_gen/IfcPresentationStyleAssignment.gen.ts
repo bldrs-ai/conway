@@ -6,6 +6,7 @@ import { IfcSurfaceStyle } from "./index"
 import { IfcTextStyle } from "./index"
 import {
   stepExtractOptional,
+  stepEnterTypedValue,
   stepExtractArrayToken,
   stepExtractArrayBegin,
   skipValue,
@@ -43,7 +44,7 @@ export  class IfcPresentationStyleAssignment extends StepEntityBase< EntityTypes
 
       while ( signedCursor0 >= 0 ) {
         const value1Untyped : StepEntityBase< EntityTypesIfc > | IfcNullStyle | undefined = 
-          this.extractBufferReference( buffer, cursor, endCursor ) ?? IfcNullStyleDeserializeStep( buffer, cursor, endCursor )
+          this.extractBufferReference( buffer, cursor, endCursor ) ?? IfcNullStyleDeserializeStep( buffer, stepEnterTypedValue( buffer, cursor, endCursor, 'IFCNULLSTYLE' ), endCursor )
 
         if ( !( value1Untyped instanceof IfcCurveStyle ) && !( value1Untyped instanceof IfcFillAreaStyle ) && !( value1Untyped instanceof IfcSurfaceStyle ) && !( value1Untyped instanceof IfcTextStyle ) && value1Untyped !== IfcNullStyle.NULL ) {
           throw new Error( 'Value in select must be populated' )

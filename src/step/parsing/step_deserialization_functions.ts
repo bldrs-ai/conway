@@ -500,6 +500,62 @@ export function* stepExtractArray(
 
 
 /**
+ * Step past a `TYPENAME(` wrapper to the value inside it, when the value at
+ * the cursor is written in its typed form and the type name matches.
+ *
+ * A select member may be written either bare or typed — `.NULL.` or
+ * `NULL_STYLE(.NULL.)` — and inside a SELECT the typed form is how a reader
+ * tells which member it is, so exporters legitimately use it. Entity-valued
+ * members already handle both, because the parser indexes an inline
+ * `TYPENAME(...)` entity and `extractBufferReference` resolves it by address.
+ * A member whose type is an enum has no entity to index, so its deserializer
+ * is a bare parse starting at the cursor, and the wrapper makes it fail.
+ * That cost 274 of the public regression baseline's error rows — every
+ * `PRESENTATION_STYLE_ASSIGNMENT((NULL_STYLE(.NULL.)))` in the corpus threw
+ * and lost its styled item. See bldrs-ai/conway#489.
+ *
+ * The type name is verified rather than skipped past, so this accepts only
+ * the value's own typed form: a mismatched wrapper stays a type error
+ * instead of being silently read as the member it isn't.
+ *
+ * @param buffer The buffer to read from.
+ * @param cursor The position the value starts at.
+ * @param endCursor The last position accessible for this read in the buffer.
+ * @param typeName The expected STEP type name of the wrapper, upper case —
+ * StepEntityIdentifierParser matches `[A-Z][A-Z0-9_]*`, so a lower-case
+ * spelling is not an identifier here and never reaches the comparison.
+ * @return {number} The position just inside the wrapper's parenthesis, or
+ * `cursor` unchanged when the value is not this type's typed form.
+ */
+export function stepEnterTypedValue(
+    buffer: Uint8Array,
+    cursor: number,
+    endCursor: number,
+    typeName: string ): number {
+
+  const identifierEnd = identifierParser.match( buffer, cursor, endCursor )
+
+  if ( identifierEnd === void 0 || ( identifierEnd - cursor ) !== typeName.length ) {
+    return cursor
+  }
+
+  for ( let where = 0; where < typeName.length; ++where ) {
+
+    if ( buffer[ cursor + where ] !== typeName.charCodeAt( where ) ) {
+      return cursor
+    }
+  }
+
+  // Delegate the rest to the inline-element reader rather than repeating its
+  // identifier/whitespace/comment/paren walk. Sharing it is not just less
+  // code: entity-valued select members reach their value through that exact
+  // function, so a divergence here would mean the two kinds of member in the
+  // SAME select disagreed about where a typed value begins.
+  return stepExtractInlineElemement( buffer, cursor, endCursor ) ?? cursor
+}
+
+
+/**
  * Extracts an inline element and returns its cursor, or none if it can't be found.
  *
  * @param buffer The buffer to extract it from.
