@@ -101,6 +101,15 @@ interface RunSuccessResults {
 
   hash?: string
 
+  /**
+   * True when the model loaded but its digest carries no geometry rows at all.
+   *
+   * This is a distinct outcome from both success and failure: the child exits
+   * 0, writes no failed.csv row, and may emit no errors, so nothing else in
+   * the harness can see it. See bldrs-ai/conway#477 and #478.
+   */
+  producedNoGeometry?: boolean
+
 }
 
 interface RunErrorResults extends ExecException {
@@ -322,12 +331,21 @@ async function runForFile(filePath: string,
   const outputFile = path.basename(outputPath)
 
   let fileHash: string | undefined
+  let producedNoGeometry = false
   const outputCSV = `${outputPath}.csv`
   if (fs.existsSync(outputCSV)) {
+    const digest = await fsPromises.readFile(outputCSV)
+
     fileHash = crypto
         .createHash('sha1')
-        .update(await fsPromises.readFile(outputCSV))
+        .update(digest)
         .digest('hex')
+
+    // A digest with nothing after its header means the model loaded and
+    // produced no geometry at all. The child still exits 0, so this is
+    // invisible to every other signal the harness has — see #477 / #478.
+    producedNoGeometry =
+      digest.toString('utf8').split('\n').filter((line) => line.trim().length > 0).length <= 1
   }
 
   return {
@@ -335,50 +353,10 @@ async function runForFile(filePath: string,
     errorLines: errorLines.length > 0 ? errorLines : undefined,
     outputFile,
     hash: fileHash,
+    producedNoGeometry,
   }
 }
 
-
-/**
- * Run a file's digest, retrying ONCE if the first attempt times out.
- *
- * A per-model timeout is not a deterministic parse/geometry failure — it
- * surfaces as a failed.csv row with an empty code AND empty signal (the
- * TimeoutError path sets neither) and, historically, has come from transient
- * core oversubscription on the CI runner rather than the model itself.
- * ISSUE_159_kleine_Wohnung_R22.ifc (a geometry-dense ~18.5k-item model) has
- * reddened the rc-regression gate this way twice: first co-scheduled at
- * --concurrency 2, then again running ALONE at --concurrency 1, so serializing
- * the batch was not enough to make it reliable.
- *
- * Digest regeneration is idempotent, so a second attempt is safe: a transient
- * timeout clears on the retry, while a genuine hang times out both times and
- * still lands in failed.csv — the gate keeps its protective value against a
- * model that truly never loads. Only timeouts are retried; a real non-zero
- * exit or signal is returned immediately (those ARE deterministic).
- *
- * @param filePath   Model file to digest.
- * @param outputPath Digest output path (without extension).
- * @param maxTimeout Per-attempt timeout in ms.
- * @param perfPath   Optional path the child writes its one-row perf CSV to.
- * @return The first attempt's result, or the retry's result on a timeout.
- */
-async function runForFileWithTimeoutRetry(filePath: string,
-    outputPath: string, maxTimeout: number, perfPath?: string): Promise<RunResults> {
-  const timedOut = (r: RunResults): boolean =>
-    r.type === 'Failed' && r.message === 'Execution timed out'
-
-  const first = await runForFile(filePath, outputPath, maxTimeout, perfPath)
-  if (!timedOut(first)) {
-    return first
-  }
-
-  console.log(
-      `"${path.basename(filePath)}" timed out; retrying once ` +
-      `(a transient timeout clears, a true hang times out again).`,
-  )
-  return runForFile(filePath, outputPath, maxTimeout, perfPath)
-}
 
 // Model files the regression harness understands: IFC plus STEP AP214.
 const SUPPORTED_MODEL_EXTENSIONS = ['.ifc', '.stp', '.step']
@@ -475,6 +453,7 @@ function getSystemMemoryUsagePercent(): number {
  * @param errorLines
  * @param fileLines
  * @param failedLines
+ * @param zeroGeometryLines
  * @param memUtilization
  * @param maxTimeout
  * @param concurrency Max children processed at once (>= 1).
@@ -486,6 +465,7 @@ async function processIFCFilesInParallel(
     errorLines: string[],
     fileLines: string[],
     failedLines: string[],
+    zeroGeometryLines: string[],
     memUtilization: number,
     maxTimeout:number,
     concurrency: number,
@@ -514,7 +494,7 @@ async function processIFCFilesInParallel(
       const perfChildPath = perfDir ?
         path.join(perfDir, `${path.parse(ifcPath).name}.perf.csv`) :
         undefined
-      const fileResults = await runForFileWithTimeoutRetry(
+      const fileResults = await runForFile(
           ifcPath,
           path.join(outputPath, path.parse(ifcPath).name),
           maxTimeout,
@@ -543,6 +523,10 @@ async function processIFCFilesInParallel(
           `${csvSafeString(fileResults.hash ?? '')},` +
           `${fileResults.errorLines?.length ?? 0}\n`,
       )
+
+      if (fileResults.producedNoGeometry) {
+        zeroGeometryLines.push(`${csvSafeString(path.basename(ifcPath))}\n`)
+      }
     } else {
       // it's 'Failed'
       failedLines.push(
@@ -564,6 +548,7 @@ async function processIFCFilesInParallel(
  * @param errorLines
  * @param fileLines
  * @param failedLines
+ * @param zeroGeometryLines
  * @param maxTimeout
  * @param perfDir If set, the child writes its perf CSV here as <basename>.perf.csv.
  */
@@ -574,6 +559,7 @@ async function recursiveWalk(
     errorLines: string[],
     fileLines: string[],
     failedLines: string[],
+    zeroGeometryLines: string[],
     maxTimeout: number,
     perfDir?: string,
 ) {
@@ -589,12 +575,12 @@ async function recursiveWalk(
 
     if (item.isDirectory()) {
       await recursiveWalk(resolved, excludeRegex, outputPath,
-          errorLines, fileLines, failedLines, maxTimeout, perfDir)
+          errorLines, fileLines, failedLines, zeroGeometryLines, maxTimeout, perfDir)
     } else if (isSupportedModelFile(resolved)) {
       const perfChildPath = perfDir ?
         path.join(perfDir, `${path.parse(resolved).name}.perf.csv`) :
         undefined
-      const fileResults = await runForFileWithTimeoutRetry(
+      const fileResults = await runForFile(
           resolved,
           path.join(outputPath, path.parse(resolved).name),
           maxTimeout,
@@ -611,6 +597,10 @@ async function recursiveWalk(
                 fileResults.hash ?? '',
             )},${fileResults.errorLines?.length ?? 0}\n`,
         )
+
+        if (fileResults.producedNoGeometry) {
+          zeroGeometryLines.push(`${csvSafeString(path.basename(resolved))}\n`)
+        }
       } else {
         failedLines.push(
             `${csvSafeString(path.basename(resolved))},${csvSafeString(
@@ -760,10 +750,12 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           const mainPath = path.join(outputPath, 'main.csv')
           const errorPath = path.join(outputPath, 'errors.csv')
           const failedPath = path.join(outputPath, 'failed.csv')
+          const zeroGeometryPath = path.join(outputPath, 'zero_geometry.csv')
 
           const errorLines: string[] = []
           const fileLines: string[] = []
           const failedLines: string[] = []
+          const zeroGeometryLines: string[] = []
 
           const excludeRegex: RegExp | undefined =
         excludeFilter.length > 0 ? new RegExp(excludeFilter) : undefined
@@ -779,6 +771,7 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
                 errorLines,
                 fileLines,
                 failedLines,
+                zeroGeometryLines,
                 memUtilization,
                 maxTimeout,
                 concurrency,
@@ -788,13 +781,29 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
             console.log('Processing in serial mode...')
 
             await recursiveWalk(ifcFolder, excludeRegex, outputPath,
-                errorLines, fileLines, failedLines, maxTimeout, perfTmpDir)
+                errorLines, fileLines, failedLines, zeroGeometryLines, maxTimeout, perfTmpDir)
           }
 
           // Write out results
           await fsPromises.writeFile(mainPath, `file,hash,errors\n${  fileLines.join('')}`)
           await fsPromises.writeFile(errorPath, `${errorCSVHeader}\n${  errorLines.join('')}`)
           await fsPromises.writeFile(failedPath, `file,code,signal\n${  failedLines.join('')}`)
+
+          // Models that loaded and produced no geometry. Written as its own
+          // artifact rather than folded into failed.csv, because the two need
+          // different gates: failed.csv is empty and stays empty, while a
+          // handful of zero-geometry models are known and tracked (#477), so
+          // CI compares this against an explicit allowlist instead.
+          await fsPromises.writeFile(zeroGeometryPath, `file\n${  zeroGeometryLines.join('')}`)
+
+          if (zeroGeometryLines.length > 0) {
+            console.log(
+                `\n${zeroGeometryLines.length} model(s) loaded but produced NO geometry:`)
+            for (const line of zeroGeometryLines) {
+              console.log(`  ${line.trim()}`)
+            }
+            console.log('')
+          }
 
           // Aggregate per-child perf rows (if requested) before runDiff so the
           // run completes deterministically even when the git diff step is

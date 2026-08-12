@@ -467,6 +467,38 @@ jobs:
           fi
           echo "No smoke failures."
 
+      # A model that loads and emits nothing exits 0 and writes no failed.csv
+      # row, so hard-failure detection cannot see it — see #477 / #478. The
+      # batch now reports these in zero_geometry.csv; anything not explicitly
+      # listed (with an issue) in regression/zero_geometry_allowlist.txt is a
+      # new one and fails here.
+      - name: Fail on unexpected zero-geometry models
+        run: |
+          ZERO=test-models/regression/test_models/zero_geometry.csv
+          ALLOW=regression/zero_geometry_allowlist.txt
+          if [ ! -f "$ZERO" ]; then
+            echo "No zero_geometry.csv produced."; exit 0
+          fi
+          python3 - "$ZERO" "$ALLOW" <<'PY'
+          import csv, sys
+          zero, allow = sys.argv[1], sys.argv[2]
+          allowed = set()
+          for line in open(allow, encoding='utf-8'):
+              line = line.split('#', 1)[0].strip()
+              if line:
+                  allowed.add(line)
+          rows = [r['file'] for r in csv.DictReader(open(zero, newline='', encoding='utf-8'))]
+          unexpected = [f for f in rows if f not in allowed]
+          for f in rows:
+              print(f"zero geometry: {f}" + ("" if f in unexpected else "  (allowlisted)"))
+          if unexpected:
+              print("::error::Models loaded but produced NO geometry and are not allowlisted:")
+              for f in unexpected:
+                  print(f"::error::  {f}")
+              sys.exit(1)
+          print(f"{len(rows)} zero-geometry model(s), all allowlisted.")
+          PY
+
       - name: Gather Regression Results
         id: regression_results
         run: |
@@ -664,7 +696,8 @@ jobs:
               cwd=root, capture_output=True, text=True, check=True).stdout
           # Per-run report files churn on every run (env-specific paths,
           # counters) — only per-model digest CSVs identify changed geometry.
-          meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv'}
+          meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv',
+                  'zero_geometry.csv'}
 
           def digest_stems(listing):
               stems = set()
