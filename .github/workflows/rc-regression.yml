@@ -213,31 +213,36 @@ jobs:
       # the regeneration — we want it to persist so the PR carries it.
       #
       # --concurrency 1: run ONE model at a time. Each child is itself
-      # multi-threaded, so any concurrency oversubscribes the cores — and that
-      # co-scheduling is not just slow, it's unreliable: on the regression runner a
-      # geometry-dense model (ISSUE_159, ~18.5k triangulated items) that
-      # extracts in ~12s ALONE ran past a 600s per-model timeout while sharing
-      # cores at --concurrency 2, landing in failed.csv as a bogus timeout
-      # (empty code/signal) and reddening the rc. Running each model alone
-      # removes the co-scheduling entirely: every model gets the full cores and
-      # its true standalone time (all well under the timeout), and the per-model
-      # numbers become steady enough to record (see --perf below). Digests are
-      # deterministic regardless of concurrency, so the blessed output is
-      # unchanged; the wall-clock barely moves, since a --concurrency 2 slot was
-      # being wasted on the livelocked model anyway.
+      # multi-threaded, so any concurrency oversubscribes the cores, and serial
+      # execution is what makes the per-model perf numbers usable at all (see
+      # --perf below). Digests are deterministic regardless of concurrency, so
+      # the blessed output is unchanged.
+      #
+      # This flag was originally justified by ISSUE_159 timing out at
+      # --concurrency 2, blamed on core oversubscription. That diagnosis was
+      # wrong (#473 — it was a non-terminating CDT loop, fixed in
+      # conway-geom#165), but the flag earns its place on the perf-measurement
+      # grounds above regardless.
       #
       # --timeout 300000 (5 min): generous over the slowest model's true
       # standalone time (~80s) now that nothing is starved, and catches a
       # genuine hang faster than the old 600s.
       #
-      # Serializing was still not enough on its own: ISSUE_159 timed out AGAIN
-      # running alone at --concurrency 1, reddening the rc with the same bogus
-      # empty-code/signal row. A per-model timeout is a nondeterministic infra
-      # event, not a reproducible parse/geometry failure, so the batch now
-      # retries a timed-out model ONCE before recording it (idempotent digest
-      # regen makes the retry safe). A transient timeout clears on the retry; a
-      # genuine hang times out both times and still lands in failed.csv, so the
-      # gate keeps its teeth against a model that truly never loads.
+      # The retry-once that used to live here has been REMOVED. It was added
+      # because ISSUE_159 timed out again at --concurrency 1, which was read as
+      # "a per-model timeout is a nondeterministic infra event". It was not:
+      # CDT::insertEdges under TryResolve did not terminate on that model's
+      # revolution unwrap, allocating until the wasm heap died (#473, fixed in
+      # conway-geom#165). The model was bimodal — 2s or 35-92s or past any
+      # timeout — and retrying a coin flip once comes up green often enough to
+      # look like transient infra, so the retry laundered a real bug into a
+      # passing run for months. If a timeout returns, treat it as a bug and
+      # diagnose it; do not re-add a retry.
+      #
+      # -e also drops cg4*-cylinder.stp: LLM-generated files (their FILE_NAME
+      # credits ChatGPT) with no PRODUCT, no shape representation and invalid
+      # entity types, so producing zero geometry is correct and they only add
+      # noise. Same reasoning as the sp-* concatenations. See #477.
       #
       # --perf: with the run already serial, capture every model's steady
       # parse/geometry/total + RSS in one pass. Written to the conway workspace
@@ -250,7 +255,7 @@ jobs:
         run: |
           node --experimental-specifier-resolution=node \
             ./compiled/src/ifc/ifc_regression_batch_main.js \
-            -e "sp-.*\.ifc" \
+            -e "sp-.*\.ifc|cg4.*-cylinder\.stp" \
             -t HEAD \
             --concurrency 1 \
             --timeout 300000 \
@@ -258,6 +263,24 @@ jobs:
             models \
             models/regression/test_models \
             --parallel --mem-utilization 90
+
+      # zero_geometry.csv lands in the model checkout next to the baselines the
+      # re-bless PR commits (add-paths: regression/test_models), but it is a
+      # derived per-run diagnostic, not part of the blessed baseline — leaving
+      # it there would commit it and churn it on every rc. Move it up to the
+      # workspace: out of the PR, and readable by the gate at the end of the
+      # job. `!cancelled()` so it survives an earlier hard-gate failure, which
+      # is precisely the run where the diagnostic is worth having.
+      - name: Move zero_geometry.csv out of the baseline checkout
+        if: ${{ !cancelled() }}
+        run: |
+          SRC=models/regression/test_models/zero_geometry.csv
+          if [ -f "$SRC" ]; then
+            mv "$SRC" "${GITHUB_WORKSPACE}/zero_geometry.csv"
+            echo "Moved zero_geometry.csv to the workspace."
+          else
+            echo "No zero_geometry.csv produced."
+          fi
 
       # Hard gate: fail the rc only on NEW parse/extract failures — models that
       # were NOT already failing in the committed baseline. Pre-existing,
@@ -434,3 +457,44 @@ jobs:
             drift.
 
             Generated by conway's `rc-regression` workflow.
+
+      # Same zero-geometry gate as the smoke job: a model that loads and emits
+      # nothing exits 0 and writes no failed.csv row, so nothing else sees it
+      # (#477 / #478). Anything not explicitly allowlisted, with an issue, is
+      # new and fails the rc.
+      #
+      # Last step, `!cancelled()`, for the same reason as in build.yml: a gate
+      # that exits 1 mid-job takes every later step with it, and here those
+      # later steps are the rc's entire deliverable — the perf summary and the
+      # re-bless PR whose diff IS the regression report. Blocking the report on
+      # a finding the report is the evidence for is backwards; the re-bless PR
+      # is human-reviewed and merged, and a red rc job is the signal not to
+      # merge it. Reads the copy moved to the workspace earlier, since by now
+      # the file is deliberately gone from the model checkout.
+      - name: Fail on unexpected zero-geometry models
+        if: ${{ !cancelled() }}
+        run: |
+          ZERO="${GITHUB_WORKSPACE}/zero_geometry.csv"
+          ALLOW=regression/zero_geometry_allowlist.txt
+          if [ ! -f "$ZERO" ]; then
+            echo "No zero_geometry.csv produced."; exit 0
+          fi
+          python3 - "$ZERO" "$ALLOW" <<'PYEOF'
+          import csv, sys
+          zero, allow = sys.argv[1], sys.argv[2]
+          allowed = set()
+          for line in open(allow, encoding='utf-8'):
+              line = line.split('#', 1)[0].strip()
+              if line:
+                  allowed.add(line)
+          rows = [r['file'] for r in csv.DictReader(open(zero, newline='', encoding='utf-8'))]
+          unexpected = [f for f in rows if f not in allowed]
+          for f in rows:
+              print(f"zero geometry: {f}" + ("" if f in unexpected else "  (allowlisted)"))
+          if unexpected:
+              print("::error::Models loaded but produced NO geometry and are not allowlisted:")
+              for f in unexpected:
+                  print(f"::error::  {f}")
+              sys.exit(1)
+          print(f"{len(rows)} zero-geometry model(s), all allowlisted.")
+          PYEOF

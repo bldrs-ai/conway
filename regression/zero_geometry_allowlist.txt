@@ -1,0 +1,34 @@
+# Models known to load successfully and produce NO geometry.
+#
+# A model that loads and emits nothing is a total failure from a user's point
+# of view — an empty viewer with no diagnostic — but it exits 0, writes no
+# failed.csv row, and may emit no errors, so nothing else in the harness sees
+# it. The regression batch now writes zero_geometry.csv, and CI fails on any
+# model in it that is NOT listed here.
+#
+# This is deliberately a short, hand-maintained, issue-annotated file rather
+# than a generated blessed CSV. errors.csv shows what the generated kind turns
+# into: 580 rows in the public baseline, reported green every run, with a
+# genuine 30s/3.4GB runaway sitting among them unnoticed (#473). Adding a line
+# here should require writing down why, and every line should have an issue.
+#
+# One basename per line; '#' starts a comment. Remove a line the moment its
+# model starts producing geometry — the gate does not check that a listed
+# model is STILL empty, so a stale entry silently gives up coverage.
+
+# --- Real bugs: supported schema, zero geometry (#477) ---
+
+# AP214 (AUTOMOTIVE_DESIGN), 1.1 MB. Supported schema, emits nothing.
+NEMA 23 - 76mm.STEP
+
+# IFC2X3, 72.9 MB. Supported schema, emits nothing. Largest impact of the set.
+ISSUE_098_R8_F1_MAB_AR_M3_XX_XXX_MO_7000.IFC
+
+# --- Unsupported schema: expected until the schema lands ---
+
+# IFC4X3_RC2. Tracked by #280 (IFC 4.3 support).
+KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
+
+# AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF, parsed as AP214. Tracked by
+# #480. Also the largest single error source in the public baseline (272 rows).
+nist_ftc_08_asme1_ap242-e1-tg.stp
