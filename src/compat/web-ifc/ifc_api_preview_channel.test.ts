@@ -389,7 +389,12 @@ describe( 'StreamedPreviewChannel', () => {
     const forceTick = () => {
       /* eslint-disable @typescript-eslint/no-explicit-any */
       ( channel as any ).lastInlineTick_ = 0;
-      ( channel as any ).tickIntervalMs_ = 0
+      ( channel as any ).tickIntervalMs_ = 0;
+      // Lift the per-tick wall-clock budget too. The assertions below count
+      // exactly which units ran in a tick, and against the real 25ms budget
+      // that is a coin flip on a loaded runner — this expected [0,1,2] and
+      // got [0,1] in CI while passing locally.
+      ( channel as any ).tickBudgetMs_ = Number.MAX_SAFE_INTEGER
       /* eslint-enable @typescript-eslint/no-explicit-any */
       channel.maybeTickInline()
     }
