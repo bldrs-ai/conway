@@ -423,6 +423,13 @@ export class StreamedPreviewChannel {
   private lastInlineTick_ = 0
   private tickIntervalMs_ = TICK_INTERVAL_MS
 
+  // A field rather than reading TICK_BUDGET_MS directly, so a test can lift
+  // the wall-clock bound the way it already lifts tickIntervalMs_. Asserting
+  // "this tick ran all N units" against a real 25ms budget is a coin flip on
+  // a loaded runner: the retryEmptyUnits test expected [0,1,2] and got [0,1]
+  // in CI while passing locally. Production behaviour is unchanged.
+  private tickBudgetMs_ = TICK_BUDGET_MS
+
   /** Begin ticking (call just before awaiting the parse). */
   public start(): void {
     this.schedule_()
@@ -519,7 +526,7 @@ export class StreamedPreviewChannel {
    */
   private tick_(): void {
 
-    const deadline = Date.now() + TICK_BUDGET_MS
+    const deadline = Date.now() + this.tickBudgetMs_
 
     if (!this.ensureGeneration_()) {
       return
