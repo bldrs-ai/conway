@@ -304,6 +304,17 @@ async function runForFile(filePath: string,
 
   console.log(`Current File: ${filePath}`)
 
+  // Remove any stale digest before the child runs. Without this, a child that
+  // dies without writing one leaves the committed baseline CSV in place, the
+  // batch hashes THAT, and the model reports an unchanged hash with no failure
+  // and no zero-geometry row - green, while extraction is completely broken.
+  // That is precisely the case this gate exists to catch.
+  const staleDigest = `${outputPath}.csv`
+
+  if (fs.existsSync(staleDigest)) {
+    await fsPromises.rm(staleDigest, { force: true })
+  }
+
   // Use safeExecWithCancellation, will kill the process if it takes longer than MAX_TIMEOUT_MS.
   const process = await safeExecWithCancellation(safeExecCommand, MAX_TIMEOUT_MS)
 
@@ -331,7 +342,11 @@ async function runForFile(filePath: string,
   const outputFile = path.basename(outputPath)
 
   let fileHash: string | undefined
-  let producedNoGeometry = false
+  // Absent digest counts as zero geometry: the stale file was removed before
+  // the child ran, so nothing here can be left over from the committed
+  // baseline. A child that dies without writing one is exactly the case this
+  // gate exists to catch, and hashing the old file would report it as green.
+  let producedNoGeometry = true
   const outputCSV = `${outputPath}.csv`
   if (fs.existsSync(outputCSV)) {
     const digest = await fsPromises.readFile(outputCSV)
@@ -344,6 +359,15 @@ async function runForFile(filePath: string,
     // A digest with nothing after its header means the model loaded and
     // produced no geometry at all. The child still exits 0, so this is
     // invisible to every other signal the harness has — see #477 / #478.
+    //
+    // Known limitation: a digest row is any hashed entity, and that includes
+    // non-renderable ones (IFCSURFACESTYLE, IFCPOLYLINE, IFCCENTERLINEPROFILEDEF
+    // …), so "has rows" is weaker than "has renderable geometry". A model that
+    // emits only styles and profiles reads as fine here. That is a deliberate
+    // floor, not an oversight: this catches the total-blank case with zero
+    // false positives, which is what an unconditional CI gate needs. Tightening
+    // it to a mesh/vertex count means teaching the digest which types are
+    // renderable and re-blessing every baseline; tracked on #478.
     producedNoGeometry =
       digest.toString('utf8').split('\n').filter((line) => line.trim().length > 0).length <= 1
   }
@@ -794,12 +818,43 @@ const args = yargs(process.argv.slice(SKIP_PARAMS))
           // different gates: failed.csv is empty and stays empty, while a
           // handful of zero-geometry models are known and tracked (#477), so
           // CI compares this against an explicit allowlist instead.
-          await fsPromises.writeFile(zeroGeometryPath, `file\n${  zeroGeometryLines.join('')}`)
+          // Models whose digest stem collides cannot be judged: two models
+          // sharing a basename write the SAME digest file, so in --parallel one
+          // can be read between another's truncate and its first row. That
+          // collision is a pre-existing harness bug (it also means the blessed
+          // digest is whichever model ran last) - `ifc/index.ifc` and
+          // `ifc/bldrs/index.ifc` are a live example, both in the smoke subset.
+          // Suppress rather than guess, so it cannot red an unrelated PR, and
+          // say so loudly.
+          const stemCounts = new Map<string, number>()
 
-          if (zeroGeometryLines.length > 0) {
+          for (const line of fileLines) {
+            const basename = line.split(',')[0].replaceAll('"', '')
+            const stem = path.parse(basename).name
+
+            stemCounts.set(stem, (stemCounts.get(stem) ?? 0) + 1)
+          }
+
+          const collidingStems =
+            [...stemCounts].filter(([, count]) => count > 1).map(([stem]) => stem)
+
+          if (collidingStems.length > 0) {
+            console.warn(
+                `WARNING: ${collidingStems.length} digest stem(s) are written by more ` +
+                `than one model, so their digests overwrite each other and their ` +
+                `zero-geometry status cannot be determined: ${collidingStems.join(', ')}`)
+          }
+
+          const reportableZeroGeometry = zeroGeometryLines.filter(
+              (line) => !collidingStems.includes(path.parse(line.trim().replaceAll('"', '')).name))
+
+          await fsPromises.writeFile(
+              zeroGeometryPath, `file\n${  reportableZeroGeometry.join('')}`)
+
+          if (reportableZeroGeometry.length > 0) {
             console.log(
-                `\n${zeroGeometryLines.length} model(s) loaded but produced NO geometry:`)
-            for (const line of zeroGeometryLines) {
+                `\n${reportableZeroGeometry.length} model(s) loaded but produced NO geometry:`)
+            for (const line of reportableZeroGeometry) {
               console.log(`  ${line.trim()}`)
             }
             console.log('')
