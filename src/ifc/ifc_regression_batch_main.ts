@@ -115,6 +115,17 @@ interface RunSuccessResults {
 interface RunErrorResults extends ExecException {
 
   type: 'Failed'
+
+  /**
+   * Human-readable cause, for failures the harness diagnoses itself rather
+   * than reading off a child's exit.
+   *
+   * ExecException's own fields cannot carry one: `code` is a number and
+   * `signal` is a NodeJS.Signals. Written into failed.csv's signal column,
+   * which is free text, so the row says what happened instead of leaving the
+   * reader to infer it from two empty fields the way a timeout does.
+   */
+  failureReason?: string
 }
 
 type RunResults = RunSuccessResults | RunErrorResults
@@ -349,6 +360,30 @@ async function runForFile(filePath: string,
 
   console.log(`Current File: ${filePath}`)
 
+  // A model file that is still an unsmudged Git LFS pointer is NOT a model,
+  // and must not reach a child. Both engines parse the 132-byte placeholder
+  // as an empty document and exit 0, so without this it reads as a
+  // successful load of a model with no geometry - and a blessing run commits
+  // that to the baseline, where it stays. It already happened: NEMA 23 and
+  // ISSUE_098 were blessed at zero rows and filed as engine bugs (#477)
+  // before anyone noticed the run had never read them. See #486.
+  //
+  // Checked before the stale-digest removal below, deliberately: a local
+  // checkout that failed to smudge should not also destroy the good
+  // committed digest for that model.
+  if (await isGitLfsPointer(filePath)) {
+    console.error(
+        `::error::"${path.basename(filePath)}" is an unsmudged Git LFS pointer, not a model. ` +
+        `Run \`git lfs pull\` in the models checkout.`)
+
+    return {
+      type: 'Failed',
+      message: 'Git LFS pointer stub, not a model file',
+      failureReason: 'lfs-pointer-stub',
+      name: 'Error',
+    }
+  }
+
   // Remove any stale digest before the child runs. Without this, a child that
   // dies without writing one leaves the committed baseline CSV in place, the
   // batch hashes THAT, and the model reports an unchanged hash with no failure
@@ -429,6 +464,50 @@ async function runForFile(filePath: string,
 
 // Model files the regression harness understands: IFC plus STEP AP214.
 const SUPPORTED_MODEL_EXTENSIONS = ['.ifc', '.stp', '.step']
+
+/**
+ * First bytes of a Git LFS pointer file, per the v1 pointer spec. The spec
+ * fixes this as the first line of every pointer, so a prefix match is exact
+ * rather than a heuristic - and no STEP or IFC file can begin this way, both
+ * being required to start with `ISO-10303-21;`.
+ */
+const GIT_LFS_POINTER_PREFIX = 'version https://git-lfs.github.com/spec/v1'
+
+/**
+ * Whether this file is an unsmudged Git LFS pointer rather than the model it
+ * stands for.
+ *
+ * Reads only the prefix: pointers are ~132 bytes, and a real model may be
+ * hundreds of megabytes.
+ *
+ * @param filePath Model file to inspect.
+ * @return {Promise<boolean>} True if the file is an LFS pointer stub.
+ */
+async function isGitLfsPointer( filePath: string ): Promise<boolean> {
+
+  let handle: fsPromises.FileHandle | undefined
+
+  try {
+
+    handle = await fsPromises.open( filePath, 'r' )
+
+    const buffer = Buffer.alloc( GIT_LFS_POINTER_PREFIX.length )
+    const { bytesRead } = await handle.read( buffer, 0, buffer.length, 0 )
+
+    return bytesRead === buffer.length &&
+      buffer.toString( 'utf8' ) === GIT_LFS_POINTER_PREFIX
+
+  } catch {
+
+    // Unreadable is not this function's business to report - let the child
+    // run and fail with whatever the real problem is.
+    return false
+
+  } finally {
+
+    await handle?.close()
+  }
+}
 
 /**
  * Whether this is a STEP (AP214) model file by extension.
@@ -598,10 +677,13 @@ async function processIFCFilesInParallel(
       }
     } else {
       // it's 'Failed'
+      // failureReason takes the signal column when the harness diagnosed the
+      // failure itself, so the row says what happened instead of leaving a
+      // reader to infer it from two empty fields. See RunErrorResults.
       failedLines.push(
           `${csvSafeString(path.basename(ifcPath))},` +
           `${csvSafeString(fileResults.code?.toString() ?? '')},` +
-          `${csvSafeString(fileResults.signal ?? '')}\n`,
+          `${csvSafeString(fileResults.failureReason ?? fileResults.signal ?? '')}\n`,
       )
     }
   }
@@ -671,10 +753,11 @@ async function recursiveWalk(
           zeroGeometryLines.push(`${csvSafeString(path.basename(resolved))}\n`)
         }
       } else {
+        // See the parallel path's copy for why failureReason wins here.
         failedLines.push(
             `${csvSafeString(path.basename(resolved))},${csvSafeString(
                 fileResults.code?.toString() ?? '',
-            )},${csvSafeString(fileResults.signal ?? '')}\n`,
+            )},${csvSafeString(fileResults.failureReason ?? fileResults.signal ?? '')}\n`,
         )
       }
     }

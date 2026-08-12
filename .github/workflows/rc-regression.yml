@@ -475,13 +475,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ZERO="${GITHUB_WORKSPACE}/zero_geometry.csv"
+          MAIN=models/regression/test_models/main.csv
           ALLOW=regression/zero_geometry_allowlist.txt
           if [ ! -f "$ZERO" ]; then
             echo "No zero_geometry.csv produced."; exit 0
           fi
-          python3 - "$ZERO" "$ALLOW" <<'PYEOF'
-          import csv, sys
-          zero, allow = sys.argv[1], sys.argv[2]
+          python3 - "$ZERO" "$ALLOW" "$MAIN" <<'PYEOF'
+          import csv, os, sys
+          zero, allow, main = sys.argv[1], sys.argv[2], sys.argv[3]
           allowed = set()
           for line in open(allow, encoding='utf-8'):
               line = line.split('#', 1)[0].strip()
@@ -491,10 +492,25 @@ jobs:
           unexpected = [f for f in rows if f not in allowed]
           for f in rows:
               print(f"zero geometry: {f}" + ("" if f in unexpected else "  (allowlisted)"))
+
+          # Same anti-rot check as the smoke job; see build.yml for the
+          # reasoning. It matters more here: this is the run that blesses.
+          ran = set()
+          if os.path.exists(main):
+              ran = {r['file'] for r in csv.DictReader(open(main, newline='', encoding='utf-8'))}
+          stale = sorted((allowed & ran) - set(rows))
+
           if unexpected:
               print("::error::Models loaded but produced NO geometry and are not allowlisted:")
               for f in unexpected:
                   print(f"::error::  {f}")
+          if stale:
+              print("::error::Allowlisted models that now DO produce geometry - "
+                    "delete their lines from regression/zero_geometry_allowlist.txt:")
+              for f in stale:
+                  print(f"::error::  {f}")
+          if unexpected or stale:
               sys.exit(1)
-          print(f"{len(rows)} zero-geometry model(s), all allowlisted.")
+          print(f"{len(rows)} zero-geometry model(s), all allowlisted; "
+                f"{len(allowed & ran)} allowlist entr(ies) exercised and still empty.")
           PYEOF

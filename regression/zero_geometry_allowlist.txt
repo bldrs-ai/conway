@@ -3,8 +3,17 @@
 # A model that loads and emits nothing is a total failure from a user's point
 # of view — an empty viewer with no diagnostic — but it exits 0, writes no
 # failed.csv row, and may emit no errors, so nothing else in the harness sees
-# it. The regression batch now writes zero_geometry.csv, and CI fails on any
+# it. The regression batch writes zero_geometry.csv, and CI fails on any
 # model in it that is NOT listed here.
+#
+# CI also fails the other way: a model listed here that DOES produce geometry
+# fails too, and its line must be deleted. Without that, a stale line silently
+# gives up coverage for its model forever. That is not hypothetical — this
+# file shipped with two such lines. `NEMA 23 - 76mm.STEP` and
+# `ISSUE_098_...IFC` were listed as real zero-geometry bugs (#477) when in
+# fact the blessing run had read 132-byte Git LFS pointer stubs instead of the
+# models; materialized, they produce 266 and 45,558 digest rows. The batch now
+# fails a stub outright rather than parsing it as an empty model (#486).
 #
 # This is deliberately a short, hand-maintained, issue-annotated file rather
 # than a generated blessed CSV. errors.csv shows what the generated kind turns
@@ -12,17 +21,7 @@
 # genuine 30s/3.4GB runaway sitting among them unnoticed (#473). Adding a line
 # here should require writing down why, and every line should have an issue.
 #
-# One basename per line; '#' starts a comment. Remove a line the moment its
-# model starts producing geometry — the gate does not check that a listed
-# model is STILL empty, so a stale entry silently gives up coverage.
-
-# --- Real bugs: supported schema, zero geometry (#477) ---
-
-# AP214 (AUTOMOTIVE_DESIGN), 1.1 MB. Supported schema, emits nothing.
-NEMA 23 - 76mm.STEP
-
-# IFC2X3, 72.9 MB. Supported schema, emits nothing. Largest impact of the set.
-ISSUE_098_R8_F1_MAB_AR_M3_XX_XXX_MO_7000.IFC
+# One basename per line; '#' starts a comment.
 
 # --- Unsupported schema: expected until the schema lands ---
 

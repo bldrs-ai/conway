@@ -772,13 +772,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ZERO=test-models/regression/test_models/zero_geometry.csv
+          MAIN=test-models/regression/test_models/main.csv
           ALLOW=regression/zero_geometry_allowlist.txt
           if [ ! -f "$ZERO" ]; then
             echo "No zero_geometry.csv produced."; exit 0
           fi
-          python3 - "$ZERO" "$ALLOW" <<'PY'
-          import csv, sys
-          zero, allow = sys.argv[1], sys.argv[2]
+          python3 - "$ZERO" "$ALLOW" "$MAIN" <<'PY'
+          import csv, os, sys
+          zero, allow, main = sys.argv[1], sys.argv[2], sys.argv[3]
           allowed = set()
           for line in open(allow, encoding='utf-8'):
               line = line.split('#', 1)[0].strip()
@@ -788,12 +789,31 @@ jobs:
           unexpected = [f for f in rows if f not in allowed]
           for f in rows:
               print(f"zero geometry: {f}" + ("" if f in unexpected else "  (allowlisted)"))
+
+          # Stale entries rot silently: an allowlisted model that starts
+          # producing geometry keeps its exemption forever, so a later
+          # regression that empties it again is waved through. main.csv is the
+          # set of models this run actually digested, which is what keeps this
+          # correct on the smoke subset - an entry for a model the run never
+          # touched is neither stale nor confirmed, just absent.
+          ran = set()
+          if os.path.exists(main):
+              ran = {r['file'] for r in csv.DictReader(open(main, newline='', encoding='utf-8'))}
+          stale = sorted((allowed & ran) - set(rows))
+
           if unexpected:
               print("::error::Models loaded but produced NO geometry and are not allowlisted:")
               for f in unexpected:
                   print(f"::error::  {f}")
+          if stale:
+              print("::error::Allowlisted models that now DO produce geometry - "
+                    "delete their lines from regression/zero_geometry_allowlist.txt:")
+              for f in stale:
+                  print(f"::error::  {f}")
+          if unexpected or stale:
               sys.exit(1)
-          print(f"{len(rows)} zero-geometry model(s), all allowlisted.")
+          print(f"{len(rows)} zero-geometry model(s), all allowlisted; "
+                f"{len(allowed & ran)} allowlist entr(ies) exercised and still empty.")
           PY
 
   # ---------------------------------------------------------------------------
@@ -887,11 +907,17 @@ jobs:
 
       # Model files under ifc/ and step/ are git-lfs objects; a manual
       # fetch/checkout (and a cache seeded from one) can leave 132-byte
-      # pointer stubs, which parse as "no geometry" in both engines.
-      # Materialize what we can. A couple of stubs are CHRONIC — their LFS
-      # objects don't restore (same models the regression errors table
-      # flags as unparseable) — so warn and continue: their rows will read
-      # "no geometry" truthfully while every other model still renders.
+      # pointer stubs. Materialize what we can.
+      #
+      # Stubs used to be tolerated here with a warning saying their rows would
+      # read "no geometry" truthfully. That is truthful about the bytes on
+      # disk and false about the model, and it cost real work: two models were
+      # blessed at zero rows and filed as engine bugs (#477) before anyone
+      # noticed the run had never read them. The regression batch now FAILS a
+      # stub instead of parsing it (#486), so a stub can no longer reach a
+      # baseline. This job renders rather than digests, so it still continues
+      # — a stub here costs one blank image, not a committed falsehood — but
+      # the warning now says what it actually means.
       - name: Materialize LFS model files
         run: |
           cd test-models
@@ -903,7 +929,7 @@ jobs:
             LEFT=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
             echo "stubs after lfs pull: $LEFT"
             if [ "$LEFT" != "0" ]; then
-              echo "::warning::test-models still has $LEFT LFS pointer stub(s); their rows will render as 'no geometry'."
+              echo "::warning::test-models still has $LEFT unsmudged LFS pointer stub(s). These are NOT models: any row below that renders empty for one of them is a missing file, not a geometry regression."
               grep -rl "git-lfs.github.com" ifc step 2>/dev/null || true
             fi
           fi
