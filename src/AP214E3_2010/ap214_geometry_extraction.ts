@@ -157,6 +157,58 @@ import AP214StepModel from './ap214_step_model'
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 
+// Fewest points a bound can have and still span a plane, which is what
+// GetBasisFromCoplanarPoints needs downstream.
+const MINIMUM_BOUND_POINTS = 3
+
+/**
+ * Whether an edge's vertices are the basis curve's own endpoints, making its
+ * trim a no-op that spans the whole curve.
+ *
+ * Only B-splines are considered. A LINE or CIRCLE has no endpoint entities to
+ * compare against — a circle is unbounded parametrically, and a line's trim is
+ * what gives it extent at all — so "whole curve" does not apply to them and
+ * their trims must be resolved.
+ *
+ * Detected by entity identity, not by comparing coordinates: the file
+ * references the same CARTESIAN_POINT from both the control point list and the
+ * VERTEX_POINT, so this is exact and needs no tolerance.
+ *
+ * @param basisCurve The edge's underlying geometry.
+ * @param edgeStart The edge's start vertex.
+ * @param edgeEnd The edge's end vertex.
+ * @return {boolean} True when the edge covers the entire basis curve.
+ */
+function isWholeCurveEdge(
+    basisCurve: curve,
+    edgeStart: unknown,
+    edgeEnd: unknown ): boolean {
+
+  if ( !( basisCurve instanceof b_spline_curve ) ||
+       !( edgeStart instanceof vertex_point ) ||
+       !( edgeEnd instanceof vertex_point ) ) {
+
+    return false
+  }
+
+  const controlPoints = basisCurve.control_points_list
+
+  if ( controlPoints.length < 2 ) {
+    return false
+  }
+
+  const first = controlPoints[ 0 ]
+  const last = controlPoints[ controlPoints.length - 1 ]
+  const from = edgeStart.vertex_geometry
+  const to = edgeEnd.vertex_geometry
+
+  // Either orientation: same_sense is normalised separately, and an edge
+  // running end -> start still spans the whole curve. A closed curve whose
+  // first and last control points coincide also lands here, which is correct
+  // — that edge is the whole curve too.
+  return ( from === first && to === last ) || ( from === last && to === first )
+}
+
 /**
  * Render something thrown that is not an Error, for a log message.
  *
@@ -3219,7 +3271,54 @@ export class AP214GeometryExtraction {
 
               curve = this.extractCurve( edgeCurve, true, true, trimmingArguments )
 
-              if ( curve !== void 0 && trimmingArguments.exist ) {
+              // An edge whose vertices ARE the basis curve's own endpoints
+              // spans the whole curve, so its trim carries no information —
+              // and on some B-splines resolving it anyway comes back as just
+              // the two endpoints. When such edges form a face's outer loop
+              // the loop is collinear by construction, GetBasisFromCoplanarPoints
+              // finds no basis, and TriangulateBounds discards the ENTIRE face,
+              // eleven good 47-point inner bounds along with it (four edges on
+              // nist_ctc_02_asme1_rc.stp, bldrs-ai/conway#492).
+              //
+              // Deliberately gated on the result being degenerate rather than
+              // on the trim being a no-op. Most whole-curve trims resolve
+              // correctly — 31 of 35 on that model — and bypassing those too
+              // would re-route working edges onto a different extraction and
+              // memoisation path for no reason, which is churn masquerading as
+              // a fix. This only fires where the current path has already
+              // failed, so an edge that works keeps its exact output.
+              //
+              // Whole-curve is decided by entity identity, not coordinates:
+              // the file references the same CARTESIAN_POINT from both the
+              // control point list and the VERTEX_POINT, so it is exact.
+              if ( curve !== void 0 &&
+                   curve.getPointsSize() < MINIMUM_BOUND_POINTS &&
+                   isWholeCurveEdge( edgeCurve, edgeStart, edgeEnd ) ) {
+
+                Logger.warning(
+                    `Whole-curve trim on edge #${edgeElement.expressID} ` +
+                    `(${EntityTypesAP214[edgeCurve.type]}) resolved to ` +
+                    `${curve.getPointsSize()} point(s); re-extracting untrimmed.` )
+
+                // extractCurve memoises an untrimmed extraction under the
+                // BASIS curve's localID and owns it there, so this must not
+                // also be registered under the edge's localID.
+                const untrimmed = this.extractCurve(
+                    edgeCurve, true, true,
+                    { exist: false, start: void 0, end: void 0 } )
+
+                if ( untrimmed !== void 0 &&
+                     untrimmed.getPointsSize() >= MINIMUM_BOUND_POINTS ) {
+
+                  curve = untrimmed
+                } else {
+
+                  Logger.error(
+                      `Untrimmed re-extraction of edge #${edgeElement.expressID} ` +
+                      `also degenerate; the face will be dropped.` )
+                }
+
+              } else if ( curve !== void 0 && trimmingArguments.exist ) {
 
                 this.curves.add( edgeElement.localID, curve )
               }
@@ -3328,6 +3427,19 @@ export class AP214GeometryExtraction {
       // Logger.info("isEdgeLoop: " + (isEdgeLoop) ? "TRUE" : "FALSE")
       const curve: CurveObject = this.conwayModel.getLoop(parameters)
 
+      // No general "bound has fewer than 3 points" check here, deliberately.
+      // It looks like the obvious backstop for the #479 family and it is not:
+      // a VERTEX_LOOP is one point and zero edges BY DESIGN - the degenerate
+      // loop at a sphere pole or cone apex - and it is legitimate input that
+      // conway is expected to handle (bldrs-ai/conway#461). Measured on the
+      // smoke subset, such a check fires 50 times across Right_Hand.step and
+      // nist_ctc_01_asme1_rd.stp, and every one of those is a valid
+      // VERTEX_LOOP or single-edge closed loop. Reporting them would put 50
+      // false "the face will be dropped" rows into the blessed baseline, which
+      // is the noise problem in #478 rather than a fix for it.
+      //
+      // The known real cause is handled above, where it IS distinguishable
+      // from legitimate input.
       loopCurves.push( curve )
       loopIsOuter.push( bound.type === EntityTypesAP214.FACE_OUTER_BOUND )
       loopOrientations.push( bound.orientation )
