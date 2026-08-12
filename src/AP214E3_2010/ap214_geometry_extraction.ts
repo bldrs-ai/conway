@@ -170,9 +170,18 @@ const MINIMUM_BOUND_POINTS = 3
  * what gives it extent at all — so "whole curve" does not apply to them and
  * their trims must be resolved.
  *
- * Detected by entity identity, not by comparing coordinates: the file
- * references the same CARTESIAN_POINT from both the control point list and the
- * VERTEX_POINT, so this is exact and needs no tolerance.
+ * Compared by entity localID, not by coordinates: the file references the
+ * same CARTESIAN_POINT from both the control point list and the VERTEX_POINT,
+ * so this is exact and needs no tolerance.
+ *
+ * localID rather than object identity, deliberately. `===` looks equivalent
+ * and is not: getTypedElementByLocalID caches instances only while
+ * model.elementMemoization holds, and extraction turns it off for
+ * lowMemoryMode or a buffer over MEMOIZATION_THRESHOLD. StepModelBase says so
+ * outright — "it's not guaranteed element objects returned from this have
+ * referential equality even if they have ID equality". With `===` this guard
+ * would quietly stop firing on exactly the large models where a dropped face
+ * costs most.
  *
  * @param basisCurve The edge's underlying geometry.
  * @param edgeStart The edge's start vertex.
@@ -197,10 +206,10 @@ function isWholeCurveEdge(
     return false
   }
 
-  const first = controlPoints[ 0 ]
-  const last = controlPoints[ controlPoints.length - 1 ]
-  const from = edgeStart.vertex_geometry
-  const to = edgeEnd.vertex_geometry
+  const first = controlPoints[ 0 ].localID
+  const last = controlPoints[ controlPoints.length - 1 ].localID
+  const from = edgeStart.vertex_geometry.localID
+  const to = edgeEnd.vertex_geometry.localID
 
   // Either orientation: same_sense is normalised separately, and an edge
   // running end -> start still spans the whole curve. A closed curve whose
@@ -3277,45 +3286,57 @@ export class AP214GeometryExtraction {
               // the two endpoints. When such edges form a face's outer loop
               // the loop is collinear by construction, GetBasisFromCoplanarPoints
               // finds no basis, and TriangulateBounds discards the ENTIRE face,
-              // eleven good 47-point inner bounds along with it (four edges on
+              // eleven good 47-point inner bounds along with it (two edges on
               // nist_ctc_02_asme1_rc.stp, bldrs-ai/conway#492).
               //
               // Deliberately gated on the result being degenerate rather than
               // on the trim being a no-op. Most whole-curve trims resolve
-              // correctly — 31 of 35 on that model — and bypassing those too
+              // correctly — 33 of 35 on that model — and bypassing those too
               // would re-route working edges onto a different extraction and
               // memoisation path for no reason, which is churn masquerading as
               // a fix. This only fires where the current path has already
               // failed, so an edge that works keeps its exact output.
-              //
-              // Whole-curve is decided by entity identity, not coordinates:
-              // the file references the same CARTESIAN_POINT from both the
-              // control point list and the VERTEX_POINT, so it is exact.
               if ( curve !== void 0 &&
                    curve.getPointsSize() < MINIMUM_BOUND_POINTS &&
                    isWholeCurveEdge( edgeCurve, edgeStart, edgeEnd ) ) {
 
-                Logger.warning(
-                    `Whole-curve trim on edge #${edgeElement.expressID} ` +
-                    `(${EntityTypesAP214[edgeCurve.type]}) resolved to ` +
-                    `${curve.getPointsSize()} point(s); re-extracting untrimmed.` )
-
                 // extractCurve memoises an untrimmed extraction under the
-                // BASIS curve's localID and owns it there, so this must not
-                // also be registered under the edge's localID.
+                // BASIS curve's localID and owns it there.
                 const untrimmed = this.extractCurve(
                     edgeCurve, true, true,
                     { exist: false, start: void 0, end: void 0 } )
 
-                if ( untrimmed !== void 0 &&
-                     untrimmed.getPointsSize() >= MINIMUM_BOUND_POINTS ) {
+                const recovered =
+                  untrimmed !== void 0 &&
+                  untrimmed.getPointsSize() > curve.getPointsSize()
 
+                if ( recovered ) {
+
+                  // Only now is the trimmed result known to be a defect rather
+                  // than the curve's honest shape - a degree-1 B-spline over
+                  // two control points really is two points, trimmed or not,
+                  // and warning about those would be the false-row noise the
+                  // comment further down argues against.
+                  Logger.warning(
+                      `Whole-curve trim on edge #${edgeElement.expressID} ` +
+                      `(${EntityTypesAP214[edgeCurve.type]}) resolved to ` +
+                      `${curve.getPointsSize()} point(s); recovered ` +
+                      `${untrimmed!.getPointsSize()} untrimmed.` )
+
+                  // The trimmed CurveObject is being dropped, and nothing else
+                  // holds it: it was never added to this.curves, so without
+                  // this its native allocation is unreachable.
+                  curve.delete()
                   curve = untrimmed
-                } else {
+                }
 
-                  Logger.error(
-                      `Untrimmed re-extraction of edge #${edgeElement.expressID} ` +
-                      `also degenerate; the face will be dropped.` )
+                // Memoise under the edge either way. The adjacent face's
+                // ORIENTED_EDGE shares this edge, and without the entry it
+                // re-runs the whole native trim extraction, re-warns, and
+                // leaks a second trimmed curve.
+                if ( curve !== void 0 && trimmingArguments.exist ) {
+
+                  this.curves.add( edgeElement.localID, curve )
                 }
 
               } else if ( curve !== void 0 && trimmingArguments.exist ) {
