@@ -12,6 +12,7 @@ import { externally_defined_style } from "./index"
 import { null_style, null_styleDeserializeStep } from "./index"
 import {
   stepExtractOptional,
+  stepEnterTypedValue,
   stepExtractArrayToken,
   stepExtractArrayBegin,
   skipValue,
@@ -49,7 +50,7 @@ export  class presentation_style_assignment extends founded_item {
 
       while ( signedCursor0 >= 0 ) {
         const value1Untyped : StepEntityBase< EntityTypesAP214 > | null_style | undefined = 
-          this.extractBufferReference( buffer, cursor, endCursor ) ?? null_styleDeserializeStep( buffer, cursor, endCursor )
+          this.extractBufferReference( buffer, cursor, endCursor ) ?? null_styleDeserializeStep( buffer, stepEnterTypedValue( buffer, cursor, endCursor, 'NULL_STYLE' ), endCursor )
 
         if ( !( value1Untyped instanceof pre_defined_presentation_style ) && !( value1Untyped instanceof point_style ) && !( value1Untyped instanceof curve_style ) && !( value1Untyped instanceof surface_style_usage ) && !( value1Untyped instanceof symbol_style ) && !( value1Untyped instanceof fill_area_style ) && !( value1Untyped instanceof text_style ) && !( value1Untyped instanceof approximation_tolerance ) && !( value1Untyped instanceof externally_defined_style ) && value1Untyped !== null_style.NULL ) {
           throw new Error( 'Value in select must be populated' )
