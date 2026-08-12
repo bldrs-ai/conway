@@ -157,6 +157,37 @@ import AP214StepModel from './ap214_step_model'
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 
+/**
+ * Render something thrown that is not an Error, for a log message.
+ *
+ * Interpolating a thrown value straight into a template string is how the
+ * public baseline ended up with 8 rows reading `[object Object]` — a message
+ * that names the face type and then says nothing about the failure. JSON
+ * first so a plain thrown object shows its fields; String() as the fallback
+ * for what JSON cannot take (cycles, BigInt, symbols).
+ *
+ * @param thrown The caught value, known not to be an Error.
+ * @return {string} A description with at least as much information as String().
+ */
+function describeThrown( thrown: unknown ): string {
+
+  try {
+
+    const asJson = JSON.stringify( thrown )
+
+    // undefined for a symbol or a bare undefined; "{}" for an object whose
+    // own properties are all non-enumerable, which is no better than String().
+    if ( asJson !== void 0 && asJson !== '{}' ) {
+      return asJson
+    }
+
+  } catch {
+    // Cyclic, BigInt, or a throwing toJSON - fall through.
+  }
+
+  return String( thrown )
+}
+
 
 /**
  * Extract an AP214 Colour into our RGBA color, using premultiplied alpha.
@@ -2815,9 +2846,14 @@ export class AP214GeometryExtraction {
             `Error extracting face ${EntityTypesAP214[face_.type]} - ${
               error.message}\t\n${error.stack} - expressID: #${face_.expressID}`)
         } else {
+          // A non-Error throw interpolates as "[object Object]" in a template
+          // string, which is what 8 occurrences in the public baseline
+          // actually say - the message names the face type and nothing else.
+          // JSON first so a plain thrown object shows its fields; String() as
+          // the fallback for what JSON cannot take (cycles, BigInt, symbols).
           Logger.error(
             `Error extracting face ${EntityTypesAP214[face_.type]} - ${
-              error} - expressID: #${face_.expressID}`)
+              describeThrown( error )} - expressID: #${face_.expressID}`)
         }
       }
     }
@@ -4492,7 +4528,12 @@ export class AP214GeometryExtraction {
             }
           } catch ( ex ) {
             if (ex instanceof Error) {
-              Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\texpressID: #${item.expressID}` )
+              // Stack included for the same reason extractFaces includes it:
+              // this family's message is the same string for every occurrence
+              // ("Value in select must be populated" accounts for all 274 in
+              // the NIST AP242 set), so without a stack there is nothing to
+              // tell one occurrence from another or say WHICH select failed.
+              Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
             } else {
               Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
             }
