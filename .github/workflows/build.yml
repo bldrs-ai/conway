@@ -453,20 +453,6 @@ jobs:
             test-models/regression/test_models \
             --parallel --mem-utilization 90
 
-      # Hard gate: a smoke model that fails to parse/extract blocks the PR.
-      # Digest CHANGES stay informational (intended geometry changes are
-      # reviewed via the visual diff and blessed at the rc), but a crash is
-      # never intended.
-      - name: Fail on smoke regression failures
-        run: |
-          FAILED=test-models/regression/test_models/failed.csv
-          if [ -f "$FAILED" ] && [ "$(wc -l < "$FAILED")" -gt 1 ]; then
-            echo "::error::Smoke regression failures:"
-            cat "$FAILED"
-            exit 1
-          fi
-          echo "No smoke failures."
-
       - name: Gather Regression Results
         id: regression_results
         run: |
@@ -750,21 +736,38 @@ jobs:
             Download it from [this run's artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
             (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
 
+      # --- Gates. Both run LAST, and both `!cancelled()`. ---------------------
+      #
+      # A gate that exits 1 mid-job takes every later step with it, so gating up
+      # front discarded exactly the evidence needed to diagnose the model it had
+      # just flagged: the results summary, the changed-model list visual-diff
+      # consumes, the tarball, perf.csv, and the PR comment — which quotes
+      # failed.csv, so before this a smoke crash produced no PR comment at all
+      # and you had to open the job log to see WHICH model crashed. Running the
+      # gates last costs nothing but the red X. `!cancelled()` (rather than bare)
+      # so neither gate masks the other: a run reports both problems instead of
+      # making the next push rediscover the second.
+
+      # Hard gate: a smoke model that fails to parse/extract blocks the PR.
+      # Digest CHANGES stay informational (intended geometry changes are
+      # reviewed via the visual diff and blessed at the rc), but a crash is
+      # never intended.
+      - name: Fail on smoke regression failures
+        if: ${{ !cancelled() }}
+        run: |
+          FAILED=test-models/regression/test_models/failed.csv
+          if [ -f "$FAILED" ] && [ "$(wc -l < "$FAILED")" -gt 1 ]; then
+            echo "::error::Smoke regression failures:"
+            cat "$FAILED"
+            exit 1
+          fi
+          echo "No smoke failures."
+
       # A model that loads and emits nothing exits 0 and writes no failed.csv
       # row, so hard-failure detection cannot see it — see #477 / #478. The
       # batch now reports these in zero_geometry.csv; anything not explicitly
       # listed (with an issue) in regression/zero_geometry_allowlist.txt is a
       # new one and fails here.
-      #
-      # Deliberately the LAST step in the job, and `!cancelled()` rather than
-      # bare: a gate that exits 1 mid-job takes every later step with it, so
-      # gating here up front would have discarded exactly the evidence needed
-      # to diagnose the model it just flagged (the results summary, the
-      # changed-model list the visual-diff job consumes, the tarball, perf.csv,
-      # the PR comment). Running last means the failure costs nothing but the
-      # red X; `!cancelled()` means an earlier hard failure — a smoke crash —
-      # does not mask this one, so a run reports both problems instead of
-      # making the next push rediscover the second.
       - name: Fail on unexpected zero-geometry models
         if: ${{ !cancelled() }}
         run: |
