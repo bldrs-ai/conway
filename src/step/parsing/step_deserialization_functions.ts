@@ -546,38 +546,12 @@ export function stepEnterTypedValue(
     }
   }
 
-  let inner = identifierEnd
-  let previousCursor: number
-
-  do {
-    previousCursor = inner
-
-    while ( inner < endCursor && WHITESPACE.has( buffer[ inner ] ) ) {
-      ++inner
-    }
-
-    inner = commentParser( buffer, inner, endCursor ) ?? inner
-  }
-  while ( previousCursor !== inner )
-
-  if ( inner >= endCursor || buffer[ inner ] !== OPEN_PAREN ) {
-    return cursor
-  }
-
-  ++inner
-
-  do {
-    previousCursor = inner
-
-    while ( inner < endCursor && WHITESPACE.has( buffer[ inner ] ) ) {
-      ++inner
-    }
-
-    inner = commentParser( buffer, inner, endCursor ) ?? inner
-  }
-  while ( previousCursor !== inner )
-
-  return inner
+  // Delegate the rest to the inline-element reader rather than repeating its
+  // identifier/whitespace/comment/paren walk. Sharing it is not just less
+  // code: entity-valued select members reach their value through that exact
+  // function, so a divergence here would mean the two kinds of member in the
+  // SAME select disagreed about where a typed value begins.
+  return stepExtractInlineElemement( buffer, cursor, endCursor ) ?? cursor
 }
 
 
