@@ -115,9 +115,73 @@ export function mat4MultiplyF64(
 }
 
 /**
+ * Grid (metres) the recentre translation snaps to.
+ *
+ * The anchor a recentre is derived from is the *first geometry* the walk
+ * reaches, which is an arbitrary interior element: whichever one the file
+ * happens to declare first. Left unsnapped, that makes a model's world
+ * position a function of its element order, with two consequences users
+ * see:
+ *
+ *  - Two exports of one object — the same logo as IFC and as STEP, a part
+ *    re-exported by a different CAD kernel — land in different places,
+ *    because they disagree about which element comes first. Share#1749
+ *    hit exactly this: `index.step` sat 76m off `index.ifc` because the
+ *    IFC declares the x=76 block first and the STEP the x=0 one.
+ *  - Re-exporting a model with the element order shuffled moves it, so
+ *    every camera permalink saved against it is silently wrong.
+ *
+ * Snapping the recentre to a coarse grid makes the frame depend on
+ * *where* the anchor is rather than *which* anchor it is: any two anchors
+ * in the same cell derive the same frame, so exports of one object agree
+ * whenever they anchor within a cell of each other. Models near the
+ * origin — the overwhelming majority — snap to zero and simply keep their
+ * authored coordinates, which is both the most predictable behaviour and
+ * what makes twin exports coincide by construction.
+ *
+ * The grid is 1/10th of LARGE_COORDINATE_BUDGET_M, the engine's own
+ * "this frame failed to recentre" threshold: snapping spends at most
+ * 500m (half a cell) of a 1e4 m budget, ~0.05mm of float32 resolution at
+ * the GPU, while the georeferenced case it exists for — LV95 eastings at
+ * ~2.6e6 m — still recentres to within half a kilometre of the origin.
+ *
+ * A snapped translation is also exactly representable where the raw
+ * anchor was not: whole kilometres (and their whole-unit equivalents in
+ * millimetre files) survive the float32 vertex/matrix path without
+ * rounding, so the recentre itself stops contributing error.
+ */
+export const COORDINATION_SNAP_M = 1e3
+
+/**
+ * Snap one recentre component to COORDINATION_SNAP_M.
+ *
+ * Works in source units — the value is pre-scale, so the grid converts
+ * by the same `scaleFactor` the caller is about to apply (a millimetre
+ * model snaps every 1e6 source units, a metre model every 1e3). A
+ * degenerate scale factor leaves the value untouched rather than
+ * producing a non-finite frame.
+ *
+ * @param value One translation component, in source units.
+ * @param scaleFactor The linear scaling factor to metres.
+ * @return {number} The snapped component, in source units.
+ */
+function snapRecentre(value: number, scaleFactor: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+    return Number.isFinite(value) ? value : 0
+  }
+
+  const gridSourceUnits = COORDINATION_SNAP_M / scaleFactor
+
+  return Math.round(value / gridSourceUnits) * gridSourceUnits
+}
+
+/**
  * Derive the coordination (recentre) matrix in float64, matching the
  * gl-matrix op sequence exactly:
- * `scale * NormalizeMat * translate(-(placement * point))`.
+ * `scale * NormalizeMat * translate(-snap(placement * point))`.
+ *
+ * The snap is what keeps the derived frame independent of which element
+ * a file declares first — see COORDINATION_SNAP_M for why that matters.
  *
  * @param placement The native placement (16 elements, column-major
  * float64 from `getValues()`); `undefined` is treated as identity.
@@ -140,11 +204,11 @@ export function deriveCoordinationF64(
   const ty = p[1] * x + p[5] * y + p[9] * z + p[13]
   const tz = p[2] * x + p[6] * y + p[10] * z + p[14]
 
-  // translate(-transformedPt)
+  // translate(-snap(transformedPt))
   const translate = IDENTITY.slice()
-  translate[12] = -tx
-  translate[13] = -ty
-  translate[14] = -tz
+  translate[12] = snapRecentre(-tx, scaleFactor)
+  translate[13] = snapRecentre(-ty, scaleFactor)
+  translate[14] = snapRecentre(-tz, scaleFactor)
 
   // scale(scaleFactor)
   const scale = [

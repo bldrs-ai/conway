@@ -132,6 +132,7 @@ Check `scripts/` before building tooling — see
 | Native GLB export from the CLI | [design/new/glb-native-export.md](design/new/glb-native-export.md) |
 | Memory residency, streaming and federated loading | [design/new/memory-residency.md](design/new/memory-residency.md), [design/new/streaming-federated-loader.md](design/new/streaming-federated-loader.md) |
 | emsdk version, wasm build environment | [design/new/web-build-environment.md](design/new/web-build-environment.md), [design/new/emsdk-upgrade-scalable-allocator.md](design/new/emsdk-upgrade-scalable-allocator.md) |
+| Where a model lands in world space: `COORDINATE_TO_ORIGIN`, why the recentre snaps to a grid, why two exports of one object used to land 76m apart, what a frame change costs in re-blessing and saved cameras | [design/new/coordination-frame.md](design/new/coordination-frame.md) |
 
 Add a row here when you write a doc future assistants should find — this
 table is the index, not the filesystem.
