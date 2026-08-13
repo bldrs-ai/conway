@@ -33,23 +33,50 @@ const INF_ID = 22
 const AFTER_ID = 33
 const EXPECTED_IDS = [ BEFORE_ID, INF_ID, AFTER_ID ]
 
-const WITH_INF = [
+// One template, one substitution point. Derived with String.replace on a
+// whitespace-exact literal, the controls below would silently become copies of
+// the INF case the moment anyone reflowed the source - replace() returns its
+// input unchanged when the token is absent - and "indexes the same as the
+// equivalent record with a real" would degrade to expect(x).toEqual(x), which
+// passes even with the bug reinstated.
+const VALUE_SLOT = '<<VALUE>>'
+
+const TEMPLATE = [
   `#${BEFORE_ID}= IFCQUANTITYLENGTH('before',$,$,1.5,$);`,
-  `#${INF_ID}= IFCQUANTITYLENGTH('unbounded',$,$,          INF,$);`,
+  `#${INF_ID}= IFCQUANTITYLENGTH('unbounded',$,$,${VALUE_SLOT},$);`,
   `#${AFTER_ID}= IFCQUANTITYLENGTH('after',$,$,2.5,$);`,
 ].join( '\n' )
 
-// Same shape with a real in place of INF, as the control: whatever the index
-// looks like here is what the INF version has to match.
-const WITHOUT_INF = WITH_INF.replace( '          INF', '3.5' )
+/**
+ * Build the fixture with a given value in the middle record's 4th attribute.
+ *
+ * @param value The value text to substitute.
+ * @return {string} The fixture source.
+ */
+function withValue( value: string ): string {
 
-// The same export writes `-INF` for the opposite bound. It is a CONTROL, not
-// a second case of the bug: a leading '-' is dispatched as a number, so it
-// never reaches the inline-instance recovery and was never affected. Kept so
-// that stays visible - the defect is specific to the bare identifier-like
-// form, and anyone reading `INF` handling should not assume both directions
-// went through it.
-const WITH_NEGATIVE_INF = WITH_INF.replace( '          INF', '         -INF' )
+  if ( !TEMPLATE.includes( VALUE_SLOT ) ) {
+    throw new Error( 'fixture template lost its substitution slot' )
+  }
+
+  return TEMPLATE.replace( VALUE_SLOT, value )
+}
+
+// Leading whitespace preserved from the real export, since it is what puts an
+// identifier-like token where an attribute is expected.
+const WITH_INF = withValue( '          INF' )
+
+// The control: whatever the index looks like with an ordinary real is what the
+// INF version has to match.
+const WITHOUT_INF = withValue( '3.5' )
+
+// The same export writes `-INF` for the opposite bound. Also a CONTROL, not a
+// second case of the bug: a leading '-' is dispatched as a number, so it never
+// reaches the inline-instance recovery and was never affected. Kept so that
+// stays visible - the defect is specific to the bare identifier-like form, and
+// anyone reading INF handling should not assume both directions went through
+// it.
+const WITH_NEGATIVE_INF = withValue( '         -INF' )
 
 
 /**
