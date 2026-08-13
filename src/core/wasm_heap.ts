@@ -98,10 +98,18 @@ export function arrayToWasmHeap(
   // indistinguishable from a dozen other causes.
   if ( arrayPtr + numBytes > heapBuffer.byteLength ) {
 
+    const description = describeHeap( wasmModule, arrayPtr, numBytes )
+
+    // The allocation SUCCEEDED and only the view is refused, so this owns a
+    // pointer nobody else can reach - arraysToWasmHeap's cleanup cannot see it
+    // because it was never returned. Leaking here would mean leaking once per
+    // record, under a per-record catch, while reporting that the heap is in
+    // trouble.
+    wasmModule._free( arrayPtr )
+
     throw new Error(
       'wasm heap allocation lies outside the heap view - ' +
-      `the view is stale or the heap grew without it. ` +
-      describeHeap( wasmModule, arrayPtr, numBytes ) )
+      `the view is stale or the heap grew without it. ${description}` )
   }
 
   const destination = new Uint8Array( heapBuffer, arrayPtr, numBytes )

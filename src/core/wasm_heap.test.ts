@@ -102,15 +102,38 @@ describe( 'arrayToWasmHeap', () => {
       expect( message ).toContain(
         `ptr ${past} + ${PAYLOAD.byteLength} bytes` )
       expect( message ).toContain( `byteLength ${HEAP_BYTES}` )
-      // Exact, not toContain: 'ArrayBuffer' is a substring of
-      // 'SharedArrayBuffer', so a containment check could not tell the two
-      // apart - which is the one thing this field exists to do.
+      // 'ArrayBuffer' alone would also match 'SharedArrayBuffer', so this
+      // matches with the surrounding text that pins which field it is, and
+      // asserts the shared spelling is absent - telling the two apart being
+      // the one thing this field exists to do.
       expect( message ).toContain( 'buffer ArrayBuffer byteLength' )
       expect( message ).not.toContain( 'SharedArrayBuffer' )
 
       // Resizable, not growable, is the flag a plain ArrayBuffer carries.
       expect( message ).toContain( 'extensible false' )
     }
+  } )
+
+  // Here the allocation SUCCEEDED and only the view was refused, so this owns
+  // a pointer no caller can reach - and it is #485's own branch, under a
+  // per-record catch, so leaking would mean leaking once per record while
+  // reporting that the heap is in trouble.
+  test( 'frees the allocation it is refusing to view', () => {
+
+    const past = HEAP_BYTES - 8
+    const freed: number[] = []
+
+    const wasmModule: WasmHeapModule = {
+      ...fakeModule( HEAP_BYTES, () => past ),
+      _free: ( pointer: number ) => {
+        freed.push( pointer )
+      },
+    }
+
+    expect( () => arrayToWasmHeap( wasmModule, PAYLOAD ) )
+      .toThrow( /outside the heap view/ )
+
+    expect( freed ).toEqual( [ past ] )
   } )
 } )
 

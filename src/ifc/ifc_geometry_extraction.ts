@@ -999,10 +999,9 @@ export class IfcGeometryExtraction {
     const polygonalFaceBufferOffsetsArray = polygonalFaceBufferOffsets.view
     const startIndicesBufferOffsetsArray = startIndicesBufferOffsets.view
 
-    // All four together, because they are only freed together at the end of
-    // this function: taken one at a time, a failed allocation part-way would
-    // strand the ones already taken, and the per-record catch upstream would
-    // carry on to the next faceset and do it again.
+    // All four together, so a failed allocation part-way through cannot strand
+    // the ones already taken. Everything after this point is inside the
+    // try/finally below, which is what actually guarantees they come back.
     const [
       indicesArrayPtr,
       startIndicesArrayPtr,
@@ -1015,50 +1014,67 @@ export class IfcGeometryExtraction {
       startIndicesBufferOffsetsArray,
     ] )
 
-    const polygonalFaceVector = this.wasmModule.buildIndexedPolygonalFaceVector(
-        indicesArrayPtr,
-        indicesArray.length,
-        startIndicesArrayPtr,
-        polygonalFaceBufferOffsetsArrayPtr,
-        polygonalFaceBufferOffsetsArray.length,
-        startIndicesBufferOffsetsArrayPtr,
-        startIndicesBufferOffsetsArray.length)
+    // finally, not a straight-line free at the end. Per-record extraction
+    // errors are caught upstream and are expected on malformed models, so
+    // anything in here throwing - buildIndexedPolygonalFaceVector,
+    // extractParseBuffer, parseVertexVector, or the embind call - used to
+    // strand all four pointers plus the two native objects, once per faceset.
+    // On a model with 15,777 facesets that is a leak large enough to cause the
+    // exhaustion it would then be blamed on.
+    let geometry: GeometryObject
 
+    try {
 
-    const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+      const polygonalFaceVector = this.wasmModule.buildIndexedPolygonalFaceVector(
+          indicesArrayPtr,
+          indicesArray.length,
+          startIndicesArrayPtr,
+          polygonalFaceBufferOffsetsArrayPtr,
+          polygonalFaceBufferOffsetsArray.length,
+          startIndicesBufferOffsetsArrayPtr,
+          startIndicesBufferOffsetsArray.length)
 
-    if ( !entity.Coordinates.extractParseBuffer(
-        0,
-        0,
-        0,
-        pointsParseBuffer,
-        this.wasmModule,
-        true ) ) {
+      try {
 
-      pointsParseBuffer.resize( 0 )
+        const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+
+        if ( !entity.Coordinates.extractParseBuffer(
+            0,
+            0,
+            0,
+            pointsParseBuffer,
+            this.wasmModule,
+            true ) ) {
+
+          pointsParseBuffer.resize( 0 )
+        }
+
+        const pointsArrayNative = this.wasmModule.parseVertexVector( pointsParseBuffer )
+
+        this.conwayModel.freeParseBuffer( pointsParseBuffer )
+
+        try {
+
+          const parameters: ParamsPolygonalFaceSet = {
+            indicesPerFace: indicesPerFace,
+            points: pointsArrayNative,
+            faces: polygonalFaceVector,
+          }
+
+          geometry = this.conwayModel.getPolygonalFaceSetGeometry(parameters)
+        } finally {
+          pointsArrayNative.delete()
+        }
+      } finally {
+        polygonalFaceVector.delete()
+      }
+    } finally {
+
+      this.wasmModule._free(indicesArrayPtr)
+      this.wasmModule._free(startIndicesArrayPtr)
+      this.wasmModule._free(polygonalFaceBufferOffsetsArrayPtr)
+      this.wasmModule._free(startIndicesBufferOffsetsArrayPtr)
     }
-
-    const pointsArrayNative = this.wasmModule.parseVertexVector( pointsParseBuffer )
-
-    this.conwayModel.freeParseBuffer( pointsParseBuffer )
-
-    const parameters: ParamsPolygonalFaceSet = {
-      indicesPerFace: indicesPerFace,
-      points: pointsArrayNative,
-      faces: polygonalFaceVector,
-    }
-
-    const geometry: GeometryObject = this.conwayModel.getPolygonalFaceSetGeometry(parameters)
-
-    // free allocated wasm vectors
-    pointsArrayNative.delete()
-
-    this.wasmModule._free(indicesArrayPtr)
-    this.wasmModule._free(startIndicesArrayPtr)
-    this.wasmModule._free(polygonalFaceBufferOffsetsArrayPtr)
-    this.wasmModule._free(startIndicesBufferOffsetsArrayPtr)
-
-    polygonalFaceVector.delete()
 
     const canonicalMesh: CanonicalMesh = {
       type: CanonicalMeshType.BUFFER_GEOMETRY,
