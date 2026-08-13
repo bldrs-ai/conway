@@ -4386,8 +4386,13 @@ export class AP214GeometryExtraction {
         }
       } catch (error) {
         if ( !this.quietRecoverableLogging ) {
+          // toString(), not localID: localID is the dense internal index and
+          // means nothing against the source file, and these land in the
+          // regression run's `expressids` column where the whole point is to
+          // be able to go look at the record. It also spells the inline case
+          // honestly rather than passing off an index as a reference.
           Logger.error(
-            `Error populating styled item map: ${error}`, styledItem.localID )
+            `Error populating styled item map: ${error}`, styledItem.toString() )
         }
       }
     }
@@ -4402,7 +4407,7 @@ export class AP214GeometryExtraction {
         if ( !this.quietRecoverableLogging ) {
           Logger.error(
             `Error populating overriding styled item map: ${error}`,
-            overridingStyledItem.localID )
+            overridingStyledItem.toString() )
         }
       }
     }

@@ -83,10 +83,14 @@ describe( 'Logger levels + sink', () => {
     expect( entries[ 0 ].expressIDs ).toEqual(
       new Set( records.map( ( record ) => `${record}` ) ) )
 
-    // ...and the ID never reaches the message, so the echoed line and the CSV
-    // cell both carry the family rather than one instance of it.
+    // ...and the ID never reaches the buffered message, so the CSV cell is the
+    // family rather than one instance of it.
     expect( entries[ 0 ].message ).toBe( 'boom' )
-    expect( echoed ).toEqual( [ [ 'error', 'boom' ] ] )
+
+    // The console echo still carries it, though. Only the buffer needs the ID
+    // out of the way, and a console line read once by a person should not lose
+    // its only pointer to the record.
+    expect( echoed ).toEqual( [ [ 'error', `boom expressID: ${numericRecord}` ] ] )
   } )
 
   test( 'the argument wins over an in-message expressID suffix', () => {

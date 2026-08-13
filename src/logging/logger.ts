@@ -165,8 +165,11 @@ export default class Logger {
       level: LogLevelName, message: string, expressID?: number | string ): void {
 
     // Two ways to attach a record to an entry. The parameter is the one to
-    // use; the ' expressID: ' suffix is the older in-message form, still
-    // honoured because call sites and wasm-side logs use it.
+    // use; the ' expressID: ' suffix is the older in-message form, kept
+    // because TS call sites still use it. Nothing on the wasm side does - the
+    // C++ logger spells its own IDs differently and never matches this split -
+    // so the suffix has no external dependency and can go once the remaining
+    // call sites are converted.
     const baseMessage = message.split(' expressID: ')[0] // Extract the base message
     const data = expressID !== void 0 ?
       String( expressID ) :
@@ -196,8 +199,14 @@ export default class Logger {
 
     // Echo only the first occurrence of each distinct entry — repeats keep
     // deduplicating silently into the buffer (visible via displayLogs()).
+    //
+    // The record goes back on for the echo. Only the BUFFER needs the ID out
+    // of the message, so that repeats collapse to one entry; a console line is
+    // read once by a person, and dropping the ID there would trade a one-off
+    // browser error's only pointer to the offending record for nothing.
     if (firstOccurrence && Logger.isLevelEnabled(LOG_LEVEL_BY_NAME[level])) {
-      Logger.sink(level, baseMessage)
+      Logger.sink(
+        level, data !== void 0 ? `${baseMessage} expressID: ${data}` : baseMessage)
     }
 
     Logger.proxies.forEach((proxy) => proxy.log(logEntry))
