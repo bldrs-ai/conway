@@ -4386,7 +4386,8 @@ export class AP214GeometryExtraction {
         }
       } catch (error) {
         if ( !this.quietRecoverableLogging ) {
-          Logger.error(`Error populating styled item map for item ${styledItem.localID}: ${error}`)
+          Logger.error(
+            `Error populating styled item map: ${error}`, styledItem.localID )
         }
       }
     }
@@ -4399,7 +4400,9 @@ export class AP214GeometryExtraction {
         }
       } catch (error) {
         if ( !this.quietRecoverableLogging ) {
-          Logger.error(`Error populating styled item map for item ${overridingStyledItem.localID}: ${error}`)
+          Logger.error(
+            `Error populating overriding styled item map: ${error}`,
+            overridingStyledItem.localID )
         }
       }
     }

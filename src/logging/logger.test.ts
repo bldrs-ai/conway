@@ -61,6 +61,44 @@ describe( 'Logger levels + sink', () => {
     expect( entry?.expressIDs.size ).toBe( 3 )
   } )
 
+  // The whole point of the parameter: an ID written into the message text
+  // makes every occurrence its own entry, and `count` then reports 1 for a
+  // problem that hit hundreds of records. One AP242 model in the regression
+  // corpus produced 272 such rows before this.
+  test( 'the expressID argument dedupes where interpolating the ID does not', () => {
+
+    // Deliberately mixed: the parameter takes an express ID as a number and a
+    // local ID as an already-formatted string, and both must key the same way.
+    const numericRecord = 11
+    const records: Array< number | string > = [ numericRecord, '22', '33' ]
+
+    for ( const record of records ) {
+      Logger.error( 'boom', record )
+    }
+
+    const entries = Logger.getErrors()
+
+    expect( entries.length ).toBe( 1 )
+    expect( entries[ 0 ].count ).toBe( records.length )
+    expect( entries[ 0 ].expressIDs ).toEqual(
+      new Set( records.map( ( record ) => `${record}` ) ) )
+
+    // ...and the ID never reaches the message, so the echoed line and the CSV
+    // cell both carry the family rather than one instance of it.
+    expect( entries[ 0 ].message ).toBe( 'boom' )
+    expect( echoed ).toEqual( [ [ 'error', 'boom' ] ] )
+  } )
+
+  test( 'the argument wins over an in-message expressID suffix', () => {
+
+    Logger.error( 'clash expressID: 1', 2 )
+
+    const entries = Logger.getErrors()
+
+    expect( entries[ 0 ].message ).toBe( 'clash' )
+    expect( entries[ 0 ].expressIDs ).toEqual( new Set( [ '2' ] ) )
+  } )
+
   test( 'isLevelEnabled matches the threshold ordering', () => {
 
     Logger.setLogLevel( LogLevel.WARNING )

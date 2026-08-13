@@ -67,6 +67,16 @@ const defaultSink: LogSink = ( level, message ) => {
  * first occurrence of each distinct entry at or above the current threshold
  * is echoed to the console sink immediately, so warnings/errors are visible
  * live without waiting for a displayLogs() dump.
+ *
+ * Deduplication keys on the exact message string, so anything interpolated
+ * into the message splits one problem into N entries with count 1 each and
+ * `count` stops meaning "how big is this". That is not hypothetical: one
+ * record ID in a message turned a single AP242 failure into 272 rows of the
+ * regression run's errors.csv, and normalising the whole public corpus that
+ * way takes it from 325 rows to 22. Pass the record as the `expressID`
+ * argument instead of writing it into the message - it lands in `expressIDs`,
+ * which is unioned across repeats, and the family stays one row that `count`
+ * can size.
  */
 export default class Logger {
   private static logs: LogEntry[] = []
@@ -148,10 +158,19 @@ export default class Logger {
    *
    * @param level - log level
    * @param message - log message
+   * @param expressID - record this entry is about, kept out of the message
+   *   text so repeats dedupe into one entry (see the class doc)
    */
-  private static log(level: LogLevelName, message: string): void {
+  private static log(
+      level: LogLevelName, message: string, expressID?: number | string ): void {
+
+    // Two ways to attach a record to an entry. The parameter is the one to
+    // use; the ' expressID: ' suffix is the older in-message form, still
+    // honoured because call sites and wasm-side logs use it.
     const baseMessage = message.split(' expressID: ')[0] // Extract the base message
-    const data = message.split(' expressID: ')[1] // Extract the expressID
+    const data = expressID !== void 0 ?
+      String( expressID ) :
+      message.split(' expressID: ')[1] // Extract the expressID
 
     const index = Logger.findLogIndex(baseMessage, level)
     let logEntry: LogEntry
@@ -308,17 +327,19 @@ export default class Logger {
   /**
    *
    * @param message - log message
+   * @param expressID - record this entry is about
    */
-  public static warning(message: string): void {
-    Logger.log('warning', message)
+  public static warning(message: string, expressID?: number | string): void {
+    Logger.log('warning', message, expressID)
   }
 
   /**
    *
    * @param message - log message
+   * @param expressID - record this entry is about
    */
-  public static error(message: string): void {
-    Logger.log('error', message)
+  public static error(message: string, expressID?: number | string): void {
+    Logger.log('error', message, expressID)
   }
 
   /**
