@@ -974,11 +974,38 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
             if (elementResult !== (void 0)) {
 
-              for ( const element of elementResult[0].elements ) {
-              
-                element.expressID = expressID
-              }
-
+              // No stamping here. This used to run
+              //
+              //   for ( const element of elementResult[0].elements ) {
+              //     element.expressID = expressID
+              //   }
+              //
+              // and elementResult[0] is `indexResult` - syntaxError() returns
+              // it wholesale - so that wrote THIS record's express ID over
+              // every top-level entry indexed so far in the block.
+              //
+              // It cannot have been doing anything useful. Both pushEntry
+              // sites already set `expressID` at construction, so every entry
+              // arrives correct and the loop could only overwrite correct
+              // values with one wrong one. The same recovery inside the nested
+              // parseInlineElement - begin, parse, rollback, tokenws(INF) - has
+              // never had the loop and works.
+              //
+              // Note it ran BEFORE the rollback and the INF check, so it was
+              // never specific to INF: any top-level inline-instance parse
+              // failure poisoned the index the same way. And the index is not
+              // discarded on a syntax error - parseDataToModel builds the
+              // model from itemIndex.elements whatever the ParseResult, and
+              // the loaders only log and continue - so a poisoned index does
+              // reach consumers.
+              //
+              // What kept it hidden is narrower than that: no public corpus
+              // model reaches this recovery at all. A private one does, via an
+              // exporter writing `IFCQUANTITYLENGTH(...,INF,$)` for an
+              // unbounded quantity - not valid ISO 10303-21, but what the tool
+              // emits - where it cost 3,116 entities and produced 630
+              // relationship failures all naming the same record.
+              // See #412, #481, #482.
               input.rollback()
 
               if ( tokenws( INF ) ) {
