@@ -78,16 +78,29 @@ describe( 'arrayToWasmHeap', () => {
       .toThrow( /_malloc returned an unusable address/ )
   } )
 
-  // The heap's maximum is 4GB and _malloc is a raw i32 export, so any address
-  // at or above 2^31 arrives signed. Unchecked it would pass the upper-bound
-  // test - a negative plus numBytes is not greater than byteLength - and reach
-  // the constructor as a bare "Start offset is outside the bounds".
-  test( 'a negative address is treated as a failed allocation', () => {
+  // A >2GB address is a SUCCESSFUL allocation that arrives signed, because
+  // _malloc is a raw i32 export and every target builds with 4GB max. Treating
+  // it as a failure would hard-fail every copy once the heap passes 2GB, which
+  // is exactly the memory-pressure case #485 is about - so it is normalised,
+  // not rejected. Simulated here by a heap sized past 2GB in address terms
+  // only; nothing that big is allocated.
+  test( 'an address above 2GB is normalised, not read as a failure', () => {
 
-    const wasmModule = fakeModule( HEAP_BYTES, () => -1 )
+    const signedAddress = -2147483648
+    const unsignedAddress = 2147483648
+    const headroom = 4096
 
+    const wasmModule: WasmHeapModule = {
+      _malloc: () => signedAddress,
+      _free: () => { /* unused here */ },
+      HEAPU8: { length: 0, buffer: { byteLength: unsignedAddress + headroom } } as
+        unknown as Uint8Array,
+    }
+
+    // Fails on the copy rather than on the guard, which is the proof it got
+    // past the "unusable address" test with the address intact.
     expect( () => arrayToWasmHeap( wasmModule, PAYLOAD ) )
-      .toThrow( /_malloc returned an unusable address/ )
+      .not.toThrow( /_malloc returned an unusable address/ )
   } )
 
   test( 'a zero-length copy is not mistaken for a failed malloc', () => {

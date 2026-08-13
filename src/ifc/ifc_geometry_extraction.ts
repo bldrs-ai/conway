@@ -1,7 +1,6 @@
 import {
   ConwayGeometry,
   ParamsGetSweptDiskSolid,
-  ParamsPolygonalFaceSet,
   GeometryObject,
   ParamsAxis2Placement3D,
   ParamsCartesianTransformationOperator3D,

@@ -30,8 +30,8 @@ export type CopyableArray = Float32Array | Float64Array | Uint32Array
  *
  * The buffer's kind matters, and there are two kinds to tell apart, not one.
  * conway's MT build creates its memory with `shared: true`, so its heap is a
- * *growable* SharedArrayBuffer; single-threaded builds on emscripten 6 get a
- * *resizable* ArrayBuffer (see decode_utf8.ts). Both cases have length-tracking
+ * growable SharedArrayBuffer; single-threaded builds on emscripten 6 get a
+ * resizable ArrayBuffer (see decode_utf8.ts). Both cases have length-tracking
  * views that extend by themselves, which is why emscripten's
  * updateMemoryViews() early-returns on growth rather than rebuilding them.
  *
@@ -81,20 +81,23 @@ export function arrayToWasmHeap(
     wasmModule: WasmHeapModule, array: CopyableArray ): number {
 
   const numBytes = array.length * array.BYTES_PER_ELEMENT
-  const arrayPtr = wasmModule._malloc( numBytes )
 
-  // _malloc returns 0 on failure, which is a valid byteOffset, so the view
+  // Normalised, not rejected. _malloc is bound raw from wasmExports and
+  // returns i32, and every target builds with MAXIMUM_MEMORY=4GB, so a
+  // perfectly good address at or above 2^31 arrives here NEGATIVE. Treating
+  // that as a failure would hard-fail every copy once the heap passes 2GB -
+  // which is the memory-pressure scenario #485 is about - so it is converted
+  // the way emscripten's own glue does (`HEAPU32[ptr >>> 2 >>> 0]`) and used
+  // in that form for the bounds test, the view, the free and the message.
+  // Left signed it would also pass the bounds test below, since a negative
+  // plus numBytes is not greater than byteLength.
+  const arrayPtr = wasmModule._malloc( numBytes ) >>> 0
+
+  // 0 is _malloc's failure return and also a valid byteOffset, so the view
   // below would be constructed happily and this would go on to write over
   // whatever lives at address 0 - corrupting the heap instead of reporting
   // that it is exhausted.
-  //
-  // Negative is the same failure wearing a different hat. The heap's maximum
-  // is 4GB (maximum: 65536 pages), _malloc is a raw i32 export, and any
-  // address at or above 2^31 arrives here signed - which then passes the upper
-  // bound check below, because a negative plus numBytes is not greater than
-  // byteLength. Left unchecked it reaches the constructor as a bare
-  // "Start offset is outside the bounds", skipping the cleanup underneath.
-  if ( ( arrayPtr === 0 && numBytes > 0 ) || arrayPtr < 0 ) {
+  if ( arrayPtr === 0 && numBytes > 0 ) {
 
     throw new Error(
       `wasm _malloc returned an unusable address for ${numBytes} bytes - ` +
