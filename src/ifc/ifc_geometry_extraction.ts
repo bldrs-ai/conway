@@ -198,7 +198,7 @@ import { IfcMaterialCache } from './ifc_material_cache'
 import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
 import Logger from '../logging/logger'
-import { arrayToWasmHeap, arraysToWasmHeap } from '../core/wasm_heap'
+import { arrayToWasmHeap, arraysToWasmHeap, releaseQuietly } from '../core/wasm_heap'
 // import fs from 'fs'
 import Environment, { EnvironmentType } from '../utilities/environment'
 import { REFLECTANCE_METHOD_PERMISSIVE,
@@ -1018,9 +1018,16 @@ export class IfcGeometryExtraction {
     // errors are caught upstream and are expected on malformed models, so
     // anything in here throwing - buildIndexedPolygonalFaceVector,
     // extractParseBuffer, parseVertexVector, or the embind call - used to
-    // strand all four pointers plus the two native objects, once per faceset.
-    // On a model with 15,777 facesets that is a leak large enough to cause the
-    // exhaustion it would then be blamed on.
+    // strand all four pointers plus the pooled parse buffer and the two native
+    // objects, once per faceset. On a model with 15,777 facesets that is a leak
+    // large enough to cause the exhaustion it would then be blamed on.
+    //
+    // Every release goes through releaseQuietly, because these run while an
+    // exception may already be in flight and all of them re-enter the wasm
+    // runtime. If that runtime is the thing that failed, a release throwing
+    // would REPLACE the original error, and the per-record catch upstream would
+    // log a generic embind failure in place of the heap diagnostic this whole
+    // change exists to produce.
     let geometry: GeometryObject
 
     try {
@@ -1037,21 +1044,28 @@ export class IfcGeometryExtraction {
       try {
 
         const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+        let pointsArrayNative
 
-        if ( !entity.Coordinates.extractParseBuffer(
-            0,
-            0,
-            0,
-            pointsParseBuffer,
-            this.wasmModule,
-            true ) ) {
+        // Released here rather than after parseVertexVector, so a throw inside
+        // extractParseBuffer or parseVertexVector still returns it to the pool.
+        // It is pooled, so leaking it also loses whatever resize() grew for it.
+        try {
 
-          pointsParseBuffer.resize( 0 )
+          if ( !entity.Coordinates.extractParseBuffer(
+              0,
+              0,
+              0,
+              pointsParseBuffer,
+              this.wasmModule,
+              true ) ) {
+
+            pointsParseBuffer.resize( 0 )
+          }
+
+          pointsArrayNative = this.wasmModule.parseVertexVector( pointsParseBuffer )
+        } finally {
+          releaseQuietly( () => this.conwayModel.freeParseBuffer( pointsParseBuffer ) )
         }
-
-        const pointsArrayNative = this.wasmModule.parseVertexVector( pointsParseBuffer )
-
-        this.conwayModel.freeParseBuffer( pointsParseBuffer )
 
         try {
 
@@ -1063,17 +1077,19 @@ export class IfcGeometryExtraction {
 
           geometry = this.conwayModel.getPolygonalFaceSetGeometry(parameters)
         } finally {
-          pointsArrayNative.delete()
+          releaseQuietly( () => pointsArrayNative.delete() )
         }
       } finally {
-        polygonalFaceVector.delete()
+        releaseQuietly( () => polygonalFaceVector.delete() )
       }
     } finally {
 
-      this.wasmModule._free(indicesArrayPtr)
-      this.wasmModule._free(startIndicesArrayPtr)
-      this.wasmModule._free(polygonalFaceBufferOffsetsArrayPtr)
-      this.wasmModule._free(startIndicesBufferOffsetsArrayPtr)
+      releaseQuietly( () => {
+        this.wasmModule._free(indicesArrayPtr)
+        this.wasmModule._free(startIndicesArrayPtr)
+        this.wasmModule._free(polygonalFaceBufferOffsetsArrayPtr)
+        this.wasmModule._free(startIndicesBufferOffsetsArrayPtr)
+      } )
     }
 
     const canonicalMesh: CanonicalMesh = {

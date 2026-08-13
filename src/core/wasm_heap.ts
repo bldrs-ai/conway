@@ -11,6 +11,9 @@
  * across two models before it could even be located.
  */
 
+import Logger from '../logging/logger'
+
+
 /** What the wasm module exposes that this needs. Deliberately narrow. */
 export interface WasmHeapModule {
   _malloc( bytes: number ): number
@@ -158,4 +161,36 @@ export function arraysToWasmHeap(
   }
 
   return pointers
+}
+
+
+/**
+ * Run a resource release so it cannot replace an exception already in flight.
+ *
+ * Releases here re-enter the wasm runtime - _free, embind delete(), returning
+ * a pooled buffer - and they run from finally blocks that may be unwinding
+ * because that runtime just failed. A throw from one of them would REPLACE the
+ * original error, so the caller upstream would see a generic teardown failure
+ * instead of the diagnostic that says what actually went wrong. Losing the
+ * cause is strictly worse than failing to reclaim memory on a path where the
+ * heap is already lost.
+ *
+ * Reported at debug rather than swallowed outright, so it is still findable
+ * with -vv, and NOT at warning/error: this runs during teardown of an already
+ * failing record, where a second message would be noise on top of the one that
+ * matters.
+ *
+ * @param release The release step to run.
+ */
+export function releaseQuietly( release: () => void ): void {
+
+  try {
+
+    release()
+  } catch ( error ) {
+
+    Logger.debug(
+      `wasm resource release failed during teardown: ${
+        error instanceof Error ? error.message : error}` )
+  }
 }

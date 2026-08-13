@@ -4,7 +4,9 @@
 // full-corpus memory pressure (bldrs-ai/conway#485).
 import { describe, expect, test } from '@jest/globals'
 
-import { arraysToWasmHeap, arrayToWasmHeap, WasmHeapModule } from './wasm_heap'
+import {
+  arraysToWasmHeap, arrayToWasmHeap, releaseQuietly, WasmHeapModule,
+} from './wasm_heap'
 
 
 const HEAP_BYTES = 1024
@@ -178,5 +180,40 @@ describe( 'arraysToWasmHeap', () => {
       .toThrow( /_malloc failed/ )
 
     expect( freed ).toEqual( [ first ] )
+  } )
+} )
+
+
+describe( 'releaseQuietly', () => {
+
+  test( 'runs the release', () => {
+
+    let ran = false
+
+    releaseQuietly( () => {
+      ran = true
+    } )
+
+    expect( ran ).toBe( true )
+  } )
+
+  // The point: these run from finally blocks that may be unwinding because the
+  // wasm runtime just failed, and every release re-enters that same runtime.
+  // A throw here would replace the in-flight error, and the per-record catch
+  // upstream would log a generic teardown failure instead of the heap
+  // diagnostic this module exists to produce.
+  test( 'does not let a failed release replace the error being unwound', () => {
+
+    const original = new Error( 'the diagnostic worth keeping' )
+
+    expect( () => {
+      try {
+        throw original
+      } finally {
+        releaseQuietly( () => {
+          throw new Error( 'teardown blew up too' )
+        } )
+      }
+    } ).toThrow( original )
   } )
 } )
