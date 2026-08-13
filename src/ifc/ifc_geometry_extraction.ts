@@ -198,7 +198,7 @@ import { IfcMaterialCache } from './ifc_material_cache'
 import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
 import Logger from '../logging/logger'
-import { arrayToWasmHeap } from '../core/wasm_heap'
+import { arrayToWasmHeap, arraysToWasmHeap } from '../core/wasm_heap'
 // import fs from 'fs'
 import Environment, { EnvironmentType } from '../utilities/environment'
 import { REFLECTANCE_METHOD_PERMISSIVE,
@@ -995,13 +995,25 @@ export class IfcGeometryExtraction {
 
     // Views over exactly the appended elements — no intermediate copy.
     const indicesArray = allIndices.view
-    const indicesArrayPtr = this.arrayToWasmHeap(indicesArray)
     const startIndicesArray = allStartIndices.view
-    const startIndicesArrayPtr = this.arrayToWasmHeap(startIndicesArray)
     const polygonalFaceBufferOffsetsArray = polygonalFaceBufferOffsets.view
-    const polygonalFaceBufferOffsetsArrayPtr = this.arrayToWasmHeap(polygonalFaceBufferOffsetsArray)
     const startIndicesBufferOffsetsArray = startIndicesBufferOffsets.view
-    const startIndicesBufferOffsetsArrayPtr = this.arrayToWasmHeap(startIndicesBufferOffsetsArray)
+
+    // All four together, because they are only freed together at the end of
+    // this function: taken one at a time, a failed allocation part-way would
+    // strand the ones already taken, and the per-record catch upstream would
+    // carry on to the next faceset and do it again.
+    const [
+      indicesArrayPtr,
+      startIndicesArrayPtr,
+      polygonalFaceBufferOffsetsArrayPtr,
+      startIndicesBufferOffsetsArrayPtr,
+    ] = arraysToWasmHeap( this.wasmModule, [
+      indicesArray,
+      startIndicesArray,
+      polygonalFaceBufferOffsetsArray,
+      startIndicesBufferOffsetsArray,
+    ] )
 
     const polygonalFaceVector = this.wasmModule.buildIndexedPolygonalFaceVector(
         indicesArrayPtr,

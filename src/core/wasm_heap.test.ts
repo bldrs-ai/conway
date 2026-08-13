@@ -4,7 +4,7 @@
 // full-corpus memory pressure (bldrs-ai/conway#485).
 import { describe, expect, test } from '@jest/globals'
 
-import { arrayToWasmHeap, WasmHeapModule } from './wasm_heap'
+import { arraysToWasmHeap, arrayToWasmHeap, WasmHeapModule } from './wasm_heap'
 
 
 const HEAP_BYTES = 1024
@@ -27,7 +27,7 @@ function fakeModule(
 
   const heap = new Uint8Array( new ArrayBuffer( heapBytes ) )
 
-  return { _malloc: malloc, HEAPU8: heap }
+  return { _malloc: malloc, _free: () => { /* recorded by callers that care */ }, HEAPU8: heap }
 }
 
 
@@ -102,7 +102,58 @@ describe( 'arrayToWasmHeap', () => {
       expect( message ).toContain(
         `ptr ${past} + ${PAYLOAD.byteLength} bytes` )
       expect( message ).toContain( `byteLength ${HEAP_BYTES}` )
-      expect( message ).toContain( 'ArrayBuffer' )
+      // Exact, not toContain: 'ArrayBuffer' is a substring of
+      // 'SharedArrayBuffer', so a containment check could not tell the two
+      // apart - which is the one thing this field exists to do.
+      expect( message ).toContain( 'buffer ArrayBuffer byteLength' )
+      expect( message ).not.toContain( 'SharedArrayBuffer' )
+
+      // Resizable, not growable, is the flag a plain ArrayBuffer carries.
+      expect( message ).toContain( 'extensible false' )
     }
+  } )
+} )
+
+
+describe( 'arraysToWasmHeap', () => {
+
+  test( 'returns pointers in the order the arrays were given', () => {
+
+    const first = 16
+    const stride = 64
+    let next = first
+
+    const wasmModule = fakeModule( HEAP_BYTES, () => {
+      const address = next
+
+      next += stride
+
+      return address
+    } )
+
+    expect( arraysToWasmHeap( wasmModule, [ PAYLOAD, TAIL ] ) )
+      .toEqual( [ first, first + stride ] )
+  } )
+
+  // The point of the batch form: a caller holding several allocations frees
+  // them together at the end, so a throw part-way through would strand the
+  // ones already taken and the retry upstream would do it again.
+  test( 'frees what it already took when a later allocation fails', () => {
+
+    const first = 16
+    const freed: number[] = []
+    let call = 0
+
+    const wasmModule: WasmHeapModule = {
+      ...fakeModule( HEAP_BYTES, () => ( call++ === 0 ? first : 0 ) ),
+      _free: ( pointer: number ) => {
+        freed.push( pointer )
+      },
+    }
+
+    expect( () => arraysToWasmHeap( wasmModule, [ PAYLOAD, TAIL ] ) )
+      .toThrow( /_malloc failed/ )
+
+    expect( freed ).toEqual( [ first ] )
   } )
 } )
