@@ -67,6 +67,16 @@ const defaultSink: LogSink = ( level, message ) => {
  * first occurrence of each distinct entry at or above the current threshold
  * is echoed to the console sink immediately, so warnings/errors are visible
  * live without waiting for a displayLogs() dump.
+ *
+ * Deduplication keys on the exact message string, so anything interpolated
+ * into the message splits one problem into N entries with count 1 each and
+ * `count` stops meaning "how big is this". That is not hypothetical: one
+ * record ID in a message turned a single AP242 failure into 272 rows of the
+ * regression run's errors.csv, and normalising the whole public corpus that
+ * way takes it from 325 rows to 22. Pass the record as the `expressID`
+ * argument instead of writing it into the message - it lands in `expressIDs`,
+ * which is unioned across repeats, and the family stays one row that `count`
+ * can size.
  */
 export default class Logger {
   private static logs: LogEntry[] = []
@@ -148,10 +158,22 @@ export default class Logger {
    *
    * @param level - log level
    * @param message - log message
+   * @param expressID - record this entry is about, kept out of the message
+   *   text so repeats dedupe into one entry (see the class doc)
    */
-  private static log(level: LogLevelName, message: string): void {
+  private static log(
+      level: LogLevelName, message: string, expressID?: number | string ): void {
+
+    // Two ways to attach a record to an entry. The parameter is the one to
+    // use; the ' expressID: ' suffix is the older in-message form, kept
+    // because TS call sites still use it. Nothing on the wasm side does - the
+    // C++ logger spells its own IDs differently and never matches this split -
+    // so the suffix has no external dependency and can go once the remaining
+    // call sites are converted.
     const baseMessage = message.split(' expressID: ')[0] // Extract the base message
-    const data = message.split(' expressID: ')[1] // Extract the expressID
+    const data = expressID !== void 0 ?
+      String( expressID ) :
+      message.split(' expressID: ')[1] // Extract the expressID
 
     const index = Logger.findLogIndex(baseMessage, level)
     let logEntry: LogEntry
@@ -177,8 +199,14 @@ export default class Logger {
 
     // Echo only the first occurrence of each distinct entry — repeats keep
     // deduplicating silently into the buffer (visible via displayLogs()).
+    //
+    // The record goes back on for the echo. Only the BUFFER needs the ID out
+    // of the message, so that repeats collapse to one entry; a console line is
+    // read once by a person, and dropping the ID there would trade a one-off
+    // browser error's only pointer to the offending record for nothing.
     if (firstOccurrence && Logger.isLevelEnabled(LOG_LEVEL_BY_NAME[level])) {
-      Logger.sink(level, baseMessage)
+      Logger.sink(
+        level, data !== void 0 ? `${baseMessage} expressID: ${data}` : baseMessage)
     }
 
     Logger.proxies.forEach((proxy) => proxy.log(logEntry))
@@ -308,17 +336,19 @@ export default class Logger {
   /**
    *
    * @param message - log message
+   * @param expressID - record this entry is about
    */
-  public static warning(message: string): void {
-    Logger.log('warning', message)
+  public static warning(message: string, expressID?: number | string): void {
+    Logger.log('warning', message, expressID)
   }
 
   /**
    *
    * @param message - log message
+   * @param expressID - record this entry is about
    */
-  public static error(message: string): void {
-    Logger.log('error', message)
+  public static error(message: string, expressID?: number | string): void {
+    Logger.log('error', message, expressID)
   }
 
   /**

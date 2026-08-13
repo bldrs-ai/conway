@@ -6448,8 +6448,9 @@ export class IfcGeometryExtraction {
     } catch (ex) {
       if (ex instanceof Error) {
         if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
-          Logger.error('Error processing relAggregate\n\t' +
-            `error: ${ex.message}\n\t express ID: #${relAggregate.expressID}`)
+          Logger.error(
+            `Error processing relAggregate\n\terror: ${ex.message}`,
+            relAggregate.expressID )
         } else {
           throw ex
         }
