@@ -1,7 +1,6 @@
 import {
   ConwayGeometry,
   ParamsGetSweptDiskSolid,
-  ParamsPolygonalFaceSet,
   GeometryObject,
   ParamsAxis2Placement3D,
   ParamsCartesianTransformationOperator3D,
@@ -198,6 +197,9 @@ import { IfcMaterialCache } from './ifc_material_cache'
 import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
 import Logger from '../logging/logger'
+import {
+  arraysToWasmHeap, arrayToWasmHeap, freeAll, withRelease,
+} from '../core/wasm_heap'
 // import fs from 'fs'
 import Environment, { EnvironmentType } from '../utilities/environment'
 import { REFLECTANCE_METHOD_PERMISSIVE,
@@ -994,58 +996,95 @@ export class IfcGeometryExtraction {
 
     // Views over exactly the appended elements — no intermediate copy.
     const indicesArray = allIndices.view
-    const indicesArrayPtr = this.arrayToWasmHeap(indicesArray)
     const startIndicesArray = allStartIndices.view
-    const startIndicesArrayPtr = this.arrayToWasmHeap(startIndicesArray)
     const polygonalFaceBufferOffsetsArray = polygonalFaceBufferOffsets.view
-    const polygonalFaceBufferOffsetsArrayPtr = this.arrayToWasmHeap(polygonalFaceBufferOffsetsArray)
     const startIndicesBufferOffsetsArray = startIndicesBufferOffsets.view
-    const startIndicesBufferOffsetsArrayPtr = this.arrayToWasmHeap(startIndicesBufferOffsetsArray)
 
-    const polygonalFaceVector = this.wasmModule.buildIndexedPolygonalFaceVector(
+    // All four together, so a failed allocation part-way through cannot strand
+    // the ones already taken. Everything after this point is inside the
+    // try/finally below, which is what actually guarantees they come back.
+    const [
+      indicesArrayPtr,
+      startIndicesArrayPtr,
+      polygonalFaceBufferOffsetsArrayPtr,
+      startIndicesBufferOffsetsArrayPtr,
+    ] = arraysToWasmHeap( this.wasmModule, [
+      indicesArray,
+      startIndicesArray,
+      polygonalFaceBufferOffsetsArray,
+      startIndicesBufferOffsetsArray,
+    ] )
+
+    // Each acquisition is paired with its release through withRelease, which
+    // propagates a release failure on the success path and suppresses it only
+    // while something is already being unwound. Per-record extraction errors
+    // are caught upstream and expected on malformed models, so anything in
+    // here throwing used to strand all four pointers plus the pooled parse
+    // buffer and the two native objects, once per faceset - on a model with
+    // 15,777 facesets, a leak large enough to cause the exhaustion it would
+    // then be blamed on.
+    //
+    // Suppressing during unwinding matters as much as the release itself:
+    // every one of these re-enters the wasm runtime, and if that runtime is
+    // what failed, a throw here would REPLACE the in-flight error and the
+    // catch upstream would log a generic teardown failure instead of the heap
+    // diagnostic this change exists to produce.
+    const geometry = withRelease(
+      () => {
+
+          const polygonalFaceVector =
+            this.wasmModule.buildIndexedPolygonalFaceVector(
+                indicesArrayPtr,
+                indicesArray.length,
+                startIndicesArrayPtr,
+                polygonalFaceBufferOffsetsArrayPtr,
+                polygonalFaceBufferOffsetsArray.length,
+                startIndicesBufferOffsetsArrayPtr,
+                startIndicesBufferOffsetsArray.length)
+
+          return withRelease(
+            () => {
+
+              const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+
+              // Released around parseVertexVector too, not just the extract:
+              // it is pooled, so leaking it also loses whatever resize() grew.
+              const pointsArrayNative = withRelease(
+                () => {
+
+                  if ( !entity.Coordinates.extractParseBuffer(
+                      0,
+                      0,
+                      0,
+                      pointsParseBuffer,
+                      this.wasmModule,
+                      true ) ) {
+
+                    pointsParseBuffer.resize( 0 )
+                  }
+
+                  return this.wasmModule.parseVertexVector( pointsParseBuffer )
+                },
+                () => this.conwayModel.freeParseBuffer( pointsParseBuffer ) )
+
+              return withRelease(
+                () => this.conwayModel.getPolygonalFaceSetGeometry( {
+                  indicesPerFace: indicesPerFace,
+                  points: pointsArrayNative,
+                  faces: polygonalFaceVector,
+                } ),
+                () => pointsArrayNative.delete() )
+            },
+            () => polygonalFaceVector.delete() )
+      },
+      // freeAll, not four statements in one closure: there the first failure
+      // would abandon the other three.
+      () => freeAll( this.wasmModule, [
         indicesArrayPtr,
-        indicesArray.length,
         startIndicesArrayPtr,
         polygonalFaceBufferOffsetsArrayPtr,
-        polygonalFaceBufferOffsetsArray.length,
         startIndicesBufferOffsetsArrayPtr,
-        startIndicesBufferOffsetsArray.length)
-
-
-    const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
-
-    if ( !entity.Coordinates.extractParseBuffer(
-        0,
-        0,
-        0,
-        pointsParseBuffer,
-        this.wasmModule,
-        true ) ) {
-
-      pointsParseBuffer.resize( 0 )
-    }
-
-    const pointsArrayNative = this.wasmModule.parseVertexVector( pointsParseBuffer )
-
-    this.conwayModel.freeParseBuffer( pointsParseBuffer )
-
-    const parameters: ParamsPolygonalFaceSet = {
-      indicesPerFace: indicesPerFace,
-      points: pointsArrayNative,
-      faces: polygonalFaceVector,
-    }
-
-    const geometry: GeometryObject = this.conwayModel.getPolygonalFaceSetGeometry(parameters)
-
-    // free allocated wasm vectors
-    pointsArrayNative.delete()
-
-    this.wasmModule._free(indicesArrayPtr)
-    this.wasmModule._free(startIndicesArrayPtr)
-    this.wasmModule._free(polygonalFaceBufferOffsetsArrayPtr)
-    this.wasmModule._free(startIndicesBufferOffsetsArrayPtr)
-
-    polygonalFaceVector.delete()
+      ] ) )
 
     const canonicalMesh: CanonicalMesh = {
       type: CanonicalMeshType.BUFFER_GEOMETRY,
@@ -1240,19 +1279,7 @@ export class IfcGeometryExtraction {
    * @return {number} Pointer/memory address
    */
   arrayToWasmHeap(array:Float32Array | Float64Array | Uint32Array): any {
-    // Allocate memory for the array within the Wasm module
-    const bytesPerElement = array.BYTES_PER_ELEMENT
-    const numBytes = array.length * bytesPerElement
-    const arrayPtr = this.wasmModule._malloc(numBytes)
-
-    // Create a new Uint8Array view on the Wasm memory buffer, then set the array to it
-    const arrayWasm = new Uint8Array(this.wasmModule.HEAPU8.buffer, arrayPtr, numBytes)
-    // Honour the view's own window: subarray() results share their parent's
-    // backing buffer, so copying `array.buffer` wholesale would read the
-    // wrong bytes (and the wrong length) for a view.
-    arrayWasm.set(new Uint8Array(array.buffer, array.byteOffset, numBytes))
-
-    return arrayPtr
+    return arrayToWasmHeap(this.wasmModule, array)
   }
 
   /**

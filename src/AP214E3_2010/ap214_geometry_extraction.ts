@@ -57,6 +57,7 @@ import {
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
+import { arrayToWasmHeap } from '../core/wasm_heap'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -944,16 +945,7 @@ export class AP214GeometryExtraction {
    * @return {number} Pointer/memory address
    */
   arrayToWasmHeap(array:Float32Array | Uint32Array): any {
-    // Allocate memory for the array within the Wasm module
-    const bytesPerElement = array.BYTES_PER_ELEMENT
-    const numBytes = array.length * bytesPerElement
-    const arrayPtr = this.wasmModule._malloc(numBytes)
-
-    // Create a new Uint8Array view on the Wasm memory buffer, then set the array to it
-    const arrayWasm = new Uint8Array(this.wasmModule.HEAPU8.buffer, arrayPtr, numBytes)
-    arrayWasm.set(new Uint8Array(array.buffer))
-
-    return arrayPtr
+    return arrayToWasmHeap(this.wasmModule, array)
   }
 
   /**
