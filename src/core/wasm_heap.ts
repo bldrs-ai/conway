@@ -87,10 +87,17 @@ export function arrayToWasmHeap(
   // below would be constructed happily and this would go on to write over
   // whatever lives at address 0 - corrupting the heap instead of reporting
   // that it is exhausted.
-  if ( arrayPtr === 0 && numBytes > 0 ) {
+  //
+  // Negative is the same failure wearing a different hat. The heap's maximum
+  // is 4GB (maximum: 65536 pages), _malloc is a raw i32 export, and any
+  // address at or above 2^31 arrives here signed - which then passes the upper
+  // bound check below, because a negative plus numBytes is not greater than
+  // byteLength. Left unchecked it reaches the constructor as a bare
+  // "Start offset is outside the bounds", skipping the cleanup underneath.
+  if ( ( arrayPtr === 0 && numBytes > 0 ) || arrayPtr < 0 ) {
 
     throw new Error(
-      `wasm _malloc failed for ${numBytes} bytes - ` +
+      `wasm _malloc returned an unusable address for ${numBytes} bytes - ` +
       describeHeap( wasmModule, arrayPtr, numBytes ) )
   }
 
@@ -108,7 +115,7 @@ export function arrayToWasmHeap(
     // because it was never returned. Leaking here would mean leaking once per
     // record, under a per-record catch, while reporting that the heap is in
     // trouble.
-    wasmModule._free( arrayPtr )
+    releaseQuietly( () => wasmModule._free( arrayPtr ) )
 
     throw new Error(
       'wasm heap allocation lies outside the heap view - ' +
@@ -153,8 +160,10 @@ export function arraysToWasmHeap(
     }
   } catch ( error ) {
 
+    // Individually, and quietly. One free throwing must not strand the rest,
+    // and must not replace the allocation error being propagated.
     for ( const pointer of pointers ) {
-      wasmModule._free( pointer )
+      releaseQuietly( () => wasmModule._free( pointer ) )
     }
 
     throw error
@@ -192,5 +201,74 @@ export function releaseQuietly( release: () => void ): void {
     Logger.debug(
       `wasm resource release failed during teardown: ${
         error instanceof Error ? error.message : error}` )
+  }
+}
+
+
+/**
+ * Run `body`, then release - propagating a release failure on success, and
+ * suppressing it only when something is already being unwound.
+ *
+ * That asymmetry is the point. releaseQuietly on its own is right during
+ * unwinding and wrong otherwise: on the success path a teardown failure is a
+ * real fault with nothing competing to report it, and swallowing it would let
+ * a record be reported COMPLETE while its resources were never reclaimed. So
+ * the quiet treatment applies to exactly the case it was argued for.
+ *
+ * @param body The work that needs the resource.
+ * @param release How to give the resource back.
+ * @return {T} Whatever body returned.
+ */
+export function withRelease<T>( body: () => T, release: () => void ): T {
+
+  let result: T
+
+  try {
+
+    result = body()
+  } catch ( error ) {
+
+    releaseQuietly( release )
+
+    throw error
+  }
+
+  release()
+
+  return result
+}
+
+
+/**
+ * Free several pointers, independently.
+ *
+ * One failing free must not abandon the rest - batching them into a single
+ * statement means the first failure strands every pointer after it - and it
+ * must not be lost either, so the first error is re-thrown once they have all
+ * been attempted. Combined with withRelease that gives the wanted behaviour on
+ * both paths: everything is freed either way, and the failure surfaces on the
+ * success path while staying quiet during unwinding.
+ *
+ * @param wasmModule The module the pointers belong to.
+ * @param pointers The allocations to release.
+ */
+export function freeAll(
+    wasmModule: WasmHeapModule, pointers: readonly number[] ): void {
+
+  let firstFailure: unknown
+
+  for ( const pointer of pointers ) {
+
+    try {
+
+      wasmModule._free( pointer )
+    } catch ( error ) {
+
+      firstFailure ??= error
+    }
+  }
+
+  if ( firstFailure !== void 0 ) {
+    throw firstFailure
   }
 }

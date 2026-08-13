@@ -5,7 +5,8 @@
 import { describe, expect, test } from '@jest/globals'
 
 import {
-  arraysToWasmHeap, arrayToWasmHeap, releaseQuietly, WasmHeapModule,
+  arraysToWasmHeap, arrayToWasmHeap, freeAll, releaseQuietly, WasmHeapModule,
+  withRelease,
 } from './wasm_heap'
 
 
@@ -74,7 +75,19 @@ describe( 'arrayToWasmHeap', () => {
     const wasmModule = fakeModule( HEAP_BYTES, () => 0 )
 
     expect( () => arrayToWasmHeap( wasmModule, PAYLOAD ) )
-      .toThrow( /_malloc failed/ )
+      .toThrow( /_malloc returned an unusable address/ )
+  } )
+
+  // The heap's maximum is 4GB and _malloc is a raw i32 export, so any address
+  // at or above 2^31 arrives signed. Unchecked it would pass the upper-bound
+  // test - a negative plus numBytes is not greater than byteLength - and reach
+  // the constructor as a bare "Start offset is outside the bounds".
+  test( 'a negative address is treated as a failed allocation', () => {
+
+    const wasmModule = fakeModule( HEAP_BYTES, () => -1 )
+
+    expect( () => arrayToWasmHeap( wasmModule, PAYLOAD ) )
+      .toThrow( /_malloc returned an unusable address/ )
   } )
 
   test( 'a zero-length copy is not mistaken for a failed malloc', () => {
@@ -177,7 +190,7 @@ describe( 'arraysToWasmHeap', () => {
     }
 
     expect( () => arraysToWasmHeap( wasmModule, [ PAYLOAD, TAIL ] ) )
-      .toThrow( /_malloc failed/ )
+      .toThrow( /_malloc returned an unusable address/ )
 
     expect( freed ).toEqual( [ first ] )
   } )
@@ -215,5 +228,92 @@ describe( 'releaseQuietly', () => {
         } )
       }
     } ).toThrow( original )
+  } )
+} )
+
+
+describe( 'withRelease', () => {
+
+  test( 'releases after the body and returns its value', () => {
+
+    const order: string[] = []
+
+    const result = withRelease(
+      () => {
+        order.push( 'body' )
+
+        return 'value'
+      },
+      () => {
+        order.push( 'release' )
+      } )
+
+    expect( result ).toBe( 'value' )
+    expect( order ).toEqual( [ 'body', 'release' ] )
+  } )
+
+  // The asymmetry this exists for. On the success path a teardown failure is a
+  // real fault with nothing competing to report it, and swallowing it would let
+  // a record be reported COMPLETE with its resources never reclaimed.
+  test( 'propagates a release failure when the body succeeded', () => {
+
+    expect( () => withRelease( () => 'fine', () => {
+      throw new Error( 'release failed' )
+    } ) ).toThrow( /release failed/ )
+  } )
+
+  test( 'keeps the body\'s error when the release fails too', () => {
+
+    const original = new Error( 'the diagnostic worth keeping' )
+
+    expect( () => withRelease(
+      () => {
+        throw original
+      },
+      () => {
+        throw new Error( 'teardown blew up too' )
+      } ) ).toThrow( original )
+  } )
+
+  test( 'still releases when the body throws', () => {
+
+    let released = false
+
+    expect( () => withRelease(
+      () => {
+        throw new Error( 'body failed' )
+      },
+      () => {
+        released = true
+      } ) ).toThrow( /body failed/ )
+
+    expect( released ).toBe( true )
+  } )
+} )
+
+
+describe( 'freeAll', () => {
+
+  // Batched into one statement, the first failure abandons every pointer after
+  // it - which is the whole reason this is not just four _free calls.
+  test( 'frees every pointer even when one throws, and reports the first', () => {
+
+    const freed: number[] = []
+    const bad = 2
+
+    const wasmModule: WasmHeapModule = {
+      ...fakeModule( HEAP_BYTES, () => 0 ),
+      _free: ( pointer: number ) => {
+        if ( pointer === bad ) {
+          throw new Error( 'free failed' )
+        }
+
+        freed.push( pointer )
+      },
+    }
+
+    expect( () => freeAll( wasmModule, [ 1, bad, 3 ] ) ).toThrow( /free failed/ )
+
+    expect( freed ).toEqual( [ 1, 3 ] )
   } )
 } )
