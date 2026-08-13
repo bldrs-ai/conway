@@ -198,6 +198,7 @@ import { IfcMaterialCache } from './ifc_material_cache'
 import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
 import Logger from '../logging/logger'
+import { arrayToWasmHeap } from '../core/wasm_heap'
 // import fs from 'fs'
 import Environment, { EnvironmentType } from '../utilities/environment'
 import { REFLECTANCE_METHOD_PERMISSIVE,
@@ -1240,19 +1241,7 @@ export class IfcGeometryExtraction {
    * @return {number} Pointer/memory address
    */
   arrayToWasmHeap(array:Float32Array | Float64Array | Uint32Array): any {
-    // Allocate memory for the array within the Wasm module
-    const bytesPerElement = array.BYTES_PER_ELEMENT
-    const numBytes = array.length * bytesPerElement
-    const arrayPtr = this.wasmModule._malloc(numBytes)
-
-    // Create a new Uint8Array view on the Wasm memory buffer, then set the array to it
-    const arrayWasm = new Uint8Array(this.wasmModule.HEAPU8.buffer, arrayPtr, numBytes)
-    // Honour the view's own window: subarray() results share their parent's
-    // backing buffer, so copying `array.buffer` wholesale would read the
-    // wrong bytes (and the wrong length) for a view.
-    arrayWasm.set(new Uint8Array(array.buffer, array.byteOffset, numBytes))
-
-    return arrayPtr
+    return arrayToWasmHeap(this.wasmModule, array)
   }
 
   /**
