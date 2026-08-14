@@ -115,13 +115,13 @@ export function mat4MultiplyF64(
 }
 
 /**
- * Grid (metres) the recentre translation snaps to.
+ * Grid (metres) a recentre snaps to once it is needed at all.
  *
  * The anchor a recentre is derived from is the *first geometry* the walk
  * reaches, which is an arbitrary interior element: whichever one the file
- * happens to declare first. Left unsnapped, that makes a model's world
+ * happens to declare first. Left as-is, that makes a model's world
  * position a function of its element order, with two consequences users
- * see:
+ * see (conway#87, "not a sound basis for a camera in the permalink"):
  *
  *  - Two exports of one object — the same logo as IFC and as STEP, a part
  *    re-exported by a different CAD kernel — land in different places,
@@ -131,43 +131,55 @@ export function mat4MultiplyF64(
  *  - Re-exporting a model with the element order shuffled moves it, so
  *    every camera permalink saved against it is silently wrong.
  *
- * Snapping the recentre to a coarse grid makes the frame depend on
- * *where* the anchor is rather than *which* anchor it is: any two anchors
- * in the same cell derive the same frame, so exports of one object agree
- * whenever they anchor within a cell of each other. Models near the
- * origin — the overwhelming majority — snap to zero and simply keep their
- * authored coordinates, which is both the most predictable behaviour and
- * what makes twin exports coincide by construction.
+ * `quantizeRecentre` answers that in two stages, because the two ranges
+ * want different things:
  *
- * The grid is 1/10th of LARGE_COORDINATE_BUDGET_M, the engine's own
- * "this frame failed to recentre" threshold: snapping spends at most
- * 500m (half a cell) of a 1e4 m budget, ~0.05mm of float32 resolution at
- * the GPU, while the georeferenced case it exists for — LV95 eastings at
- * ~2.6e6 m — still recentres to within half a kilometre of the origin.
+ *  - **Inside LARGE_COORDINATE_BUDGET_M, do not recentre at all.** There
+ *    is no float32 benefit below the budget — that constant *is* the
+ *    threshold where quantization becomes visible — so a model within
+ *    10km of the origin simply keeps the coordinates its file authored.
+ *    That is model-zero, conway#87's proposal, and it makes the frame
+ *    exactly order-independent for the overwhelming majority of models
+ *    rather than order-independent-per-cell.
+ *  - **Above it, snap to this grid.** A georeferenced model has to come
+ *    back near the origin, and snapping keeps that repeatable across
+ *    exports. Half a cell (500m) out of a 1e4 m budget costs ~0.05mm of
+ *    float32 resolution, and a whole-kilometre translation is exactly
+ *    representable where the raw anchor was not, so the recentre itself
+ *    stops contributing rounding.
  *
- * A snapped translation is also exactly representable where the raw
- * anchor was not: whole kilometres (and their whole-unit equivalents in
- * millimetre files) survive the float32 vertex/matrix path without
- * rounding, so the recentre itself stops contributing error.
+ * The staging also matters for the adopted-preview-frame gate: snapping
+ * *everything* would let a local model whose preview and durable anchors
+ * straddle a cell boundary (say x=480 and x=520) derive frames a full
+ * kilometre apart, which the gate's `magnitude > LARGE_COORDINATE_BUDGET_M`
+ * check cannot see. Below the budget both now derive zero, so they agree
+ * exactly. Above the budget the amplification survives in principle —
+ * two anchors either side of a boundary on a georeferenced model — which
+ * is the residual noted in design/new/coordination-frame.md.
  */
 export const COORDINATION_SNAP_M = 1e3
 
 /**
- * Snap one recentre component to COORDINATION_SNAP_M.
+ * The recentre for one translation component: zero while the coordinate
+ * is small enough not to need one, else snapped to COORDINATION_SNAP_M.
  *
- * Works in source units — the value is pre-scale, so the grid converts
- * by the same `scaleFactor` the caller is about to apply (a millimetre
- * model snaps every 1e6 source units, a metre model every 1e3). A
- * degenerate scale factor leaves the value untouched rather than
- * producing a non-finite frame.
+ * Works in source units — the value is pre-scale, so both the budget and
+ * the grid convert by the same `scaleFactor` the caller is about to
+ * apply (a millimetre model snaps every 1e6 source units, a metre model
+ * every 1e3). A degenerate scale factor leaves the value untouched
+ * rather than producing a non-finite frame.
  *
  * @param value One translation component, in source units.
  * @param scaleFactor The linear scaling factor to metres.
- * @return {number} The snapped component, in source units.
+ * @return {number} The recentre for that component, in source units.
  */
-function snapRecentre(value: number, scaleFactor: number): number {
+function quantizeRecentre(value: number, scaleFactor: number): number {
   if (!Number.isFinite(value) || !Number.isFinite(scaleFactor) || scaleFactor <= 0) {
     return Number.isFinite(value) ? value : 0
+  }
+
+  if (Math.abs(value) * scaleFactor <= LARGE_COORDINATE_BUDGET_M) {
+    return 0
   }
 
   const gridSourceUnits = COORDINATION_SNAP_M / scaleFactor
@@ -178,10 +190,11 @@ function snapRecentre(value: number, scaleFactor: number): number {
 /**
  * Derive the coordination (recentre) matrix in float64, matching the
  * gl-matrix op sequence exactly:
- * `scale * NormalizeMat * translate(-snap(placement * point))`.
+ * `scale * NormalizeMat * translate(-quantize(placement * point))`.
  *
- * The snap is what keeps the derived frame independent of which element
- * a file declares first — see COORDINATION_SNAP_M for why that matters.
+ * The quantization is what keeps the derived frame independent of which
+ * element a file declares first — see COORDINATION_SNAP_M for why that
+ * matters, and why it is staged around LARGE_COORDINATE_BUDGET_M.
  *
  * @param placement The native placement (16 elements, column-major
  * float64 from `getValues()`); `undefined` is treated as identity.
@@ -206,9 +219,9 @@ export function deriveCoordinationF64(
 
   // translate(-snap(transformedPt))
   const translate = IDENTITY.slice()
-  translate[12] = snapRecentre(-tx, scaleFactor)
-  translate[13] = snapRecentre(-ty, scaleFactor)
-  translate[14] = snapRecentre(-tz, scaleFactor)
+  translate[12] = quantizeRecentre(-tx, scaleFactor)
+  translate[13] = quantizeRecentre(-ty, scaleFactor)
+  translate[14] = quantizeRecentre(-tz, scaleFactor)
 
   // scale(scaleFactor)
   const scale = [

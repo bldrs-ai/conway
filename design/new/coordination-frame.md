@@ -12,15 +12,20 @@ The frame itself is derived once per model, in
 every placement:
 
 ```
-frame = scale * NormalizeMat * translate(-snap(firstPlacement * firstVertex))
+frame = scale * NormalizeMat * translate(-quantize(firstPlacement * firstVertex))
 ```
 
-## The anchor is arbitrary; the snap is what makes it repeatable
+## The anchor is arbitrary; quantizing is what makes it repeatable
+
+This is conway#87 ("Change Coordination Matrix to use Model-zero
+offsets", filed 2023): *both web-ifc and current conway pick a
+reference point based on model parser order, and this is not a sound
+basis for a camera in the permalink.*
 
 `firstPlacement * firstVertex` is **the first geometry the walk
 reaches** — whichever element the file happens to declare first, latched
-via `_isCoordinated`. Nothing about that element is special. Without the
-snap, a model's rendered position is therefore a function of its element
+via `_isCoordinated`. Nothing about that element is special. Left raw, a
+model's rendered position is therefore a function of its element
 *order*, and two things break:
 
 - **Two exports of one object land in different places.** Share#1749:
@@ -32,30 +37,45 @@ snap, a model's rendered position is therefore a function of its element
 - **Re-exporting a model moves it.** Same geometry, shuffled element
   order, and every camera saved against the model is silently wrong.
 
-`snapRecentre` rounds the recentre to `COORDINATION_SNAP_M` (1 km), so
-the frame depends on *where* the anchor is rather than *which* anchor it
-is. Any two anchors in the same cell derive the same frame. Near-origin
-models — the overwhelming majority — snap to zero and keep the
-coordinates their file authored, which is both the most predictable
-behaviour and what makes twin exports coincide by construction.
+`quantizeRecentre` answers this in two stages, because the two ranges
+want different things.
 
-The grid is 1/10th of `LARGE_COORDINATE_BUDGET_M`, the engine's own
-"this frame failed to recentre" threshold. Snapping spends at most half
-a cell (500m) of a 1e4 m budget — about 0.05mm of float32 resolution —
-while LV95 eastings still recentre to within half a kilometre. A snapped
-translation is also exactly representable in float32, where an arbitrary
-anchor was not, so the recentre stops contributing rounding of its own.
+**Inside `LARGE_COORDINATE_BUDGET_M` (1e4 m), it does not recentre at
+all.** There is no float32 benefit below the budget — that constant *is*
+the threshold where quantization becomes visible — so a model within
+10km of the origin keeps the coordinates its file authored. That is
+model-zero, which is what conway#87 asked for, and it makes the frame
+*exactly* order-independent for the overwhelming majority of models:
+there is no cell boundary to straddle, so twin exports and federated
+sets coincide however their elements are ordered.
+
+**Above the budget it snaps to `COORDINATION_SNAP_M` (1 km).** A
+georeferenced model has to come back near the origin, and snapping keeps
+that repeatable across exports. Half a cell out of a 1e4 m budget costs
+~0.05mm of float32 resolution, and a whole-kilometre translation is
+exactly representable in float32 where an arbitrary anchor was not, so
+the recentre stops contributing rounding of its own.
 
 ### What this does not guarantee
 
-Two anchors that straddle a cell boundary still derive frames a
-kilometre apart. This converts an exact order-dependence into a coarse
-one; it does not eliminate it. The fully general fix is an anchor that
-is a symmetric function of all the geometry — the model's bounding box —
-which the streaming opens cannot compute before they emit their first
-batch, and which would have to be identical across the classic,
-streamed and preview paths or one model would render in two places
-depending on which open ran.
+Above the budget, two anchors either side of a grid line still derive
+frames a kilometre apart — and because a 1 km divergence is *inside* the
+budget, the adopted-preview-frame gate
+(`magnitude > LARGE_COORDINATE_BUDGET_M`) will not re-derive to catch it.
+Two georeferenced exports of one site that anchor across a boundary
+misalign by a kilometre where before they misaligned by the raw anchor
+distance. This is why the staging matters: below the budget, where
+almost everything lives, the amplification cannot occur at all.
+
+The fully general fix is an anchor that is a symmetric function of all
+the geometry — the model's bounding box — which the streaming opens
+cannot compute before they emit their first batch, and which would have
+to be identical across the classic, streamed and preview paths or one
+model would render in two places depending on which open ran. conway#87
+also points past that, at the XeoKit
+[full-precision geometry](https://xeokit.io/blog_full_precision_geometry.html)
+approach (relative-to-centre tiles), as the way to stop trading precision
+for a single global frame at all.
 
 ## Consequences of changing the frame
 
@@ -64,16 +84,25 @@ an interior element now renders where its file puts it; the logo moved
 86m, from x ∈ [-76, 10] to x ∈ [0, 86]. So:
 
 - **Saved camera permalinks against existing models are invalidated**,
-  including Share's homepage camera. They need re-capturing.
-- **Regression digests and visual-diff baselines shift** for any model
-  whose anchor was not already at the origin, and need re-blessing —
-  see [regression/README.md](../../regression/README.md).
+  including Share's homepage camera. They need re-capturing, and
+  Share-side visual baselines shot against those cameras move with them.
+
+What does **not** move is this repo's regression corpus. The regression
+mains never touch the coordination frame — `ifc_regression_main.ts` and
+`ifc_regression_batch_main.ts` mention neither `COORDINATE_TO_ORIGIN`
+nor the linear scaling factor — and the digests hash curve/profile/mesh
+geometry in *file* coordinates, which is the same reason the CLI can't
+witness this change at all (see the note at the end). `visual-diff` is
+gated on `run-ifc-regression` reporting a non-zero digest count, so with
+no digest movement it does not run and has no baselines to re-bless.
+Treat a digest that *does* move as a real geometry regression, not as
+fallout from this.
 
 ## What is pinned, and where
 
 | Property | Test |
 |---|---|
-| Anchors in one cell derive one frame; unit-independence; budget | `src/compat/web-ifc/coordination_f64.test.ts` |
+| Model-zero below the budget, whatever the anchor; anchors either side of a grid line agree; unit-independent snapping above the budget | `src/compat/web-ifc/coordination_f64.test.ts` |
 | Near-origin model keeps authored coordinates; georeferenced model still recentres; classic and streamed opens agree | `src/compat/web-ifc/coordination_export_order.test.ts` |
 | The cross-format claim — `index.ifc` and `index.step` render in the same world box | Share: `src/Containers/indexStepLogo.spec.ts` |
 

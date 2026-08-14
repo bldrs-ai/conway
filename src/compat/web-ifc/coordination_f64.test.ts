@@ -56,11 +56,11 @@ describe( 'coordination_f64', () => {
     }
   } )
 
-  test( 'derives one frame for anchors sharing a snap cell (export-order independence)', () => {
+  test( 'below the budget every anchor derives model-zero (export-order independence)', () => {
     // The Share#1749 shape: two exports of one object disagree about
     // which element comes first, so the walk anchors on points 76m
-    // apart. Both must still derive the same frame, or the two files
-    // render 76m apart and no camera permalink spans them.
+    // apart. Both must derive the same frame, or the two files render
+    // 76m apart and no camera permalink spans them.
     const identity = glmatrix.mat4.create()
     const first = deriveCoordinationF64(
         identity, { x: 76, y: -11.4504049888, z: 0 }, NORMALIZE_MAT, 1 )
@@ -68,14 +68,30 @@ describe( 'coordination_f64', () => {
         identity, { x: 0, y: -11.4504049888, z: 0 }, NORMALIZE_MAT, 1 )
 
     expect( second ).toEqual( first )
-    // Near-origin models snap to zero, i.e. they keep their authored
-    // coordinates: the frame is the bare Y-up normalize.
+    // Model-zero (conway#87): the frame is the bare Y-up normalize and
+    // the model keeps the coordinates its file authored.
     expect( first[ TRANSLATION_X ] ).toBe( 0 )
     expect( first[ TRANSLATION_Y ] ).toBe( 0 )
     expect( first[ TRANSLATION_Z ] ).toBe( 0 )
   } )
 
-  test( 'snaps on the same metre grid whatever the source unit', () => {
+  test( 'anchors either side of a grid line below the budget still agree', () => {
+    // Why the recentre is staged rather than snapped everywhere: a
+    // straight snap turns a small anchor disagreement into a full-cell
+    // one. A site-grid model at x ~ 500m whose preview channel anchors
+    // at 480 and whose durable walk anchors at 520 would derive frames
+    // 1km apart — and the adopted-frame gate only re-derives past
+    // LARGE_COORDINATE_BUDGET_M, so it would keep the wrong one and
+    // render 1km off a classic open. Below the budget both are zero.
+    const identity = glmatrix.mat4.create()
+    const below = deriveCoordinationF64( identity, { x: 480, y: 0, z: 0 }, NORMALIZE_MAT, 1 )
+    const above = deriveCoordinationF64( identity, { x: 520, y: 0, z: 0 }, NORMALIZE_MAT, 1 )
+
+    expect( above ).toEqual( below )
+    expect( below[ TRANSLATION_X ] ).toBe( 0 )
+  } )
+
+  test( 'recentres only once past the budget, on the same metre grid whatever the source unit', () => {
     // Same object, one file in metres and one in millimetres: the
     // millimetre file's anchor is 1000x larger and its scaleFactor
     // 1000x smaller, so both must land on the same metre frame.
@@ -92,9 +108,10 @@ describe( 'coordination_f64', () => {
   } )
 
   test( 'keeps a georeferenced model well inside the recentre budget', () => {
-    // Snapping trades exactness for order-independence; the trade has to
-    // stay well inside LARGE_COORDINATE_BUDGET_M, the threshold above
-    // which a frame counts as having failed to recentre at all.
+    // Above the budget the recentre engages and snapping trades
+    // exactness for order-independence; the trade has to stay well
+    // inside LARGE_COORDINATE_BUDGET_M, the threshold above which a
+    // frame counts as having failed to recentre at all.
     const identity = glmatrix.mat4.create()
     const ref = { x: 2_600_000.31, y: 1_200_000.17, z: 412.5 }
     const coord = deriveCoordinationF64( identity, ref, NORMALIZE_MAT, 1 )
