@@ -95,16 +95,24 @@ an interior element now renders where its file puts it; the logo moved
   including Share's homepage camera. They need re-capturing, and
   Share-side visual baselines shot against those cameras move with them.
 
-What does **not** move is this repo's regression corpus. The regression
-mains never touch the coordination frame — `ifc_regression_main.ts` and
-`ifc_regression_batch_main.ts` mention neither `COORDINATE_TO_ORIGIN`
-nor the linear scaling factor — and the digests hash curve/profile/mesh
-geometry in *file* coordinates, which is the same reason the CLI can't
-witness this change at all (see the note at the end). `visual-diff` is
-gated on `run-ifc-regression` reporting a non-zero digest count, so with
-no digest movement it does not run and has no baselines to re-bless.
-Treat a digest that *does* move as a real geometry regression, not as
-fallout from this.
+- **Regression digests move**, and with them the visual-diff baselines.
+  An earlier revision of this doc claimed they would not, reasoning that
+  the regression mains never mention `COORDINATE_TO_ORIGIN` and the
+  digests hash geometry in file coordinates. CI disproved it: the first
+  gated run on this change reported **11 of the 12 smoke models
+  digest-changed**, with no failures and no errors. So re-blessing is
+  real work — see [regression/README.md](../../regression/README.md).
+
+  What the same run also showed is that the movement is not visible:
+  `visual-diff` rendered all 11 and every one came in under the 0.05%
+  pixel threshold. A digest that moves *with* a visible diff is still a
+  real geometry regression; a digest that moves without one is this
+  change.
+
+  The lesson worth keeping: the CLI cannot witness the frame change (see
+  the note at the end), but "the CLI can't see it" does not imply "the
+  digest can't see it". Verify against a run rather than by reading the
+  pipeline.
 
 ## What is pinned, and where
 
