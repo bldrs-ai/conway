@@ -194,10 +194,26 @@ function isWholeCurveEdge(
     edgeStart: unknown,
     edgeEnd: unknown ): boolean {
 
-  if ( !( basisCurve instanceof b_spline_curve ) ||
-       !( edgeStart instanceof vertex_point ) ||
+  if ( !( edgeStart instanceof vertex_point ) ||
        !( edgeEnd instanceof vertex_point ) ) {
 
+    return false
+  }
+
+  // An edge from a vertex back to ITSELF spans the whole of its basis curve:
+  // that is how STEP writes a closed edge, and trimming a circle by one point
+  // taken twice is how a torus's equator circles were resolving to a single
+  // point - which starved the revolution face of every angular sample it had
+  // and collapsed the swept surface flat (conway#461). The caller's gates make
+  // this safe for an open basis curve too: recovery only replaces the trimmed
+  // result when it was already degenerate AND the untrimmed extraction yields
+  // more points, and an identical-vertex edge over an open curve is degenerate
+  // whichever way it is read.
+  if ( edgeStart.vertex_geometry.localID === edgeEnd.vertex_geometry.localID ) {
+    return true
+  }
+
+  if ( !( basisCurve instanceof b_spline_curve ) ) {
     return false
   }
 
