@@ -57,7 +57,9 @@ import {
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
-import { arrayToWasmHeap } from '../core/wasm_heap'
+import {
+  allocateWasmHeap, arrayToWasmHeap, releaseQuietly,
+} from '../core/wasm_heap'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -3860,23 +3862,29 @@ export class AP214GeometryExtraction {
     // If we have no existing buffer OR it's too small, allocate a new one
     if (!pointer || capacity < maxPossibleFloats) {
     // Free the old buffer if it exists and is too small
-      if (pointer) {
-        this.wasmModule._free(pointer)
-      }
-
       const numBytes = maxPossibleFloats * bytesPerElement
 
-      pointer = this.wasmModule._malloc(numBytes)
+      // Keep the old reusable allocation live until its replacement succeeds;
+      // otherwise a failed grow leaves pointBuffer holding a freed pointer.
+      const replacement = allocateWasmHeap( this.wasmModule, numBytes )
+
+      if (pointer) {
+        try {
+          this.wasmModule._free(pointer)
+        } catch ( error ) {
+          releaseQuietly( () => this.wasmModule._free(replacement) )
+          throw error
+        }
+      }
+
+      pointer = replacement
       capacity = maxPossibleFloats
     }
 
-    // 2) Create a Float64Array view into WASM memory
-    // We only need to create a subarray up to the capacity
-    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
-        pointer / bytesPerElement,
-         
-        pointer / bytesPerElement + capacity,
-    )
+    // Read the current buffer after allocation. HEAPF64 can be a detached
+    // pre-growth view, which turns a successful grow into an opaque RangeError.
+    const wasmFloat64View = new Float64Array(
+      this.wasmModule.HEAPU8.buffer, pointer, capacity )
 
     // 3) Single pass to skip consecutive duplicates, fill up the wasm array
     let offset = 0

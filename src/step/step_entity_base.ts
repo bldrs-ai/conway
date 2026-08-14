@@ -1,4 +1,5 @@
 import { ParseBuffer } from '../../dependencies/conway-geom/interface/parse_buffer'
+import { wasmAddress } from '../core/wasm_heap'
 import { Entity } from '../core/entity'
 import { EntityDescription, EntityFieldsDescription } from '../core/entity_description'
 import { EntityFieldDescription } from '../core/entity_field_description'
@@ -876,7 +877,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       return false
     }
 
-    const dataPtr = result.resize( endCursor - cursor )
+    // ParseBuffer::resize is a raw wasm32 export. Above 2 GiB its valid i32
+    // pointer arrives in JavaScript signed; TypedArray#set interprets that as
+    // a negative offset unless it is normalized first.
+    const dataPtr = wasmAddress( result.resize( endCursor - cursor ) )
 
     module.HEAPU8.set( buffer.subarray( cursor, endCursor ), dataPtr )
 

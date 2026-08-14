@@ -25,6 +25,55 @@ export type CopyableArray = Float32Array | Float64Array | Uint32Array
 
 
 /**
+ * Normalize a raw wasm32 i32 pointer for use as a JavaScript array offset.
+ *
+ * @param pointer Raw pointer returned across the wasm boundary.
+ * @return {number} The pointer interpreted as an unsigned wasm32 address.
+ */
+export function wasmAddress( pointer: number ): number {
+  return pointer >>> 0
+}
+
+
+/**
+ * Allocate a checked region of the current wasm heap.
+ *
+ * Keep this separate from copying so callers that fill an allocation in place
+ * get the same exhaustion, unsigned-pointer and stale-view handling as
+ * arrayToWasmHeap.
+ *
+ * @param wasmModule The module to allocate in.
+ * @param numBytes Number of bytes required.
+ * @return {number} The unsigned wasm address, owned by the caller.
+ */
+export function allocateWasmHeap(
+    wasmModule: WasmHeapModule, numBytes: number ): number {
+
+  const arrayPtr = wasmAddress( wasmModule._malloc( numBytes ) )
+
+  if ( arrayPtr === 0 && numBytes > 0 ) {
+    throw new Error(
+      `wasm _malloc returned an unusable address for ${numBytes} bytes - ` +
+      describeHeap( wasmModule, arrayPtr, numBytes ) )
+  }
+
+  const heapBuffer = wasmModule.HEAPU8.buffer
+
+  if ( arrayPtr + numBytes > heapBuffer.byteLength ) {
+    const description = describeHeap( wasmModule, arrayPtr, numBytes )
+
+    releaseQuietly( () => wasmModule._free( arrayPtr ) )
+
+    throw new Error(
+      'wasm heap allocation lies outside the heap view - ' +
+      `the view is stale or the heap grew without it. ${description}` )
+  }
+
+  return arrayPtr
+}
+
+
+/**
  * Describe the heap and the request, for an error message that is actually
  * actionable.
  *
@@ -91,39 +140,8 @@ export function arrayToWasmHeap(
   // in that form for the bounds test, the view, the free and the message.
   // Left signed it would also pass the bounds test below, since a negative
   // plus numBytes is not greater than byteLength.
-  const arrayPtr = wasmModule._malloc( numBytes ) >>> 0
-
-  // 0 is _malloc's failure return and also a valid byteOffset, so the view
-  // below would be constructed happily and this would go on to write over
-  // whatever lives at address 0 - corrupting the heap instead of reporting
-  // that it is exhausted.
-  if ( arrayPtr === 0 && numBytes > 0 ) {
-
-    throw new Error(
-      `wasm _malloc returned an unusable address for ${numBytes} bytes - ` +
-      describeHeap( wasmModule, arrayPtr, numBytes ) )
-  }
-
+  const arrayPtr = allocateWasmHeap( wasmModule, numBytes )
   const heapBuffer = wasmModule.HEAPU8.buffer
-
-  // Checked rather than left to the TypedArray constructor, whose RangeError
-  // is just "Invalid typed array length: N" - true, unactionable, and
-  // indistinguishable from a dozen other causes.
-  if ( arrayPtr + numBytes > heapBuffer.byteLength ) {
-
-    const description = describeHeap( wasmModule, arrayPtr, numBytes )
-
-    // The allocation SUCCEEDED and only the view is refused, so this owns a
-    // pointer nobody else can reach - arraysToWasmHeap's cleanup cannot see it
-    // because it was never returned. Leaking here would mean leaking once per
-    // record, under a per-record catch, while reporting that the heap is in
-    // trouble.
-    releaseQuietly( () => wasmModule._free( arrayPtr ) )
-
-    throw new Error(
-      'wasm heap allocation lies outside the heap view - ' +
-      `the view is stale or the heap grew without it. ${description}` )
-  }
 
   const destination = new Uint8Array( heapBuffer, arrayPtr, numBytes )
 

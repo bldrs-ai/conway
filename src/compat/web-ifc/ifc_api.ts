@@ -7,6 +7,7 @@ import { ProgressCallback } from '../../core/progress'
 import { ModelInfo } from '../../core/progress_log'
 import Environment from '../../utilities/environment'
 import * as glmatrix from 'gl-matrix'
+import { wasmAddress } from '../../core/wasm_heap'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiModelPassthroughFactory } from './ifc_api_model_passthrough_factory'
@@ -803,8 +804,9 @@ export class IfcAPI {
    */
   getSubArray(heap: Float32Array | Uint32Array, startPtr: number, sizeBytes: number):
     Float32Array | Uint32Array {
+    const address = wasmAddress( startPtr )
     // eslint-disable-next-line no-magic-numbers, no-mixed-operators
-    return heap.subarray(startPtr / 4, startPtr / 4 + sizeBytes).slice(0)
+    return heap.subarray(address / 4, address / 4 + sizeBytes).slice(0)
   }
 
   /**

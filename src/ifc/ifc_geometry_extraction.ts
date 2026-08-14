@@ -198,7 +198,8 @@ import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
 import Logger from '../logging/logger'
 import {
-  arraysToWasmHeap, arrayToWasmHeap, freeAll, withRelease,
+  allocateWasmHeap, arraysToWasmHeap, arrayToWasmHeap, freeAll, releaseQuietly,
+  withRelease,
 } from '../core/wasm_heap'
 // import fs from 'fs'
 import Environment, { EnvironmentType } from '../utilities/environment'
@@ -3806,23 +3807,33 @@ export class IfcGeometryExtraction {
     // If we have no existing buffer OR it's too small, allocate a new one
     if (!pointer || capacity < maxPossibleFloats) {
     // Free the old buffer if it exists and is too small
-      if (pointer) {
-        this.wasmModule._free(pointer)
-      }
-
       const numBytes = maxPossibleFloats * bytesPerElement
 
-      pointer = this.wasmModule._malloc(numBytes)
+      // Allocate before releasing the reusable buffer. If allocation fails,
+      // pointBuffer must continue to own a valid pointer rather than a freed
+      // one that cleanup later frees a second time.
+      const replacement = allocateWasmHeap( this.wasmModule, numBytes )
+
+      if (pointer) {
+        try {
+          this.wasmModule._free(pointer)
+        } catch ( error ) {
+          // The replacement is not published until the old allocation is
+          // released. Do not strand it if that release itself fails.
+          releaseQuietly( () => this.wasmModule._free(replacement) )
+          throw error
+        }
+      }
+
+      pointer = replacement
       capacity = maxPossibleFloats
     }
 
-    // 2) Create a Float64Array view into WASM memory
-    // We only need to create a subarray up to the capacity
-    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
-        pointer / bytesPerElement,
-         
-        pointer / bytesPerElement + capacity,
-    )
+    // Construct from the current heap buffer. HEAPF64 may still be a detached
+    // pre-growth view; retaining it here was the remaining unguarded source of
+    // the bare "Invalid typed array length" failure tracked by #485.
+    const wasmFloat64View = new Float64Array(
+      this.wasmModule.HEAPU8.buffer, pointer, capacity )
 
     // 3) Single pass to skip consecutive duplicates, fill up the wasm array
     let offset = 0

@@ -6,17 +6,33 @@ import { describe, expect, test } from '@jest/globals'
 
 import {
   arraysToWasmHeap, arrayToWasmHeap, freeAll, releaseQuietly, WasmHeapModule,
-  withRelease,
+  wasmAddress, withRelease,
 } from './wasm_heap'
 
 
 const HEAP_BYTES = 1024
+const LOW_ADDRESS = 64
+const SIGNED_2_GIB_ADDRESS = -2147483648
+const UNSIGNED_2_GIB_ADDRESS = 2147483648
 
 // Named rather than inlined, and non-zero, since what every assertion here
 // actually checks is that the right bytes landed somewhere that starts out
 // zero-filled.
 const PAYLOAD = Float64Array.from( [ 1, 2, 3 ] )
 const TAIL = Float64Array.from( [ 7, 8 ] )
+
+
+describe( 'wasmAddress', () => {
+
+  test( 'preserves ordinary pointers', () => {
+    expect( wasmAddress( LOW_ADDRESS ) ).toBe( LOW_ADDRESS )
+  } )
+
+  test( 'normalizes a signed pointer above 2 GiB', () => {
+    expect( wasmAddress( SIGNED_2_GIB_ADDRESS ) )
+      .toBe( UNSIGNED_2_GIB_ADDRESS )
+  } )
+} )
 
 /**
  * A stand-in for the emscripten module, with a heap we control.

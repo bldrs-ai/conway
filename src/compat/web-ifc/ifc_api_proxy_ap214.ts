@@ -3,6 +3,7 @@ import {
   GeometryObject,
 } from '../../index'
 import { Vector3 } from '../../../dependencies/conway-geom'
+import { wasmAddress } from '../../core/wasm_heap'
 import { CanonicalMaterial } from '../../index'
 import {
   FlatMesh,
@@ -1219,8 +1220,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    */
   getSubArray(heap: Float32Array | Uint32Array, startPtr: number, sizeBytes: number):
     Float32Array | Uint32Array {
+    const address = wasmAddress( startPtr )
     // eslint-disable-next-line no-magic-numbers, no-mixed-operators
-    return heap.subarray(startPtr / 4, startPtr / 4 + sizeBytes).slice(0)
+    return heap.subarray(address / 4, address / 4 + sizeBytes).slice(0)
   }
 
   /**
