@@ -148,43 +148,60 @@ export function mat4MultiplyF64(
  *    representable where the raw anchor was not, so the recentre itself
  *    stops contributing rounding.
  *
- * The staging also matters for the adopted-preview-frame gate: snapping
- * *everything* would let a local model whose preview and durable anchors
- * straddle a cell boundary (say x=480 and x=520) derive frames a full
- * kilometre apart, which the gate's `magnitude > LARGE_COORDINATE_BUDGET_M`
- * check cannot see. Below the budget both now derive zero, so they agree
- * exactly. Above the budget the amplification survives in principle —
- * two anchors either side of a boundary on a georeferenced model — which
- * is the residual noted in design/new/coordination-frame.md.
+ * **Quantizing cannot remove the discontinuity, only move it**, and it
+ * is worth being precise about where this one sits, because it is not
+ * where you would guess. Snapping *everything* to the grid would put a
+ * 1km step at every cell edge, including around the near-origin models
+ * that make up almost the whole corpus. Staging moves it to the budget:
+ * inside, every anchor derives model-zero and there is no edge at all;
+ * the single remaining edge is the budget itself, where the step is
+ * `LARGE_COORDINATE_BUDGET_M` (1e4), not the grid (1e3) — an anchor at
+ * 9900 derives zero and one at 10100 derives -10000.
+ *
+ * That edge is also invisible to the adopted-preview-frame gate, which
+ * re-derives only when a durable placement lands beyond the budget: a
+ * preview anchored at 10100 and a durable first placement at 9900 probe
+ * at ~100m, so the preview frame is kept and the model renders 10km off
+ * a classic open. The trade is deliberate — one edge that a georeferenced
+ * model may sit near, rather than an edge every kilometre through the
+ * range where nearly every model lives — but it is a real residual, not
+ * an eliminated one. design/new/coordination-frame.md tracks it, and
+ * conway#87's relative-to-centre direction is what removes it properly.
  */
 export const COORDINATION_SNAP_M = 1e3
 
 /**
- * The recentre for one translation component: zero while the coordinate
- * is small enough not to need one, else snapped to COORDINATION_SNAP_M.
+ * The recentre for an anchor: all zeros while the anchor is close enough
+ * to the origin not to need one, else each component snapped to
+ * COORDINATION_SNAP_M.
  *
- * Works in source units — the value is pre-scale, so both the budget and
- * the grid convert by the same `scaleFactor` the caller is about to
+ * The stage decision is made **once, on the anchor's distance from the
+ * origin**, and applied to all three components together. Deciding per
+ * component would leave a model offset diagonally — say (9km, 9km, 9km),
+ * 15.6km out and well past the budget — with no recentre at all, since
+ * no single component crosses the threshold. That silently regresses the
+ * float32 jitter fix (Share#1631) the budget exists to enforce.
+ *
+ * Works in source units: the values are pre-scale, so both the budget
+ * and the grid convert by the same `scaleFactor` the caller is about to
  * apply (a millimetre model snaps every 1e6 source units, a metre model
- * every 1e3). A degenerate scale factor leaves the value untouched
- * rather than producing a non-finite frame.
+ * every 1e3).
  *
- * @param value One translation component, in source units.
- * @param scaleFactor The linear scaling factor to metres.
- * @return {number} The recentre for that component, in source units.
+ * @param values The three translation components, in source units.
+ * @param scaleFactor The linear scaling factor to metres; already
+ * sanitized by the caller.
+ * @return {number[]} The recentre per component, in source units.
  */
-function quantizeRecentre(value: number, scaleFactor: number): number {
-  if (!Number.isFinite(value) || !Number.isFinite(scaleFactor) || scaleFactor <= 0) {
-    return Number.isFinite(value) ? value : 0
-  }
+function quantizeRecentre(values: number[], scaleFactor: number): number[] {
+  const finite = values.map((v) => (Number.isFinite(v) ? v : 0))
 
-  if (Math.abs(value) * scaleFactor <= LARGE_COORDINATE_BUDGET_M) {
-    return 0
+  if (Math.hypot(...finite) * scaleFactor <= LARGE_COORDINATE_BUDGET_M) {
+    return [0, 0, 0]
   }
 
   const gridSourceUnits = COORDINATION_SNAP_M / scaleFactor
 
-  return Math.round(value / gridSourceUnits) * gridSourceUnits
+  return finite.map((v) => Math.round(v / gridSourceUnits) * gridSourceUnits)
 }
 
 /**
@@ -211,23 +228,29 @@ export function deriveCoordinationF64(
 
   const p = placement !== undefined ? sanitize16(placement) : IDENTITY
   const { x, y, z } = point
+  // Sanitized once, here, so the promise the rest of this function makes
+  // about degenerate input actually holds: a NaN/Infinite factor from a
+  // malformed unit-assignment chain would otherwise pass the recentre
+  // guard and then poison every component through the scale matrix below.
+  const scale1 = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1
 
   // transformedPt = placement * (x, y, z, 1)
   const tx = p[0] * x + p[4] * y + p[8] * z + p[12]
   const ty = p[1] * x + p[5] * y + p[9] * z + p[13]
   const tz = p[2] * x + p[6] * y + p[10] * z + p[14]
 
-  // translate(-snap(transformedPt))
+  // translate(-quantize(transformedPt))
+  const recentre = quantizeRecentre([-tx, -ty, -tz], scale1)
   const translate = IDENTITY.slice()
-  translate[12] = quantizeRecentre(-tx, scaleFactor)
-  translate[13] = quantizeRecentre(-ty, scaleFactor)
-  translate[14] = quantizeRecentre(-tz, scaleFactor)
+  translate[12] = recentre[0]
+  translate[13] = recentre[1]
+  translate[14] = recentre[2]
 
   // scale(scaleFactor)
   const scale = [
-    scaleFactor, 0, 0, 0,
-    0, scaleFactor, 0, 0,
-    0, 0, scaleFactor, 0,
+    scale1, 0, 0, 0,
+    0, scale1, 0, 0,
+    0, 0, scale1, 0,
     0, 0, 0, 1,
   ]
 

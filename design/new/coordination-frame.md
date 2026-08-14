@@ -58,14 +58,22 @@ the recentre stops contributing rounding of its own.
 
 ### What this does not guarantee
 
-Above the budget, two anchors either side of a grid line still derive
-frames a kilometre apart — and because a 1 km divergence is *inside* the
-budget, the adopted-preview-frame gate
-(`magnitude > LARGE_COORDINATE_BUDGET_M`) will not re-derive to catch it.
-Two georeferenced exports of one site that anchor across a boundary
-misalign by a kilometre where before they misaligned by the raw anchor
-distance. This is why the staging matters: below the budget, where
-almost everything lives, the amplification cannot occur at all.
+Quantizing cannot remove the discontinuity, only move it. Staging moves
+it to the budget, and the step *there* is `LARGE_COORDINATE_BUDGET_M`
+(1e4), not the grid (1e3) — an anchor at 9900 derives model-zero while
+one at 10100 derives −10000, so two anchors 200m apart can produce
+frames 10km apart. Above the budget the grid adds its own 1km edges on
+top.
+
+Those edges are invisible to the adopted-preview-frame gate, which
+re-derives only when a durable placement lands beyond the budget: a
+preview anchored at 10100 with a durable first placement at 9900 probes
+at ~100m, keeps the preview frame, and renders 10km off a classic open.
+
+The trade is deliberate — a handful of edges out at georeferenced
+magnitudes, instead of an edge every kilometre right through the range
+where nearly every model lives — but it is a real residual, not an
+eliminated one.
 
 The fully general fix is an anchor that is a symmetric function of all
 the geometry — the model's bounding box — which the streaming opens

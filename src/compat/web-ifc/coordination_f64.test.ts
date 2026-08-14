@@ -107,23 +107,46 @@ describe( 'coordination_f64', () => {
     expect( metres[ TRANSLATION_X ] ).toBe( -2_600_000 )
   } )
 
-  test( 'keeps a georeferenced model well inside the recentre budget', () => {
+  test( 'keeps a georeferenced model inside the recentre budget', () => {
     // Above the budget the recentre engages and snapping trades
-    // exactness for order-independence; the trade has to stay well
-    // inside LARGE_COORDINATE_BUDGET_M, the threshold above which a
-    // frame counts as having failed to recentre at all.
+    // exactness for order-independence. Once engaged every component is
+    // snapped, so each keeps at most half a cell and the anchor lands
+    // within half a cell in each axis — measured as a distance so the
+    // bound is a property of the anchor, like the stage decision itself.
+    // The outer bound that matters is LARGE_COORDINATE_BUDGET_M, the
+    // threshold above which a frame counts as not having recentred.
     const identity = glmatrix.mat4.create()
     const ref = { x: 2_600_000.31, y: 1_200_000.17, z: 412.5 }
     const coord = deriveCoordinationF64( identity, ref, NORMALIZE_MAT, 1 )
     // NORMALIZE_MAT is Z-up -> Y-up, so the source y/z components land in
     // the frame's z/y translation slots.
-    const residual = Math.max(
-        Math.abs( ref.x + coord[ TRANSLATION_X ] ),
-        Math.abs( ref.z + coord[ TRANSLATION_Y ] ),
-        Math.abs( ref.y - coord[ TRANSLATION_Z ] ) )
+    const residual = Math.hypot(
+        ref.x + coord[ TRANSLATION_X ],
+        ref.z + coord[ TRANSLATION_Y ],
+        ref.y - coord[ TRANSLATION_Z ] )
 
-    expect( residual ).toBeLessThanOrEqual( COORDINATION_SNAP_M / 2 )
-    expect( residual ).toBeLessThan( LARGE_COORDINATE_BUDGET_M / 10 )
+    // sqrt(3) half-cells is the true worst case; assert both it and the
+    // budget so a future edit that widens either is caught.
+    expect( residual ).toBeLessThanOrEqual( COORDINATION_SNAP_M )
+    expect( residual ).toBeLessThan( LARGE_COORDINATE_BUDGET_M )
+  } )
+
+  test( 'recentres a model whose offset is spread across axes', () => {
+    // The stage decision is the anchor's distance from the origin, not
+    // any one component: (9km, 9km, 9km) is 15.6km out — past the budget
+    // — while no single component crosses it. Deciding per component
+    // would leave this model in file coordinates and quietly undo the
+    // float32 jitter fix the budget exists to enforce.
+    const identity = glmatrix.mat4.create()
+    const coord = deriveCoordinationF64(
+        identity, { x: 9000, y: 9000, z: 9000 }, NORMALIZE_MAT, 1 )
+    const residual = Math.hypot(
+        9000 + coord[ TRANSLATION_X ],
+        9000 + coord[ TRANSLATION_Y ],
+        9000 - coord[ TRANSLATION_Z ] )
+
+    expect( coord[ TRANSLATION_X ] ).not.toBe( 0 )
+    expect( residual ).toBeLessThan( LARGE_COORDINATE_BUDGET_M )
   } )
 
   test( 'places a LV95-magnitude element exactly where float32 mis-lands it', () => {
@@ -152,7 +175,13 @@ describe( 'coordination_f64', () => {
     placementF64[ TRANSLATION_Y ] = ref.y
     placementF64[ TRANSLATION_Z ] = ref.z
 
-    // Where it must land: the within-cell remainder, in Y-up axes.
+    // Where it must land: the within-cell remainder of every component.
+    // The stage decision is made once on the whole anchor, and this one
+    // is far past the budget, so all three components snap — including
+    // z=412.5, whose nearest grid multiple is 0 and which therefore
+    // keeps its full value. (A per-component budget test would leave z
+    // untouched for a different reason and agree here by coincidence;
+    // this mirrors what quantizeRecentre actually does.)
     const rem = ( v: number ) =>
       v - Math.round( v / COORDINATION_SNAP_M ) * COORDINATION_SNAP_M
     const expected = [ rem( ref.x ), rem( ref.z ), -rem( ref.y ) ]
