@@ -2,6 +2,11 @@
 import { describe, expect, test } from '@jest/globals'
 import * as glmatrix from 'gl-matrix'
 import {
+  COORDINATION_SNAP_M,
+  LARGE_COORDINATE_BUDGET_M,
+  TRANSLATION_X,
+  TRANSLATION_Y,
+  TRANSLATION_Z,
   composeTransformF64,
   deriveCoordinationF64,
   mat4MultiplyF64,
@@ -51,43 +56,156 @@ describe( 'coordination_f64', () => {
     }
   } )
 
-  test( 'recentres a LV95-magnitude reference exactly where float32 mis-lands it', () => {
-    // The georeferencing jitter mechanism: the recentre translation
-    // negates a reference point at Swiss LV95 magnitude (~2.6M easting).
-    // Stored in a Float32Array it quantizes to the ~0.31 m grid (float32
-    // ULP at 2.6M), so the reference lands cm-to-dm off the origin — a
-    // per-model positional error baked into every emitted transform. The
-    // float64 recentre lands it exactly.
-    const identity = glmatrix.mat4.create() // placement; world via the point
+  test( 'below the budget every anchor derives model-zero (export-order independence)', () => {
+    // The Share#1749 shape: two exports of one object disagree about
+    // which element comes first, so the walk anchors on points 76m
+    // apart. Both must derive the same frame, or the two files render
+    // 76m apart and no camera permalink spans them.
+    const identity = glmatrix.mat4.create()
+    const first = deriveCoordinationF64(
+        identity, { x: 76, y: -11.4504049888, z: 0 }, NORMALIZE_MAT, 1 )
+    const second = deriveCoordinationF64(
+        identity, { x: 0, y: -11.4504049888, z: 0 }, NORMALIZE_MAT, 1 )
+
+    expect( second ).toEqual( first )
+    // Model-zero (conway#87): the frame is the bare Y-up normalize and
+    // the model keeps the coordinates its file authored.
+    expect( first[ TRANSLATION_X ] ).toBe( 0 )
+    expect( first[ TRANSLATION_Y ] ).toBe( 0 )
+    expect( first[ TRANSLATION_Z ] ).toBe( 0 )
+  } )
+
+  test( 'anchors either side of a grid line below the budget still agree', () => {
+    // Why the recentre is staged rather than snapped everywhere: a
+    // straight snap turns a small anchor disagreement into a full-cell
+    // one. A site-grid model at x ~ 500m whose preview channel anchors
+    // at 480 and whose durable walk anchors at 520 would derive frames
+    // 1km apart — and the adopted-frame gate only re-derives past
+    // LARGE_COORDINATE_BUDGET_M, so it would keep the wrong one and
+    // render 1km off a classic open. Below the budget both are zero.
+    const identity = glmatrix.mat4.create()
+    const below = deriveCoordinationF64( identity, { x: 480, y: 0, z: 0 }, NORMALIZE_MAT, 1 )
+    const above = deriveCoordinationF64( identity, { x: 520, y: 0, z: 0 }, NORMALIZE_MAT, 1 )
+
+    expect( above ).toEqual( below )
+    expect( below[ TRANSLATION_X ] ).toBe( 0 )
+  } )
+
+  test( 'recentres only once past the budget, on the same metre grid whatever the source unit', () => {
+    // Same object, one file in metres and one in millimetres: the
+    // millimetre file's anchor is 1000x larger and its scaleFactor
+    // 1000x smaller, so both must land on the same metre frame.
+    const identity = glmatrix.mat4.create()
+    const metres = deriveCoordinationF64(
+        identity, { x: 2_600_076, y: 412, z: 0 }, NORMALIZE_MAT, 1 )
+    const millimetres = deriveCoordinationF64(
+        identity, { x: 2_600_076_000, y: 412_000, z: 0 }, NORMALIZE_MAT, 0.001 )
+
+    for ( const i of [ TRANSLATION_X, TRANSLATION_Y, TRANSLATION_Z ] ) {
+      expect( millimetres[ i ] ).toBeCloseTo( metres[ i ], 6 )
+    }
+    expect( metres[ TRANSLATION_X ] ).toBe( -2_600_000 )
+  } )
+
+  test( 'keeps a georeferenced model inside the recentre budget', () => {
+    // Above the budget the recentre engages and snapping trades
+    // exactness for order-independence. Once engaged every component is
+    // snapped, so each keeps at most half a cell and the anchor lands
+    // within half a cell in each axis — measured as a distance so the
+    // bound is a property of the anchor, like the stage decision itself.
+    // The outer bound that matters is LARGE_COORDINATE_BUDGET_M, the
+    // threshold above which a frame counts as not having recentred.
+    const identity = glmatrix.mat4.create()
     const ref = { x: 2_600_000.31, y: 1_200_000.17, z: 412.5 }
+    const coord = deriveCoordinationF64( identity, ref, NORMALIZE_MAT, 1 )
+    // NORMALIZE_MAT is Z-up -> Y-up, so the source y/z components land in
+    // the frame's z/y translation slots.
+    const residual = Math.hypot(
+        ref.x + coord[ TRANSLATION_X ],
+        ref.z + coord[ TRANSLATION_Y ],
+        ref.y - coord[ TRANSLATION_Z ] )
 
-    /**
-     * Apply a column-major 4x4 to a point.
-     *
-     * @param m 16-element matrix.
-     * @param p The point.
-     * @return {number} The transformed point's distance from origin.
-     */
-    const originDist = ( m: ArrayLike<number> ) => Math.hypot(
-        m[ 0 ] * ref.x + m[ 4 ] * ref.y + m[ 8 ] * ref.z + m[ 12 ],
-        m[ 1 ] * ref.x + m[ 5 ] * ref.y + m[ 9 ] * ref.z + m[ 13 ],
-        m[ 2 ] * ref.x + m[ 6 ] * ref.y + m[ 10 ] * ref.z + m[ 14 ] )
+    // sqrt(3) half-cells is the true worst case; assert both it and the
+    // budget so a future edit that widens either is caught.
+    expect( residual ).toBeLessThanOrEqual( COORDINATION_SNAP_M )
+    expect( residual ).toBeLessThan( LARGE_COORDINATE_BUDGET_M )
+  } )
 
-    // float64 recentre (the fix).
-    const distF64 = originDist( deriveCoordinationF64( identity, ref, NORMALIZE_MAT, 1 ) )
+  test( 'recentres a model whose offset is spread across axes', () => {
+    // The stage decision is the anchor's distance from the origin, not
+    // any one component: (9km, 9km, 9km) is 15.6km out — past the budget
+    // — while no single component crosses it. Deciding per component
+    // would leave this model in file coordinates and quietly undo the
+    // float32 jitter fix the budget exists to enforce.
+    const identity = glmatrix.mat4.create()
+    const coord = deriveCoordinationF64(
+        identity, { x: 9000, y: 9000, z: 9000 }, NORMALIZE_MAT, 1 )
+    const residual = Math.hypot(
+        9000 + coord[ TRANSLATION_X ],
+        9000 + coord[ TRANSLATION_Y ],
+        9000 - coord[ TRANSLATION_Z ] )
 
-    // Old float32 gl-matrix recentre: the translation is stored in a
-    // Float32Array, quantizing the -2.6M component.
-    const tp = glmatrix.vec4.create()
-    glmatrix.vec4.transformMat4( tp, [ ref.x, ref.y, ref.z, 1 ], identity )
-    const coordF32 = glmatrix.mat4.create()
-    glmatrix.mat4.fromTranslation( coordF32, [ -tp[ 0 ], -tp[ 1 ], -tp[ 2 ] ] )
-    glmatrix.mat4.multiply( coordF32, NORMALIZE_MAT as unknown as glmatrix.mat4, coordF32 )
-    const distF32 = originDist( coordF32 )
+    expect( coord[ TRANSLATION_X ] ).not.toBe( 0 )
+    expect( residual ).toBeLessThan( LARGE_COORDINATE_BUDGET_M )
+  } )
 
-    // float64 lands sub-micron; float32 is off by cm+.
-    expect( distF64 ).toBeLessThan( 1e-6 )
-    expect( distF32 ).toBeGreaterThan( 1e-2 )
+  test( 'places a LV95-magnitude element exactly where float32 mis-lands it', () => {
+    // The georeferencing jitter mechanism (Share#1631): an element placed
+    // at Swiss LV95 magnitude (~2.6M easting) is composed against the
+    // recentre frame, and float32 ULP at 2.6M is ~0.31m. Run through
+    // gl-matrix's Float32Array that composition quantizes, and the
+    // element lands cm-to-dm from where the frame says — a positional
+    // error baked into every emitted transform. The float64 path lands it
+    // exactly.
+    //
+    // Note the frame's own translation is now snapped to whole kilometres
+    // (COORDINATION_SNAP_M), which happens to be exactly representable in
+    // float32 — so the loss this pins is in the composition against the
+    // element's full-precision placement, which is where it always
+    // mattered: that product is what becomes the FlatMesh transform.
+    const ref = { x: 2_600_000.31, y: 1_200_000.17, z: 412.5 }
+    const frame = deriveCoordinationF64(
+        glmatrix.mat4.create(), ref, NORMALIZE_MAT, 1 )
+
+    // An element sitting on that reference point.
+    const placement = glmatrix.mat4.create()
+    glmatrix.mat4.identity( placement )
+    const placementF64 = Array.from( placement )
+    placementF64[ TRANSLATION_X ] = ref.x
+    placementF64[ TRANSLATION_Y ] = ref.y
+    placementF64[ TRANSLATION_Z ] = ref.z
+
+    // Where it must land: the within-cell remainder of every component.
+    // The stage decision is made once on the whole anchor, and this one
+    // is far past the budget, so all three components snap — including
+    // z=412.5, whose nearest grid multiple is 0 and which therefore
+    // keeps its full value. (A per-component budget test would leave z
+    // untouched for a different reason and agree here by coincidence;
+    // this mirrors what quantizeRecentre actually does.)
+    const rem = ( v: number ) =>
+      v - Math.round( v / COORDINATION_SNAP_M ) * COORDINATION_SNAP_M
+    const expected = [ rem( ref.x ), rem( ref.z ), -rem( ref.y ) ]
+
+    const f64 = composeTransformF64( frame, placementF64 )
+
+    // The old path's loss: the placement crosses the wasm boundary as a
+    // glm::dmat4 but was rebuilt with gl-matrix `mat4.fromValues`, i.e.
+    // stored in a Float32Array — quantizing its 2.6M component to the
+    // ~0.31m float32 grid before anything is composed. Snapping the frame
+    // does not rescue that; only keeping the placement in float64 does.
+    const f32 = composeTransformF64( frame, new Float32Array( placementF64 ) )
+
+    const errF64 = Math.max(
+        Math.abs( f64[ TRANSLATION_X ] - expected[ 0 ] ),
+        Math.abs( f64[ TRANSLATION_Y ] - expected[ 1 ] ),
+        Math.abs( f64[ TRANSLATION_Z ] - expected[ 2 ] ) )
+    const errF32 = Math.max(
+        Math.abs( f32[ TRANSLATION_X ] - expected[ 0 ] ),
+        Math.abs( f32[ TRANSLATION_Y ] - expected[ 1 ] ),
+        Math.abs( f32[ TRANSLATION_Z ] - expected[ 2 ] ) )
+
+    expect( errF64 ).toBeLessThan( 1e-6 )
+    expect( errF32 ).toBeGreaterThan( 1e-2 )
   } )
 
   test( 'near origin float64 and float32 agree (fixtures unaffected)', () => {
