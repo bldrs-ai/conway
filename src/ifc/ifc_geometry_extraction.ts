@@ -1052,7 +1052,7 @@ export class IfcGeometryExtraction {
                 pointsArrayNative,
                 indicesArrayPtr,
                 polygonalFaceBufferOffsetsArrayPtr,
-                polygonalFaceBufferOffsetsArray.length - 1,
+                polygonalFaceBufferOffsetsArray.length,
                 startIndicesArrayPtr,
                 startIndicesBufferOffsetsArrayPtr ),
             () => pointsArrayNative.delete() )
