@@ -12,6 +12,7 @@
  */
 
 import Logger from '../logging/logger'
+import { wasmAddress } from './wasm_address'
 
 
 /** What the wasm module exposes that this needs. Deliberately narrow. */
@@ -22,17 +23,6 @@ export interface WasmHeapModule {
 }
 
 export type CopyableArray = Float32Array | Float64Array | Uint32Array
-
-
-/**
- * Normalize a raw wasm32 i32 pointer for use as a JavaScript array offset.
- *
- * @param pointer Raw pointer returned across the wasm boundary.
- * @return {number} The pointer interpreted as an unsigned wasm32 address.
- */
-export function wasmAddress( pointer: number ): number {
-  return pointer >>> 0
-}
 
 
 /**

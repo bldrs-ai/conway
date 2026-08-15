@@ -57,9 +57,7 @@ import {
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
-import {
-  allocateWasmHeap, arrayToWasmHeap, releaseQuietly,
-} from '../core/wasm_heap'
+import { allocateWasmHeap, arrayToWasmHeap } from '../core/wasm_heap'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -3864,21 +3862,25 @@ export class AP214GeometryExtraction {
     // Free the old buffer if it exists and is too small
       const numBytes = maxPossibleFloats * bytesPerElement
 
-      // Keep the old reusable allocation live until its replacement succeeds;
-      // otherwise a failed grow leaves pointBuffer holding a freed pointer.
-      const replacement = allocateWasmHeap( this.wasmModule, numBytes )
-
       if (pointer) {
+        const ownedBuffer = this.pointBuffer?.pointer === pointer ?
+          this.pointBuffer : null
+        if ( ownedBuffer !== null ) {
+          this.pointBuffer = null
+        }
         try {
           this.wasmModule._free(pointer)
         } catch ( error ) {
-          releaseQuietly( () => this.wasmModule._free(replacement) )
+          if ( ownedBuffer !== null ) {
+            this.pointBuffer = ownedBuffer
+          }
           throw error
         }
       }
 
-      pointer = replacement
+      pointer = allocateWasmHeap( this.wasmModule, numBytes )
       capacity = maxPossibleFloats
+      this.pointBuffer = { pointer, length: 0, capacity }
     }
 
     // Read the current buffer after allocation. HEAPF64 can be a detached

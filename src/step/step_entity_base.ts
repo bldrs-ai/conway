@@ -1,5 +1,5 @@
 import { ParseBuffer } from '../../dependencies/conway-geom/interface/parse_buffer'
-import { wasmAddress } from '../core/wasm_heap'
+import { wasmAddress } from '../core/wasm_address'
 import { Entity } from '../core/entity'
 import { EntityDescription, EntityFieldsDescription } from '../core/entity_description'
 import { EntityFieldDescription } from '../core/entity_field_description'

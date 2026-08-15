@@ -3,7 +3,7 @@ import {
   GeometryObject,
 } from '../../index'
 import { Vector3 } from '../../../dependencies/conway-geom'
-import { wasmAddress } from '../../core/wasm_heap'
+import { wasmAddress } from '../../core/wasm_address'
 import { CanonicalMaterial } from '../../index'
 import {
   FlatMesh,

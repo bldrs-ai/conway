@@ -198,8 +198,7 @@ import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
 import Logger from '../logging/logger'
 import {
-  allocateWasmHeap, arraysToWasmHeap, arrayToWasmHeap, freeAll, releaseQuietly,
-  withRelease,
+  allocateWasmHeap, arraysToWasmHeap, arrayToWasmHeap, freeAll, withRelease,
 } from '../core/wasm_heap'
 // import fs from 'fs'
 import Environment, { EnvironmentType } from '../utilities/environment'
@@ -3809,24 +3808,31 @@ export class IfcGeometryExtraction {
     // Free the old buffer if it exists and is too small
       const numBytes = maxPossibleFloats * bytesPerElement
 
-      // Allocate before releasing the reusable buffer. If allocation fails,
-      // pointBuffer must continue to own a valid pointer rather than a freed
-      // one that cleanup later frees a second time.
-      const replacement = allocateWasmHeap( this.wasmModule, numBytes )
-
       if (pointer) {
+        // Drop class ownership before freeing. Allocating first briefly needs
+        // both buffers resident, which can make a grow fail precisely under
+        // the memory pressure this path is intended to survive.
+        const ownedBuffer = this.pointBuffer?.pointer === pointer ?
+          this.pointBuffer : null
+        if ( ownedBuffer !== null ) {
+          this.pointBuffer = null
+        }
         try {
           this.wasmModule._free(pointer)
         } catch ( error ) {
-          // The replacement is not published until the old allocation is
-          // released. Do not strand it if that release itself fails.
-          releaseQuietly( () => this.wasmModule._free(replacement) )
+          if ( ownedBuffer !== null ) {
+            this.pointBuffer = ownedBuffer
+          }
           throw error
         }
       }
 
-      pointer = replacement
+      pointer = allocateWasmHeap( this.wasmModule, numBytes )
       capacity = maxPossibleFloats
+
+      // Publish ownership before constructing/filling the view, so a later
+      // exception cannot strand the new allocation.
+      this.pointBuffer = { pointer, length: 0, capacity }
     }
 
     // Construct from the current heap buffer. HEAPF64 may still be a detached
