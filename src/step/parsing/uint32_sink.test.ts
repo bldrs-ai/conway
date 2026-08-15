@@ -13,7 +13,7 @@ import {
   IfcIndexedPolygonalFaceWithVoids,
   IfcPolygonalFaceSet,
 } from '../../ifc/ifc4_gen/index'
-import { Uint32Sink } from './uint32_sink'
+import { Uint32Sink, extractUnsignedIntegerListAt } from './uint32_sink'
 
 describe( 'Uint32Sink', () => {
 
@@ -30,6 +30,24 @@ describe( 'Uint32Sink', () => {
 
     expect( sink.length ).toBe( 10 )
     expect( Array.from( sink.view ) ).toEqual( [ 0, 3, 6, 9, 12, 15, 18, 21, 24, 27 ] )
+  } )
+
+  test( 'extractUnsignedIntegerListAt parses a plain CoordIndex list', () => {
+
+    const sink = new Uint32Sink( 4 )
+    const bytes = new TextEncoder().encode( '(1,2,3,4)' )
+
+    expect( extractUnsignedIntegerListAt( bytes, 0, bytes.length, sink ) ).toBe( 4 )
+    expect( Array.from( sink.view ) ).toEqual( [ 1, 2, 3, 4 ] )
+  } )
+
+  test( 'extractUnsignedIntegerListAt refuses a real', () => {
+
+    const sink = new Uint32Sink( 4 )
+    const bytes = new TextEncoder().encode( '(1,2.5,3)' )
+
+    expect( extractUnsignedIntegerListAt( bytes, 0, bytes.length, sink ) )
+        .toBeUndefined()
   } )
 
   test( 'reset drops elements but keeps capacity for reuse', () => {

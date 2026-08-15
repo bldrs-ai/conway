@@ -1152,6 +1152,7 @@ export class IfcGeometryExtraction {
     // abandons the whole faceset back to the getter path below, so
     // correctness never depends on the fast path's coverage.
     let fastPathOk = true
+    let hintLocalID: number | undefined
 
     const facesWalked = entity.forEachReferenceInField(
         FACES_FIELD_OFFSET,
@@ -1164,8 +1165,15 @@ export class IfcGeometryExtraction {
             return false
           }
 
-          const count = this.model.extractIntegerArrayByExpressIDInto(
-              expressID,
+          const localID = this.model.resolveExpressID( expressID, hintLocalID )
+
+          if ( localID === void 0 ) {
+            fastPathOk = false
+            return false
+          }
+
+          const count = this.model.extractIntegerArrayByLocalIDInto(
+              localID,
               COORD_INDEX_FIELD_OFFSET,
               EntityTypesIfc.IFCINDEXEDPOLYGONALFACE,
               allIndices)
@@ -1174,6 +1182,8 @@ export class IfcGeometryExtraction {
             fastPathOk = false
             return false
           }
+
+          hintLocalID = localID
 
           polygonalFaceBufferOffsets.push(allIndices.length - count)
           startIndicesBufferOffsets.push(allStartIndices.length)

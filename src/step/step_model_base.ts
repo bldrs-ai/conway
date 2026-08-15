@@ -426,15 +426,52 @@ implements Iterable<BaseEntity>, Model {
    * @return {number | undefined} Count appended, or undefined when the
    * fast path does not apply and the caller must fall back.
    */
-  public extractIntegerArrayByExpressIDInto(
+  /**
+   * Resolve an express ID to a local ID, using `hintLocalID + 1` when
+   * the next record is the one we want. Tessellated Faces lists are
+   * sequential (PSB: every faceset), so this turns 9.1M interpolation
+   * searches into one per faceset.
+   *
+   * @param expressID The referenced record.
+   * @param hintLocalID Local ID of the previous resolve, if any.
+   * @return {number | undefined} The local ID, or undefined if unknown.
+   */
+  public resolveExpressID(
       expressID: number,
+      hintLocalID?: number ): number | undefined {
+
+    if ( hintLocalID !== void 0 ) {
+
+      const next = hintLocalID + 1
+
+      if ( next < this.firstInlineElement_ &&
+        this.expressID_[ next ] === expressID ) {
+        return next
+      }
+    }
+
+    return this.expressIDMap_.get( expressID )
+  }
+
+
+  /**
+   * Append a local record's unsigned-integer list field into `sink`
+   * without an express-ID lookup. See extractIntegerArrayByExpressIDInto.
+   *
+   * @param localID The record's local ID.
+   * @param offset The field's vtable offset.
+   * @param expectedTypeID The type the record must be.
+   * @param sink Receives the appended values.
+   * @return {number | undefined} Count appended, or undefined when the
+   * fast path does not apply.
+   */
+  public extractIntegerArrayByLocalIDInto(
+      localID: number,
       offset: number,
       expectedTypeID: EntityTypeIDs,
       sink: Uint32Sink ): number | undefined {
 
-    const localID = this.expressIDMap_.get( expressID )
-
-    if ( localID === void 0 || localID >= this.count_ ) {
+    if ( localID >= this.count_ ) {
       return void 0
     }
 
@@ -477,6 +514,34 @@ implements Iterable<BaseEntity>, Model {
     // same end bound the generated array getters use.
     return extractIntegerArrayAt(
         buffer, vtable[ ( element.vtableIndex as number ) + offset ], buffer.length, sink )
+  }
+
+
+  /**
+   * Append a referenced record's unsigned-integer list field into `sink`
+   * without materialising the referenced entity.
+   *
+   * @param expressID The referenced record's express ID.
+   * @param offset The field's vtable offset within the record.
+   * @param expectedTypeID The type the record must be.
+   * @param sink Receives the appended values.
+   * @return {number | undefined} Count appended, or undefined when the
+   * fast path does not apply.
+   */
+  public extractIntegerArrayByExpressIDInto(
+      expressID: number,
+      offset: number,
+      expectedTypeID: EntityTypeIDs,
+      sink: Uint32Sink ): number | undefined {
+
+    const localID = this.expressIDMap_.get( expressID )
+
+    if ( localID === void 0 ) {
+      return void 0
+    }
+
+    return this.extractIntegerArrayByLocalIDInto(
+        localID, offset, expectedTypeID, sink )
   }
 
 
