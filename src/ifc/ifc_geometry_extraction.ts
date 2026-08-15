@@ -972,7 +972,6 @@ export class IfcGeometryExtraction {
    * @param entity The faceset.
    * @param temporary Is this a temporary (preview//operand) extraction?
    * @param isRelVoid Is this geometry a rel-void operand?
-   * @param indicesPerFace Index count of the last face processed.
    * @param allIndices Face indices, concatenated.
    * @param allStartIndices Per-face start indices.
    * @param polygonalFaceBufferOffsets Per-face offsets into allIndices.
@@ -983,7 +982,6 @@ export class IfcGeometryExtraction {
       entity: IfcPolygonalFaceSet,
       temporary: boolean,
       isRelVoid: boolean,
-      indicesPerFace: number,
       allIndices: Uint32Sink,
       allStartIndices: Uint32Sink,
       polygonalFaceBufferOffsets: Uint32Sink,
@@ -1015,6 +1013,12 @@ export class IfcGeometryExtraction {
       startIndicesBufferOffsetsArray,
     ] )
 
+    // A throw here used to strand all four heap pointers plus the pooled
+    // parse buffer, once per faceset (15,777 on PSB — a leak large enough
+    // to cause the exhaustion it would then be blamed on). withRelease
+    // reclaims them; it suppresses a release failure only while something
+    // is already unwinding, so a wasm-runtime fault is not replaced by a
+    // generic teardown error in the per-record catch upstream.
     const geometry = withRelease(
       () => {
 
@@ -1053,6 +1057,8 @@ export class IfcGeometryExtraction {
                 startIndicesBufferOffsetsArrayPtr ),
             () => pointsArrayNative.delete() )
       },
+      // freeAll, not four statements in one closure: there the first
+      // failure would abandon the other three.
       () => freeAll( this.wasmModule, [
         indicesArrayPtr,
         startIndicesArrayPtr,
@@ -1141,8 +1147,6 @@ export class IfcGeometryExtraction {
     polygonalFaceBufferOffsets.reset()
     startIndicesBufferOffsets.reset()
 
-    let indicesPerFace: number = -1
-
     // Fast path: read each face's CoordIndex straight from its record,
     // never constructing the 9M+ IfcIndexedPolygonalFace entities a
     // large tessellated model would otherwise materialise (and retain,
@@ -1188,14 +1192,13 @@ export class IfcGeometryExtraction {
           polygonalFaceBufferOffsets.push(allIndices.length - count)
           startIndicesBufferOffsets.push(allStartIndices.length)
           allStartIndices.push(0)
-          indicesPerFace = count
 
           return true
         })
 
     if (fastPathOk && facesWalked) {
       this.finishPolygonalFaceSet_(
-          entity, temporary, isRelVoid, indicesPerFace,
+          entity, temporary, isRelVoid,
           allIndices, allStartIndices,
           polygonalFaceBufferOffsets, startIndicesBufferOffsets)
 
@@ -1207,7 +1210,6 @@ export class IfcGeometryExtraction {
     allStartIndices.reset()
     polygonalFaceBufferOffsets.reset()
     startIndicesBufferOffsets.reset()
-    indicesPerFace = -1
 
     // Prepare indices and start indices for all faces
     entity.Faces.forEach((polygonalFace) => {
@@ -1221,7 +1223,7 @@ export class IfcGeometryExtraction {
 
       if (polygonalFace instanceof IfcIndexedPolygonalFaceWithVoids) {
         // Voided faces are rare; keep the straightforward getter path.
-        indicesPerFace = polygonalFace.CoordIndex.length
+        const indicesPerFace = polygonalFace.CoordIndex.length
 
         allStartIndices.push(0)
         coordIndex += indicesPerFace
@@ -1242,13 +1244,13 @@ export class IfcGeometryExtraction {
       } else {
         // CoordIndex is vtable offset 0 on IfcIndexedPolygonalFace (see
         // its generated getter) — parsed in place, never allocated or cached.
-        indicesPerFace = polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
+        polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
         allStartIndices.push(0)
       }
     })
 
     this.finishPolygonalFaceSet_(
-        entity, temporary, isRelVoid, indicesPerFace,
+        entity, temporary, isRelVoid,
         allIndices, allStartIndices,
         polygonalFaceBufferOffsets, startIndicesBufferOffsets)
 

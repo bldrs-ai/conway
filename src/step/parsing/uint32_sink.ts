@@ -148,7 +148,8 @@ export function extractIntegerArrayAt(
 /**
  * Fast path for `(1,2,3,4)` / `(1, 2, 3, 4)` — the CoordIndex shape.
  * Digits only, no comments, no reals. Returns undefined when the field
- * is not that shape so the caller can use the general parser.
+ * is not that shape so the caller can use the general parser. A failed
+ * parse does not leave partial values in `sink`.
  *
  * @param buffer Record window.
  * @param cursor Start of the field.
@@ -162,6 +163,8 @@ export function extractUnsignedIntegerListAt(
     cursor: number,
     endCursor: number,
     sink: Uint32Sink ): number | undefined {
+
+  const marked = sink.length
 
   while ( cursor < endCursor && WHITESPACE.has( buffer[ cursor ] ) ) {
     ++cursor
@@ -190,6 +193,7 @@ export function extractUnsignedIntegerListAt(
     }
 
     if ( cursor >= endCursor ) {
+      sink.truncate( marked )
       return void 0
     }
 
@@ -200,6 +204,7 @@ export function extractUnsignedIntegerListAt(
     if ( count > 0 ) {
 
       if ( buffer[ cursor ] !== COMMA ) {
+        sink.truncate( marked )
         return void 0
       }
 
@@ -210,6 +215,7 @@ export function extractUnsignedIntegerListAt(
       }
 
       if ( cursor >= endCursor ) {
+        sink.truncate( marked )
         return void 0
       }
     }
@@ -217,6 +223,7 @@ export function extractUnsignedIntegerListAt(
     const digit = buffer[ cursor ] - ZERO
 
     if ( digit < 0 || digit > 9 ) {
+      sink.truncate( marked )
       return void 0
     }
 
@@ -239,5 +246,6 @@ export function extractUnsignedIntegerListAt(
     ++count
   }
 
+  sink.truncate( marked )
   return void 0
 }

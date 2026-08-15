@@ -394,39 +394,6 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
-   * Populate a raw vtable entry for a particular element, extra
-   * 
-   * @param element The raw elment to populate the vtable entry for.
-   * @return {boolean} Did the vtable entry populate correctly?
-   */
-  /**
-   * Append a referenced record's unsigned-integer list field into `sink`
-   * without materialising the referenced entity.
-   *
-   * This is the reference-level twin of
-   * `StepEntityBase.extractIntegerArrayInto`, for hot loops that walk
-   * millions of small records (tessellated facesets) where constructing
-   * an entity per record dominates. It deliberately handles only the
-   * simple case and reports failure otherwise, so callers keep a
-   * correct fallback rather than this growing subtle special cases:
-   * the reference must resolve, be single-class (no multi-mapping),
-   * and be exactly `expectedTypeID`.
-   *
-   * Field 0 is the data-block start the parser stored in `address_`
-   * (after `TYPE(`). Reading it from the columns skips the descriptor
-   * and vtable `entry()` would retain — on a 9 M-face model those are
-   * the objects the faceset path is trying not to build. Non-zero
-   * offsets still go through a vtable, because only field 0 has that
-   * address identity.
-   *
-   * @param expressID The referenced record's express ID.
-   * @param offset The field's vtable offset within the record.
-   * @param expectedTypeID The type the record must be.
-   * @param sink Receives the appended values.
-   * @return {number | undefined} Count appended, or undefined when the
-   * fast path does not apply and the caller must fall back.
-   */
-  /**
    * Resolve an express ID to a local ID, using `hintLocalID + 1` when
    * the next record is the one we want. Tessellated Faces lists are
    * sequential (PSB: every faceset), so this turns 9.1M interpolation
@@ -456,7 +423,21 @@ implements Iterable<BaseEntity>, Model {
 
   /**
    * Append a local record's unsigned-integer list field into `sink`
-   * without an express-ID lookup. See extractIntegerArrayByExpressIDInto.
+   * without an express-ID lookup. The reference-level twin of
+   * `StepEntityBase.extractIntegerArrayInto`, for hot loops that walk
+   * millions of small records (tessellated facesets) where constructing
+   * an entity per record dominates. It deliberately handles only the
+   * simple case and reports failure otherwise, so callers keep a
+   * correct fallback rather than this growing subtle special cases:
+   * the record must be single-class (no multi-mapping) and exactly
+   * `expectedTypeID`.
+   *
+   * Field 0 is the data-block start the parser stored in `address_`
+   * (after `TYPE(`). Reading it from the columns skips the descriptor
+   * and vtable `entry()` would retain — on a 9 M-face model those are
+   * the objects the faceset path is trying not to build. Non-zero
+   * offsets still go through a vtable, because only field 0 has that
+   * address identity.
    *
    * @param localID The record's local ID.
    * @param offset The field's vtable offset.

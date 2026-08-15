@@ -41,13 +41,16 @@ describe( 'Uint32Sink', () => {
     expect( Array.from( sink.view ) ).toEqual( [ 1, 2, 3, 4 ] )
   } )
 
-  test( 'extractUnsignedIntegerListAt refuses a real', () => {
+  test( 'extractUnsignedIntegerListAt refuses a real and leaves the sink clean', () => {
 
     const sink = new Uint32Sink( 4 )
     const bytes = new TextEncoder().encode( '(1,2.5,3)' )
 
+    sink.push( 9 )
+
     expect( extractUnsignedIntegerListAt( bytes, 0, bytes.length, sink ) )
         .toBeUndefined()
+    expect( Array.from( sink.view ) ).toEqual( [ 9 ] )
   } )
 
   test( 'reset drops elements but keeps capacity for reuse', () => {
