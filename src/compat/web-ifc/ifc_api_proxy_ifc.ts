@@ -78,6 +78,8 @@ interface IfcProxyLoadState {
   scene: IfcSceneBuilder
   conwayGeometry: IfcGeometryExtraction
   geometryTimeInMs: number
+  /** Parse tracker, kept so the deferred batch pump can emit Geometry. */
+  tracker?: ProgressTracker
 }
 
 /**
@@ -101,6 +103,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Was this model opened without extraction (DEFER_GEOMETRY)? */
   private deferredMode_: boolean = false
+
+  /** Parse/load tracker — deferred opens resume it for the Geometry phase. */
+  private progressTracker_?: ProgressTracker
+
+  /** True once beginPhase('geometry') has fired for this deferred pump. */
+  private geometryPhaseStarted_: boolean = false
 
   /** Deferred-mode product worklist (file order), lazily enumerated. */
   private demandProducts_?: number[]
@@ -199,6 +207,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.conwaywasm = loadState.conwaywasm
     this.conwayGeometry_ = loadState.conwayGeometry
     this.deferredMode_ = loadState.deferred === true
+    this.progressTracker_ = loadState.tracker
 
     const statistics = Logger.getStatistics(modelID)
 
@@ -823,6 +832,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         scene: conwayGeometry.scene,
         conwayGeometry,
         geometryTimeInMs: 0,
+        tracker,
       }
     }
 
@@ -1535,16 +1545,25 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.demandAggregatesCursor_ = 0
     }
 
+    const products = this.demandProducts_ ?? []
+    const aggregates = this.demandAggregates_ ?? []
+    const totalWork = products.length + aggregates.length
+
+    if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
+      this.progressTracker_.beginPhase('geometry', 'products', totalWork)
+      this.geometryPhaseStarted_ = true
+    }
+
     const budget = Math.max(batchSize, 1)
     const end = Math.min(
         this.demandCursor_ + budget,
-        this.demandProducts_.length)
+        products.length)
 
     let extracted = 0
 
     for (; this.demandCursor_ < end; ++this.demandCursor_) {
 
-      const localID = this.demandProducts_[this.demandCursor_]
+      const localID = products[this.demandCursor_]
 
       if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
         ++extracted
@@ -1556,9 +1575,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // the same per-call budget — batch-by-batch, not as one end-of-load
     // stall — so aggregate parts stream in cut, exactly once, with
     // final content (see demandAggregates_).
-    const aggregates = this.demandAggregates_ ?? []
-
-    if (this.demandCursor_ >= this.demandProducts_.length &&
+    if (this.demandCursor_ >= products.length &&
         this.demandAggregatesCursor_ < aggregates.length) {
 
       const aggregatesEnd = Math.min(
@@ -1578,10 +1595,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.streamNewMeshes_(meshCallback)
     }
 
+    const remaining = (products.length - this.demandCursor_) +
+        (aggregates.length - this.demandAggregatesCursor_)
+
+    if (this.progressTracker_ !== void 0) {
+      const completed = totalWork - remaining
+      if (remaining === 0) {
+        this.progressTracker_.endPhase(totalWork)
+      } else {
+        this.progressTracker_.update(completed)
+      }
+    }
+
     return {
       extracted,
-      remaining: (this.demandProducts_.length - this.demandCursor_) +
-        (aggregates.length - this.demandAggregatesCursor_),
+      remaining,
     }
   }
 
