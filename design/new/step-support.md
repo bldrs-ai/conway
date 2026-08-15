@@ -56,7 +56,7 @@ work.
 |---|------|----------|-------|
 | 1 | Public API surface | High | `src/index.ts` exports IFC types only. AP214 model / extraction / parser need stable named exports. |
 | 2 | Regression coverage | High | No AP21x analog of `ifc_regression_main.ts` or `ifc_regression_batch_main.ts`. The 47-CSV golden corpus in `regression/test_models/` is IFC-only. |
-| 3 | AP203 fall-through correctness | Medium | The loader logs `"AP203 Step Detected, using AP214 loader"` and reuses the AP214 parser. Real AP203 entities may diverge — needs a sweep across known AP203 exports. |
+| 3 | AP203 fall-through correctness | Medium | The loader logs `"AP203 Step Detected, using AP214 loader"` and reuses the AP214 parser. Real AP203 entities may diverge — needs a sweep across known AP203 exports. Now tracked as #503. |
 | 4 | AP242 | Medium | Not implemented. ISO 10303-242 supersets AP214 and is the modern PMI-bearing target; no detection, no entities, no parser. |
 | 5 | Test models | Medium | `data/` now carries 9 STEP fixtures (incl. AP203/AP242 header minima, the AS1 assembly, and a CTC properties reduction). Still need broader *geometry* coverage: real-world AP203 CAD exports, AP242 PMI samples, the full NIST CAx-IF corpus (which lives in `test-models/step/nist/`, not `data/`). |
 | 6 | AP214 test depth | Low | The metadata track added `ap214_product_structure_extraction.test` + `ap214_property_extraction.test` (and occurrence-path geometry tests, PR #353) on top of `ap214_step_model.test.ts` / `ap214_geometry_extraction.test.ts`. Still missing equivalents for block extraction and full scene-builder coverage. |
@@ -133,11 +133,109 @@ work.
 - [ ] Document expected AP214/IFC ratio at equivalent geometric
       complexity, so future regressions are visible
 
+## STEP geometry semantics — field notes from the Aug 2026 burn-down
+
+Durable findings from the geometry-correctness issue sweep (#458–#502 and
+the conway-geom fixes they pulled in). These are spec- and
+architecture-level facts that cost real debugging time to establish;
+bug-specific history stays on the issues.
+
+### Closed edges span their whole basis curve
+
+An `EDGE_CURVE` whose start and end reference the **same** `VERTEX_POINT`
+is a closed edge, and ISO 10303-42 reads it as spanning the *entire*
+basis curve — trimming it by its endpoint positions collapses it to a
+point. `isWholeCurveEdge` in `ap214_geometry_extraction.ts` gates the
+recovery: it originally recognized only a b-spline control-point
+heuristic and was extended to identical-vertex edges over any curve type
+(#502). This is not exotic input — the OCCT exporter family writes torus
+equators exactly this way (`EDGE_CURVE(#v,#v)` over
+`SURFACE_CURVE(CIRCLE)`), which is what kept every torus at half
+coverage in #461.
+
+Relatedly, closed surfaces are often bounded by **seam edges walked in
+both directions**, so the loop's *net* winding around the axis cancels
+to zero. Detecting "this bound covers the full turn" needs the winding
+*excursion* — running max minus min of the cumulative wrapped deltas —
+not the net (conway-geom#169).
+
+### Revolution faces: the sweep angle cannot come from centroids
+
+`TriangulateRevolution`'s fallback measured the swept angle from one
+centroid per boundary edge; the centroid of a full circle around the
+axis lies **on** the axis and carries no angular information, so a
+torus-style face measured a zero span. The recovery (conway-geom#169)
+re-measures from the boundary samples themselves — winding excursion
+plus `largestCircularGap` over both theta and profile-arclength — and
+observes the degenerate-bound convention: a bound with no angular spread
+(the seam, or the profile itself) means *covers the whole surface*, the
+same convention the sphere's `VERTEX_LOOP` expresses one dimension down
+(conway-geom#160). Known limitation: antipodal two-equator bounds tie
+the gap choice (conway-geom#173).
+
+### Spherical faces: pole placement decides whether blends survive
+
+conway-geom's planar dual-parameterization projects through a pole; a
+bound that touches the pole produces non-finite parameter coordinates,
+and the face is dropped (guarded in `manifold_utils.h` — the guard
+replaced a wasm-heap-exhausting CDT feed, see conway-geom#171). The
+practical consequence: **every ⅛-sphere corner blend** on a filleted box
+dies this way — `box-fillet-r8` renders at 79.3% of OCCT's reference
+area, missing exactly its 8 corners. This is a triangulation-side
+failure; it is *not* the pcurve planar-only gap (#505), which was ruled
+out by probing the pcurve reject path against the same fixtures.
+
+### Parser: `INF` literals and error-recovery blast radius
+
+Real exporters write bare `INF` in data lines (observed in the #412
+reproducer family). The parser's inline-instance recovery used to stamp
+the *current* express ID across the whole accumulated index on that
+path, silently corrupting every previously indexed element — one bad
+literal poisoned thousands of good entities (#500; 3,116 entities
+recovered on the reproducer). The structural fact worth keeping:
+`parseDataToModel` builds the model from whatever `itemIndex.elements`
+holds *regardless of the ParseResult code*, so index integrity **is**
+model integrity — recovery paths must never mutate already-indexed
+elements.
+
+### Measuring against OCCT ground truth
+
+bldrs-ai/Create's proof pipeline (`src/proof/` — `catalogue.ts`,
+`proofWorker.ts`, `run.ts`) authors STEP fixtures through OCCT and
+computes reference measures per fixture; running it writes
+`out/proof/proof.json` locally (`out/` is gitignored, so the numbers
+are regenerated by the pipeline, not read from a checked-in file —
+e.g. `box-fillet-r8` → `occtArea: 3891.398…`). Loading the same STEP
+through conway and summing triangle areas + bbox from `dumpToOBJ` gives
+a cheap parity number that caught the sphere, torus, and fillet
+families in turn. Worth promoting into the Phase 2 regression harness
+as a second signal beside digests — which means regenerating or
+vendoring the reference numbers as part of the harness, since there is
+no checked-in file to read.
+One caveat when using it: `Geometry::Reify`'s welder deletes zero-area
+triangles, so "the face added triangles" does not imply "the face dumps
+geometry" — an empty dump hashes to SHA-1's empty string
+(`da39a3ee…`), which is how a face can pass a triangle-count probe and
+still be invisible.
+
+### Error accounting
+
+`Logger` dedups on the exact message string, and `errors.csv` carries a
+`count` column that sizes each deduped row — a *constant* message
+therefore yields one row with an honest count. The pathology runs the
+other way: interpolating a per-record value (an express ID, a
+coordinate) into the message splits one family into N rows of count 1,
+burying the family's true size in noise (#495's motivating case). The
+sizing work (#495/#496) added `Logger.error(message, expressID?)` — new
+extraction errors should keep the message constant and pass the entity
+ID as the second argument, which preserves dedup *and* still makes the
+family attributable to specific entities.
+
 ## Open questions
 
 - AP203 strategy: indefinite AP214 fall-through, or its own gen tree
   once divergence is measured? Decision needed before Phase 4 work
-  starts.
+  starts (#503 tracks the measurement).
 - Test model storage: checked into `data/`, into a
   `regression/test_models_step/` corpus, or in a separate `test-models`
   repo similar to IFC's? Affects PR-time test budget and licensing.
@@ -145,4 +243,4 @@ work.
   Drives whether Phase 5 is gating.
 - CONFIG_CONTROL_DESIGN routing: currently aliases to AP214, but it's
   a profile of AP203, not AP214 — verify this isn't producing silent
-  parse errors on real CCD files.
+  parse errors on real CCD files. Filed as #503.
