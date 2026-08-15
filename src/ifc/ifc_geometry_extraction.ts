@@ -1015,70 +1015,44 @@ export class IfcGeometryExtraction {
       startIndicesBufferOffsetsArray,
     ] )
 
-    // Each acquisition is paired with its release through withRelease, which
-    // propagates a release failure on the success path and suppresses it only
-    // while something is already being unwound. Per-record extraction errors
-    // are caught upstream and expected on malformed models, so anything in
-    // here throwing used to strand all four pointers plus the pooled parse
-    // buffer and the two native objects, once per faceset - on a model with
-    // 15,777 facesets, a leak large enough to cause the exhaustion it would
-    // then be blamed on.
-    //
-    // Suppressing during unwinding matters as much as the release itself:
-    // every one of these re-enters the wasm runtime, and if that runtime is
-    // what failed, a throw here would REPLACE the in-flight error and the
-    // catch upstream would log a generic teardown failure instead of the heap
-    // diagnostic this change exists to produce.
     const geometry = withRelease(
       () => {
 
-          const polygonalFaceVector =
-            this.wasmModule.buildIndexedPolygonalFaceVector(
-                indicesArrayPtr,
-                indicesArray.length,
-                startIndicesArrayPtr,
-                polygonalFaceBufferOffsetsArrayPtr,
-                polygonalFaceBufferOffsetsArray.length,
-                startIndicesBufferOffsetsArrayPtr,
-                startIndicesBufferOffsetsArray.length)
+          const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
-          return withRelease(
+          // Packed triangulation: the four heap buffers are already the
+          // face index layout. Unpacking them into 9.1M IndexedPolygonalFace
+          // std::vectors was the rest of the PSB pump after #448, and is
+          // why feeding the ThreadPool lost (the pool was paying to copy
+          // those vectors).
+          const pointsArrayNative = withRelease(
             () => {
 
-              const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+              if ( !entity.Coordinates.extractParseBuffer(
+                  0,
+                  0,
+                  0,
+                  pointsParseBuffer,
+                  this.wasmModule,
+                  true ) ) {
 
-              // Released around parseVertexVector too, not just the extract:
-              // it is pooled, so leaking it also loses whatever resize() grew.
-              const pointsArrayNative = withRelease(
-                () => {
+                pointsParseBuffer.resize( 0 )
+              }
 
-                  if ( !entity.Coordinates.extractParseBuffer(
-                      0,
-                      0,
-                      0,
-                      pointsParseBuffer,
-                      this.wasmModule,
-                      true ) ) {
-
-                    pointsParseBuffer.resize( 0 )
-                  }
-
-                  return this.wasmModule.parseVertexVector( pointsParseBuffer )
-                },
-                () => this.conwayModel.freeParseBuffer( pointsParseBuffer ) )
-
-              return withRelease(
-                () => this.conwayModel.getPolygonalFaceSetGeometry( {
-                  indicesPerFace: indicesPerFace,
-                  points: pointsArrayNative,
-                  faces: polygonalFaceVector,
-                } ),
-                () => pointsArrayNative.delete() )
+              return this.wasmModule.parseVertexVector( pointsParseBuffer )
             },
-            () => polygonalFaceVector.delete() )
+            () => this.conwayModel.freeParseBuffer( pointsParseBuffer ) )
+
+          return withRelease(
+            () => this.conwayModel.getPolygonalFaceSetGeometryPacked(
+                pointsArrayNative,
+                indicesArrayPtr,
+                polygonalFaceBufferOffsetsArrayPtr,
+                polygonalFaceBufferOffsetsArray.length - 1,
+                startIndicesArrayPtr,
+                startIndicesBufferOffsetsArrayPtr ),
+            () => pointsArrayNative.delete() )
       },
-      // freeAll, not four statements in one closure: there the first failure
-      // would abandon the other three.
       () => freeAll( this.wasmModule, [
         indicesArrayPtr,
         startIndicesArrayPtr,
@@ -1094,11 +1068,10 @@ export class IfcGeometryExtraction {
       temporary: temporary,
     }
 
-    // add mesh to the list of mesh objects
-    if (!isRelVoid) {
-      this.model.geometry.add(canonicalMesh)
+    if ( !isRelVoid ) {
+      this.model.geometry.add( canonicalMesh )
     } else {
-      this.model.voidGeometry.add(canonicalMesh)
+      this.model.voidGeometry.add( canonicalMesh )
     }
 
     return ExtractResult.COMPLETE
