@@ -974,8 +974,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
 
-    await conwayGeometry.ensureResidentForDemandPrep()
-    conwayGeometry.prepareDemandExtraction()
+    const prepPins = await conwayGeometry.ensureResidentForDemandPrep()
+
+    try {
+      conwayGeometry.prepareDemandExtraction()
+    } finally {
+      model.unpinLocalIDs( prepPins )
+    }
 
     if (deferGeometry) {
 
@@ -1009,16 +1014,38 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         continue
       }
 
-      await conwayGeometry.ensureResidentForProductExtract( product.localID )
-      conwayGeometry.extractProductGeometryByLocalID( product.localID )
+      const pins =
+        await conwayGeometry.ensureResidentForProductExtract( product.localID )
+
+      try {
+        conwayGeometry.extractProductGeometryByLocalID( product.localID )
+      } catch ( error ) {
+        Logger.error(
+            `Error extracting product ${product.expressID}: ` +
+            `${error instanceof Error ? error.message : String( error )}` )
+      } finally {
+        model.unpinLocalIDs( pins )
+      }
+
       ++completed
       tracker?.update( completed )
     }
 
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
 
-      await conwayGeometry.ensureResidentForAggregateExtract( relAggregate )
-      conwayGeometry.extractRelAggregateGeometry( relAggregate )
+      const pins =
+        await conwayGeometry.ensureResidentForAggregateExtract( relAggregate )
+
+      try {
+        conwayGeometry.extractRelAggregateGeometry( relAggregate )
+      } catch ( error ) {
+        Logger.error(
+            `Error extracting aggregate ${relAggregate.expressID}: ` +
+            `${error instanceof Error ? error.message : String( error )}` )
+      } finally {
+        model.unpinLocalIDs( pins )
+      }
+
       ++completed
       tracker?.update( completed )
     }
@@ -1718,25 +1745,81 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
+    const totalWork = products.length + aggregates.length
     const budget = Math.max(batchSize, 1)
-    const productEnd = Math.min(this.demandCursor_ + budget, products.length)
+    let extracted = 0
 
-    for (let where = this.demandCursor_; where < productEnd; ++where) {
-      await this.conwayGeometry_.ensureResidentForProductExtract(products[where])
+    if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
+      this.progressTracker_.beginPhase('geometry', 'products', totalWork)
+      this.geometryPhaseStarted_ = true
     }
 
-    if (this.demandCursor_ >= products.length) {
+    const productEnd = Math.min(this.demandCursor_ + budget, products.length)
 
-      const remainingBudget = budget
-      const aggregatesEnd = Math.min(
-          this.demandAggregatesCursor_ + remainingBudget, aggregates.length)
+    for (; this.demandCursor_ < productEnd; ++this.demandCursor_) {
 
-      for (let where = this.demandAggregatesCursor_; where < aggregatesEnd; ++where) {
-        await this.conwayGeometry_.ensureResidentForAggregateExtract(aggregates[where])
+      const localID = products[this.demandCursor_]
+      const pins =
+        await this.conwayGeometry_.ensureResidentForProductExtract(localID)
+
+      try {
+        if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+          ++extracted
+        }
+      } catch (error) {
+        Logger.error(
+            `Error extracting product localID ${localID}: ` +
+            `${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        this.model[0].unpinLocalIDs(pins)
       }
     }
 
-    return this.pumpGeometryBatch_(batchSize, meshCallback)
+    if (this.demandCursor_ >= products.length &&
+        this.demandAggregatesCursor_ < aggregates.length) {
+
+      const aggregatesEnd = Math.min(
+          this.demandAggregatesCursor_ + (budget - extracted),
+          aggregates.length)
+
+      for (; this.demandAggregatesCursor_ < aggregatesEnd;
+        ++this.demandAggregatesCursor_) {
+
+        const relAggregate = aggregates[this.demandAggregatesCursor_]
+        const pins =
+          await this.conwayGeometry_.ensureResidentForAggregateExtract(
+              relAggregate)
+
+        try {
+          this.conwayGeometry_.extractRelAggregateGeometry(relAggregate)
+          ++extracted
+        } catch (error) {
+          Logger.error(
+              `Error extracting aggregate ${relAggregate.expressID}: ` +
+              `${error instanceof Error ? error.message : String(error)}`)
+        } finally {
+          this.model[0].unpinLocalIDs(pins)
+        }
+      }
+    }
+
+    if (meshCallback !== void 0) {
+      this.streamNewMeshes_(meshCallback)
+    }
+
+    const remaining = (products.length - this.demandCursor_) +
+        (aggregates.length - this.demandAggregatesCursor_)
+
+    if (this.progressTracker_ !== void 0) {
+      const completed = totalWork - remaining
+      if (remaining === 0) {
+        this.progressTracker_.endPhase(totalWork)
+      } else {
+        this.progressTracker_.update(completed)
+      }
+    }
+
+    return {extracted, remaining}
   }
 
   /**

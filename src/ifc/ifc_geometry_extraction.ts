@@ -6402,12 +6402,15 @@ export class IfcGeometryExtraction {
    * the relationship sweeps succeed on a windowed source. Call before
    * the first prepare on a model whose source is external.
    *
-   * @return {Promise<void>} Resolves when the prep set is resident.
+   * @return {Promise<Set<number>>} Pinned local IDs — caller must
+   * {@link StepModelBase.unpinLocalIDs} after prepare/extract.
    */
-  public async ensureResidentForDemandPrep(): Promise< void > {
+  public async ensureResidentForDemandPrep(): Promise< Set< number > > {
+
+    const pinned = new Set< number >()
 
     if ( !this.model.isSourceExternal ) {
-      return
+      return pinned
     }
 
     const prepTypes = [
@@ -6422,9 +6425,11 @@ export class IfcGeometryExtraction {
     for ( const type of prepTypes ) {
 
       for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
-        await this.model.ensureResidentClosureByExpressID( expressID )
+        await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
       }
     }
+
+    return pinned
   }
 
   /**
@@ -6433,12 +6438,16 @@ export class IfcGeometryExtraction {
    * (those are inverse — not written in the product record).
    *
    * @param localID The product's local ID.
-   * @return {Promise<void>} Resolves when the extract set is resident.
+   * @return {Promise<Set<number>>} Pinned local IDs — caller must unpin
+   * after extract.
    */
-  public async ensureResidentForProductExtract( localID: number ): Promise< void > {
+  public async ensureResidentForProductExtract(
+      localID: number,
+      seen?: Set< number > ):
+      Promise< Set< number > > {
 
     if ( !this.model.isSourceExternal ) {
-      return
+      return seen ?? new Set< number >()
     }
 
     const extra: number[] = []
@@ -6454,7 +6463,8 @@ export class IfcGeometryExtraction {
       extra.push( material )
     }
 
-    const visited = await this.model.ensureResidentClosureByLocalID( localID, extra )
+    const visited =
+      await this.model.ensureResidentClosureByLocalID( localID, extra, seen )
     const styleExtra: number[] = []
 
     for ( const visitedID of visited ) {
@@ -6473,8 +6483,10 @@ export class IfcGeometryExtraction {
     }
 
     if ( styleExtra.length > 0 ) {
-      await this.model.ensureResidentClosureByLocalID( localID, styleExtra )
+      await this.model.ensureResidentClosureByLocalID( localID, styleExtra, visited )
     }
+
+    return visited
   }
 
   /**
@@ -6483,32 +6495,36 @@ export class IfcGeometryExtraction {
    * and every related product.
    *
    * @param relAggregate The relationship to prefetch.
-   * @return {Promise<void>} Resolves when the extract set is resident.
+   * @return {Promise<Set<number>>} Pinned local IDs — caller must unpin
+   * after extract.
    */
   public async ensureResidentForAggregateExtract(
-      relAggregate: IfcRelAggregates ): Promise< void > {
+      relAggregate: IfcRelAggregates ): Promise< Set< number > > {
 
     if ( !this.model.isSourceExternal ) {
-      return
+      return new Set< number >()
     }
 
-    await this.model.ensureResidentClosureByLocalID( relAggregate.localID )
+    const pinned =
+      await this.model.ensureResidentClosureByLocalID( relAggregate.localID )
 
     const relating = relAggregate.RelatingObject
 
     if ( relating !== null && relating !== void 0 ) {
-      await this.ensureResidentForProductExtract( relating.localID )
+      await this.ensureResidentForProductExtract( relating.localID, pinned )
     }
 
     const related = relAggregate.RelatedObjects
 
     if ( related === null || related === void 0 ) {
-      return
+      return pinned
     }
 
     for ( const product of related ) {
-      await this.ensureResidentForProductExtract( product.localID )
+      await this.ensureResidentForProductExtract( product.localID, pinned )
     }
+
+    return pinned
   }
 
   /**

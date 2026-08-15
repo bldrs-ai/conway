@@ -211,25 +211,6 @@ const MIN_WINDOW = 4 * 1024
 
 
 /**
- * Cooperative twin of {@link buildIndexStreaming}: identical parse, window
- * and grow-and-restart behaviour (mirrored the same way the parser mirrors
- * parseDataBlock/parseDataBlockAsync), but the parse periodically yields to
- * the event loop so browsers repaint progress UI mid-parse instead of
- * flagging the tab as stalled (issue #301 §2 for the streamed path).
- *
- * @param source The byte source.
- * @param parser The STEP parser (typed to the schema).
- * @param pool Target window size in bytes.
- * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
- * @param sink Optional index sink (columnar builds).
- * @param onProgress Optional progress callback with the ABSOLUTE source byte
- * cursor (unlike the parser's window-relative cursor), so callers can report
- * `cursor / source.byteLength` directly.
- * @param yieldIntervalMs Minimum ms between event-loop yields.
- * @return {Promise<StreamingIndexResult>} The index, header, result and
- * diagnostics.
- */
-/**
  * Fill `into` from either a sync or async byte source. A sync `read`
  * resolves immediately; this is what lets the cooperative builder
  * parse from an OPFS `File.slice()` store without a worker.
@@ -252,6 +233,25 @@ async function readSource(
 }
 
 
+/**
+ * Cooperative twin of {@link buildIndexStreaming}: identical parse, window
+ * and grow-and-restart behaviour (mirrored the same way the parser mirrors
+ * parseDataBlock/parseDataBlockAsync), but the parse periodically yields to
+ * the event loop so browsers repaint progress UI mid-parse instead of
+ * flagging the tab as stalled (issue #301 §2 for the streamed path).
+ *
+ * @param source The byte source.
+ * @param parser The STEP parser (typed to the schema).
+ * @param pool Target window size in bytes.
+ * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
+ * @param sink Optional index sink (columnar builds).
+ * @param onProgress Optional progress callback with the ABSOLUTE source byte
+ * cursor (unlike the parser's window-relative cursor), so callers can report
+ * `cursor / source.byteLength` directly.
+ * @param yieldIntervalMs Minimum ms between event-loop yields.
+ * @return {Promise<StreamingIndexResult>} The index, header, result and
+ * diagnostics.
+ */
 export async function buildIndexStreamingAsync<TypeIDType>(
     source: ReadableByteSource,
     parser: StepParser<TypeIDType>,

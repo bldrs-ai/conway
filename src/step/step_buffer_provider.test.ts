@@ -118,6 +118,25 @@ describe('WindowedStepBufferProvider', () => {
     expect(() => provider.acquire(32, 8)).toThrow(StepBufferNotResidentError)
   })
 
+  test('pinRange holds a chunk across later ensures that would evict it', async () => {
+    const bytes = makeBytes(160)
+    const provider = new WindowedStepBufferProvider(new InMemoryStepByteStore(bytes), 16, 2)
+
+    await provider.ensureResident(0, 8)
+    provider.pinRange(0, 8)
+    await provider.ensureResident(16, 8)
+    await provider.ensureResident(32, 8)
+    await provider.ensureResident(48, 8)
+
+    expect(() => provider.acquire(0, 8)).not.toThrow()
+
+    provider.unpinRange(0, 8)
+    await provider.ensureResident(64, 8)
+    await provider.ensureResident(80, 8)
+
+    expect(() => provider.acquire(0, 8)).toThrow(StepBufferNotResidentError)
+  })
+
   test('de-duplicates concurrent in-flight chunk loads', async () => {
     const bytes = makeBytes(64)
     let reads = 0

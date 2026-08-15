@@ -734,13 +734,13 @@ implements Iterable<BaseEntity>, Model {
    *
    * @param localID Seed record.
    * @param extraLocalIDs Additional seeds (voids, styles, materials).
+   * @param seen Optional set to extend (also skips already-pinned IDs).
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
       localID: number,
-      extraLocalIDs?: Iterable<number> ): Promise< Set< number > > {
-
-    const seen = new Set< number >()
+      extraLocalIDs?: Iterable<number>,
+      seen: Set< number > = new Set< number >() ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -766,6 +766,7 @@ implements Iterable<BaseEntity>, Model {
       seen.add( id )
 
       await this.ensureResidentByLocalID( id )
+      this.pinByLocalID( id )
 
       for ( const expressID of this.scanRecordRefs_( id ) ) {
 
@@ -782,6 +783,54 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Hold a record's source range against windowed LRU eviction until
+   * {@link unpinByLocalID}. No-op while the source is fully resident.
+   *
+   * @param localID The record to pin.
+   */
+  public pinByLocalID( localID: number ): void {
+
+    if ( !this.isSourceExternal || localID >= this.count_ ) {
+      return
+    }
+
+    this.bufferProvider_.pinRange?.(
+        this.address_[ localID ], this.length_[ localID ] )
+  }
+
+
+  /**
+   * Drop one {@link pinByLocalID} hold.
+   *
+   * @param localID The record to unpin.
+   */
+  public unpinByLocalID( localID: number ): void {
+
+    if ( !this.isSourceExternal || localID >= this.count_ ) {
+      return
+    }
+
+    this.bufferProvider_.unpinRange?.(
+        this.address_[ localID ], this.length_[ localID ] )
+  }
+
+
+  /**
+   * Unpin every local ID in `localIDs` (best-effort; missing IDs are
+   * ignored). Use after {@link ensureResidentClosureByLocalID}, which
+   * pins as it walks.
+   *
+   * @param localIDs The records to unpin.
+   */
+  public unpinLocalIDs( localIDs: Iterable< number > ): void {
+
+    for ( const localID of localIDs ) {
+      this.unpinByLocalID( localID )
+    }
+  }
+
+
+  /**
    * Express-ID twin of {@link ensureResidentClosureByLocalID}. Unknown
    * IDs resolve to an empty visit set.
    *
@@ -791,19 +840,20 @@ implements Iterable<BaseEntity>, Model {
    */
   public async ensureResidentClosureByExpressID(
       expressID: number,
-      extraLocalIDs?: Iterable<number> ): Promise< Set< number > > {
+      extraLocalIDs?: Iterable<number>,
+      seen?: Set< number > ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
-      return new Set< number >()
+      return seen ?? new Set< number >()
     }
 
     const localID = this.expressIDMap_.get( expressID )
 
     if ( localID === void 0 ) {
-      return new Set< number >()
+      return seen ?? new Set< number >()
     }
 
-    return this.ensureResidentClosureByLocalID( localID, extraLocalIDs )
+    return this.ensureResidentClosureByLocalID( localID, extraLocalIDs, seen )
   }
 
 
