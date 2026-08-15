@@ -476,7 +476,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return next.value
       }
 
-      onProgress?.( next.value )
+      if ( typeof next.value === 'number' ) {
+        onProgress?.( next.value )
+      }
     }
   }
 
@@ -489,7 +491,8 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    *
    * @param input The input parsing buffer, positioned at the data section.
    * @param onRecordBoundary Called at each top-level record boundary with the
-   * buffer; the callback may rebase the buffer's window in place.
+   * buffer; the callback may rebase the buffer's window in place. Must be
+   * synchronous on this driver — a returned Promise is a caller bug.
    * @param onRecordIndexed Called as each top-level record is indexed, with
    * its localID, expressID and typeID (0 for external-mapping records) — the
    * seam for incremental semantic consumers (type index, roots registry,
@@ -500,7 +503,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    */
   public parseDataBlockStreamed(
       input: ParsingBuffer,
-      onRecordBoundary: ( input: ParsingBuffer ) => void,
+      onRecordBoundary: ( input: ParsingBuffer ) => void | Promise<void>,
       onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
       onProgress?: ParseProgressCallback,
       sink?: StepIndexSink<TypeIDType> ): BlockParseResult<TypeIDType> {
@@ -516,6 +519,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return next.value
       }
 
+      if ( typeof next.value !== 'number' ) {
+        throw new Error(
+            'parseDataBlockStreamed: async window slide requires parseDataBlockStreamedAsync' )
+      }
+
       onProgress?.( next.value )
     }
   }
@@ -529,7 +537,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    *
    * @param input The input parsing buffer, positioned at the data section.
    * @param onRecordBoundary Called at each top-level record boundary with the
-   * buffer; the callback may rebase the buffer's window in place.
+   * buffer; the callback may rebase the buffer's window in place. May return
+   * a Promise when the slide itself is I/O (an async ByteSource); this
+   * driver awaits it before the next record is lexed.
    * @param onRecordIndexed Called as each top-level record is indexed — see
    * parseDataBlockStreamed.
    * @param onProgress Optional byte-cursor progress callback.
@@ -540,7 +550,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    */
   public async parseDataBlockStreamedAsync(
       input: ParsingBuffer,
-      onRecordBoundary: ( input: ParsingBuffer ) => void,
+      onRecordBoundary: ( input: ParsingBuffer ) => void | Promise<void>,
       onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
       onProgress?: ParseProgressCallback,
       sink?: StepIndexSink<TypeIDType>,
@@ -558,6 +568,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
       if ( next.done === true ) {
         return next.value
+      }
+
+      if ( typeof next.value !== 'number' ) {
+        await next.value
+        continue
       }
 
       onProgress?.( next.value )
@@ -599,7 +614,9 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return next.value
       }
 
-      onProgress?.( next.value )
+      if ( typeof next.value === 'number' ) {
+        onProgress?.( next.value )
+      }
 
       if ( Date.now() - lastYield >= yieldIntervalMs ) {
         await yieldToEventLoop()
@@ -620,10 +637,10 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    */
   private* parseDataBlockIncremental(
       input: ParsingBuffer,
-      onRecordBoundary?: ( input: ParsingBuffer ) => void,
+      onRecordBoundary?: ( input: ParsingBuffer ) => void | Promise<void>,
       onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
       sink?: StepIndexSink<TypeIDType> ):
-      Generator<number, BlockParseResult<TypeIDType>, undefined> {
+      Generator<number | Promise<void>, BlockParseResult<TypeIDType>, undefined> {
 
     const indexResult: StepIndex<TypeIDType> = { elements: [] }
 
@@ -841,8 +858,14 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
       // Top-level record boundary: the rewind stack is empty and the cursor
       // sits at the next record's leading whitespace/`#`. A streaming driver
       // uses this to slide its moving window forward (see
-      // streaming_index_builder.ts). No-op on the resident path.
-      onRecordBoundary?.( input )
+      // streaming_index_builder.ts). No-op on the resident path. An async
+      // slide (OPFS File.slice / HTTP range) is yielded so the async
+      // driver can await it before the next record is lexed.
+      const slide = onRecordBoundary?.( input )
+
+      if ( slide !== void 0 && typeof ( slide as Promise<void> ).then === 'function' ) {
+        yield slide as Promise<void>
+      }
 
       if (!charws(HASH)) {
         if (tokenws(END_SECTION)) {

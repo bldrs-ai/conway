@@ -17,6 +17,8 @@
  */
 export {
   openStreamedIfcModel,
+  openStreamedIfcModelAsync,
+  openStreamedIfcModelFromStore,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
 } from '../ifc/ifc_stream_open'
@@ -26,7 +28,16 @@ export {
   StreamingColumnarIndexResult,
   StreamingIndexStats,
 } from '../step/parsing/streaming_index_builder'
-export { ByteSource, BufferByteSource } from '../step/parsing/byte_source'
+export {
+  ByteSource,
+  BufferByteSource,
+  AsyncByteSource,
+  ReadableByteSource,
+  StoreByteSource,
+  SyncAccessHandleByteSource,
+  SyncAccessHandleLike,
+} from '../step/parsing/byte_source'
+export { scanExpressRefs } from '../step/parsing/express_ref_scan'
 export {
   StepExternalByteStore,
   InMemoryStepByteStore,

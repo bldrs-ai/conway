@@ -1,7 +1,8 @@
-import { ByteSource } from '../step/parsing/byte_source'
+import { ByteSource, ReadableByteSource, StoreByteSource } from '../step/parsing/byte_source'
 import { StepIndexColumns } from '../step/parsing/columnar_index'
 import {
   buildColumnarIndexStreaming,
+  buildColumnarIndexStreamingAsync,
   StreamingIndexStats,
 } from '../step/parsing/streaming_index_builder'
 import { ParseResult, StepHeader } from '../step/parsing/step_parser'
@@ -122,4 +123,72 @@ export function openStreamedIfcModel(
     columns,
     stats,
   }
+}
+
+
+/**
+ * Cooperative twin of {@link openStreamedIfcModel}: the index build
+ * yields to the event loop and can fill windows from an async
+ * {@link ReadableByteSource}. Pass a {@link StoreByteSource} wrapping
+ * `store` to parse a file that is already in OPFS without ever
+ * holding it as one `ArrayBuffer`.
+ *
+ * @param source Sync or async parse source.
+ * @param store The random-access store the model reads from afterwards.
+ * @param options See {@link StreamedIfcOpenOptions} plus `onProgress`.
+ * @return {Promise<StreamedIfcOpen>} The model + header, columns, diagnostics.
+ */
+export async function openStreamedIfcModelAsync(
+    source: ReadableByteSource,
+    store: StepExternalByteStore,
+    options?: StreamedIfcOpenOptions & {
+      onProgress?: ( absoluteByteCursor: number ) => void
+    } ): Promise<StreamedIfcOpen> {
+
+  if ( store.byteLength !== source.byteLength ) {
+    throw new Error(
+        `Streaming store byteLength ${store.byteLength} does not match ` +
+        `source byteLength ${source.byteLength}` )
+  }
+
+  const { header, columns, result, stats } = await buildColumnarIndexStreamingAsync(
+      source,
+      IfcStepParser.Instance,
+      options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
+      options?.onRecordIndexed,
+      options?.onProgress )
+
+  if ( result !== ParseResult.COMPLETE ) {
+    return { model: void 0, result, header, columns, stats }
+  }
+
+  const provider = new WindowedStepBufferProvider(
+      store, options?.chunkBytes, options?.maxResidentChunks )
+
+  return {
+    model: new IfcStepModel( void 0, columns, provider ),
+    result,
+    header,
+    columns,
+    stats,
+  }
+}
+
+
+/**
+ * Open a windowed IFC model from a store alone — parse windows and
+ * post-parse reads share `store`. This is the M1b embedder entry for
+ * a file already sitting in OPFS.
+ *
+ * @param store The source of truth for the file bytes.
+ * @param options See {@link openStreamedIfcModelAsync}.
+ * @return {Promise<StreamedIfcOpen>} The model + header, columns, diagnostics.
+ */
+export function openStreamedIfcModelFromStore(
+    store: StepExternalByteStore,
+    options?: StreamedIfcOpenOptions & {
+      onProgress?: ( absoluteByteCursor: number ) => void
+    } ): Promise<StreamedIfcOpen> {
+
+  return openStreamedIfcModelAsync( new StoreByteSource( store ), store, options )
 }

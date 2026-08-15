@@ -142,4 +142,53 @@ describe( 'OpenModelStreamed', () => {
 
     expect( await api.OpenModelStreamed( garbage, SETTINGS ) ).toBe( -1 )
   }, 120000 )
+
+  test( 'OpenModelStream parses from a store without a resident buffer', async () => {
+
+    const store = new InMemoryStepByteStore( buffer )
+    const modelID = await api.OpenModelStream( store, SETTINGS )
+
+    expect( modelID ).toBeGreaterThanOrEqual( 0 )
+
+    const passthrough = api.getPassthrough( modelID )!
+
+    expect( passthrough.sourceIsExternal ).toBe( true )
+
+    const streamedID = await api.OpenModelStreamed( buffer, SETTINGS )
+
+    expect( captureMeshes( modelID ) ).toEqual( captureMeshes( streamedID ) )
+
+    api.CloseModel( modelID )
+    api.CloseModel( streamedID )
+  }, 240000 )
+
+  test( 'OpenModelStream + DEFER_GEOMETRY pumps via ExtractGeometryBatchAsync', async () => {
+
+    const store = new InMemoryStepByteStore( buffer )
+    const deferredID = await api.OpenModelStream(
+        store, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    expect( deferredID ).toBeGreaterThanOrEqual( 0 )
+
+    const captured: object[] = []
+
+    for ( ; ; ) {
+
+      const { extracted, remaining } = await api.ExtractGeometryBatchAsync(
+          deferredID, 8, ( mesh ) => {
+            captured.push( { expressID: mesh.expressID } )
+          } )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( captured.length ).toBeGreaterThan( 0 )
+
+    expect( () => api.ExtractGeometryBatch( deferredID, 8 ) )
+        .toThrow( /ExtractGeometryBatchAsync/ )
+
+    api.CloseModel( deferredID )
+  }, 240000 )
 } )

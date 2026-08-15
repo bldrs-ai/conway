@@ -107,6 +107,42 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api.CloseModel( deferredID )
   }, 240000 )
 
+  test( 'deferred pump emits a Geometry progress phase', async () => {
+
+    const events: { phase: string, completed: number, total?: number }[] = []
+    const deferredID = await api.OpenModelStreamed( buffer, {
+      ...SETTINGS,
+      DEFER_GEOMETRY: true,
+      ON_PROGRESS: ( event ) => {
+        events.push( {
+          phase: event.phase,
+          completed: event.completed,
+          total: event.total,
+        } )
+      },
+    } )
+
+    expect( deferredID ).toBeGreaterThanOrEqual( 0 )
+
+    for ( ; ; ) {
+      const { extracted, remaining } = api.ExtractGeometryBatch( deferredID, 7 )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    const parseEvents = events.filter( ( event ) => event.phase === 'dataParse' )
+    const geometryEvents = events.filter( ( event ) => event.phase === 'geometry' )
+
+    expect( parseEvents.length ).toBeGreaterThan( 0 )
+    expect( geometryEvents.length ).toBeGreaterThan( 0 )
+    expect( geometryEvents[ 0 ].completed ).toBe( 0 )
+    expect( geometryEvents[ geometryEvents.length - 1 ].completed ).
+        toBe( geometryEvents[ geometryEvents.length - 1 ].total )
+
+    api.CloseModel( deferredID )
+  }, 240000 )
+
   test( 'StreamAllMeshes on a deferred model drains the pump and matches classic', async () => {
 
     const classicID = api.OpenModel( buffer, SETTINGS )

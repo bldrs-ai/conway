@@ -79,6 +79,8 @@ interface Ap214ProxyLoadState {
   scene: AP214SceneBuilder
   conwayGeometry: AP214GeometryExtraction
   geometryTimeInMs: number
+  /** Parse tracker, kept so the deferred batch pump can emit Geometry. */
+  tracker?: ProgressTracker
 }
 
 /**
@@ -100,6 +102,12 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
   /** Was this model opened without extraction (DEFER_GEOMETRY)? */
   private deferredMode_: boolean = false
+
+  /** Parse/load tracker — deferred opens resume it for the Geometry phase. */
+  private progressTracker_?: ProgressTracker
+
+  /** True once beginPhase('geometry') has fired for this deferred pump. */
+  private geometryPhaseStarted_: boolean = false
 
   /** Has finishDemandExtraction run (deferred models, once)? */
   private demandFinished_: boolean = false
@@ -222,6 +230,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     this.conwaywasm = loadState.conwaywasm
     this.conwayGeometry_ = loadState.conwayGeometry
     this.deferredMode_ = loadState.deferred === true
+    this.progressTracker_ = loadState.tracker
 
     const statistics = Logger.getStatistics(modelID)
 
@@ -576,6 +585,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         scene: conwayGeometry.scene,
         conwayGeometry,
         geometryTimeInMs: 0,
+        tracker,
       }
     }
 
@@ -1308,8 +1318,22 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // any consumer knowing the schema.
     const units = Math.max(1, Math.floor(batchSize / AP214_UNITS_PER_PRODUCT_BATCH))
 
+    if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
+      this.progressTracker_.beginPhase(
+          'geometry', 'products', extraction.demandUnitCount)
+      this.geometryPhaseStarted_ = true
+    }
+
     const extracted = extraction.extractDemandUnitBatch(units)
     const remaining = extraction.demandUnitCount - extraction.demandUnitCursor
+
+    if (this.progressTracker_ !== void 0) {
+      if (remaining === 0) {
+        this.progressTracker_.endPhase(extraction.demandUnitCount)
+      } else {
+        this.progressTracker_.update(extraction.demandUnitCursor)
+      }
+    }
 
     if (remaining === 0 && !this.demandFinished_) {
       this.demandFinished_ = true

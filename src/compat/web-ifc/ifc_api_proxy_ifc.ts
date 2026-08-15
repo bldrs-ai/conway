@@ -15,7 +15,7 @@ import {
   RawLineData,
   Vector,
 } from './ifc_api'
-import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import { StepExternalByteStore, WindowedStepBufferProvider } from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
@@ -28,9 +28,10 @@ import { formatModelLine } from '../../core/progress_log'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
-import { BufferByteSource } from '../../step/parsing/byte_source'
+import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
 import {
   buildIndexStreamingAsync,
+  buildColumnarIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import {
@@ -78,6 +79,8 @@ interface IfcProxyLoadState {
   scene: IfcSceneBuilder
   conwayGeometry: IfcGeometryExtraction
   geometryTimeInMs: number
+  /** Parse tracker, kept so the deferred batch pump can emit Geometry. */
+  tracker?: ProgressTracker
 }
 
 /**
@@ -101,6 +104,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Was this model opened without extraction (DEFER_GEOMETRY)? */
   private deferredMode_: boolean = false
+
+  /** Parse/load tracker — deferred opens resume it for the Geometry phase. */
+  private progressTracker_?: ProgressTracker
+
+  /** True once beginPhase('geometry') has fired for this deferred pump. */
+  private geometryPhaseStarted_: boolean = false
 
   /** Deferred-mode product worklist (file order), lazily enumerated. */
   private demandProducts_?: number[]
@@ -199,6 +208,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.conwaywasm = loadState.conwaywasm
     this.conwayGeometry_ = loadState.conwayGeometry
     this.deferredMode_ = loadState.deferred === true
+    this.progressTracker_ = loadState.tracker
 
     const statistics = Logger.getStatistics(modelID)
 
@@ -431,6 +441,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         modelID, data, new ConwayGeometry(wasmModule), settings, true)
 
     return new IfcApiProxyIfc(modelID, data, wasmModule, settings, loadState)
+  }
+
+  /**
+   * M1b store-backed open: parse through a moving window over `store`
+   * and keep the model windowed from birth — the source is never held
+   * as one `ArrayBuffer`. Geometry extract pages product closures
+   * through {@link extractGeometryBatchAsync}.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcApiProxyIfc>} The constructed proxy.
+   */
+  public static async createFromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
+
+    const loadState = await IfcApiProxyIfc.parseColumnarFromStore(
+        modelID, store, new ConwayGeometry(wasmModule), settings,
+        settings?.DEFER_GEOMETRY === true )
+
+    return new IfcApiProxyIfc(modelID, new Uint8Array( 0 ), wasmModule, settings, loadState)
   }
 
   /**
@@ -823,6 +858,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         scene: conwayGeometry.scene,
         conwayGeometry,
         geometryTimeInMs: 0,
+        tracker,
       }
     }
 
@@ -857,6 +893,176 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       stepHeader,
       model,
       scene,
+      conwayGeometry,
+      geometryTimeInMs: endTime - startTime,
+    }
+  }
+
+
+  /**
+   * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
+   * source stays in `store`, parse windows are filled through it, and
+   * the model never holds a resident copy. Preview-during-parse is
+   * skipped (that channel needs a resident prefix). Deferred opens
+   * page prep closures before prepareDemandExtraction; non-deferred
+   * opens drain the demand pump with per-product residency.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param deferGeometry Skip extraction (Share demand pump).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarFromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const parser = IfcStepParser.Instance
+    const fileSize = store.byteLength
+
+    tracker?.beginPhase('headerParse', 'bytes', fileSize)
+
+    const headerLen = Math.min( fileSize, STREAMED_PARSE_POOL_BYTES )
+    const headerBytes = await store.read( 0, headerLen )
+    const [stepHeader, result0] = parser.parseHeader( new ParsingBuffer( headerBytes ) )
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    IfcApiProxyIfc.reportHeaderParseResult(result0, new ParsingBuffer( headerBytes ), modelID)
+
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+
+    const { result, columns } = await buildColumnarIndexStreamingAsync(
+        new StoreByteSource( store ),
+        parser,
+        STREAMED_PARSE_POOL_BYTES,
+        void 0,
+        parseTick )
+
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(fileSize)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStream]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const provider = new WindowedStepBufferProvider( store )
+    const model = new IfcStepModel( void 0, columns, provider )
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
+
+    const prepPins = await conwayGeometry.ensureResidentForDemandPrep()
+
+    try {
+      conwayGeometry.prepareDemandExtraction()
+    } finally {
+      model.unpinLocalIDs( prepPins )
+    }
+
+    if (deferGeometry) {
+
+      statistics?.setProductCount(model.typeCount(IfcProduct))
+
+      return {
+        conwaywasm,
+        deferred: true,
+        allTimeStart,
+        stepHeader,
+        model,
+        scene: conwayGeometry.scene,
+        conwayGeometry,
+        geometryTimeInMs: 0,
+        tracker,
+      }
+    }
+
+    tracker?.beginPhase('geometry', 'products')
+
+    const startTime = Date.now()
+
+    const aggregateTargets = conwayGeometry.aggregateTargetLocalIDs()
+    let completed = 0
+
+    tracker?.setPhaseTotal( model.typeCount( IfcProduct ) )
+
+    for ( const product of model.types( IfcProduct ) ) {
+
+      if ( aggregateTargets.has( product.localID ) ) {
+        continue
+      }
+
+      const pins =
+        await conwayGeometry.ensureResidentForProductExtract( product.localID )
+
+      try {
+        conwayGeometry.extractProductGeometryByLocalID( product.localID )
+      } catch ( error ) {
+        Logger.error(
+            `Error extracting product ${product.expressID}: ` +
+            `${error instanceof Error ? error.message : String( error )}` )
+      } finally {
+        model.unpinLocalIDs( pins )
+      }
+
+      ++completed
+      tracker?.update( completed )
+    }
+
+    for ( const relAggregate of model.types( IfcRelAggregates ) ) {
+
+      const pins =
+        await conwayGeometry.ensureResidentForAggregateExtract( relAggregate )
+
+      try {
+        conwayGeometry.extractRelAggregateGeometry( relAggregate )
+      } catch ( error ) {
+        Logger.error(
+            `Error extracting aggregate ${relAggregate.expressID}: ` +
+            `${error instanceof Error ? error.message : String( error )}` )
+      } finally {
+        model.unpinLocalIDs( pins )
+      }
+
+      ++completed
+      tracker?.update( completed )
+    }
+
+    const endTime = Date.now()
+
+    tracker?.endPhase()
+
+    statistics?.setProductCount(model.typeCount(IfcProduct))
+    statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+
+    return {
+      conwaywasm,
+      allTimeStart,
+      stepHeader,
+      model,
+      scene: conwayGeometry.scene,
       conwayGeometry,
       geometryTimeInMs: endTime - startTime,
     }
@@ -1501,7 +1707,130 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {extracted: 0, remaining: 0}
     }
 
-    if (this.demandProducts_ === void 0) {
+    if (this.model[0].isSourceExternal) {
+      throw new Error(
+          'ExtractGeometryBatch is synchronous and cannot page a windowed ' +
+          'source — use ExtractGeometryBatchAsync' )
+    }
+
+    this.ensureDemandWorklists_()
+
+    return this.pumpGeometryBatch_(batchSize, meshCallback)
+  }
+
+  /**
+   * Async twin of {@link extractGeometryBatch}: pages each product's
+   * `#ref` closure before extracting it, so a model opened through
+   * {@link IfcApiProxyIfc.createFromStore} (windowed from birth) can
+   * be pumped. Safe on a resident source (prefetch is a no-op).
+   *
+   * @param batchSize Max products to extract this call (min 1).
+   * @param meshCallback Receives each newly-extracted product's mesh.
+   * @return {Promise<object>} `{extracted, remaining}`.
+   */
+  async extractGeometryBatchAsync(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ):
+      Promise<{extracted: number, remaining: number}> {
+
+    if (!this.deferredMode_) {
+      return {extracted: 0, remaining: 0}
+    }
+
+    this.ensureDemandWorklists_()
+
+    if (!this.model[0].isSourceExternal) {
+      return this.pumpGeometryBatch_(batchSize, meshCallback)
+    }
+
+    const products = this.demandProducts_ ?? []
+    const aggregates = this.demandAggregates_ ?? []
+    const totalWork = products.length + aggregates.length
+    const budget = Math.max(batchSize, 1)
+    let extracted = 0
+
+    if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
+      this.progressTracker_.beginPhase('geometry', 'products', totalWork)
+      this.geometryPhaseStarted_ = true
+    }
+
+    const productEnd = Math.min(this.demandCursor_ + budget, products.length)
+
+    for (; this.demandCursor_ < productEnd; ++this.demandCursor_) {
+
+      const localID = products[this.demandCursor_]
+      const pins =
+        await this.conwayGeometry_.ensureResidentForProductExtract(localID)
+
+      try {
+        if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+          ++extracted
+        }
+      } catch (error) {
+        Logger.error(
+            `Error extracting product localID ${localID}: ` +
+            `${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        this.model[0].unpinLocalIDs(pins)
+      }
+    }
+
+    if (this.demandCursor_ >= products.length &&
+        this.demandAggregatesCursor_ < aggregates.length) {
+
+      const aggregatesEnd = Math.min(
+          this.demandAggregatesCursor_ + (budget - extracted),
+          aggregates.length)
+
+      for (; this.demandAggregatesCursor_ < aggregatesEnd;
+        ++this.demandAggregatesCursor_) {
+
+        const relAggregate = aggregates[this.demandAggregatesCursor_]
+        const pins =
+          await this.conwayGeometry_.ensureResidentForAggregateExtract(
+              relAggregate)
+
+        try {
+          this.conwayGeometry_.extractRelAggregateGeometry(relAggregate)
+          ++extracted
+        } catch (error) {
+          Logger.error(
+              `Error extracting aggregate ${relAggregate.expressID}: ` +
+              `${error instanceof Error ? error.message : String(error)}`)
+        } finally {
+          this.model[0].unpinLocalIDs(pins)
+        }
+      }
+    }
+
+    if (meshCallback !== void 0) {
+      this.streamNewMeshes_(meshCallback)
+    }
+
+    const remaining = (products.length - this.demandCursor_) +
+        (aggregates.length - this.demandAggregatesCursor_)
+
+    if (this.progressTracker_ !== void 0) {
+      const completed = totalWork - remaining
+      if (remaining === 0) {
+        this.progressTracker_.endPhase(totalWork)
+      } else {
+        this.progressTracker_.update(completed)
+      }
+    }
+
+    return {extracted, remaining}
+  }
+
+  /**
+   * Enumerate the deferred worklists once (file-order products, then
+   * rel-aggregates). Shared by the sync and async pumps.
+   */
+  private ensureDemandWorklists_(): void {
+
+    if (this.demandProducts_ !== void 0) {
+      return
+    }
 
       // Aggregate-target products are extracted ONLY by the
       // rel-aggregates pass below (with the relating object's master
@@ -1533,18 +1862,39 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.demandAggregates_ = aggregates
       this.demandCursor_ = 0
       this.demandAggregatesCursor_ = 0
+  }
+
+  /**
+   * Synchronous extract of the next batch. Caller must have paged
+   * ranges if the source is windowed.
+   *
+   * @param batchSize Max products this call.
+   * @param meshCallback Optional mesh consumer.
+   * @return {object} `{extracted, remaining}`.
+   */
+  private pumpGeometryBatch_(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
+
+    const products = this.demandProducts_ ?? []
+    const aggregates = this.demandAggregates_ ?? []
+    const totalWork = products.length + aggregates.length
+
+    if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
+      this.progressTracker_.beginPhase('geometry', 'products', totalWork)
+      this.geometryPhaseStarted_ = true
     }
 
     const budget = Math.max(batchSize, 1)
     const end = Math.min(
         this.demandCursor_ + budget,
-        this.demandProducts_.length)
+        products.length)
 
     let extracted = 0
 
     for (; this.demandCursor_ < end; ++this.demandCursor_) {
 
-      const localID = this.demandProducts_[this.demandCursor_]
+      const localID = products[this.demandCursor_]
 
       if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
         ++extracted
@@ -1556,9 +1906,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // the same per-call budget — batch-by-batch, not as one end-of-load
     // stall — so aggregate parts stream in cut, exactly once, with
     // final content (see demandAggregates_).
-    const aggregates = this.demandAggregates_ ?? []
-
-    if (this.demandCursor_ >= this.demandProducts_.length &&
+    if (this.demandCursor_ >= products.length &&
         this.demandAggregatesCursor_ < aggregates.length) {
 
       const aggregatesEnd = Math.min(
@@ -1578,10 +1926,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.streamNewMeshes_(meshCallback)
     }
 
+    const remaining = (products.length - this.demandCursor_) +
+        (aggregates.length - this.demandAggregatesCursor_)
+
+    if (this.progressTracker_ !== void 0) {
+      const completed = totalWork - remaining
+      if (remaining === 0) {
+        this.progressTracker_.endPhase(totalWork)
+      } else {
+        this.progressTracker_.update(completed)
+      }
+    }
+
     return {
       extracted,
-      remaining: (this.demandProducts_.length - this.demandCursor_) +
-        (aggregates.length - this.demandAggregatesCursor_),
+      remaining,
     }
   }
 

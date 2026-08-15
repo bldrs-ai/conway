@@ -210,6 +210,23 @@ export interface StepBufferProvider {
    * @return {Promise< void >} Resolves when resident.
    */
   ensureResident( address: number, length: number ): Promise< void >
+
+  /**
+   * Hold a range against LRU eviction until a matching
+   * {@link unpinRange}. No-op on a fully-resident source. Refcounted.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   */
+  pinRange?( address: number, length: number ): void
+
+  /**
+   * Drop one {@link pinRange} hold on a range.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   */
+  unpinRange?( address: number, length: number ): void
 }
 
 /**
@@ -441,7 +458,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     // until we return — the caller's synchronous acquire runs in its
     // continuation, which can interleave with other ensures' evictions.
     for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
-      this.ensurePins_.set( chunkIndex, ( this.ensurePins_.get( chunkIndex ) ?? 0 ) + 1 )
+      this.addPin_( chunkIndex, 1 )
     }
 
     try {
@@ -510,15 +527,72 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     } finally {
 
       for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
-
-        const pins = this.ensurePins_.get( chunkIndex ) ?? 0
-
-        if ( pins <= 1 ) {
-          this.ensurePins_.delete( chunkIndex )
-        } else {
-          this.ensurePins_.set( chunkIndex, pins - 1 )
-        }
+        this.addPin_( chunkIndex, -1 )
       }
+    }
+  }
+
+  /**
+   * Hold a range against LRU eviction until {@link unpinRange}.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   */
+  public pinRange( address: number, length: number ): void {
+
+    for ( const chunkIndex of this.chunkSpan_( address, length ) ) {
+      this.addPin_( chunkIndex, 1 )
+    }
+  }
+
+  /**
+   * Drop one {@link pinRange} hold.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   */
+  public unpinRange( address: number, length: number ): void {
+
+    for ( const chunkIndex of this.chunkSpan_( address, length ) ) {
+      this.addPin_( chunkIndex, -1 )
+    }
+  }
+
+  /**
+   * Chunk indices covering `[address, address + length)`.
+   *
+   * @param address Absolute start.
+   * @param length Length in bytes.
+   * @return {number[]} Inclusive chunk indices.
+   */
+  private chunkSpan_( address: number, length: number ): number[] {
+
+    const chunkBytes = this.chunkBytes_
+    const firstChunk = Math.floor( address / chunkBytes )
+    const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
+    const span: number[] = []
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+      span.push( chunkIndex )
+    }
+
+    return span
+  }
+
+  /**
+   * Adjust a chunk's pin count, deleting the entry at zero.
+   *
+   * @param chunkIndex The chunk.
+   * @param delta +1 pin or -1 unpin.
+   */
+  private addPin_( chunkIndex: number, delta: number ): void {
+
+    const pins = ( this.ensurePins_.get( chunkIndex ) ?? 0 ) + delta
+
+    if ( pins <= 0 ) {
+      this.ensurePins_.delete( chunkIndex )
+    } else {
+      this.ensurePins_.set( chunkIndex, pins )
     }
   }
 }

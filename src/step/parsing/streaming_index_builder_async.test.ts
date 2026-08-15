@@ -11,7 +11,8 @@ import fs from 'fs'
 import { describe, expect, test } from '@jest/globals'
 
 import IfcStepParser from '../../ifc/ifc_step_parser'
-import { BufferByteSource } from './byte_source'
+import { BufferByteSource, StoreByteSource } from './byte_source'
+import { InMemoryStepByteStore } from '../step_buffer_provider'
 import {
   buildColumnarIndexStreaming,
   buildColumnarIndexStreamingAsync,
@@ -73,6 +74,23 @@ describe( 'buildColumnarIndexStreamingAsync', () => {
     // Same window mechanics (slides prove the moving window really moved).
     expect( cooperative.stats.slides ).toBe( sync.stats.slides )
     expect( cooperative.stats.slides ).toBeGreaterThan( 0 )
+  }, 60000 )
+
+  test( 'StoreByteSource fills produce the same columns as a buffer source', async () => {
+
+    const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+    const parser = IfcStepParser.Instance
+    const fromBuffer = await buildColumnarIndexStreamingAsync(
+        new BufferByteSource( bytes ), parser, POOL, void 0, void 0, 0 )
+    const fromStore = await buildColumnarIndexStreamingAsync(
+        new StoreByteSource( new InMemoryStepByteStore( bytes ) ),
+        parser, POOL, void 0, void 0, 0 )
+
+    expect( fromStore.result ).toBe( ParseResult.COMPLETE )
+    expect( Array.from( fromStore.columns.address ) )
+        .toEqual( Array.from( fromBuffer.columns.address ) )
+    expect( Array.from( fromStore.columns.expressID ) )
+        .toEqual( Array.from( fromBuffer.columns.expressID ) )
   }, 60000 )
 
   test( 'yields to the event loop and reports absolute progress mid-parse', async () => {

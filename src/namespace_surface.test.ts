@@ -12,7 +12,10 @@ describe( 'plane namespace surface', () => {
 
   test( 'stream exposes the fixed-memory open plane', () => {
     expect( typeof stream.openStreamedIfcModel ).toBe( 'function' )
+    expect( typeof stream.openStreamedIfcModelFromStore ).toBe( 'function' )
     expect( typeof stream.BufferByteSource ).toBe( 'function' )
+    expect( typeof stream.StoreByteSource ).toBe( 'function' )
+    expect( typeof stream.SyncAccessHandleByteSource ).toBe( 'function' )
     expect( typeof stream.InMemoryStepByteStore ).toBe( 'function' )
     expect( typeof stream.WindowedStepBufferProvider ).toBe( 'function' )
     expect( typeof stream.serializeIndexSidecarFromColumns ).toBe( 'function' )

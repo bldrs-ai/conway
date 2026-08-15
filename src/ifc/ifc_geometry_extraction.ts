@@ -6398,6 +6398,136 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Page in every record {@link prepareDemandExtraction} will read, so
+   * the relationship sweeps succeed on a windowed source. Call before
+   * the first prepare on a model whose source is external.
+   *
+   * @return {Promise<Set<number>>} Pinned local IDs — caller must
+   * {@link StepModelBase.unpinLocalIDs} after prepare/extract.
+   */
+  public async ensureResidentForDemandPrep(): Promise< Set< number > > {
+
+    const pinned = new Set< number >()
+
+    if ( !this.model.isSourceExternal ) {
+      return pinned
+    }
+
+    const prepTypes = [
+      IfcProject,
+      IfcRelAssociatesMaterial,
+      IfcMaterialDefinitionRepresentation,
+      IfcRelVoidsElement,
+      IfcStyledItem,
+      IfcRelAggregates,
+    ]
+
+    for ( const type of prepTypes ) {
+
+      for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
+        await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
+      }
+    }
+
+    return pinned
+  }
+
+  /**
+   * Page in the `#ref` closure a per-product extract will acquire,
+   * including this product's voids, bound materials and styled items
+   * (those are inverse — not written in the product record).
+   *
+   * @param localID The product's local ID.
+   * @return {Promise<Set<number>>} Pinned local IDs — caller must unpin
+   * after extract.
+   */
+  public async ensureResidentForProductExtract(
+      localID: number,
+      seen?: Set< number > ):
+      Promise< Set< number > > {
+
+    if ( !this.model.isSourceExternal ) {
+      return seen ?? new Set< number >()
+    }
+
+    const extra: number[] = []
+    const voids = this.productToVoidGeometryMap.get( localID )
+
+    if ( voids !== void 0 ) {
+      extra.push( ...voids )
+    }
+
+    const material = this.materials.relMaterialsMap.get( localID )
+
+    if ( material !== void 0 ) {
+      extra.push( material )
+    }
+
+    const visited =
+      await this.model.ensureResidentClosureByLocalID( localID, extra, seen )
+    const styleExtra: number[] = []
+
+    for ( const visitedID of visited ) {
+
+      const styled = this.materials.styledItemMap.get( visitedID )
+
+      if ( styled !== void 0 ) {
+        styleExtra.push( styled )
+      }
+
+      const definition = this.materials.materialDefinitionsMap.get( visitedID )
+
+      if ( definition !== void 0 ) {
+        styleExtra.push( definition )
+      }
+    }
+
+    if ( styleExtra.length > 0 ) {
+      await this.model.ensureResidentClosureByLocalID( localID, styleExtra, visited )
+    }
+
+    return visited
+  }
+
+  /**
+   * Page in the records {@link extractRelAggregateGeometry} will
+   * acquire: the relationship, the relating product (and its voids)
+   * and every related product.
+   *
+   * @param relAggregate The relationship to prefetch.
+   * @return {Promise<Set<number>>} Pinned local IDs — caller must unpin
+   * after extract.
+   */
+  public async ensureResidentForAggregateExtract(
+      relAggregate: IfcRelAggregates ): Promise< Set< number > > {
+
+    if ( !this.model.isSourceExternal ) {
+      return new Set< number >()
+    }
+
+    const pinned =
+      await this.model.ensureResidentClosureByLocalID( relAggregate.localID )
+
+    const relating = relAggregate.RelatingObject
+
+    if ( relating !== null && relating !== void 0 ) {
+      await this.ensureResidentForProductExtract( relating.localID, pinned )
+    }
+
+    const related = relAggregate.RelatedObjects
+
+    if ( related === null || related === void 0 ) {
+      return pinned
+    }
+
+    for ( const product of related ) {
+      await this.ensureResidentForProductExtract( product.localID, pinned )
+    }
+
+    return pinned
+  }
+
+  /**
    * The whole-model walk's SECOND product pass, shared with the demand
    * pump: for every IfcRelAggregates, re-extract the related products
    * with the relating object's rel-voids as a master override. This
