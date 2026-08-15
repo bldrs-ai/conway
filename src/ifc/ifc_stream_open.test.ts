@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, test } from '@jest/globals'
 
 import ParsingBuffer from '../parsing/parsing_buffer'
 import IfcStepParser from './ifc_step_parser'
-import { openStreamedIfcModel } from './ifc_stream_open'
+import { openStreamedIfcModel, openStreamedIfcModelFromStore } from './ifc_stream_open'
 import { BufferByteSource } from '../step/parsing/byte_source'
 import { InMemoryStepByteStore } from '../step/step_buffer_provider'
 import { ParseResult } from '../step/parsing/step_parser'
@@ -100,5 +100,17 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
         new BufferByteSource( bytes ),
         new InMemoryStepByteStore( bytes.subarray( 0, 100 ) ) ) )
         .toThrow( /does not match/ )
+  } )
+
+  test( 'openStreamedIfcModelFromStore matches the sync open', async () => {
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const streamed = openStreamedIfcModel(
+        new BufferByteSource( bytes ), store, { pool: 4 * 1024 } )
+
+    expect( fromStore.result ).toBe( ParseResult.COMPLETE )
+    expect( fromStore.model!.isSourceExternal ).toBe( true )
+    expect( [ ...fromStore.model!.expressIDsOfTypes( IfcRoot ) ] )
+        .toEqual( [ ...streamed.model!.expressIDsOfTypes( IfcRoot ) ] )
   } )
 } )

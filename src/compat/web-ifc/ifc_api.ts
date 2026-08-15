@@ -383,6 +383,44 @@ export class IfcAPI {
   }
 
   /**
+   * M1b store-backed open (conway extension; feature-detect with
+   * `typeof api.OpenModelStream === 'function'`). Parses through a
+   * moving window over `store` and keeps the model windowed from
+   * birth — the source is never one JS `ArrayBuffer`. Geometry
+   * extract on the deferred path must use
+   * {@link ExtractGeometryBatchAsync} so product closures can be
+   * paged in.
+   *
+   * IFC only; other formats return -1 (caller should fall back to
+   * buffering + OpenModelStreamed).
+   *
+   * @param store External store holding the source bytes (OPFS File).
+   * @param settings settings for loading the model
+   * @return {Promise<number>} model ID, or -1 on failure
+   */
+  async OpenModelStream(
+      store: StepExternalByteStore,
+      settings?: Loadersettings ): Promise<number> {
+
+    const modelIdResult = this.globalModelIDCounter++
+
+    const result =
+      await IfcApiModelPassthroughFactory.fromStore(
+          modelIdResult,
+          store,
+          this.wasmModule,
+          settings)
+
+    if ( result === void 0 ) {
+      return -1
+    }
+
+    this.models.set( modelIdResult, result )
+
+    return modelIdResult
+  }
+
+  /**
    * Set conway's console-echo log threshold, web-ifc compatible surface
    * (numeric LogLevel enum). Embedders (e.g. Share) use this to quiet a
    * clean load's console down to warnings/errors — conway issue #301.
@@ -851,6 +889,37 @@ export class IfcAPI {
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
     const result = this.models.get(modelID)
+
+    if (result?.extractGeometryBatch === void 0) {
+      return {extracted: 0, remaining: 0}
+    }
+
+    return result.extractGeometryBatch(batchSize, meshCallback)
+  }
+
+  /**
+   * Async twin of {@link ExtractGeometryBatch}: pages each product's
+   * source-byte closure before extracting it. Required for models
+   * opened with {@link OpenModelStream}; a no-op-prefetch on a
+   * resident-source deferred open. Feature-detect with
+   * `typeof api.ExtractGeometryBatchAsync === 'function'`.
+   *
+   * @param modelID handle retrieved by OpenModelStream / OpenModelStreamed
+   * @param batchSize max products to extract this call
+   * @param meshCallback receives each newly-extracted product's mesh
+   * @return {Promise<object>} `{extracted, remaining}`
+   */
+  async ExtractGeometryBatchAsync(
+      modelID: number,
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ):
+      Promise<{extracted: number, remaining: number}> {
+
+    const result = this.models.get(modelID)
+
+    if (result?.extractGeometryBatchAsync !== void 0) {
+      return result.extractGeometryBatchAsync(batchSize, meshCallback)
+    }
 
     if (result?.extractGeometryBatch === void 0) {
       return {extracted: 0, remaining: 0}

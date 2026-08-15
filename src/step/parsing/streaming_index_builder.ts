@@ -1,5 +1,5 @@
 import ParsingBuffer from '../../parsing/parsing_buffer'
-import { ByteSource } from './byte_source'
+import { ByteSource, ReadableByteSource } from './byte_source'
 import { ColumnarIndexSink, StepIndexColumns } from './columnar_index'
 import StepParser, {
   ParseResult,
@@ -229,8 +229,31 @@ const MIN_WINDOW = 4 * 1024
  * @return {Promise<StreamingIndexResult>} The index, header, result and
  * diagnostics.
  */
+/**
+ * Fill `into` from either a sync or async byte source. A sync `read`
+ * resolves immediately; this is what lets the cooperative builder
+ * parse from an OPFS `File.slice()` store without a worker.
+ *
+ * @param source Sync or async positioned source.
+ * @param offset Absolute source offset.
+ * @param length Maximum bytes to copy.
+ * @param into Destination buffer.
+ * @param intoOffset Offset within `into`.
+ * @return {Promise<number>} Bytes copied.
+ */
+async function readSource(
+    source: ReadableByteSource,
+    offset: number,
+    length: number,
+    into: Uint8Array,
+    intoOffset: number ): Promise<number> {
+
+  return await source.read( offset, length, into, intoOffset )
+}
+
+
 export async function buildIndexStreamingAsync<TypeIDType>(
-    source: ByteSource,
+    source: ReadableByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
     onRecordIndexed?:
@@ -249,7 +272,7 @@ export async function buildIndexStreamingAsync<TypeIDType>(
     const window = new Uint8Array( windowBytes )
 
     let windowStartFile = 0
-    let windowLen = source.read( 0, windowBytes, window, 0 )
+    let windowLen = await readSource( source, 0, windowBytes, window, 0 )
     let bytesRead = windowLen
 
     const input = new ParsingBuffer( window, 0, windowLen )
@@ -271,7 +294,7 @@ export async function buildIndexStreamingAsync<TypeIDType>(
     let maxRecordLen = 0
     let prevBoundaryFile = windowStartFile + input.cursor
 
-    const onRecordBoundary = ( buffer: ParsingBuffer ): void => {
+    const onRecordBoundary = ( buffer: ParsingBuffer ): void | Promise<void> => {
 
       const cursor = buffer.cursor
       const recordFileStart = windowStartFile + cursor
@@ -297,15 +320,19 @@ export async function buildIndexStreamingAsync<TypeIDType>(
       window.copyWithin( 0, cursor, windowLen )
 
       const want = windowBytes - tail
-      const got = source.read( windowStartFile + windowLen, want, window, tail )
+      const fillAt = windowStartFile + windowLen
 
-      bytesRead += got
-      windowLen = tail + got
-      windowStartFile = recordFileStart
+      // Only return a Promise when this boundary actually slides —
+      // an `async` callback would force an await at every record
+      // (millions of hops on a PSB-class file).
+      return readSource( source, fillAt, want, window, tail ).then( ( got ) => {
 
-      buffer.rebaseWindow( window, 0, windowLen, windowStartFile )
-
-      ++slides
+        bytesRead += got
+        windowLen = tail + got
+        windowStartFile = recordFileStart
+        buffer.rebaseWindow( window, 0, windowLen, windowStartFile )
+        ++slides
+      } )
     }
 
     // Translate the parser's window-relative cursor to an absolute source
@@ -402,7 +429,7 @@ export function buildColumnarIndexStreaming<TypeIDType extends number>(
  * stats.
  */
 export async function buildColumnarIndexStreamingAsync<TypeIDType extends number>(
-    source: ByteSource,
+    source: ReadableByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
     onRecordIndexed?:

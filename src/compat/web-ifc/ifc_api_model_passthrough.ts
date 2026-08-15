@@ -25,6 +25,15 @@ export interface IfcApiModelPassthrough {
   extractGeometryBatch?(
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void): {extracted: number, remaining: number}
+
+  /**
+   * Async twin of extractGeometryBatch — pages windowed source ranges
+   * before each product extract (M1b). Feature-detect with typeof.
+   */
+  extractGeometryBatchAsync?(
+    batchSize: number,
+    meshCallback?: (mesh: FlatMesh) => void):
+    Promise<{extracted: number, remaining: number}>
   getCoordinationMatrix(): number[]
 
   /**

@@ -5,6 +5,11 @@ import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
+import { StepExternalByteStore } from '../../step/step_buffer_provider'
+
+/** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
+// eslint-disable-next-line no-magic-numbers
+const STORE_DETECT_PREFIX_BYTES = 64 * 1024
 
 /**
  * The factory to construct models.
@@ -165,6 +170,49 @@ export class IfcApiModelPassthroughFactory {
     }
 
     return IfcApiModelPassthroughFactory.fromAsync(modelID, data, wasmModule, settings)
+  }
+
+  /**
+   * Store-backed open (M1b): IFC models parse through a moving window
+   * over `store` and stay windowed from birth. Non-IFC formats are not
+   * implemented on this path — the caller should fall back to buffering
+   * and fromStreamed.
+   *
+   * @param modelID
+   * @param store External store holding the source bytes.
+   * @param wasmModule
+   * @param settings
+   * @return {Promise<IfcApiModelPassthrough | undefined>}
+   */
+  public static async fromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    const prefixLen = Math.min( store.byteLength, STORE_DETECT_PREFIX_BYTES )
+    const prefix = await store.read( 0, prefixLen )
+    const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( prefix ) )
+
+    if ( modelFormat === ModelFormatType.IFC ) {
+
+      try {
+
+        return await IfcApiProxyIfc.createFromStore(
+            modelID, store, wasmModule, settings )
+      } catch ( e ) {
+
+        const message = e instanceof Error ? e.message : String( e )
+
+        Logger.warning(
+            `Store-backed open failed for model ${modelID}: ${message}` )
+      }
+    } else {
+
+      Logger.warning(
+          'Store-backed open is IFC-only; use OpenModelStreamed with a buffer ' +
+          `for format ${modelFormat}` )
+    }
   }
 
   /**

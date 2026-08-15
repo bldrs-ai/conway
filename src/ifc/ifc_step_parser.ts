@@ -3,8 +3,11 @@ import StepParser, {ParseProgressCallback, ParseResult} from '../step/parsing/st
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import EntitTypesIfcSearch from './ifc4_gen/entity_types_search.gen'
 import IfcStepModel from './ifc_step_model'
-import { ByteSource } from '../step/parsing/byte_source'
-import { buildColumnarIndexStreaming } from '../step/parsing/streaming_index_builder'
+import { ByteSource, ReadableByteSource } from '../step/parsing/byte_source'
+import {
+  buildColumnarIndexStreaming,
+  buildColumnarIndexStreamingAsync,
+} from '../step/parsing/streaming_index_builder'
 import {
   StepExternalByteStore,
   WindowedStepBufferProvider,
@@ -110,6 +113,47 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
     // per-record object phase never exists, so peak heap is window + columns.
     const { columns, result } =
       buildColumnarIndexStreaming( source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES )
+
+    const provider =
+      new WindowedStepBufferProvider( store, opts?.chunkBytes, opts?.maxResidentChunks )
+
+    return [result, new IfcStepModel( void 0, columns, provider )]
+  }
+
+  /**
+   * Cooperative twin of {@link parseStreamToModel}: the index build
+   * yields to the event loop and can fill windows from an async
+   * {@link ReadableByteSource} (an OPFS `File.slice()` store). The
+   * model is still windowed — geometry extract must
+   * `ensureResident` first.
+   *
+   * @param source Sync or async byte source feeding the parse.
+   * @param store Async external store backing the windowed model.
+   * @param opts Optional window sizing plus parse progress.
+   * @return {Promise<[ParseResult, IfcStepModel | undefined]>} The
+   * parse result and the windowed model.
+   */
+  public async parseStreamToModelAsync(
+      source: ReadableByteSource,
+      store: StepExternalByteStore,
+      opts?: {
+        pool?: number
+        chunkBytes?: number
+        maxResidentChunks?: number
+        onProgress?: ( absoluteByteCursor: number ) => void
+      } ):
+      Promise<[ParseResult, IfcStepModel | undefined]> {
+
+    if ( store.byteLength !== source.byteLength ) {
+      throw new Error(
+          `Streaming store byteLength ${store.byteLength} does not match ` +
+          `source byteLength ${source.byteLength}` )
+    }
+
+    const { columns, result } =
+      await buildColumnarIndexStreamingAsync(
+          source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES,
+          void 0, opts?.onProgress )
 
     const provider =
       new WindowedStepBufferProvider( store, opts?.chunkBytes, opts?.maxResidentChunks )

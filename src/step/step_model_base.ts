@@ -1,6 +1,7 @@
 import { StepIndexEntry } from './parsing/step_parser'
 import { StepIndexColumns } from './parsing/columnar_index'
 import { releaseScratchParsingBuffer } from './parsing/step_deserialization_functions'
+import { scanExpressRefs } from './parsing/express_ref_scan'
 import {
   ResidentStepBufferProvider,
   StepBufferProvider,
@@ -718,6 +719,134 @@ implements Iterable<BaseEntity>, Model {
     }
 
     await this.ensureResidentByLocalID( localID )
+  }
+
+
+  /**
+   * Page in the byte ranges a record *and every `#ref` reachable from
+   * its text* will need, so a following synchronous extract of that
+   * subgraph succeeds on a windowed source. Inverse relationships
+   * (not written in the record) are not discovered — callers that
+   * need them (rel-voids, styled items) pass their local IDs as
+   * `extraLocalIDs`.
+   *
+   * No-op while the source is fully resident.
+   *
+   * @param localID Seed record.
+   * @param extraLocalIDs Additional seeds (voids, styles, materials).
+   * @return {Promise<Set<number>>} The local IDs that were visited.
+   */
+  public async ensureResidentClosureByLocalID(
+      localID: number,
+      extraLocalIDs?: Iterable<number> ): Promise< Set< number > > {
+
+    const seen = new Set< number >()
+
+    if ( !this.isSourceExternal ) {
+      return seen
+    }
+
+    const stack: number[] = [ localID ]
+
+    if ( extraLocalIDs !== void 0 ) {
+
+      for ( const extra of extraLocalIDs ) {
+        stack.push( extra )
+      }
+    }
+
+    while ( stack.length > 0 ) {
+
+      const id = stack.pop() as number
+
+      if ( seen.has( id ) || id >= this.count_ ) {
+        continue
+      }
+
+      seen.add( id )
+
+      await this.ensureResidentByLocalID( id )
+
+      for ( const expressID of this.scanRecordRefs_( id ) ) {
+
+        const referenced = this.expressIDMap_.get( expressID )
+
+        if ( referenced !== void 0 && !seen.has( referenced ) ) {
+          stack.push( referenced )
+        }
+      }
+    }
+
+    return seen
+  }
+
+
+  /**
+   * Express-ID twin of {@link ensureResidentClosureByLocalID}. Unknown
+   * IDs resolve to an empty visit set.
+   *
+   * @param expressID Seed record.
+   * @param extraLocalIDs Additional seeds (local IDs).
+   * @return {Promise<Set<number>>} The local IDs that were visited.
+   */
+  public async ensureResidentClosureByExpressID(
+      expressID: number,
+      extraLocalIDs?: Iterable<number> ): Promise< Set< number > > {
+
+    if ( !this.isSourceExternal ) {
+      return new Set< number >()
+    }
+
+    const localID = this.expressIDMap_.get( expressID )
+
+    if ( localID === void 0 ) {
+      return new Set< number >()
+    }
+
+    return this.ensureResidentClosureByLocalID( localID, extraLocalIDs )
+  }
+
+
+  /**
+   * Scan a resident record's bytes for `#<expressID>` references.
+   *
+   * @param localID The record to scan.
+   * @return {number[]} Distinct referenced express IDs.
+   */
+  private scanRecordRefs_( localID: number ): number[] {
+
+    const address = this.address_[ localID ]
+    const length = this.length_[ localID ]
+    const acquisition = this.bufferProvider_.acquire( address, length )
+    const viewStart = address - acquisition.offset
+
+    const refs = scanExpressRefs( acquisition.buffer, viewStart, length )
+
+    const complex = this.complexEntries_?.get( localID )
+
+    if ( complex?.multiMapping === void 0 ) {
+      return refs
+    }
+
+    const seen = new Set< number >( refs )
+
+    for ( const mapped of complex.multiMapping ) {
+
+      const mappedAcquisition =
+        this.bufferProvider_.acquire( mapped.address, mapped.length )
+      const mappedStart = mapped.address - mappedAcquisition.offset
+
+      for ( const expressID of scanExpressRefs(
+          mappedAcquisition.buffer, mappedStart, mapped.length ) ) {
+
+        if ( !seen.has( expressID ) ) {
+          seen.add( expressID )
+          refs.push( expressID )
+        }
+      }
+    }
+
+    return refs
   }
 
 
