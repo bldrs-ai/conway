@@ -222,6 +222,53 @@ describe( 'reference-level faceset fast path', () => {
     }
   }, 120000 )
 
+  test( 'column path matches CoordIndex without materialising the face first', () => {
+
+    const model = stepModel()
+    const sink = new Uint32Sink( 4 )
+
+    for ( const faceSet of faceSets() ) {
+
+      const expressIDs: number[] = []
+
+      faceSet.forEachReferenceInField(
+          FACES_OFFSET, FACES_BASE_OFFSET, FACES_DEPTH,
+          ( expressID ) => {
+
+            if ( expressID !== void 0 ) {
+              expressIDs.push( expressID )
+            }
+
+            return true
+          } )
+
+      const fromColumns: number[][] = []
+
+      for ( const expressID of expressIDs ) {
+
+        sink.reset()
+
+        const count = model.extractIntegerArrayByExpressIDInto(
+            expressID,
+            COORD_INDEX_OFFSET,
+            EntityTypesIfc.IFCINDEXEDPOLYGONALFACE,
+            sink )
+
+        if ( count === void 0 ) {
+          continue
+        }
+
+        fromColumns.push( Array.from( sink.view ) )
+      }
+
+      const fromGetter = faceSet.Faces
+          .filter( ( face ) => !( face instanceof IfcIndexedPolygonalFaceWithVoids ) )
+          .map( ( face ) => face.CoordIndex )
+
+      expect( fromColumns ).toEqual( fromGetter )
+    }
+  }, 120000 )
+
   test( 'reports failure for an unknown express ID and for a type mismatch', () => {
 
     const model = stepModel()

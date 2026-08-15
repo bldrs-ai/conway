@@ -410,10 +410,14 @@ implements Iterable<BaseEntity>, Model {
    * simple case and reports failure otherwise, so callers keep a
    * correct fallback rather than this growing subtle special cases:
    * the reference must resolve, be single-class (no multi-mapping),
-   * and be exactly `expectedTypeID` — which is what makes reading
-   * `offset` as a plain vtable slot equivalent to the generated
-   * getter's `getOffsetCursor( offset, _, _ )` (that only subtracts a
-   * base offset for multi-mapped records).
+   * and be exactly `expectedTypeID`.
+   *
+   * Field 0 is the data-block start the parser stored in `address_`
+   * (after `TYPE(`). Reading it from the columns skips the descriptor
+   * and vtable `entry()` would retain — on a 9 M-face model those are
+   * the objects the faceset path is trying not to build. Non-zero
+   * offsets still go through a vtable, because only field 0 has that
+   * address identity.
    *
    * @param expressID The referenced record's express ID.
    * @param offset The field's vtable offset within the record.
@@ -434,13 +438,28 @@ implements Iterable<BaseEntity>, Model {
       return void 0
     }
 
-    const element = this.entry( localID )
-
     // Multi-mapped records need per-depth base offsets; leave them to
-    // the generated getters.
-    if ( element.multiMapping !== void 0 || element.typeID !== expectedTypeID ) {
+    // the generated getters. typeID_ is -1 when unset.
+    if ( this.complexEntries_?.has( localID ) ||
+      this.typeID_[ localID ] !== expectedTypeID ) {
       return void 0
     }
+
+    if ( offset === 0 ) {
+
+      const address = this.address_[ localID ]
+      const acquisition = this.bufferProvider_.acquire(
+          address, this.length_[ localID ] )
+      const viewAddress = address - acquisition.offset
+
+      return extractIntegerArrayAt(
+          acquisition.buffer,
+          viewAddress,
+          acquisition.buffer.length,
+          sink )
+    }
+
+    const element = this.entry( localID )
 
     if ( element.vtableIndex === void 0 && !this.populateVtableEntryRaw( element ) ) {
       return void 0
