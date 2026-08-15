@@ -5,6 +5,14 @@ import {
   stepExtractNumber,
   stepExtractOptional,
 } from './step_deserialization_functions'
+import ParsingConstants from '../../parsing/parsing_constants'
+
+
+const OPEN_PAREN  = ParsingConstants.OPEN_PAREN
+const CLOSE_PAREN = ParsingConstants.CLOSE_PAREN
+const COMMA       = ParsingConstants.COMMA
+const ZERO        = ParsingConstants.ZERO
+const WHITESPACE  = ParsingConstants.WHITE_SPACE_SET
 
 /**
  * Growable Uint32Array append sink.
@@ -50,6 +58,15 @@ export class Uint32Sink {
   }
 
   /**
+   * Keep the first `length` elements. Used to unwind a failed fast path.
+   *
+   * @param length New length, ≤ current length.
+   */
+  public truncate( length: number ): void {
+    this.length_ = length
+  }
+
+  /**
    * Append one value, growing geometrically when full.
    *
    * @param value The value to append.
@@ -90,6 +107,15 @@ export function extractIntegerArrayAt(
     endCursor: number,
     sink: Uint32Sink ): number {
 
+  const marked = sink.length
+  const fast   = extractUnsignedIntegerListAt( buffer, cursor, endCursor, sink )
+
+  if ( fast !== void 0 ) {
+    return fast
+  }
+
+  sink.truncate( marked )
+
   if ( stepExtractOptional( buffer, cursor, endCursor ) === null ) {
     return 0
   }
@@ -116,4 +142,110 @@ export function extractIntegerArrayAt(
   }
 
   return count
+}
+
+
+/**
+ * Fast path for `(1,2,3,4)` / `(1, 2, 3, 4)` — the CoordIndex shape.
+ * Digits only, no comments, no reals. Returns undefined when the field
+ * is not that shape so the caller can use the general parser. A failed
+ * parse does not leave partial values in `sink`.
+ *
+ * @param buffer Record window.
+ * @param cursor Start of the field.
+ * @param endCursor End bound.
+ * @param sink Receives values.
+ * @return {number | undefined} Count appended, or undefined if this
+ * is not an unsigned-integer list.
+ */
+export function extractUnsignedIntegerListAt(
+    buffer: Uint8Array,
+    cursor: number,
+    endCursor: number,
+    sink: Uint32Sink ): number | undefined {
+
+  const marked = sink.length
+
+  while ( cursor < endCursor && WHITESPACE.has( buffer[ cursor ] ) ) {
+    ++cursor
+  }
+
+  if ( cursor >= endCursor ) {
+    return void 0
+  }
+
+  if ( buffer[ cursor ] === ParsingConstants.DOLLAR ) {
+    return 0
+  }
+
+  if ( buffer[ cursor ] !== OPEN_PAREN ) {
+    return void 0
+  }
+
+  ++cursor
+
+  let count = 0
+
+  while ( cursor < endCursor ) {
+
+    while ( cursor < endCursor && WHITESPACE.has( buffer[ cursor ] ) ) {
+      ++cursor
+    }
+
+    if ( cursor >= endCursor ) {
+      sink.truncate( marked )
+      return void 0
+    }
+
+    if ( buffer[ cursor ] === CLOSE_PAREN ) {
+      return count
+    }
+
+    if ( count > 0 ) {
+
+      if ( buffer[ cursor ] !== COMMA ) {
+        sink.truncate( marked )
+        return void 0
+      }
+
+      ++cursor
+
+      while ( cursor < endCursor && WHITESPACE.has( buffer[ cursor ] ) ) {
+        ++cursor
+      }
+
+      if ( cursor >= endCursor ) {
+        sink.truncate( marked )
+        return void 0
+      }
+    }
+
+    const digit = buffer[ cursor ] - ZERO
+
+    if ( digit < 0 || digit > 9 ) {
+      sink.truncate( marked )
+      return void 0
+    }
+
+    let value = digit
+    ++cursor
+
+    while ( cursor < endCursor ) {
+
+      const next = buffer[ cursor ] - ZERO
+
+      if ( next < 0 || next > 9 ) {
+        break
+      }
+
+      value = value * 10 + next
+      ++cursor
+    }
+
+    sink.push( value )
+    ++count
+  }
+
+  sink.truncate( marked )
+  return void 0
 }

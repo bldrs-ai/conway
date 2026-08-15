@@ -394,53 +394,90 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
-   * Populate a raw vtable entry for a particular element, extra
-   * 
-   * @param element The raw elment to populate the vtable entry for.
-   * @return {boolean} Did the vtable entry populate correctly?
-   */
-  /**
-   * Append a referenced record's unsigned-integer list field into `sink`
-   * without materialising the referenced entity.
+   * Resolve an express ID to a local ID, using `hintLocalID + 1` when
+   * the next record is the one we want. Tessellated Faces lists are
+   * sequential (PSB: every faceset), so this turns 9.1M interpolation
+   * searches into one per faceset.
    *
-   * This is the reference-level twin of
+   * @param expressID The referenced record.
+   * @param hintLocalID Local ID of the previous resolve, if any.
+   * @return {number | undefined} The local ID, or undefined if unknown.
+   */
+  public resolveExpressID(
+      expressID: number,
+      hintLocalID?: number ): number | undefined {
+
+    if ( hintLocalID !== void 0 ) {
+
+      const next = hintLocalID + 1
+
+      if ( next < this.firstInlineElement_ &&
+        this.expressID_[ next ] === expressID ) {
+        return next
+      }
+    }
+
+    return this.expressIDMap_.get( expressID )
+  }
+
+
+  /**
+   * Append a local record's unsigned-integer list field into `sink`
+   * without an express-ID lookup. The reference-level twin of
    * `StepEntityBase.extractIntegerArrayInto`, for hot loops that walk
    * millions of small records (tessellated facesets) where constructing
    * an entity per record dominates. It deliberately handles only the
    * simple case and reports failure otherwise, so callers keep a
    * correct fallback rather than this growing subtle special cases:
-   * the reference must resolve, be single-class (no multi-mapping),
-   * and be exactly `expectedTypeID` — which is what makes reading
-   * `offset` as a plain vtable slot equivalent to the generated
-   * getter's `getOffsetCursor( offset, _, _ )` (that only subtracts a
-   * base offset for multi-mapped records).
+   * the record must be single-class (no multi-mapping) and exactly
+   * `expectedTypeID`.
    *
-   * @param expressID The referenced record's express ID.
-   * @param offset The field's vtable offset within the record.
+   * Field 0 is the data-block start the parser stored in `address_`
+   * (after `TYPE(`). Reading it from the columns skips the descriptor
+   * and vtable `entry()` would retain — on a 9 M-face model those are
+   * the objects the faceset path is trying not to build. Non-zero
+   * offsets still go through a vtable, because only field 0 has that
+   * address identity.
+   *
+   * @param localID The record's local ID.
+   * @param offset The field's vtable offset.
    * @param expectedTypeID The type the record must be.
    * @param sink Receives the appended values.
    * @return {number | undefined} Count appended, or undefined when the
-   * fast path does not apply and the caller must fall back.
+   * fast path does not apply.
    */
-  public extractIntegerArrayByExpressIDInto(
-      expressID: number,
+  public extractIntegerArrayByLocalIDInto(
+      localID: number,
       offset: number,
       expectedTypeID: EntityTypeIDs,
       sink: Uint32Sink ): number | undefined {
 
-    const localID = this.expressIDMap_.get( expressID )
-
-    if ( localID === void 0 || localID >= this.count_ ) {
+    if ( localID >= this.count_ ) {
       return void 0
+    }
+
+    // Multi-mapped records need per-depth base offsets; leave them to
+    // the generated getters. typeID_ is -1 when unset.
+    if ( this.complexEntries_?.has( localID ) ||
+      this.typeID_[ localID ] !== expectedTypeID ) {
+      return void 0
+    }
+
+    if ( offset === 0 ) {
+
+      const address = this.address_[ localID ]
+      const acquisition = this.bufferProvider_.acquire(
+          address, this.length_[ localID ] )
+      const viewAddress = address - acquisition.offset
+
+      return extractIntegerArrayAt(
+          acquisition.buffer,
+          viewAddress,
+          acquisition.buffer.length,
+          sink )
     }
 
     const element = this.entry( localID )
-
-    // Multi-mapped records need per-depth base offsets; leave them to
-    // the generated getters.
-    if ( element.multiMapping !== void 0 || element.typeID !== expectedTypeID ) {
-      return void 0
-    }
 
     if ( element.vtableIndex === void 0 && !this.populateVtableEntryRaw( element ) ) {
       return void 0
@@ -458,6 +495,34 @@ implements Iterable<BaseEntity>, Model {
     // same end bound the generated array getters use.
     return extractIntegerArrayAt(
         buffer, vtable[ ( element.vtableIndex as number ) + offset ], buffer.length, sink )
+  }
+
+
+  /**
+   * Append a referenced record's unsigned-integer list field into `sink`
+   * without materialising the referenced entity.
+   *
+   * @param expressID The referenced record's express ID.
+   * @param offset The field's vtable offset within the record.
+   * @param expectedTypeID The type the record must be.
+   * @param sink Receives the appended values.
+   * @return {number | undefined} Count appended, or undefined when the
+   * fast path does not apply.
+   */
+  public extractIntegerArrayByExpressIDInto(
+      expressID: number,
+      offset: number,
+      expectedTypeID: EntityTypeIDs,
+      sink: Uint32Sink ): number | undefined {
+
+    const localID = this.expressIDMap_.get( expressID )
+
+    if ( localID === void 0 ) {
+      return void 0
+    }
+
+    return this.extractIntegerArrayByLocalIDInto(
+        localID, offset, expectedTypeID, sink )
   }
 
 

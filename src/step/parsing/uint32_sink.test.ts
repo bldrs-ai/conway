@@ -13,7 +13,7 @@ import {
   IfcIndexedPolygonalFaceWithVoids,
   IfcPolygonalFaceSet,
 } from '../../ifc/ifc4_gen/index'
-import { Uint32Sink } from './uint32_sink'
+import { Uint32Sink, extractUnsignedIntegerListAt } from './uint32_sink'
 
 describe( 'Uint32Sink', () => {
 
@@ -30,6 +30,27 @@ describe( 'Uint32Sink', () => {
 
     expect( sink.length ).toBe( 10 )
     expect( Array.from( sink.view ) ).toEqual( [ 0, 3, 6, 9, 12, 15, 18, 21, 24, 27 ] )
+  } )
+
+  test( 'extractUnsignedIntegerListAt parses a plain CoordIndex list', () => {
+
+    const sink = new Uint32Sink( 4 )
+    const bytes = new TextEncoder().encode( '(1,2,3,4)' )
+
+    expect( extractUnsignedIntegerListAt( bytes, 0, bytes.length, sink ) ).toBe( 4 )
+    expect( Array.from( sink.view ) ).toEqual( [ 1, 2, 3, 4 ] )
+  } )
+
+  test( 'extractUnsignedIntegerListAt refuses a real and leaves the sink clean', () => {
+
+    const sink = new Uint32Sink( 4 )
+    const bytes = new TextEncoder().encode( '(1,2.5,3)' )
+
+    sink.push( 9 )
+
+    expect( extractUnsignedIntegerListAt( bytes, 0, bytes.length, sink ) )
+        .toBeUndefined()
+    expect( Array.from( sink.view ) ).toEqual( [ 9 ] )
   } )
 
   test( 'reset drops elements but keeps capacity for reuse', () => {
@@ -219,6 +240,53 @@ describe( 'reference-level faceset fast path', () => {
         expect( count ).toBe( face.CoordIndex.length )
         expect( Array.from( sink.view ) ).toEqual( face.CoordIndex )
       }
+    }
+  }, 120000 )
+
+  test( 'column path matches CoordIndex without materialising the face first', () => {
+
+    const model = stepModel()
+    const sink = new Uint32Sink( 4 )
+
+    for ( const faceSet of faceSets() ) {
+
+      const expressIDs: number[] = []
+
+      faceSet.forEachReferenceInField(
+          FACES_OFFSET, FACES_BASE_OFFSET, FACES_DEPTH,
+          ( expressID ) => {
+
+            if ( expressID !== void 0 ) {
+              expressIDs.push( expressID )
+            }
+
+            return true
+          } )
+
+      const fromColumns: number[][] = []
+
+      for ( const expressID of expressIDs ) {
+
+        sink.reset()
+
+        const count = model.extractIntegerArrayByExpressIDInto(
+            expressID,
+            COORD_INDEX_OFFSET,
+            EntityTypesIfc.IFCINDEXEDPOLYGONALFACE,
+            sink )
+
+        if ( count === void 0 ) {
+          continue
+        }
+
+        fromColumns.push( Array.from( sink.view ) )
+      }
+
+      const fromGetter = faceSet.Faces
+          .filter( ( face ) => !( face instanceof IfcIndexedPolygonalFaceWithVoids ) )
+          .map( ( face ) => face.CoordIndex )
+
+      expect( fromColumns ).toEqual( fromGetter )
     }
   }, 120000 )
 

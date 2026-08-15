@@ -972,7 +972,6 @@ export class IfcGeometryExtraction {
    * @param entity The faceset.
    * @param temporary Is this a temporary (preview//operand) extraction?
    * @param isRelVoid Is this geometry a rel-void operand?
-   * @param indicesPerFace Index count of the last face processed.
    * @param allIndices Face indices, concatenated.
    * @param allStartIndices Per-face start indices.
    * @param polygonalFaceBufferOffsets Per-face offsets into allIndices.
@@ -983,7 +982,6 @@ export class IfcGeometryExtraction {
       entity: IfcPolygonalFaceSet,
       temporary: boolean,
       isRelVoid: boolean,
-      indicesPerFace: number,
       allIndices: Uint32Sink,
       allStartIndices: Uint32Sink,
       polygonalFaceBufferOffsets: Uint32Sink,
@@ -1015,70 +1013,52 @@ export class IfcGeometryExtraction {
       startIndicesBufferOffsetsArray,
     ] )
 
-    // Each acquisition is paired with its release through withRelease, which
-    // propagates a release failure on the success path and suppresses it only
-    // while something is already being unwound. Per-record extraction errors
-    // are caught upstream and expected on malformed models, so anything in
-    // here throwing used to strand all four pointers plus the pooled parse
-    // buffer and the two native objects, once per faceset - on a model with
-    // 15,777 facesets, a leak large enough to cause the exhaustion it would
-    // then be blamed on.
-    //
-    // Suppressing during unwinding matters as much as the release itself:
-    // every one of these re-enters the wasm runtime, and if that runtime is
-    // what failed, a throw here would REPLACE the in-flight error and the
-    // catch upstream would log a generic teardown failure instead of the heap
-    // diagnostic this change exists to produce.
+    // A throw here used to strand all four heap pointers plus the pooled
+    // parse buffer, once per faceset (15,777 on PSB — a leak large enough
+    // to cause the exhaustion it would then be blamed on). withRelease
+    // reclaims them; it suppresses a release failure only while something
+    // is already unwinding, so a wasm-runtime fault is not replaced by a
+    // generic teardown error in the per-record catch upstream.
     const geometry = withRelease(
       () => {
 
-          const polygonalFaceVector =
-            this.wasmModule.buildIndexedPolygonalFaceVector(
-                indicesArrayPtr,
-                indicesArray.length,
-                startIndicesArrayPtr,
-                polygonalFaceBufferOffsetsArrayPtr,
-                polygonalFaceBufferOffsetsArray.length,
-                startIndicesBufferOffsetsArrayPtr,
-                startIndicesBufferOffsetsArray.length)
+          const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
 
-          return withRelease(
+          // Packed triangulation: the four heap buffers are already the
+          // face index layout. Unpacking them into 9.1M IndexedPolygonalFace
+          // std::vectors was the rest of the PSB pump after #448, and is
+          // why feeding the ThreadPool lost (the pool was paying to copy
+          // those vectors).
+          const pointsArrayNative = withRelease(
             () => {
 
-              const pointsParseBuffer = this.conwayModel.nativeParseBuffer()
+              if ( !entity.Coordinates.extractParseBuffer(
+                  0,
+                  0,
+                  0,
+                  pointsParseBuffer,
+                  this.wasmModule,
+                  true ) ) {
 
-              // Released around parseVertexVector too, not just the extract:
-              // it is pooled, so leaking it also loses whatever resize() grew.
-              const pointsArrayNative = withRelease(
-                () => {
+                pointsParseBuffer.resize( 0 )
+              }
 
-                  if ( !entity.Coordinates.extractParseBuffer(
-                      0,
-                      0,
-                      0,
-                      pointsParseBuffer,
-                      this.wasmModule,
-                      true ) ) {
-
-                    pointsParseBuffer.resize( 0 )
-                  }
-
-                  return this.wasmModule.parseVertexVector( pointsParseBuffer )
-                },
-                () => this.conwayModel.freeParseBuffer( pointsParseBuffer ) )
-
-              return withRelease(
-                () => this.conwayModel.getPolygonalFaceSetGeometry( {
-                  indicesPerFace: indicesPerFace,
-                  points: pointsArrayNative,
-                  faces: polygonalFaceVector,
-                } ),
-                () => pointsArrayNative.delete() )
+              return this.wasmModule.parseVertexVector( pointsParseBuffer )
             },
-            () => polygonalFaceVector.delete() )
+            () => this.conwayModel.freeParseBuffer( pointsParseBuffer ) )
+
+          return withRelease(
+            () => this.conwayModel.getPolygonalFaceSetGeometryPacked(
+                pointsArrayNative,
+                indicesArrayPtr,
+                polygonalFaceBufferOffsetsArrayPtr,
+                polygonalFaceBufferOffsetsArray.length,
+                startIndicesArrayPtr,
+                startIndicesBufferOffsetsArrayPtr ),
+            () => pointsArrayNative.delete() )
       },
-      // freeAll, not four statements in one closure: there the first failure
-      // would abandon the other three.
+      // freeAll, not four statements in one closure: there the first
+      // failure would abandon the other three.
       () => freeAll( this.wasmModule, [
         indicesArrayPtr,
         startIndicesArrayPtr,
@@ -1094,11 +1074,10 @@ export class IfcGeometryExtraction {
       temporary: temporary,
     }
 
-    // add mesh to the list of mesh objects
-    if (!isRelVoid) {
-      this.model.geometry.add(canonicalMesh)
+    if ( !isRelVoid ) {
+      this.model.geometry.add( canonicalMesh )
     } else {
-      this.model.voidGeometry.add(canonicalMesh)
+      this.model.voidGeometry.add( canonicalMesh )
     }
 
     return ExtractResult.COMPLETE
@@ -1168,8 +1147,6 @@ export class IfcGeometryExtraction {
     polygonalFaceBufferOffsets.reset()
     startIndicesBufferOffsets.reset()
 
-    let indicesPerFace: number = -1
-
     // Fast path: read each face's CoordIndex straight from its record,
     // never constructing the 9M+ IfcIndexedPolygonalFace entities a
     // large tessellated model would otherwise materialise (and retain,
@@ -1179,6 +1156,7 @@ export class IfcGeometryExtraction {
     // abandons the whole faceset back to the getter path below, so
     // correctness never depends on the fast path's coverage.
     let fastPathOk = true
+    let hintLocalID: number | undefined
 
     const facesWalked = entity.forEachReferenceInField(
         FACES_FIELD_OFFSET,
@@ -1191,8 +1169,15 @@ export class IfcGeometryExtraction {
             return false
           }
 
-          const count = this.model.extractIntegerArrayByExpressIDInto(
-              expressID,
+          const localID = this.model.resolveExpressID( expressID, hintLocalID )
+
+          if ( localID === void 0 ) {
+            fastPathOk = false
+            return false
+          }
+
+          const count = this.model.extractIntegerArrayByLocalIDInto(
+              localID,
               COORD_INDEX_FIELD_OFFSET,
               EntityTypesIfc.IFCINDEXEDPOLYGONALFACE,
               allIndices)
@@ -1202,17 +1187,18 @@ export class IfcGeometryExtraction {
             return false
           }
 
+          hintLocalID = localID
+
           polygonalFaceBufferOffsets.push(allIndices.length - count)
           startIndicesBufferOffsets.push(allStartIndices.length)
           allStartIndices.push(0)
-          indicesPerFace = count
 
           return true
         })
 
     if (fastPathOk && facesWalked) {
       this.finishPolygonalFaceSet_(
-          entity, temporary, isRelVoid, indicesPerFace,
+          entity, temporary, isRelVoid,
           allIndices, allStartIndices,
           polygonalFaceBufferOffsets, startIndicesBufferOffsets)
 
@@ -1224,7 +1210,6 @@ export class IfcGeometryExtraction {
     allStartIndices.reset()
     polygonalFaceBufferOffsets.reset()
     startIndicesBufferOffsets.reset()
-    indicesPerFace = -1
 
     // Prepare indices and start indices for all faces
     entity.Faces.forEach((polygonalFace) => {
@@ -1238,7 +1223,7 @@ export class IfcGeometryExtraction {
 
       if (polygonalFace instanceof IfcIndexedPolygonalFaceWithVoids) {
         // Voided faces are rare; keep the straightforward getter path.
-        indicesPerFace = polygonalFace.CoordIndex.length
+        const indicesPerFace = polygonalFace.CoordIndex.length
 
         allStartIndices.push(0)
         coordIndex += indicesPerFace
@@ -1259,13 +1244,13 @@ export class IfcGeometryExtraction {
       } else {
         // CoordIndex is vtable offset 0 on IfcIndexedPolygonalFace (see
         // its generated getter) — parsed in place, never allocated or cached.
-        indicesPerFace = polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
+        polygonalFace.extractIntegerArrayInto(0, 0, 3, allIndices)
         allStartIndices.push(0)
       }
     })
 
     this.finishPolygonalFaceSet_(
-        entity, temporary, isRelVoid, indicesPerFace,
+        entity, temporary, isRelVoid,
         allIndices, allStartIndices,
         polygonalFaceBufferOffsets, startIndicesBufferOffsets)
 
