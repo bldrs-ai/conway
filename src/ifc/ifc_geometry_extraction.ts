@@ -6035,8 +6035,14 @@ export class IfcGeometryExtraction {
 
     for (const styledItem of styledItems) {
       try {
-        if (styledItem.Item !== null) {
-          this.materials.styledItemMap.set(styledItem.Item.localID, styledItem.localID)
+        // IfcStyledItem.Item — same vtable slot as the generated
+        // getter's extractElement(0, 0, 1, true, ...). Hydrating Item
+        // would acquire the faceset record (often the packed geometry
+        // itself) for every styled item at once.
+        const itemLocalID = styledItem.extractReferenceLocalID(0, 0, 1, true)
+
+        if (itemLocalID !== null) {
+          this.materials.styledItemMap.set(itemLocalID, styledItem.localID)
         }
       } catch (ex) {
         this.handleMapPrepError_('IfcStyledItem', styledItem.expressID, ex)
@@ -6402,6 +6408,12 @@ export class IfcGeometryExtraction {
    * the relationship sweeps succeed on a windowed source. Call before
    * the first prepare on a model whose source is external.
    *
+   * Pins the prep-type records themselves (and a 1-hop of product /
+   * material records the relationship getters hydrate). Does **not**
+   * BFS-pin styled-item Item closures — those are facesets, and
+   * walking them here pulled most of the file into the windowed LRU
+   * before the first product extract.
+   *
    * @return {Promise<Set<number>>} Pinned local IDs — caller must
    * {@link StepModelBase.unpinLocalIDs} after prepare/extract.
    */
@@ -6413,19 +6425,68 @@ export class IfcGeometryExtraction {
       return pinned
     }
 
-    const prepTypes = [
-      IfcProject,
+    // Small trees: project units, material-definition style stacks.
+    for ( const type of [IfcProject, IfcMaterialDefinitionRepresentation] ) {
+
+      for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
+        await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
+      }
+    }
+
+    const recordOnlyTypes = [
       IfcRelAssociatesMaterial,
-      IfcMaterialDefinitionRepresentation,
       IfcRelVoidsElement,
       IfcStyledItem,
       IfcRelAggregates,
     ]
 
-    for ( const type of prepTypes ) {
+    for ( const type of recordOnlyTypes ) {
 
       for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
-        await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
+
+        const localID = this.model.resolveExpressID( expressID )
+
+        if ( localID === void 0 || pinned.has( localID ) ) {
+          continue
+        }
+
+        await this.model.ensureResidentByLocalID( localID )
+        this.model.pinByLocalID( localID )
+        pinned.add( localID )
+      }
+    }
+
+    // Relationship getters hydrate the related product / material
+    // records (not their geometry). Pin that 1-hop so populate can
+    // read `.localID` without a full closure walk.
+    const oneHopTypes = [
+      IfcRelAssociatesMaterial,
+      IfcRelVoidsElement,
+      IfcRelAggregates,
+    ]
+
+    for ( const type of oneHopTypes ) {
+
+      for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
+
+        const localID = this.model.resolveExpressID( expressID )
+
+        if ( localID === void 0 ) {
+          continue
+        }
+
+        for ( const refExpressID of this.model.referencedExpressIDs( localID ) ) {
+
+          const refLocalID = this.model.resolveExpressID( refExpressID )
+
+          if ( refLocalID === void 0 || pinned.has( refLocalID ) ) {
+            continue
+          }
+
+          await this.model.ensureResidentByLocalID( refLocalID )
+          this.model.pinByLocalID( refLocalID )
+          pinned.add( refLocalID )
+        }
       }
     }
 

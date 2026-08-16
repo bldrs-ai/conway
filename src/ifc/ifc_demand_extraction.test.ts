@@ -14,7 +14,7 @@ import IfcStepModel from './ifc_step_model'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { ExtractResult } from '../core/shared_constants'
-import { IfcProduct } from './ifc4_gen'
+import { IfcProduct, IfcStyledItem } from './ifc4_gen'
 
 let conwayGeometry: ConwayGeometry
 
@@ -151,5 +151,22 @@ describe( 'per-product demand extraction (Phase B2)', () => {
     expect( first instanceof IfcProduct ).toBe( false )
 
     expect( extraction.extractProductGeometryByLocalID( 0 ) ).toBe( false )
+  } )
+
+  test( 'styled-item Item local IDs resolve without hydrating the item', () => {
+
+    const model = freshModel()
+    let checked = 0
+
+    for ( const styledItem of model.types( IfcStyledItem ) ) {
+
+      const viaIndex = styledItem.extractReferenceLocalID( 0, 0, 1, true )
+      const viaItem = styledItem.Item?.localID ?? null
+
+      expect( viaIndex ).toBe( viaItem )
+      ++checked
+    }
+
+    expect( checked ).toBeGreaterThan( 0 )
   } )
 } )
