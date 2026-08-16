@@ -1093,6 +1093,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    */
   protected get buffer(): Uint8Array {
 
+    this.guaranteeBuffer()
+
     return this.internalReference_.buffer as Uint8Array
   }
 

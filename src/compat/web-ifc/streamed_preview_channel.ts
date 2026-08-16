@@ -74,6 +74,8 @@ export interface PreviewMeshPayload {
   flatTransformation: number[]
   vertexData?: Float32Array
   indexData?: Uint32Array
+  /** Parse-time AABB imposter (no vertex payload; Share instances a unit cube). */
+  aabb?: { min: [number, number, number], max: [number, number, number] }
 }
 
 /**

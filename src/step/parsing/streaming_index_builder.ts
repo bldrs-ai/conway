@@ -88,8 +88,11 @@ export function buildIndexStreaming<TypeIDType>(
     source: ByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
-    onRecordIndexed?:
-      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+    onRecordIndexed?: (
+      localID: number,
+      expressID: number,
+      typeID: TypeIDType | undefined,
+      recordBytes?: Uint8Array ) => void,
     sink?: StepIndexSink<TypeIDType> ):
     StreamingIndexResult<TypeIDType> {
 
@@ -256,8 +259,11 @@ export async function buildIndexStreamingAsync<TypeIDType>(
     source: ReadableByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
-    onRecordIndexed?:
-      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+    onRecordIndexed?: (
+      localID: number,
+      expressID: number,
+      typeID: TypeIDType | undefined,
+      recordBytes?: Uint8Array ) => void,
     sink?: StepIndexSink<TypeIDType>,
     onProgress?: ( absoluteByteCursor: number ) => void,
     yieldIntervalMs?: number ):
@@ -400,8 +406,11 @@ export function buildColumnarIndexStreaming<TypeIDType extends number>(
     source: ByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
-    onRecordIndexed?:
-      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void ):
+    onRecordIndexed?: (
+      localID: number,
+      expressID: number,
+      typeID: TypeIDType | undefined,
+      recordBytes?: Uint8Array ) => void ):
     StreamingColumnarIndexResult<TypeIDType> {
 
   const sink = new ColumnarIndexSink<TypeIDType>()
@@ -432,8 +441,11 @@ export async function buildColumnarIndexStreamingAsync<TypeIDType extends number
     source: ReadableByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
-    onRecordIndexed?:
-      ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+    onRecordIndexed?: (
+      localID: number,
+      expressID: number,
+      typeID: TypeIDType | undefined,
+      recordBytes?: Uint8Array ) => void,
     onProgress?: ( absoluteByteCursor: number ) => void,
     yieldIntervalMs?: number ):
     Promise<StreamingColumnarIndexResult<TypeIDType>> {

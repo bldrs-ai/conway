@@ -33,6 +33,8 @@ export interface ProgressEvent {
   readonly elapsedMs: number
   /** Coarse used-JS-heap sample in MB, when the environment exposes one. */
   readonly memoryMb?: number
+  /** Windowed source bytes currently resident, in MB (Geometry phase). */
+  readonly residentSourceMb?: number
 }
 
 export type ProgressCallback = ( event: ProgressEvent ) => void
@@ -101,6 +103,7 @@ export class ProgressTracker {
   private phase_: ProgressPhase | undefined
   private unit_: ProgressUnit = 'elements'
   private total_: number | undefined
+  private extras_: { residentSourceMb?: number } | undefined
 
   /**
    * Construct this with the callback progress events are forwarded to.
@@ -150,15 +153,19 @@ export class ProgressTracker {
    * Report progress within the current phase; throttled.
    *
    * @param completed Units completed so far.
+   * @param extras Optional extras (window residency) merged into the event.
    */
-  public update( completed: number ): void {
+  public update(
+      completed: number,
+      extras?: { residentSourceMb?: number } ): void {
     const now = Date.now()
 
     if ( now - this.lastEmitTime < this.minIntervalMs ) {
       return
     }
 
-    this.emit( completed, now )
+    this.extras_ = extras
+    this.emit( completed, now, extras )
   }
 
   /**
@@ -168,8 +175,9 @@ export class ProgressTracker {
    * @param completed Final completed units (defaults to the phase total).
    */
   public endPhase( completed?: number ): void {
-    this.emit( completed ?? this.total_ ?? 0 )
+    this.emit( completed ?? this.total_ ?? 0, Date.now(), this.extras_ )
     this.phase_ = void 0
+    this.extras_ = void 0
   }
 
   /**
@@ -177,8 +185,12 @@ export class ProgressTracker {
    *
    * @param completed Units completed so far.
    * @param now Current time in ms (defaults to Date.now()).
+   * @param extras Optional extras merged into the event.
    */
-  private emit( completed: number, now: number = Date.now() ): void {
+  private emit(
+      completed: number,
+      now: number = Date.now(),
+      extras?: { residentSourceMb?: number } ): void {
     if ( this.phase_ === void 0 ) {
       return
     }
@@ -194,6 +206,7 @@ export class ProgressTracker {
       unit: this.unit_,
       elapsedMs: now - this.startTime,
       memoryMb: Memory.usedHeapMb(),
+      residentSourceMb: extras?.residentSourceMb,
     } )
   }
 }

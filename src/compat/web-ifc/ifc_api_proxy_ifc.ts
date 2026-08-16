@@ -38,6 +38,7 @@ import {
   ifcPreviewAdapter,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
+import { makeParseAabbImposter } from './parse_aabb_imposter'
 import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
@@ -65,6 +66,8 @@ const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
  * is scratch — it does not stay resident after parse. */
 // eslint-disable-next-line no-magic-numbers
 const STORE_PARSE_POOL_BYTES = 16 * 1024 * 1024
+// eslint-disable-next-line no-magic-numbers
+const BYTES_PER_MIB = 1024 * 1024
 
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
@@ -908,8 +911,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /**
    * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
    * source stays in `store`, parse windows are filled through it, and
-   * the model never holds a resident copy. Preview-during-parse is
-   * skipped (that channel needs a resident prefix). Deferred opens
+   * the model never holds a resident copy. The full prefix-extract
+   * preview channel is skipped (it needs a resident prefix); a sparse
+   * AABB imposter rides onRecordIndexed instead. Deferred opens
    * page prep closures before prepareDemandExtraction; non-deferred
    * opens drain the demand pump with per-product residency.
    *
@@ -956,11 +960,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const parseStartTime = Date.now()
 
+    const onRecordIndexed = settings?.ON_PREVIEW_MESH !== void 0 ?
+      makeParseAabbImposter( settings.ON_PREVIEW_MESH ) : void 0
+
     const { result, columns } = await buildColumnarIndexStreamingAsync(
         new StoreByteSource( store ),
         parser,
         STORE_PARSE_POOL_BYTES,
-        void 0,
+        onRecordIndexed,
         parseTick )
 
     const parseEndTime = Date.now()
@@ -985,6 +992,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     try {
       conwayGeometry.prepareDemandExtraction()
     } finally {
+      model.releaseSourceViews( prepPins )
       model.unpinLocalIDs( prepPins )
     }
 
@@ -1030,11 +1038,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             `Error extracting product ${product.expressID}: ` +
             `${error instanceof Error ? error.message : String( error )}` )
       } finally {
+        model.releaseSourceViews( pins )
         model.unpinLocalIDs( pins )
       }
 
       ++completed
-      tracker?.update( completed )
+      tracker?.update( completed, {
+        residentSourceMb: model.residentSourceBytes / BYTES_PER_MIB,
+      } )
     }
 
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
@@ -1049,11 +1060,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             `Error extracting aggregate ${relAggregate.expressID}: ` +
             `${error instanceof Error ? error.message : String( error )}` )
       } finally {
+        model.releaseSourceViews( pins )
         model.unpinLocalIDs( pins )
       }
 
       ++completed
-      tracker?.update( completed )
+      tracker?.update( completed, {
+        residentSourceMb: model.residentSourceBytes / BYTES_PER_MIB,
+      } )
     }
 
     const endTime = Date.now()
@@ -1777,6 +1791,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             `Error extracting product localID ${localID}: ` +
             `${error instanceof Error ? error.message : String(error)}`)
       } finally {
+        this.model[0].releaseSourceViews(pins)
         this.model[0].unpinLocalIDs(pins)
       }
     }
@@ -1804,6 +1819,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
               `Error extracting aggregate ${relAggregate.expressID}: ` +
               `${error instanceof Error ? error.message : String(error)}`)
         } finally {
+          this.model[0].releaseSourceViews(pins)
           this.model[0].unpinLocalIDs(pins)
         }
       }
@@ -1816,12 +1832,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const remaining = (products.length - this.demandCursor_) +
         (aggregates.length - this.demandAggregatesCursor_)
 
+    const windowMb = this.model[0].residentSourceBytes / BYTES_PER_MIB
+
     if (this.progressTracker_ !== void 0) {
       const completed = totalWork - remaining
       if (remaining === 0) {
+        this.progressTracker_.update(completed, { residentSourceMb: windowMb })
         this.progressTracker_.endPhase(totalWork)
       } else {
-        this.progressTracker_.update(completed)
+        this.progressTracker_.update(completed, { residentSourceMb: windowMb })
       }
     }
 

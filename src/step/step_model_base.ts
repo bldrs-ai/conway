@@ -816,6 +816,57 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Drop captured source-window views on `localIDs` so the windowed
+   * LRU can actually evict those chunks. Descriptors keep SoA columns
+   * and (if present) the entity object; the next field read
+   * re-acquires. Call after a product extract, once the closure is
+   * unpin-able — otherwise every extracted entity pins its 4 MiB
+   * chunk for the rest of the load.
+   *
+   * @param localIDs Records whose `buffer` views to drop.
+   */
+  public releaseSourceViews( localIDs: Iterable< number > ): void {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    for ( const localID of localIDs ) {
+
+      if ( localID >= this.count_ ) {
+        continue
+      }
+
+      const item =
+        this.complexEntries_?.get( localID ) ?? this.descriptorCache_[ localID ]
+
+      if ( item === void 0 ) {
+        continue
+      }
+
+      // Drop the view AND the vtable: vtable slots are view-relative,
+      // so they are stale against the next acquire of a different window.
+      item.buffer      = void 0
+      item.vtable      = void 0
+      item.vtableCount = void 0
+      item.vtableIndex = void 0
+
+      if ( item.multiMapping !== void 0 ) {
+
+        for ( const mapped of item.multiMapping ) {
+          mapped.buffer      = void 0
+          mapped.vtable      = void 0
+          mapped.vtableCount = void 0
+          mapped.vtableIndex = void 0
+        }
+      }
+    }
+
+    releaseScratchParsingBuffer()
+  }
+
+
+  /**
    * Unpin every local ID in `localIDs` (best-effort; missing IDs are
    * ignored). Use after {@link ensureResidentClosureByLocalID}, which
    * pins as it walks.
