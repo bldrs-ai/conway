@@ -34,16 +34,18 @@ import {
   buildColumnarIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import { StorePreviewChannel } from './store_preview_channel'
 import {
   ifcPreviewAdapter,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
-import { makeParseAabbImposter } from './parse_aabb_imposter'
+import { emitSpatialStructureImposters } from './spatial_imposter'
 import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import { ParseResult } from '../../index'
+import { releaseScratchParsingBuffer } from '../../step/parsing/step_deserialization_functions'
 import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
@@ -135,6 +137,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
+
+  /** Wall-clock split of the store-backed batch pump (profile script). */
+  private readonly extractProfile_ = {
+    prefetchMs: 0,
+    extractMs: 0,
+    releaseMs: 0,
+    batches: 0,
+    lastPins: 0,
+    pinMax: 0,
+  }
 
   /**
    * Deferred-mode rel-aggregates worklist, pumped batch-by-batch AFTER
@@ -850,6 +862,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // walks, so meshes appear to consumers as batches extract.
     if (deferGeometry) {
 
+      if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
+
+        try {
+          await emitSpatialStructureImposters( model, settings.ON_PREVIEW_MESH )
+        } catch {
+          // Spatial imposters must never break a deferred open.
+        }
+      }
+
       conwayGeometry.prepareDemandExtraction()
 
       statistics?.setProductCount(model.typeCount(IfcProduct))
@@ -911,11 +932,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /**
    * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
    * source stays in `store`, parse windows are filled through it, and
-   * the model never holds a resident copy. The full prefix-extract
-   * preview channel is skipped (it needs a resident prefix); a sparse
-   * AABB imposter rides onRecordIndexed instead. Deferred opens
-   * page prep closures before prepareDemandExtraction; non-deferred
-   * opens drain the demand pump with per-product residency.
+   * the model never holds a resident copy. During parse a bounded
+   * prefix extract pages product closures from the store and emits
+   * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
+   * the index exists, spatial-structure AABB plates go out too.
+   * Deferred opens page prep closures before prepareDemandExtraction;
+   * non-deferred opens drain the demand pump with per-product residency.
    *
    * @param modelID The model ID being opened.
    * @param store External store holding the source bytes.
@@ -936,22 +958,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const parser = IfcStepParser.Instance
     const fileSize = store.byteLength
 
-    tracker?.beginPhase('headerParse', 'bytes', fileSize)
-
-    const headerLen = Math.min( fileSize, STORE_PARSE_POOL_BYTES )
-    const headerBytes = await store.read( 0, headerLen )
-    const [stepHeader, result0] = parser.parseHeader( new ParsingBuffer( headerBytes ) )
-
     Logger.createStatistics(modelID)
 
     const statistics = Logger.getStatistics(modelID)
-
-    IfcApiProxyIfc.reportHeaderParseResult(result0, new ParsingBuffer( headerBytes ), modelID)
-
-    const modelInfo = extractModelInfo(stepHeader, fileSize)
-
-    Logger.info(formatModelLine(modelInfo))
-    settings?.ON_MODEL_INFO?.(modelInfo)
 
     tracker?.beginPhase('dataParse', 'bytes', fileSize)
 
@@ -960,15 +969,56 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const parseStartTime = Date.now()
 
-    const onRecordIndexed = settings?.ON_PREVIEW_MESH !== void 0 ?
-      makeParseAabbImposter( settings.ON_PREVIEW_MESH ) : void 0
+    // Live sink so the store preview channel can snapshot a prefix
+    // mid-parse without a resident source buffer.
+    const sink = new ColumnarIndexSink< EntityTypesIfc >()
+    const storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
+      new StorePreviewChannel(
+          store,
+          sink,
+          conwaywasm,
+          settings.COORDINATE_TO_ORIGIN === true,
+          settings.ON_PREVIEW_MESH ) : void 0
 
-    const { result, columns } = await buildColumnarIndexStreamingAsync(
-        new StoreByteSource( store ),
-        parser,
-        STORE_PARSE_POOL_BYTES,
-        onRecordIndexed,
-        parseTick )
+    const parseProgress = async ( cursorBytes: number ): Promise< void > => {
+      parseTick?.( cursorBytes )
+      await storePreview?.maybeTickAsync()
+    }
+
+    // One windowed pass: header comes out of the same slide as the
+    // data block so we do not hold a second 16 MiB prefix copy.
+    let result
+    let stepHeader
+
+    try {
+      ( { result, header: stepHeader } = await buildIndexStreamingAsync(
+          new StoreByteSource( store ),
+          parser,
+          STORE_PARSE_POOL_BYTES,
+          void 0,
+          sink,
+          parseProgress ) )
+
+      if ( storePreview !== void 0 ) {
+        await storePreview.flushAsync()
+      }
+    } finally {
+      storePreview?.stop()
+    }
+
+    const columns = sink.finalize()
+
+    // Parse window is out of scope; drop the module scratch in case a
+    // numeric read during the slide left it pointed at that 16 MiB view.
+    releaseScratchParsingBuffer()
+
+    IfcApiProxyIfc.reportHeaderParseResult(
+        result, new ParsingBuffer( new Uint8Array( 0 ) ), modelID )
+
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
 
     const parseEndTime = Date.now()
 
@@ -984,6 +1034,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const model = new IfcStepModel( void 0, columns, provider )
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
+
+      try {
+        await emitSpatialStructureImposters( model, settings.ON_PREVIEW_MESH )
+      } catch {
+        // Spatial imposters must never break a store-backed open.
+      }
+    }
 
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
 
@@ -1003,6 +1062,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
+        previewCoordinationMatrix: storePreview?.coordinationMatrix,
         allTimeStart,
         stepHeader,
         model,
@@ -1033,11 +1093,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
 
       const pins = new Set< number >()
+      const leafSpans: { address: number, length: number }[] = []
 
       try {
 
         await Promise.all( pending.map( ( localID ) =>
-          conwayGeometry.ensureResidentForProductExtract( localID, pins ) ) )
+          conwayGeometry.ensureResidentForProductExtract(
+              localID, pins, leafSpans ) ) )
 
         for ( const localID of pending ) {
 
@@ -1049,11 +1111,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
                 `${error instanceof Error ? error.message : String( error )}` )
           }
 
+          model.releaseSourceViews( pins )
           ++completed
         }
       } finally {
         model.releaseSourceViews( pins )
         model.unpinLocalIDs( pins )
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
         pending.length = 0
       }
 
@@ -1079,8 +1145,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
 
+      const leafSpans: { address: number, length: number }[] = []
       const pins =
-        await conwayGeometry.ensureResidentForAggregateExtract( relAggregate )
+        await conwayGeometry.ensureResidentForAggregateExtract(
+            relAggregate, leafSpans )
 
       try {
         conwayGeometry.extractRelAggregateGeometry( relAggregate )
@@ -1091,6 +1159,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       } finally {
         model.releaseSourceViews( pins )
         model.unpinLocalIDs( pins )
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
       }
 
       ++completed
@@ -1316,6 +1387,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   get sourceIsExternal(): boolean {
     return this.model[0].isSourceExternal
+  }
+
+  /**
+   * Store-backed pump split (prefetch / extract / release).
+   *
+   * @return {object} Cumulative milliseconds and pin telemetry.
+   */
+  get extractProfile(): {
+    prefetchMs: number
+    extractMs: number
+    releaseMs: number
+    batches: number
+    lastPins: number
+    pinMax: number
+  } {
+    return this.extractProfile_
   }
 
   /**
@@ -1811,12 +1898,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // One pin set for the batch so mapped geometry stays resident
       // across the instances that share it.
       const pins = new Set<number>()
+      const leafSpans: { address: number, length: number }[] = []
+      const profile = this.extractProfile_
 
       try {
 
+        const prefetchStart = Date.now()
         await Promise.all(batchIDs.map((localID) =>
-          this.conwayGeometry_.ensureResidentForProductExtract(localID, pins)))
+          this.conwayGeometry_.ensureResidentForProductExtract(
+              localID, pins, leafSpans)))
+        profile.prefetchMs += Date.now() - prefetchStart
+        if ( pins.size > profile.pinMax ) {
+          profile.pinMax = pins.size
+        }
+        profile.lastPins = pins.size
 
+        const extractStart = Date.now()
         for (const localID of batchIDs) {
 
           try {
@@ -1828,12 +1925,23 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
                 `Error extracting product localID ${localID}: ` +
                 `${error instanceof Error ? error.message : String(error)}`)
           }
+
+          // Drop JS views after each product; chunks stay pinned for
+          // the rest of the batch so rematerialise is a cache hit.
+          this.model[0].releaseSourceViews(pins)
         }
+        profile.extractMs += Date.now() - extractStart
 
         this.demandCursor_ = productEnd
       } finally {
+        const releaseStart = Date.now()
         this.model[0].releaseSourceViews(pins)
         this.model[0].unpinLocalIDs(pins)
+        for (const span of leafSpans) {
+          this.model[0].unpinAddressRange(span.address, span.length)
+        }
+        profile.releaseMs += Date.now() - releaseStart
+        profile.batches++
       }
     }
 
@@ -1848,9 +1956,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         ++this.demandAggregatesCursor_) {
 
         const relAggregate = aggregates[this.demandAggregatesCursor_]
+        const leafSpans: { address: number, length: number }[] = []
         const pins =
           await this.conwayGeometry_.ensureResidentForAggregateExtract(
-              relAggregate)
+              relAggregate, leafSpans)
 
         try {
           this.conwayGeometry_.extractRelAggregateGeometry(relAggregate)
@@ -1862,6 +1971,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         } finally {
           this.model[0].releaseSourceViews(pins)
           this.model[0].unpinLocalIDs(pins)
+          for (const span of leafSpans) {
+            this.model[0].unpinAddressRange(span.address, span.length)
+          }
         }
       }
     }

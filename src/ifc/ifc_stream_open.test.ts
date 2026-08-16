@@ -173,6 +173,7 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     const visited = await model.ensureResidentClosureByLocalID( localID )
 
     expect( visited.has( localID ) ).toBe( true )
+    expect( model.typeIDOf( localID ) ).toBeDefined()
 
     for ( const refExpressID of refs ) {
 
@@ -182,6 +183,103 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
         expect( visited.has( refLocalID ) ).toBe( true )
       }
     }
+  } )
+
+  test( 'ensureResidentClosureByLocalID skip-descend does not follow #refs', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const refs = model.referencedExpressIDs( localID )
+    expect( refs.length ).toBeGreaterThan( 0 )
+
+    const leafSpans: { address: number, length: number }[] = []
+    const visited = await model.ensureResidentClosureByLocalID(
+        localID,
+        void 0,
+        new Set< number >(),
+        ( id ) => id === localID,
+        leafSpans )
+
+    expect( visited.has( localID ) ).toBe( true )
+    expect( visited.size ).toBe( 1 )
+    expect( leafSpans.length ).toBeGreaterThan( 0 )
+    expect( leafSpans[ 0 ].length ).toBeGreaterThan( 0 )
+  } )
+
+  test( 'spanLeaf spans children; !descend without spanLeaf still visits them', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const refs = model.referencedExpressIDs( localID )
+    expect( refs.length ).toBeGreaterThan( 0 )
+
+    const leafSpans: { address: number, length: number }[] = []
+    const visited = await model.ensureResidentClosureByLocalID(
+        localID,
+        void 0,
+        new Set< number >(),
+        ( id ) => id === localID,
+        leafSpans,
+        () => false )
+
+    expect( visited.has( localID ) ).toBe( true )
+    expect( visited.size ).toBeGreaterThan( 1 )
+    expect( leafSpans.length ).toBe( 0 )
+  } )
+
+  test( 'spansOfExpressIDs covers each record without the holes between', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressIDs = [ ...model.expressIDsOfTypes( IfcRoot ) ]
+    expect( expressIDs.length ).toBeGreaterThan( 1 )
+
+    const spans = model.spansOfExpressIDs( expressIDs )
+
+    expect( spans.length ).toBeGreaterThan( 0 )
+
+    let covered = 0
+    let hullMin = Infinity
+    let hullMax = 0
+
+    for ( const span of spans ) {
+      covered += span.length
+    }
+
+    for ( const refExpressID of expressIDs ) {
+
+      const localID = model.resolveExpressID( refExpressID )!
+      const address = model.recordAddress( localID )!
+      const end = address + model.recordLength( localID )!
+
+      if ( address < hullMin ) {
+        hullMin = address
+      }
+
+      if ( end > hullMax ) {
+        hullMax = end
+      }
+
+      const inside = spans.some( ( span ) =>
+        address >= span.address && end <= span.address + span.length )
+
+      expect( inside ).toBe( true )
+    }
+
+    // IfcRoot rows are scattered through index.ifc — the coalesced
+    // spans must not be the single hull from first to last.
+    expect( covered ).toBeLessThan( hullMax - hullMin )
   } )
 
   test( 'openStreamedIfcModelFromStore matches the sync open', async () => {
