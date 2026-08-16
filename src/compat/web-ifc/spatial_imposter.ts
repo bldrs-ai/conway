@@ -59,6 +59,7 @@ interface SpatialNode {
   origin?: [number, number, number]
   elevation?: number
   aabb?: Aabb3
+  computing?: boolean
 }
 
 
@@ -487,7 +488,9 @@ export async function emitSpatialStructureImposters(
           } )
 
       if ( products.length > 0 ) {
-        contained.set( structureID, products )
+        const existing = contained.get( structureID ) ?? []
+        existing.push( ...products )
+        contained.set( structureID, existing )
       }
     } catch {
       // Preview must never break open.
@@ -516,6 +519,7 @@ export async function emitSpatialStructureImposters(
   }
 
   const queue = roots.slice()
+  const queued = new Set< number >( roots )
   let maxDepth = 0
 
   while ( queue.length > 0 ) {
@@ -530,7 +534,16 @@ export async function emitSpatialStructureImposters(
     const parentID = parentOf.get( id )
     node.depth = parentID === void 0 ? 0 : ( nodes.get( parentID )?.depth ?? 0 ) + 1
     maxDepth = Math.max( maxDepth, node.depth )
-    queue.push( ...node.children )
+
+    for ( const childID of node.children ) {
+
+      if ( queued.has( childID ) ) {
+        continue
+      }
+
+      queued.add( childID )
+      queue.push( childID )
+    }
   }
 
   const originCache = new Map< number, [number, number, number] | undefined >()
@@ -592,18 +605,58 @@ export async function emitSpatialStructureImposters(
     }
   }
 
-  const storeys = [...nodes.values()].
-      filter( ( node ) => STOREY_TYPES.has( node.typeID ) && node.elevation !== void 0 ).
-      sort( ( a, b ) => ( a.elevation ?? 0 ) - ( b.elevation ?? 0 ) )
+  const storeysByParent = new Map< number | string, SpatialNode[] >()
+
+  for ( const node of nodes.values() ) {
+
+    if ( !STOREY_TYPES.has( node.typeID ) || node.elevation === void 0 ) {
+      continue
+    }
+
+    const parentKey = parentOf.get( node.localID ) ?? 'root'
+    const group = storeysByParent.get( parentKey ) ?? []
+    group.push( node )
+    storeysByParent.set( parentKey, group )
+  }
 
   const storeyHeight = new Map< number, number >()
 
-  for ( let i = 0; i < storeys.length; ++i ) {
+  for ( const group of storeysByParent.values() ) {
 
-    const here = storeys[ i ].elevation ?? 0
-    const next = storeys[ i + 1 ]?.elevation
-    const height = next !== void 0 && next > here ? next - here : MIN_EDGE
-    storeyHeight.set( storeys[ i ].localID, height )
+    group.sort( ( a, b ) => ( a.elevation ?? 0 ) - ( b.elevation ?? 0 ) )
+
+    for ( let i = 0; i < group.length; ++i ) {
+
+      const here = group[ i ].elevation ?? 0
+      const next = group[ i + 1 ]?.elevation
+      let height = next !== void 0 && next > here ? next - here : void 0
+
+      if ( height === void 0 ) {
+
+        const samples = productOrigins.get( group[ i ].localID )
+
+        if ( samples !== void 0 && samples.length > 0 ) {
+
+          let minZ = samples[ 0 ][ 2 ]
+          let maxZ = samples[ 0 ][ 2 ]
+
+          for ( const origin of samples ) {
+            if ( origin[ 2 ] < minZ ) {
+              minZ = origin[ 2 ]
+            }
+            if ( origin[ 2 ] > maxZ ) {
+              maxZ = origin[ 2 ]
+            }
+          }
+
+          height = Math.max( maxZ - minZ, MIN_EDGE )
+        } else {
+          height = MIN_EDGE
+        }
+      }
+
+      storeyHeight.set( group[ i ].localID, height )
+    }
   }
 
   const aabbOf = ( localID: number ): Aabb3 | undefined => {
@@ -618,44 +671,55 @@ export async function emitSpatialStructureImposters(
       return node.aabb
     }
 
-    const pieces: Aabb3[] = []
-
-    if ( node.origin !== void 0 ) {
-      pieces.push( pointAabb_( ...node.origin ) )
+    if ( node.computing === true ) {
+      return
     }
 
-    const samples = productOrigins.get( localID )
+    node.computing = true
 
-    if ( samples !== void 0 ) {
+    try {
 
-      for ( const origin of samples ) {
-        pieces.push( pointAabb_( ...origin ) )
+      const pieces: Aabb3[] = []
+
+      if ( node.origin !== void 0 ) {
+        pieces.push( pointAabb_( ...node.origin ) )
       }
-    }
 
-    for ( const childID of node.children ) {
-      const childBox = aabbOf( childID )
+      const samples = productOrigins.get( localID )
 
-      if ( childBox !== void 0 ) {
-        pieces.push( childBox )
+      if ( samples !== void 0 ) {
+
+        for ( const origin of samples ) {
+          pieces.push( pointAabb_( ...origin ) )
+        }
       }
-    }
 
-    let box = unionAabb( ...pieces )
+      for ( const childID of node.children ) {
+        const childBox = aabbOf( childID )
 
-    if ( box !== void 0 && STOREY_TYPES.has( node.typeID ) ) {
-
-      const height = storeyHeight.get( localID )
-      const z0 = node.elevation ?? box.min[ 2 ]
-      const z1 = height !== void 0 ? z0 + height : box.max[ 2 ]
-      box = {
-        min: [box.min[ 0 ], box.min[ 1 ], Math.min( box.min[ 2 ], z0 )],
-        max: [box.max[ 0 ], box.max[ 1 ], Math.max( box.max[ 2 ], z1 )],
+        if ( childBox !== void 0 ) {
+          pieces.push( childBox )
+        }
       }
-    }
 
-    node.aabb = box
-    return box
+      let box = unionAabb( ...pieces )
+
+      if ( box !== void 0 && STOREY_TYPES.has( node.typeID ) ) {
+
+        const height = storeyHeight.get( localID )
+        const z0 = node.elevation ?? box.min[ 2 ]
+        const z1 = height !== void 0 ? z0 + height : box.max[ 2 ]
+        box = {
+          min: [box.min[ 0 ], box.min[ 1 ], Math.min( box.min[ 2 ], z0 )],
+          max: [box.max[ 0 ], box.max[ 1 ], Math.max( box.max[ 2 ], z1 )],
+        }
+      }
+
+      node.aabb = box
+      return box
+    } finally {
+      node.computing = false
+    }
   }
 
   for ( const root of roots ) {

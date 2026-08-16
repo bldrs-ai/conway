@@ -211,6 +211,32 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     expect( leafSpans[ 0 ].length ).toBeGreaterThan( 0 )
   } )
 
+  test( 'spanLeaf spans children; !descend without spanLeaf still visits them', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const refs = model.referencedExpressIDs( localID )
+    expect( refs.length ).toBeGreaterThan( 0 )
+
+    const leafSpans: { address: number, length: number }[] = []
+    const visited = await model.ensureResidentClosureByLocalID(
+        localID,
+        void 0,
+        new Set< number >(),
+        ( id ) => id === localID,
+        leafSpans,
+        () => false )
+
+    expect( visited.has( localID ) ).toBe( true )
+    expect( visited.size ).toBeGreaterThan( 1 )
+    expect( leafSpans.length ).toBe( 0 )
+  } )
+
   test( 'spanOfExpressIDExtremes covers a dense express-ID run', async () => {
 
     const store = new InMemoryStepByteStore( bytes )

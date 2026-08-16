@@ -833,12 +833,17 @@ implements Iterable<BaseEntity>, Model {
    * @param extraLocalIDs Additional seeds (voids, styles, materials).
    * @param seen Optional set to extend (also skips already-pinned IDs).
    * @param descend If set, records for which this returns false are
-   * pinned and paged but their `#refs` are not followed. Packed
-   * polygonal extract reads `IfcIndexedPolygonalFace.CoordIndex` as
-   * integers and never walks those faces' graphs — following them
-   * pinned ~78k records per PSB product.
+   * still visited (pinned, in `seen`) but their `#refs` are not
+   * followed — e.g. an `IfcPolygonalFaceSet` whose Faces[] payload
+   * is paged as one span afterwards.
    * @param leafSpans Optional out-array of coalesced pin ranges for
-   * skipped leaves — caller must {@link unpinAddressRange} each.
+   * {@link spanLeaf} children — caller must {@link unpinAddressRange}
+   * each.
+   * @param spanLeaf If set, matching children are *not* visited
+   * (absent from `seen`); their bytes are one pin span. Packed
+   * extract reads `IfcIndexedPolygonalFace.CoordIndex` as integers —
+   * following those faces pinned ~78k records per PSB product. If
+   * omitted, `!descend` children use this span path (test helper).
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
@@ -846,7 +851,8 @@ implements Iterable<BaseEntity>, Model {
       extraLocalIDs?: Iterable<number>,
       seen: Set< number > = new Set< number >(),
       descend?: ( localID: number ) => boolean,
-      leafSpans?: { address: number, length: number }[] ): Promise< Set< number > > {
+      leafSpans?: { address: number, length: number }[],
+      spanLeaf?: ( localID: number ) => boolean ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -917,9 +923,15 @@ implements Iterable<BaseEntity>, Model {
             continue
           }
 
-          // Leaf types are claimed so a later path does not walk them.
-          // Their bytes are pinned as one span (packed Faces[] run).
-          if ( descend !== void 0 && !descend( referenced ) ) {
+          // Packed leaves (Faces[]) are spanned, not visited. Stop
+          // nodes (facesets) fail `descend` so we do not scan their
+          // refs, but they still go on the frontier so they land in
+          // `seen` for the payload pass.
+          const leaf = spanLeaf !== void 0 ?
+            spanLeaf( referenced ) :
+            ( descend !== void 0 && !descend( referenced ) )
+
+          if ( leaf ) {
             skipped.push( referenced )
             continue
           }

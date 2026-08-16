@@ -931,11 +931,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /**
    * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
    * source stays in `store`, parse windows are filled through it, and
-   * the model never holds a resident copy. The full prefix-extract
-   * preview channel is skipped (it needs a resident prefix); a sparse
-   * AABB imposter rides onRecordIndexed instead. Deferred opens
-   * page prep closures before prepareDemandExtraction; non-deferred
-   * opens drain the demand pump with per-product residency.
+   * the model never holds a resident copy. Prefix-extract preview is
+   * skipped (it needs a resident prefix). After the index exists,
+   * spatial-structure AABB plates go through ON_PREVIEW_MESH.
+   * Deferred opens page prep closures before prepareDemandExtraction;
+   * non-deferred opens drain the demand pump with per-product residency.
    *
    * @param modelID The model ID being opened.
    * @param store External store holding the source bytes.
@@ -956,8 +956,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const parser = IfcStepParser.Instance
     const fileSize = store.byteLength
 
-    tracker?.beginPhase('headerParse', 'bytes', fileSize)
-
     Logger.createStatistics(modelID)
 
     const statistics = Logger.getStatistics(modelID)
@@ -968,11 +966,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       (cursorBytes: number) => tracker.update(cursorBytes) : void 0
 
     const parseStartTime = Date.now()
-
-    // Store-backed preview is the spatial-structure boxes emitted
-    // after the index exists (see emitSpatialStructureImposters).
-    // Parse-time point-list cubes stay on the resident streamed path;
-    // on an 860 MB file they are thousands of unaligned AABBs.
 
     // One windowed pass: header comes out of the same slide as the
     // data block so we do not hold a second 16 MiB prefix copy.

@@ -6570,24 +6570,28 @@ export class IfcGeometryExtraction {
       extra.push( material )
     }
 
-    // Packed polygonal extract reads CoordIndex as integers. Do not
-    // BFS those face records — on PSB that was ~78k pins / 15s prefetch.
-    // Facesets themselves are also leaves: scanning their Faces[] still
-    // resolved 78k express IDs. Payload (Coordinates + Faces[] span)
-    // is paged in a second pass that only looks at two extremes.
+    // Facesets are visited but not scanned (Faces[] is a later span).
+    // Face records are spanned, not visited — 78k pins / 15s otherwise.
+    const isFace = ( id: number ): boolean => {
+
+      const typeID = this.model.typeIDOf( id )
+
+      return typeID === EntityTypesIfc.IFCINDEXEDPOLYGONALFACE ||
+        typeID === EntityTypesIfc.IFCINDEXEDPOLYGONALFACEWITHVOIDS
+    }
+
     const descend = ( id: number ): boolean => {
 
       const typeID = this.model.typeIDOf( id )
 
-      return typeID !== EntityTypesIfc.IFCINDEXEDPOLYGONALFACE &&
-        typeID !== EntityTypesIfc.IFCINDEXEDPOLYGONALFACEWITHVOIDS &&
+      return !isFace( id ) &&
         typeID !== EntityTypesIfc.IFCPOLYGONALFACESET &&
         typeID !== EntityTypesIfc.IFCTRIANGULATEDFACESET
     }
 
     const visited =
       await this.model.ensureResidentClosureByLocalID(
-          localID, extra, seen, descend, leafSpans )
+          localID, extra, seen, descend, leafSpans, isFace )
     const styleExtra: number[] = []
 
     for ( const visitedID of visited ) {
@@ -6607,7 +6611,7 @@ export class IfcGeometryExtraction {
 
     if ( styleExtra.length > 0 ) {
       await this.model.ensureResidentClosureByLocalID(
-          localID, styleExtra, visited, descend, leafSpans )
+          localID, styleExtra, visited, descend, leafSpans, isFace )
     }
 
     await this.ensureResidentVisitedFacesetPayloads_( visited, leafSpans )
@@ -6649,9 +6653,9 @@ export class IfcGeometryExtraction {
 
       if ( coordsLocalID !== void 0 && !visited.has( coordsLocalID ) ) {
 
-        await this.model.ensureResidentByLocalID( coordsLocalID )
-        this.model.pinByLocalID( coordsLocalID )
         visited.add( coordsLocalID )
+        this.model.pinByLocalID( coordsLocalID )
+        await this.model.ensureResidentByLocalID( coordsLocalID )
       }
 
       if ( refs.length < 2 ) {
@@ -6694,49 +6698,53 @@ export class IfcGeometryExtraction {
     // A full BFS of the rel used to follow every RelatedObject into
     // Faces[] (the 78k-pin path) before descend could skip them.
     const pinned = new Set< number >()
+    const hop: number[] = []
 
-    await this.model.ensureResidentByLocalID( relAggregate.localID )
     this.model.pinByLocalID( relAggregate.localID )
     pinned.add( relAggregate.localID )
 
-    const hop: number[] = []
+    try {
 
-    for ( const expressID of this.model.referencedExpressIDs(
-        relAggregate.localID ) ) {
+      await this.model.ensureResidentByLocalID( relAggregate.localID )
 
-      const localID = this.model.resolveExpressID( expressID )
+      for ( const expressID of this.model.referencedExpressIDs(
+          relAggregate.localID ) ) {
 
-      if ( localID === void 0 || pinned.has( localID ) ) {
-        continue
+        const localID = this.model.resolveExpressID( expressID )
+
+        if ( localID === void 0 || pinned.has( localID ) ) {
+          continue
+        }
+
+        this.model.pinByLocalID( localID )
+        hop.push( localID )
+        await this.model.ensureResidentByLocalID( localID )
       }
 
-      await this.model.ensureResidentByLocalID( localID )
-      this.model.pinByLocalID( localID )
-      hop.push( localID )
-    }
+      const relating = relAggregate.RelatingObject
 
-    const relating = relAggregate.RelatingObject
-
-    if ( relating !== null && relating !== void 0 ) {
-      await this.ensureResidentForProductExtract(
-          relating.localID, pinned, leafSpans )
-    }
-
-    const related = relAggregate.RelatedObjects
-
-    if ( related !== null && related !== void 0 ) {
-
-      for ( const product of related ) {
+      if ( relating !== null && relating !== void 0 ) {
         await this.ensureResidentForProductExtract(
-            product.localID, pinned, leafSpans )
+            relating.localID, pinned, leafSpans )
+      }
+
+      const related = relAggregate.RelatedObjects
+
+      if ( related !== null && related !== void 0 ) {
+
+        for ( const product of related ) {
+          await this.ensureResidentForProductExtract(
+              product.localID, pinned, leafSpans )
+        }
+      }
+
+      return pinned
+    } finally {
+
+      for ( const localID of hop ) {
+        this.model.unpinByLocalID( localID )
       }
     }
-
-    for ( const localID of hop ) {
-      this.model.unpinByLocalID( localID )
-    }
-
-    return pinned
   }
 
   /**
