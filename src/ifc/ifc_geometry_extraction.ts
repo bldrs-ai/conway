@@ -344,6 +344,16 @@ export function extractColorOrFactorMultiply(
 const FACES_FIELD_OFFSET = 2
 const FACES_FIELD_BASE_OFFSET = 1
 const FACES_FIELD_DEPTH = 4
+
+/** IfcRelAggregates.RelatedObjects — see IfcRelAggregates.gen.ts. */
+const REL_AGGREGATES_RELATED_OFFSET = 5
+const REL_AGGREGATES_RELATED_BASE = 4
+const REL_AGGREGATES_RELATED_DEPTH = 3
+
+/** IfcRelAssociates.RelatedObjects — see IfcRelAssociates.gen.ts. */
+const REL_ASSOCIATES_RELATED_OFFSET = 4
+const REL_ASSOCIATES_RELATED_BASE = 4
+const REL_ASSOCIATES_RELATED_DEPTH = 2
 const COORD_INDEX_FIELD_OFFSET = 0
 
 const POLYGONAL_INDEX_SINK_CAPACITY = 65536
@@ -6256,17 +6266,38 @@ export class IfcGeometryExtraction {
     }
 
     const targets = new Set<number>()
+    const productTypes = new Set< number >( IfcProduct.query )
 
     for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
 
       try {
 
-        for ( const related of relAggregate.RelatedObjects ) {
+        // RelatedObjects as express IDs — do not hydrate every child
+        // product (that paged most of the file during demand prep).
+        relAggregate.forEachReferenceInField(
+            REL_AGGREGATES_RELATED_OFFSET,
+            REL_AGGREGATES_RELATED_BASE,
+            REL_AGGREGATES_RELATED_DEPTH,
+            ( expressID ) => {
 
-          if ( related instanceof IfcProduct ) {
-            targets.add( related.localID )
-          }
-        }
+              if ( expressID === void 0 ) {
+                return true
+              }
+
+              const relatedLocalID = this.model.resolveExpressID( expressID )
+
+              if ( relatedLocalID === void 0 ) {
+                return true
+              }
+
+              const typeID = this.model.typeIDOf( relatedLocalID )
+
+              if ( typeID !== void 0 && productTypes.has( typeID ) ) {
+                targets.add( relatedLocalID )
+              }
+
+              return true
+            } )
       } catch {
         // Malformed relationship rows are tolerated exactly like the
         // aggregates pass itself tolerates them (permissive catch) —
@@ -6297,6 +6328,7 @@ export class IfcGeometryExtraction {
 
     // populate relMaterialsMap
     const relAssociatesMaterials = this.model.types(IfcRelAssociatesMaterial)
+    const productTypes = new Set< number >( IfcProduct.query )
 
     for (const relAssociateMaterial of relAssociatesMaterials) {
       try {
@@ -6308,25 +6340,37 @@ export class IfcGeometryExtraction {
         // here. The rel-aggregates loop below already reads its RelatingObject
         // inside its own try for exactly this reason.
         const relatingMaterial = relAssociateMaterial.RelatingMaterial
-        const relatedObjects = relAssociateMaterial.RelatedObjects
-        for (const relatedObject of relatedObjects) {
-          const product = relatedObject
+        const materialLocalID = relatingMaterial.localID
+        relAssociateMaterial.forEachReferenceInField(
+            REL_ASSOCIATES_RELATED_OFFSET,
+            REL_ASSOCIATES_RELATED_BASE,
+            REL_ASSOCIATES_RELATED_DEPTH,
+            ( expressID ) => {
 
-          if (product instanceof IfcProduct) {
-            if (product instanceof IfcOpeningElement ||
-              product instanceof IfcSpace ||
-              product instanceof IfcOpeningStandardCase) {
-              continue
-            }
+              if ( expressID === void 0 ) {
+                return true
+              }
 
-            // save mapping of IfcProduct --> IfcMaterial
-            this.materials.relMaterialsMap.set(
-                product.localID,
-                relatingMaterial.localID)
-          } else {
-            //     Logger.warning(`type other than IfcProduct: ${EntityTypesIfc[product.type]}`)
-          }
-        }
+              const productLocalID = this.model.resolveExpressID( expressID )
+
+              if ( productLocalID === void 0 ) {
+                return true
+              }
+
+              const typeID = this.model.typeIDOf( productLocalID )
+
+              if ( typeID === EntityTypesIfc.IFCOPENINGELEMENT ||
+                  typeID === EntityTypesIfc.IFCSPACE ||
+                  typeID === EntityTypesIfc.IFCOPENINGSTANDARDCASE ) {
+                return true
+              }
+
+              if ( typeID !== void 0 && productTypes.has( typeID ) ) {
+                this.materials.relMaterialsMap.set( productLocalID, materialLocalID )
+              }
+
+              return true
+            } )
       } catch (ex) {
         // Reference the relationship record, not RelatingMaterial: the
         // latter may be exactly what threw and would be undefined here.
@@ -6462,7 +6506,6 @@ export class IfcGeometryExtraction {
     const oneHopTypes = [
       IfcRelAssociatesMaterial,
       IfcRelVoidsElement,
-      IfcRelAggregates,
     ]
 
     for ( const type of oneHopTypes ) {
@@ -6499,12 +6542,15 @@ export class IfcGeometryExtraction {
    * (those are inverse — not written in the product record).
    *
    * @param localID The product's local ID.
+   * @param seen Optional set to extend.
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
    * @return {Promise<Set<number>>} Pinned local IDs — caller must unpin
    * after extract.
    */
   public async ensureResidentForProductExtract(
       localID: number,
-      seen?: Set< number > ):
+      seen?: Set< number >,
+      leafSpans?: { address: number, length: number }[] ):
       Promise< Set< number > > {
 
     if ( !this.model.isSourceExternal ) {
@@ -6524,8 +6570,24 @@ export class IfcGeometryExtraction {
       extra.push( material )
     }
 
+    // Packed polygonal extract reads CoordIndex as integers. Do not
+    // BFS those face records — on PSB that was ~78k pins / 15s prefetch.
+    // Facesets themselves are also leaves: scanning their Faces[] still
+    // resolved 78k express IDs. Payload (Coordinates + Faces[] span)
+    // is paged in a second pass that only looks at two extremes.
+    const descend = ( id: number ): boolean => {
+
+      const typeID = this.model.typeIDOf( id )
+
+      return typeID !== EntityTypesIfc.IFCINDEXEDPOLYGONALFACE &&
+        typeID !== EntityTypesIfc.IFCINDEXEDPOLYGONALFACEWITHVOIDS &&
+        typeID !== EntityTypesIfc.IFCPOLYGONALFACESET &&
+        typeID !== EntityTypesIfc.IFCTRIANGULATEDFACESET
+    }
+
     const visited =
-      await this.model.ensureResidentClosureByLocalID( localID, extra, seen )
+      await this.model.ensureResidentClosureByLocalID(
+          localID, extra, seen, descend, leafSpans )
     const styleExtra: number[] = []
 
     for ( const visitedID of visited ) {
@@ -6544,10 +6606,68 @@ export class IfcGeometryExtraction {
     }
 
     if ( styleExtra.length > 0 ) {
-      await this.model.ensureResidentClosureByLocalID( localID, styleExtra, visited )
+      await this.model.ensureResidentClosureByLocalID(
+          localID, styleExtra, visited, descend, leafSpans )
     }
 
+    await this.ensureResidentVisitedFacesetPayloads_( visited, leafSpans )
+
     return visited
+  }
+
+  /**
+   * Page a faceset's Coordinates record and its Faces[] run as one
+   * address span. The generic closure treats the faceset as a leaf so
+   * it does not resolve every face express ID.
+   *
+   * @param visited Faceset local IDs already pinned (and the set to
+   * extend with Coordinates).
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
+   */
+  private async ensureResidentVisitedFacesetPayloads_(
+      visited: Set< number >,
+      leafSpans?: { address: number, length: number }[] ): Promise< void > {
+
+    for ( const localID of visited ) {
+
+      const typeID = this.model.typeIDOf( localID )
+
+      if ( typeID !== EntityTypesIfc.IFCPOLYGONALFACESET &&
+          typeID !== EntityTypesIfc.IFCTRIANGULATEDFACESET ) {
+        continue
+      }
+
+      const refs = this.model.referencedExpressIDs( localID )
+
+      if ( refs.length === 0 ) {
+        continue
+      }
+
+      // First #ref is Coordinates (IfcTessellatedFaceSet). Pin it as a
+      // normal record — one IfcCartesianPointList3D, no child #refs.
+      const coordsLocalID = this.model.resolveExpressID( refs[ 0 ] )
+
+      if ( coordsLocalID !== void 0 && !visited.has( coordsLocalID ) ) {
+
+        await this.model.ensureResidentByLocalID( coordsLocalID )
+        this.model.pinByLocalID( coordsLocalID )
+        visited.add( coordsLocalID )
+      }
+
+      if ( refs.length < 2 ) {
+        continue
+      }
+
+      const span = this.model.spanOfExpressIDExtremes( refs, 1 )
+
+      if ( span === void 0 ) {
+        continue
+      }
+
+      this.model.pinAddressRange( span.address, span.length )
+      await this.model.ensureResidentRange( span.address, span.length )
+      leafSpans?.push( span )
+    }
   }
 
   /**
@@ -6560,29 +6680,60 @@ export class IfcGeometryExtraction {
    * after extract.
    */
   public async ensureResidentForAggregateExtract(
-      relAggregate: IfcRelAggregates ): Promise< Set< number > > {
+      relAggregate: IfcRelAggregates,
+      leafSpans?: { address: number, length: number }[] ): Promise< Set< number > > {
 
     if ( !this.model.isSourceExternal ) {
       return new Set< number >()
     }
 
-    const pinned =
-      await this.model.ensureResidentClosureByLocalID( relAggregate.localID )
+    // Pin the rel record, page its 1-hop so RelatingObject /
+    // RelatedObjects getters can hydrate, then walk each product
+    // through the bounded extract. The 1-hop IDs must NOT go into
+    // `pinned`/`seen` — that would skip their geometry closures.
+    // A full BFS of the rel used to follow every RelatedObject into
+    // Faces[] (the 78k-pin path) before descend could skip them.
+    const pinned = new Set< number >()
+
+    await this.model.ensureResidentByLocalID( relAggregate.localID )
+    this.model.pinByLocalID( relAggregate.localID )
+    pinned.add( relAggregate.localID )
+
+    const hop: number[] = []
+
+    for ( const expressID of this.model.referencedExpressIDs(
+        relAggregate.localID ) ) {
+
+      const localID = this.model.resolveExpressID( expressID )
+
+      if ( localID === void 0 || pinned.has( localID ) ) {
+        continue
+      }
+
+      await this.model.ensureResidentByLocalID( localID )
+      this.model.pinByLocalID( localID )
+      hop.push( localID )
+    }
 
     const relating = relAggregate.RelatingObject
 
     if ( relating !== null && relating !== void 0 ) {
-      await this.ensureResidentForProductExtract( relating.localID, pinned )
+      await this.ensureResidentForProductExtract(
+          relating.localID, pinned, leafSpans )
     }
 
     const related = relAggregate.RelatedObjects
 
-    if ( related === null || related === void 0 ) {
-      return pinned
+    if ( related !== null && related !== void 0 ) {
+
+      for ( const product of related ) {
+        await this.ensureResidentForProductExtract(
+            product.localID, pinned, leafSpans )
+      }
     }
 
-    for ( const product of related ) {
-      await this.ensureResidentForProductExtract( product.localID, pinned )
+    for ( const localID of hop ) {
+      this.model.unpinByLocalID( localID )
     }
 
     return pinned

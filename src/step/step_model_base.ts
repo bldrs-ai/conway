@@ -638,6 +638,91 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * Column type of a record, or `undefined` if the id is unknown / untyped.
+   *
+   * @param localID The record.
+   * @return {number | undefined} The schema type id.
+   */
+  public typeIDOf( localID: number ): number | undefined {
+
+    if ( localID >= this.count_ ) {
+      return
+    }
+
+    const typeID = this.typeID_[ localID ]
+
+    return typeID < 0 ? void 0 : typeID
+  }
+
+  /**
+   * Absolute source address of a record.
+   *
+   * @param localID The record.
+   * @return {number | undefined} The address.
+   */
+  public recordAddress( localID: number ): number | undefined {
+
+    return localID < this.count_ ? this.address_[ localID ] : void 0
+  }
+
+  /**
+   * Source length of a record.
+   *
+   * @param localID The record.
+   * @return {number | undefined} The length.
+   */
+  public recordLength( localID: number ): number | undefined {
+
+    return localID < this.count_ ? this.length_[ localID ] : void 0
+  }
+
+  /**
+   * Pin an arbitrary source span (e.g. a faceset's packed Faces[] run).
+   *
+   * @param address Absolute start.
+   * @param length Length in bytes.
+   */
+  public pinAddressRange( address: number, length: number ): void {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    this.bufferProvider_.pinRange?.( address, length )
+  }
+
+  /**
+   * Drop one {@link pinAddressRange} hold.
+   *
+   * @param address Absolute start.
+   * @param length Length in bytes.
+   */
+  public unpinAddressRange( address: number, length: number ): void {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    this.bufferProvider_.unpinRange?.( address, length )
+  }
+
+  /**
+   * Page an arbitrary source span.
+   *
+   * @param address Absolute start.
+   * @param length Length in bytes.
+   * @return {Promise<void>} Resolves when resident.
+   */
+  public async ensureResidentRange( address: number, length: number ): Promise< void > {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    await this.bufferProvider_.ensureResident( address, length )
+  }
+
+  /**
    * Release the resident source buffer and serve subsequent record
    * reads from fixed-size windows paged in from an external store.
    *
@@ -747,12 +832,21 @@ implements Iterable<BaseEntity>, Model {
    * @param localID Seed record.
    * @param extraLocalIDs Additional seeds (voids, styles, materials).
    * @param seen Optional set to extend (also skips already-pinned IDs).
+   * @param descend If set, records for which this returns false are
+   * pinned and paged but their `#refs` are not followed. Packed
+   * polygonal extract reads `IfcIndexedPolygonalFace.CoordIndex` as
+   * integers and never walks those faces' graphs — following them
+   * pinned ~78k records per PSB product.
+   * @param leafSpans Optional out-array of coalesced pin ranges for
+   * skipped leaves — caller must {@link unpinAddressRange} each.
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
       localID: number,
       extraLocalIDs?: Iterable<number>,
-      seen: Set< number > = new Set< number >() ): Promise< Set< number > > {
+      seen: Set< number > = new Set< number >(),
+      descend?: ( localID: number ) => boolean,
+      leafSpans?: { address: number, length: number }[] ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -805,16 +899,48 @@ implements Iterable<BaseEntity>, Model {
 
       await Promise.all( wave.map( ( id ) => this.ensureResidentByLocalID( id ) ) )
 
+      const waveSpans: { address: number, length: number }[] = []
+
       for ( const id of wave ) {
+
+        if ( descend !== void 0 && !descend( id ) ) {
+          continue
+        }
+
+        const skipped: number[] = []
 
         for ( const expressID of this.scanRecordRefs_( id ) ) {
 
           const referenced = this.expressIDMap_.get( expressID )
 
-          if ( referenced !== void 0 && !seen.has( referenced ) ) {
-            frontier.push( referenced )
+          if ( referenced === void 0 || seen.has( referenced ) ) {
+            continue
+          }
+
+          // Leaf types are claimed so a later path does not walk them.
+          // Their bytes are pinned as one span (packed Faces[] run).
+          if ( descend !== void 0 && !descend( referenced ) ) {
+            skipped.push( referenced )
+            continue
+          }
+
+          frontier.push( referenced )
+        }
+
+        if ( skipped.length > 0 ) {
+          const span = this.spanOf_( skipped )
+
+          if ( span !== void 0 ) {
+            this.pinAddressRange( span.address, span.length )
+            waveSpans.push( span )
+            leafSpans?.push( span )
           }
         }
+      }
+
+      if ( waveSpans.length > 0 ) {
+        await Promise.all( waveSpans.map( ( span ) =>
+          this.ensureResidentRange( span.address, span.length ) ) )
       }
     }
 
@@ -934,7 +1060,119 @@ implements Iterable<BaseEntity>, Model {
       return seen ?? new Set< number >()
     }
 
-    return this.ensureResidentClosureByLocalID( localID, extraLocalIDs, seen )
+    return this.ensureResidentClosureByLocalID(
+        localID, extraLocalIDs, seen )
+  }
+
+
+  /**
+   * Tight source span covering the records referenced by `expressIDs`
+   * from `fromIndex` onward. A packed Faces[] run is consecutive in
+   * parse order — two express-ID lookups then cover the whole range.
+   * Non-dense sets fall back to resolving every id.
+   *
+   * @param expressIDs Referenced express IDs (e.g. a faceset's #refs).
+   * @param fromIndex First index to include (skip Coordinates at [0]).
+   * @return {{address: number, length: number} | undefined} The span.
+   */
+  public spanOfExpressIDExtremes(
+      expressIDs: readonly number[],
+      fromIndex: number = 0 ): { address: number, length: number } | undefined {
+
+    let minExpressID = Infinity
+    let maxExpressID = 0
+    let count = 0
+
+    for ( let i = fromIndex; i < expressIDs.length; ++i ) {
+
+      const expressID = expressIDs[ i ]
+
+      if ( expressID < minExpressID ) {
+        minExpressID = expressID
+      }
+
+      if ( expressID > maxExpressID ) {
+        maxExpressID = expressID
+      }
+
+      ++count
+    }
+
+    if ( count === 0 || !Number.isFinite( minExpressID ) ) {
+      return
+    }
+
+    const minLocal = this.expressIDMap_.get( minExpressID )
+    const maxLocal = this.expressIDMap_.get( maxExpressID )
+
+    if ( minLocal === void 0 || maxLocal === void 0 ) {
+      return
+    }
+
+    const lo = Math.min( minLocal, maxLocal )
+    const hi = Math.max( minLocal, maxLocal )
+
+    if ( hi - lo + 1 === count ) {
+      const address = this.address_[ lo ]
+      const end = this.address_[ hi ] + this.length_[ hi ]
+
+      if ( end <= address ) {
+        return
+      }
+
+      return { address, length: end - address }
+    }
+
+    const locals: number[] = []
+
+    for ( let i = fromIndex; i < expressIDs.length; ++i ) {
+
+      const localID = this.expressIDMap_.get( expressIDs[ i ] )
+
+      if ( localID !== void 0 ) {
+        locals.push( localID )
+      }
+    }
+
+    return this.spanOf_( locals )
+  }
+
+
+  /**
+   * Tight source span covering `localIDs` (file-order faces of one set).
+   *
+   * @param localIDs The records.
+   * @return {{address: number, length: number} | undefined} The span.
+   */
+  private spanOf_(
+      localIDs: number[] ): { address: number, length: number } | undefined {
+
+    let minAddress = Infinity
+    let maxEnd = 0
+
+    for ( const id of localIDs ) {
+
+      if ( id >= this.count_ ) {
+        continue
+      }
+
+      const address = this.address_[ id ]
+      const end = address + this.length_[ id ]
+
+      if ( address < minAddress ) {
+        minAddress = address
+      }
+
+      if ( end > maxEnd ) {
+        maxEnd = end
+      }
+    }
+
+    if ( !Number.isFinite( minAddress ) || maxEnd <= minAddress ) {
+      return
+    }
+
+    return { address: minAddress, length: maxEnd - minAddress }
   }
 
 

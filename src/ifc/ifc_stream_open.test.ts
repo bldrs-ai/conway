@@ -173,6 +173,7 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     const visited = await model.ensureResidentClosureByLocalID( localID )
 
     expect( visited.has( localID ) ).toBe( true )
+    expect( model.typeIDOf( localID ) ).toBeDefined()
 
     for ( const refExpressID of refs ) {
 
@@ -181,6 +182,58 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
       if ( refLocalID !== void 0 ) {
         expect( visited.has( refLocalID ) ).toBe( true )
       }
+    }
+  } )
+
+  test( 'ensureResidentClosureByLocalID skip-descend does not follow #refs', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const refs = model.referencedExpressIDs( localID )
+    expect( refs.length ).toBeGreaterThan( 0 )
+
+    const leafSpans: { address: number, length: number }[] = []
+    const visited = await model.ensureResidentClosureByLocalID(
+        localID,
+        void 0,
+        new Set< number >(),
+        ( id ) => id === localID,
+        leafSpans )
+
+    expect( visited.has( localID ) ).toBe( true )
+    expect( visited.size ).toBe( 1 )
+    expect( leafSpans.length ).toBeGreaterThan( 0 )
+    expect( leafSpans[ 0 ].length ).toBeGreaterThan( 0 )
+  } )
+
+  test( 'spanOfExpressIDExtremes covers a dense express-ID run', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressIDs = [ ...model.expressIDsOfTypes( IfcRoot ) ]
+    expect( expressIDs.length ).toBeGreaterThan( 1 )
+
+    const span = model.spanOfExpressIDExtremes( expressIDs )
+
+    expect( span ).toBeDefined()
+    expect( span!.length ).toBeGreaterThan( 0 )
+
+    const spanEnd = span!.address + span!.length
+
+    for ( const refExpressID of expressIDs ) {
+
+      const localID = model.resolveExpressID( refExpressID )!
+
+      expect( model.recordAddress( localID )! ).toBeGreaterThanOrEqual( span!.address )
+      expect(
+          model.recordAddress( localID )! + model.recordLength( localID )! )
+          .toBeLessThanOrEqual( spanEnd )
     }
   } )
 

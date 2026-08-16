@@ -76,6 +76,12 @@ export interface PreviewMeshPayload {
   indexData?: Uint32Array
   /** Parse-time AABB imposter (no vertex payload; Share instances a unit cube). */
   aabb?: { min: [number, number, number], max: [number, number, number] }
+  /**
+   * Filled volume (spatial-structure boxes). Share's aabb path is
+   * wireframe unless this is set — parse-time point-list cubes stay
+   * wire, storey plates render as a translucent solid.
+   */
+  solid?: boolean
 }
 
 /**

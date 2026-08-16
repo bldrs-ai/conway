@@ -64,6 +64,16 @@ export interface IfcApiModelPassthrough {
    */
   readonly sourceIsExternal?: boolean
 
+  /** Optional: store-backed pump split (prefetch / extract / release). */
+  readonly extractProfile?: {
+    prefetchMs: number
+    extractMs: number
+    releaseMs: number
+    batches: number
+    lastPins: number
+    pinMax: number
+  }
+
   /**
    * Optional: release the resident source buffer, serving subsequent
    * record reads through windows paged from the given external store.
