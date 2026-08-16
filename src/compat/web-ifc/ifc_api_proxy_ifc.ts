@@ -1022,31 +1022,60 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     tracker?.setPhaseTotal( model.typeCount( IfcProduct ) )
 
+    // eslint-disable-next-line no-magic-numbers
+    const EXTRACT_BATCH = 8
+    const pending: number[] = []
+
+    const flushProductBatch = async () => {
+
+      if ( pending.length === 0 ) {
+        return
+      }
+
+      const pins = new Set< number >()
+
+      try {
+
+        await Promise.all( pending.map( ( localID ) =>
+          conwayGeometry.ensureResidentForProductExtract( localID, pins ) ) )
+
+        for ( const localID of pending ) {
+
+          try {
+            conwayGeometry.extractProductGeometryByLocalID( localID )
+          } catch ( error ) {
+            Logger.error(
+                `Error extracting product localID ${localID}: ` +
+                `${error instanceof Error ? error.message : String( error )}` )
+          }
+
+          ++completed
+        }
+      } finally {
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+        pending.length = 0
+      }
+
+      tracker?.update( completed, {
+        residentSourceMb: model.residentSourceBytes / BYTES_PER_MIB,
+      } )
+    }
+
     for ( const product of model.types( IfcProduct ) ) {
 
       if ( aggregateTargets.has( product.localID ) ) {
         continue
       }
 
-      const pins =
-        await conwayGeometry.ensureResidentForProductExtract( product.localID )
+      pending.push( product.localID )
 
-      try {
-        conwayGeometry.extractProductGeometryByLocalID( product.localID )
-      } catch ( error ) {
-        Logger.error(
-            `Error extracting product ${product.expressID}: ` +
-            `${error instanceof Error ? error.message : String( error )}` )
-      } finally {
-        model.releaseSourceViews( pins )
-        model.unpinLocalIDs( pins )
+      if ( pending.length >= EXTRACT_BATCH ) {
+        await flushProductBatch()
       }
-
-      ++completed
-      tracker?.update( completed, {
-        residentSourceMb: model.residentSourceBytes / BYTES_PER_MIB,
-      } )
     }
+
+    await flushProductBatch()
 
     for ( const relAggregate of model.types( IfcRelAggregates ) ) {
 
@@ -1775,21 +1804,33 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
 
     const productEnd = Math.min(this.demandCursor_ + budget, products.length)
+    const batchIDs = products.slice(this.demandCursor_, productEnd)
 
-    for (; this.demandCursor_ < productEnd; ++this.demandCursor_) {
+    if (batchIDs.length > 0) {
 
-      const localID = products[this.demandCursor_]
-      const pins =
-        await this.conwayGeometry_.ensureResidentForProductExtract(localID)
+      // One pin set for the batch so mapped geometry stays resident
+      // across the instances that share it.
+      const pins = new Set<number>()
 
       try {
-        if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-          ++extracted
+
+        await Promise.all(batchIDs.map((localID) =>
+          this.conwayGeometry_.ensureResidentForProductExtract(localID, pins)))
+
+        for (const localID of batchIDs) {
+
+          try {
+            if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+              ++extracted
+            }
+          } catch (error) {
+            Logger.error(
+                `Error extracting product localID ${localID}: ` +
+                `${error instanceof Error ? error.message : String(error)}`)
+          }
         }
-      } catch (error) {
-        Logger.error(
-            `Error extracting product localID ${localID}: ` +
-            `${error instanceof Error ? error.message : String(error)}`)
+
+        this.demandCursor_ = productEnd
       } finally {
         this.model[0].releaseSourceViews(pins)
         this.model[0].unpinLocalIDs(pins)

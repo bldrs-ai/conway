@@ -897,7 +897,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       module: WasmModule,
       optional: boolean ): boolean {
     
-    offset -= this.multiReference_ !== void 0 ? baseOffset : 0    
+    offset -= this.multiReference_ !== void 0 ? baseOffset : 0
+
+    // releaseSourceViews keeps the vtable and drops `buffer`.
+    this.guaranteeBuffer()
 
     const internalReference = this.guaranteeVTable( depth )
 
@@ -1224,6 +1227,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
         }
       }
 
+      if ( classReference.buffer === void 0 ) {
+        this.model.populateBufferEntry( this.localID )
+      }
+
       // Sync on EVERY access (not just first populate): generated
       // getters read `this.buffer` right after resolving a cursor for
       // this depth, and with a windowed provider each class reference
@@ -1242,6 +1249,10 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       if (!populated) {
         throw new Error('Entity does not have matching table entry to read from model')
       }
+    }
+
+    if ( internalReference.buffer === void 0 ) {
+      this.guaranteeBuffer()
     }
 
     return internalReference as Required< StepEntityInternalReference<EntityTypeIDs> >

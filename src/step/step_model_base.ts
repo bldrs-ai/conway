@@ -484,6 +484,10 @@ implements Iterable<BaseEntity>, Model {
       return void 0
     }
 
+    if ( element.buffer === void 0 ) {
+      this.populateBufferEntry( localID )
+    }
+
     const vtable = element.vtable
     const buffer = element.buffer
 
@@ -593,6 +597,14 @@ implements Iterable<BaseEntity>, Model {
 
     element.buffer =
       this.bufferProvider_.acquire( element.address, element.length ).buffer
+
+    if ( element.multiMapping !== void 0 ) {
+
+      for ( const mapped of element.multiMapping ) {
+        mapped.buffer =
+          this.bufferProvider_.acquire( mapped.address, mapped.length ).buffer
+      }
+    }
   }
 
 
@@ -746,34 +758,62 @@ implements Iterable<BaseEntity>, Model {
       return seen
     }
 
-    const stack: number[] = [ localID ]
+    // BFS by hop: page a whole frontier in parallel so a product whose
+    // #refs sit in different OPFS chunks is one round-trip, not one
+    // await per record. Claim `seen` before the await so overlapping
+    // walks (a batch of products sharing mapped geometry) pin once.
+    const frontier: number[] = []
+
+    const enqueue = ( id: number ) => {
+
+      if ( id < this.count_ && !seen.has( id ) ) {
+        frontier.push( id )
+      }
+    }
+
+    enqueue( localID )
 
     if ( extraLocalIDs !== void 0 ) {
 
       for ( const extra of extraLocalIDs ) {
-        stack.push( extra )
+        enqueue( extra )
       }
     }
 
-    while ( stack.length > 0 ) {
+    while ( frontier.length > 0 ) {
 
-      const id = stack.pop() as number
+      const wave: number[] = []
 
-      if ( seen.has( id ) || id >= this.count_ ) {
-        continue
+      for ( const id of frontier ) {
+
+        if ( seen.has( id ) || id >= this.count_ ) {
+          continue
+        }
+
+        // Claim + pin before the await so a sibling ensure cannot
+        // evict this range once its own ensurePins_ drop.
+        seen.add( id )
+        this.pinByLocalID( id )
+        wave.push( id )
       }
 
-      seen.add( id )
+      frontier.length = 0
 
-      await this.ensureResidentByLocalID( id )
-      this.pinByLocalID( id )
+      if ( wave.length === 0 ) {
+        break
+      }
 
-      for ( const expressID of this.scanRecordRefs_( id ) ) {
+      await Promise.all( wave.map( ( id ) => this.ensureResidentByLocalID( id ) ) )
 
-        const referenced = this.expressIDMap_.get( expressID )
+      for ( const id of wave ) {
 
-        if ( referenced !== void 0 && !seen.has( referenced ) ) {
-          stack.push( referenced )
+        for ( const expressID of this.scanRecordRefs_( id ) ) {
+
+          const referenced = this.expressIDMap_.get( expressID )
+
+          if ( referenced !== void 0 && !seen.has( referenced ) ) {
+            frontier.push( referenced )
+          }
         }
       }
     }

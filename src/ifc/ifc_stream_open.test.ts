@@ -123,6 +123,67 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     expect( again!.extractLineArguments().length ).toBe( args.length )
   } )
 
+  test( 'extractParseBuffer rematerialises after releaseSourceViews', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const first = model.getElementByExpressID( expressID )!
+
+    // Populate vtable + buffer the way a first extract does.
+    expect( first.extractLineArguments().length ).toBeGreaterThan( 0 )
+
+    const copied: number[] = []
+    const fakeResult = { resize: ( n: number ) => n }
+    const fakeModule = { HEAPU8: { set: ( src: Uint8Array ) => {
+
+      copied.push( src.length )
+    } } }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    first.extractParseBuffer( 0, 0, 0, fakeResult as any, fakeModule as any, true )
+    expect( copied[ 0 ] ).toBeGreaterThan( 0 )
+
+    model.releaseSourceViews( [ localID ] )
+    await model.ensureResidentByLocalID( localID )
+
+    // Same entity object — vtable kept, buffer dropped. This is the
+    // PSB "Cannot read properties of undefined (reading 'subarray')" path.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    first.extractParseBuffer( 0, 0, 0, fakeResult as any, fakeModule as any, true )
+    expect( copied[ 1 ] ).toBe( copied[ 0 ] )
+  } )
+
+  test( 'ensureResidentClosureByLocalID visits every #ref hop', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const refs = model.referencedExpressIDs( localID )
+    expect( refs.length ).toBeGreaterThan( 0 )
+
+    const visited = await model.ensureResidentClosureByLocalID( localID )
+
+    expect( visited.has( localID ) ).toBe( true )
+
+    for ( const refExpressID of refs ) {
+
+      const refLocalID = model.resolveExpressID( refExpressID )
+
+      if ( refLocalID !== void 0 ) {
+        expect( visited.has( refLocalID ) ).toBe( true )
+      }
+    }
+  } )
+
   test( 'openStreamedIfcModelFromStore matches the sync open', async () => {
     const store = new InMemoryStepByteStore( bytes )
     const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
