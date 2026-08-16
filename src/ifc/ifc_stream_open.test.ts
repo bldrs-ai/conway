@@ -237,7 +237,7 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     expect( leafSpans.length ).toBe( 0 )
   } )
 
-  test( 'spanOfExpressIDExtremes covers a dense express-ID run', async () => {
+  test( 'spansOfExpressIDs covers each record without the holes between', async () => {
 
     const store = new InMemoryStepByteStore( bytes )
     const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
@@ -245,22 +245,41 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     const expressIDs = [ ...model.expressIDsOfTypes( IfcRoot ) ]
     expect( expressIDs.length ).toBeGreaterThan( 1 )
 
-    const span = model.spanOfExpressIDExtremes( expressIDs )
+    const spans = model.spansOfExpressIDs( expressIDs )
 
-    expect( span ).toBeDefined()
-    expect( span!.length ).toBeGreaterThan( 0 )
+    expect( spans.length ).toBeGreaterThan( 0 )
 
-    const spanEnd = span!.address + span!.length
+    let covered = 0
+    let hullMin = Infinity
+    let hullMax = 0
+
+    for ( const span of spans ) {
+      covered += span.length
+    }
 
     for ( const refExpressID of expressIDs ) {
 
       const localID = model.resolveExpressID( refExpressID )!
+      const address = model.recordAddress( localID )!
+      const end = address + model.recordLength( localID )!
 
-      expect( model.recordAddress( localID )! ).toBeGreaterThanOrEqual( span!.address )
-      expect(
-          model.recordAddress( localID )! + model.recordLength( localID )! )
-          .toBeLessThanOrEqual( spanEnd )
+      if ( address < hullMin ) {
+        hullMin = address
+      }
+
+      if ( end > hullMax ) {
+        hullMax = end
+      }
+
+      const inside = spans.some( ( span ) =>
+        address >= span.address && end <= span.address + span.length )
+
+      expect( inside ).toBe( true )
     }
+
+    // IfcRoot rows are scattered through index.ifc — the coalesced
+    // spans must not be the single hull from first to last.
+    expect( covered ).toBeLessThan( hullMax - hullMin )
   } )
 
   test( 'openStreamedIfcModelFromStore matches the sync open', async () => {

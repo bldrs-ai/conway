@@ -37,6 +37,12 @@ implements Iterable<BaseEntity>, Model {
   public readonly abstract typeIndex: MultiIndexSet<EntityTypeIDs>
   public readonly abstract externalMappingType: StepEntityConstructor< EntityTypeIDs, BaseEntity >
 
+  // Merge neighbouring leaf records only when the hole between them is
+  // a few small STEP rows. A Faces[] dump is packed; a sparse list
+  // must not pin the file in between.
+  // eslint-disable-next-line no-magic-numbers
+  private static readonly LEAF_SPAN_COALESCE_GAP_ = 1024
+
   private readonly vtableBuilder_: StepVtableBuilder = new StepVtableBuilder()
   private readonly expressIDMap_: InterpolationSearchTable32
   private readonly inlineAddressMap_: InterpolationSearchTable32
@@ -940,9 +946,8 @@ implements Iterable<BaseEntity>, Model {
         }
 
         if ( skipped.length > 0 ) {
-          const span = this.spanOf_( skipped )
 
-          if ( span !== void 0 ) {
+          for ( const span of this.spansOf_( skipped ) ) {
             this.pinAddressRange( span.address, span.length )
             waveSpans.push( span )
             leafSpans?.push( span )
@@ -1078,18 +1083,19 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
-   * Tight source span covering the records referenced by `expressIDs`
-   * from `fromIndex` onward. A packed Faces[] run is consecutive in
-   * parse order — two express-ID lookups then cover the whole range.
-   * Non-dense sets fall back to resolving every id.
+   * Source spans covering the records referenced by `expressIDs` from
+   * `fromIndex` onward. A packed Faces[] run is consecutive in parse
+   * order — two express-ID lookups then cover the whole range. Sparse
+   * sets are coalesced into tight runs so intervening file is not
+   * pinned.
    *
    * @param expressIDs Referenced express IDs (e.g. a faceset's #refs).
    * @param fromIndex First index to include (skip Coordinates at [0]).
-   * @return {{address: number, length: number} | undefined} The span.
+   * @return {{address: number, length: number}[]} The spans.
    */
-  public spanOfExpressIDExtremes(
+  public spansOfExpressIDs(
       expressIDs: readonly number[],
-      fromIndex: number = 0 ): { address: number, length: number } | undefined {
+      fromIndex: number = 0 ): { address: number, length: number }[] {
 
     let minExpressID = Infinity
     let maxExpressID = 0
@@ -1111,14 +1117,14 @@ implements Iterable<BaseEntity>, Model {
     }
 
     if ( count === 0 || !Number.isFinite( minExpressID ) ) {
-      return
+      return []
     }
 
     const minLocal = this.expressIDMap_.get( minExpressID )
     const maxLocal = this.expressIDMap_.get( maxExpressID )
 
     if ( minLocal === void 0 || maxLocal === void 0 ) {
-      return
+      return []
     }
 
     const lo = Math.min( minLocal, maxLocal )
@@ -1129,10 +1135,10 @@ implements Iterable<BaseEntity>, Model {
       const end = this.address_[ hi ] + this.length_[ hi ]
 
       if ( end <= address ) {
-        return
+        return []
       }
 
-      return { address, length: end - address }
+      return [ { address, length: end - address } ]
     }
 
     const locals: number[] = []
@@ -1146,21 +1152,22 @@ implements Iterable<BaseEntity>, Model {
       }
     }
 
-    return this.spanOf_( locals )
+    return this.spansOf_( locals )
   }
 
 
   /**
-   * Tight source span covering `localIDs` (file-order faces of one set).
+   * Coalesce `localIDs` into tight source runs. Records more than
+   * {@link LEAF_SPAN_COALESCE_GAP_} apart stay separate so a sparse
+   * Faces[] list does not pin the file between them.
    *
    * @param localIDs The records.
-   * @return {{address: number, length: number} | undefined} The span.
+   * @return {{address: number, length: number}[]} The spans.
    */
-  private spanOf_(
-      localIDs: number[] ): { address: number, length: number } | undefined {
+  private spansOf_(
+      localIDs: number[] ): { address: number, length: number }[] {
 
-    let minAddress = Infinity
-    let maxEnd = 0
+    const items: { address: number, length: number }[] = []
 
     for ( const id of localIDs ) {
 
@@ -1168,23 +1175,41 @@ implements Iterable<BaseEntity>, Model {
         continue
       }
 
-      const address = this.address_[ id ]
-      const end = address + this.length_[ id ]
-
-      if ( address < minAddress ) {
-        minAddress = address
-      }
-
-      if ( end > maxEnd ) {
-        maxEnd = end
-      }
+      items.push( {
+        address: this.address_[ id ],
+        length: this.length_[ id ],
+      } )
     }
 
-    if ( !Number.isFinite( minAddress ) || maxEnd <= minAddress ) {
-      return
+    items.sort( ( a, b ) => a.address - b.address )
+
+    const spans: { address: number, length: number }[] = []
+    let run: { address: number, length: number } | undefined
+
+    for ( const item of items ) {
+
+      if ( run === void 0 ) {
+        run = { address: item.address, length: item.length }
+        continue
+      }
+
+      const runEnd = run.address + run.length
+
+      if ( item.address <= runEnd + StepModelBase.LEAF_SPAN_COALESCE_GAP_ ) {
+        const end = Math.max( runEnd, item.address + item.length )
+        run.length = end - run.address
+        continue
+      }
+
+      spans.push( run )
+      run = { address: item.address, length: item.length }
     }
 
-    return { address: minAddress, length: maxEnd - minAddress }
+    if ( run !== void 0 ) {
+      spans.push( run )
+    }
+
+    return spans
   }
 
 

@@ -6621,8 +6621,8 @@ export class IfcGeometryExtraction {
 
   /**
    * Page a faceset's Coordinates record and its Faces[] run as one
-   * address span. The generic closure treats the faceset as a leaf so
-   * it does not resolve every face express ID.
+   * or more tight address spans. The generic closure visits the
+   * faceset but does not scan Faces[].
    *
    * @param visited Faceset local IDs already pinned (and the set to
    * extend with Coordinates).
@@ -6662,15 +6662,13 @@ export class IfcGeometryExtraction {
         continue
       }
 
-      const span = this.model.spanOfExpressIDExtremes( refs, 1 )
+      const spans = this.model.spansOfExpressIDs( refs, 1 )
 
-      if ( span === void 0 ) {
-        continue
+      for ( const span of spans ) {
+        this.model.pinAddressRange( span.address, span.length )
+        leafSpans?.push( span )
+        await this.model.ensureResidentRange( span.address, span.length )
       }
-
-      this.model.pinAddressRange( span.address, span.length )
-      await this.model.ensureResidentRange( span.address, span.length )
-      leafSpans?.push( span )
     }
   }
 
