@@ -34,9 +34,10 @@
  *    a {@link StepExternalByteStore} with an LRU residency cap.
  *    Records contained in one chunk are served as a view over it;
  *    records straddling chunks get a per-record merged copy. Eviction
- *    is advisory — descriptors that captured a chunk keep it alive
- *    via their own reference, so correctness never depends on the
- *    residency set; only memory does.
+ *    is advisory while a descriptor still holds a chunk view.
+ *    {@link StepModelBase.releaseSourceViews} drops those views so
+ *    the LRU can evict; the next sync read must `ensureResident`
+ *    first (same as any other miss).
  *
  * The external store itself is environment-provided (OPFS in the
  * browser, a file or memory in node) — this module only defines the

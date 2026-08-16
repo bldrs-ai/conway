@@ -112,13 +112,15 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
 
     await model.ensureResidentByLocalID( localID )
     const first = model.getElementByExpressID( expressID )
-    expect( first?.expressID ).toBe( expressID )
+    expect( first ).toBeDefined()
+    const args = first!.extractLineArguments()
+    expect( args.length ).toBeGreaterThan( 0 )
 
     model.releaseSourceViews( [ localID ] )
 
     await model.ensureResidentByLocalID( localID )
     const again = model.getElementByExpressID( expressID )
-    expect( again?.expressID ).toBe( expressID )
+    expect( again!.extractLineArguments().length ).toBe( args.length )
   } )
 
   test( 'openStreamedIfcModelFromStore matches the sync open', async () => {

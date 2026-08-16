@@ -158,13 +158,13 @@ export class ProgressTracker {
   public update(
       completed: number,
       extras?: { residentSourceMb?: number } ): void {
+    this.extras_ = extras
     const now = Date.now()
 
     if ( now - this.lastEmitTime < this.minIntervalMs ) {
       return
     }
 
-    this.extras_ = extras
     this.emit( completed, now, extras )
   }
 

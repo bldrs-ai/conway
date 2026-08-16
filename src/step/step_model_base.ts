@@ -816,12 +816,10 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
-   * Drop captured source-window views on `localIDs` so the windowed
-   * LRU can actually evict those chunks. Descriptors keep SoA columns
-   * and (if present) the entity object; the next field read
-   * re-acquires. Call after a product extract, once the closure is
-   * unpin-able — otherwise every extracted entity pins its 4 MiB
-   * chunk for the rest of the load.
+   * Drop captured source-window views on `localIDs` so the LRU can
+   * evict those chunks. Vtables stay — `acquire` of the same
+   * `(address, length)` is at a stable base. The next
+   * `ensureResident` + field read rematerialises the view.
    *
    * @param localIDs Records whose `buffer` views to drop.
    */
@@ -844,20 +842,12 @@ implements Iterable<BaseEntity>, Model {
         continue
       }
 
-      // Drop the view AND the vtable: vtable slots are view-relative,
-      // so they are stale against the next acquire of a different window.
-      item.buffer      = void 0
-      item.vtable      = void 0
-      item.vtableCount = void 0
-      item.vtableIndex = void 0
+      item.buffer = void 0
 
       if ( item.multiMapping !== void 0 ) {
 
         for ( const mapped of item.multiMapping ) {
-          mapped.buffer      = void 0
-          mapped.vtable      = void 0
-          mapped.vtableCount = void 0
-          mapped.vtableIndex = void 0
+          mapped.buffer = void 0
         }
       }
     }

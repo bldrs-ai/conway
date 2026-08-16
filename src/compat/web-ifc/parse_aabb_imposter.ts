@@ -1,4 +1,5 @@
 import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import ParsingBuffer from '../../parsing/parsing_buffer'
 import type { PreviewMeshPayload } from './streamed_preview_channel'
 
 /* eslint-disable no-magic-numbers */
@@ -9,16 +10,11 @@ const IMPOSTER_STRIDE = 8
 /** Skip lists with fewer than this many points (noise). */
 const MIN_POINTS = 8
 
-/** Pale cyan, see-through — reads as a ghost, not finished geom. */
+/** Cap so one huge tessellation list cannot stall the parse yield. */
+const SCAN_BUDGET_BYTES = 128 * 1024
+
 const IMPOSTER_COLOR = { x: 0.45, y: 0.75, z: 0.95, w: 0.35 }
 
-const CHAR_0 = 0x30
-const CHAR_9 = 0x39
-const CHAR_MINUS = 0x2d
-const CHAR_PLUS = 0x2b
-const CHAR_DOT = 0x2e
-const CHAR_E = 0x45
-const CHAR_e = 0x65
 const CHAR_HASH = 0x23
 const CHAR_EQ = 0x3d
 const CHAR_LPAREN = 0x28
@@ -52,36 +48,35 @@ export function aabbFromStepReals( bytes: Uint8Array ): Aabb3 | null {
   let x = 0
   let y = 0
 
-  const end = bytes.length
   // Skip `#id=TYPENAME(` so the express ID is not a phantom first real.
-  let cursor = 0
+  let start = 0
+  const end = Math.min( bytes.length, SCAN_BUDGET_BYTES )
 
-  if ( bytes[ cursor ] === CHAR_HASH ) {
+  if ( bytes[ start ] === CHAR_HASH ) {
 
-    while ( cursor < end && bytes[ cursor ] !== CHAR_EQ ) {
-      ++cursor
+    while ( start < end && bytes[ start ] !== CHAR_EQ ) {
+      ++start
     }
 
-    if ( cursor < end ) {
-      ++cursor
+    if ( start < end ) {
+      ++start
     }
   }
 
-  while ( cursor < end && bytes[ cursor ] !== CHAR_LPAREN ) {
-    ++cursor
+  while ( start < end && bytes[ start ] !== CHAR_LPAREN ) {
+    ++start
   }
 
-  while ( cursor < end ) {
+  const input = new ParsingBuffer( bytes, start, end )
 
-    const parsed = parseStepReal_( bytes, cursor, end )
+  while ( !input.finished ) {
 
-    if ( parsed === null ) {
-      ++cursor
+    const value = input.readReal()
+
+    if ( value === void 0 ) {
+      input.step()
       continue
     }
-
-    cursor = parsed.next
-    const value = parsed.value
 
     if ( axis === 0 ) {
       x = value
@@ -137,7 +132,7 @@ export function aabbToPreviewMatrix( aabb: Aabb3 ): number[] {
   const cy = ( aabb.min[ 1 ] + aabb.max[ 1 ] ) * 0.5
   const cz = ( aabb.min[ 2 ] + aabb.max[ 2 ] ) * 0.5
 
-  // Z-up → Y-up (same as StreamedPreviewChannel.NORMALIZE_MAT).
+  // Z-up → Y-up, then scale/centre for a unit cube.
   return [
     sx, 0, 0, 0,
     0, sz, 0, 0,
@@ -149,9 +144,8 @@ export function aabbToPreviewMatrix( aabb: Aabb3 ): number[] {
 
 /**
  * Stateful filter: every IMPOSTER_STRIDE-th IfcCartesianPointList3D
- * becomes a tiny preview payload. Synchronous and allocation-light —
- * safe on the parse's onRecordIndexed seam. The view `recordBytes`
- * is into the sliding parse window; do not retain it.
+ * becomes a tiny preview payload. The view `recordBytes` is into the
+ * sliding parse window; do not retain it.
  *
  * @param onMesh Preview consumer (Share's ON_PREVIEW_MESH).
  * @return A callback matching onRecordIndexed.
@@ -197,71 +191,4 @@ export function makeParseAabbImposter(
       // Preview must never break the parse.
     }
   }
-}
-
-
-/**
- * @param bytes
- * @param start
- * @param end
- * @return The real and the cursor after it, or null if `start` is not
- * the start of a number.
- */
-function parseStepReal_(
-    bytes: Uint8Array,
-    start: number,
-    end: number ): { value: number, next: number } | null {
-
-  let cursor = start
-  const first = bytes[ cursor ]
-
-  if ( first !== CHAR_MINUS && first !== CHAR_PLUS && first !== CHAR_DOT &&
-      ( first < CHAR_0 || first > CHAR_9 ) ) {
-    return null
-  }
-
-  if ( first === CHAR_MINUS || first === CHAR_PLUS ) {
-    ++cursor
-    if ( cursor >= end ) {
-      return null
-    }
-  }
-
-  const digitOrDot = bytes[ cursor ]
-
-  if ( digitOrDot !== CHAR_DOT && ( digitOrDot < CHAR_0 || digitOrDot > CHAR_9 ) ) {
-    return null
-  }
-
-  while ( cursor < end ) {
-
-    const ch = bytes[ cursor ]
-
-    if ( ( ch >= CHAR_0 && ch <= CHAR_9 ) || ch === CHAR_DOT ) {
-      ++cursor
-      continue
-    }
-
-    if ( ch === CHAR_E || ch === CHAR_e ) {
-      ++cursor
-      if ( cursor < end &&
-          ( bytes[ cursor ] === CHAR_MINUS || bytes[ cursor ] === CHAR_PLUS ) ) {
-        ++cursor
-      }
-      while ( cursor < end && bytes[ cursor ] >= CHAR_0 && bytes[ cursor ] <= CHAR_9 ) {
-        ++cursor
-      }
-    }
-
-    break
-  }
-
-  const value = Number.parseFloat(
-      String.fromCharCode( ...bytes.subarray( start, cursor ) ) )
-
-  if ( !Number.isFinite( value ) ) {
-    return null
-  }
-
-  return { value, next: cursor }
 }
