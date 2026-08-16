@@ -439,6 +439,52 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   }
 
   /**
+   * Resolve a single reference field to its local ID without
+   * constructing the target entity. Prep maps that only store
+   * `Item.localID` (IfcStyledItem → faceset) must not hydrate the
+   * target: on a windowed source that would pin the faceset record
+   * (often megabytes) for every styled item at once.
+   *
+   * @param offset The offset in the vtable to extract from.
+   * @param baseOffset The base offset of the class in the vtable.
+   * @param depth The depth in the inheritance hierarchy.
+   * @param optional Is this an optional field?
+   * @return {number | null} The referenced local ID, or null if the
+   * field is unset/optional-null.
+   */
+  public extractReferenceLocalID(
+      offset: number,
+      baseOffset: number,
+      depth: number,
+      optional: boolean ): number | null {
+
+    const [cursor, endCursor, buffer] = this.getOffsetAndEndCursor( offset, baseOffset, depth )
+    const expressID = stepExtractReference( buffer, cursor, endCursor )
+
+    if ( expressID !== void 0 ) {
+      return this.model.resolveExpressID( expressID ) ?? null
+    }
+
+    const inline = this.model.getInlineElementByAddress(
+        extractInlineElementAddress( buffer, cursor, endCursor ) )
+
+    if ( inline !== void 0 ) {
+      return inline.localID
+    }
+
+    if ( !optional ) {
+      throw new Error( 'Value in STEP was incorrectly typed' )
+    }
+
+    if ( !this.model.nullOnErrors &&
+        stepExtractOptional( buffer, cursor, endCursor ) !== null ) {
+      throw new Error( 'Value in STEP was incorrectly typed' )
+    }
+
+    return null
+  }
+
+  /**
    *
    * @param buffer
    * @param cursor

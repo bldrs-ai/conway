@@ -60,6 +60,12 @@ const DEFERRED_DRAIN_BATCH = 256
 // eslint-disable-next-line no-magic-numbers
 const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 
+/* Store-backed open pays an await per window slide (`File.slice`).
+ * 1 MiB on an 860 MB IFC is ~1700 trips; 16 MiB is ~100. The window
+ * is scratch — it does not stay resident after parse. */
+// eslint-disable-next-line no-magic-numbers
+const STORE_PARSE_POOL_BYTES = 16 * 1024 * 1024
+
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
  * (mesh vectors, statistics) consumes — precomputed by createAsync so the
@@ -928,7 +934,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     tracker?.beginPhase('headerParse', 'bytes', fileSize)
 
-    const headerLen = Math.min( fileSize, STREAMED_PARSE_POOL_BYTES )
+    const headerLen = Math.min( fileSize, STORE_PARSE_POOL_BYTES )
     const headerBytes = await store.read( 0, headerLen )
     const [stepHeader, result0] = parser.parseHeader( new ParsingBuffer( headerBytes ) )
 
@@ -953,7 +959,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const { result, columns } = await buildColumnarIndexStreamingAsync(
         new StoreByteSource( store ),
         parser,
-        STREAMED_PARSE_POOL_BYTES,
+        STORE_PARSE_POOL_BYTES,
         void 0,
         parseTick )
 

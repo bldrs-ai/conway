@@ -858,6 +858,19 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Express IDs referenced by a resident record (`#<id>` tokens in its
+   * text, including multi-mapped class records). The record itself
+   * must already be resident.
+   *
+   * @param localID The record to scan.
+   * @return {number[]} Distinct referenced express IDs.
+   */
+  public referencedExpressIDs( localID: number ): number[] {
+    return this.scanRecordRefs_( localID )
+  }
+
+
+  /**
    * Scan a resident record's bytes for `#<expressID>` references.
    *
    * @param localID The record to scan.
