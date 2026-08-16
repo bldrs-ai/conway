@@ -1034,25 +1034,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const pins = new Set< number >()
 
-      await Promise.all( pending.map( ( localID ) =>
-        conwayGeometry.ensureResidentForProductExtract( localID, pins ) ) )
+      try {
 
-      for ( const localID of pending ) {
+        await Promise.all( pending.map( ( localID ) =>
+          conwayGeometry.ensureResidentForProductExtract( localID, pins ) ) )
 
-        try {
-          conwayGeometry.extractProductGeometryByLocalID( localID )
-        } catch ( error ) {
-          Logger.error(
-              `Error extracting product localID ${localID}: ` +
-              `${error instanceof Error ? error.message : String( error )}` )
+        for ( const localID of pending ) {
+
+          try {
+            conwayGeometry.extractProductGeometryByLocalID( localID )
+          } catch ( error ) {
+            Logger.error(
+                `Error extracting product localID ${localID}: ` +
+                `${error instanceof Error ? error.message : String( error )}` )
+          }
+
+          ++completed
         }
-
-        ++completed
+      } finally {
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+        pending.length = 0
       }
-
-      model.releaseSourceViews( pins )
-      model.unpinLocalIDs( pins )
-      pending.length = 0
 
       tracker?.update( completed, {
         residentSourceMb: model.residentSourceBytes / BYTES_PER_MIB,
@@ -1805,31 +1808,33 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (batchIDs.length > 0) {
 
-      // One shared pin set for the batch: mapped/type geometry is
-      // paged once, then every product extracts against it. Per-product
-      // release was re-reading the same facesets from OPFS on every
-      // instance (the ~20s Geometry tax vs a resident buffer).
+      // One pin set for the batch so mapped geometry stays resident
+      // across the instances that share it.
       const pins = new Set<number>()
 
-      await Promise.all(batchIDs.map((localID) =>
-        this.conwayGeometry_.ensureResidentForProductExtract(localID, pins)))
+      try {
 
-      for (const localID of batchIDs) {
+        await Promise.all(batchIDs.map((localID) =>
+          this.conwayGeometry_.ensureResidentForProductExtract(localID, pins)))
 
-        try {
-          if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-            ++extracted
+        for (const localID of batchIDs) {
+
+          try {
+            if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+              ++extracted
+            }
+          } catch (error) {
+            Logger.error(
+                `Error extracting product localID ${localID}: ` +
+                `${error instanceof Error ? error.message : String(error)}`)
           }
-        } catch (error) {
-          Logger.error(
-              `Error extracting product localID ${localID}: ` +
-              `${error instanceof Error ? error.message : String(error)}`)
         }
-      }
 
-      this.model[0].releaseSourceViews(pins)
-      this.model[0].unpinLocalIDs(pins)
-      this.demandCursor_ = productEnd
+        this.demandCursor_ = productEnd
+      } finally {
+        this.model[0].releaseSourceViews(pins)
+        this.model[0].unpinLocalIDs(pins)
+      }
     }
 
     if (this.demandCursor_ >= products.length &&

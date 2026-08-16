@@ -790,7 +790,10 @@ implements Iterable<BaseEntity>, Model {
           continue
         }
 
+        // Claim + pin before the await so a sibling ensure cannot
+        // evict this range once its own ensurePins_ drop.
         seen.add( id )
+        this.pinByLocalID( id )
         wave.push( id )
       }
 
@@ -803,8 +806,6 @@ implements Iterable<BaseEntity>, Model {
       await Promise.all( wave.map( ( id ) => this.ensureResidentByLocalID( id ) ) )
 
       for ( const id of wave ) {
-
-        this.pinByLocalID( id )
 
         for ( const expressID of this.scanRecordRefs_( id ) ) {
 

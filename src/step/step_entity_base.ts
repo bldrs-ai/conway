@@ -899,10 +899,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     
     offset -= this.multiReference_ !== void 0 ? baseOffset : 0
 
-    // Rematerialise before the vtable walk: releaseSourceViews keeps
-    // vtables and drops `buffer`, and guaranteeVTable used to return
-    // the stale descriptor. HEAPU8.set then threw
-    // "Cannot read properties of undefined (reading 'subarray')".
+    // releaseSourceViews keeps the vtable and drops `buffer`.
     this.guaranteeBuffer()
 
     const internalReference = this.guaranteeVTable( depth )
