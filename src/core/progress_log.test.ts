@@ -121,6 +121,32 @@ describe( 'LoadLogAccumulator', () => {
     expect( log.totalLine() ).toBe( 'Total: 16.500s, 500.000000 → 720.000000 MB heap' )
   } )
 
+  test( 'appends window residency on the Geometry line when provided', () => {
+
+    const log = new LoadLogAccumulator()
+
+    log.onProgress( {
+      phase: 'geometry',
+      completed: 0,
+      total: 10,
+      elapsedMs: 0,
+      memoryMb: 100,
+      residentSourceMb: 64,
+    } )
+    log.onProgress( {
+      phase: 'geometry',
+      completed: 10,
+      total: 10,
+      elapsedMs: 1000,
+      memoryMb: 120,
+      residentSourceMb: 64,
+    } )
+    log.closeCurrentStage()
+
+    expect( log.finishedLines()[ 0 ] ).toBe(
+        'Geometry: 1.000s, +20.000000 MB heap, window=64.000000 MB' )
+  } )
+
   test( 'handles indeterminate stages and missing memory', () => {
 
     const log = new LoadLogAccumulator()

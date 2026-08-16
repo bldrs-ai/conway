@@ -102,6 +102,27 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
         .toThrow( /does not match/ )
   } )
 
+  test( 'releaseSourceViews still lets a later read re-acquire', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )
+    const model = fromStore.model!
+    const expressID = [ ...model.expressIDsOfTypes( IfcRoot ) ][ 0 ] as number
+    const localID = model.resolveExpressID( expressID ) as number
+
+    await model.ensureResidentByLocalID( localID )
+    const first = model.getElementByExpressID( expressID )
+    expect( first ).toBeDefined()
+    const args = first!.extractLineArguments()
+    expect( args.length ).toBeGreaterThan( 0 )
+
+    model.releaseSourceViews( [ localID ] )
+
+    await model.ensureResidentByLocalID( localID )
+    const again = model.getElementByExpressID( expressID )
+    expect( again!.extractLineArguments().length ).toBe( args.length )
+  } )
+
   test( 'openStreamedIfcModelFromStore matches the sync open', async () => {
     const store = new InMemoryStepByteStore( bytes )
     const fromStore = await openStreamedIfcModelFromStore( store, { pool: 4 * 1024 } )

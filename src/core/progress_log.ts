@@ -40,6 +40,7 @@ export interface ProgressEventLike {
   total?: number
   elapsedMs: number
   memoryMb?: number
+  residentSourceMb?: number
 }
 
 /** Display labels for the phase taxonomy; unknown phases title-case as-is. */
@@ -159,6 +160,7 @@ interface StageState {
   startHeapMb?: number
   lastHeapMb?: number
   percent?: number
+  residentSourceMb?: number
 }
 
 /**
@@ -195,17 +197,19 @@ function heapDeltaSuffix( state: StageState ): string {
 function formatStageLine( state: StageState, final: boolean ): string {
   const duration = state.lastElapsedMs - state.startElapsedMs
   const heap = heapDeltaSuffix( state )
+  const window = state.residentSourceMb !== void 0 ?
+    `, window=${formatMb( state.residentSourceMb )} MB` : ''
   const determinate = state.percent !== void 0
 
   // Completed: no bar, colon-separated. A determinate stage that stopped
   // short of 100% is a failure — keep its bar to show the reach.
   if ( final && !( determinate && ( state.percent as number ) < PERCENT ) ) {
-    return `${state.label}: ${formatSeconds( duration )}${heap}`
+    return `${state.label}: ${formatSeconds( duration )}${heap}${window}`
   }
 
   const bar = formatBar( determinate ? state.percent : void 0 )
 
-  return `${state.label} ${bar} ${formatSeconds( duration )}${heap}`
+  return `${state.label} ${bar} ${formatSeconds( duration )}${heap}${window}`
 }
 
 /**
@@ -282,6 +286,10 @@ export class LoadLogAccumulator {
     if ( event.memoryMb !== void 0 ) {
       current.startHeapMb ??= event.memoryMb
       current.lastHeapMb = event.memoryMb
+    }
+
+    if ( event.residentSourceMb !== void 0 ) {
+      current.residentSourceMb = event.residentSourceMb
     }
 
     if ( event.total !== void 0 && event.total > 0 ) {

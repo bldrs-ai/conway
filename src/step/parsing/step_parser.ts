@@ -504,7 +504,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   public parseDataBlockStreamed(
       input: ParsingBuffer,
       onRecordBoundary: ( input: ParsingBuffer ) => void | Promise<void>,
-      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+      onRecordIndexed?: (
+        localID: number,
+        expressID: number,
+        typeID: TypeIDType | undefined,
+        recordBytes?: Uint8Array ) => void,
       onProgress?: ParseProgressCallback,
       sink?: StepIndexSink<TypeIDType> ): BlockParseResult<TypeIDType> {
 
@@ -551,7 +555,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   public async parseDataBlockStreamedAsync(
       input: ParsingBuffer,
       onRecordBoundary: ( input: ParsingBuffer ) => void | Promise<void>,
-      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+      onRecordIndexed?: (
+        localID: number,
+        expressID: number,
+        typeID: TypeIDType | undefined,
+        recordBytes?: Uint8Array ) => void,
       onProgress?: ParseProgressCallback,
       sink?: StepIndexSink<TypeIDType>,
       yieldIntervalMs: number = DEFAULT_PARSE_YIELD_INTERVAL_MS ):
@@ -638,7 +646,11 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   private* parseDataBlockIncremental(
       input: ParsingBuffer,
       onRecordBoundary?: ( input: ParsingBuffer ) => void | Promise<void>,
-      onRecordIndexed?: ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void,
+      onRecordIndexed?: (
+        localID: number,
+        expressID: number,
+        typeID: TypeIDType | undefined,
+        recordBytes?: Uint8Array ) => void,
       sink?: StepIndexSink<TypeIDType> ):
       Generator<number | Promise<void>, BlockParseResult<TypeIDType>, undefined> {
 
@@ -927,7 +939,14 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           return syntaxError()
         }
 
-        onRecordIndexed?.( topLevelCount, expressID, 0 as TypeIDType )
+        {
+          const recordLen = input.address - startElement
+          onRecordIndexed?.(
+              topLevelCount,
+              expressID,
+              0 as TypeIDType,
+              input.buffer.subarray( input.cursor - recordLen, input.cursor ) )
+        }
         ++topLevelCount
 
         pushEntry(
@@ -1097,7 +1116,14 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return syntaxError()
       }
 
-      onRecordIndexed?.( topLevelCount, expressID, foundItem )
+      {
+        const recordLen = input.address - startElement
+        onRecordIndexed?.(
+            topLevelCount,
+            expressID,
+            foundItem,
+            input.buffer.subarray( input.cursor - recordLen, input.cursor ) )
+      }
       ++topLevelCount
 
       pushEntry(

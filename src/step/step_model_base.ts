@@ -816,6 +816,47 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Drop captured source-window views on `localIDs` so the LRU can
+   * evict those chunks. Vtables stay — `acquire` of the same
+   * `(address, length)` is at a stable base. The next
+   * `ensureResident` + field read rematerialises the view.
+   *
+   * @param localIDs Records whose `buffer` views to drop.
+   */
+  public releaseSourceViews( localIDs: Iterable< number > ): void {
+
+    if ( !this.isSourceExternal ) {
+      return
+    }
+
+    for ( const localID of localIDs ) {
+
+      if ( localID >= this.count_ ) {
+        continue
+      }
+
+      const item =
+        this.complexEntries_?.get( localID ) ?? this.descriptorCache_[ localID ]
+
+      if ( item === void 0 ) {
+        continue
+      }
+
+      item.buffer = void 0
+
+      if ( item.multiMapping !== void 0 ) {
+
+        for ( const mapped of item.multiMapping ) {
+          mapped.buffer = void 0
+        }
+      }
+    }
+
+    releaseScratchParsingBuffer()
+  }
+
+
+  /**
    * Unpin every local ID in `localIDs` (best-effort; missing IDs are
    * ignored). Use after {@link ensureResidentClosureByLocalID}, which
    * pins as it walks.
