@@ -34,6 +34,7 @@ import {
   buildColumnarIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import { StorePreviewChannel } from './store_preview_channel'
 import {
   ifcPreviewAdapter,
   StreamedPreviewChannel,
@@ -931,9 +932,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /**
    * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
    * source stays in `store`, parse windows are filled through it, and
-   * the model never holds a resident copy. Prefix-extract preview is
-   * skipped (it needs a resident prefix). After the index exists,
-   * spatial-structure AABB plates go through ON_PREVIEW_MESH.
+   * the model never holds a resident copy. During parse a bounded
+   * prefix extract pages product closures from the store and emits
+   * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
+   * the index exists, spatial-structure AABB plates go out too.
    * Deferred opens page prep closures before prepareDemandExtraction;
    * non-deferred opens drain the demand pump with per-product residency.
    *
@@ -967,14 +969,44 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const parseStartTime = Date.now()
 
+    // Live sink so the store preview channel can snapshot a prefix
+    // mid-parse without a resident source buffer.
+    const sink = new ColumnarIndexSink< EntityTypesIfc >()
+    const storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
+      new StorePreviewChannel(
+          store,
+          sink,
+          conwaywasm,
+          settings.COORDINATE_TO_ORIGIN === true,
+          settings.ON_PREVIEW_MESH ) : void 0
+
+    const parseProgress = async ( cursorBytes: number ): Promise< void > => {
+      parseTick?.( cursorBytes )
+      await storePreview?.maybeTickAsync()
+    }
+
     // One windowed pass: header comes out of the same slide as the
     // data block so we do not hold a second 16 MiB prefix copy.
-    const { result, columns, header: stepHeader } = await buildColumnarIndexStreamingAsync(
-        new StoreByteSource( store ),
-        parser,
-        STORE_PARSE_POOL_BYTES,
-        void 0,
-        parseTick )
+    let result
+    let stepHeader
+
+    try {
+      ( { result, header: stepHeader } = await buildIndexStreamingAsync(
+          new StoreByteSource( store ),
+          parser,
+          STORE_PARSE_POOL_BYTES,
+          void 0,
+          sink,
+          parseProgress ) )
+
+      if ( storePreview !== void 0 ) {
+        await storePreview.flushAsync()
+      }
+    } finally {
+      storePreview?.stop()
+    }
+
+    const columns = sink.finalize()
 
     // Parse window is out of scope; drop the module scratch in case a
     // numeric read during the slide left it pointed at that 16 MiB view.
@@ -1030,6 +1062,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
+        previewCoordinationMatrix: storePreview?.coordinationMatrix,
         allTimeStart,
         stepHeader,
         model,

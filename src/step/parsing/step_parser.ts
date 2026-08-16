@@ -121,7 +121,8 @@ export type LineArgumentParseResult<TypeIDType> = [StepIndex<TypeIDType>, ParseR
  * parser stays decoupled from the higher-level progress event contract in
  * core/progress.ts (ProgressTracker maps this into a ProgressEvent).
  */
-export type ParseProgressCallback = ( cursorBytes: number ) => void
+export type ParseProgressCallback =
+  ( cursorBytes: number ) => unknown
 
 // One generator suspension per (mask + 1) parsed elements keeps progress
 // overhead unmeasurable in the hot data-parse loop (a 9M-entity model yields
@@ -583,7 +584,12 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         continue
       }
 
-      onProgress?.( next.value )
+      const progressed = onProgress?.( next.value )
+
+      if ( progressed !== void 0 &&
+          typeof ( progressed as Promise< void > ).then === 'function' ) {
+        await ( progressed as Promise< void > )
+      }
 
       if ( Date.now() - lastYield >= yieldIntervalMs ) {
         await yieldToEventLoop()

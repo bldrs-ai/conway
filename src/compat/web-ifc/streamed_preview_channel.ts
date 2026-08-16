@@ -265,7 +265,7 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
  * @param geometry The model geometry cache (iterable of canonical
  * meshes with a delete(localID)).
  */
-function releaseModelGeometry(
+export function releaseModelGeometry(
     geometry: Iterable<{ localID: number }> & { delete( localID: number ): void } ): void {
 
   const localIDs: number[] = []

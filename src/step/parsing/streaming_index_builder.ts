@@ -265,7 +265,7 @@ export async function buildIndexStreamingAsync<TypeIDType>(
       typeID: TypeIDType | undefined,
       recordBytes?: Uint8Array ) => void,
     sink?: StepIndexSink<TypeIDType>,
-    onProgress?: ( absoluteByteCursor: number ) => void,
+    onProgress?: ( absoluteByteCursor: number ) => unknown,
     yieldIntervalMs?: number ):
     Promise<StreamingIndexResult<TypeIDType>> {
 
@@ -344,7 +344,8 @@ export async function buildIndexStreamingAsync<TypeIDType>(
     // Translate the parser's window-relative cursor to an absolute source
     // cursor (windowStartFile advances as the window slides).
     const progressTick = onProgress !== void 0 ?
-      ( cursor: number ) => onProgress( windowStartFile + cursor ) : void 0
+      ( cursor: number ) =>
+        onProgress( windowStartFile + cursor ) : void 0
 
     const [ index, result ] =
       await parser.parseDataBlockStreamedAsync(
@@ -446,7 +447,7 @@ export async function buildColumnarIndexStreamingAsync<TypeIDType extends number
       expressID: number,
       typeID: TypeIDType | undefined,
       recordBytes?: Uint8Array ) => void,
-    onProgress?: ( absoluteByteCursor: number ) => void,
+    onProgress?: ( absoluteByteCursor: number ) => unknown,
     yieldIntervalMs?: number ):
     Promise<StreamingColumnarIndexResult<TypeIDType>> {
 
