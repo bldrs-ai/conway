@@ -57,7 +57,7 @@ import {
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
-import { arrayToWasmHeap } from '../core/wasm_heap'
+import { arrayToWasmHeap, wasmHeapView } from '../core/wasm_heap'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -3870,13 +3870,14 @@ export class AP214GeometryExtraction {
       capacity = maxPossibleFloats
     }
 
-    // 2) Create a Float64Array view into WASM memory
-    // We only need to create a subarray up to the capacity
-    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
-        pointer / bytesPerElement,
-         
-        pointer / bytesPerElement + capacity,
-    )
+    // 2) Create a Float64Array view into WASM memory, over the heap as it is
+    // after the _malloc above rather than over whatever view the module had
+    // cached before it - see wasm_heap.ts for why those can differ. Built
+    // rather than subarray'd off HEAPF64 for the same reason: subarray clamps
+    // an out-of-range window into a short one, and the set() loop below would
+    // then quietly write somewhere other than the allocation (#485).
+    const wasmFloat64View =
+      wasmHeapView(this.wasmModule, Float64Array, pointer, capacity)
 
     // 3) Single pass to skip consecutive duplicates, fill up the wasm array
     let offset = 0
