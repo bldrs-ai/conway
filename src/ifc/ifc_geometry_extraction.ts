@@ -84,6 +84,8 @@ import {
   IfcCompositeProfileDef,
   IfcDirection,
   IfcExtrudedAreaSolid,
+  IfcGrid,
+  IfcGridAxis,
   IfcGridPlacement,
   IfcIndexedPolyCurve,
   IfcIndexedPolygonalFaceWithVoids,
@@ -191,6 +193,7 @@ import {
   IfcCompositeCurveSegment,
   IfcRevolvedAreaSolid,
   IfcFaceSurface,
+  IfcVirtualGridIntersection,
 } from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
@@ -215,6 +218,18 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 // Await cadence for extractIFCGeometryDataAsync: long enough that yielding
 // doesn't dominate, short enough that browser paint + watchdogs stay live.
 const DEFAULT_GEOMETRY_YIELD_INTERVAL_MS = 50
+
+// IfcVirtualGridIntersection.IntersectingAxes is LIST [2:2] and
+// OffsetDistances LIST [2:3], the third entry displacing the intersection
+// along the grid placement's z axis.
+const GRID_INTERSECTION_AXIS_COUNT = 2
+const GRID_INTERSECTION_Z_OFFSET = 2
+
+// Sine of the smallest angle two grid axes may cross at and still be treated
+// as intersecting. Grid axes cross at architectural angles, so this only has
+// to separate "crossing" from "drawn along each other" (or from an axis with
+// no length at all).
+const GRID_AXIS_PARALLEL_EPSILON = 1e-9
 
 
 /**
@@ -421,6 +436,12 @@ export class IfcGeometryExtraction {
   public readonly geometryTypeCounts = new Map<string, number>()
 
   private csgDepth: number = 0
+
+  /**
+   * IfcGridAxis local ID -> the IfcGrid that lists it, built on the first
+   * IfcGridPlacement a model contains (see `gridByAxis`).
+   */
+  private gridByAxis_?: Map<number, IfcGrid>
 
   /**
    * Construct a geometry extraction from an IFC step model and conway model
@@ -5641,6 +5662,308 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Reduce a grid axis to an unbounded line in the plane of the grid's
+   * placement: a point on it, and its tangent there.
+   *
+   * Only the straight axis curves are handled — an IfcLine, or the single
+   * segment of a two-point IfcPolyline — which is what grid axes are in
+   * practice. Anything else returns undefined after warning, so the
+   * placement lands in errors.csv rather than being dropped in silence.
+   *
+   * `SameSense` is folded into the tangent because everything downstream is
+   * measured from it: the offset in IfcVirtualGridIntersection is normal to
+   * the tangent, and the tangent is also an IfcGridPlacement's default
+   * x-axis, so a reversed axis offsets to the other side and points the
+   * other way.
+   *
+   * @param axis The grid axis to reduce.
+   * @return {{x, y, dx, dy} | undefined} A point and (unnormalised) tangent
+   * in the grid's coordinate system, or undefined for an axis curve this
+   * does not handle.
+   */
+  private static gridAxisLine(axis: IfcGridAxis):
+    { x: number, y: number, dx: number, dy: number } | undefined {
+
+    const curve = axis.AxisCurve
+
+    let x: number
+    let y: number
+    let dx: number
+    let dy: number
+
+    if (curve instanceof IfcPolyline) {
+
+      const points = curve.Points
+
+      if (points.length !== 2) {
+
+        // A multi-segment axis needs the segment nearest the intersection
+        // picked per axis pair, which this does not do.
+        Logger.warning(
+            'IfcGridPlacement: grid axis IfcPolyline is not a single segment.',
+            axis.expressID)
+
+        return void 0
+      }
+
+      const start = points[0].Coordinates
+      const end = points[1].Coordinates
+
+      x = start[0]
+      y = start[1]
+      dx = end[0] - start[0]
+      dy = end[1] - start[1]
+
+    } else if (curve instanceof IfcLine) {
+
+      const origin = curve.Pnt.Coordinates
+      const direction = curve.Dir.Orientation.DirectionRatios
+
+      // IfcVector.Magnitude scales the direction; the axis is unbounded
+      // here, so it changes neither the line nor the normalised tangent.
+      x = origin[0]
+      y = origin[1]
+      dx = direction[0]
+      dy = direction[1]
+
+    } else {
+
+      Logger.warning(
+          `IfcGridPlacement: unsupported grid axis curve, type: ${
+            EntityTypesIfc[curve.type]}`,
+          axis.expressID)
+
+      return void 0
+    }
+
+    if (!axis.SameSense) {
+
+      dx = -dx
+      dy = -dy
+    }
+
+    return { x: x, y: y, dx: dx, dy: dy }
+  }
+
+  /**
+   * Resolve an IfcVirtualGridIntersection to a point in the coordinate system
+   * of the IfcGrid that owns its axes, along with the tangent of its first
+   * axis — which is the default x-axis of an IfcGridPlacement located here.
+   *
+   * Per IFC4 each axis is replaced by its offset curve before intersecting:
+   * OffsetDistances[n] is measured from axis n normal to its tangent,
+   * positive towards the tangent turned a quarter turn anti-clockwise. Both
+   * axes here are straight, so their offset curves are parallel to them and
+   * the tangents are unchanged. A third offset, when the file gives one,
+   * displaces the result along the grid placement's z axis.
+   *
+   * @param from The intersection to resolve.
+   * @return {{position, tangent} | undefined} The intersection point and the
+   * first axis' unit tangent, or undefined when the axes cannot be reduced to
+   * two lines that meet (warned at the point of failure).
+   */
+  private resolveVirtualGridIntersection(from: IfcVirtualGridIntersection):
+    { position: Vector3, tangent: Vector2 } | undefined {
+
+    const axes = from.IntersectingAxes
+
+    if (axes.length < GRID_INTERSECTION_AXIS_COUNT) {
+
+      // LIST [2:2] in the schema, so this is a malformed or absent list.
+      Logger.warning(
+          'IfcGridPlacement: virtual grid intersection has fewer than two axes.',
+          from.expressID)
+
+      return void 0
+    }
+
+    const line0 = IfcGeometryExtraction.gridAxisLine(axes[0])
+    const line1 = IfcGeometryExtraction.gridAxisLine(axes[1])
+
+    if (line0 === void 0 || line1 === void 0) {
+
+      return void 0
+    }
+
+    const length0 = Math.sqrt(line0.dx * line0.dx + line0.dy * line0.dy)
+    const length1 = Math.sqrt(line1.dx * line1.dx + line1.dy * line1.dy)
+    const cross = line0.dx * line1.dy - line0.dy * line1.dx
+
+    // |cross| / (length0 * length1) is the sine of the angle between the
+    // axes, so the test is independent of the model's units. A zero-length
+    // tangent (a polyline whose two points coincide) also lands here,
+    // before it can divide its way into a NaN below.
+    if (Math.abs(cross) <= GRID_AXIS_PARALLEL_EPSILON * length0 * length1) {
+
+      Logger.warning(
+          'IfcGridPlacement: intersecting grid axes are parallel or degenerate.',
+          from.expressID)
+
+      return void 0
+    }
+
+    const offsets = from.OffsetDistances
+
+    const offset0 = offsets[0] ?? 0
+    const offset1 = offsets[1] ?? 0
+
+    // Offset curve origins: the axis point pushed along the tangent's
+    // anti-clockwise normal, (-dy, dx) normalised.
+    const x0 = line0.x - (offset0 * line0.dy) / length0
+    const y0 = line0.y + (offset0 * line0.dx) / length0
+    const x1 = line1.x - (offset1 * line1.dy) / length1
+    const y1 = line1.y + (offset1 * line1.dx) / length1
+
+    // Parameter along the first offset curve where the two meet, from
+    // crossing (p1 - p0) + t * d0 = s * d1 with d1.
+    const t = ((x1 - x0) * line1.dy - (y1 - y0) * line1.dx) / cross
+
+    return {
+      position: {
+        x: x0 + t * line0.dx,
+        y: y0 + t * line0.dy,
+        z: offsets[GRID_INTERSECTION_Z_OFFSET] ?? 0,
+      },
+      tangent: { x: line0.dx / length0, y: line0.dy / length0 },
+    }
+  }
+
+  /**
+   * The IfcGrid that lists a given axis, or undefined if no grid does.
+   *
+   * IfcGridAxis's route back to its grid is the PartOfU/PartOfV/PartOfW
+   * inverse attributes, and the generated schema layer carries no inverses,
+   * so this is a scan of every IfcGrid's axis lists, memoised. It is built on
+   * the first grid placement extracted and never at all for a model without
+   * one.
+   *
+   * @param axis The axis to look up.
+   * @return {IfcGrid | undefined} The grid listing the axis.
+   */
+  private gridByAxis(axis: IfcGridAxis): IfcGrid | undefined {
+
+    let gridByAxis = this.gridByAxis_
+
+    if (gridByAxis === void 0) {
+
+      gridByAxis = new Map<number, IfcGrid>()
+
+      for (const grid of this.model.types(IfcGrid)) {
+
+        for (const gridAxis of grid.UAxes) {
+          gridByAxis.set(gridAxis.localID, grid)
+        }
+
+        for (const gridAxis of grid.VAxes) {
+          gridByAxis.set(gridAxis.localID, grid)
+        }
+
+        for (const gridAxis of grid.WAxes ?? []) {
+          gridByAxis.set(gridAxis.localID, grid)
+        }
+      }
+
+      this.gridByAxis_ = gridByAxis
+    }
+
+    return gridByAxis.get(axis.localID)
+  }
+
+  /**
+   * Extract an IfcGridPlacement, registering a transform against its local ID
+   * the same way the IfcLocalPlacement arm does — same scene, same
+   * memoisation, same composition onto the current parent.
+   *
+   * The origin is the virtual intersection of two grid axes and the x-axis
+   * comes from PlacementRefDirection (defaulting to the first axis' tangent),
+   * both expressed in the coordinate system of the IfcGrid that owns the
+   * axes. IfcGridPlacement has no PlacementRelTo of its own in IFC4, so that
+   * grid's object placement IS the parent: extracting it first leaves it as
+   * the scene's current transform, which `addTransform` then composes onto.
+   *
+   * @param from The grid placement to extract.
+   * @param isRelVoid Whether this placement is being resolved into the void
+   * scene rather than the main one.
+   */
+  private extractGridPlacement(from: IfcGridPlacement, isRelVoid: boolean): void {
+
+    const placementLocation = from.PlacementLocation
+    const location = this.resolveVirtualGridIntersection(placementLocation)
+
+    if (location === void 0) {
+
+      // Warned where it failed, with the axis or curve responsible.
+      return
+    }
+
+    let xAxisRef: Vector3 = { x: location.tangent.x, y: location.tangent.y, z: 0 }
+
+    const refDirection = from.PlacementRefDirection
+
+    if (refDirection instanceof IfcDirection) {
+
+      const ratios = refDirection.DirectionRatios
+
+      xAxisRef = { x: ratios[0], y: ratios[1], z: ratios[2] ?? 0 }
+
+    } else if (refDirection instanceof IfcVirtualGridIntersection) {
+
+      // The x-axis runs from this placement's intersection to the reference
+      // one. If the reference cannot be resolved the resolver has already
+      // said why, and the schema's own default — the first axis' tangent —
+      // stands in.
+      const reference = this.resolveVirtualGridIntersection(refDirection)
+
+      if (reference !== void 0) {
+
+        xAxisRef = {
+          x: reference.position.x - location.position.x,
+          y: reference.position.y - location.position.y,
+          z: reference.position.z - location.position.z,
+        }
+      }
+    }
+
+    const grid = this.gridByAxis(placementLocation.IntersectingAxes[0])
+
+    if (grid === void 0) {
+
+      // Axes belonging to no grid: the intersection is still a point, but
+      // there is no grid placement to measure it from, so it lands in
+      // whatever frame is current.
+      Logger.warning(
+          'IfcGridPlacement: no IfcGrid lists the axes of this placement.',
+          from.expressID)
+
+    } else {
+
+      const gridPlacement = grid.ObjectPlacement
+
+      if (gridPlacement !== null) {
+
+        this.extractPlacement(gridPlacement, isRelVoid)
+      }
+    }
+
+    const placementTransform = this.conwayModel.getAxis2Placement3D({
+      position: location.position,
+      // A grid is planar in its own placement, so this placement's z axis is
+      // the grid's z axis; only the x axis is steered here.
+      zAxisRef: { x: 0, y: 0, z: 1 },
+      xAxisRef: xAxisRef,
+      normalizeZ: false,
+      normalizeX: true,
+    })
+
+    const scene = isRelVoid ? this.voidScene : this.scene
+
+    scene.addTransform(
+        from.localID,
+        placementTransform.getValues(),
+        placementTransform)
+  }
+
+  /**
    *
    * @param from
    * @param isRelVoid
@@ -5686,13 +6009,8 @@ export class IfcGeometryExtraction {
       }
 
     } else if (from instanceof IfcGridPlacement) {
-      // Nothing is registered for this placement's local ID, so the product
-      // hanging off it keeps whatever frame the walk left current - at the
-      // root of the scene, i.e. the model origin. The warning is what makes
-      // that measurable: the express ID rides the logger's parameter rather
-      // than the message text, so every grid-placed product in a model
-      // collapses into one errors.csv row with a count (see conway#495).
-      Logger.warning('IfcGridPlacement: unimplemented.', from.expressID)
+
+      this.extractGridPlacement(from, isRelVoid)
     }
   }
 
