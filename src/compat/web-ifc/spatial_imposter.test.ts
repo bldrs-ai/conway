@@ -42,6 +42,88 @@ interface SpatialFixture {
    * only record of the height, which some exporters do.
    */
   storeyPlacementZ?: 'elevation' | 'datum'
+  /**
+   * Rotation baked into the SITE placement's IfcAxis2Placement3D, in
+   * degrees. `'z'` is the true-north rotation Revit routinely writes
+   * (plan rotation); `'x'` tips the model out of plumb, which no
+   * exporter really writes but which separates a correct composition
+   * from one that mixes up the Axis and RefDirection columns — a Z-only
+   * fixture leaves the third column at the identity and cannot see that.
+   */
+  siteRotation?: { axis: 'x' | 'z', degrees: number }
+  /**
+   * Raw `[Axis, RefDirection]` on the site placement, overriding
+   * `siteRotation`; either slot may be omitted to write `$`. Lets a
+   * fixture state an Axis with no RefDirection, which is how a
+   * lie-down placement is commonly authored.
+   */
+  siteAxes?: PlacementAxes
+  /**
+   * Write the site's RelativePlacement as an IfcAxis2Placement**2D**.
+   * `IfcLocalPlacement.RelativePlacement` admits both forms and the two
+   * disagree on every field past Location, so a walk that reads the 3D
+   * direction fields unconditionally throws on this file.
+   */
+  sitePlacement2D?: boolean
+}
+
+
+/** `[Axis (local +Z), RefDirection (local +X)]`, either one omittable. */
+type PlacementAxes =
+  [[number, number, number] | undefined, [number, number, number] | undefined]
+
+
+/**
+ * The axes an IfcAxis2Placement3D needs to state a rotation, as
+ * `[Axis (local +Z), RefDirection (local +X)]`.
+ *
+ * @param rotation The fixture's rotation knob.
+ * @return {PlacementAxes | undefined} The two direction ratios, or
+ * undefined for no rotation.
+ */
+function rotationAxes(
+    rotation: SpatialFixture['siteRotation'] ): PlacementAxes | undefined {
+
+  if ( rotation === void 0 ) {
+    return
+  }
+
+  const radians = rotation.degrees * Math.PI / 180
+  const cos = Math.cos( radians )
+  const sin = Math.sin( radians )
+
+  // Columns of the rotation matrix: Axis is its third (local +Z),
+  // RefDirection its first (local +X).
+  return rotation.axis === 'z' ?
+    [[0, 0, 1], [cos, sin, 0]] :
+    [[0, -sin, cos], [1, 0, 0]]
+}
+
+
+/**
+ * Transform a point by the fixture's site rotation — what the composed
+ * placement chain must reproduce.
+ *
+ * @param rotation The fixture's rotation knob.
+ * @param point A point in the site's local frame.
+ * @return {[number, number, number]} The rotated point.
+ */
+function rotatePoint(
+    rotation: SpatialFixture['siteRotation'],
+    point: [number, number, number] ): [number, number, number] {
+
+  if ( rotation === void 0 ) {
+    return point
+  }
+
+  const radians = rotation.degrees * Math.PI / 180
+  const cos = Math.cos( radians )
+  const sin = Math.sin( radians )
+  const [x, y, z] = point
+
+  return rotation.axis === 'z' ?
+    [x * cos - y * sin, x * sin + y * cos, z] :
+    [x, y * cos - z * sin, y * sin + z * cos]
 }
 
 
@@ -69,20 +151,45 @@ function syntheticSpatialIfc( fixture: SpatialFixture ): Uint8Array {
   const num = ( value: number ): string => value.toFixed( 4 )
   const guid = ( seed: number ): string => `3vB2${String( seed ).padStart( 18, '0' )}`
 
+  // Direction ratios get more decimals than `num`'s four: they are
+  // trigonometric, and rounding cos(30 deg) at four places moves a
+  // sampled origin by ~1e-4 source units — enough to break assertions
+  // that compare a composed plate against the same rotation applied in
+  // double precision.
+  const direction = ( ratios: [number, number, number] ): number =>
+    push( `IFCDIRECTION((${ratios.map( ( r ) => r.toFixed( 12 ) ).join( ',' )}))` )
+
+  const ref = ( ratios: [number, number, number] | undefined ): string =>
+    ratios !== void 0 ? `#${direction( ratios )}` : '$'
+
   const placement = (
       relTo: number | undefined,
       x: number,
       y: number,
-      z: number ): number => {
+      z: number,
+      axes?: PlacementAxes,
+      twoDimensional: boolean = false ): number => {
 
-    const point = push( `IFCCARTESIANPOINT((${num( x )},${num( y )},${num( z )}))` )
-    const axis = push( `IFCAXIS2PLACEMENT3D(#${point},$,$)` )
+    // A 2D placement's Location is a 2D point, and its only direction
+    // field is RefDirection — there is no Axis to state.
+    const point = twoDimensional ?
+      push( `IFCCARTESIANPOINT((${num( x )},${num( y )}))` ) :
+      push( `IFCCARTESIANPOINT((${num( x )},${num( y )},${num( z )}))` )
+
+    const axis = twoDimensional ?
+      push( `IFCAXIS2PLACEMENT2D(#${point},$)` ) :
+      push( `IFCAXIS2PLACEMENT3D(#${point},` +
+        `${ref( axes?.[ 0 ] )},${ref( axes?.[ 1 ] )})` )
 
     return push(
         `IFCLOCALPLACEMENT(${relTo === void 0 ? '$' : `#${relTo}`},#${axis})` )
   }
 
-  const sitePlacement = placement( void 0, ...fixture.siteOrigin )
+  const sitePlacement = placement(
+      void 0,
+      ...fixture.siteOrigin,
+      fixture.siteAxes ?? rotationAxes( fixture.siteRotation ),
+      fixture.sitePlacement2D === true )
   const buildingPlacement = placement( sitePlacement, 0, 0, fixture.buildingZ )
 
   const project = push( `IFCPROJECT('${guid( 1 )}',$,'P',$,$,$,$,$,$)` )
@@ -447,6 +554,158 @@ describe( 'emitSpatialStructureImposters coordination frame', () => {
         expect( plates[ 0 ].aabb!.min[ 2 ] ).toBeCloseTo( 100, 6 )
         expect( plates[ 1 ].aabb!.min[ 2 ] ).toBeCloseTo( 103.5, 6 )
       } )
+
+  // conway#517: the placement chain used to SUM Location translations
+  // and ignore rotation outright, so on a Revit export rotated to true
+  // north every sampled origin landed unrotated in raw model space while
+  // the durable meshes did not — the plate cloud read as a rotated ghost
+  // of the building. Both fixtures below fail against that composition.
+  describe( 'rotation-aware placement composition', () => {
+
+    /** Site rotated 30 deg about Z — Revit's true-north plan rotation. */
+    const ROTATED_SITE: SpatialFixture = {
+      siteOrigin: [0, 0, 0],
+      buildingZ: 0,
+      storeyElevations: [0, 3.5],
+      wallOffset: [8, 6],
+      siteRotation: { axis: 'z', degrees: 30 },
+    }
+
+    /** Site tipped 30 deg about X, with the building datum 100 up. */
+    const TILTED_SITE: SpatialFixture = {
+      siteOrigin: [0, 0, 0],
+      buildingZ: 100,
+      storeyElevations: [0, 3.5],
+      wallOffset: [8, 6],
+      siteRotation: { axis: 'x', degrees: 30 },
+    }
+
+    test( 'plan rotation: plate XY is the AABB of the ROTATED samples',
+        async () => {
+
+          const [payloads, model] = await emitForFixture( ROTATED_SITE, 1 )
+          const plates = storeyPlates( payloads, model )
+
+          expect( plates ).toHaveLength( 2 )
+
+          // The two walls each storey contains, composed through the
+          // rotated site placement.
+          const cornerA = rotatePoint( ROTATED_SITE.siteRotation, [0, 0, 0] )
+          const cornerB = rotatePoint(
+              ROTATED_SITE.siteRotation, [...ROTATED_SITE.wallOffset, 0] )
+
+          for ( const plate of plates ) {
+
+            expect( plate.aabb!.min[ 0 ] )
+                .toBeCloseTo( Math.min( cornerA[ 0 ], cornerB[ 0 ] ), 6 )
+            expect( plate.aabb!.max[ 0 ] )
+                .toBeCloseTo( Math.max( cornerA[ 0 ], cornerB[ 0 ] ), 6 )
+            expect( plate.aabb!.min[ 1 ] )
+                .toBeCloseTo( Math.min( cornerA[ 1 ], cornerB[ 1 ] ), 6 )
+            expect( plate.aabb!.max[ 1 ] )
+                .toBeCloseTo( Math.max( cornerA[ 1 ], cornerB[ 1 ] ), 6 )
+          }
+
+          // And specifically NOT the unrotated offset the translation-sum
+          // implementation produced: 6 m north instead of 9.2 m.
+          expect( plates[ 0 ].aabb!.max[ 1 ] )
+              .not.toBeCloseTo( ROTATED_SITE.wallOffset[ 1 ], 3 )
+        } )
+
+    test( 'tilt about X: storey floors band on the DATUM\'s world Z',
+        async () => {
+
+          const [payloads, model] = await emitForFixture( TILTED_SITE, 1 )
+          const plates = storeyPlates( payloads, model )
+
+          expect( plates ).toHaveLength( 2 )
+
+          const rotation = TILTED_SITE.siteRotation
+          const floorA = rotatePoint( rotation, [0, 0, 100] )
+          const floorB = rotatePoint( rotation, [...TILTED_SITE.wallOffset, 100] )
+
+          // Elevation is a length along the datum's own +Z, so a tilted
+          // datum puts the floor at cos(30) * the elevation, not at it.
+          expect( plates[ 0 ].aabb!.min[ 2 ] ).toBeCloseTo( floorA[ 2 ], 6 )
+          expect( plates[ 1 ].aabb!.min[ 2 ] )
+              .toBeCloseTo( rotatePoint( rotation, [0, 0, 103.5] )[ 2 ], 6 )
+
+          // A Z-only fixture leaves the third matrix column at the
+          // identity; this one does not, so an Axis/RefDirection mixup
+          // shows up as Y bounds that never left zero.
+          expect( plates[ 0 ].aabb!.min[ 1 ] )
+              .toBeCloseTo( Math.min( floorA[ 1 ], floorB[ 1 ] ), 6 )
+          expect( plates[ 0 ].aabb!.max[ 1 ] )
+              .toBeCloseTo( Math.max( floorA[ 1 ], floorB[ 1 ] ), 6 )
+
+          // The translation-sum implementation put both floors at the
+          // bare elevations, 100 and 103.5.
+          expect( plates[ 0 ].aabb!.min[ 2 ] ).not.toBeCloseTo( 100, 3 )
+          expect( plates[ 1 ].aabb!.min[ 2 ] ).not.toBeCloseTo( 103.5, 3 )
+        } )
+
+    test( 'an Axis with no RefDirection still yields a frame', async () => {
+
+      // Axis = world +X with RefDirection omitted: the IFC default
+      // RefDirection (1,0,0) is parallel to it, so a naive build finds a
+      // zero cross product. Falling all the way back to world axes there
+      // discards a perfectly good rotation; IFC's IfcFirstProjAxis
+      // substitutes a perpendicular reference instead, which sends local
+      // (a,b,c) to world (c,a,b).
+      const [payloads, model] = await emitForFixture( {
+        siteOrigin: [0, 0, 0],
+        buildingZ: 0,
+        storeyElevations: [0, 3.5],
+        wallOffset: [8, 6],
+        siteAxes: [[1, 0, 0], void 0],
+      }, 1 )
+
+      const plates = storeyPlates( payloads, model )
+
+      expect( plates ).toHaveLength( 2 )
+
+      // Lower storey's walls: local (0,0,0) and (8,6,0) -> (0,0,0) and
+      // (0,8,6). X collapses, so the plate is MIN_EDGE thick about
+      // zero there; the identity fallback would have spanned 0..8.
+      const plate = plates[ 0 ].aabb!
+
+      expect( ( plate.min[ 0 ] + plate.max[ 0 ] ) * 0.5 ).toBeCloseTo( 0, 6 )
+      expect( plate.max[ 0 ] - plate.min[ 0 ] ).toBeCloseTo( 1, 6 )
+      expect( plate.max[ 1 ] ).toBeCloseTo( 8, 6 )
+      expect( plate.max[ 2 ] ).toBeCloseTo( 6, 6 )
+    } )
+
+    test( 'a 2D relative placement does not break the chain', async () => {
+
+      // IfcLocalPlacement.RelativePlacement admits IfcAxis2Placement2D,
+      // whose field 1 is RefDirection (not Axis) and which has no field
+      // 2 at all. Reading the 3D direction fields unconditionally throws
+      // "too few fields in record"; that throw memoizes an undefined
+      // placement, and every DESCENDANT then composes in local
+      // coordinates — the site translation below silently disappears.
+      const [payloads, model] = await emitForFixture( {
+        siteOrigin: [10, 20, 0],
+        buildingZ: 100,
+        storeyElevations: [0, 3.5],
+        wallOffset: [8, 6],
+        sitePlacement2D: true,
+      }, 1 )
+
+      const plates = storeyPlates( payloads, model )
+
+      expect( plates ).toHaveLength( 2 )
+
+      // The site's XY still reaches the storeys...
+      expect( plates[ 0 ].aabb!.min[ 0 ] ).toBeCloseTo( 10, 6 )
+      expect( plates[ 0 ].aabb!.max[ 0 ] ).toBeCloseTo( 18, 6 )
+      expect( plates[ 0 ].aabb!.min[ 1 ] ).toBeCloseTo( 20, 6 )
+      expect( plates[ 0 ].aabb!.max[ 1 ] ).toBeCloseTo( 26, 6 )
+
+      // ...and so does the building datum the elevations band on.
+      expect( plates[ 0 ].aabb!.min[ 2 ] ).toBeCloseTo( 100, 6 )
+      expect( plates[ 1 ].aabb!.min[ 2 ] ).toBeCloseTo( 103.5, 6 )
+    } )
+  } )
 
   test( 'nothing emits `solid`', async () => {
 

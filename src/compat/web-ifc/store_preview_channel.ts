@@ -3,7 +3,13 @@ import { CanonicalMaterial } from '../../index'
 import { CanonicalMeshType } from '../../index'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
-import { IfcProduct } from '../../ifc/ifc4_gen'
+import {
+  IfcBuildingStorey,
+  IfcProduct,
+  IfcProject,
+  IfcRelAggregates,
+  IfcUnitAssignment,
+} from '../../ifc/ifc4_gen'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { cursorIterator } from '../../indexing/cursor_utilities'
 import { WindowedStepBufferProvider } from '../../step/step_buffer_provider'
@@ -13,8 +19,10 @@ import * as glmatrix from 'gl-matrix'
 import {
   composeTransformF64,
   deriveCoordinationF64,
+  IDENTITY_MAT4,
   NORMALIZE_MAT_F64,
 } from './coordination_f64'
+import { emitSpatialStructureImposters } from './spatial_imposter'
 import {
   PreviewMeshPayload,
   releaseModelGeometry,
@@ -26,6 +34,28 @@ import {
 const TICK_INTERVAL_MS = 150
 const TICK_INTERVAL_MAX_MS = 600
 const TICK_INTERVAL_GROWTH = 1.1
+
+/**
+ * Extraction + capture budget per tick, mirroring
+ * {@link StreamedPreviewChannel}'s. The store path used to extract
+ * exactly ONE product per tick on the interval below, i.e. 2-7
+ * products/second — which is why PSB's preview arrived girder by girder
+ * where the resident path delivered batches (conway#518).
+ */
+const TICK_BUDGET_MS = 20
+
+/**
+ * Products a single tick may attempt, whatever the clock says.
+ *
+ * `deferDanglingPlacements` (Share#1744) defers any product whose
+ * placement records the prefix does not hold yet, and Revit writes
+ * per-product placements toward the file tail — so early ticks meet long
+ * runs of products that cannot extract. Each such attempt still pages
+ * source through the windowed provider, so a run of them is not free;
+ * this caps the run rather than letting the deadline be the only bound.
+ */
+const TICK_MAX_ATTEMPTS = 32
+
 const FIRST_GENERATION_MIN_RECORDS = 1024
 const GENERATION_GROWTH_FACTOR = 2.0
 const DEFAULT_MAX_PREVIEW_UNITS = 512
@@ -39,10 +69,15 @@ const FLUSH_BUDGET_MS = 100
  * Parse-time placed-mesh preview for a windowed (store-backed) open.
  *
  * Twin of {@link StreamedPreviewChannel}: same capture math and
- * COORDINATE_TO_ORIGIN frame, but the prefix model pages product
- * closures from `store` instead of a resident buffer. After each
- * product the pins drop, so peak source residency stays the windowed
- * LRU — not the file.
+ * COORDINATE_TO_ORIGIN frame, same time-budgeted tick, but the prefix
+ * model pages product closures from `store` instead of a resident
+ * buffer. After each product the pins drop, so peak source residency
+ * stays the windowed LRU — not the file.
+ *
+ * It also runs the spatial-structure walk off its own prefix
+ * generations, so the building's skeleton goes up in the first seconds
+ * of a long parse rather than after it — see
+ * {@link maybeEmitEarlySpatialPlates_}.
  */
 export class StorePreviewChannel {
 
@@ -57,6 +92,24 @@ export class StorePreviewChannel {
   private lastSnapshotRecords_ = 0
   private lastFailedSnapshotRecords_ = 0
   lastFailReason?: string
+
+  // Fields rather than the constants directly, so a test can lift the
+  // wall-clock bounds the way ifc_api_preview_channel.test.ts already
+  // lifts the streamed channel's: asserting "this tick ran N products"
+  // against a real 20ms budget is a coin flip on a loaded runner.
+  private tickBudgetMs_ = TICK_BUDGET_MS
+  private tickMaxAttempts_ = TICK_MAX_ATTEMPTS
+
+  /** Set once a prefix-generation spatial walk has emitted a plate. */
+  private earlyPlatesEmitted_ = 0
+
+  /**
+   * Whether those plates were composed under the walk's own fallback
+   * frame because no preview instance had latched one yet. They get one
+   * re-emission on a later generation once a real frame exists — see
+   * {@link maybeEmitEarlySpatialPlates_}.
+   */
+  private earlyPlatesUsedFallbackFrame_ = false
 
   private readonly emittedGeometry_ = new Set< number >()
 
@@ -104,11 +157,36 @@ export class StorePreviewChannel {
   }
 
   /**
-   * One cadence-gated tick. No-op until the interval elapses or the
-   * index can support a generation. Safe to call from parse progress.
+   * Plates the prefix-generation spatial walk emitted, 0 while it has
+   * not succeeded (see {@link maybeEmitEarlySpatialPlates_}).
+   */
+  public get earlyPlateCount(): number {
+    return this.earlyPlatesEmitted_
+  }
+
+  /**
+   * One cadence-gated, time-budgeted tick. No-op until the interval
+   * elapses or the index can support a generation. Safe to call from
+   * parse progress.
    *
-   * @return {Promise<void>} Settles when this tick's product (if any)
-   * is captured.
+   * **Cadence and budget interact once, not twice.** The interval is
+   * measured tick-start to tick-start (`lastInlineTick_` is stamped
+   * before the work, as on the streamed channel), so a tick that spends
+   * its whole budget shortens the gap to the next one by that budget
+   * rather than adding to it. And the decay is charged only to ticks
+   * that actually attempted a product: a tick that found no generation —
+   * which is every tick through the opening seconds of a big parse, when
+   * the index has not yet reached FIRST_GENERATION_MIN_RECORDS — used to
+   * decay the interval anyway, so by the time there was anything to
+   * extract the cadence had already cooled toward
+   * TICK_INTERVAL_MAX_MS. Deliberately divergent from
+   * {@link StreamedPreviewChannel}, which decays unconditionally; the
+   * cost is that a channel which never finds a generation keeps probing
+   * at TICK_INTERVAL_MS, and a probe that finds nothing is a record
+   * count compared against two thresholds.
+   *
+   * @return {Promise<void>} Settles when this tick's products (if any)
+   * are captured.
    */
   public async maybeTickAsync(): Promise< void > {
 
@@ -123,14 +201,41 @@ export class StorePreviewChannel {
     }
 
     this.lastInlineTick_ = now
-    this.tickIntervalMs_ =
-      Math.min( this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS )
 
     try {
-      await this.tickOnce_()
+
+      if ( ( await this.tickBudgeted_() ) > 0 ) {
+        this.tickIntervalMs_ = Math.min(
+            this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS )
+      }
     } catch {
       this.stopped_ = true
     }
+  }
+
+  /**
+   * Attempt products until the time budget or the attempt cap runs out,
+   * whichever comes first.
+   *
+   * @return {Promise<number>} Products attempted this tick.
+   */
+  private async tickBudgeted_(): Promise< number > {
+
+    const deadline = Date.now() + this.tickBudgetMs_
+    let attempts = 0
+
+    while ( !this.capped &&
+        attempts < this.tickMaxAttempts_ &&
+        Date.now() < deadline ) {
+
+      if ( !( await this.tickOnce_() ) ) {
+        break
+      }
+
+      ++attempts
+    }
+
+    return attempts
   }
 
   /**
@@ -310,11 +415,136 @@ export class StorePreviewChannel {
       this.lastSnapshotRecords_ = records
       this.lastFailedSnapshotRecords_ = 0
       this.lastFailReason = void 0
+
+      await this.maybeEmitEarlySpatialPlates_( model, extraction )
+
       return true
     } catch ( error ) {
       this.lastFailedSnapshotRecords_ = records
       this.lastFailReason = error instanceof Error ? error.message : String( error )
       return false
+    }
+  }
+
+  /**
+   * Put the spatial skeleton up from a PREFIX generation, seconds into
+   * the parse instead of after it (conway#518).
+   *
+   * The spatial records sit at the file head on Revit exports — on PSB
+   * `IFCSITE` is record #211 — and a prefix generation is already
+   * everything the walk needs: a columns snapshot over a windowed
+   * provider, with `prepareDemandExtraction(true)` done, which is what
+   * makes `getLinearScalingFactor()` report real units rather than 1.
+   * So the plates can lead the first extracted product rather than
+   * trailing the whole parse, which is what the store path's three
+   * stacked latency gates (one product per tick, early products
+   * deferring on late placements, the walk waiting for the full index)
+   * added up to: a blank screen through the first ~60% of a 16.7 s
+   * parse.
+   *
+   * **Runs at most once successfully, on the parse's cooperative path.**
+   * The walk is reused as-is, with no internal budget: it awaits a
+   * residency ensure per spatial node and per sampled product placement
+   * (PRODUCT_SAMPLE per node), so its cost tracks the prefix's spatial
+   * tree, not the file. On the first qualifying generation that tree is
+   * small by construction — the storeys exist but few
+   * `IfcRelContainedInSpatialStructure` do — which is the same property
+   * that makes these early plates coarse. Retries are bounded without a
+   * counter: generations only rebuild on a GENERATION_GROWTH_FACTOR
+   * doubling of the index, so there are O(log records) of them.
+   *
+   * **The end-of-parse walk in the proxy is the refresh, not a
+   * duplicate.** It re-emits the same expressIDs with contained-product
+   * samples the prefix did not hold and under the frame the channel
+   * latched, and the consumer contract is that an `aabb` payload
+   * REPLACES the prior plate for its expressID. Double emission is the
+   * design; see PreviewMeshPayload.
+   *
+   * **Known gap in that contract, and it is a gap, not a subtlety.**
+   * Replacement only reaches nodes the final walk still emits, and the
+   * emit set is not stable between the two: `aabbMostlyEqual` collapses
+   * a single-child wrapper (Project over Site over Building) once its
+   * box matches its child's, which a prefix generation's degenerate
+   * boxes may not yet do. A wrapper emitted here and collapsed there is
+   * never replaced and never removed — the payload contract has no
+   * delete — so its early box lingers as one small plate until Share
+   * tears the preview scenery down at load end. Bounded (the wrapper
+   * chain is a handful of nodes, and the collapse needs exactly one
+   * child), but real. Closing it properly needs either a delete/
+   * generation channel in the payload contract or an emit set the two
+   * walks agree on, and both are consumer-side changes.
+   *
+   * @param model The prefix model.
+   * @param extraction Its prepared extraction.
+   * @return {Promise<void>} Settles when the walk has run or been skipped.
+   */
+  private async maybeEmitEarlySpatialPlates_(
+      model: IfcStepModel,
+      extraction: IfcGeometryExtraction ): Promise< void > {
+
+    // Same choice the proxy's imposterCoordination() makes: the latched
+    // preview frame when the open asked to coordinate, else identity.
+    const coordination = this.coordinateToOrigin_ ?
+      this.coordinationMatrix : IDENTITY_MAT4
+
+    // This runs as a generation is BUILT, before that tick captures its
+    // first product — and capture is the only thing that latches a
+    // frame. So the first walk on a coordinating open always finds
+    // `undefined` here and takes the walk's fallback derivation, which
+    // its own docs describe as capable of a full site-offset on a file
+    // that bakes absolute coordinates into vertices behind identity
+    // placements. Waiting for a latched frame instead would put the
+    // skeleton back behind the deferred-placement gate this whole change
+    // exists to get in front of, so: emit now, and re-emit ONCE on a
+    // later generation as soon as a real frame exists. That second
+    // emission is exactly what the replace-by-expressID contract is for.
+    const usingFallbackFrame = coordination === void 0
+    const canImproveFrame =
+      this.earlyPlatesUsedFallbackFrame_ && !usingFallbackFrame
+
+    if ( this.earlyPlatesEmitted_ > 0 && !canImproveFrame ) {
+      return
+    }
+
+    try {
+
+      // Cheap prefix-sum reads, so this is affordable per generation.
+      // No storeys or no aggregate chain means the walk would emit
+      // nothing but still pay for the type scans. IfcProject and
+      // IfcUnitAssignment are in the guard for a different reason:
+      // `extractLinearScalingFactor` returns with the factor still at 1
+      // when it cannot resolve the project's UnitsInContext (it only
+      // logs), and a silent 1 on a millimetre model scales the whole
+      // skeleton 1000x — the conway#515 symptom. The project alone is
+      // not enough: a valid file may forward-reference its
+      // IfcUnitAssignment, so a prefix can hold the project while the
+      // units record is still ahead of the parse cursor, and because a
+      // successful walk latches `earlyPlatesEmitted_`, mis-scaled early
+      // plates would stand until the frame-improvement re-emit or the
+      // post-parse refresh (Codex review on #519). The guard therefore
+      // defers plates until the units record is indexed; a file with
+      // genuinely no unit assignment never emits EARLY plates and is
+      // covered by the end-of-parse walk instead.
+      if ( model.typeCount( IfcProject ) < 1 ||
+          model.typeCount( IfcUnitAssignment ) < 1 ||
+          model.typeCount( IfcBuildingStorey ) < 1 ||
+          model.typeCount( IfcRelAggregates ) < 1 ) {
+        return
+      }
+
+      const emitted = await emitSpatialStructureImposters(
+          model,
+          this.onMesh_,
+          coordination,
+          extraction.getLinearScalingFactor() )
+
+      if ( emitted > 0 ) {
+        this.earlyPlatesEmitted_ = emitted
+        this.earlyPlatesUsedFallbackFrame_ = usingFallbackFrame
+      }
+    } catch {
+      // A failed early walk retries on the next generation; the
+      // end-of-parse walk covers it regardless.
     }
   }
 
