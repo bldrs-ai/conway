@@ -255,6 +255,82 @@ describe( 'StorePreviewChannel', () => {
     channel.stop()
   } )
 
+  // Codex review on #519: IfcProject alone does not prove the scaling
+  // factor is resolvable — a valid file may forward-reference its
+  // IfcUnitAssignment, and a prefix holding the project but not the
+  // units record would emit (and latch) plates scaled by a silent 1.
+  test( 'early plates defer until the unit assignment is indexed', async () => {
+
+    /**
+     * Minimal spatial IFC: Project/Site/Building/Storey + aggregates +
+     * a placed wall, with the unit assignment optionally omitted.
+     *
+     * @param withUnits Include the IfcSiUnit/IfcUnitAssignment records.
+     * @return {Uint8Array} File bytes.
+     */
+    const syntheticIfc = ( withUnits: boolean ): Uint8Array => {
+
+      const units = withUnits ?
+        '#90=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n' +
+        '#91=IFCUNITASSIGNMENT((#90));\n' : ''
+
+      const text =
+        'ISO-10303-21;\nHEADER;\n' +
+        'FILE_DESCRIPTION((\'\'),\'2;1\');\n' +
+        'FILE_NAME(\'u.ifc\',\'2026-01-01T00:00:00\',(\'\'),(\'\'),\'\',\'\',\'\');\n' +
+        'FILE_SCHEMA((\'IFC4\'));\nENDSEC;\nDATA;\n' +
+        '#1=IFCCARTESIANPOINT((0.,0.,0.));\n' +
+        '#2=IFCAXIS2PLACEMENT3D(#1,$,$);\n' +
+        '#3=IFCLOCALPLACEMENT($,#2);\n' +
+        `#10=IFCPROJECT('3vP000000000000000001',$,'P',$,$,$,$,$,${
+          withUnits ? '#91' : '$'});\n` +
+        '#11=IFCSITE(\'3vP000000000000000002\',$,\'S\',$,$,#3,$,$,.ELEMENT.,$,$,$,$,$);\n' +
+        '#12=IFCBUILDING(\'3vP000000000000000003\',$,\'B\',$,$,#3,$,$,.ELEMENT.,$,$,$);\n' +
+        '#13=IFCBUILDINGSTOREY(\'3vP000000000000000004\',$,\'L0\',$,$,#3,$,$,.ELEMENT.,0.);\n' +
+        '#20=IFCRELAGGREGATES(\'3vP000000000000000005\',$,$,$,#10,(#11));\n' +
+        '#21=IFCRELAGGREGATES(\'3vP000000000000000006\',$,$,$,#11,(#12));\n' +
+        '#22=IFCRELAGGREGATES(\'3vP000000000000000007\',$,$,$,#12,(#13));\n' +
+        '#30=IFCWALL(\'3vP000000000000000008\',$,$,$,$,#3,$,$,$);\n' +
+        '#31=IFCRELCONTAINEDINSPATIALSTRUCTURE' +
+        '(\'3vP000000000000000009\',$,$,$,(#30),#13);\n' +
+        units +
+        'ENDSEC;\nEND-ISO-10303-21;\n'
+
+      return new TextEncoder().encode( text )
+    }
+
+    const runChannel = async ( fileBytes: Uint8Array ): Promise< number > => {
+
+      const sink = new ColumnarIndexSink< number >()
+
+      buildIndexStreaming(
+          new BufferByteSource( fileBytes ),
+          IfcStepParser.Instance,
+          4 * 1024,
+          void 0,
+          sink )
+
+      const channel = new StorePreviewChannel(
+          new InMemoryStepByteStore( fileBytes ), sink, conwayGeometry, true,
+          () => { /* plates counted via earlyPlateCount */ },
+          64, 48 * 1024 * 1024, 1 )
+
+      await channel.maybeTickAsync()
+
+      const count = channel.earlyPlateCount
+
+      channel.stop()
+      return count
+    }
+
+    // Without a unit assignment anywhere in the index, the guard defers
+    // — the end-of-parse walk covers such a file instead.
+    expect( await runChannel( syntheticIfc( false ) ) ).toBe( 0 )
+
+    // The same structure with units indexed emits immediately.
+    expect( await runChannel( syntheticIfc( true ) ) ).toBeGreaterThan( 0 )
+  } )
+
   test( 'open from store still leaves the source windowed', async () => {
 
     const store = new InMemoryStepByteStore( bytes )
