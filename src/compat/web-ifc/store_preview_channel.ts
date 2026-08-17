@@ -3,7 +3,11 @@ import { CanonicalMaterial } from '../../index'
 import { CanonicalMeshType } from '../../index'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
-import { IfcProduct } from '../../ifc/ifc4_gen'
+import {
+  IfcBuildingStorey,
+  IfcProduct,
+  IfcRelAggregates,
+} from '../../ifc/ifc4_gen'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { cursorIterator } from '../../indexing/cursor_utilities'
 import { WindowedStepBufferProvider } from '../../step/step_buffer_provider'
@@ -13,8 +17,10 @@ import * as glmatrix from 'gl-matrix'
 import {
   composeTransformF64,
   deriveCoordinationF64,
+  IDENTITY_MAT4,
   NORMALIZE_MAT_F64,
 } from './coordination_f64'
+import { emitSpatialStructureImposters } from './spatial_imposter'
 import {
   PreviewMeshPayload,
   releaseModelGeometry,
@@ -65,6 +71,11 @@ const FLUSH_BUDGET_MS = 100
  * model pages product closures from `store` instead of a resident
  * buffer. After each product the pins drop, so peak source residency
  * stays the windowed LRU — not the file.
+ *
+ * It also runs the spatial-structure walk off its own prefix
+ * generations, so the building's skeleton goes up in the first seconds
+ * of a long parse rather than after it — see
+ * {@link maybeEmitEarlySpatialPlates_}.
  */
 export class StorePreviewChannel {
 
@@ -86,6 +97,9 @@ export class StorePreviewChannel {
   // against a real 20ms budget is a coin flip on a loaded runner.
   private tickBudgetMs_ = TICK_BUDGET_MS
   private tickMaxAttempts_ = TICK_MAX_ATTEMPTS
+
+  /** Set once a prefix-generation spatial walk has emitted a plate. */
+  private earlyPlatesEmitted_ = 0
 
   private readonly emittedGeometry_ = new Set< number >()
 
@@ -130,6 +144,14 @@ export class StorePreviewChannel {
   /** Products the current generation would run (test seam). */
   public get productCount(): number {
     return this.generation_?.products.length ?? 0
+  }
+
+  /**
+   * Plates the prefix-generation spatial walk emitted, 0 while it has
+   * not succeeded (see {@link maybeEmitEarlySpatialPlates_}).
+   */
+  public get earlyPlateCount(): number {
+    return this.earlyPlatesEmitted_
   }
 
   /**
@@ -383,11 +405,90 @@ export class StorePreviewChannel {
       this.lastSnapshotRecords_ = records
       this.lastFailedSnapshotRecords_ = 0
       this.lastFailReason = void 0
+
+      await this.maybeEmitEarlySpatialPlates_( model, extraction )
+
       return true
     } catch ( error ) {
       this.lastFailedSnapshotRecords_ = records
       this.lastFailReason = error instanceof Error ? error.message : String( error )
       return false
+    }
+  }
+
+  /**
+   * Put the spatial skeleton up from a PREFIX generation, seconds into
+   * the parse instead of after it (conway#518).
+   *
+   * The spatial records sit at the file head on Revit exports — on PSB
+   * `IFCSITE` is record #211 — and a prefix generation is already
+   * everything the walk needs: a columns snapshot over a windowed
+   * provider, with `prepareDemandExtraction(true)` done, which is what
+   * makes `getLinearScalingFactor()` report real units rather than 1.
+   * So the plates can lead the first extracted product rather than
+   * trailing the whole parse, which is what the store path's three
+   * stacked latency gates (one product per tick, early products
+   * deferring on late placements, the walk waiting for the full index)
+   * added up to: a blank screen through the first ~60% of a 16.7 s
+   * parse.
+   *
+   * **Runs at most once successfully, on the parse's cooperative path.**
+   * The walk is reused as-is, with no internal budget: it awaits a
+   * residency ensure per spatial node and per sampled product placement
+   * (PRODUCT_SAMPLE per node), so its cost tracks the prefix's spatial
+   * tree, not the file. On the first qualifying generation that tree is
+   * small by construction — the storeys exist but few
+   * `IfcRelContainedInSpatialStructure` do — which is the same property
+   * that makes these early plates coarse. Retries are bounded without a
+   * counter: generations only rebuild on a GENERATION_GROWTH_FACTOR
+   * doubling of the index, so there are O(log records) of them.
+   *
+   * **The end-of-parse walk in the proxy is the refresh, not a
+   * duplicate.** It re-emits the same expressIDs with contained-product
+   * samples the prefix did not hold and under the frame the channel
+   * latched (which may not yet exist here — see below), and the consumer
+   * contract is that an `aabb` payload REPLACES the prior plate for its
+   * expressID. Double emission is the design; see PreviewMeshPayload.
+   *
+   * @param model The prefix model.
+   * @param extraction Its prepared extraction.
+   * @return {Promise<void>} Settles when the walk has run or been skipped.
+   */
+  private async maybeEmitEarlySpatialPlates_(
+      model: IfcStepModel,
+      extraction: IfcGeometryExtraction ): Promise< void > {
+
+    if ( this.earlyPlatesEmitted_ > 0 ) {
+      return
+    }
+
+    try {
+
+      // Cheap prefix-sum reads, so this is affordable per generation:
+      // no storeys or no aggregate chain means the walk would emit
+      // nothing but still pay for the type scans.
+      if ( model.typeCount( IfcBuildingStorey ) < 1 ||
+          model.typeCount( IfcRelAggregates ) < 1 ) {
+        return
+      }
+
+      // Same choice the proxy's imposterCoordination() makes: the
+      // latched preview frame when the open asked to coordinate, else
+      // identity. Undefined here (no product has been captured yet, so
+      // nothing has latched) sends the walk to its own fallback
+      // derivation — and if the channel later latches a different frame,
+      // the end-of-parse refresh re-emits these plates under it.
+      const coordination = this.coordinateToOrigin_ ?
+        this.coordinationMatrix : IDENTITY_MAT4
+
+      this.earlyPlatesEmitted_ = await emitSpatialStructureImposters(
+          model,
+          this.onMesh_,
+          coordination,
+          extraction.getLinearScalingFactor() )
+    } catch {
+      // A failed early walk retries on the next generation; the
+      // end-of-parse walk covers it regardless.
     }
   }
 

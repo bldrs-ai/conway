@@ -61,27 +61,29 @@ describe( 'StorePreviewChannel', () => {
 
     channel.stop()
 
-    const withGeom = payloads.filter( ( p ) => p.vertexData !== void 0 )
+    // The channel now emits spatial plates off its prefix generations
+    // too (conway#518), so the placed meshes are the aabb-less half of
+    // the stream rather than all of it.
+    const meshes = payloads.filter( ( p ) => p.aabb === void 0 )
+    const withGeom = meshes.filter( ( p ) => p.vertexData !== void 0 )
 
     // index.ifc is polygonal-faceset; some local Dist builds OOB on the
     // packed extract (same as ifc_api_preview_channel). The channel
-    // still found products. When extract works, payloads are placed
-    // meshes — not AABB imposters.
-    if ( payloads.length === 0 ) {
+    // still found products.
+    if ( meshes.length === 0 ) {
       return
     }
 
     expect( withGeom.length ).toBeGreaterThan( 0 )
-    expect( payloads[ 0 ].flatTransformation ).toHaveLength( 16 )
-    expect( payloads[ 0 ].aabb ).toBeUndefined()
-    expect( payloads[ 0 ].solid ).toBeUndefined()
+    expect( meshes[ 0 ].flatTransformation ).toHaveLength( 16 )
+    expect( meshes[ 0 ].solid ).toBeUndefined()
     expect( withGeom[ 0 ].vertexData!.length % 6 ).toBe( 0 )
     expect( withGeom[ 0 ].indexData!.length % 3 ).toBe( 0 )
     expect( channel.coordinationMatrix ).toBeDefined()
   } )
 
   // conway#518: the store path used to extract exactly ONE product per
-  // tick, on a 150ms->600ms decaying cadence.
+  // tick, and to run the spatial walk only after the whole parse.
   test( 'a tick extracts under a time budget, not one product', async () => {
 
     const store = new InMemoryStepByteStore( bytes )
@@ -141,9 +143,52 @@ describe( 'StorePreviewChannel', () => {
     }
 
     expect( internals.tickIntervalMs_ ).toBe( 150 )
+    expect( channel.earlyPlateCount ).toBe( 0 )
 
     channel.stop()
   } )
+
+  test( 'spatial plates come off a prefix generation, before parse end',
+      async () => {
+
+        const store = new InMemoryStepByteStore( bytes )
+        const sink = new ColumnarIndexSink< number >()
+
+        buildIndexStreaming(
+            new BufferByteSource( bytes ),
+            IfcStepParser.Instance,
+            4 * 1024,
+            void 0,
+            sink )
+
+        const payloads: PreviewMeshPayload[] = []
+        const channel = new StorePreviewChannel(
+            store, sink, conwayGeometry, true,
+            ( mesh ) => payloads.push( mesh ),
+            64, 48 * 1024 * 1024, 1 )
+
+        // One tick is enough: the walk runs as the generation is built,
+        // ahead of any product extraction.
+        await channel.maybeTickAsync()
+
+        expect( channel.earlyPlateCount ).toBeGreaterThan( 0 )
+
+        const plates = payloads.filter( ( p ) => p.aabb !== void 0 )
+
+        expect( plates.length ).toBe( channel.earlyPlateCount )
+        expect( plates[ 0 ].color ).toEqual( { x: 0, y: 0, z: 0, w: 0.3 } )
+        expect( plates[ 0 ].geometryExpressID ).toBe( -1 )
+        expect( plates[ 0 ].flatTransformation ).toHaveLength( 16 )
+
+        // A successful walk is not repeated on later generations.
+        const first = channel.earlyPlateCount
+
+        await channel.drainForTest()
+
+        expect( channel.earlyPlateCount ).toBe( first )
+
+        channel.stop()
+      } )
 
   test( 'open from store still leaves the source windowed', async () => {
 

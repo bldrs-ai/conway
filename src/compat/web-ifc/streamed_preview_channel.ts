@@ -75,6 +75,18 @@ export interface PreviewMeshPayload {
    * Reported in RAW IFC source-unit space as a consumer reference — the
    * `flatTransformation` beside it is in the durable coordination frame
    * like every other payload's, so that is what places the cube.
+   *
+   * **Re-emission replaces, it does not add.** An `aabb` payload
+   * carrying an `expressID` the consumer has already drawn a plate for
+   * REPLACES that plate; consumers key imposters by expressID rather
+   * than by arrival order. The store path emits each spatial node twice
+   * by design (conway#518): once early, off a prefix generation that
+   * holds the storeys but few of their contained products, and again
+   * after the parse with the full sample set and the finally-latched
+   * coordination frame. The early plate can be coarse — a Z band from
+   * elevations with a degenerate XY footprint — and the second emission
+   * is what corrects it. Vertex-carrying payloads are unaffected: those
+   * are keyed by `geometryExpressID` and never re-sent.
    */
   aabb?: { min: [number, number, number], max: [number, number, number] }
   /**
