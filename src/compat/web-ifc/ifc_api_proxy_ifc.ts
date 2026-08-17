@@ -19,8 +19,8 @@ import { StepExternalByteStore, WindowedStepBufferProvider } from '../../step/st
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
-import { LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y, TRANSLATION_Z,
-  composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import { IDENTITY_MAT4, LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y,
+  TRANSLATION_Z, composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker } from '../../core/progress'
@@ -70,6 +70,28 @@ const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 const STORE_PARSE_POOL_BYTES = 16 * 1024 * 1024
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_MIB = 1024 * 1024
+
+/**
+ * The coordination frame spatial-structure imposters compose under.
+ *
+ * With COORDINATE_TO_ORIGIN on, that is whatever frame the preview
+ * channel latched (undefined when it never captured an instance — the
+ * imposter walk then derives an equivalent one itself). With it OFF the
+ * durable capture composes against a bare identity, so the plates must
+ * too, or they would be the only thing in the scene in metres and Y-up.
+ *
+ * @param settings The open's loader settings.
+ * @param previewCoordination The preview channel's latched frame.
+ * @return {ArrayLike<number> | undefined} The frame, or undefined to let
+ * the imposter walk derive one.
+ */
+function imposterCoordination(
+    settings: Loadersettings | undefined,
+    previewCoordination: number[] | undefined ): ArrayLike< number > | undefined {
+
+  return settings?.COORDINATE_TO_ORIGIN === true ?
+    previewCoordination : IDENTITY_MAT4
+}
 
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
@@ -862,16 +884,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // walks, so meshes appear to consumers as batches extract.
     if (deferGeometry) {
 
+      conwayGeometry.prepareDemandExtraction()
+
       if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
 
         try {
-          await emitSpatialStructureImposters( model, settings.ON_PREVIEW_MESH )
+          // After prepareDemandExtraction, not before: the plates are
+          // composed under the coordination frame, whose scaling comes
+          // from getLinearScalingFactor() — which reads 1 until the
+          // extraction maps (and with them the unit assignment) are
+          // prepared. Both calls run in the same synchronous stretch
+          // after the parse, so nothing reaches the screen any later.
+          await emitSpatialStructureImposters(
+              model,
+              settings.ON_PREVIEW_MESH,
+              imposterCoordination( settings, previewChannel?.coordinationMatrix ),
+              conwayGeometry.getLinearScalingFactor() )
         } catch {
           // Spatial imposters must never break a deferred open.
         }
       }
-
-      conwayGeometry.prepareDemandExtraction()
 
       statistics?.setProductCount(model.typeCount(IfcProduct))
 
@@ -1035,15 +1067,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
 
-    if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
-
-      try {
-        await emitSpatialStructureImposters( model, settings.ON_PREVIEW_MESH )
-      } catch {
-        // Spatial imposters must never break a store-backed open.
-      }
-    }
-
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
 
     const prepPins = await conwayGeometry.ensureResidentForDemandPrep()
@@ -1053,6 +1076,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     } finally {
       model.releaseSourceViews( prepPins )
       model.unpinLocalIDs( prepPins )
+    }
+
+    if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
+
+      try {
+        // Emitted after demand prep so getLinearScalingFactor() reports
+        // the model's real units — see the resident path's note.
+        await emitSpatialStructureImposters(
+            model,
+            settings.ON_PREVIEW_MESH,
+            imposterCoordination( settings, storePreview?.coordinationMatrix ),
+            conwayGeometry.getLinearScalingFactor() )
+      } catch {
+        // Spatial imposters must never break a store-backed open.
+      }
     }
 
     if (deferGeometry) {
@@ -1270,8 +1308,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
           return clone
         } else {
-          Logger.error(`[GetGeometry]: Geometry Object not found for expressID: 
-          ${geometryExpressID}`)
+          Logger.error(`[GetGeometry]: Geometry Object not found for expressID: \n          ${geometryExpressID}`)
         }
       }
     } else {
