@@ -26,6 +26,28 @@ import {
 const TICK_INTERVAL_MS = 150
 const TICK_INTERVAL_MAX_MS = 600
 const TICK_INTERVAL_GROWTH = 1.1
+
+/**
+ * Extraction + capture budget per tick, mirroring
+ * {@link StreamedPreviewChannel}'s. The store path used to extract
+ * exactly ONE product per tick on the interval below, i.e. 2-7
+ * products/second — which is why PSB's preview arrived girder by girder
+ * where the resident path delivered batches (conway#518).
+ */
+const TICK_BUDGET_MS = 20
+
+/**
+ * Products a single tick may attempt, whatever the clock says.
+ *
+ * `deferDanglingPlacements` (Share#1744) defers any product whose
+ * placement records the prefix does not hold yet, and Revit writes
+ * per-product placements toward the file tail — so early ticks meet long
+ * runs of products that cannot extract. Each such attempt still pages
+ * source through the windowed provider, so a run of them is not free;
+ * this caps the run rather than letting the deadline be the only bound.
+ */
+const TICK_MAX_ATTEMPTS = 32
+
 const FIRST_GENERATION_MIN_RECORDS = 1024
 const GENERATION_GROWTH_FACTOR = 2.0
 const DEFAULT_MAX_PREVIEW_UNITS = 512
@@ -39,10 +61,10 @@ const FLUSH_BUDGET_MS = 100
  * Parse-time placed-mesh preview for a windowed (store-backed) open.
  *
  * Twin of {@link StreamedPreviewChannel}: same capture math and
- * COORDINATE_TO_ORIGIN frame, but the prefix model pages product
- * closures from `store` instead of a resident buffer. After each
- * product the pins drop, so peak source residency stays the windowed
- * LRU — not the file.
+ * COORDINATE_TO_ORIGIN frame, same time-budgeted tick, but the prefix
+ * model pages product closures from `store` instead of a resident
+ * buffer. After each product the pins drop, so peak source residency
+ * stays the windowed LRU — not the file.
  */
 export class StorePreviewChannel {
 
@@ -57,6 +79,13 @@ export class StorePreviewChannel {
   private lastSnapshotRecords_ = 0
   private lastFailedSnapshotRecords_ = 0
   lastFailReason?: string
+
+  // Fields rather than the constants directly, so a test can lift the
+  // wall-clock bounds the way ifc_api_preview_channel.test.ts already
+  // lifts the streamed channel's: asserting "this tick ran N products"
+  // against a real 20ms budget is a coin flip on a loaded runner.
+  private tickBudgetMs_ = TICK_BUDGET_MS
+  private tickMaxAttempts_ = TICK_MAX_ATTEMPTS
 
   private readonly emittedGeometry_ = new Set< number >()
 
@@ -104,11 +133,28 @@ export class StorePreviewChannel {
   }
 
   /**
-   * One cadence-gated tick. No-op until the interval elapses or the
-   * index can support a generation. Safe to call from parse progress.
+   * One cadence-gated, time-budgeted tick. No-op until the interval
+   * elapses or the index can support a generation. Safe to call from
+   * parse progress.
    *
-   * @return {Promise<void>} Settles when this tick's product (if any)
-   * is captured.
+   * **Cadence and budget interact once, not twice.** The interval is
+   * measured tick-start to tick-start (`lastInlineTick_` is stamped
+   * before the work, as on the streamed channel), so a tick that spends
+   * its whole budget shortens the gap to the next one by that budget
+   * rather than adding to it. And the decay is charged only to ticks
+   * that actually attempted a product: a tick that found no generation —
+   * which is every tick through the opening seconds of a big parse, when
+   * the index has not yet reached FIRST_GENERATION_MIN_RECORDS — used to
+   * decay the interval anyway, so by the time there was anything to
+   * extract the cadence had already cooled toward
+   * TICK_INTERVAL_MAX_MS. Deliberately divergent from
+   * {@link StreamedPreviewChannel}, which decays unconditionally; the
+   * cost is that a channel which never finds a generation keeps probing
+   * at TICK_INTERVAL_MS, and a probe that finds nothing is a record
+   * count compared against two thresholds.
+   *
+   * @return {Promise<void>} Settles when this tick's products (if any)
+   * are captured.
    */
   public async maybeTickAsync(): Promise< void > {
 
@@ -123,14 +169,41 @@ export class StorePreviewChannel {
     }
 
     this.lastInlineTick_ = now
-    this.tickIntervalMs_ =
-      Math.min( this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS )
 
     try {
-      await this.tickOnce_()
+
+      if ( ( await this.tickBudgeted_() ) > 0 ) {
+        this.tickIntervalMs_ = Math.min(
+            this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS )
+      }
     } catch {
       this.stopped_ = true
     }
+  }
+
+  /**
+   * Attempt products until the time budget or the attempt cap runs out,
+   * whichever comes first.
+   *
+   * @return {Promise<number>} Products attempted this tick.
+   */
+  private async tickBudgeted_(): Promise< number > {
+
+    const deadline = Date.now() + this.tickBudgetMs_
+    let attempts = 0
+
+    while ( !this.capped &&
+        attempts < this.tickMaxAttempts_ &&
+        Date.now() < deadline ) {
+
+      if ( !( await this.tickOnce_() ) ) {
+        break
+      }
+
+      ++attempts
+    }
+
+    return attempts
   }
 
   /**

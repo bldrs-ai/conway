@@ -80,6 +80,71 @@ describe( 'StorePreviewChannel', () => {
     expect( channel.coordinationMatrix ).toBeDefined()
   } )
 
+  // conway#518: the store path used to extract exactly ONE product per
+  // tick, on a 150ms->600ms decaying cadence.
+  test( 'a tick extracts under a time budget, not one product', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+    const { result } = buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink )
+
+    expect( result ).toBe( ParseResult.COMPLETE )
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true, () => { /* counted below */ },
+        64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // Lift the wall clock the way the streamed channel's test does: the
+    // assertion is about how many products ONE tick consumes, and a real
+    // 20ms budget makes that a coin flip on a loaded runner.
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+
+    await channel.maybeTickAsync()
+
+    const attempted = internals.unitOrdinal_ as number
+
+    // Capped by TICK_MAX_ATTEMPTS, and emphatically more than the one
+    // product the pre-#518 tick managed.
+    expect( attempted ).toBeGreaterThan( 1 )
+    expect( attempted ).toBeLessThanOrEqual(
+        internals.tickMaxAttempts_ as number )
+
+    channel.stop()
+  } )
+
+  test( 'an unproductive tick does not decay the cadence', async () => {
+
+    const sink = new ColumnarIndexSink< number >()
+
+    // Nothing parsed into the sink, so no generation can build. Every
+    // such tick used to pay the interval decay anyway, cooling the
+    // cadence toward its 600ms ceiling before there was ever anything
+    // to extract.
+    const channel = new StorePreviewChannel(
+        new InMemoryStepByteStore( bytes ),
+        sink, conwayGeometry, true, () => { /* nothing emits */ } )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    for ( let tick = 0; tick < 5; ++tick ) {
+      internals.lastInlineTick_ = 0
+      await channel.maybeTickAsync()
+    }
+
+    expect( internals.tickIntervalMs_ ).toBe( 150 )
+
+    channel.stop()
+  } )
+
   test( 'open from store still leaves the source windowed', async () => {
 
     const store = new InMemoryStepByteStore( bytes )
