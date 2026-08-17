@@ -5925,38 +5925,27 @@ export class IfcGeometryExtraction {
       }
     }
 
-    // The gridByAxis scan reads IfcGrid records, which are outside the
-    // forward-reference closure a windowed source pages for a product
-    // (the grid references the axes, not vice versa - see
-    // ensureResidentForProductExtract). A residency miss here must not
-    // fail the whole product: fall back to placing the intersection in
-    // the current frame, the same degraded state the no-grid arm gives,
-    // and strictly better than the pre-implementation
-    // rendered-at-origin. gridByAxis memoises only a COMPLETE scan, so a
-    // later product on a fully resident model rebuilds rather than
-    // trusting a partial index.
+    // Two guarded regions rather than one, because the two reads degrade to
+    // DIFFERENT states and a single catch could only describe one of them
+    // truthfully. Neither may fail the product: dropping it entirely is
+    // strictly worse than the pre-implementation rendered-at-origin.
+    //
+    // Region 1 - the gridByAxis scan. It reads IfcGrid records, which are
+    // outside the forward-reference closure a windowed source pages for a
+    // product (the grid references the axes, not vice versa - see
+    // ensureResidentForProductExtract), so this is the read most likely to
+    // miss. Nothing has been applied when it throws, so the intersection
+    // lands in the current frame - the same degraded state the no-grid arm
+    // gives. gridByAxis memoises only a COMPLETE scan, so a later product on
+    // a fully resident model rebuilds rather than trusting a partial index.
+    let grid: IfcGrid | undefined
+    let gridScanned = false
+
     try {
 
-      const grid = this.gridByAxis(placementLocation.IntersectingAxes[0])
+      grid = this.gridByAxis(placementLocation.IntersectingAxes[0])
+      gridScanned = true
 
-      if (grid === void 0) {
-
-        // Axes belonging to no grid: the intersection is still a point, but
-        // there is no grid placement to measure it from, so it lands in
-        // whatever frame is current.
-        Logger.warning(
-            'IfcGridPlacement: no IfcGrid lists the axes of this placement.',
-            from.expressID)
-
-      } else {
-
-        const gridPlacement = grid.ObjectPlacement
-
-        if (gridPlacement !== null) {
-
-          this.extractPlacement(gridPlacement, isRelVoid)
-        }
-      }
     } catch (error) {
 
       if (!(error instanceof StepBufferNotResidentError)) {
@@ -5968,6 +5957,45 @@ export class IfcGeometryExtraction {
           'windowed source - placing at the grid intersection in the ' +
           'current frame, without the grid\'s own placement.',
           from.expressID)
+    }
+
+    if (gridScanned && grid === void 0) {
+
+      // Axes belonging to no grid: the intersection is still a point, but
+      // there is no grid placement to measure it from, so it lands in
+      // whatever frame is current.
+      Logger.warning(
+          'IfcGridPlacement: no IfcGrid lists the axes of this placement.',
+          from.expressID)
+
+    } else if (grid !== void 0) {
+
+      // Region 2 - the grid's own placement chain. extractPlacement walks
+      // PlacementRelTo upwards and pushes a transform per level as it
+      // returns, so a residency miss PART WAY UP leaves some ancestors
+      // already applied. Region 1's message would be a lie about this state
+      // (it says the grid's placement was not applied at all), and the frame
+      // this placement then composes onto is partial rather than current.
+      try {
+
+        const gridPlacement = grid.ObjectPlacement
+
+        if (gridPlacement !== null) {
+
+          this.extractPlacement(gridPlacement, isRelVoid)
+        }
+      } catch (error) {
+
+        if (!(error instanceof StepBufferNotResidentError)) {
+          throw error
+        }
+
+        Logger.warning(
+            'IfcGridPlacement: the grid\'s own placement chain is not fully ' +
+            'resident on this windowed source - it was applied as far as it ' +
+            'reads, so this placement composes onto a partial frame.',
+            from.expressID)
+      }
     }
 
     const placementTransform = this.conwayModel.getAxis2Placement3D({

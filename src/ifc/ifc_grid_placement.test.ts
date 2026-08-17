@@ -44,6 +44,8 @@ let extractResult: ExtractResult
 /**
  * Parse data/grid_placement.ifc and extract its geometry.
  *
+ * @param mutateModel Optional hook run on the parsed model before extraction,
+ * for the windowed-source tests that need a specific read to throw.
  * @return {Promise<ExtractResult>} The result of the extraction.
  */
 async function extractGridModel(
@@ -267,5 +269,63 @@ describe('IfcGridPlacement on a windowed source', () => {
 
         expect(warning).toBeDefined()
         expect(warning!.expressIDs.has(String(PLACEMENT_A))).toBe(true)
+      })
+
+  test('a partially resident grid placement chain warns about the partial frame',
+      async () => {
+
+        // The other residency miss on this path, and the reason the guard is
+        // two regions rather than one: the grid IS found, and the read that
+        // fails is its own placement chain. extractPlacement pushes a
+        // transform per level as it unwinds, so a miss part way up leaves
+        // ancestors applied - which the scan-failure message would describe
+        // wrongly. Patched on the prototype because the failing read is a
+        // generated accessor, not a model call the mutator hook can reach.
+        const placementProperty = 'ObjectPlacement'
+        const threshold = Logger.getLogLevel()
+
+        // The buffer is file-wide, and the preceding test deliberately fires
+        // the scan-failure warning this one asserts the ABSENCE of.
+        Logger.clearLogs()
+        Logger.setLogLevel(LogLevel.OFF)
+
+        Object.defineProperty(IfcGrid.prototype, placementProperty, {
+          configurable: true,
+          /** @return {never} Always throws, as a non-resident read would. */
+          get(): never {
+            throw new StepBufferNotResidentError(0, 0)
+          },
+        })
+
+        let result: ExtractResult
+
+        try {
+
+          result = await extractGridModel()
+
+        } finally {
+
+          delete (IfcGrid.prototype as unknown as Record<string, unknown>)[
+            placementProperty]
+
+          Logger.setLogLevel(threshold)
+        }
+
+        expect(result).toBe(ExtractResult.COMPLETE)
+
+        // Still placed, and still not dropped.
+        expect(placementTransform(PLACEMENT_A)).toBeDefined()
+
+        const warning = warningStartingWith(
+            'IfcGridPlacement: the grid\'s own placement chain is not fully ' +
+            'resident')
+
+        expect(warning).toBeDefined()
+        expect(warning!.expressIDs.has(String(PLACEMENT_A))).toBe(true)
+
+        // The scan succeeded, so the message that says the grid records were
+        // never reached must NOT be the one reported.
+        expect(warningStartingWith(
+            'IfcGridPlacement: grid records are not resident')).toBeUndefined()
       })
 })
