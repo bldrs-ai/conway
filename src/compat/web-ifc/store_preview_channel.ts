@@ -10,7 +10,11 @@ import { WindowedStepBufferProvider } from '../../step/step_buffer_provider'
 import type { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import * as glmatrix from 'gl-matrix'
-import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import {
+  composeTransformF64,
+  deriveCoordinationF64,
+  NORMALIZE_MAT_F64,
+} from './coordination_f64'
 import {
   PreviewMeshPayload,
   releaseModelGeometry,
@@ -29,12 +33,6 @@ const DEFAULT_MAX_PREVIEW_BYTES = 48 * 1024 * 1024
 const FLOATS_PER_VERTEX = 6
 const BYTES_PER_FLOAT = 4
 const DEFAULT_COLOR: [number, number, number, number] = [0.8, 0.8, 0.8, 1]
-const NORMALIZE_MAT: glmatrix.mat4 = glmatrix.mat4.fromValues(
-    1, 0, 0, 0,
-    0, 0, -1, 0,
-    0, 1, 0, 0,
-    0, 0, 0, 1,
-)
 const FLUSH_BUDGET_MS = 100
 
 /**
@@ -420,7 +418,7 @@ export class StorePreviewChannel {
         this.coordinationMatrix = deriveCoordinationF64(
             geometryTransform,
             nativePt!,
-            NORMALIZE_MAT,
+            NORMALIZE_MAT_F64,
             extraction.getLinearScalingFactor() )
       }
 

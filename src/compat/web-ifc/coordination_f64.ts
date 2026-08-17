@@ -30,6 +30,24 @@ const IDENTITY: readonly number[] =
   [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
 /**
+ * The Z-up -> Y-up normalize matrix baked into every coordination frame
+ * (column-major). Identical to the shim proxies' `NormalizeMat` and the
+ * preview channels' local copies — every producer of a coordination
+ * frame MUST use the same one, or the frames it derives disagree with
+ * the durable walk's (which is exactly how the spatial-imposter plates
+ * ended up in a different space from the meshes, conway#515).
+ */
+export const NORMALIZE_MAT_F64: readonly number[] = [
+  1, 0, 0, 0,
+  0, 0, -1, 0,
+  0, 1, 0, 0,
+  0, 0, 0, 1,
+]
+
+/** Identity, for callers that need a "no coordination" frame. */
+export const IDENTITY_MAT4: readonly number[] = IDENTITY
+
+/**
  * Smallest positive magnitude representable in single precision
  * (2 ** -149, the smallest float32 subnormal). The previous code path
  * built the placement with gl-matrix `mat4.fromValues(...)` — a
