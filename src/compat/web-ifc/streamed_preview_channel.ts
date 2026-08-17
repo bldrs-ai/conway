@@ -12,7 +12,11 @@ import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { cursorIterator } from '../../indexing/cursor_utilities'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import * as glmatrix from 'gl-matrix'
-import { composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import {
+  composeTransformF64,
+  deriveCoordinationF64,
+  NORMALIZE_MAT_F64,
+} from './coordination_f64'
 
 /* eslint-disable no-magic-numbers */
 
@@ -50,14 +54,6 @@ const FLOATS_PER_VERTEX = 6
 const BYTES_PER_FLOAT = 4
 const DEFAULT_COLOR: [number, number, number, number] = [0.8, 0.8, 0.8, 1]
 
-// Matches the shim proxies' NormalizeMat (Z-up -> Y-up).
-const NORMALIZE_MAT: glmatrix.mat4 = glmatrix.mat4.fromValues(
-    1, 0, 0, 0,
-    0, 0, -1, 0,
-    0, 1, 0, 0,
-    0, 0, 0, 1,
-)
-
 /**
  * One preview mesh instance, self-contained: geometry payload is COPIED out
  * of the wasm heap at emission, so consumers can upload it directly and
@@ -74,12 +70,18 @@ export interface PreviewMeshPayload {
   flatTransformation: number[]
   vertexData?: Float32Array
   indexData?: Uint32Array
-  /** Parse-time AABB imposter (no vertex payload; Share instances a unit cube). */
+  /**
+   * AABB imposter (no vertex payload; Share instances a unit cube).
+   * Reported in RAW IFC source-unit space as a consumer reference — the
+   * `flatTransformation` beside it is in the durable coordination frame
+   * like every other payload's, so that is what places the cube.
+   */
   aabb?: { min: [number, number, number], max: [number, number, number] }
   /**
-   * Filled volume (spatial-structure boxes). Share's aabb path is
-   * wireframe unless this is set — parse-time point-list cubes stay
-   * wire, storey plates render as a translucent solid.
+   * Filled volume. Share's aabb path renders wireframe unless this is
+   * set. Nothing sets it today — the spatial-structure plates that used
+   * to are wireframe by request — but it stays part of the consumer
+   * contract Share already implements.
    */
   solid?: boolean
 }
@@ -790,7 +792,7 @@ export class StreamedPreviewChannel {
 
       if (this.coordinationMatrix === void 0 && this.coordinateToOrigin) {
         this.coordinationMatrix = deriveCoordinationF64(
-            geometryTransform, nativePt!, NORMALIZE_MAT, linearScalingFactor)
+            geometryTransform, nativePt!, NORMALIZE_MAT_F64, linearScalingFactor)
       }
 
       const coordination = this.coordinationMatrix ?? glmatrix.mat4.create()

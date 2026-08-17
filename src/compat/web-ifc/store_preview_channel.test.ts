@@ -109,9 +109,12 @@ describe( 'StorePreviewChannel', () => {
     expect( api.getPassthrough( id )?.sourceIsExternal ??
       true ).toBe( true )
 
-    const spatial = payloads.filter( ( p ) => p.solid === true )
+    // Spatial-structure plates are the aabb-only payloads (they carry no
+    // vertex data); they are wireframe, so `solid` no longer marks them.
+    const spatial = payloads.filter( ( p ) => p.aabb !== void 0 )
 
     expect( spatial.length ).toBeGreaterThan( 0 )
+    expect( spatial[ 0 ].solid ).toBeUndefined()
     expect( spatial[ 0 ].color ).toEqual( { x: 0, y: 0, z: 0, w: 0.3 } )
 
     api.CloseModel( id )

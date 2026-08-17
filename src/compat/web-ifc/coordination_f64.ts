@@ -30,6 +30,33 @@ const IDENTITY: readonly number[] =
   [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
 /**
+ * The Z-up -> Y-up normalize matrix baked into every coordination frame
+ * (column-major).
+ *
+ * Every producer of a coordination frame MUST use the same matrix, or
+ * the frames it derives disagree with the durable walk's — which is
+ * exactly how the spatial-imposter plates ended up in a different space
+ * from the meshes (conway#515).
+ *
+ * This is the definition for everything that imports it: both preview
+ * channels and the spatial-imposter walk. Three identical literals
+ * remain, the public `NormalizeMat` field on `IfcAPI`, `IfcApiProxyIfc`
+ * and `IfcApiProxyAP214` — the web-ifc shim surface, typed
+ * `glmatrix.mat4`. They are the durable frame's producers, so they must
+ * stay bit-identical to this; folding them in is worth doing and was
+ * left out of conway#516 only to keep that diff to the imposter path.
+ */
+export const NORMALIZE_MAT_F64: readonly number[] = [
+  1, 0, 0, 0,
+  0, 0, -1, 0,
+  0, 1, 0, 0,
+  0, 0, 0, 1,
+]
+
+/** Identity, for callers that need a "no coordination" frame. */
+export const IDENTITY_MAT4: readonly number[] = IDENTITY
+
+/**
  * Smallest positive magnitude representable in single precision
  * (2 ** -149, the smallest float32 subnormal). The previous code path
  * built the placement with gl-matrix `mat4.fromValues(...)` — a
