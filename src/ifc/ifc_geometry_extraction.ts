@@ -5686,8 +5686,13 @@ export class IfcGeometryExtraction {
       }
 
     } else if (from instanceof IfcGridPlacement) {
-      // TODO(nickcastel50) Implement IfcGridPlacement
-      // Logger.warning('IfcGridPlacement: unimplemented.')
+      // Nothing is registered for this placement's local ID, so the product
+      // hanging off it keeps whatever frame the walk left current - at the
+      // root of the scene, i.e. the model origin. The warning is what makes
+      // that measurable: the express ID rides the logger's parameter rather
+      // than the message text, so every grid-placed product in a model
+      // collapses into one errors.csv row with a count (see conway#495).
+      Logger.warning('IfcGridPlacement: unimplemented.', from.expressID)
     }
   }
 
