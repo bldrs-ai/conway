@@ -42,6 +42,24 @@ function fakeModule(
 }
 
 
+// Distinctive enough that a test can assert an error is NOT one of these. The
+// point of the assertions using them is that neither ever reaches a caller.
+const SCRATCH_PUSH_FAILURE = 'embind push_back could not allocate'
+const SCRATCH_DELETE_FAILURE = 'embind delete re-entered a dead runtime'
+
+/**
+ * Which halves of the embind scratch round trip should fail.
+ *
+ * Both are reachable, and for different reasons - see refreshHeapViews. This
+ * is how the tests put the module into each of them.
+ */
+interface ScratchFaults {
+  /** push_back throws: embind marshalling allocates, and the heap is short. */
+  push?: boolean
+  /** delete() throws: teardown re-enters a runtime that may have failed. */
+  delete?: boolean
+}
+
 /** What growingFakeModule hands back, so a test can look at both buffers. */
 interface GrowingFake {
   wasmModule: WasmHeapModule
@@ -77,13 +95,16 @@ interface GrowingFake {
  * @param refresh How the fake models emscripten's refresh route. 'embind'
  * mimics the std::string round trip that is the only route conway's builds
  * have; 'none' models a module with no route at all.
+ * @param scratchFaults Which halves of the embind round trip should throw.
+ * Only meaningful for the 'embind' route.
  * @return {GrowingFake} The fake and the two buffers to assert against.
  */
 function growingFakeModule(
     staleBytes: number,
     grownBytes: number,
     address: number,
-    refresh: 'embind' | 'exported' | 'none' = 'embind' ): GrowingFake {
+    refresh: 'embind' | 'exported' | 'none' = 'embind',
+    scratchFaults: ScratchFaults = {} ): GrowingFake {
 
   const staleBuffer = new ArrayBuffer( staleBytes )
   const grownBuffer = new ArrayBuffer( grownBytes )
@@ -119,12 +140,26 @@ function growingFakeModule(
       /** @param value Ignored; the marshalling is the point, not the string. */
       public push_back( value: string ): void {
         void value
+
+        // Before the rebind, because a marshalling failure is a refresh that
+        // did NOT happen - which is the state the caller then has to report.
+        if ( scratchFaults.push === true ) {
+          throw new Error( SCRATCH_PUSH_FAILURE )
+        }
+
         rebind()
       }
 
       /** Returns the scratch vector to wasm. */
       public delete(): void {
+        // Counted out first even when the fault is armed: what `balanced`
+        // pins is that the delete was ATTEMPTED for every vector taken, and a
+        // delete that throws has still been attempted.
         --outstanding
+
+        if ( scratchFaults.delete === true ) {
+          throw new Error( SCRATCH_DELETE_FAILURE )
+        }
       }
 
       /** Counts itself out so the test can prove it was given back. */
@@ -301,6 +336,52 @@ describe( 'arrayToWasmHeap', () => {
             .toContain( `ptr ${past} + ${PAYLOAD.byteLength} bytes` )
         }
       } )
+
+  // The refresh is a repair ATTEMPT, and it runs under exactly the memory
+  // pressure that makes embind's own marshalling allocation fail. If that
+  // failure escapes, it reaches the caller INSTEAD of the heap diagnostic -
+  // and #485 is the issue about how expensive it is to debug this path
+  // without that diagnostic, so destroying it here would undo the fix.
+  test( 'reports the heap state when the refresh itself cannot allocate', () => {
+
+    const fake = growingFakeModule(
+      STALE_HEAP_BYTES, GROWN_HEAP_BYTES, GROWN_ADDRESS, 'embind',
+      { push: true } )
+
+    let raised: unknown
+
+    try {
+      arrayToWasmHeap( fake.wasmModule, PAYLOAD )
+    } catch ( error ) {
+      raised = error
+    }
+
+    expect( ( raised as Error ).message ).toMatch( /outside the heap/ )
+    expect( ( raised as Error ).message ).not.toContain( SCRATCH_PUSH_FAILURE )
+
+    // The constructor is what registers the embind handle, so a vector whose
+    // push threw is still owed a delete.
+    expect( fake.balanced() ).toBe( true )
+  } )
+
+  // The mirror case, and the one where quieting actually changes the ANSWER
+  // rather than the error text: by the time delete() runs the push has already
+  // made emscripten rebuild the views, so the refresh succeeded and the copy
+  // has somewhere correct to land. Failing it over the teardown of a scratch
+  // object would break an operation that had just been repaired.
+  test( 'completes the copy when only the refresh teardown fails', () => {
+
+    const address = GROWN_ADDRESS
+
+    const fake = growingFakeModule(
+      STALE_HEAP_BYTES, GROWN_HEAP_BYTES, address, 'embind', { delete: true } )
+
+    expect( arrayToWasmHeap( fake.wasmModule, PAYLOAD ) ).toBe( address )
+
+    const written = new Float64Array( fake.grownBuffer, address, PAYLOAD.length )
+
+    expect( Array.from( written ) ).toEqual( Array.from( PAYLOAD ) )
+  } )
 
   // A module with no refresh route at all - which is what every fake here was
   // before this change, and what a non-emscripten module would be.
@@ -520,6 +601,19 @@ describe( 'wasmHeapByteLength', () => {
 
     const fake = growingFakeModule(
       STALE_HEAP_BYTES, GROWN_HEAP_BYTES, GROWN_ADDRESS, 'none' )
+
+    expect( wasmHeapByteLength( fake.wasmModule ) ).toBe( STALE_HEAP_BYTES )
+  } )
+
+  // Same reasoning as the no-route case above, but for a route that is present
+  // and fails. This one's only consumer is the AP214 CLI's high-water log
+  // line, so letting an embind failure out would abort an otherwise complete
+  // extraction from a log statement.
+  test( 'falls back to the cached view when the refresh route throws', () => {
+
+    const fake = growingFakeModule(
+      STALE_HEAP_BYTES, GROWN_HEAP_BYTES, GROWN_ADDRESS, 'embind',
+      { push: true } )
 
     expect( wasmHeapByteLength( fake.wasmModule ) ).toBe( STALE_HEAP_BYTES )
   } )

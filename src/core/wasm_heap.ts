@@ -77,6 +77,10 @@ export interface WasmHeapModule {
 
 export type CopyableArray = Float32Array | Float64Array | Uint32Array
 
+/** The scratch object refreshHeapViews borrows from the embind route. */
+type WasmScratchVector =
+  InstanceType< NonNullable< WasmHeapModule[ 'stringVector' ] > >
+
 /**
  * The part of a typed-array constructor wasmHeapView needs: build over a
  * buffer at a byte offset, and say how wide an element is.
@@ -204,13 +208,47 @@ function refreshHeapViews( wasmModule: WasmHeapModule ): void {
     return
   }
 
-  const scratch = new StringVector()
+  // Every step of the embind round trip is best-effort, INDIVIDUALLY, because
+  // this whole function is best-effort: it only ever runs once something has
+  // already gone wrong with the heap, and both of its callers have a
+  // well-defined answer for "the refresh achieved nothing" - reconcile reports
+  // the heap state (#485's actual diagnostic), and the byte-length reporter
+  // returns a possibly-lagging number. Letting an embind failure out of here
+  // would replace either of those with a bare marshalling error from a
+  // function that exists only to try.
+  //
+  // Both halves can throw, for different reasons:
+  //
+  // - construct-and-push allocates, and this path runs precisely under the
+  //   heap pressure that makes allocation fail. A throw here means the views
+  //   were NOT refreshed, so the caller carries on with its stale-view state
+  //   and reports it - which is the outcome that matters, since losing the
+  //   diagnostic to the failure of the repair attempt is what #485 cost two
+  //   sightings to locate.
+  // - delete() re-enters the same runtime that may just have failed. By then
+  //   the push has already made emscripten rebuild the views, so the refresh
+  //   SUCCEEDED; failing the caller's copy over the teardown of a scratch
+  //   object would break an operation that had just been repaired.
+  //
+  // Split rather than nested so a push that throws still gets its vector
+  // deleted: the constructor is what registers the embind handle, so anything
+  // constructed is owed a delete regardless of what the push did.
+  let scratch: WasmScratchVector | undefined
 
-  // delete() re-enters the wasm runtime that may just have failed, and losing
-  // the heap diagnostic to a teardown error would defeat the point.
-  withRelease(
-      () => scratch.push_back( '' ),
-      () => scratch.delete() )
+  releaseQuietly( () => {
+
+    const created = new StringVector()
+
+    scratch = created
+
+    created.push_back( '' )
+  } )
+
+  const created: WasmScratchVector | undefined = scratch
+
+  if ( created !== void 0 ) {
+    releaseQuietly( () => created.delete() )
+  }
 }
 
 
@@ -312,6 +350,12 @@ export function wasmHeapView< TArray >(
  * thing a high-water figure must not do. This is a reporting call - a line at
  * the end of a run - so paying microseconds for a true answer is the right
  * trade. Do not put it in a loop.
+ *
+ * That the refresh cannot throw (see refreshHeapViews) matters more here than
+ * at the other call site: this figure's only consumer is the AP214 CLI's
+ * high-water log line, so an embind failure escaping would abort an otherwise
+ * complete extraction from a log statement. A lagging number is the right
+ * answer there.
  *
  * @param wasmModule The module to measure.
  * @return {number} The heap's size in bytes, or 0 if it has no heap yet.
