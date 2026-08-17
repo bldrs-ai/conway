@@ -15,6 +15,7 @@ import Logger, { LogEntry, LogLevel } from '../logging/logger'
 const PLACEMENT_A = 201
 const PLACEMENT_B = 301
 const PLACEMENT_C = 501
+const PLACEMENT_D = 601
 const CIRCULAR_AXIS = 410
 
 /* Where the two supported placements land in world space, derived in the
@@ -25,6 +26,9 @@ const A_WORLD_Z = 9
 const B_WORLD_X = 4
 const B_WORLD_Y = 25
 const B_WORLD_Z = 5
+const D_WORLD_X = 8
+const D_WORLD_Y = 17
+const D_WORLD_Z = 10
 
 /* Column-major offsets into a 4x4 transform's values. */
 const X_AXIS = 0
@@ -162,6 +166,22 @@ describe('IfcGridPlacement extraction', () => {
     expect(values[X_AXIS]).toBeCloseTo(-1)
     expect(values[X_AXIS + 1]).toBeCloseTo(0)
     expect(values[X_AXIS + 2]).toBeCloseTo(0)
+  })
+
+  test('a local placement measured from a grid placement composes onto it', () => {
+
+    const transform = placementTransform(PLACEMENT_D)
+
+    expect(transform).toBeDefined()
+
+    const values = transform!.absoluteTransform
+
+    // 1m up from product A's grid placement, which is where an
+    // IfcLocalPlacement whose PlacementRelTo is an IfcGridPlacement lands
+    // once that placement registers a transform to be relative to.
+    expect(values[TRANSLATION]).toBeCloseTo(D_WORLD_X)
+    expect(values[TRANSLATION + 1]).toBeCloseTo(D_WORLD_Y)
+    expect(values[TRANSLATION + 2]).toBeCloseTo(D_WORLD_Z)
   })
 
   test('an axis curve that is not a line warns rather than dropping silently', () => {

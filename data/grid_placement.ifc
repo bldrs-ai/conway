@@ -71,6 +71,16 @@ DATA;
 #311=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#312));
 #312=IFCBLOCK(#313,1.,1.,1.);
 #313=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Product D: an ordinary local placement measured FROM the grid placement
+   of product A - 1m up from it, so at (8,17,10) in the world. */
+#600=IFCBUILDINGELEMENTPROXY('6kF0kSTOX3ovkcpuOhkPrX',$,'GridRelative',$,$,#601,#610,$,.NOTDEFINED.);
+#601=IFCLOCALPLACEMENT(#201,#602);
+#602=IFCAXIS2PLACEMENT3D(#603,$,$);
+#603=IFCCARTESIANPOINT((0.,0.,1.));
+#610=IFCPRODUCTDEFINITIONSHAPE($,$,(#611));
+#611=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#612));
+#612=IFCBLOCK(#613,1.,1.,1.);
+#613=IFCAXIS2PLACEMENT3D(#22,$,$);
 /* Grid #400, one of whose axes is a circle. */
 #400=IFCGRID('4kF0kSTOX3ovkcpuOhkPrX',$,'CurvedGrid',$,$,#401,$,(#410),(#420),$,.RECTANGULAR.);
 #401=IFCLOCALPLACEMENT($,#21);
