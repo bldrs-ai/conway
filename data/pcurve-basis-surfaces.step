@@ -39,7 +39,16 @@ DATA;
 /* --- Cone: a generator line at u = 0, v from 0 to 20. The placement is
  *     offset and turned a quarter turn about z so the local frame has to be
  *     applied for the mapped points to land. Radius 10 at v = 0, opening at
- *     a 30 degree semi-angle. */
+ *     a 30 degree semi-angle.
+ *
+ *     ISO 10303-42's cone measures v along the AXIS, so the ring radius is
+ *     10 + v tan(30 deg) and the local point at (u, v) = (0, 20) is
+ *     (10 + 20*0.57735, 0, 20) = (21.547005, 0, 20). Under #22 local +x is
+ *     world +y and local +y is world -x, so the two ends land at
+ *     (5, -3 + 10, 50) = (5, 7, 50) and (5, -3 + 21.547005, 70) =
+ *     (5, 18.547005, 70). Reading v along the generator instead would give
+ *     a ring of 10 + 20 sin(30 deg) = 20 at an axial 20 cos(30 deg), putting
+ *     the far end at (5, 17, 67.320508) - see bldrs-ai/conway#520. */
 #20 = PCURVE('cone',#21,#26);
 #21 = CONICAL_SURFACE('',#22,10.,0.5235987755982988);
 #22 = AXIS2_PLACEMENT_3D('',#23,#24,#25);

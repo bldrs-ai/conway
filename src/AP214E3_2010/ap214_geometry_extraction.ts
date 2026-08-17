@@ -1889,15 +1889,44 @@ export class AP214GeometryExtraction {
 
   /**
    * The ISO 10303-42 parameterization of an elementary basis surface,
-   * expressed in that surface's placement-local frame.
+   * expressed in that surface's placement-local frame. Writing C for the
+   * placement's origin, x/y/z for its axes, R (and r) for the radii and a for
+   * conical_surface.semi_angle, the standard's forms are
    *
-   * The formulae are the ones conway-geom tessellates these surfaces with:
+   *   plane        s(u,v) = C + u x + v y
+   *   cylindrical  s(u,v) = C + R((cos u) x + (sin u) y) + v z
+   *   conical      s(u,v) = C + (R + v tan a)((cos u) x + (sin u) y) + v z
+   *   spherical    s(u,v) = C + R cos v ((cos u) x + (sin u) y) + R sin v z
+   *   toroidal     s(u,v) = C + (R + r cos v)((cos u) x + (sin u) y)
+   *                           + r sin v z
+   *
+   * Note v on a sphere is a LATITUDE in [-90, 90] degrees, not a polar angle,
+   * and v on a torus runs around the tube. Those four are quoted here from the
+   * entities IFC adopted verbatim from this part - IfcPlane,
+   * IfcCylindricalSurface, IfcSphericalSurface and IfcToroidalSurface, each
+   * carrying its equation under "Definition according to ISO/CD 10303-42" plus
+   * "Entity adapted from <name> defined in ISO 10303-42".
+   *
+   * The cone is the one worth stating explicitly, because it is the arm two
+   * reviews have queried (bldrs-ai/conway#520): its v is distance along the
+   * AXIS, so the radius grows by tan a per unit v - not distance along the
+   * generator, which would grow it by sin a. Two independent STEP readers
+   * settle it the same way. Open CASCADE parameterizes its own
+   * Geom_ConicalSurface along the generator, P(u,v) = O + (R + v sin a)(...)
+   * + v cos a z, and therefore rescales v by 1/cos(a) coming in from STEP and
+   * by cos(a) going back out - GeomConvert_Units::DegreeToRadian and
+   * ::RadianToDegree, which is exactly the path its STEP reader pushes pcurves
+   * through (StepToTopoDS_TranslateEdge::MakePCurve). truck's STEP reader
+   * builds the cone by revolving the line (R,0,0) + t (tan a, 0, 1), which is
+   * the form above with t = v.
+   *
+   * conway-geom tessellates the same surfaces by inverting these formulae:
    * TriangulateCylindricalSurface, TriangulateSphericalSurface,
    * TriangulateConicalSurface and TriangulateToroidalSurface (conway-geom
    * `conway_geometry/operations/mesh_utils.h`) recover (theta, height) or
-   * (theta, latitude) from world points by inverting exactly these, so a
-   * pcurve mapped here lands on the same surface the face it bounds is
-   * triangulated on.
+   * (theta, latitude) from world points, so a pcurve mapped here lands on the
+   * same surface the face it bounds is triangulated on. It differs in one
+   * deliberate way, on the cone's sign - see that arm.
    *
    * Angular parameters are radians taken straight from the file. Conway
    * applies no plane-angle unit conversion anywhere on the STEP path -
@@ -1941,6 +1970,9 @@ export class AP214GeometryExtraction {
 
       const radius = from.radius
 
+      // tan, not sin, because v is axial distance rather than distance along
+      // the generator - see the equations in this method's doc comment.
+      //
       // Signed, unlike the native tesselator's tan(fabs(semi_angle)): that
       // one fits its generator line from boundary samples and only needs the
       // taper's magnitude, whereas the 2D curve here was authored against the

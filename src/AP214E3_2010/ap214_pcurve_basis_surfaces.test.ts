@@ -188,6 +188,14 @@ describe('AP214 pcurve basis surfaces (bldrs-ai/conway#505)', () => {
   // A generator line at u = 0 on a cone whose placement is offset and turned a
   // quarter turn about z, so the local frame has to be applied for the mapped
   // points to land: local +x is world +y here.
+  //
+  // This also pins the cone's v convention, which is the arm reviews keep
+  // querying (bldrs-ai/conway#520): ISO 10303-42 measures v along the axis, so
+  // the far end is a ring of 10 + 20 tan(30 deg) = 21.547005 at an axial 20,
+  // landing at (5, 18.547005, 70). Were v distance along the generator, the
+  // same (0, 20) would give a ring of 10 + 20 sin(30 deg) = 20 at an axial
+  // 20 cos(30 deg), i.e. (5, 17, 67.320508), and both of the assertions on
+  // `last` below would fail.
   test('a conical basis surface applies the taper and the placement frame', () => {
 
     const points = extractedPoints('cone')
