@@ -9,8 +9,11 @@ import {
   IfcSite,
   IfcSpace,
 } from '../../ifc/ifc4_gen'
-import type { Aabb3 } from './parse_aabb_imposter'
-import { aabbToPreviewMatrix } from './parse_aabb_imposter'
+import {
+  deriveCoordinationF64,
+  mat4MultiplyF64,
+  NORMALIZE_MAT_F64,
+} from './coordination_f64'
 import type { PreviewMeshPayload } from './streamed_preview_channel'
 
 
@@ -25,8 +28,79 @@ const PRODUCT_SAMPLE = 32
 /** Collapse a parent whose box matches its only child this closely. */
 const COLLAPSE_REL = 0.15
 
-/** Minimum box edge (metres / source units) so a point origin still draws. */
-const MIN_EDGE = 1
+/**
+ * Minimum box edge IN METRES so a point origin still draws. Every box in
+ * this module is in raw IFC source units, so callers convert this by the
+ * model's linear scaling factor before use ({@link minEdgeSourceUnits}) —
+ * a bare `1` is one metre on a metre model but one millimetre on a
+ * millimetre one, which made the padding invisible on mm files.
+ */
+const MIN_EDGE_M = 1
+
+/** Degenerate-scale floor for a box matrix (source units). */
+const MIN_BOX_SCALE = 1e-3
+
+
+/** An axis-aligned box in raw IFC source-unit space (Z-up). */
+export interface Aabb3 {
+  min: [number, number, number]
+  max: [number, number, number]
+}
+
+
+/**
+ * MIN_EDGE_M expressed in the model's own source units.
+ *
+ * @param linearScalingFactor Source units -> metres.
+ * @return {number} The minimum edge in source units.
+ */
+function minEdgeSourceUnits( linearScalingFactor: number ): number {
+
+  return MIN_EDGE_M / sanitizeScale_( linearScalingFactor )
+}
+
+
+/**
+ * @param linearScalingFactor Source units -> metres, possibly garbage.
+ * @return {number} The factor, or 1 when it is not usable.
+ */
+function sanitizeScale_( linearScalingFactor: number ): number {
+
+  return Number.isFinite( linearScalingFactor ) && linearScalingFactor > 0 ?
+    linearScalingFactor : 1
+}
+
+
+/**
+ * Column-major 4x4 mapping a centred unit cube onto `aabb`, entirely in
+ * RAW IFC space: `translate(centre) * scale(size)`.
+ *
+ * Deliberately carries NO Z-up -> Y-up flip and NO unit scaling: both of
+ * those live in the coordination matrix this is composed under (see
+ * {@link emitSpatialStructureImposters}), exactly as they do for real
+ * meshes. Baking the flip here — which the parse-time point-list
+ * imposter this replaced used to do — put the plates in a frame the
+ * durable geometry never shares (conway#515).
+ *
+ * @param aabb The IFC-space bounds.
+ * @return {number[]} 16-element matrix.
+ */
+export function aabbBoxMatrix( aabb: Aabb3 ): number[] {
+
+  const sx = Math.max( aabb.max[ 0 ] - aabb.min[ 0 ], MIN_BOX_SCALE )
+  const sy = Math.max( aabb.max[ 1 ] - aabb.min[ 1 ], MIN_BOX_SCALE )
+  const sz = Math.max( aabb.max[ 2 ] - aabb.min[ 2 ], MIN_BOX_SCALE )
+  const cx = ( aabb.min[ 0 ] + aabb.max[ 0 ] ) * 0.5
+  const cy = ( aabb.min[ 1 ] + aabb.max[ 1 ] ) * 0.5
+  const cz = ( aabb.min[ 2 ] + aabb.max[ 2 ] ) * 0.5
+
+  return [
+    sx, 0, 0, 0,
+    0, sy, 0, 0,
+    0, 0, sz, 0,
+    cx, cy, cz, 1,
+  ]
+}
 
 const REL_AGGREGATES_RELATING = [4, 4, 3] as const
 const REL_AGGREGATES_RELATED = [5, 4, 3] as const
@@ -108,16 +182,21 @@ export function shouldEmitSpatialNode(
  * @param a First box.
  * @param b Second box.
  * @param rel Relative slack.
+ * @param minEdge Span floor in source units (see MIN_EDGE_M).
  * @return {boolean} True if they match.
  */
-export function aabbMostlyEqual( a: Aabb3, b: Aabb3, rel: number = COLLAPSE_REL ): boolean {
+export function aabbMostlyEqual(
+    a: Aabb3,
+    b: Aabb3,
+    rel: number = COLLAPSE_REL,
+    minEdge: number = MIN_EDGE_M ): boolean {
 
   for ( let axis = 0; axis < 3; ++axis ) {
 
     const span = Math.max(
         a.max[ axis ] - a.min[ axis ],
         b.max[ axis ] - b.min[ axis ],
-        MIN_EDGE )
+        minEdge )
     const slack = span * rel
 
     if ( Math.abs( a.min[ axis ] - b.min[ axis ] ) > slack ||
@@ -167,17 +246,17 @@ export function unionAabb( ...boxes: ( Aabb3 | undefined )[] ): Aabb3 | undefine
 }
 
 
-function padAabb_( box: Aabb3 ): Aabb3 {
+function padAabb_( box: Aabb3, minEdge: number ): Aabb3 {
 
   const min: [number, number, number] = [box.min[ 0 ], box.min[ 1 ], box.min[ 2 ]]
   const max: [number, number, number] = [box.max[ 0 ], box.max[ 1 ], box.max[ 2 ]]
 
   for ( let axis = 0; axis < 3; ++axis ) {
 
-    if ( max[ axis ] - min[ axis ] < MIN_EDGE ) {
+    if ( max[ axis ] - min[ axis ] < minEdge ) {
       const mid = ( min[ axis ] + max[ axis ] ) * 0.5
-      min[ axis ] = mid - MIN_EDGE * 0.5
-      max[ axis ] = mid + MIN_EDGE * 0.5
+      min[ axis ] = mid - minEdge * 0.5
+      max[ axis ] = mid + minEdge * 0.5
     }
   }
 
@@ -335,14 +414,40 @@ async function productOrigin_(
  * depth, and storeys are always drawn when present. Nested wrappers
  * whose box matches their only child are collapsed.
  *
+ * **Frame.** Every box is measured in raw IFC source units and Z-up,
+ * because that is what the placement chains this walk reads carry. The
+ * emitted `flatTransformation` is `C * M_box`, where `M_box` is that raw
+ * box ({@link aabbBoxMatrix}) and `C` is the durable coordination frame —
+ * metres, Y-up, recentred per the quantized model-zero policy. So the
+ * plates land exactly where the real meshes do, which they did not
+ * before (raw units, a locally baked axis flip, no coordination: on a
+ * millimetre model the plates came out 1000x too big, and a
+ * georeferenced one put them a site-offset away — conway#515).
+ * `payload.aabb` stays in raw IFC space as the consumer's reference.
+ *
  * @param model Parsed IFC model (windowed or resident).
  * @param onMesh Preview consumer.
+ * @param coordinationMatrix The frame already latched by the preview
+ * channel (the one the durable pump adopts). When it is `undefined` — no
+ * preview instance was ever captured — the walk derives the same frame
+ * from an identity placement anchored on the root spatial box's centre.
+ * That is best-effort by construction: below LARGE_COORDINATE_BUDGET_M
+ * the policy recentres nothing, so it agrees with the durable derivation
+ * exactly; above it, both snap to COORDINATION_SNAP_M and agree as long
+ * as the spatial root and the first geometry share a grid cell.
+ * @param linearScalingFactor Source units -> metres, from
+ * `IfcGeometryExtraction.getLinearScalingFactor()`. Only consulted for
+ * the fallback derivation and the minimum-edge padding; when
+ * `coordinationMatrix` is supplied its own scaling is already baked in.
  * @return {Promise<number>} Boxes emitted.
  */
 export async function emitSpatialStructureImposters(
     model: IfcStepModel,
-    onMesh: ( mesh: PreviewMeshPayload ) => void ): Promise< number > {
+    onMesh: ( mesh: PreviewMeshPayload ) => void,
+    coordinationMatrix?: ArrayLike< number >,
+    linearScalingFactor: number = 1 ): Promise< number > {
 
+  const minEdge = minEdgeSourceUnits( linearScalingFactor )
   const nodes = new Map< number, SpatialNode >()
   const childrenOf = new Map< number, number[] >()
   const parentOf = new Map< number, number >()
@@ -649,9 +754,9 @@ export async function emitSpatialStructureImposters(
             }
           }
 
-          height = Math.max( maxZ - minZ, MIN_EDGE )
+          height = Math.max( maxZ - minZ, minEdge )
         } else {
-          height = MIN_EDGE
+          height = minEdge
         }
       }
 
@@ -707,7 +812,14 @@ export async function emitSpatialStructureImposters(
       if ( box !== void 0 && STOREY_TYPES.has( node.typeID ) ) {
 
         const height = storeyHeight.get( localID )
-        const z0 = node.elevation ?? box.min[ 2 ]
+
+        // IfcBuildingStorey.Elevation is measured from the BUILDING
+        // datum, not from world zero, so a building placed at z=100
+        // drew its plates 100 units low. The placement chain's world Z
+        // is the datum-free answer; elevation is only the fallback for
+        // a storey with no usable placement. Storey HEIGHTS above stay
+        // on elevation deltas — those are datum-invariant.
+        const z0 = node.origin?.[ 2 ] ?? node.elevation ?? box.min[ 2 ]
         const z1 = height !== void 0 ? z0 + height : box.max[ 2 ]
         box = {
           min: [box.min[ 0 ], box.min[ 1 ], Math.min( box.min[ 2 ], z0 )],
@@ -743,7 +855,7 @@ export async function emitSpatialStructureImposters(
       const child = nodes.get( node.children[ 0 ] )
 
       if ( child?.aabb !== void 0 &&
-          aabbMostlyEqual( node.aabb, child.aabb ) &&
+          aabbMostlyEqual( node.aabb, child.aabb, COLLAPSE_REL, minEdge ) &&
           shouldEmitSpatialNode( child.depth, maxDepth, child.typeID ) ) {
         continue
       }
@@ -751,6 +863,9 @@ export async function emitSpatialStructureImposters(
 
     emitIDs.push( node.localID )
   }
+
+  const coordination = coordinationMatrix ??
+    fallbackCoordination_( roots, nodes, linearScalingFactor )
 
   let emitted = 0
 
@@ -762,7 +877,7 @@ export async function emitSpatialStructureImposters(
       continue
     }
 
-    const aabb = padAabb_( node.aabb )
+    const aabb = padAabb_( node.aabb, minEdge )
 
     try {
 
@@ -770,9 +885,8 @@ export async function emitSpatialStructureImposters(
         expressID: node.expressID,
         geometryExpressID: -1,
         color: SPATIAL_IMPOSTER_COLOR,
-        flatTransformation: aabbToPreviewMatrix( aabb ),
+        flatTransformation: mat4MultiplyF64( coordination, aabbBoxMatrix( aabb ) ),
         aabb,
-        solid: true,
       } )
       ++emitted
     } catch {
@@ -781,4 +895,36 @@ export async function emitSpatialStructureImposters(
   }
 
   return emitted
+}
+
+
+/**
+ * The durable coordination frame, derived the way the preview channels
+ * derive theirs but anchored on the spatial root's centre instead of the
+ * first extracted geometry's first point: identity placement + that
+ * anchor is exactly `deriveCoordinationF64`'s input contract, so the
+ * quantized model-zero policy (no recentre inside
+ * LARGE_COORDINATE_BUDGET_M, snap to COORDINATION_SNAP_M beyond) applies
+ * unchanged. Used only when no preview instance latched a frame first.
+ *
+ * @param roots Root spatial node local IDs.
+ * @param nodes The walked spatial nodes.
+ * @param linearScalingFactor Source units -> metres.
+ * @return {number[]} The coordination matrix.
+ */
+function fallbackCoordination_(
+    roots: number[],
+    nodes: Map< number, SpatialNode >,
+    linearScalingFactor: number ): number[] {
+
+  const rootBox = unionAabb( ...roots.map( ( id ) => nodes.get( id )?.aabb ) )
+
+  const anchor = rootBox !== void 0 ? {
+    x: ( rootBox.min[ 0 ] + rootBox.max[ 0 ] ) * 0.5,
+    y: ( rootBox.min[ 1 ] + rootBox.max[ 1 ] ) * 0.5,
+    z: ( rootBox.min[ 2 ] + rootBox.max[ 2 ] ) * 0.5,
+  } : { x: 0, y: 0, z: 0 }
+
+  return deriveCoordinationF64(
+      void 0, anchor, NORMALIZE_MAT_F64, sanitizeScale_( linearScalingFactor ) )
 }
