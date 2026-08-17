@@ -180,15 +180,80 @@ describe( 'StorePreviewChannel', () => {
         expect( plates[ 0 ].geometryExpressID ).toBe( -1 )
         expect( plates[ 0 ].flatTransformation ).toHaveLength( 16 )
 
-        // A successful walk is not repeated on later generations.
+        // The walk necessarily ran before any product could latch a
+        // coordination frame, so it used the imposter walk's own
+        // fallback derivation.
+        /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+        expect( ( channel as any ).earlyPlatesUsedFallbackFrame_ ).toBe( true )
+
         const first = channel.earlyPlateCount
 
         await channel.drainForTest()
 
-        expect( channel.earlyPlateCount ).toBe( first )
+        // Draining latches a real frame off the first captured product.
+        expect( channel.coordinationMatrix ).toBeDefined()
 
         channel.stop()
+
+        expect( channel.earlyPlateCount ).toBeGreaterThanOrEqual( first )
       } )
+
+  test( 'early plates are re-emitted once a real frame latches', async () => {
+
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink )
+
+    const payloads: PreviewMeshPayload[] = []
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true,
+        ( mesh ) => payloads.push( mesh ),
+        64, 48 * 1024 * 1024, 1 )
+
+    await channel.drainForTest()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    expect( internals.earlyPlatesUsedFallbackFrame_ ).toBe( true )
+    expect( channel.coordinationMatrix ).toBeDefined()
+
+    const before = payloads.filter( ( p ) => p.aabb !== void 0 ).length
+
+    // Let a fresh generation build now that a frame exists — normally
+    // an index doubling does this mid-parse. Retiring the active
+    // generation is what makes ensureGeneration_ take the build path;
+    // rewinding the ordinal alone would just keep the current one.
+    internals.disposeGeneration_()
+    internals.lastSnapshotRecords_ = 0
+    internals.unitOrdinal_ = 0
+
+    await channel.drainForTest()
+
+    const after = payloads.filter( ( p ) => p.aabb !== void 0 ).length
+
+    // The plates came again, this time under the latched frame. Under
+    // the replace-by-expressID contract that is a correction, not a
+    // duplicate — and it does not happen a third time.
+    expect( after ).toBeGreaterThan( before )
+    expect( internals.earlyPlatesUsedFallbackFrame_ ).toBe( false )
+
+    internals.disposeGeneration_()
+    internals.lastSnapshotRecords_ = 0
+    internals.unitOrdinal_ = 0
+
+    await channel.drainForTest()
+
+    expect( payloads.filter( ( p ) => p.aabb !== void 0 ).length ).toBe( after )
+
+    channel.stop()
+  } )
 
   test( 'open from store still leaves the source windowed', async () => {
 

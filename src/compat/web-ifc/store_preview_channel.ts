@@ -6,6 +6,7 @@ import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import {
   IfcBuildingStorey,
   IfcProduct,
+  IfcProject,
   IfcRelAggregates,
 } from '../../ifc/ifc4_gen'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
@@ -100,6 +101,14 @@ export class StorePreviewChannel {
 
   /** Set once a prefix-generation spatial walk has emitted a plate. */
   private earlyPlatesEmitted_ = 0
+
+  /**
+   * Whether those plates were composed under the walk's own fallback
+   * frame because no preview instance had latched one yet. They get one
+   * re-emission on a later generation once a real frame exists — see
+   * {@link maybeEmitEarlySpatialPlates_}.
+   */
+  private earlyPlatesUsedFallbackFrame_ = false
 
   private readonly emittedGeometry_ = new Set< number >()
 
@@ -446,9 +455,23 @@ export class StorePreviewChannel {
    * **The end-of-parse walk in the proxy is the refresh, not a
    * duplicate.** It re-emits the same expressIDs with contained-product
    * samples the prefix did not hold and under the frame the channel
-   * latched (which may not yet exist here — see below), and the consumer
-   * contract is that an `aabb` payload REPLACES the prior plate for its
-   * expressID. Double emission is the design; see PreviewMeshPayload.
+   * latched, and the consumer contract is that an `aabb` payload
+   * REPLACES the prior plate for its expressID. Double emission is the
+   * design; see PreviewMeshPayload.
+   *
+   * **Known gap in that contract, and it is a gap, not a subtlety.**
+   * Replacement only reaches nodes the final walk still emits, and the
+   * emit set is not stable between the two: `aabbMostlyEqual` collapses
+   * a single-child wrapper (Project over Site over Building) once its
+   * box matches its child's, which a prefix generation's degenerate
+   * boxes may not yet do. A wrapper emitted here and collapsed there is
+   * never replaced and never removed — the payload contract has no
+   * delete — so its early box lingers as one small plate until Share
+   * tears the preview scenery down at load end. Bounded (the wrapper
+   * chain is a handful of nodes, and the collapse needs exactly one
+   * child), but real. Closing it properly needs either a delete/
+   * generation channel in the payload contract or an emit set the two
+   * walks agree on, and both are consumer-side changes.
    *
    * @param model The prefix model.
    * @param extraction Its prepared extraction.
@@ -458,34 +481,57 @@ export class StorePreviewChannel {
       model: IfcStepModel,
       extraction: IfcGeometryExtraction ): Promise< void > {
 
-    if ( this.earlyPlatesEmitted_ > 0 ) {
+    // Same choice the proxy's imposterCoordination() makes: the latched
+    // preview frame when the open asked to coordinate, else identity.
+    const coordination = this.coordinateToOrigin_ ?
+      this.coordinationMatrix : IDENTITY_MAT4
+
+    // This runs as a generation is BUILT, before that tick captures its
+    // first product — and capture is the only thing that latches a
+    // frame. So the first walk on a coordinating open always finds
+    // `undefined` here and takes the walk's fallback derivation, which
+    // its own docs describe as capable of a full site-offset on a file
+    // that bakes absolute coordinates into vertices behind identity
+    // placements. Waiting for a latched frame instead would put the
+    // skeleton back behind the deferred-placement gate this whole change
+    // exists to get in front of, so: emit now, and re-emit ONCE on a
+    // later generation as soon as a real frame exists. That second
+    // emission is exactly what the replace-by-expressID contract is for.
+    const usingFallbackFrame = coordination === void 0
+    const canImproveFrame =
+      this.earlyPlatesUsedFallbackFrame_ && !usingFallbackFrame
+
+    if ( this.earlyPlatesEmitted_ > 0 && !canImproveFrame ) {
       return
     }
 
     try {
 
-      // Cheap prefix-sum reads, so this is affordable per generation:
-      // no storeys or no aggregate chain means the walk would emit
-      // nothing but still pay for the type scans.
-      if ( model.typeCount( IfcBuildingStorey ) < 1 ||
+      // Cheap prefix-sum reads, so this is affordable per generation.
+      // No storeys or no aggregate chain means the walk would emit
+      // nothing but still pay for the type scans. IfcProject is in the
+      // guard for a different reason: `extractLinearScalingFactor`
+      // returns with the factor still at 1 when the model holds no
+      // project (it only logs), and a silent 1 on a millimetre model
+      // scales the whole skeleton 1000x — the conway#515 symptom. A
+      // prefix that reached the storeys but not the project is unusual,
+      // not impossible, and the read costs one prefix sum.
+      if ( model.typeCount( IfcProject ) < 1 ||
+          model.typeCount( IfcBuildingStorey ) < 1 ||
           model.typeCount( IfcRelAggregates ) < 1 ) {
         return
       }
 
-      // Same choice the proxy's imposterCoordination() makes: the
-      // latched preview frame when the open asked to coordinate, else
-      // identity. Undefined here (no product has been captured yet, so
-      // nothing has latched) sends the walk to its own fallback
-      // derivation — and if the channel later latches a different frame,
-      // the end-of-parse refresh re-emits these plates under it.
-      const coordination = this.coordinateToOrigin_ ?
-        this.coordinationMatrix : IDENTITY_MAT4
-
-      this.earlyPlatesEmitted_ = await emitSpatialStructureImposters(
+      const emitted = await emitSpatialStructureImposters(
           model,
           this.onMesh_,
           coordination,
           extraction.getLinearScalingFactor() )
+
+      if ( emitted > 0 ) {
+        this.earlyPlatesEmitted_ = emitted
+        this.earlyPlatesUsedFallbackFrame_ = usingFallbackFrame
+      }
     } catch {
       // A failed early walk retries on the next generation; the
       // end-of-parse walk covers it regardless.
