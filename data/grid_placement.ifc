@@ -101,5 +101,21 @@ DATA;
 #511=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#512));
 #512=IFCBLOCK(#513,1.,1.,1.);
 #513=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Product E: axes A and 1 with no offsets, so the intersection is (0,0,0)
+   in the grid and (10,20,5) in the world — but with a reference direction
+   of +Z (#23, the same direction the grid's own placement uses as its
+   axis). A grid placement's z axis is forced to +Z, so a
+   PlacementRefDirection along it steers the x axis nowhere: normalising it
+   against that z yields NaN, which addTransform then bakes into this
+   placement and everything measured from it. Guarded, the schema default
+   stands in instead — the first axis' tangent, +X in the grid, which the
+   quarter turn takes to world +Y, the same x axis product A gets. */
+#700=IFCBUILDINGELEMENTPROXY('7kF0kSTOX3ovkcpuOhkPrX',$,'GridRefParallelZ',$,$,#701,#710,$,.NOTDEFINED.);
+#701=IFCGRIDPLACEMENT(#702,#23);
+#702=IFCVIRTUALGRIDINTERSECTION((#110,#130),(0.,0.));
+#710=IFCPRODUCTDEFINITIONSHAPE($,$,(#711));
+#711=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#712));
+#712=IFCBLOCK(#713,1.,1.,1.);
+#713=IFCAXIS2PLACEMENT3D(#22,$,$);
 ENDSEC;
 END-ISO-10303-21;

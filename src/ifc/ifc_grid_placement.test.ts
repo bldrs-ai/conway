@@ -19,6 +19,7 @@ const PLACEMENT_A = 201
 const PLACEMENT_B = 301
 const PLACEMENT_C = 501
 const PLACEMENT_D = 601
+const PLACEMENT_E = 701
 const CIRCULAR_AXIS = 410
 
 /* Where the two supported placements land in world space, derived in the
@@ -32,6 +33,9 @@ const B_WORLD_Z = 5
 const D_WORLD_X = 8
 const D_WORLD_Y = 17
 const D_WORLD_Z = 10
+const E_WORLD_X = 10
+const E_WORLD_Y = 20
+const E_WORLD_Z = 5
 
 /* Column-major offsets into a 4x4 transform's values. */
 const X_AXIS = 0
@@ -202,6 +206,41 @@ describe('IfcGridPlacement extraction', () => {
     expect(warning).toBeDefined()
     expect(warning!.message).toContain('IFCCIRCLE')
     expect(warning!.expressIDs.has(String(CIRCULAR_AXIS))).toBe(true)
+  })
+
+  test('a reference direction along the placement z falls back to the tangent', () => {
+
+    const transform = placementTransform(PLACEMENT_E)
+
+    expect(transform).toBeDefined()
+
+    const values = transform!.absoluteTransform
+
+    // The failure this covers is not a wrong number but a poisoned one:
+    // unguarded, normalising a reference direction that lies along the forced
+    // z gives NaN, and addTransform carries it into every descendant. Asserted
+    // over the whole matrix rather than the x axis alone, since that is how it
+    // spreads.
+    expect(Array.from(values).every((value) => Number.isFinite(value)))
+      .toBe(true)
+
+    // Axes A and 1 with no offsets meet at the grid origin.
+    expect(values[TRANSLATION]).toBeCloseTo(E_WORLD_X)
+    expect(values[TRANSLATION + 1]).toBeCloseTo(E_WORLD_Y)
+    expect(values[TRANSLATION + 2]).toBeCloseTo(E_WORLD_Z)
+
+    // The schema default the guard falls back to: the first axis' tangent,
+    // +X in the grid, taken to world +Y by the grid's quarter turn - so the
+    // same x axis product A gets from having no reference direction at all.
+    expect(values[X_AXIS]).toBeCloseTo(0)
+    expect(values[X_AXIS + 1]).toBeCloseTo(1)
+    expect(values[X_AXIS + 2]).toBeCloseTo(0)
+
+    const warning = warningStartingWith(
+        'IfcGridPlacement: the placement reference direction is parallel')
+
+    expect(warning).toBeDefined()
+    expect(warning!.expressIDs.has(String(PLACEMENT_E))).toBe(true)
   })
 
   test('nothing in this model is left unimplemented', () => {

@@ -5925,6 +5925,45 @@ export class IfcGeometryExtraction {
       }
     }
 
+    // getAxis2Placement3D below is called with a forced z of (0,0,1) and
+    // normalizeX, and the native side (ConwayGeometryProcessor's
+    // getAxis2Placement3D) has no degeneracy guard of its own: an xAxisRef
+    // with nothing off that z has no component left after the projection,
+    // normalises to NaN, and addTransform then bakes the NaN into this
+    // placement and every descendant of it. Measured on data/grid_placement.ifc
+    // product E, whose x axis came out (NaN,NaN,NaN) before this guard.
+    //
+    // Two schema-reachable states produce it, and because z is exactly +Z both
+    // reduce to one test - the xy magnitude vanishing relative to the vector's
+    // own, in the same units-independent form as the axis-parallel check in
+    // resolveVirtualGridIntersection (a zero vector fails it too, 0 <= 0):
+    //
+    // - PlacementRefDirection is an IfcVirtualGridIntersection resolving to
+    //   the same point as PlacementLocation, so the difference above is the
+    //   zero vector;
+    // - PlacementRefDirection is IFCDIRECTION((0.,0.,1.)), parallel to the
+    //   forced z.
+    //
+    // The fallback is the schema's own default for an absent
+    // PlacementRefDirection, and it is already in hand and already known
+    // non-degenerate: resolveVirtualGridIntersection returns the first axis'
+    // tangent normalised, and only after rejecting a zero-length one.
+    const xAxisRefPlanar =
+      Math.sqrt(xAxisRef.x * xAxisRef.x + xAxisRef.y * xAxisRef.y)
+    const xAxisRefLength =
+      Math.sqrt(xAxisRefPlanar * xAxisRefPlanar + xAxisRef.z * xAxisRef.z)
+
+    if (xAxisRefPlanar <= GRID_AXIS_PARALLEL_EPSILON * xAxisRefLength) {
+
+      Logger.warning(
+          'IfcGridPlacement: the placement reference direction is parallel ' +
+          'to the grid placement\'s z axis, or has no length - falling back ' +
+          'to the schema default, the first axis\' tangent.',
+          from.expressID)
+
+      xAxisRef = { x: location.tangent.x, y: location.tangent.y, z: 0 }
+    }
+
     // Two guarded regions rather than one, because the two reads degrade to
     // DIFFERENT states and a single catch could only describe one of them
     // truthfully. Neither may fail the product: dropping it entirely is
