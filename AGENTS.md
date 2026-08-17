@@ -90,6 +90,67 @@ The same lifecycle and the same gate shape apply in
 [Share](https://github.com/bldrs-ai/Share) — see its `AGENTS.md` for
 which jobs are gated there.
 
+## Issue-queue burndowns: sub-agents and the rubric
+
+Sizeable issue queues (triage passes, bug burndowns) are worked by a
+coordinator session that plans, defines issues and manages the queue,
+dispatching one sub-agent per issue for the hands-on work — issue
+handling, PR authoring, review and release lifecycle. Use a
+Fable-class model for the coordinator and Opus-class for the
+sub-agents. This is the org direction, not a one-repo experiment;
+Share carries the same guidance
+([design/new/agent-workflow.md](https://github.com/bldrs-ai/Share/blob/main/design/new/agent-workflow.md)).
+Sequence agents that share a branch or files; parallelize only across
+disjoint trees.
+
+A dispatch brief must carry: the branch and its current state, the
+verification bar as numbers (the suite/test/lint counts the tree meets
+today), the issue's full context — and an instruction to read the live
+issue thread before coding, with explicit license to stop and report
+if the thread has retracted the premise. Premises rot; never assert an
+issue's triage state in a brief without having read its comments. (The
+Aug 2026 burndown lost one dispatch exactly this way, and the agent
+that refused to ship against the dead premise was right.)
+
+The rubric every sub-agent is held to — written after reviewing a PR
+that failed most of these (#508), then applied across
+#485/#504/#505/#503:
+
+1. **Read the thread first.** If comments retract the premise, stop
+   and report rather than ship.
+2. **Path evidence before claim.** A fix for a specific failure must
+   show the failing path reaches the changed code — entity chain,
+   stack, or captured diagnostic. "Consistent with" is not "caused
+   by".
+3. **Claim discipline.** State what the change establishes vs. what it
+   hopes. No closing keywords, and no `(#N)` in a title, for unproven
+   fixes of flaky or statistical bugs — auto-close has burned #485
+   twice.
+4. **Description ≡ diff.** PR and commit text describe the code as it
+   is, not an earlier draft's intent.
+5. **No speculative defenses.** Every guard corresponds to a state
+   something can actually produce; cite what can throw.
+6. **Tests pin the change, not the language.** Prove it: run the new
+   tests against a stash/revert of the source change and show them
+   fail.
+7. **Verify environment assumptions empirically.** Emscripten flags,
+   glue behaviour, schema revisions — read the built artifact or the
+   pinned source, never memory of a different configuration.
+8. **Diagnosis before defense** on silent-corruption and flaky bugs. A
+   change that makes a symptom vanish without establishing mechanism
+   closes an issue while keeping the bug.
+9. **Digest discipline.** Byte-identical output for every model the
+   change shouldn't touch, and a precise enumeration of the models it
+   legitimately changes — those baselines need re-blessing.
+10. **Report honestly.** Exact counts, verified vs. unverified,
+    confounders named (LFS stubs, wasm-prebuilt drift, upstream
+    fixes already landed).
+
+Reviewers hold the same bar, in this order: verify claims against the
+diff (not the description), against repo history, then against the
+actual failure path — and grade findings by evidence, not
+plausibility.
+
 ## Debugging a bad model
 
 When a model renders wrong — spikes, missing parts, exploded assemblies —
