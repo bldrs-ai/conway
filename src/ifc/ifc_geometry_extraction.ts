@@ -6973,6 +6973,50 @@ export class IfcGeometryExtraction {
       return seen ?? new Set< number >()
     }
 
+    // Paging failures are contained to their product (conway#526).
+    // `extractGeometryBatchAsync` prefetches a batch through one
+    // Promise.all, so a rejection here used to escape the pump and
+    // abort the entire load — a whole model lost to one unreadable
+    // product. The extract that follows already tolerates a product it
+    // cannot read (its own per-product catch logs and moves on), so
+    // degrading to "this product is missing" is both the smaller
+    // failure and the one the pipeline is already built for.
+    //
+    // Deliberately no retry: a second attempt sharing `seen` would
+    // re-claim nothing and re-ensure nothing, and giving it a fresh set
+    // would double-pin every record it re-walked — pins are refcounted
+    // but the caller unpins once per unique ID, so the surplus would
+    // hold those chunks resident for the model's life and grow the
+    // window without bound.
+    try {
+      return await this.ensureResidentForProductExtractUnguarded_(
+          localID, seen, leafSpans )
+    } catch ( error ) {
+
+      Logger.error(
+          `Error paging product localID ${localID} for extract: ` +
+          `${error instanceof Error ? error.message : String( error )}` )
+
+      return seen ?? new Set< number >()
+    }
+  }
+
+  /**
+   * {@link ensureResidentForProductExtract} without the per-product
+   * fault containment — split out so the guard cannot accidentally
+   * swallow a failure raised by its own bookkeeping.
+   *
+   * @param localID The product's local ID.
+   * @param seen Optional set to extend.
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
+   * @return {Promise<Set<number>>} Pinned local IDs.
+   */
+  private async ensureResidentForProductExtractUnguarded_(
+      localID: number,
+      seen?: Set< number >,
+      leafSpans?: { address: number, length: number }[] ):
+      Promise< Set< number > > {
+
     const extra: number[] = []
     const voids = this.productToVoidGeometryMap.get( localID )
 
@@ -7005,9 +7049,14 @@ export class IfcGeometryExtraction {
         typeID !== EntityTypesIfc.IFCTRIANGULATEDFACESET
     }
 
+    // IDs THIS call claimed and awaited, as opposed to `visited`, which
+    // is the caller's shared set when a batch prefetches concurrently.
+    // Only the former may be read synchronously afterwards (conway#526).
+    const claimed = new Set< number >()
+
     const visited =
       await this.model.ensureResidentClosureByLocalID(
-          localID, extra, seen, descend, leafSpans, isFace )
+          localID, extra, seen, descend, leafSpans, isFace, claimed )
     const styleExtra: number[] = []
 
     for ( const visitedID of visited ) {
@@ -7027,10 +7076,10 @@ export class IfcGeometryExtraction {
 
     if ( styleExtra.length > 0 ) {
       await this.model.ensureResidentClosureByLocalID(
-          localID, styleExtra, visited, descend, leafSpans, isFace )
+          localID, styleExtra, visited, descend, leafSpans, isFace, claimed )
     }
 
-    await this.ensureResidentVisitedFacesetPayloads_( visited, leafSpans )
+    await this.ensureResidentVisitedFacesetPayloads_( claimed, visited, leafSpans )
 
     return visited
   }
@@ -7040,15 +7089,34 @@ export class IfcGeometryExtraction {
    * or more tight address spans. The generic closure visits the
    * faceset but does not scan Faces[].
    *
-   * @param visited Faceset local IDs already pinned (and the set to
-   * extend with Coordinates).
+   * **Iterates `claimed`, not `visited`, and re-ensures before the
+   * scan** — both halves of conway#526. `referencedExpressIDs` is a
+   * SYNCHRONOUS acquire of the faceset's own bytes, and when a batch
+   * prefetches products concurrently through one shared `visited` set
+   * (`extractGeometryBatchAsync`'s Promise.all over 8 products), the
+   * closure walk skips any ID a sibling product already claimed. That
+   * sibling has pinned the range but its read may still be in flight,
+   * so scanning the shared set threw
+   * `StepBufferNotResidentError: STEP source range [...] is not
+   * resident` out of the prefetch and killed the whole load — a pin
+   * reserves a chunk against eviction, it does not make it resident.
+   * Iterating this call's own claims fixes that (and drops the
+   * quadratic re-scan of every sibling's facesets); the `await` below
+   * makes the guarantee local rather than inherited, since a resident
+   * chunk costs only a microtask there.
+   *
+   * @param claimed Faceset local IDs this call claimed and awaited.
+   * @param visited The (possibly shared) visited set — read for
+   * Coordinates de-duplication and extended with the ones pinned here,
+   * so the caller's unpin covers them.
    * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
    */
   private async ensureResidentVisitedFacesetPayloads_(
+      claimed: Set< number >,
       visited: Set< number >,
       leafSpans?: { address: number, length: number }[] ): Promise< void > {
 
-    for ( const localID of visited ) {
+    for ( const localID of claimed ) {
 
       const typeID = this.model.typeIDOf( localID )
 
@@ -7056,6 +7124,11 @@ export class IfcGeometryExtraction {
           typeID !== EntityTypesIfc.IFCTRIANGULATEDFACESET ) {
         continue
       }
+
+      // Cheap when already resident (a Map hit and a microtask), and
+      // the difference between a guarantee and an assumption when the
+      // window has churned since this record was claimed.
+      await this.model.ensureResidentByLocalID( localID )
 
       const refs = this.model.referencedExpressIDs( localID )
 

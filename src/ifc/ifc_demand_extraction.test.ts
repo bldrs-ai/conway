@@ -15,6 +15,12 @@ import ParsingBuffer from '../parsing/parsing_buffer'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { ExtractResult } from '../core/shared_constants'
 import { IfcProduct, IfcStyledItem } from './ifc4_gen'
+import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
+import { openStreamedIfcModelFromStore } from './ifc_stream_open'
+import {
+  InMemoryStepByteStore,
+  WindowedStepBufferProvider,
+} from '../step/step_buffer_provider'
 
 let conwayGeometry: ConwayGeometry
 
@@ -169,4 +175,192 @@ describe( 'per-product demand extraction (Phase B2)', () => {
 
     expect( checked ).toBeGreaterThan( 0 )
   } )
+} )
+
+
+// conway#526. `extractGeometryBatchAsync` prefetches a batch of products
+// through one Promise.all over ONE shared `seen` set, so the closure walk
+// skips any record a sibling product already claimed — that sibling has
+// pinned the range, but a pin reserves a chunk against eviction, it does
+// not make it resident, and its read may still be in flight. The faceset
+// payload pass then scanned the shared set and synchronously acquired a
+// record nobody had finished reading:
+//
+//   StepBufferNotResidentError: STEP source range [164128495, 164187850)
+//   is not resident — call ensureResident before synchronous extraction
+//
+// which escaped the prefetch and aborted the whole load on a large model.
+describe( 'concurrent windowed product prefetch (conway#526)', () => {
+
+  const CHUNK = 4 * 1024
+
+  /**
+   * A store-backed model over a deliberately cramped window: 4 KiB
+   * chunks with 2 resident, so a sibling's chunks are gone by the time
+   * anyone else looks for them.
+   *
+   * @param store The backing store.
+   * @return {Promise<IfcStepModel>} The windowed model.
+   */
+  async function windowedModel( store: InMemoryStepByteStore ):
+      Promise< IfcStepModel > {
+
+    const open = await openStreamedIfcModelFromStore( store, { pool: CHUNK } )
+
+    expect( open.model ).toBeDefined()
+
+    return new IfcStepModel(
+        void 0,
+        open.columns as any,
+        new WindowedStepBufferProvider( store, CHUNK, 2 ) )
+  }
+
+  test( 'a shared seen set does not make one product read records it never paged',
+      async () => {
+
+        const store = new InMemoryStepByteStore(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ) )
+        const model = await windowedModel( store )
+        const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+
+        extraction.quietRecoverableLogging = true
+        extraction.deferDanglingPlacements = true
+
+        const prepPins = await extraction.ensureResidentForDemandPrep()
+
+        try {
+          extraction.prepareDemandExtraction( true )
+        } finally {
+          model.releaseSourceViews( prepPins )
+          model.unpinLocalIDs( prepPins )
+        }
+
+        const products = [ ...model.types( IfcProduct ) ].map( ( p ) => p.localID )
+
+        expect( products.length ).toBeGreaterThan( 1 )
+
+        // The pump's shape: one shared pin set across the batch.
+        const pins = new Set< number >()
+        const leafSpans: { address: number, length: number }[] = []
+
+        // Seed the shared set until it holds facesets — not every
+        // product carries tessellated geometry, and the payload pass is
+        // what this is about.
+        let seeded = 0
+        let claimedFacesets: number[] = []
+
+        while ( seeded < products.length && claimedFacesets.length === 0 ) {
+
+          await extraction.ensureResidentForProductExtract(
+              products[ seeded++ ], pins, leafSpans )
+
+          claimedFacesets = [ ...pins ].filter( ( id ) =>
+            model.typeIDOf( id ) === EntityTypesIfc.IFCPOLYGONALFACESET )
+        }
+
+        expect( claimedFacesets.length ).toBeGreaterThan( 0 )
+        expect( seeded ).toBeLessThan( products.length )
+
+        // Now force the state the production race produced by timing:
+        // records that are IN the shared set but NOT resident from the
+        // next caller's point of view. Dropping the pins and filling the
+        // 2-chunk window with an unrelated range evicts them, which is
+        // the same invariant violation as a sibling's read still being
+        // in flight — and unlike the race, it happens every run.
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
+
+        leafSpans.length = 0
+
+        const facesetAt = model.recordAddress( claimedFacesets[ 0 ] )!
+        const far = facesetAt >= CHUNK * 4 ? 0 : store.byteLength - CHUNK * 2
+
+        await model.ensureResidentRange( far, CHUNK * 2 )
+
+        // Pre-#526 the payload pass walked the shared set, synchronously
+        // acquired those evicted facesets and threw
+        // StepBufferNotResidentError out of the prefetch, killing the load.
+        await expect( Promise.all( products.slice( seeded ).map( ( localID ) =>
+          extraction.ensureResidentForProductExtract(
+              localID, pins, leafSpans ) ) ) ).resolves.toBeDefined()
+
+        expect( pins.size ).toBeGreaterThan( 0 )
+
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
+      }, 120000 )
+
+  test( 'the closure walk reports only what THIS call claimed', async () => {
+
+    const model = await windowedModel(
+        new InMemoryStepByteStore( new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ) ) )
+    const products = [ ...model.types( IfcProduct ) ].map( ( p ) => p.localID )
+
+    expect( products.length ).toBeGreaterThan( 1 )
+
+    // The invariant the payload pass now rests on: with a shared set,
+    // a second walk claims only what the first left unclaimed, so
+    // `claimed` is what this call has actually awaited residency for.
+    const shared = new Set< number >()
+    const firstClaimed = new Set< number >()
+    const secondClaimed = new Set< number >()
+
+    await model.ensureResidentClosureByLocalID(
+        products[ 0 ], void 0, shared, void 0, void 0, void 0, firstClaimed )
+    await model.ensureResidentClosureByLocalID(
+        products[ 0 ], void 0, shared, void 0, void 0, void 0, secondClaimed )
+
+    expect( firstClaimed.size ).toBeGreaterThan( 0 )
+    expect( secondClaimed.size ).toBe( 0 )
+
+    for ( const id of firstClaimed ) {
+      expect( shared.has( id ) ).toBe( true )
+    }
+
+    model.unpinLocalIDs( shared )
+  }, 120000 )
+
+  test( 'a product whose paging fails is skipped, not fatal to the batch', async () => {
+
+    const model = await windowedModel(
+        new InMemoryStepByteStore( new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ) ) )
+    const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+
+    const products = [ ...model.types( IfcProduct ) ].map( ( p ) => p.localID )
+    const failing = products[ 0 ]
+
+    // A store read that rejects for one product's closure must not take
+    // the batch — the pump's Promise.all would otherwise reject and the
+    // load dies where a missing product would do.
+    const realEnsure = model.ensureResidentClosureByLocalID.bind( model )
+
+    ;( model as any ).ensureResidentClosureByLocalID =
+      ( localID: number, ...rest: unknown[] ) => {
+
+        if ( localID === failing ) {
+          return Promise.reject( new Error( 'simulated store read failure' ) )
+        }
+
+        return ( realEnsure as any )( localID, ...rest )
+      }
+
+    const pins = new Set< number >()
+
+    await expect( Promise.all( products.slice( 0, 4 ).map( ( localID ) =>
+      extraction.ensureResidentForProductExtract(
+          localID, pins ) ) ) ).resolves.toBeDefined()
+
+    ;( model as any ).ensureResidentClosureByLocalID = realEnsure
+
+    model.releaseSourceViews( pins )
+    model.unpinLocalIDs( pins )
+  }, 120000 )
 } )

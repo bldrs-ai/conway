@@ -850,6 +850,14 @@ implements Iterable<BaseEntity>, Model {
    * extract reads `IfcIndexedPolygonalFace.CoordIndex` as integers —
    * following those faces pinned ~78k records per PSB product. If
    * omitted, `!descend` children use this span path (test helper).
+   * @param claimed Optional out-set of the IDs *this call* claimed and
+   * awaited residency for — a strict subset of `seen`. When `seen` is
+   * shared across concurrent walks (a batch of products sharing mapped
+   * geometry), an ID another walk claimed is skipped here and is NOT
+   * resident yet from this call's point of view: that walk's pin holds
+   * the chunk once it lands, but its read is still in flight. Anything
+   * that must synchronously read a record's bytes after this returns
+   * has to iterate `claimed`, never `seen` (conway#526).
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
@@ -858,7 +866,8 @@ implements Iterable<BaseEntity>, Model {
       seen: Set< number > = new Set< number >(),
       descend?: ( localID: number ) => boolean,
       leafSpans?: { address: number, length: number }[],
-      spanLeaf?: ( localID: number ) => boolean ): Promise< Set< number > > {
+      spanLeaf?: ( localID: number ) => boolean,
+      claimed?: Set< number > ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -901,6 +910,7 @@ implements Iterable<BaseEntity>, Model {
         seen.add( id )
         this.pinByLocalID( id )
         wave.push( id )
+        claimed?.add( id )
       }
 
       frontier.length = 0
