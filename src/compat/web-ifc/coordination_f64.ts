@@ -31,11 +31,20 @@ const IDENTITY: readonly number[] =
 
 /**
  * The Z-up -> Y-up normalize matrix baked into every coordination frame
- * (column-major). Identical to the shim proxies' `NormalizeMat` and the
- * preview channels' local copies — every producer of a coordination
- * frame MUST use the same one, or the frames it derives disagree with
- * the durable walk's (which is exactly how the spatial-imposter plates
- * ended up in a different space from the meshes, conway#515).
+ * (column-major).
+ *
+ * Every producer of a coordination frame MUST use the same matrix, or
+ * the frames it derives disagree with the durable walk's — which is
+ * exactly how the spatial-imposter plates ended up in a different space
+ * from the meshes (conway#515).
+ *
+ * This is the definition for everything that imports it: both preview
+ * channels and the spatial-imposter walk. Three identical literals
+ * remain, the public `NormalizeMat` field on `IfcAPI`, `IfcApiProxyIfc`
+ * and `IfcApiProxyAP214` — the web-ifc shim surface, typed
+ * `glmatrix.mat4`. They are the durable frame's producers, so they must
+ * stay bit-identical to this; folding them in is worth doing and was
+ * left out of conway#516 only to keep that diff to the imposter path.
  */
 export const NORMALIZE_MAT_F64: readonly number[] = [
   1, 0, 0, 0,
