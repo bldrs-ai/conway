@@ -182,7 +182,11 @@ export function shouldEmitSpatialNode(
  * @param a First box.
  * @param b Second box.
  * @param rel Relative slack.
- * @param minEdge Span floor in source units (see MIN_EDGE_M).
+ * @param minEdge Span floor, in the same source units as `a` and `b`.
+ * The walk always passes {@link minEdgeSourceUnits}' converted value;
+ * the default is the unconverted MIN_EDGE_M, which is only correct on a
+ * metre model — a caller that omits it on a millimetre one gets a
+ * one-millimetre floor, the very bug MIN_EDGE_M removed.
  * @return {boolean} True if they match.
  */
 export function aabbMostlyEqual(
@@ -424,6 +428,27 @@ async function productOrigin_(
  * millimetre model the plates came out 1000x too big, and a
  * georeferenced one put them a site-offset away — conway#515).
  * `payload.aabb` stays in raw IFC space as the consumer's reference.
+ *
+ * **Call it after `prepareDemandExtraction()`, never before.** The frame
+ * needs `getLinearScalingFactor()`, which reads 1 until the extraction
+ * maps — and with them the unit assignment — are prepared, and
+ * `extractLinearScalingFactor()` is `*=`-accumulating, so it cannot be
+ * pulled forward on its own without squaring the unit prefix. The cost
+ * is latency on the model's first visible feedback: on the resident path
+ * the plates now follow the prep instead of preceding it, and on the
+ * store-backed path they also follow an awaited
+ * `ensureResidentForDemandPrep()`, so on a large model they land
+ * measurably later than they used to. Accepted deliberately — a plate at
+ * 1000x the model's scale is worse than a plate slightly late.
+ *
+ * **The latched frame is adopted, not guaranteed.** The deferred durable
+ * pump re-derives its own when the composed placement overruns
+ * LARGE_COORDINATE_BUDGET_M (`validatePreviewFrame`, Share#1634). Plates
+ * emitted here are not re-emitted, so on that path they keep the
+ * rejected frame and sit a site-offset from the durable meshes — the
+ * conway#515 symptom again, now confined to a case the preview meshes
+ * beside them share, and to scenery Share tears down at load end.
+ * Re-emitting on rejection is the fix if it ever shows up live.
  *
  * @param model Parsed IFC model (windowed or resident).
  * @param onMesh Preview consumer.
@@ -786,8 +811,26 @@ export async function emitSpatialStructureImposters(
 
       const pieces: Aabb3[] = []
 
+      // Where a storey states an Elevation, its floor is the building
+      // datum plus that — see the banding block below, which this has to
+      // agree with. Under the ordinary authoring it equals the storey's
+      // own placement Z; the two only part on files that leave every
+      // storey placement on the datum.
+      const storeyZ0 =
+        STOREY_TYPES.has( node.typeID ) && node.elevation !== void 0 ?
+          storeyDatumZ_( localID, nodes, parentOf ) + node.elevation : void 0
+
       if ( node.origin !== void 0 ) {
-        pieces.push( pointAabb_( ...node.origin ) )
+
+        // The placement point contributes this node's XY footprint. For
+        // a storey with an Elevation its Z is the DATUM, not its
+        // contents, so seeding the band with it would drag every
+        // storey's floor down onto the building origin — substitute the
+        // banded floor. Non-storeys keep their own Z.
+        pieces.push( pointAabb_(
+            node.origin[ 0 ],
+            node.origin[ 1 ],
+            storeyZ0 ?? node.origin[ 2 ] ) )
       }
 
       const samples = productOrigins.get( localID )
@@ -815,11 +858,15 @@ export async function emitSpatialStructureImposters(
 
         // IfcBuildingStorey.Elevation is measured from the BUILDING
         // datum, not from world zero, so a building placed at z=100
-        // drew its plates 100 units low. The placement chain's world Z
-        // is the datum-free answer; elevation is only the fallback for
-        // a storey with no usable placement. Storey HEIGHTS above stay
-        // on elevation deltas — those are datum-invariant.
-        const z0 = node.origin?.[ 2 ] ?? node.elevation ?? box.min[ 2 ]
+        // drew its plates 100 units low. Add the datum back rather than
+        // letting the storey's own placement Z replace elevation
+        // outright: the two agree under the ordinary authoring (the
+        // storey placement is offset from the building BY the
+        // elevation), but a file that parks every storey placement on
+        // the building datum and carries the height only in Elevation
+        // would then collapse all of its plates onto one Z. Storey
+        // HEIGHTS stay on elevation deltas — datum-invariant either way.
+        const z0 = storeyZ0 ?? node.origin?.[ 2 ] ?? box.min[ 2 ]
         const z1 = height !== void 0 ? z0 + height : box.max[ 2 ]
         box = {
           min: [box.min[ 0 ], box.min[ 1 ], Math.min( box.min[ 2 ], z0 )],
@@ -899,6 +946,46 @@ export async function emitSpatialStructureImposters(
 
 
 /**
+ * World Z of the datum an IfcBuildingStorey's `Elevation` is measured
+ * from — the nearest ancestor with a resolved placement, i.e. the
+ * IfcBuilding in a well-formed file.
+ *
+ * Zero when nothing up the chain resolved one, which reads Elevation as
+ * world-relative. That is the pre-fix behaviour and the only remaining
+ * fallback: a storey whose ancestors have no usable placement gives us
+ * nothing better to anchor on.
+ *
+ * @param localID The storey.
+ * @param nodes All walked nodes.
+ * @param parentOf Child -> parent.
+ * @return {number} The datum's world Z.
+ */
+function storeyDatumZ_(
+    localID: number,
+    nodes: Map< number, SpatialNode >,
+    parentOf: Map< number, number > ): number {
+
+  let id = parentOf.get( localID )
+
+  // Bounded rather than while-truthy: parentOf is built by a BFS and so
+  // should be acyclic, but this module treats the aggregate graph as
+  // untrusted everywhere else too (see `computing` in aabbOf).
+  for ( let hops = 0; id !== void 0 && hops <= nodes.size; ++hops ) {
+
+    const originZ = nodes.get( id )?.origin?.[ 2 ]
+
+    if ( originZ !== void 0 ) {
+      return originZ
+    }
+
+    id = parentOf.get( id )
+  }
+
+  return 0
+}
+
+
+/**
  * The durable coordination frame, derived the way the preview channels
  * derive theirs but anchored on the spatial root's centre instead of the
  * first extracted geometry's first point: identity placement + that
@@ -906,6 +993,18 @@ export async function emitSpatialStructureImposters(
  * quantized model-zero policy (no recentre inside
  * LARGE_COORDINATE_BUDGET_M, snap to COORDINATION_SNAP_M beyond) applies
  * unchanged. Used only when no preview instance latched a frame first.
+ *
+ * Best-effort by construction, and the failure has two shapes. Beyond
+ * LARGE_COORDINATE_BUDGET_M both sides snap to COORDINATION_SNAP_M and
+ * agree as long as the spatial root and the first geometry share a grid
+ * cell. Worse: the anchor comes from `placementOrigin_`, which sums
+ * IfcLocalPlacement translations and never looks at geometry — so a file
+ * that keeps identity placements and bakes absolute coordinates into the
+ * vertices (civil/GIS exports do this) has a root box near zero and gets
+ * no recentre at all, while the durable walk anchors tens of km out and
+ * does. That is a full site-offset, not a one-cell disagreement. Whenever
+ * the preview channel latched a frame we use it instead, precisely
+ * because it was derived from real geometry.
  *
  * @param roots Root spatial node local IDs.
  * @param nodes The walked spatial nodes.

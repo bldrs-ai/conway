@@ -34,6 +34,14 @@ interface SpatialFixture {
   storeyElevations: [number, number]
   /** XY offset of the second contained wall within each storey. */
   wallOffset: [number, number]
+  /**
+   * How each storey's own IfcLocalPlacement states its height. The
+   * default `'elevation'` offsets it from the building BY the elevation
+   * — ordinary authoring, where placement and Elevation agree. `'datum'`
+   * parks every storey on the building datum and leaves Elevation as the
+   * only record of the height, which some exporters do.
+   */
+  storeyPlacementZ?: 'elevation' | 'datum'
 }
 
 
@@ -85,10 +93,16 @@ function syntheticSpatialIfc( fixture: SpatialFixture ): Uint8Array {
 
   const storeys = fixture.storeyElevations.map( ( elevation, index ) => {
 
-    // The storey's own placement carries the same offset from the
-    // building datum that Elevation states — the ordinary authoring —
-    // so the two only disagree once the BUILDING is off world zero.
-    const storeyPlacement = placement( buildingPlacement, 0, 0, elevation )
+    // Under the default the storey's own placement carries the same
+    // offset from the building datum that Elevation states — the
+    // ordinary authoring — so the two only disagree once the BUILDING is
+    // off world zero. Under 'datum' the placement says nothing and
+    // Elevation is the only record of the height.
+    const storeyPlacement = placement(
+        buildingPlacement,
+        0,
+        0,
+        fixture.storeyPlacementZ === 'datum' ? 0 : elevation )
 
     return push(
         `IFCBUILDINGSTOREY('${guid( 10 + index )}',$,'L${index}',$,$,` +
@@ -104,12 +118,19 @@ function syntheticSpatialIfc( fixture: SpatialFixture ): Uint8Array {
 
     const storeyPlacement = storey - 1
 
+    // Whatever the storey placement does not say about the height, the
+    // contained walls have to say themselves — otherwise every storey's
+    // contents would pile up at the building datum, which is not a file
+    // any exporter produces.
+    const wallZ = fixture.storeyPlacementZ === 'datum' ?
+      fixture.storeyElevations[ index ] : 0
+
     const wallA = push(
         `IFCWALL('${guid( 30 + index * 2 )}',$,$,$,$,` +
-        `#${placement( storeyPlacement, 0, 0, 0 )},$,$,$)` )
+        `#${placement( storeyPlacement, 0, 0, wallZ )},$,$,$)` )
     const wallB = push(
         `IFCWALL('${guid( 31 + index * 2 )}',$,$,$,$,` +
-        `#${placement( storeyPlacement, ...fixture.wallOffset, 0 )},$,$,$)` )
+        `#${placement( storeyPlacement, ...fixture.wallOffset, wallZ )},$,$,$)` )
 
     push( `IFCRELCONTAINEDINSPATIALSTRUCTURE('${guid( 40 + index )}',$,$,$,` +
       `(#${wallA},#${wallB}),#${storey})` )
@@ -378,7 +399,7 @@ describe( 'emitSpatialStructureImposters coordination frame', () => {
     }
   } )
 
-  test( 'storey plates band on placement Z, not the building-relative elevation',
+  test( 'storey plates band on the building datum, not on bare elevation',
       async () => {
 
         // Building datum 100m above world zero: Elevation says 0 and
@@ -402,6 +423,29 @@ describe( 'emitSpatialStructureImposters coordination frame', () => {
         // Upper storey: no next elevation, so MIN_EDGE thick.
         expect( plates[ 1 ].aabb!.min[ 2 ] ).toBeCloseTo( 103.5, 6 )
         expect( plates[ 1 ].aabb!.max[ 2 ] ).toBeCloseTo( 104.5, 6 )
+      } )
+
+  test( 'storey plates keep their spacing when only Elevation states it',
+      async () => {
+
+        // Every storey placement parked on the building datum, so the
+        // placement chain reports the same Z for both and Elevation is
+        // the only thing that separates them. Reading placement Z
+        // INSTEAD of elevation stacks both plates on 100; reading it as
+        // the datum elevation is measured from keeps them apart.
+        const [payloads, model] = await emitForFixture( {
+          siteOrigin: [0, 0, 0],
+          buildingZ: 100,
+          storeyElevations: [0, 3.5],
+          wallOffset: [8, 6],
+          storeyPlacementZ: 'datum',
+        }, 1 )
+
+        const plates = storeyPlates( payloads, model )
+
+        expect( plates ).toHaveLength( 2 )
+        expect( plates[ 0 ].aabb!.min[ 2 ] ).toBeCloseTo( 100, 6 )
+        expect( plates[ 1 ].aabb!.min[ 2 ] ).toBeCloseTo( 103.5, 6 )
       } )
 
   test( 'nothing emits `solid`', async () => {
