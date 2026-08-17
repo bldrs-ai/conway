@@ -189,8 +189,8 @@ describe('AP214 pcurve basis surfaces (bldrs-ai/conway#505)', () => {
   // quarter turn about z, so the local frame has to be applied for the mapped
   // points to land: local +x is world +y here.
   //
-  // This also pins the cone's v convention, which is the arm reviews keep
-  // querying (bldrs-ai/conway#520): ISO 10303-42 measures v along the axis, so
+  // This also pins the cone's v convention, the point a review of this code
+  // queried (bldrs-ai/conway#520): ISO 10303-42 measures v along the axis, so
   // the far end is a ring of 10 + 20 tan(30 deg) = 21.547005 at an axial 20,
   // landing at (5, 18.547005, 70). Were v distance along the generator, the
   // same (0, 20) would give a ring of 10 + 20 sin(30 deg) = 20 at an axial

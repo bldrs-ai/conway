@@ -1907,10 +1907,10 @@ export class AP214GeometryExtraction {
    * carrying its equation under "Definition according to ISO/CD 10303-42" plus
    * "Entity adapted from <name> defined in ISO 10303-42".
    *
-   * The cone is the one worth stating explicitly, because it is the arm two
-   * reviews have queried (bldrs-ai/conway#520): its v is distance along the
-   * AXIS, so the radius grows by tan a per unit v - not distance along the
-   * generator, which would grow it by sin a. Two independent STEP readers
+   * The cone is the one worth stating explicitly, because it is the arm a
+   * review of this code read the other way (bldrs-ai/conway#520): its v is
+   * distance along the AXIS, so the radius grows by tan a per unit v - not
+   * distance along the generator, which would grow it by sin a. Two STEP readers
    * settle it the same way. Open CASCADE parameterizes its own
    * Geom_ConicalSurface along the generator, P(u,v) = O + (R + v sin a)(...)
    * + v cos a z, and therefore rescales v by 1/cos(a) coming in from STEP and
