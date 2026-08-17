@@ -51,6 +51,7 @@ import {
   FlattenedPointsResult,
 } from '../../dependencies/conway-geom'
 import { Uint32Sink } from '../step/parsing/uint32_sink'
+import { StepBufferNotResidentError } from '../step/step_buffer_provider'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { CanonicalProfile } from '../core/canonical_profile'
@@ -5924,25 +5925,49 @@ export class IfcGeometryExtraction {
       }
     }
 
-    const grid = this.gridByAxis(placementLocation.IntersectingAxes[0])
+    // The gridByAxis scan reads IfcGrid records, which are outside the
+    // forward-reference closure a windowed source pages for a product
+    // (the grid references the axes, not vice versa - see
+    // ensureResidentForProductExtract). A residency miss here must not
+    // fail the whole product: fall back to placing the intersection in
+    // the current frame, the same degraded state the no-grid arm gives,
+    // and strictly better than the pre-implementation
+    // rendered-at-origin. gridByAxis memoises only a COMPLETE scan, so a
+    // later product on a fully resident model rebuilds rather than
+    // trusting a partial index.
+    try {
 
-    if (grid === void 0) {
+      const grid = this.gridByAxis(placementLocation.IntersectingAxes[0])
 
-      // Axes belonging to no grid: the intersection is still a point, but
-      // there is no grid placement to measure it from, so it lands in
-      // whatever frame is current.
-      Logger.warning(
-          'IfcGridPlacement: no IfcGrid lists the axes of this placement.',
-          from.expressID)
+      if (grid === void 0) {
 
-    } else {
+        // Axes belonging to no grid: the intersection is still a point, but
+        // there is no grid placement to measure it from, so it lands in
+        // whatever frame is current.
+        Logger.warning(
+            'IfcGridPlacement: no IfcGrid lists the axes of this placement.',
+            from.expressID)
 
-      const gridPlacement = grid.ObjectPlacement
+      } else {
 
-      if (gridPlacement !== null) {
+        const gridPlacement = grid.ObjectPlacement
 
-        this.extractPlacement(gridPlacement, isRelVoid)
+        if (gridPlacement !== null) {
+
+          this.extractPlacement(gridPlacement, isRelVoid)
+        }
       }
+    } catch (error) {
+
+      if (!(error instanceof StepBufferNotResidentError)) {
+        throw error
+      }
+
+      Logger.warning(
+          'IfcGridPlacement: grid records are not resident on this ' +
+          'windowed source - placing at the grid intersection in the ' +
+          'current frame, without the grid\'s own placement.',
+          from.expressID)
     }
 
     const placementTransform = this.conwayModel.getAxis2Placement3D({

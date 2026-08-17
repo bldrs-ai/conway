@@ -7,6 +7,9 @@ import IfcStepParser from './ifc_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { ExtractResult } from '../core/shared_constants'
+import { StepBufferNotResidentError } from '../step/step_buffer_provider'
+import { IfcGrid } from './ifc4_gen'
+import IfcStepModel from './ifc_step_model'
 import Logger, { LogEntry, LogLevel } from '../logging/logger'
 
 
@@ -43,7 +46,9 @@ let extractResult: ExtractResult
  *
  * @return {Promise<ExtractResult>} The result of the extraction.
  */
-async function extractGridModel(): Promise<ExtractResult> {
+async function extractGridModel(
+    mutateModel?: (model: IfcStepModel) => void):
+    Promise<ExtractResult> {
 
   const parser = IfcStepParser.Instance
   const input = new ParsingBuffer(fs.readFileSync('data/grid_placement.ifc'))
@@ -63,6 +68,8 @@ async function extractGridModel(): Promise<ExtractResult> {
   if (model === void 0) {
     return ExtractResult.INCOMPLETE
   }
+
+  mutateModel?.(model)
 
   extraction = new IfcGeometryExtraction(conwayGeometry, model)
 
@@ -201,4 +208,64 @@ describe('IfcGridPlacement extraction', () => {
     // still warns would mean the implementation had not been reached.
     expect(warningStartingWith('IfcGridPlacement: unimplemented')).toBeUndefined()
   })
+})
+
+describe('IfcGridPlacement on a windowed source', () => {
+
+  test('non-resident grid records degrade to the intersection, not a dropped product',
+      async () => {
+
+        // A store-backed model pages a product's forward-reference closure,
+        // which reaches the axes but never the IfcGrid that back-references
+        // them — so the gridByAxis scan is the one read here that can throw
+        // StepBufferNotResidentError. Simulate exactly that read failing.
+        const threshold = Logger.getLogLevel()
+
+        Logger.setLogLevel(LogLevel.OFF)
+
+        let result: ExtractResult
+
+        try {
+
+          result = await extractGridModel((model) => {
+
+            const originalTypes = model.types.bind(model)
+
+            model.types = ((...requested: Parameters<typeof originalTypes>) => {
+
+              if (requested.length === 1 && requested[0] === IfcGrid) {
+                throw new StepBufferNotResidentError(0, 0)
+              }
+
+              return originalTypes(...requested)
+            }) as typeof model.types
+          })
+
+        } finally {
+
+          Logger.setLogLevel(threshold)
+        }
+
+        // The product survives - dropping it entirely would be strictly worse
+        // than the pre-implementation rendered-at-origin state.
+        expect(result).toBe(ExtractResult.COMPLETE)
+
+        const transform = placementTransform(PLACEMENT_A)
+
+        expect(transform).toBeDefined()
+
+        const values = transform!.absoluteTransform
+
+        // The grid-frame intersection with its offsets, WITHOUT the grid's
+        // own placement composed on: the degraded-but-warned state.
+        expect(values[TRANSLATION]).toBeCloseTo(-3)
+        expect(values[TRANSLATION + 1]).toBeCloseTo(2)
+        expect(values[TRANSLATION + 2]).toBeCloseTo(4)
+
+        const warning =
+          warningStartingWith('IfcGridPlacement: grid records are not resident')
+
+        expect(warning).toBeDefined()
+        expect(warning!.expressIDs.has(String(PLACEMENT_A))).toBe(true)
+      })
 })
