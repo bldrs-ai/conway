@@ -130,6 +130,9 @@ const TRANSLATION = [12, 13, 14] as const
 /** Column-major index of the local +Z axis' world Z component. */
 const LOCAL_Z_WORLD_Z = 10
 
+/** Cross-product magnitude below which two unit axes are parallel. */
+const MIN_AXIS_CROSS = 1e-9
+
 
 const SPACE_TYPES = new Set< number >( [
   EntityTypesIfc.IFCSPACE,
@@ -370,9 +373,52 @@ async function directionRatios_(
 
 
 /**
- * The 4x4 an IfcAxis2Placement3D denotes: Location as the translation,
- * Axis as local +Z and RefDirection as local +X, both defaulting to the
- * world axes when absent per the IFC defaults.
+ * The local +X reference to use when a placement states an `Axis` but no
+ * `RefDirection`: world +X, unless that is (nearly) parallel to the
+ * stated axis, in which case world +Y.
+ *
+ * IFC's own `IfcFirstProjAxis` makes exactly this substitution, and
+ * without it a lie-down placement — `Axis = (1,0,0)`, RefDirection
+ * omitted, which is how a wall-mounted or rotated-into-plan element is
+ * commonly written — has its Axis cross the defaulted (1,0,0) to zero
+ * and falls all the way back to the world frame, discarding a perfectly
+ * well-formed rotation. conway-geom divides by that zero cross product
+ * and returns NaN, so matching the C++ settles nothing here; keeping the
+ * stated Axis is strictly better than dropping it.
+ *
+ * @param zAxis The normalized local +Z.
+ * @return {[number, number, number]} A reference not parallel to it.
+ */
+function defaultRefDirection_(
+    zAxis: [number, number, number] ): [number, number, number] {
+
+  // |cross(zAxis, worldX)| — world +X stays the default (which is what
+  // the IFC default says, and what the overwhelmingly common
+  // zAxis = (0,0,1) needs) until it degenerates.
+  return Math.hypot( zAxis[ 1 ], zAxis[ 2 ] ) > MIN_AXIS_CROSS ?
+    [1, 0, 0] : [0, 1, 0]
+}
+
+
+/**
+ * The 4x4 an IfcAxis2Placement denotes: Location as the translation,
+ * and — on the 3D form only — Axis as local +Z and RefDirection as local
+ * +X, both defaulting to the world axes when absent per the IFC
+ * defaults.
+ *
+ * The 2D form has to be handled, not assumed away.
+ * `IfcLocalPlacement.RelativePlacement` is
+ * `IfcAxis2Placement2D | IfcAxis2Placement3D`, and the two disagree on
+ * every field past Location: offset 1 is `Axis` on the 3D entity but
+ * `RefDirection` on the 2D one, and offset 2 does not exist there at
+ * all, so reading it throws "too few fields in record". That throw would
+ * escape to {@link placementTransform_}'s catch, which memoizes
+ * `undefined` for the placement — and a memoized undefined is not merely
+ * a lost sample: every descendant placement then takes the
+ * no-parent branch and is composed in LOCAL coordinates, silently
+ * reparenting a whole subtree to the origin. So the direction fields are
+ * read only once the type is confirmed 3D, which also restores the
+ * pre-#517 behaviour for 2D links (translation only).
  *
  * Deliberately the same construction as conway-geom's
  * `GetAxis2Placement3D` (ConwayGeometryProcessor.cpp) — normalize the
@@ -424,21 +470,28 @@ async function axisPlacementMatrix_(
     }
   }
 
-  const axisRatios =
-    await directionRatios_( model, placement, PLACEMENT_AXIS )
-  const refRatios =
-    await directionRatios_( model, placement, PLACEMENT_REF_DIRECTION )
+  const is3D =
+    model.typeIDOf( axisLocalID ) === EntityTypesIfc.IFCAXIS2PLACEMENT3D
+
+  const axisRatios = is3D ?
+    await directionRatios_( model, placement, PLACEMENT_AXIS ) : void 0
+  const refRatios = is3D ?
+    await directionRatios_( model, placement, PLACEMENT_REF_DIRECTION ) : void 0
 
   let zAxis: [number, number, number] =
     ( axisRatios !== void 0 ? normalize3_( axisRatios ) : void 0 ) ?? [0, 0, 1]
   let refAxis: [number, number, number] =
-    ( refRatios !== void 0 ? normalize3_( refRatios ) : void 0 ) ?? [1, 0, 0]
+    ( refRatios !== void 0 ? normalize3_( refRatios ) : void 0 ) ??
+      defaultRefDirection_( zAxis )
 
   let yAxis = normalize3_( cross3_( zAxis, refAxis ) )
 
   if ( yAxis === void 0 ) {
-    // Axis and RefDirection parallel (or garbage): no frame is derivable
-    // from them, so keep the translation and drop back to world axes.
+    // Axis and RefDirection are parallel (or garbage): nothing here
+    // determines a frame, so keep the translation and drop back to world
+    // axes. Only reachable with an explicit RefDirection now — an Axis
+    // on its own gets a perpendicular default instead of being thrown
+    // away with it (see defaultRefDirection_).
     zAxis = [0, 0, 1]
     refAxis = [1, 0, 0]
     yAxis = [0, 1, 0]

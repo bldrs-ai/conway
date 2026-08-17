@@ -51,7 +51,26 @@ interface SpatialFixture {
    * fixture leaves the third column at the identity and cannot see that.
    */
   siteRotation?: { axis: 'x' | 'z', degrees: number }
+  /**
+   * Raw `[Axis, RefDirection]` on the site placement, overriding
+   * `siteRotation`; either slot may be omitted to write `$`. Lets a
+   * fixture state an Axis with no RefDirection, which is how a
+   * lie-down placement is commonly authored.
+   */
+  siteAxes?: PlacementAxes
+  /**
+   * Write the site's RelativePlacement as an IfcAxis2Placement**2D**.
+   * `IfcLocalPlacement.RelativePlacement` admits both forms and the two
+   * disagree on every field past Location, so a walk that reads the 3D
+   * direction fields unconditionally throws on this file.
+   */
+  sitePlacement2D?: boolean
 }
+
+
+/** `[Axis (local +Z), RefDirection (local +X)]`, either one omittable. */
+type PlacementAxes =
+  [[number, number, number] | undefined, [number, number, number] | undefined]
 
 
 /**
@@ -59,11 +78,11 @@ interface SpatialFixture {
  * `[Axis (local +Z), RefDirection (local +X)]`.
  *
  * @param rotation The fixture's rotation knob.
- * @return {[[number, number, number], [number, number, number]] | undefined}
- * The two direction ratios, or undefined for no rotation.
+ * @return {PlacementAxes | undefined} The two direction ratios, or
+ * undefined for no rotation.
  */
-function rotationAxes( rotation: SpatialFixture['siteRotation'] ):
-  [[number, number, number], [number, number, number]] | undefined {
+function rotationAxes(
+    rotation: SpatialFixture['siteRotation'] ): PlacementAxes | undefined {
 
   if ( rotation === void 0 ) {
     return
@@ -140,25 +159,37 @@ function syntheticSpatialIfc( fixture: SpatialFixture ): Uint8Array {
   const direction = ( ratios: [number, number, number] ): number =>
     push( `IFCDIRECTION((${ratios.map( ( r ) => r.toFixed( 12 ) ).join( ',' )}))` )
 
+  const ref = ( ratios: [number, number, number] | undefined ): string =>
+    ratios !== void 0 ? `#${direction( ratios )}` : '$'
+
   const placement = (
       relTo: number | undefined,
       x: number,
       y: number,
       z: number,
-      axes?: [[number, number, number], [number, number, number]] ): number => {
+      axes?: PlacementAxes,
+      twoDimensional: boolean = false ): number => {
 
-    const point = push( `IFCCARTESIANPOINT((${num( x )},${num( y )},${num( z )}))` )
-    const axisRef = axes !== void 0 ? `#${direction( axes[ 0 ] )}` : '$'
-    const refDirection = axes !== void 0 ? `#${direction( axes[ 1 ] )}` : '$'
-    const axis =
-      push( `IFCAXIS2PLACEMENT3D(#${point},${axisRef},${refDirection})` )
+    // A 2D placement's Location is a 2D point, and its only direction
+    // field is RefDirection — there is no Axis to state.
+    const point = twoDimensional ?
+      push( `IFCCARTESIANPOINT((${num( x )},${num( y )}))` ) :
+      push( `IFCCARTESIANPOINT((${num( x )},${num( y )},${num( z )}))` )
+
+    const axis = twoDimensional ?
+      push( `IFCAXIS2PLACEMENT2D(#${point},$)` ) :
+      push( `IFCAXIS2PLACEMENT3D(#${point},` +
+        `${ref( axes?.[ 0 ] )},${ref( axes?.[ 1 ] )})` )
 
     return push(
         `IFCLOCALPLACEMENT(${relTo === void 0 ? '$' : `#${relTo}`},#${axis})` )
   }
 
   const sitePlacement = placement(
-      void 0, ...fixture.siteOrigin, rotationAxes( fixture.siteRotation ) )
+      void 0,
+      ...fixture.siteOrigin,
+      fixture.siteAxes ?? rotationAxes( fixture.siteRotation ),
+      fixture.sitePlacement2D === true )
   const buildingPlacement = placement( sitePlacement, 0, 0, fixture.buildingZ )
 
   const project = push( `IFCPROJECT('${guid( 1 )}',$,'P',$,$,$,$,$,$)` )
@@ -612,6 +643,68 @@ describe( 'emitSpatialStructureImposters coordination frame', () => {
           expect( plates[ 0 ].aabb!.min[ 2 ] ).not.toBeCloseTo( 100, 3 )
           expect( plates[ 1 ].aabb!.min[ 2 ] ).not.toBeCloseTo( 103.5, 3 )
         } )
+
+    test( 'an Axis with no RefDirection still yields a frame', async () => {
+
+      // Axis = world +X with RefDirection omitted: the IFC default
+      // RefDirection (1,0,0) is parallel to it, so a naive build finds a
+      // zero cross product. Falling all the way back to world axes there
+      // discards a perfectly good rotation; IFC's IfcFirstProjAxis
+      // substitutes a perpendicular reference instead, which sends local
+      // (a,b,c) to world (c,a,b).
+      const [payloads, model] = await emitForFixture( {
+        siteOrigin: [0, 0, 0],
+        buildingZ: 0,
+        storeyElevations: [0, 3.5],
+        wallOffset: [8, 6],
+        siteAxes: [[1, 0, 0], void 0],
+      }, 1 )
+
+      const plates = storeyPlates( payloads, model )
+
+      expect( plates ).toHaveLength( 2 )
+
+      // Lower storey's walls: local (0,0,0) and (8,6,0) -> (0,0,0) and
+      // (0,8,6). X collapses, so the plate is MIN_EDGE thick about
+      // zero there; the identity fallback would have spanned 0..8.
+      const plate = plates[ 0 ].aabb!
+
+      expect( ( plate.min[ 0 ] + plate.max[ 0 ] ) * 0.5 ).toBeCloseTo( 0, 6 )
+      expect( plate.max[ 0 ] - plate.min[ 0 ] ).toBeCloseTo( 1, 6 )
+      expect( plate.max[ 1 ] ).toBeCloseTo( 8, 6 )
+      expect( plate.max[ 2 ] ).toBeCloseTo( 6, 6 )
+    } )
+
+    test( 'a 2D relative placement does not break the chain', async () => {
+
+      // IfcLocalPlacement.RelativePlacement admits IfcAxis2Placement2D,
+      // whose field 1 is RefDirection (not Axis) and which has no field
+      // 2 at all. Reading the 3D direction fields unconditionally throws
+      // "too few fields in record"; that throw memoizes an undefined
+      // placement, and every DESCENDANT then composes in local
+      // coordinates — the site translation below silently disappears.
+      const [payloads, model] = await emitForFixture( {
+        siteOrigin: [10, 20, 0],
+        buildingZ: 100,
+        storeyElevations: [0, 3.5],
+        wallOffset: [8, 6],
+        sitePlacement2D: true,
+      }, 1 )
+
+      const plates = storeyPlates( payloads, model )
+
+      expect( plates ).toHaveLength( 2 )
+
+      // The site's XY still reaches the storeys...
+      expect( plates[ 0 ].aabb!.min[ 0 ] ).toBeCloseTo( 10, 6 )
+      expect( plates[ 0 ].aabb!.max[ 0 ] ).toBeCloseTo( 18, 6 )
+      expect( plates[ 0 ].aabb!.min[ 1 ] ).toBeCloseTo( 20, 6 )
+      expect( plates[ 0 ].aabb!.max[ 1 ] ).toBeCloseTo( 26, 6 )
+
+      // ...and so does the building datum the elevations band on.
+      expect( plates[ 0 ].aabb!.min[ 2 ] ).toBeCloseTo( 100, 6 )
+      expect( plates[ 1 ].aabb!.min[ 2 ] ).toBeCloseTo( 103.5, 6 )
+    } )
   } )
 
   test( 'nothing emits `solid`', async () => {
