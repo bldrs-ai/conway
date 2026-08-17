@@ -29,9 +29,9 @@ export  class b_spline_surface extends bounded_surface {
   private v_degree_? : number
   private control_points_list_? : Array<Array<cartesian_point>>
   private surface_form_? : b_spline_surface_form
-  private u_closed_? : boolean
-  private v_closed_? : boolean
-  private self_intersect_? : boolean
+  private u_closed_? : boolean | null
+  private v_closed_? : boolean | null
+  private self_intersect_? : boolean | null
 
   public get u_degree() : number {
     if ( this.u_degree_ === void 0 ) {
@@ -100,28 +100,28 @@ export  class b_spline_surface extends bounded_surface {
     return this.surface_form_ as b_spline_surface_form
   }
 
-  public get u_closed() : boolean {
+  public get u_closed() : boolean | null {
     if ( this.u_closed_ === void 0 ) {
-      this.u_closed_ = this.extractBoolean( 5, 1, 4, false )
+      this.u_closed_ = this.extractLogical( 5, 1, 4, false )
     }
 
-    return this.u_closed_ as boolean
+    return this.u_closed_ as boolean | null
   }
 
-  public get v_closed() : boolean {
+  public get v_closed() : boolean | null {
     if ( this.v_closed_ === void 0 ) {
-      this.v_closed_ = this.extractBoolean( 6, 1, 4, false )
+      this.v_closed_ = this.extractLogical( 6, 1, 4, false )
     }
 
-    return this.v_closed_ as boolean
+    return this.v_closed_ as boolean | null
   }
 
-  public get self_intersect() : boolean {
+  public get self_intersect() : boolean | null {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 7, 1, 4, false )
+      this.self_intersect_ = this.extractLogical( 7, 1, 4, false )
     }
 
-    return this.self_intersect_ as boolean
+    return this.self_intersect_ as boolean | null
   }
 
   public get u_upper() : number {

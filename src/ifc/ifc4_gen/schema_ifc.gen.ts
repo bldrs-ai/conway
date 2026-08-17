@@ -29376,7 +29376,7 @@ let descriptions : EntityDescription< EntityTypesIfc >[] = [
       },
       ImpliedOrder: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 8,
       },
@@ -34371,7 +34371,7 @@ let descriptions : EntityDescription< EntityTypesIfc >[] = [
     fields: {
       Value: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 0,
       },

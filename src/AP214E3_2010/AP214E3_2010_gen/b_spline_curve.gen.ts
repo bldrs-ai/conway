@@ -28,8 +28,8 @@ export  class b_spline_curve extends bounded_curve {
   private degree_? : number
   private control_points_list_? : Array<cartesian_point>
   private curve_form_? : b_spline_curve_form
-  private closed_curve_? : boolean
-  private self_intersect_? : boolean
+  private closed_curve_? : boolean | null
+  private self_intersect_? : boolean | null
 
   public get degree() : number {
     if ( this.degree_ === void 0 ) {
@@ -80,20 +80,20 @@ export  class b_spline_curve extends bounded_curve {
     return this.curve_form_ as b_spline_curve_form
   }
 
-  public get closed_curve() : boolean {
+  public get closed_curve() : boolean | null {
     if ( this.closed_curve_ === void 0 ) {
-      this.closed_curve_ = this.extractBoolean( 4, 1, 4, false )
+      this.closed_curve_ = this.extractLogical( 4, 1, 4, false )
     }
 
-    return this.closed_curve_ as boolean
+    return this.closed_curve_ as boolean | null
   }
 
-  public get self_intersect() : boolean {
+  public get self_intersect() : boolean | null {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 5, 1, 4, false )
+      this.self_intersect_ = this.extractLogical( 5, 1, 4, false )
     }
 
-    return this.self_intersect_ as boolean
+    return this.self_intersect_ as boolean | null
   }
 
   public get upper_index_on_control_points() : number {

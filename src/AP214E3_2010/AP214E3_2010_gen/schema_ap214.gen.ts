@@ -5421,7 +5421,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       product_definitional: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 3,
       },
@@ -10840,13 +10840,13 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       closed_curve: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 4,
       },
       self_intersect: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 5,
       },
@@ -10979,19 +10979,19 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       u_closed: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 5,
       },
       v_closed: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 6,
       },
       self_intersect: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 7,
       },
@@ -11831,7 +11831,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       self_intersect: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 2,
       },
@@ -11842,7 +11842,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       closed_curve: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: true,
       },
     },
@@ -14269,7 +14269,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       self_intersect: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 3,
       },
@@ -14296,7 +14296,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       self_intersect: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 3,
       },
@@ -20945,7 +20945,7 @@ let descriptions : EntityDescription< EntityTypesAP214 >[] = [
       },
       self_intersect: {
         kind: f.BOOLEAN,
-        optional: false,
+        optional: true,
         derived: false,
         offset: 3,
       },

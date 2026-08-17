@@ -22,7 +22,7 @@ export  class composite_curve extends bounded_curve {
     return EntityTypesAP214.COMPOSITE_CURVE
   }
   private segments_? : Array<composite_curve_segment>
-  private self_intersect_? : boolean
+  private self_intersect_? : boolean | null
 
   public get segments() : Array<composite_curve_segment> {
     if ( this.segments_ === void 0 ) {
@@ -57,12 +57,12 @@ export  class composite_curve extends bounded_curve {
     return this.segments_ as Array<composite_curve_segment>
   }
 
-  public get self_intersect() : boolean {
+  public get self_intersect() : boolean | null {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 2, 1, 4, false )
+      this.self_intersect_ = this.extractLogical( 2, 1, 4, false )
     }
 
-    return this.self_intersect_ as boolean
+    return this.self_intersect_ as boolean | null
   }
 
   public get n_segments() : number {

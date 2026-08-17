@@ -14,14 +14,14 @@ export class IfcLogical extends StepEntityBase< EntityTypesIfc > {
     return EntityTypesIfc.IFCLOGICAL
   }
 
-  private Value_? : boolean;
+  private Value_? : boolean | null;
 
-  public get Value() : boolean {
+  public get Value() : boolean | null {
     if ( this.Value_ === void 0 ) {
-      this.Value_ = this.extractBoolean( 0, 0, 0, false )
+      this.Value_ = this.extractLogical( 0, 0, 0, false )
     }
 
-    return this.Value_ as boolean
+    return this.Value_ as boolean | null
   }
 
   constructor(

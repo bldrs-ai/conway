@@ -346,22 +346,20 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
+   * Unlike the other extractors this has a single signature rather than an
+   * optional/non-optional overload pair, because LOGICAL is three-valued:
+   * `.U.` is a legitimate value that reads as null, so a non-optional LOGICAL
+   * is null-valued too and `optional` only decides whether a *missing* value
+   * throws. The old `optional: false` overload promised a bare `boolean` and
+   * was a lie for exactly the `.U.` case this extractor exists to handle.
+   *
    * @param offset The offset in the vtable to extract from
    * @param baseOffset The base offset in the vtable to extract from
    * @param depth The depth of the vtable to extract from
    * @param optional Is this an optional field?
-   * @return {boolean | null} The extracted logical or null for optionals.
+   * @return {boolean | null} The extracted logical, or null for `.U.` and for
+   * an absent optional.
    */
-  public extractLogical(
-    offset: number,
-    baseOffset: number,
-    depth: number,
-    optional: true): boolean | null
-  public extractLogical(
-    offset: number,
-    baseOffset: number,
-    depth: number,
-    optional: false): boolean
   public extractLogical(
     offset: number,
     baseOffset: number,

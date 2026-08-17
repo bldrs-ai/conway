@@ -17,7 +17,7 @@ export  class offset_curve_3d extends curve {
   }
   private basis_curve_? : curve
   private distance_? : number
-  private self_intersect_? : boolean
+  private self_intersect_? : boolean | null
   private ref_direction_? : direction
 
   public get basis_curve() : curve {
@@ -36,12 +36,12 @@ export  class offset_curve_3d extends curve {
     return this.distance_ as number
   }
 
-  public get self_intersect() : boolean {
+  public get self_intersect() : boolean | null {
     if ( this.self_intersect_ === void 0 ) {
-      this.self_intersect_ = this.extractBoolean( 3, 1, 3, false )
+      this.self_intersect_ = this.extractLogical( 3, 1, 3, false )
     }
 
-    return this.self_intersect_ as boolean
+    return this.self_intersect_ as boolean | null
   }
 
   public get ref_direction() : direction {
