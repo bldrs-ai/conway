@@ -8,6 +8,7 @@ import {
   IfcProduct,
   IfcProject,
   IfcRelAggregates,
+  IfcUnitAssignment,
 } from '../../ifc/ifc4_gen'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { cursorIterator } from '../../indexing/cursor_utilities'
@@ -509,14 +510,23 @@ export class StorePreviewChannel {
 
       // Cheap prefix-sum reads, so this is affordable per generation.
       // No storeys or no aggregate chain means the walk would emit
-      // nothing but still pay for the type scans. IfcProject is in the
-      // guard for a different reason: `extractLinearScalingFactor`
-      // returns with the factor still at 1 when the model holds no
-      // project (it only logs), and a silent 1 on a millimetre model
-      // scales the whole skeleton 1000x — the conway#515 symptom. A
-      // prefix that reached the storeys but not the project is unusual,
-      // not impossible, and the read costs one prefix sum.
+      // nothing but still pay for the type scans. IfcProject and
+      // IfcUnitAssignment are in the guard for a different reason:
+      // `extractLinearScalingFactor` returns with the factor still at 1
+      // when it cannot resolve the project's UnitsInContext (it only
+      // logs), and a silent 1 on a millimetre model scales the whole
+      // skeleton 1000x — the conway#515 symptom. The project alone is
+      // not enough: a valid file may forward-reference its
+      // IfcUnitAssignment, so a prefix can hold the project while the
+      // units record is still ahead of the parse cursor, and because a
+      // successful walk latches `earlyPlatesEmitted_`, mis-scaled early
+      // plates would stand until the frame-improvement re-emit or the
+      // post-parse refresh (Codex review on #519). The guard therefore
+      // defers plates until the units record is indexed; a file with
+      // genuinely no unit assignment never emits EARLY plates and is
+      // covered by the end-of-parse walk instead.
       if ( model.typeCount( IfcProject ) < 1 ||
+          model.typeCount( IfcUnitAssignment ) < 1 ||
           model.typeCount( IfcBuildingStorey ) < 1 ||
           model.typeCount( IfcRelAggregates ) < 1 ) {
         return
