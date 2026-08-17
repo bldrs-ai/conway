@@ -57,7 +57,7 @@ import {
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
 import Logger from '../logging/logger'
-import { arrayToWasmHeap } from '../core/wasm_heap'
+import { arrayToWasmHeap, wasmHeapView } from '../core/wasm_heap'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -125,7 +125,6 @@ import {
   rational_b_spline_surface,
   representation_item,
   representation_relationship_with_transformation,
-  seam_curve,
   shape_definition_representation,
   shape_representation,
   shape_representation_relationship,
@@ -161,6 +160,29 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 // Fewest points a bound can have and still span a plane, which is what
 // GetBasisFromCoplanarPoints needs downstream.
 const MINIMUM_BOUND_POINTS = 3
+
+// Ceiling on how finely one span of a pcurve's parameter curve is sampled
+// when it is pushed through an angular surface parameterization. Nothing in
+// STEP bounds how far a parameter curve may run in u or v - a helix wound a
+// thousand times is a legal (if unusual) parameter-space line - and without a
+// cap the sample count is a function of file content rather than of the
+// extractor. At circleSegments density this is over twenty full turns of a
+// single span - well past the point where the polyline is the limiting
+// factor on any face it bounds.
+const MAXIMUM_PCURVE_SPAN_SAMPLES = 256
+
+/**
+ * How a basis surface turns a point in its own parameter space into a point
+ * in its placement's local frame, plus which of (u, v) are angles - the
+ * latter is what decides how finely a mapped span has to be sampled, since a
+ * straight run in an angular parameter is an arc in space.
+ */
+interface SurfaceParameterization {
+  position: axis2_placement_3d
+  evaluate: ( u: number, v: number ) => Vector3
+  angularU: boolean
+  angularV: boolean
+}
 
 /**
  * Whether an edge's vertices are the basis curve's own endpoints, making its
@@ -960,7 +982,7 @@ export class AP214GeometryExtraction {
    * @param array
    * @return {number} Pointer/memory address
    */
-  arrayToWasmHeap(array:Float32Array | Uint32Array): any {
+  arrayToWasmHeap(array:Float32Array | Float64Array | Uint32Array): any {
     return arrayToWasmHeap(this.wasmModule, array)
   }
 
@@ -1777,11 +1799,18 @@ export class AP214GeometryExtraction {
 
     } else if ( from instanceof pcurve ) {
 
-      const seamCurve = from.findVariant( seam_curve )
+      // An explicit 3D representation beats the parameter-space mapping where
+      // one is carried, as it already does for surface_curve and seam_curve
+      // reached in their own right. surface_curve rather than seam_curve:
+      // seam_curve and intersection_curve are both its subtypes and all three
+      // carry curve_3d, so this is the same preference over the whole family
+      // (bldrs-ai/conway#505).
+      const surfaceCurve = from.findVariant( surface_curve )
 
-      if ( seamCurve !== void 0 ) {
+      if ( surfaceCurve !== void 0 ) {
 
-        stepCurve = this.extractCurve( seamCurve.curve_3d, parentSense, isEdge, trimmingArguments )
+        stepCurve =
+          this.extractCurve( surfaceCurve.curve_3d, parentSense, isEdge, trimmingArguments )
 
       } else {
 
@@ -1859,54 +1888,311 @@ export class AP214GeometryExtraction {
   }  
 
   /**
+   * The ISO 10303-42 parameterization of an elementary basis surface,
+   * expressed in that surface's placement-local frame. Writing C for the
+   * placement's origin, x/y/z for its axes, R (and r) for the radii and a for
+   * conical_surface.semi_angle, the standard's forms are
    *
-   * @param from
-   * @return {CurveObject | undefined}
+   *   plane        s(u,v) = C + u x + v y
+   *   cylindrical  s(u,v) = C + R((cos u) x + (sin u) y) + v z
+   *   conical      s(u,v) = C + (R + v tan a)((cos u) x + (sin u) y) + v z
+   *   spherical    s(u,v) = C + R cos v ((cos u) x + (sin u) y) + R sin v z
+   *   toroidal     s(u,v) = C + (R + r cos v)((cos u) x + (sin u) y)
+   *                           + r sin v z
+   *
+   * Note v on a sphere is a LATITUDE in [-90, 90] degrees, not a polar angle,
+   * and v on a torus runs around the tube. Those four are quoted here from the
+   * entities IFC adopted verbatim from this part - IfcPlane,
+   * IfcCylindricalSurface, IfcSphericalSurface and IfcToroidalSurface, each
+   * carrying its equation under "Definition according to ISO/CD 10303-42" plus
+   * "Entity adapted from <name> defined in ISO 10303-42".
+   *
+   * The cone is the one worth stating explicitly, because it is the arm a
+   * review of this code read the other way (bldrs-ai/conway#520): its v is
+   * distance along the AXIS, so the radius grows by tan a per unit v - not
+   * distance along the generator, which would grow it by sin a. Two STEP readers
+   * settle it the same way. Open CASCADE parameterizes its own
+   * Geom_ConicalSurface along the generator, P(u,v) = O + (R + v sin a)(...)
+   * + v cos a z, and therefore rescales v by 1/cos(a) coming in from STEP and
+   * by cos(a) going back out - GeomConvert_Units::DegreeToRadian and
+   * ::RadianToDegree, which is exactly the path its STEP reader pushes pcurves
+   * through (StepToTopoDS_TranslateEdge::MakePCurve). truck's STEP reader
+   * builds the cone by revolving the line (R,0,0) + t (tan a, 0, 1), which is
+   * the form above with t = v.
+   *
+   * conway-geom tessellates the same surfaces by inverting these formulae:
+   * TriangulateCylindricalSurface, TriangulateSphericalSurface,
+   * TriangulateConicalSurface and TriangulateToroidalSurface (conway-geom
+   * `conway_geometry/operations/mesh_utils.h`) recover (theta, height) or
+   * (theta, latitude) from world points, so a pcurve mapped here lands on the
+   * same surface the face it bounds is triangulated on. It differs in one
+   * deliberate way, on the cone's sign - see that arm.
+   *
+   * Angular parameters are radians taken straight from the file. Conway
+   * applies no plane-angle unit conversion anywhere on the STEP path -
+   * conical_surface.semi_angle reaches conway-geom raw in
+   * extractConicalSurface - so a degree-unit export is wrong here in exactly
+   * the same way, and consistently so.
+   *
+   * @param from The basis surface.
+   * @return {SurfaceParameterization | undefined} The parameterization, or
+   * undefined for a surface that has none here (b-spline and swept surfaces).
+   */
+  private surfaceParameterization(
+      from: surface ): SurfaceParameterization | undefined {
+
+    if ( from instanceof plane ) {
+
+      // The one non-angular case: (u, v) are distances along the placement's
+      // x and y axes.
+      return {
+        position: from.position,
+        evaluate: ( u: number, v: number ) => ( { x: u, y: v, z: 0 } ),
+        angularU: false,
+        angularV: false,
+      }
+    }
+
+    if ( from instanceof cylindrical_surface ) {
+
+      const radius = from.radius
+
+      return {
+        position: from.position,
+        evaluate: ( u: number, v: number ) =>
+          ( { x: radius * Math.cos( u ), y: radius * Math.sin( u ), z: v } ),
+        angularU: true,
+        angularV: false,
+      }
+    }
+
+    if ( from instanceof conical_surface ) {
+
+      const radius = from.radius
+
+      // tan, not sin, because v is axial distance rather than distance along
+      // the generator - see the equations in this method's doc comment.
+      //
+      // Signed, unlike the native tesselator's tan(fabs(semi_angle)): that
+      // one fits its generator line from boundary samples and only needs the
+      // taper's magnitude, whereas the 2D curve here was authored against the
+      // spec's parameterization, where the radius grows with v by the SIGNED
+      // taper and a narrowing cone runs the other way.
+      const taper = Math.tan( from.semi_angle )
+
+      return {
+        position: from.position,
+        evaluate: ( u: number, v: number ) => {
+
+          const ring = radius + ( v * taper )
+
+          return { x: ring * Math.cos( u ), y: ring * Math.sin( u ), z: v }
+        },
+        angularU: true,
+        angularV: false,
+      }
+    }
+
+    if ( from instanceof spherical_surface ) {
+
+      const radius = from.radius
+
+      return {
+        position: from.position,
+        evaluate: ( u: number, v: number ) => {
+
+          const ring = radius * Math.cos( v )
+
+          return {
+            x: ring * Math.cos( u ),
+            y: ring * Math.sin( u ),
+            z: radius * Math.sin( v ),
+          }
+        },
+        angularU: true,
+        angularV: true,
+      }
+    }
+
+    // Covers degenerate_toroidal_surface, which is a subtype and shares the
+    // parameterization (it only restricts the range v is meaningful over).
+    if ( from instanceof toroidal_surface ) {
+
+      const majorRadius = from.major_radius
+      const minorRadius = from.minor_radius
+
+      return {
+        position: from.position,
+        evaluate: ( u: number, v: number ) => {
+
+          const ring = majorRadius + ( minorRadius * Math.cos( v ) )
+
+          return {
+            x: ring * Math.cos( u ),
+            y: ring * Math.sin( u ),
+            z: minorRadius * Math.sin( v ),
+          }
+        },
+        angularU: true,
+        angularV: true,
+      }
+    }
+
+    return void 0
+  }
+
+  /**
+   * Extract a pcurve: a curve given in the parameter space of a basis surface
+   * (ISO 10303-42). The parameter curve is extracted through the ordinary
+   * curve path and its (u, v) samples are pushed through the basis surface's
+   * parameterization, giving the 3D polyline every other arm of extractCurve
+   * hands back.
+   *
+   * Extent comes from the parameter curve itself: a bounded one (polyline,
+   * b-spline, trimmed or composite curve) carries its own, and an unbounded
+   * 2D LINE or CIRCLE gets whatever the ordinary line/circle extraction gives
+   * it. An EDGE_CURVE's vertex trims are 3D and are deliberately NOT inverted
+   * back into parameter space here, so an edge whose parameter curve is an
+   * unbounded LINE comes out at that line's own extent rather than the edge's
+   * - see https://github.com/bldrs-ai/conway/issues/505.
+   *
+   * @param from The pcurve to extract.
+   * @return {CurveObject | undefined} The mapped 3D curve, or undefined where
+   * the basis surface has no parameterization here or the parameter curve
+   * yields no points. Both are warned about naming the type responsible, so
+   * the residue is measurable per surface family rather than as one row.
    */
   extractPScurve1( from: pcurve ): CurveObject | undefined {
 
-    const surface = from.basis_surface
+    const basisSurface = from.basis_surface
 
-    if ( !( surface instanceof plane ) ) {
-      Logger.error( 'PSCurve not a plane, other curves unsupported')
+    const parameterization = this.surfaceParameterization( basisSurface )
+
+    if ( parameterization === void 0 ) {
+
+      Logger.warning(
+          'Unsupported PCURVE basis surface, type: ' +
+          `${EntityTypesAP214[ basisSurface.type ]}`,
+          from.expressID )
       return
     }
 
-    const point = surface.position.location.coordinates
+    // ISO 10303-42 constrains reference_to_curve to a single curve item in a
+    // 2D parametric context, but the field is a general representation, so
+    // the curve is searched for rather than indexed blindly.
+    const parameterCurveItem =
+      from.reference_to_curve.items.find(
+          ( item ): item is curve => item instanceof curve )
 
-    const dim   = point.length
+    if ( parameterCurveItem === void 0 ) {
 
-    const pointsFlattened = new Float32Array( dim * 1 )
-
-    pointsFlattened[ 0 ] = point[ 0 ]
-    pointsFlattened[ 1 ] = point[ 1 ]
-
-     
-    if ( dim > 2 ) {
-
-      pointsFlattened[ 2 ] = point[ 2 ]
-
-      // pointsFlattened[ 3 ] = point[ 0 ] + ( dir[ 0 ] * mag )
-      // pointsFlattened[ 4 ] = point[ 1 ] + ( dir[ 1 ] * mag )
-      // pointsFlattened[ 5 ] = point[ 2 ] + ( dir[ 2 ] * mag )
-    } else {
-      // pointsFlattened[ 2 ] = point[ 0 ] + ( dir[ 0 ] * mag )
-      // pointsFlattened[ 3 ] = point[ 1 ] + ( dir[ 1 ] * mag )
+      Logger.warning(
+          'PCURVE reference_to_curve carries no curve item', from.expressID )
+      return
     }
 
-    const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
+    const parameterCurve = this.extractCurve( parameterCurveItem )
+    const parameterCount = parameterCurve?.getPointsSize() ?? 0
+
+    if ( parameterCurve === void 0 || parameterCount === 0 ) {
+
+      // extractCurve has already warned under the parameter curve's own type.
+      return
+    }
+
+    // The frame is built by the same native call the surface side uses
+    // (extractCylindricalSurface and friends), so the pcurve is orthonormalised
+    // identically to the surface it lies on rather than by a second, subtly
+    // different implementation here.
+    const placement = this.conwayModel.getAxis2Placement3D(
+        this.extractAxis2Placement3D(
+            parameterization.position, basisSurface.localID, true ) )
+
+    const transform = placement.getValues()
+
+    // Sample density for angular parameters: the same knob the ellipse path
+    // uses, so a mapped arc is tessellated like every other arc conway emits.
+    const angularStep = ( 2 * Math.PI ) / this.circleSegments
+
+    const localPoints: Vector3[] = []
+
+    let previous = parameterCurve.get2d( 0 )
+
+    localPoints.push( parameterization.evaluate( previous.x, previous.y ) )
+
+    for ( let index = 1; index < parameterCount; ++index ) {
+
+      const current = parameterCurve.get2d( index )
+
+      const deltaU = current.x - previous.x
+      const deltaV = current.y - previous.y
+
+      // A straight run in an angular parameter is an arc in space, so a span
+      // that covers real angle is subdivided rather than chorded across.
+      let samples = 1
+
+      if ( parameterization.angularU ) {
+
+        samples = Math.max( samples, Math.ceil( Math.abs( deltaU ) / angularStep ) )
+      }
+
+      if ( parameterization.angularV ) {
+
+        samples = Math.max( samples, Math.ceil( Math.abs( deltaV ) / angularStep ) )
+      }
+
+      samples = Math.min( samples, MAXIMUM_PCURVE_SPAN_SAMPLES )
+
+      for ( let sample = 1; sample <= samples; ++sample ) {
+
+        const ratio = sample / samples
+
+        localPoints.push( parameterization.evaluate(
+            previous.x + ( deltaU * ratio ),
+            previous.y + ( deltaV * ratio ) ) )
+      }
+
+      previous = current
+    }
+
+    // Column-major Glmdmat4: basis columns at 0, 4, 8, translation at 12.
+    const pointsFlattened =
+      new Float64Array( localPoints.length * this.THREE_DIMENSIONS )
+
+    let offset = 0
+
+    for ( const localPoint of localPoints ) {
+
+      pointsFlattened[ offset ] =
+        ( transform[ 0 ] * localPoint.x ) + ( transform[ 4 ] * localPoint.y ) +
+        ( transform[ 8 ] * localPoint.z ) + transform[ 12 ]
+      pointsFlattened[ offset + 1 ] =
+        ( transform[ 1 ] * localPoint.x ) + ( transform[ 5 ] * localPoint.y ) +
+        ( transform[ 9 ] * localPoint.z ) + transform[ 13 ]
+      pointsFlattened[ offset + 2 ] =
+        ( transform[ 2 ] * localPoint.x ) + ( transform[ 6 ] * localPoint.y ) +
+        ( transform[ 10 ] * localPoint.z ) + transform[ 14 ]
+
+      offset += this.THREE_DIMENSIONS
+    }
+
+    placement.delete()
+
+    const pointsPtr = this.arrayToWasmHeap( pointsFlattened )
 
     const parameters = this.paramsGetPolyCurvePool!.acquire()
 
     parameters.points = pointsPtr
-    parameters.pointsLength = 1
-    parameters.dimensions = dim
+    parameters.pointsLength = localPoints.length
+    parameters.dimensions = this.THREE_DIMENSIONS
+    parameters.senseAgreement = true
+    parameters.isEdge = false
 
-    const curve_ = this.conwayModel.getPolyCurve(parameters)
+    const curve_ = this.conwayModel.getPolyCurve( parameters )
 
-    this.paramsGetPolyCurvePool!.release(parameters)
+    this.paramsGetPolyCurvePool!.release( parameters )
 
-    this.wasmModule._free(pointsPtr)
+    this.wasmModule._free( pointsPtr )
 
     return curve_
   }
@@ -2413,16 +2699,21 @@ export class AP214GeometryExtraction {
   }
 
   /**
-   * Efficiently flatten the points into a Float32Array
+   * Efficiently flatten the points into a Float64Array.
+   *
+   * Float64 because getPolyCurve, the only consumer, reinterprets the buffer
+   * as `const double *`: Float32 elements decode there as unrelated numbers
+   * (and read twice as many bytes as were written). Matches the IFC side's
+   * helper of the same name.
    *
    * @param points - Array of AP214CartesianPoint
    * @param dimensions - dimensions of points
-   * @return {Float32Array}
+   * @return {Float64Array}
    */
-  flattenPointsToFloat32Array( points: cartesian_point[], dimensions:number ): Float32Array {
+  flattenPointsToFloat64Array( points: cartesian_point[], dimensions:number ): Float64Array {
 
     const totalCoordinates = points.length * dimensions
-    const flatCoordinates = new Float32Array(totalCoordinates)
+    const flatCoordinates = new Float64Array(totalCoordinates)
 
     let offset = 0
 
@@ -2453,7 +2744,7 @@ export class AP214GeometryExtraction {
 
     if (pointsLength > 0) {
 
-      const pointsFlattened = this.flattenPointsToFloat32Array(points, dim)
+      const pointsFlattened = this.flattenPointsToFloat64Array(points, dim)
 
       const pointsPtr = this.arrayToWasmHeap(pointsFlattened)
 
@@ -3870,13 +4161,14 @@ export class AP214GeometryExtraction {
       capacity = maxPossibleFloats
     }
 
-    // 2) Create a Float64Array view into WASM memory
-    // We only need to create a subarray up to the capacity
-    const wasmFloat64View = this.wasmModule.HEAPF64.subarray(
-        pointer / bytesPerElement,
-         
-        pointer / bytesPerElement + capacity,
-    )
+    // 2) Create a Float64Array view into WASM memory, over the heap as it is
+    // after the _malloc above rather than over whatever view the module had
+    // cached before it - see wasm_heap.ts for why those can differ. Built
+    // rather than subarray'd off HEAPF64 for the same reason: subarray clamps
+    // an out-of-range window into a short one, and the set() loop below would
+    // then quietly write somewhere other than the allocation (#485).
+    const wasmFloat64View =
+      wasmHeapView(this.wasmModule, Float64Array, pointer, capacity)
 
     // 3) Single pass to skip consecutive duplicates, fill up the wasm array
     let offset = 0

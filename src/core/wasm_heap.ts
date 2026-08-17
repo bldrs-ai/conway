@@ -1,5 +1,6 @@
 /**
- * Copying JS-side arrays into the wasm heap.
+ * Reading and writing the wasm heap from JS, through views that are known to
+ * belong to the heap as it is RIGHT NOW.
  *
  * This lives in one place because the two geometry extractors had a copy each,
  * and the copies had drifted: one honoured the source view's window and the
@@ -9,36 +10,108 @@
  * See bldrs-ai/conway#485 for what an uninstrumented failure on this path
  * costs: `Invalid typed array length: 80`, no context, and two sightings
  * across two models before it could even be located.
+ *
+ * The confirmed mechanism behind #485
+ * -----------------------------------
+ * conway's MT builds create their memory as
+ * `new WebAssembly.Memory({ initial, maximum: 65536, shared: true })` with no
+ * `maxByteLength`, so `wasmMemory.buffer` is a **non-extensible**
+ * SharedArrayBuffer - `growable === false`, `maxByteLength === byteLength`
+ * (verified against Dist/ConwayGeomWasmNodeMT.js and by inspecting a live
+ * module). A non-extensible buffer cannot grow in place, so
+ * `WebAssembly.Memory.grow()` materialises a NEW SharedArrayBuffer, which the
+ * `.buffer` getter hands out from then on.
+ *
+ * emscripten rebuilds `Module.HEAPU8` and friends over that new buffer in
+ * `updateMemoryViews()` - but only on the thread that did the growing, and
+ * only when its own glue passes through `growMemViews()`. Growth driven by a
+ * pthread runs `updateMemoryViews()` in the WORKER's JS scope; the main
+ * thread's `Module.HEAPU8` stays bound to the pre-growth buffer until some
+ * main-thread glue call happens to run `growMemViews()`. `_malloc` is a raw
+ * wasm export, so it is not one of those calls: it can hand back an address in
+ * the newly added region while the JS-side view still ends before it. That is
+ * exactly the state #498's diagnostic captured in CI - view length equal to
+ * its own buffer's byteLength (so not stale relative to that buffer),
+ * `extensible false` (so that buffer never grew), and the pointer past the end
+ * of both.
+ *
+ * Which is why every view here is built through wasmHeapView(): it re-reads
+ * the module's view, reconciles it against the pointer, and only then
+ * constructs.
  */
 
 import Logger from '../logging/logger'
 
 
-/** What the wasm module exposes that this needs. Deliberately narrow. */
+/**
+ * What the wasm module exposes that this needs. Deliberately narrow.
+ *
+ * Everything past `HEAPU8` is a refresh route that MAY be present; see
+ * refreshHeapViews for what each one is worth and which of them conway's
+ * current builds actually have.
+ */
 export interface WasmHeapModule {
   _malloc( bytes: number ): number
   _free( pointer: number ): void
   HEAPU8: Uint8Array
+
+  /**
+   * emscripten's own view rebuilder, if the build exports it. Not exported by
+   * any conway build today.
+   */
+  updateMemoryViews?: () => void
+
+  /**
+   * The live `WebAssembly.Memory`, if the build exposes it. Its `.buffer`
+   * getter always yields the current buffer, which makes staleness
+   * unrepresentable. Not exposed by any conway build today.
+   */
+  wasmMemory?: { readonly buffer: ArrayBufferLike }
+
+  /**
+   * embind's `std::vector<std::string>`. Present on every conway-geom build;
+   * used as a refresh route of last resort (see refreshHeapViews).
+   */
+  stringVector?: new () => { push_back( value: string ): void, delete(): void }
 }
 
 export type CopyableArray = Float32Array | Float64Array | Uint32Array
+
+/** The scratch object refreshHeapViews borrows from the embind route. */
+type WasmScratchVector =
+  InstanceType< NonNullable< WasmHeapModule[ 'stringVector' ] > >
+
+/**
+ * The part of a typed-array constructor wasmHeapView needs: build over a
+ * buffer at a byte offset, and say how wide an element is.
+ */
+export interface WasmHeapArrayConstructor< TArray > {
+  new ( buffer: ArrayBufferLike, byteOffset: number, length: number ): TArray
+  readonly BYTES_PER_ELEMENT: number
+}
 
 
 /**
  * Describe the heap and the request, for an error message that is actually
  * actionable.
  *
- * The buffer's kind matters, and there are two kinds to tell apart, not one.
- * conway's MT build creates its memory with `shared: true`, so its heap is a
- * growable SharedArrayBuffer; single-threaded builds on emscripten 6 get a
- * resizable ArrayBuffer (see decode_utf8.ts). Both cases have length-tracking
- * views that extend by themselves, which is why emscripten's
- * updateMemoryViews() early-returns on growth rather than rebuilding them.
+ * Three of these fields exist to tell #485's two candidate mechanisms apart,
+ * and the CI capture that settled it read them in this order:
  *
- * So both flags are reported. They have different names on the two buffer
- * types, and printing only one makes every single-threaded failure look like
- * the assumption has broken when it has not - which would be a false alarm
- * pointing away from whatever the real cause was.
+ * - `heap view length` BELOW `byteLength` means the view is stale relative to
+ *   its own buffer - a buffer that grew in place while the view kept its
+ *   original length.
+ * - `heap view length` EQUAL to `byteLength`, with the pointer past both,
+ *   means the view is fine for the buffer it has and the buffer itself is the
+ *   old one - the heap grew into a different buffer object entirely.
+ * - `extensible` settles whether the first was even possible: a non-extensible
+ *   buffer can never have grown in place.
+ *
+ * The flag has different names on the two buffer kinds (`growable` on
+ * SharedArrayBuffer, `resizable` on ArrayBuffer), so it is reported as one
+ * field alongside the kind rather than making a reader know which goes with
+ * which. Printing only one name would make every single-threaded failure look
+ * like the shared-memory case, pointing away from whatever the real cause was.
  *
  * @param wasmModule The module whose heap is being written to.
  * @param arrayPtr The pointer _malloc returned.
@@ -50,7 +123,7 @@ function describeHeap(
 
   const heap = wasmModule.HEAPU8
   const buffer =
-    heap?.buffer as ( ArrayBuffer | SharedArrayBuffer | undefined ) &
+    currentHeapBuffer( wasmModule ) as ( ArrayBufferLike | undefined ) &
       { growable?: boolean, resizable?: boolean }
 
   const shared = typeof SharedArrayBuffer !== 'undefined' &&
@@ -71,6 +144,231 @@ function describeHeap(
 
 
 /**
+ * The buffer the heap lives in as of this instant.
+ *
+ * `wasmMemory` is authoritative when a build exposes it - its `.buffer` getter
+ * cannot be stale - and reading it is a property access, so it is worth
+ * preferring even though nothing exposes it yet. Otherwise this is the
+ * module's cached view's buffer, which is what everything downstream then has
+ * to reconcile.
+ *
+ * @param wasmModule The module whose heap is wanted.
+ * @return {ArrayBufferLike} The heap's backing buffer.
+ */
+function currentHeapBuffer( wasmModule: WasmHeapModule ): ArrayBufferLike {
+
+  const memory = wasmModule.wasmMemory
+
+  // Re-read HEAPU8 off the module every time rather than caching it: an
+  // emscripten refresh REPLACES the property, so a cached reference is exactly
+  // the stale view this module exists to avoid.
+  return memory !== void 0 ? memory.buffer : wasmModule.HEAPU8?.buffer
+}
+
+
+/**
+ * Bring the module's cached heap views back in line with the real memory.
+ *
+ * Only ever called once a pointer has been seen to fall outside the cached
+ * view, so cost here is paid about once per growth event, not per copy.
+ *
+ * The routes are tried best-first, and the last one is the only one conway's
+ * current builds actually have. That is a finding, not an oversight: the
+ * emscripten output exposes `HEAP8/HEAPU8/HEAP32/HEAPU32/HEAPF32/HEAPF64`,
+ * `_malloc` and `_free` and nothing else memory-related - no `wasmMemory`, no
+ * `updateMemoryViews`, no `growMemViews`, no `GROWABLE_HEAP_*` helpers. What
+ * it does have is `growMemViews()` guarding every heap access inside its own
+ * JS library, and embind's `std::string` marshalling is one of those accesses
+ * (`stringToUTF8` reads `(growMemViews(), HEAPU8)`). So pushing an empty
+ * string into an embind vector makes emscripten notice the growth and rebuild
+ * `Module.HEAPU8` for us, which is what the reconcile below then re-reads.
+ * Measured at ~9us per round trip, on a path that runs after a heap growth.
+ *
+ * @param wasmModule The module whose views may be stale.
+ */
+function refreshHeapViews( wasmModule: WasmHeapModule ): void {
+
+  if ( typeof wasmModule.updateMemoryViews === 'function' ) {
+
+    wasmModule.updateMemoryViews()
+
+    return
+  }
+
+  // Nothing to refresh - currentHeapBuffer already reads this live.
+  if ( wasmModule.wasmMemory !== void 0 ) {
+    return
+  }
+
+  const StringVector = wasmModule.stringVector
+
+  // Absent on a module that is not conway-geom (the fakes in the tests, say),
+  // in which case there is no route and the caller reports the state instead.
+  if ( StringVector === void 0 ) {
+    return
+  }
+
+  // Every step of the embind round trip is best-effort, INDIVIDUALLY, because
+  // this whole function is best-effort: it only ever runs once something has
+  // already gone wrong with the heap, and both of its callers have a
+  // well-defined answer for "the refresh achieved nothing" - reconcile reports
+  // the heap state (#485's actual diagnostic), and the byte-length reporter
+  // returns a possibly-lagging number. Letting an embind failure out of here
+  // would replace either of those with a bare marshalling error from a
+  // function that exists only to try.
+  //
+  // Both halves can throw, for different reasons:
+  //
+  // - construct-and-push allocates, and this path runs precisely under the
+  //   heap pressure that makes allocation fail. A throw here means the views
+  //   were NOT refreshed, so the caller carries on with its stale-view state
+  //   and reports it - which is the outcome that matters, since losing the
+  //   diagnostic to the failure of the repair attempt is what #485 cost two
+  //   sightings to locate.
+  // - delete() re-enters the same runtime that may just have failed. By then
+  //   the push has already made emscripten rebuild the views, so the refresh
+  //   SUCCEEDED; failing the caller's copy over the teardown of a scratch
+  //   object would break an operation that had just been repaired.
+  //
+  // Split rather than nested so a push that throws still gets its vector
+  // deleted: the constructor is what registers the embind handle, so anything
+  // constructed is owed a delete regardless of what the push did.
+  let scratch: WasmScratchVector | undefined
+
+  releaseQuietly( () => {
+
+    const created = new StringVector()
+
+    scratch = created
+
+    created.push_back( '' )
+  } )
+
+  const created: WasmScratchVector | undefined = scratch
+
+  if ( created !== void 0 ) {
+    releaseQuietly( () => created.delete() )
+  }
+}
+
+
+/**
+ * Reconcile a pointer against the heap, refreshing stale views if that is what
+ * is wrong, and hand back the buffer the view should be built over.
+ *
+ * The hot path is one property read, one add and one compare - the same test
+ * that was already here - so the refresh machinery costs nothing until a
+ * pointer actually lands outside.
+ *
+ * @param wasmModule The module the pointer belongs to.
+ * @param address The pointer, already normalised to unsigned.
+ * @param numBytes How many bytes past it will be touched.
+ * @return {ArrayBufferLike} A buffer that contains [address, address+numBytes).
+ */
+function reconcileHeapBuffer(
+    wasmModule: WasmHeapModule, address: number, numBytes: number ):
+    ArrayBufferLike {
+
+  const buffer = currentHeapBuffer( wasmModule )
+
+  if ( buffer !== void 0 && address + numBytes <= buffer.byteLength ) {
+    return buffer
+  }
+
+  refreshHeapViews( wasmModule )
+
+  const refreshed = currentHeapBuffer( wasmModule )
+
+  if ( refreshed !== void 0 && address + numBytes <= refreshed.byteLength ) {
+    return refreshed
+  }
+
+  // Past here the heap really does not contain the address, so this is the
+  // genuinely-impossible case #498 added the diagnostic for rather than the
+  // growth race it was chasing.
+  throw new Error(
+      'wasm heap allocation lies outside the heap, and refreshing the module ' +
+      'views did not reconcile it. ' +
+      describeHeap( wasmModule, address, numBytes ) )
+}
+
+
+/**
+ * Build a typed-array view over a region of the wasm heap.
+ *
+ * Every view onto the heap in this repo goes through here, because the
+ * property that makes a view safe - that its buffer is the heap's CURRENT
+ * buffer - is not something a caller can check by looking at its own code. It
+ * depends on whether some other thread grew the heap between the call that
+ * produced `pointer` and this line.
+ *
+ * Two things beyond the reconcile are worth knowing:
+ *
+ * - The pointer is normalised to unsigned. Pointers reaching JS from raw i32
+ *   wasm exports arrive NEGATIVE once the heap passes 2GB, and every target
+ *   builds with `maximum: 65536` pages (4GB), so that is a reachable state and
+ *   not a theoretical one. (This build's `applySignatureConversions` already
+ *   wraps `_malloc` as `a0 => f(a0) >>> 0`; pointers from other exports and
+ *   from other builds are not covered by that, so it is done here too.)
+ * - A view is CONSTRUCTED rather than `subarray`d off the module's view.
+ *   `subarray` silently clamps an out-of-range window, which turns "the heap
+ *   moved" into a short view and then into a copy that lands somewhere else
+ *   entirely; the constructor throws instead, and by then the reconcile has
+ *   already made throwing the right answer.
+ *
+ * @param wasmModule The module owning the heap.
+ * @param arrayType The typed-array constructor for the element type wanted.
+ * @param pointer Byte address in the heap, signed or unsigned.
+ * @param elementCount How many elements the view spans.
+ * @return {TArray} A view over the live heap. Do not retain it across any
+ * further call into wasm.
+ */
+export function wasmHeapView< TArray >(
+    wasmModule: WasmHeapModule,
+    arrayType: WasmHeapArrayConstructor< TArray >,
+    pointer: number,
+    elementCount: number ): TArray {
+
+  const address = pointer >>> 0
+  const numBytes = elementCount * arrayType.BYTES_PER_ELEMENT
+
+  return new arrayType(
+      reconcileHeapBuffer( wasmModule, address, numBytes ),
+      address,
+      elementCount )
+}
+
+
+/**
+ * How many bytes of wasm heap there currently are.
+ *
+ * Refreshes first, unconditionally - which is the opposite of what
+ * wasmHeapView does, and deliberate. There is nothing to compare a size
+ * against, so lag here cannot be detected the way an out-of-range pointer can;
+ * and `HEAPU8.length` on its own under-reports by a whole growth step whenever
+ * the module's views are behind (see this file's header), which is the one
+ * thing a high-water figure must not do. This is a reporting call - a line at
+ * the end of a run - so paying microseconds for a true answer is the right
+ * trade. Do not put it in a loop.
+ *
+ * That the refresh cannot throw (see refreshHeapViews) matters more here than
+ * at the other call site: this figure's only consumer is the AP214 CLI's
+ * high-water log line, so an embind failure escaping would abort an otherwise
+ * complete extraction from a log statement. A lagging number is the right
+ * answer there.
+ *
+ * @param wasmModule The module to measure.
+ * @return {number} The heap's size in bytes, or 0 if it has no heap yet.
+ */
+export function wasmHeapByteLength( wasmModule: WasmHeapModule ): number {
+
+  refreshHeapViews( wasmModule )
+
+  return currentHeapBuffer( wasmModule )?.byteLength ?? 0
+}
+
+
+/**
  * Copy an array into a fresh wasm heap allocation.
  *
  * @param wasmModule The module to allocate in.
@@ -82,15 +380,12 @@ export function arrayToWasmHeap(
 
   const numBytes = array.length * array.BYTES_PER_ELEMENT
 
-  // Normalised, not rejected. _malloc is bound raw from wasmExports and
-  // returns i32, and every target builds with MAXIMUM_MEMORY=4GB, so a
-  // perfectly good address at or above 2^31 arrives here NEGATIVE. Treating
-  // that as a failure would hard-fail every copy once the heap passes 2GB -
-  // which is the memory-pressure scenario #485 is about - so it is converted
-  // the way emscripten's own glue does (`HEAPU32[ptr >>> 2 >>> 0]`) and used
-  // in that form for the bounds test, the view, the free and the message.
-  // Left signed it would also pass the bounds test below, since a negative
-  // plus numBytes is not greater than byteLength.
+  // Normalised, not rejected. Pointers arriving from raw i32 wasm exports are
+  // NEGATIVE at or above 2^31, and every target builds with 4GB of maximum
+  // memory, so that is reachable - and it is reachable precisely under the
+  // memory pressure #485 is about. wasmHeapView normalises too; doing it here
+  // as well keeps the zero test, the free and the message all talking about
+  // the same address.
   const arrayPtr = wasmModule._malloc( numBytes ) >>> 0
 
   // 0 is _malloc's failure return and also a valid byteOffset, so the view
@@ -104,14 +399,12 @@ export function arrayToWasmHeap(
       describeHeap( wasmModule, arrayPtr, numBytes ) )
   }
 
-  const heapBuffer = wasmModule.HEAPU8.buffer
+  let destination: Uint8Array
 
-  // Checked rather than left to the TypedArray constructor, whose RangeError
-  // is just "Invalid typed array length: N" - true, unactionable, and
-  // indistinguishable from a dozen other causes.
-  if ( arrayPtr + numBytes > heapBuffer.byteLength ) {
+  try {
 
-    const description = describeHeap( wasmModule, arrayPtr, numBytes )
+    destination = wasmHeapView( wasmModule, Uint8Array, arrayPtr, numBytes )
+  } catch ( error ) {
 
     // The allocation SUCCEEDED and only the view is refused, so this owns a
     // pointer nobody else can reach - arraysToWasmHeap's cleanup cannot see it
@@ -120,12 +413,8 @@ export function arrayToWasmHeap(
     // trouble.
     releaseQuietly( () => wasmModule._free( arrayPtr ) )
 
-    throw new Error(
-      'wasm heap allocation lies outside the heap view - ' +
-      `the view is stale or the heap grew without it. ${description}` )
+    throw error
   }
-
-  const destination = new Uint8Array( heapBuffer, arrayPtr, numBytes )
 
   // Honour the source view's own window: subarray() results share their
   // parent's backing buffer, so copying `array.buffer` wholesale reads the

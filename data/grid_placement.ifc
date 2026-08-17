@@ -1,0 +1,121 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('grid_placement.ifc','2026-08-17T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* Minimal synthetic model exercising IFCGRIDPLACEMENT (conway#504).
+
+   Grid #100 is placed at (10,20,5) and turned a quarter turn about +Z, so a
+   product placed against it can only land correctly if the grid placement
+   COMPOSES onto the grid's own object placement rather than adding to it.
+
+   Its U axes run along +X, its V axes along +Y, all in the grid's own
+   coordinate system:
+
+     A: y = 0    B: y = 5    1: x = 0    2: x = 7
+
+   Grid #400 exists to cover the unsupported-axis-curve path: one of its two
+   axes is an IFCCIRCLE, which this extractor does not reduce to a line. */
+#1=IFCPROJECT('0kF0kSTOX3ovkcpuOhkPrX',$,'GridPlacement',$,$,$,$,(#20),#10);
+#10=IFCUNITASSIGNMENT((#11));
+#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-05,#21,$);
+#21=IFCAXIS2PLACEMENT3D(#22,$,$);
+#22=IFCCARTESIANPOINT((0.,0.,0.));
+#23=IFCDIRECTION((0.,0.,1.));
+#25=IFCDIRECTION((0.,1.,0.));
+/* Grid #100, placed at (10,20,5) with its x axis along world +Y. */
+#100=IFCGRID('1kF0kSTOX3ovkcpuOhkPrX',$,'Grid',$,$,#101,$,(#110,#120),(#130,#140),$,.RECTANGULAR.);
+#101=IFCLOCALPLACEMENT($,#102);
+#102=IFCAXIS2PLACEMENT3D(#103,#23,#25);
+#103=IFCCARTESIANPOINT((10.,20.,5.));
+/* U axes: two-point polylines along +X. */
+#110=IFCGRIDAXIS('A',#111,.T.);
+#111=IFCPOLYLINE((#112,#113));
+#112=IFCCARTESIANPOINT((0.,0.));
+#113=IFCCARTESIANPOINT((1.,0.));
+#120=IFCGRIDAXIS('B',#121,.T.);
+#121=IFCPOLYLINE((#122,#123));
+#122=IFCCARTESIANPOINT((0.,5.));
+#123=IFCCARTESIANPOINT((1.,5.));
+/* V axes: two-point polylines along +Y. */
+#130=IFCGRIDAXIS('1',#131,.T.);
+#131=IFCPOLYLINE((#132,#133));
+#132=IFCCARTESIANPOINT((0.,0.));
+#133=IFCCARTESIANPOINT((0.,1.));
+#140=IFCGRIDAXIS('2',#141,.T.);
+#141=IFCPOLYLINE((#142,#143));
+#142=IFCCARTESIANPOINT((7.,0.));
+#143=IFCCARTESIANPOINT((7.,1.));
+/* Product A: axes A and 1, offsets (2.,3.,4.), no reference direction.
+   Offsetting A by 2 gives y = 2, offsetting 1 by 3 gives x = -3 (both
+   normal to the axis tangent, anti-clockwise), so the intersection sits at
+   (-3,2,4) in the grid and at (8,17,9) in the world. */
+#200=IFCBUILDINGELEMENTPROXY('2kF0kSTOX3ovkcpuOhkPrX',$,'GridPlacedA',$,$,#201,#210,$,.NOTDEFINED.);
+#201=IFCGRIDPLACEMENT(#202,$);
+#202=IFCVIRTUALGRIDINTERSECTION((#110,#130),(2.,3.,4.));
+#210=IFCPRODUCTDEFINITIONSHAPE($,$,(#211));
+#211=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#212));
+#212=IFCBLOCK(#213,1.,1.,1.);
+#213=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Product B: axes B and 2, two offsets only (1.,2.), reference direction
+   +Y in the grid. Offsetting B by 1 gives y = 6, offsetting 2 by 2 gives
+   x = 5, so the intersection sits at (5,6,0) in the grid and at (4,25,5)
+   in the world. */
+#300=IFCBUILDINGELEMENTPROXY('3kF0kSTOX3ovkcpuOhkPrX',$,'GridPlacedB',$,$,#301,#310,$,.NOTDEFINED.);
+#301=IFCGRIDPLACEMENT(#302,#25);
+#302=IFCVIRTUALGRIDINTERSECTION((#120,#140),(1.,2.));
+#310=IFCPRODUCTDEFINITIONSHAPE($,$,(#311));
+#311=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#312));
+#312=IFCBLOCK(#313,1.,1.,1.);
+#313=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Product D: an ordinary local placement measured FROM the grid placement
+   of product A - 1m up from it, so at (8,17,10) in the world. */
+#600=IFCBUILDINGELEMENTPROXY('6kF0kSTOX3ovkcpuOhkPrX',$,'GridRelative',$,$,#601,#610,$,.NOTDEFINED.);
+#601=IFCLOCALPLACEMENT(#201,#602);
+#602=IFCAXIS2PLACEMENT3D(#603,$,$);
+#603=IFCCARTESIANPOINT((0.,0.,1.));
+#610=IFCPRODUCTDEFINITIONSHAPE($,$,(#611));
+#611=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#612));
+#612=IFCBLOCK(#613,1.,1.,1.);
+#613=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Grid #400, one of whose axes is a circle. */
+#400=IFCGRID('4kF0kSTOX3ovkcpuOhkPrX',$,'CurvedGrid',$,$,#401,$,(#410),(#420),$,.RECTANGULAR.);
+#401=IFCLOCALPLACEMENT($,#21);
+#410=IFCGRIDAXIS('C',#411,.T.);
+#411=IFCCIRCLE(#412,4.);
+#412=IFCAXIS2PLACEMENT2D(#413,$);
+#413=IFCCARTESIANPOINT((0.,0.));
+#420=IFCGRIDAXIS('3',#421,.T.);
+#421=IFCPOLYLINE((#422,#423));
+#422=IFCCARTESIANPOINT((0.,0.));
+#423=IFCCARTESIANPOINT((0.,1.));
+/* Product C: placed against the circular axis, which cannot be reduced to
+   a line - no transform is registered and the warning says why. */
+#500=IFCBUILDINGELEMENTPROXY('5kF0kSTOX3ovkcpuOhkPrX',$,'GridPlacedC',$,$,#501,#510,$,.NOTDEFINED.);
+#501=IFCGRIDPLACEMENT(#502,$);
+#502=IFCVIRTUALGRIDINTERSECTION((#410,#420),(0.,0.));
+#510=IFCPRODUCTDEFINITIONSHAPE($,$,(#511));
+#511=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#512));
+#512=IFCBLOCK(#513,1.,1.,1.);
+#513=IFCAXIS2PLACEMENT3D(#22,$,$);
+/* Product E: axes A and 1 with no offsets, so the intersection is (0,0,0)
+   in the grid and (10,20,5) in the world — but with a reference direction
+   of +Z (#23, the same direction the grid's own placement uses as its
+   axis). A grid placement's z axis is forced to +Z, so a
+   PlacementRefDirection along it steers the x axis nowhere: normalising it
+   against that z yields NaN, which addTransform then bakes into this
+   placement and everything measured from it. Guarded, the schema default
+   stands in instead — the first axis' tangent, +X in the grid, which the
+   quarter turn takes to world +Y, the same x axis product A gets. */
+#700=IFCBUILDINGELEMENTPROXY('7kF0kSTOX3ovkcpuOhkPrX',$,'GridRefParallelZ',$,$,#701,#710,$,.NOTDEFINED.);
+#701=IFCGRIDPLACEMENT(#702,#23);
+#702=IFCVIRTUALGRIDINTERSECTION((#110,#130),(0.,0.));
+#710=IFCPRODUCTDEFINITIONSHAPE($,$,(#711));
+#711=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#712));
+#712=IFCBLOCK(#713,1.,1.,1.);
+#713=IFCAXIS2PLACEMENT3D(#22,$,$);
+ENDSEC;
+END-ISO-10303-21;

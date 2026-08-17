@@ -11,6 +11,7 @@ import { AP214SceneBuilder } from './ap214_scene_builder'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 import GeometryAggregator from '../core/geometry_aggregator'
 import GeometryConvertor from '../core/geometry_convertor'
+import { wasmHeapByteLength } from '../core/wasm_heap'
 import { AP214GeometryExtraction } from './ap214_geometry_extraction'
 import { ExtractResult } from '../core/shared_constants'
 import Environment from '../utilities/environment'
@@ -554,11 +555,15 @@ function geometryExtraction(
   const ONE_KB = 1024
   const ONE_MB = ONE_KB * ONE_KB
 
-  const wasmHeap = conwaywasm.wasmModule?.HEAPU8
+  // Measured through wasmHeapByteLength rather than HEAPU8.length: the
+  // module's cached view can be a growth step behind the real heap (#485), and
+  // a high-water figure that under-reports is worse than none.
+  const wasmModule = conwaywasm.wasmModule
 
-  if (wasmHeap !== void 0) {
+  if (wasmModule !== void 0) {
     Logger.info(
-        `WASM heap high-water: ${(wasmHeap.length / ONE_MB).toFixed(1)} MB`)
+        `WASM heap high-water: ${
+          (wasmHeapByteLength(wasmModule) / ONE_MB).toFixed(1)} MB`)
   }
 
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))

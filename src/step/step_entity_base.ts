@@ -3,6 +3,7 @@ import { Entity } from '../core/entity'
 import { EntityDescription, EntityFieldsDescription } from '../core/entity_description'
 import { EntityFieldDescription } from '../core/entity_field_description'
 import { WasmModule } from '../core/native_types'
+import { wasmHeapView } from '../core/wasm_heap'
 import {
   skipValue,
   stepExtractArray,
@@ -925,9 +926,16 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
       return false
     }
 
-    const dataPtr = result.resize( endCursor - cursor )
+    const length = endCursor - cursor
 
-    module.HEAPU8.set( buffer.subarray( cursor, endCursor ), dataPtr )
+    // resize() can grow the wasm heap, which on the MT build can leave the
+    // module's cached HEAPU8 bound to the pre-growth buffer - so the
+    // destination view is taken through wasmHeapView, after the resize, rather
+    // than off module.HEAPU8 (#485).
+    const dataPtr = result.resize( length )
+
+    wasmHeapView( module, Uint8Array, dataPtr, length )
+        .set( buffer.subarray( cursor, endCursor ) )
 
     return true
   }

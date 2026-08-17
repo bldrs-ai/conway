@@ -32,6 +32,9 @@ import { AP214Properties } from './ap214_properties'
 import { EntityTypesAP214Count } from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
 import { ProgressTracker } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
+import {
+  WasmHeapArrayConstructor, wasmHeapView,
+} from '../../core/wasm_heap'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { BufferByteSource } from '../../step/parsing/byte_source'
@@ -1229,8 +1232,18 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    */
   getSubArray(heap: Float32Array | Uint32Array, startPtr: number, sizeBytes: number):
     Float32Array | Uint32Array {
-    // eslint-disable-next-line no-magic-numbers, no-mixed-operators
-    return heap.subarray(startPtr / 4, startPtr / 4 + sizeBytes).slice(0)
+
+    // `heap` stays in the signature because web-ifc's API puts it there, but
+    // it is now read only for its element type. The view itself is rebuilt
+    // over the module's CURRENT heap buffer: a caller-held HEAPF32/HEAPU32 can
+    // be bound to a pre-growth buffer on the MT build, and subarray() on such
+    // a view clamps the window silently and returns short data rather than
+    // failing (#485, and see core/wasm_heap.ts).
+    const arrayType =
+      heap.constructor as WasmHeapArrayConstructor<Float32Array | Uint32Array>
+
+    // slice(0) as before, so the result outlives the next call into wasm.
+    return wasmHeapView(this.wasmModule, arrayType, startPtr, sizeBytes).slice(0)
   }
 
   /**

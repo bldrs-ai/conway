@@ -1,0 +1,129 @@
+ISO-10303-21;
+HEADER;
+/* Synthetic fixture for bldrs-ai/conway#505: PCURVEs whose basis surfaces
+ * span the elementary surface types conway parameterizes, plus the two
+ * residue cases (an unsupported basis surface, and a pcurve that is one
+ * variant of a complex instance which also carries an explicit curve_3d).
+ *
+ * Every parameter curve here is chosen so the mapped 3D points are
+ * analytically checkable - see ap214_pcurve_basis_surfaces.test.ts. The
+ * entities are deliberately NOT wired into a shape representation: the test
+ * drives extractCurve() on the PCURVEs directly, which is the arm the issue
+ * is about. */
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('pcurve-basis-surfaces.step','2026-08-17T00:00:00',(''),(''),
+'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_PROTOCOL_DEFINITION('international standard',
+  'automotive_design',2010,#2);
+#2 = APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#3 = ( GEOMETRIC_REPRESENTATION_CONTEXT(2) PARAMETRIC_REPRESENTATION_CONTEXT()
+  REPRESENTATION_CONTEXT('2D SPACE','') );
+
+/* --- Cylinder: a straight run in (u, v) is a helix arc of radius 25,
+ *     sweeping u from 0 to pi while v climbs from 0 to 20. */
+#10 = PCURVE('cylinder',#11,#15);
+#11 = CYLINDRICAL_SURFACE('',#12,25.);
+#12 = AXIS2_PLACEMENT_3D('',#13,#14,#140);
+#13 = CARTESIAN_POINT('',(0.,0.,0.));
+#14 = DIRECTION('',(0.,0.,1.));
+#140 = DIRECTION('',(1.,0.,0.));
+#15 = DEFINITIONAL_REPRESENTATION('',(#16),#3);
+#16 = POLYLINE('',(#17,#18,#19));
+#17 = CARTESIAN_POINT('',(0.,0.));
+#18 = CARTESIAN_POINT('',(1.5707963267948966,10.));
+#19 = CARTESIAN_POINT('',(3.141592653589793,20.));
+
+/* --- Cone: a generator line at u = 0, v from 0 to 20. The placement is
+ *     offset and turned a quarter turn about z so the local frame has to be
+ *     applied for the mapped points to land. Radius 10 at v = 0, opening at
+ *     a 30 degree semi-angle.
+ *
+ *     ISO 10303-42's cone measures v along the AXIS, so the ring radius is
+ *     10 + v tan(30 deg) and the local point at (u, v) = (0, 20) is
+ *     (10 + 20*0.57735, 0, 20) = (21.547005, 0, 20). Under #22 local +x is
+ *     world +y and local +y is world -x, so the two ends land at
+ *     (5, -3 + 10, 50) = (5, 7, 50) and (5, -3 + 21.547005, 70) =
+ *     (5, 18.547005, 70). Reading v along the generator instead would give
+ *     a ring of 10 + 20 sin(30 deg) = 20 at an axial 20 cos(30 deg), putting
+ *     the far end at (5, 17, 67.320508) - see bldrs-ai/conway#520. */
+#20 = PCURVE('cone',#21,#26);
+#21 = CONICAL_SURFACE('',#22,10.,0.5235987755982988);
+#22 = AXIS2_PLACEMENT_3D('',#23,#24,#25);
+#23 = CARTESIAN_POINT('',(5.,-3.,50.));
+#24 = DIRECTION('',(0.,0.,1.));
+#25 = DIRECTION('',(0.,1.,0.));
+#26 = DEFINITIONAL_REPRESENTATION('',(#27),#3);
+#27 = POLYLINE('',(#28,#29));
+#28 = CARTESIAN_POINT('',(0.,0.));
+#29 = CARTESIAN_POINT('',(0.,20.));
+
+/* --- Sphere: u sweeps a quarter turn at a constant latitude of 30 degrees,
+ *     so every mapped point sits on radius 10 at z = 5. */
+#30 = PCURVE('sphere',#31,#35);
+#31 = SPHERICAL_SURFACE('',#32,10.);
+#32 = AXIS2_PLACEMENT_3D('',#33,#34,#340);
+#33 = CARTESIAN_POINT('',(0.,0.,0.));
+#34 = DIRECTION('',(0.,0.,1.));
+#340 = DIRECTION('',(1.,0.,0.));
+#35 = DEFINITIONAL_REPRESENTATION('',(#36),#3);
+#36 = POLYLINE('',(#37,#38));
+#37 = CARTESIAN_POINT('',(0.,0.5235987755982988));
+#38 = CARTESIAN_POINT('',(1.5707963267948966,0.5235987755982988));
+
+/* --- Torus: half a turn around the tube (v) at a fixed u, walking the
+ *     outer equator across to the inner one. Major 20, minor 5. */
+#40 = PCURVE('torus',#41,#45);
+#41 = TOROIDAL_SURFACE('',#42,20.,5.);
+#42 = AXIS2_PLACEMENT_3D('',#43,#44,#440);
+#43 = CARTESIAN_POINT('',(0.,0.,0.));
+#44 = DIRECTION('',(0.,0.,1.));
+#440 = DIRECTION('',(1.,0.,0.));
+#45 = DEFINITIONAL_REPRESENTATION('',(#46),#3);
+#46 = POLYLINE('',(#47,#48));
+#47 = CARTESIAN_POINT('',(0.,0.));
+#48 = CARTESIAN_POINT('',(0.,3.141592653589793));
+
+/* --- Plane: (u, v) are distances along the placement's x and y axes. */
+#50 = PCURVE('plane',#51,#55);
+#51 = PLANE('',#52);
+#52 = AXIS2_PLACEMENT_3D('',#53,#54,#540);
+#53 = CARTESIAN_POINT('',(1.,2.,3.));
+#54 = DIRECTION('',(0.,0.,1.));
+#540 = DIRECTION('',(1.,0.,0.));
+#55 = DEFINITIONAL_REPRESENTATION('',(#56),#3);
+#56 = POLYLINE('',(#57,#58));
+#57 = CARTESIAN_POINT('',(0.,0.));
+#58 = CARTESIAN_POINT('',(4.,7.));
+
+/* --- Residue: a B-spline basis surface has no closed-form parameterization
+ *     here, so this one is warned about by name and dropped. */
+#60 = PCURVE('bspline',#61,#66);
+#61 = B_SPLINE_SURFACE_WITH_KNOTS('',1,1,((#62,#63),(#64,#65)),.UNSPECIFIED.,
+  .F.,.F.,.F.,(2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.);
+#62 = CARTESIAN_POINT('',(0.,0.,0.));
+#63 = CARTESIAN_POINT('',(0.,1.,0.));
+#64 = CARTESIAN_POINT('',(1.,0.,0.));
+#65 = CARTESIAN_POINT('',(1.,1.,1.));
+#66 = DEFINITIONAL_REPRESENTATION('',(#67),#3);
+#67 = POLYLINE('',(#68,#69));
+#68 = CARTESIAN_POINT('',(0.,0.));
+#69 = CARTESIAN_POINT('',(1.,1.));
+
+/* --- A pcurve that is one variant of a complex instance also carrying a
+ *     SURFACE_CURVE: the explicit curve_3d wins over the parameter space
+ *     mapping. The 3D polyline runs along +y from (25,0,0), which the
+ *     pcurve's own parameter curve (a helix on the cylinder) never touches. */
+#70 = ( CURVE() GEOMETRIC_REPRESENTATION_ITEM() PCURVE(#11,#75)
+  REPRESENTATION_ITEM('complex') SURFACE_CURVE(#71,(#10),.CURVE_3D.) );
+#71 = POLYLINE('',(#72,#73));
+#72 = CARTESIAN_POINT('',(25.,0.,0.));
+#73 = CARTESIAN_POINT('',(25.,40.,0.));
+#75 = DEFINITIONAL_REPRESENTATION('',(#76),#3);
+#76 = POLYLINE('',(#77,#78));
+#77 = CARTESIAN_POINT('',(0.,0.));
+#78 = CARTESIAN_POINT('',(3.141592653589793,20.));
+ENDSEC;
+END-ISO-10303-21;

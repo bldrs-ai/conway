@@ -56,7 +56,7 @@ work.
 |---|------|----------|-------|
 | 1 | Public API surface | High | `src/index.ts` exports IFC types only. AP214 model / extraction / parser need stable named exports. |
 | 2 | Regression coverage | High | No AP21x analog of `ifc_regression_main.ts` or `ifc_regression_batch_main.ts`. The 47-CSV golden corpus in `regression/test_models/` is IFC-only. |
-| 3 | AP203 fall-through correctness | Medium | The loader logs `"AP203 Step Detected, using AP214 loader"` and reuses the AP214 parser. Real AP203 entities may diverge — needs a sweep across known AP203 exports. Now tracked as #503. |
+| 3 | AP203 fall-through correctness | Low (measured) | The loader logs `"AP203 Step Detected, using AP214 loader"` and reuses the AP214 parser. Measured Aug 2026 over all 16 AP203 models in the corpus: 76 of 214,437 instances (0.035%) name a type the AP214 vtable has no slot for, none of them geometry-bearing, and zero errors attributable to the schema alias. See §"AP203 fall-through: measured" (#503). |
 | 4 | AP242 | Medium | Not implemented. ISO 10303-242 supersets AP214 and is the modern PMI-bearing target; no detection, no entities, no parser. |
 | 5 | Test models | Medium | `data/` now carries 9 STEP fixtures (incl. AP203/AP242 header minima, the AS1 assembly, and a CTC properties reduction). Still need broader *geometry* coverage: real-world AP203 CAD exports, AP242 PMI samples, the full NIST CAx-IF corpus (which lives in `test-models/step/nist/`, not `data/`). |
 | 6 | AP214 test depth | Low | The metadata track added `ap214_product_structure_extraction.test` + `ap214_property_extraction.test` (and occurrence-path geometry tests, PR #353) on top of `ap214_step_model.test.ts` / `ap214_geometry_extraction.test.ts`. Still missing equivalents for block extraction and full scene-builder coverage. |
@@ -104,8 +104,9 @@ work.
 
 ### Phase 4 — AP203 schema sweep
 
-- [ ] Enumerate AP203 entities that are not in the AP214 vtable (walk
-      via `step_vtable_builder.ts`)
+- [x] Enumerate AP203 entities that are not in the AP214 vtable —
+      done Aug 2026, both statically and against the corpus. Numbers and
+      method in §"AP203 fall-through: measured" below (#503).
 - [ ] If divergence is small: extend AP214 model with conditional
       handling keyed off detected schema
 - [ ] If divergence is large: generate a parallel `src/AP203_1994/` tree
@@ -113,6 +114,11 @@ work.
       that produced `AP214E3_2010_gen/`
 - [ ] Acceptance: parse + geometry-extract three independently-sourced
       AP203 CAD exports with no parser errors
+
+The measurement says **neither fork is currently earning its keep** —
+the AP214 parser already reads every geometry- and product-structure-
+bearing entity these files contain. The cheapest real improvement is
+the diagnostic gap the measurement exposed (below), not schema work.
 
 ### Phase 5 — AP242 (ISO 10303-242)
 
@@ -218,6 +224,125 @@ geometry" — an empty dump hashes to SHA-1's empty string
 (`da39a3ee…`), which is how a face can pass a triangle-count probe and
 still be invisible.
 
+### AP203 fall-through: measured
+
+The loader routes both AP203 schema names to the AP214 parser (#503,
+and the sibling AP242 alias in #480). Measured Aug 2026; the short
+answer is that the alias costs almost nothing, and the interesting
+finding is *why* — the two schemas share the same ISO 10303 integrated
+resources, so the geometry and product-structure entities a CAD
+exporter actually writes are the same entities with the same attribute
+order in both.
+
+Note first that "AP203" is two schemas, not one, and the detector
+matches both:
+
+- **`CONFIG_CONTROL_DESIGN`** — AP203 edition 1 (ISO 10303-203:1994
+  AIM long form). Small: 254 entities.
+- **`AP203_CONFIGURATION_CONTROLLED_3D_DESIGN_…_MIM_LF`** — AP203
+  edition 2 (ISO/TS 10303-403 MIM long form). Large: 1,006 entities,
+  because the MIM pulls in whole modules (procedural/parametric
+  representation, sheet metal, the rule/logic schema) that no CAD
+  exporter emits.
+
+Both appear in the corpus: of the 16 AP203 models under
+`test-models/step/nist/NIST-PMI-STEP-Files/`, 3 are edition 1 and 13
+are edition 2.
+
+**Static gap** (schema entity set vs. the 966 names in
+`EntityTypesAP214`, i.e. what `step_vtable_builder.ts` can dispatch):
+
+| schema | entities | absent from vtable | of those, geometry/topology-bearing |
+|---|---:|---:|---:|
+| CONFIG_CONTROL_DESIGN | 254 | 22 | 4 (`WIRE_SHELL`, `VERTEX_SHELL`, `SHELL_BASED_WIREFRAME_MODEL`/`_SHAPE_REPRESENTATION`) |
+| AP203e2 MIM_LF | 1,006 | 332 | 131 |
+
+The 332 looks alarming and is almost entirely a MIM-superset artifact —
+see the empirical number below before sizing any work off it.
+
+**Attribute-order divergence** — the dangerous class, because a
+same-named entity whose attributes are declared in a different order
+mis-parses *silently* under positional STEP encoding. Five cases exist
+across the two schemas, all outside geometry, and **none of them occurs
+in the corpus**:
+
+- `DATED_EFFECTIVITY` — edition 1 declares `(start_date, end_date)`,
+  AP214 declares `(end_date, start_date)`. A genuine silent swap; the
+  AP214 parser would read an edition-1 file's dates transposed.
+  Edition 2 uses the AP214 order, so this is an edition-1-only hazard.
+- `AREA_UNIT` / `VOLUME_UNIT` — edition 1 subtypes `named_unit`
+  (attribute `dimensions`, one reference); AP214 and edition 2 both
+  subtype `derived_unit` (attribute `elements`, an aggregate). Again
+  edition-1-only.
+- `APPLIED_NAME_ASSIGNMENT` (`item` scalar vs. `items` aggregate) and
+  `VECTOR_STYLE` (multiple-inheritance parents declared in the opposite
+  order) — edition 2 vs. AP214.
+
+Restricting the comparison to the entity names the corpus actually
+instantiates and checking *types* as well as order: 140 shared names
+for edition 2, **zero** divergent attribute slots; 63 shared names for
+edition 1, 8 slots that differ only by widening (`TEXT` vs `LABEL`,
+required vs `OPTIONAL`, an entity reference vs. a select that contains
+it) — all safe in the AP203→AP214 direction.
+
+**Empirical gap**, counting every instance in every AP203 model against
+the vtable, with the AP242 files as a same-build control:
+
+| corpus | files | instances | naming a type absent from the vtable | distinct such types |
+|---|---:|---:|---:|---:|
+| AP203 (both editions) | 16 | 214,437 | **76 (0.035%)** | 6 |
+| AP242 (control) | 17 | 220,215 | 19,610 (8.90%) | 47 |
+
+The six are `CC_DESIGN_PERSON_AND_ORGANIZATION_ASSIGNMENT` (24),
+`CC_DESIGN_APPROVAL` (18), `CC_DESIGN_DATE_AND_TIME_ASSIGNMENT` (12),
+`DESIGN_CONTEXT` (8), `MECHANICAL_CONTEXT` (8),
+`CC_DESIGN_SECURITY_CLASSIFICATION` (6) — configuration-management and
+product-context records. Nothing in `src/` reads any of them (nor the
+AP214 `product_context` / `product_definition_context` they specialize),
+so dropping them costs nothing conway currently consumes. Eight of the
+16 files use none of them at all, including all three edition-1 files:
+those write plain `PRODUCT_CONTEXT` / `PRODUCT_DEFINITION_CONTEXT`
+despite the `CONFIG_CONTROL_DESIGN` header.
+
+Every AP203 model produces geometry — **zero** zero-geometry loads,
+against one in the AP242 control (`nist_ftc_08…-e1-tg`, #480). Total
+error volume across all 16: 25 messages, none schema-attributable —
+`Unsupported type: GEOMETRIC_SET` ×3 (an unimplemented extraction for
+an entity that *is* in the vtable), spherical-pole triangulation
+failures ×10, and 16 informational whole-curve-trim recoveries.
+
+Two confounders were controlled explicitly, both of which distorted the
+first AP242 measurement in #480: all 16 models were materialized from
+Git LFS before measuring (a pointer stub parses as an empty document,
+#486), and the run post-dates the #493 select-deserialization fix. A
+third is worth naming because it is *not* AP203-specific: the
+LOGICAL-read-as-BOOLEAN generator bug (#480) reaches
+`B_SPLINE_CURVE`, `B_SPLINE_SURFACE` and `COMPOSITE_CURVE` alike, and
+three AP203 files carry 53 `.U.` tokens in those attributes. It does
+not fire here only because no AP203 file in the corpus pairs a
+`.U.` with an attribute the extractor reads.
+
+**The gap this leaves.** An entity name the vtable cannot resolve is
+indexed with an undefined type and dropped with **no diagnostic at
+all** — `this.index_.get(...)` in `step_parser.ts` returns `undefined`
+and nothing counts it. That is the failure mode #503 was filed about,
+and it is real; it is just cheap here (76 instances) and ruinous for
+AP242 (19,610). A parse-time tally of unresolved type names, logged
+once per name with a count, would turn "silently absent" into a
+readable signal for every schema at once. It is deliberately *not*
+bundled with this measurement: it adds rows to `errors.csv` for most
+of the corpus, IFC included, so it needs its own PR and a baseline
+re-bless.
+
+Reproducing: the entity list for each schema comes from the EXPRESS
+long forms (edition 1 and edition 2 from the STEPcode `data/` tree,
+both carrying their ISO TC184/SC4/WG3 provenance in the file header;
+AP214 from `schemas/AP214E3_2010.exp` in the pinned `IFC-gen-internal`
+revision, which is the exact input the checked-in `*.gen.ts` were
+generated from). The per-model run is
+`node --experimental-specifier-resolution=node
+compiled/src/AP214E3_2010/ap214_regression_main.js -d <file> <out>`.
+
 ### Error accounting
 
 `Logger` dedups on the exact message string, and `errors.csv` carries a
@@ -234,13 +359,24 @@ family attributable to specific entities.
 ## Open questions
 
 - AP203 strategy: indefinite AP214 fall-through, or its own gen tree
-  once divergence is measured? Decision needed before Phase 4 work
-  starts (#503 tracks the measurement).
+  once divergence is measured? Measured under #503 — see §"AP203
+  fall-through: measured". The data supports staying on the
+  fall-through: 0.035% of instances unresolvable, none geometry-bearing,
+  no geometry loss. Still open as a *policy* question, since the
+  measurement covers one exporter family (the NIST corpus is CATIA- and
+  Creo-sourced) and edition-1 CCD files carry a real
+  `DATED_EFFECTIVITY` attribute-order hazard that this corpus never
+  exercises.
 - Test model storage: checked into `data/`, into a
   `regression/test_models_step/` corpus, or in a separate `test-models`
   repo similar to IFC's? Affects PR-time test budget and licensing.
 - AP242 in scope for the first production cut, or follow-up release?
   Drives whether Phase 5 is gating.
-- CONFIG_CONTROL_DESIGN routing: currently aliases to AP214, but it's
-  a profile of AP203, not AP214 — verify this isn't producing silent
-  parse errors on real CCD files. Filed as #503.
+- ~~CONFIG_CONTROL_DESIGN routing: verify the AP214 alias isn't
+  producing silent parse errors on real CCD files.~~ Answered under
+  #503: it isn't. The three CCD files in the corpus resolve every
+  entity they contain against the AP214 vtable and load clean. The
+  residual risk is the `DATED_EFFECTIVITY` / `AREA_UNIT` /
+  `VOLUME_UNIT` attribute-order divergences, which are edition-1-only
+  and unexercised here — a CCD file that *does* use them mis-parses
+  silently, with no diagnostic.

@@ -137,16 +137,30 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
     // Populate vtable + buffer the way a first extract does.
     expect( first.extractLineArguments().length ).toBeGreaterThan( 0 )
 
-    const copied: number[] = []
-    const fakeResult = { resize: ( n: number ) => n }
-    const fakeModule = { HEAPU8: { set: ( src: Uint8Array ) => {
+    // A real heap rather than a stubbed HEAPU8.set. extractParseBuffer builds
+    // its destination through wasmHeapView now, which reconciles the pointer
+    // against the heap's actual buffer before writing (#485) - so the fake has
+    // to have one. It also makes the assertions stronger: the bytes are
+    // checked where they landed, not just counted on the way past.
+    const wasmHeap = new Uint8Array( 4 * 1024 )
+    const fakeModule = { HEAPU8: wasmHeap }
 
-      copied.push( src.length )
-    } } }
+    const copied: number[] = []
+    const fakeResult = { resize: ( n: number ) => {
+
+      copied.push( n )
+
+      return 0
+    } }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     first.extractParseBuffer( 0, 0, 0, fakeResult as any, fakeModule as any, true )
     expect( copied[ 0 ] ).toBeGreaterThan( 0 )
+
+    // Landed in the heap, at the pointer resize handed back.
+    const written = Array.from( wasmHeap.subarray( 0, copied[ 0 ] ) )
+
+    expect( written.some( ( byte ) => byte !== 0 ) ).toBe( true )
 
     model.releaseSourceViews( [ localID ] )
     await model.ensureResidentByLocalID( localID )
