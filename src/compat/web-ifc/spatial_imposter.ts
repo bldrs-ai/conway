@@ -110,7 +110,25 @@ const PRODUCT_PLACEMENT = [5, 5, 3] as const
 const LOCAL_PLACEMENT_REL_TO = [0, 0, 1] as const
 const LOCAL_PLACEMENT_RELATIVE = [1, 0, 1] as const
 const PLACEMENT_LOCATION = [0, 0, 2] as const
+const PLACEMENT_AXIS = [1, 1, 3] as const
+const PLACEMENT_REF_DIRECTION = [2, 1, 3] as const
 const STOREY_ELEVATION = [9, 9, 6] as const
+
+/** Column-major 4x4, the convention {@link mat4MultiplyF64} multiplies in. */
+type Mat4 = number[]
+
+const IDENTITY_PLACEMENT: Mat4 = [
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]
+
+/** Column-major indices of a 4x4's translation component. */
+const TRANSLATION = [12, 13, 14] as const
+
+/** Column-major index of the local +Z axis' world Z component. */
+const LOCAL_Z_WORLD_Z = 10
 
 
 const SPACE_TYPES = new Set< number >( [
@@ -130,6 +148,9 @@ interface SpatialNode {
   typeID: number
   depth: number
   children: number[]
+  /** Composed world placement, or undefined when the chain gave none. */
+  placement?: Mat4
+  /** `placement`'s translation column, cached for the box arithmetic. */
   origin?: [number, number, number]
   elevation?: number
   aabb?: Aabb3
@@ -281,19 +302,183 @@ async function ensure_( model: IfcStepModel, localID: number ): Promise< void > 
 
 
 /**
- * World translation of an IfcLocalPlacement chain (rotation ignored —
- * enough for the axis-aligned storey plates this first pass draws).
+ * @param v A vector.
+ * @return {[number, number, number] | undefined} `v` scaled to unit
+ * length, or undefined when it has none (zero / non-finite input).
+ */
+function normalize3_(
+    v: [number, number, number] ): [number, number, number] | undefined {
+
+  const length = Math.hypot( v[ 0 ], v[ 1 ], v[ 2 ] )
+
+  return Number.isFinite( length ) && length > 0 ?
+    [v[ 0 ] / length, v[ 1 ] / length, v[ 2 ] / length] : void 0
+}
+
+
+/**
+ * @param a Left vector.
+ * @param b Right vector.
+ * @return {[number, number, number]} `a` x `b`.
+ */
+function cross3_(
+    a: [number, number, number],
+    b: [number, number, number] ): [number, number, number] {
+
+  return [
+    a[ 1 ] * b[ 2 ] - a[ 2 ] * b[ 1 ],
+    a[ 2 ] * b[ 0 ] - a[ 0 ] * b[ 2 ],
+    a[ 0 ] * b[ 1 ] - a[ 1 ] * b[ 0 ],
+  ]
+}
+
+
+/**
+ * The `DirectionRatios` of an IfcDirection referenced from `field` of
+ * `entity`, or undefined when the field is absent.
+ *
+ * @param model The model.
+ * @param entity The referring entity.
+ * @param field The (index, min, max) field triple.
+ * @return {Promise<[number, number, number] | undefined>} The ratios.
+ */
+async function directionRatios_(
+    model: IfcStepModel,
+    entity: { extractReferenceLocalID(
+      a: number, b: number, c: number, optional: boolean ): number | null },
+    field: readonly [number, number, number] ):
+    Promise< [number, number, number] | undefined > {
+
+  const directionID =
+    entity.extractReferenceLocalID( field[ 0 ], field[ 1 ], field[ 2 ], true )
+
+  if ( directionID === null ) {
+    return
+  }
+
+  await ensure_( model, directionID )
+  const direction = model.getElementByLocalID( directionID ) as
+    { DirectionRatios?: number[] } | undefined
+  const ratios = direction?.DirectionRatios
+
+  if ( ratios === void 0 || ratios.length < 2 ) {
+    return
+  }
+
+  return [ratios[ 0 ], ratios[ 1 ], ratios[ 2 ] ?? 0]
+}
+
+
+/**
+ * The 4x4 an IfcAxis2Placement3D denotes: Location as the translation,
+ * Axis as local +Z and RefDirection as local +X, both defaulting to the
+ * world axes when absent per the IFC defaults.
+ *
+ * Deliberately the same construction as conway-geom's
+ * `GetAxis2Placement3D` (ConwayGeometryProcessor.cpp) — normalize the
+ * two references, `y = normalize(z x x)`, then re-derive
+ * `x = normalize(y x z)` so a non-perpendicular RefDirection is
+ * projected rather than skewing the frame. It has to match: the plates
+ * are previewing meshes the durable pipeline places with that function,
+ * and a second convention here (Gram-Schmidt on x, say) would rotate
+ * them apart on any file whose RefDirection is off-perpendicular.
+ *
+ * One deviation, on degenerate input: where the C++ divides by a zero
+ * cross product and yields NaN, this falls back to the identity axes. A
+ * NaN transform reaching Share is an invisible or scene-destroying box,
+ * and the imposter path's standing rule is that a preview must never
+ * break open.
+ *
+ * @param model The model.
+ * @param axisLocalID The IfcAxis2Placement3D's local ID.
+ * @return {Promise<Mat4>} The placement, identity if unreadable.
+ */
+async function axisPlacementMatrix_(
+    model: IfcStepModel,
+    axisLocalID: number ): Promise< Mat4 > {
+
+  await ensure_( model, axisLocalID )
+  const placement = model.getElementByLocalID( axisLocalID )
+
+  if ( placement === void 0 ) {
+    return IDENTITY_PLACEMENT.slice()
+  }
+
+  let translation: [number, number, number] = [0, 0, 0]
+
+  const locationID = placement.extractReferenceLocalID(
+      PLACEMENT_LOCATION[ 0 ],
+      PLACEMENT_LOCATION[ 1 ],
+      PLACEMENT_LOCATION[ 2 ],
+      false )
+
+  if ( locationID !== null ) {
+
+    await ensure_( model, locationID )
+    const point = model.getElementByLocalID( locationID ) as
+      { Coordinates?: number[] } | undefined
+    const coords = point?.Coordinates
+
+    if ( coords !== void 0 && coords.length >= 2 ) {
+      translation = [coords[ 0 ], coords[ 1 ], coords[ 2 ] ?? 0]
+    }
+  }
+
+  const axisRatios =
+    await directionRatios_( model, placement, PLACEMENT_AXIS )
+  const refRatios =
+    await directionRatios_( model, placement, PLACEMENT_REF_DIRECTION )
+
+  let zAxis: [number, number, number] =
+    ( axisRatios !== void 0 ? normalize3_( axisRatios ) : void 0 ) ?? [0, 0, 1]
+  let refAxis: [number, number, number] =
+    ( refRatios !== void 0 ? normalize3_( refRatios ) : void 0 ) ?? [1, 0, 0]
+
+  let yAxis = normalize3_( cross3_( zAxis, refAxis ) )
+
+  if ( yAxis === void 0 ) {
+    // Axis and RefDirection parallel (or garbage): no frame is derivable
+    // from them, so keep the translation and drop back to world axes.
+    zAxis = [0, 0, 1]
+    refAxis = [1, 0, 0]
+    yAxis = [0, 1, 0]
+  }
+
+  const xAxis = normalize3_( cross3_( yAxis, zAxis ) ) ?? refAxis
+
+  return [
+    xAxis[ 0 ], xAxis[ 1 ], xAxis[ 2 ], 0,
+    yAxis[ 0 ], yAxis[ 1 ], yAxis[ 2 ], 0,
+    zAxis[ 0 ], zAxis[ 1 ], zAxis[ 2 ], 0,
+    translation[ 0 ], translation[ 1 ], translation[ 2 ], 1,
+  ]
+}
+
+
+/**
+ * The composed world transform of an IfcLocalPlacement chain: every
+ * link's IfcAxis2Placement3D built out in full and multiplied
+ * `parent * local`, which is exactly conway-geom's `GetLocalPlacement`.
+ *
+ * Rotation used to be dropped here — the chain summed Location
+ * translations and nothing else (conway#514's shortcut). That is correct
+ * only while every ancestor placement is axis-aligned, and Revit
+ * routinely rotates the site or building placement to true north, so on
+ * a real export every sampled origin landed unrotated in raw model space
+ * while the durable meshes beside it did not: the plate cloud read as a
+ * rotated ghost of the building (conway#517).
  *
  * @param model The model.
  * @param placementLocalID IfcObjectPlacement local ID.
- * @param cache Memo.
- * @return {Promise<[number, number, number] | undefined>} World origin.
+ * @param cache Memo of composed transforms, keyed by placement local ID.
+ * A placement re-entered while it is being composed (a cyclic RelativeTo)
+ * reads back undefined and stops the recursion.
+ * @return {Promise<Mat4 | undefined>} The world transform.
  */
-async function placementOrigin_(
+async function placementTransform_(
     model: IfcStepModel,
     placementLocalID: number,
-    cache: Map< number, [number, number, number] | undefined > ):
-    Promise< [number, number, number] | undefined > {
+    cache: Map< number, Mat4 | undefined > ): Promise< Mat4 | undefined > {
 
   if ( cache.has( placementLocalID ) ) {
     return cache.get( placementLocalID )
@@ -322,34 +507,9 @@ async function placementOrigin_(
         LOCAL_PLACEMENT_RELATIVE[ 2 ],
         false )
 
-    let local: [number, number, number] = [0, 0, 0]
-
-    if ( relativeID !== null ) {
-
-      await ensure_( model, relativeID )
-      const relative = model.getElementByLocalID( relativeID )
-
-      if ( relative !== void 0 ) {
-
-        const locationID = relative.extractReferenceLocalID(
-            PLACEMENT_LOCATION[ 0 ],
-            PLACEMENT_LOCATION[ 1 ],
-            PLACEMENT_LOCATION[ 2 ],
-            false )
-
-        if ( locationID !== null ) {
-
-          await ensure_( model, locationID )
-          const point = model.getElementByLocalID( locationID ) as
-            { Coordinates?: number[] } | undefined
-          const coords = point?.Coordinates
-
-          if ( coords !== void 0 && coords.length >= 2 ) {
-            local = [coords[ 0 ], coords[ 1 ], coords[ 2 ] ?? 0]
-          }
-        }
-      }
-    }
+    const local = relativeID !== null ?
+      await axisPlacementMatrix_( model, relativeID ) :
+      IDENTITY_PLACEMENT.slice()
 
     const parentID = entity.extractReferenceLocalID(
         LOCAL_PLACEMENT_REL_TO[ 0 ],
@@ -362,18 +522,8 @@ async function placementOrigin_(
       return local
     }
 
-    const parent = await placementOrigin_( model, parentID, cache )
-
-    if ( parent === void 0 ) {
-      cache.set( placementLocalID, local )
-      return local
-    }
-
-    const world: [number, number, number] = [
-      parent[ 0 ] + local[ 0 ],
-      parent[ 1 ] + local[ 1 ],
-      parent[ 2 ] + local[ 2 ],
-    ]
+    const parent = await placementTransform_( model, parentID, cache )
+    const world = parent === void 0 ? local : mat4MultiplyF64( parent, local )
 
     cache.set( placementLocalID, world )
     return world
@@ -383,11 +533,25 @@ async function placementOrigin_(
 }
 
 
-async function productOrigin_(
+/**
+ * @param transform A composed world transform.
+ * @return {[number, number, number]} Its translation column, i.e. where
+ * the placement's own origin lands in world space.
+ */
+function originOf_( transform: Mat4 ): [number, number, number] {
+
+  return [
+    transform[ TRANSLATION[ 0 ] ],
+    transform[ TRANSLATION[ 1 ] ],
+    transform[ TRANSLATION[ 2 ] ],
+  ]
+}
+
+
+async function productTransform_(
     model: IfcStepModel,
     localID: number,
-    cache: Map< number, [number, number, number] | undefined > ):
-    Promise< [number, number, number] | undefined > {
+    cache: Map< number, Mat4 | undefined > ): Promise< Mat4 | undefined > {
 
   await ensure_( model, localID )
   const entity = model.getElementByLocalID( localID )
@@ -406,7 +570,7 @@ async function productOrigin_(
     return
   }
 
-  return placementOrigin_( model, placementID, cache )
+  return placementTransform_( model, placementID, cache )
 }
 
 
@@ -676,7 +840,7 @@ export async function emitSpatialStructureImposters(
     }
   }
 
-  const originCache = new Map< number, [number, number, number] | undefined >()
+  const placementCache = new Map< number, Mat4 | undefined >()
 
   for ( const node of nodes.values() ) {
 
@@ -685,7 +849,11 @@ export async function emitSpatialStructureImposters(
       // IfcProject is an IfcContext, not an IfcProduct — field 5 is
       // not ObjectPlacement.
       if ( node.typeID !== EntityTypesIfc.IFCPROJECT ) {
-        node.origin = await productOrigin_( model, node.localID, originCache )
+
+        node.placement =
+          await productTransform_( model, node.localID, placementCache )
+        node.origin = node.placement !== void 0 ?
+          originOf_( node.placement ) : void 0
       }
 
       if ( STOREY_TYPES.has( node.typeID ) ) {
@@ -720,10 +888,11 @@ export async function emitSpatialStructureImposters(
     for ( let i = 0; i < products.length && origins.length < PRODUCT_SAMPLE; i += stride ) {
 
       try {
-        const origin = await productOrigin_( model, products[ i ], originCache )
+        const transform =
+          await productTransform_( model, products[ i ], placementCache )
 
-        if ( origin !== void 0 ) {
-          origins.push( origin )
+        if ( transform !== void 0 ) {
+          origins.push( originOf_( transform ) )
         }
       } catch {
         // Skip one product.
@@ -818,7 +987,7 @@ export async function emitSpatialStructureImposters(
       // storey placement on the datum.
       const storeyZ0 =
         STOREY_TYPES.has( node.typeID ) && node.elevation !== void 0 ?
-          storeyDatumZ_( localID, nodes, parentOf ) + node.elevation : void 0
+          storeyFloorZ_( localID, node.elevation, nodes, parentOf ) : void 0
 
       if ( node.origin !== void 0 ) {
 
@@ -865,7 +1034,12 @@ export async function emitSpatialStructureImposters(
         // elevation), but a file that parks every storey placement on
         // the building datum and carries the height only in Elevation
         // would then collapse all of its plates onto one Z. Storey
-        // HEIGHTS stay on elevation deltas — datum-invariant either way.
+        // HEIGHTS stay on elevation deltas — datum-invariant either way,
+        // though on a datum tilted out of plumb they over-thicken the
+        // plate by 1/cos(tilt) (the floor Z is tilt-correct; see
+        // storeyFloorZ_). Left alone: the sample-derived height fallback
+        // is already a world-Z span, so one scale cannot serve both, and
+        // a tilted building has no horizontal storeys to plate anyway.
         const z0 = storeyZ0 ?? node.origin?.[ 2 ] ?? box.min[ 2 ]
         const z1 = height !== void 0 ? z0 + height : box.max[ 2 ]
         box = {
@@ -946,22 +1120,33 @@ export async function emitSpatialStructureImposters(
 
 
 /**
- * World Z of the datum an IfcBuildingStorey's `Elevation` is measured
- * from — the nearest ancestor with a resolved placement, i.e. the
- * IfcBuilding in a well-formed file.
+ * World Z of an IfcBuildingStorey's floor: `Elevation` measured up the
+ * datum's own +Z from the datum's world origin, where the datum is the
+ * nearest ancestor with a resolved placement (the IfcBuilding in a
+ * well-formed file).
  *
- * Zero when nothing up the chain resolved one, which reads Elevation as
- * world-relative. That is the pre-fix behaviour and the only remaining
- * fallback: a storey whose ancestors have no usable placement gives us
- * nothing better to anchor on.
+ * Elevation is a length along the datum's Z, not along world Z, so the
+ * datum's whole transform is needed and not just its height — on a
+ * building tilted out of plumb the two differ by `cos(tilt)`. Only the
+ * Z component is taken, because that is all the banding uses: the plate
+ * keeps the XY footprint its placement and contained samples give it.
+ * A tilted building's storeys are not horizontal anyway, so the
+ * axis-aligned plate is an approximation there by construction — this
+ * just stops it being an approximation on the *height* as well.
+ *
+ * Falls back to a world-relative Elevation (datum at zero, +Z up) when
+ * nothing up the chain resolved a placement: the pre-fix behaviour, and
+ * the only thing left to anchor on.
  *
  * @param localID The storey.
+ * @param elevation The storey's `Elevation`, in source units.
  * @param nodes All walked nodes.
  * @param parentOf Child -> parent.
- * @return {number} The datum's world Z.
+ * @return {number} The floor's world Z.
  */
-function storeyDatumZ_(
+function storeyFloorZ_(
     localID: number,
+    elevation: number,
     nodes: Map< number, SpatialNode >,
     parentOf: Map< number, number > ): number {
 
@@ -972,16 +1157,17 @@ function storeyDatumZ_(
   // untrusted everywhere else too (see `computing` in aabbOf).
   for ( let hops = 0; id !== void 0 && hops <= nodes.size; ++hops ) {
 
-    const originZ = nodes.get( id )?.origin?.[ 2 ]
+    const placement = nodes.get( id )?.placement
 
-    if ( originZ !== void 0 ) {
-      return originZ
+    if ( placement !== void 0 ) {
+      return placement[ TRANSLATION[ 2 ] ] +
+        elevation * placement[ LOCAL_Z_WORLD_Z ]
     }
 
     id = parentOf.get( id )
   }
 
-  return 0
+  return elevation
 }
 
 
@@ -997,9 +1183,9 @@ function storeyDatumZ_(
  * Best-effort by construction, and the failure has two shapes. Beyond
  * LARGE_COORDINATE_BUDGET_M both sides snap to COORDINATION_SNAP_M and
  * agree as long as the spatial root and the first geometry share a grid
- * cell. Worse: the anchor comes from `placementOrigin_`, which sums
- * IfcLocalPlacement translations and never looks at geometry — so a file
- * that keeps identity placements and bakes absolute coordinates into the
+ * cell. Worse: the anchor comes from `placementTransform_`, which reads
+ * IfcLocalPlacement chains and never looks at geometry — so a file that
+ * keeps identity placements and bakes absolute coordinates into the
  * vertices (civil/GIS exports do this) has a root box near zero and gets
  * no recentre at all, while the durable walk anchors tens of km out and
  * does. That is a full site-offset, not a one-cell disagreement. Whenever
