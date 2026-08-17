@@ -20,7 +20,7 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
   private RelatedElement_? : IfcElement
   private InterferenceGeometry_? : IfcConnectionGeometry | null
   private InterferenceType_? : string | null
-  private ImpliedOrder_? : boolean
+  private ImpliedOrder_? : boolean | null
 
   public get RelatingElement() : IfcElement {
     if ( this.RelatingElement_ === void 0 ) {
@@ -54,12 +54,12 @@ export  class IfcRelInterferesElements extends IfcRelConnects {
     return this.InterferenceType_ as string | null
   }
 
-  public get ImpliedOrder() : boolean {
+  public get ImpliedOrder() : boolean | null {
     if ( this.ImpliedOrder_ === void 0 ) {
-      this.ImpliedOrder_ = this.extractBoolean( 8, 4, 3, false )
+      this.ImpliedOrder_ = this.extractLogical( 8, 4, 3, false )
     }
 
-    return this.ImpliedOrder_ as boolean
+    return this.ImpliedOrder_ as boolean | null
   }
   constructor(
     localID: number,

@@ -22,7 +22,7 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
   private name_? : string
   private description_? : string | null
   private of_shape_? : product_definition_shape
-  private product_definitional_? : boolean
+  private product_definitional_? : boolean | null
 
   public get name() : string {
     if ( this.name_ === void 0 ) {
@@ -48,12 +48,12 @@ export  class shape_aspect extends StepEntityBase< EntityTypesAP214 > {
     return this.of_shape_ as product_definition_shape
   }
 
-  public get product_definitional() : boolean {
+  public get product_definitional() : boolean | null {
     if ( this.product_definitional_ === void 0 ) {
-      this.product_definitional_ = this.extractBoolean( 3, 0, 0, false )
+      this.product_definitional_ = this.extractLogical( 3, 0, 0, false )
     }
 
-    return this.product_definitional_ as boolean
+    return this.product_definitional_ as boolean | null
   }
 
   public get id() : string {

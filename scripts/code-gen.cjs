@@ -17,7 +17,7 @@ const ifcGenPath = path.resolve(__dirname, '../external/IFC-gen-internal');
 // warn you. Verified at this SHA: regenerating both schemas reproduces the
 // checked-in output byte for byte, 1111 AP214 files and 1180 IFC4 files, zero
 // differences.
-const IFC_GEN_REVISION = '94ff4cc19399fa1baad9bb687cd1e2cde778b18c';
+const IFC_GEN_REVISION = 'c001505abd849e8be826ce61b0f7db0e6b6d82f4';
 
 function runCommand(command, options = {}) {
   try {
