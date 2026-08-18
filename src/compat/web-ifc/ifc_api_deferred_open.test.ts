@@ -725,6 +725,59 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api9.CloseModel( deferredID )
   }, 240000 )
 
+  test( 'StreamAllMeshes serves live geometry under a budget, and rebudgets after',
+      async () => {
+
+        // The half a capture-before-eviction fix does NOT cover. Preserving
+        // the FlatMesh metadata keeps the instance counts right while the
+        // natives behind them are freed, so a consumer doing the ONLY thing
+        // it can do here — read geometry inside the callback, the classic
+        // contract — gets a BindingError on a dangling handle.
+        //
+        // StreamAllMeshes asks for the whole model at once, so the budget is
+        // suspended for the call and restored after. This pins both halves:
+        // every delivered geometry is readable during delivery, and the
+        // budget is back in force when it returns.
+        const api10 = new IfcAPI()
+        await api10.Init()
+
+        const fixture = new Uint8Array(
+            fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+        const modelID = await api10.OpenModelStreamed(
+            fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+        const budgetBytes = 2048
+
+        api10.SetGeometryBudget( modelID, budgetBytes / ( 1024 * 1024 ) )
+
+        let read = 0
+
+        api10.StreamAllMeshes( modelID, ( mesh ) => {
+          for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+
+            // Reading at delivery is what a classic consumer does, and what
+            // an evicted native cannot survive.
+            const geometry =
+              api10.GetGeometry( modelID, mesh.geometries.get( where ).geometryExpressID )
+
+            expect( geometry.GetVertexDataSize() ).toBeGreaterThan( 0 )
+            ++read
+          }
+        } )
+
+        expect( read ).toBeGreaterThan( 0 )
+
+        // ...and the suspension is temporary: the budget is in force again,
+        // and has been applied, by the time the call returns.
+        const after = api10.SetGeometryBudget( modelID, budgetBytes / ( 1024 * 1024 ) )
+
+        expect( after?.budgetBytes ).toBe( budgetBytes )
+        expect( after?.liveBytes ).toBeLessThanOrEqual( budgetBytes )
+
+        api10.CloseModel( modelID )
+      }, 240000 )
+
   test( 'no budget is the default, and evicts nothing', async () => {
 
     // The contract eviction changes — GetGeometry serving an evicted asset —

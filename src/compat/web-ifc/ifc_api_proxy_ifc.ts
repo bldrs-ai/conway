@@ -2540,6 +2540,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // completion and serve the accumulated full per-entity meshes.
     if (this.deferredMode_) {
 
+      // A budget cannot hold across this call, and pretending otherwise
+      // hands the consumer freed memory.
+      //
+      // StreamAllMeshes asks for the WHOLE model at once and delivers every
+      // entity after the drain completes, so a consumer reading geometry in
+      // its callback — the classic contract, and the only way to copy a
+      // payload here — reaches natives evicted batches ago. Capturing before
+      // eviction (see the pumps) saves the FlatMesh metadata but not the
+      // natives it points at, so it fixes the silent-omission half of this
+      // and not the dangling half.
+      //
+      // So the budget is suspended for the call and restored after, with one
+      // eviction pass to trim what the drain accumulated. The peak during
+      // StreamAllMeshes is therefore the UNBUDGETED peak, which is what
+      // asking for every mesh at once means. A consumer that wants the
+      // budget honoured throughout should pump ExtractGeometryBatch and copy
+      // per batch, which is what Share does.
+      const residency = this.model[0].geometryResidency
+      const suspendedBudgetBytes = residency.budgetBytes
+
+      residency.setBudgetBytes(0)
+
       const noCallback = void 0
 
       while (this.extractGeometryBatch(
@@ -2554,6 +2576,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         vectorFlatMesh.push(mesh[1])
         meshCallback(mesh[1])
       })
+
+      if (Number.isFinite(suspendedBudgetBytes)) {
+
+        // Restoring seeds from everything now resident; the pass then trims
+        // to the ceiling, so the model is back under budget by the time this
+        // returns rather than at some later pump that may never come.
+        residency.setBudgetBytes(suspendedBudgetBytes)
+        residency.evictToBudget()
+      }
 
       return
     }
