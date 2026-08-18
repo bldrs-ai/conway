@@ -27,17 +27,23 @@ export type RecordHandler<TypeIDType> = RecordEventHandler<TypeIDType>
  * belongs on a demand queue, not here.
  *
  * Because subscriptions match on the raw parse `typeID`, external-mapping /
- * complex records (typeID 0) are only delivered via `onAnyRecord` — resolving
- * their concrete type is the incremental-type-index consumer's job (it reads
- * `multiMapping`), a follow-on. For the overwhelming majority of records
+ * complex records (typeID 0) are only delivered via `onAnyRecord`. Resolving
+ * their concrete types is not this class's job and never was: the columns
+ * carry the multi-mapping, so
+ * {@link import('./prefix_type_index').PrefixTypeIndex} attributes them
+ * correctly without the event stream. For the overwhelming majority of records
  * (simple, one type each) type-set delivery is exact.
  */
 export class StreamingRecordDispatcher<TypeIDType extends number> {
 
-  private readonly typed: Array<{
-    set: Set<TypeIDType>,
-    handler: RecordHandler<TypeIDType>,
-  }> = []
+  /**
+   * Concrete type → the handlers subscribed to it, unioned across
+   * subscriptions. Dispatch is one lookup per record no matter how many
+   * consumers are attached: the per-record cost of a subscription is the only
+   * cost this class has at 9.4 M records, so it must not scale with the
+   * subscriber count (issue #393).
+   */
+  private readonly byType = new Map<TypeIDType, RecordHandler<TypeIDType>[]>()
 
   private readonly any: RecordHandler<TypeIDType>[] = []
 
@@ -52,10 +58,20 @@ export class StreamingRecordDispatcher<TypeIDType extends number> {
       types: StepEntityConstructorAbstract<TypeIDType>[],
       handler: RecordHandler<TypeIDType> ): void {
 
-    this.typed.push( {
-      set: new Set<TypeIDType>( types.flatMap( ( type ) => type.query ) ),
-      handler,
-    } )
+    // Closures overlap between subscriptions (IfcRoot ⊃ IfcProduct, …), so a
+    // type may already have handlers; dedupe within one subscription so a
+    // constructor named twice doesn't deliver twice.
+    for ( const typeID of new Set<TypeIDType>(
+        types.flatMap( ( type ) => type.query ) ) ) {
+
+      const handlers = this.byType.get( typeID )
+
+      if ( handlers === void 0 ) {
+        this.byType.set( typeID, [ handler ] )
+      } else {
+        handlers.push( handler )
+      }
+    }
   }
 
   /**
@@ -93,8 +109,10 @@ export class StreamingRecordDispatcher<TypeIDType extends number> {
       }
 
       if ( typeID !== void 0 ) {
-        for ( const { set, handler } of this.typed ) {
-          if ( set.has( typeID ) ) {
+        const handlers = this.byType.get( typeID )
+
+        if ( handlers !== void 0 ) {
+          for ( const handler of handlers ) {
             handler( localID, expressID, typeID, buffer, byteOffset, byteLength )
           }
         }

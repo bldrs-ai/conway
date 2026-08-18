@@ -81,6 +81,8 @@ export {
 export { StreamingRecordDispatcher, RecordHandler } from './step/parsing/streaming_record_dispatcher'
 export { PrefixTypeIndex } from './step/parsing/prefix_type_index'
 export { RecordEventHandler } from './step/parsing/record_event'
+export { RecordFieldCursor } from './step/parsing/record_field_cursor'
+export { IfcSpatialSkeleton, SkeletonNode } from './ifc/ifc_spatial_skeleton'
 export { DemandGeometryQueue, GeometryTiles, DemandQueueStats } from './core/demand_geometry_queue'
 export { DemandResidencyPump, ResidencyPrefetcher, PumpResult } from './core/demand_residency_pump'
 export {

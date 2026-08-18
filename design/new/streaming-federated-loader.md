@@ -415,6 +415,20 @@ Deliberately small first step; each has a measurable exit.
       genuinely does (Name / LongName / GlobalId + the spatial rel edges);
       it is what carries the "spatial tree populates while parsing" exit
       criterion, and it deletes Share's post-parse `'names'` sweep.
+      `IfcSpatialSkeleton` subscribes to `IfcObjectDefinition` for names
+      and to the two containment relationships for edges, reading fields
+      straight out of the window through `RecordFieldCursor` (the
+      production tokenizer over the record's bytes — no model, no entity,
+      nothing allocated per record). Edges are appended as integer pairs
+      and only linked into a tree when `tree()` is called, which is what
+      makes "resolvable" mean "present when you asked" rather than a
+      pending-reference table. Measured on PSB: **+1.6 %** parse
+      (min-of-3, 8,191 → 8,326 ms) and ~5 MB, for 13.5 k nodes and 7.9 k
+      edges available *during* the parse. The cost is dominated by having
+      subscriptions attached at all, not by the skeleton's own work — a
+      pair of subscriptions that merely count measured the same — which
+      is why the dispatcher now resolves a record's handlers with one
+      `Map` lookup regardless of how many consumers are attached.
     - **Forward references need no pending-refs table.** With the skeleton
       resolving edges at snapshot time, "resolvable" is "present in this
       generation", and a hostile ordering degenerates to "resolvable at

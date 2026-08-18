@@ -27,6 +27,9 @@
  *               time the record count doubles — the same index, but queryable
  *               mid-parse. This is what "incremental type index" costs when
  *               it is derived rather than pushed.
+ *   skeleton  : IFC only — the spatial names skeleton, the one standard
+ *               consumer that legitimately runs in the parse path (it reads
+ *               each named record's bytes while the window still holds them).
  *
  * Records/checksum are reported per phase so a consumer that perturbs the
  * index shows up immediately.
@@ -42,7 +45,8 @@ import * as process from 'node:process'
 
 const POOL_BYTES = 1024 * 1024
 
-const PHASES = [ 'base', 'hook', 'dispatch', 'consumers', 'columns', 'generations' ]
+const PHASES =
+  [ 'base', 'hook', 'dispatch', 'consumers', 'columns', 'generations', 'skeleton' ]
 
 /**
  * Snapshot cadence for the `generations` phase: a new prefix index only once
@@ -84,8 +88,16 @@ class Uint32Capture {
   }
 }
 
+/**
+ * @param filePath A model path.
+ * @return {boolean} Whether it is IFC (vs a STEP/AP214 part).
+ */
+function isIfcFile( filePath ) {
+  return filePath.toLowerCase().endsWith( '.ifc' )
+}
+
 async function parserFor( filePath ) {
-  if ( filePath.toLowerCase().endsWith( '.ifc' ) ) {
+  if ( isIfcFile( filePath ) ) {
     const { default: IfcStepParser } = await import( '../compiled/src/ifc/ifc_step_parser.js' )
     return IfcStepParser.Instance
   }
@@ -129,10 +141,31 @@ async function hookFor( phase, filePath ) {
     return { hook: () => { ++seen }, report: () => ( { seen } ) }
   }
 
-  const isIfc = filePath.toLowerCase().endsWith( '.ifc' )
+  const isIfc = isIfcFile( filePath )
   const { StreamingRecordDispatcher } =
     await import( '../compiled/src/step/parsing/streaming_record_dispatcher.js' )
   const dispatcher = new StreamingRecordDispatcher()
+
+  if ( phase === 'skeleton' ) {
+    if ( !isIfcFile( filePath ) ) {
+      return { hook: void 0, report: () => ( { skipped: 'ifc-only' } ) }
+    }
+
+    const { IfcSpatialSkeleton } =
+      await import( '../compiled/src/ifc/ifc_spatial_skeleton.js' )
+    const skeleton = new IfcSpatialSkeleton()
+
+    skeleton.subscribe( dispatcher )
+
+    return {
+      hook: dispatcher.onRecordIndexed,
+      report: () => ( {
+        nodes: skeleton.nodeCount,
+        edges: skeleton.edgeCount,
+        roots: skeleton.tree().length,
+      } ),
+    }
+  }
 
   // Roots for IFC; AP214 has no IfcRoot, so subscribe to `product` — the
   // schema's identity-bearing root — keeping the two families comparable.
@@ -356,10 +389,12 @@ function main() {
         `dispatch=${byPhase.dispatch.ms.toFixed( 0 )}ms (${pct( 'dispatch' )}) ` +
         `consumers=${byPhase.consumers.ms.toFixed( 0 )}ms (${pct( 'consumers' )}) ` +
         `columns=${byPhase.columns.ms.toFixed( 0 )}ms (${pct( 'columns' )}) ` +
-        `generations=${byPhase.generations.ms.toFixed( 0 )}ms (${pct( 'generations' )})  ` +
+        `generations=${byPhase.generations.ms.toFixed( 0 )}ms (${pct( 'generations' )}) ` +
+        `skeleton=${byPhase.skeleton.ms.toFixed( 0 )}ms (${pct( 'skeleton' )})  ` +
         `mem base=${base.retainedMB.toFixed( 0 )}MB ` +
         `consumers=${byPhase.consumers.retainedMB.toFixed( 0 )}MB ` +
-        `generations=${byPhase.generations.retainedMB.toFixed( 0 )}MB  ` +
+        `generations=${byPhase.generations.retainedMB.toFixed( 0 )}MB ` +
+        `skeleton=${byPhase.skeleton.retainedMB.toFixed( 0 )}MB  ` +
         `identical=${checksums.size === 1}` )
   }
 

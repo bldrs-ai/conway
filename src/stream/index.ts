@@ -60,3 +60,5 @@ export {
 } from '../step/parsing/streaming_record_dispatcher'
 export { PrefixTypeIndex } from '../step/parsing/prefix_type_index'
 export { RecordEventHandler } from '../step/parsing/record_event'
+export { RecordFieldCursor } from '../step/parsing/record_field_cursor'
+export { IfcSpatialSkeleton, SkeletonNode } from '../ifc/ifc_spatial_skeleton'

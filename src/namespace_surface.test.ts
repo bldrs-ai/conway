@@ -24,6 +24,8 @@ describe( 'plane namespace surface', () => {
     expect( typeof stream.hashSource ).toBe( 'function' )
     expect( typeof stream.StreamingRecordDispatcher ).toBe( 'function' )
     expect( typeof stream.PrefixTypeIndex ).toBe( 'function' )
+    expect( typeof stream.RecordFieldCursor ).toBe( 'function' )
+    expect( typeof stream.IfcSpatialSkeleton ).toBe( 'function' )
   } )
 
   test( 'demand exposes the residency/extraction plane', () => {
