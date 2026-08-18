@@ -32,13 +32,16 @@ const BYTES_PER_MIB = 1024 * 1024
  * maps: +62.6 % assets on MB-Khaya at batch 64, +79.4 % on D3D. Evicting only
  * what does not fit keeps whatever there is room for, so extraction order's
  * natural locality — a representation goes cold once its users are extracted
- * — does the work instead of the batch boundary. Measured on MB-Khaya: 3 053
- * assets evicted for **zero** rebuilds, and the wasm peak 102 -> 71 MB.
+ * — does the work instead of the batch boundary. Measured on MB-Khaya at an
+ * 8 MB budget: the wasm peak falls 102 -> 85 MB with delta-mesh counts
+ * unchanged, and on PSB at batch 8 it falls 1284 -> 298 MB under 64 MB.
  *
- * **What a too-small budget costs.** Ordinary cache pressure, bounded and
- * proportional: D3D under 64 MB rebuilds 2.8 % more assets than an unbudgeted
- * load and finishes in the same time (52.5 s against 53.1 s); MB-Khaya under
- * an absurd 1 MB rebuilds 38 % more. Nothing here thrashes. (An earlier
+ * **What it costs.** Rebuilds, and far fewer than release-on-emit: MB-Khaya
+ * at an 8 MB budget rebuilds 47 assets against 7 193 (+0.65 %), where
+ * release-on-emit rebuilds +62.6 %. Squeezing harder stays proportional
+ * rather than falling off a cliff — D3D under 64 MB rebuilds 2.8 % more and
+ * finishes in the same time (52.5 s against 53.1 s), MB-Khaya under an
+ * absurd 1 MB rebuilds 38 % more. Nothing here thrashes. (An earlier
  * version of this file carried a floor that raised the budget when eviction
  * looked like churn, written after a 64 MB D3D load ran for an hour. That
  * load was not thrashing — eviction was freeing natives other cached entries

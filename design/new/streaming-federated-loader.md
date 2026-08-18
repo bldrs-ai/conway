@@ -686,9 +686,10 @@ Deliberately small first step; each has a measurable exit.
   on the same models. Freeing everything a batch created is *correct* —
   see the fixture below — but rebuilds geometry a later product still
   maps: **+62.6 %** assets on MB-Khaya at batch 64, **+79.4 %** on D3D.
-  Evicting only what does not fit costs a fraction of that, because
-  extraction order has enough locality that recency predicts reuse where
-  creation order does not.
+  Evicting only what does not fit costs a fraction of that: MB-Khaya at an
+  8 MB budget rebuilds **47** assets against 7 193 (**+0.65 %**), and D3D
+  at 64 MB rebuilds +2.8 %. Extraction order has enough locality that
+  recency predicts reuse, where creation order does not.
 
   **The bug that eviction exposed, which predates it.** A native geometry
   can be cached under more than one local ID — 1 448 of 23 692 adds on
