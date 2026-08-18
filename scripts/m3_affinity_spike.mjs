@@ -212,6 +212,21 @@ function rejectIfIncomplete( graph ) {
         'products; re-capture before simulating or emitting from it' )
     process.exit( 1 )
   }
+
+  // "No failed rows" is not "this capture saw anything". A header-only model
+  // captures zero products and zero assets, and every downstream number is then
+  // computed from an empty set: duplication `NaN%`, `max users -Infinity`,
+  // `NaNx` speedups for all four strategies, and an empty assignment from
+  // --emit — all at exit 0. A partition probe that never fired cannot be
+  // evidence for a partition.
+  const assets = graph.assets ?? 0
+
+  if ( graph.rows.length === 0 || assets === 0 ) {
+    console.error(
+        `capture has ${graph.rows.length} product(s) and ${assets} asset(s) — ` +
+        'nothing was extracted, so there is no partition to simulate or emit' )
+    process.exit( 1 )
+  }
 }
 
 /**

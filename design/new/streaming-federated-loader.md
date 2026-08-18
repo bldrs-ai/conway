@@ -68,7 +68,7 @@ The remaining structural residencies — the things this doc exists to kill:
    harness's own leaked native clones). Geometry is extracted eagerly for
    the whole model and stays resident in the wasm heap even after the
    GLB/scene is built — see the M3 status below, where per-batch release
-   takes this to 342 MB at batch 256 and 100 MB at batch 32.
+   takes this to 342 MB at batch 256 and 84 MB at batch 32.
 3. **Eager whole-model geometry extraction.** Even with a bounded heap,
    extracting *everything up front* is O(model) time before first pixel
    and O(model) scene memory after.
@@ -544,10 +544,22 @@ Deliberately small first step; each has a measurable exit.
      are the result, and they are stable.
 
   **The high-water becomes O(batch), which is the whole point.**
-  `bounded` at batch = 32 reaches **100 MB** (37.5 s, identical digests)
-  against 342 MB at batch = 256. The residency now tracks the in-flight
+  `bounded` at batch = 32 reaches **84 MB** (identical digests) against
+  342 MB at batch = 256. The residency now tracks the in-flight
   working set the way the design says it should, rather than the model:
-  1283 MB → 342 MB → 100 MB as the batch shrinks, at no wall-clock cost.
+  1283 MB → 342 MB → 84 MB as the batch shrinks, at no wall-clock cost.
+
+  Release is keyed on what the extractor **creates**, not on what it
+  delivers. The two differ: natives are built that never reach a
+  consumer as a payload — void and opening geometry consumed by a
+  boolean — and a release keyed on delivered payloads leaves those
+  resident for the life of the model. On PSB that is 403 of 20 581
+  assets, and on MB-Khaya 3 347 of 8 947 (37 %). Correcting it is what
+  moves the batch-32 row from 100 MB to 84 MB; the batch-256 row is
+  unchanged at 342 MB, because at that size the in-flight set dominates
+  the residue. (An earlier version of this section reported 100 MB and
+  checked only that every *copied* geometry was freed — a check that
+  cannot see this class of leak at all.)
 
   **This clears M3's memory gate on PSB** — "steady-state wasm heap
   under a configured budget (e.g. 512 MB) with the full model
@@ -586,7 +598,7 @@ Deliberately small first step; each has a measurable exit.
   itself diverges, a release regression would hide inside a difference
   that is already expected. So the corpus provides **no evidence that
   per-batch release changes what a consumer receives**, which is the M3
-  invariant, and the 342 MB / 100 MB rows are a real result rather than
+  invariant, and the 342 MB / 84 MB rows are a real result rather than
   one bought by dropping geometry.
 
   An earlier version of this section claimed the opposite — that

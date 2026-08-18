@@ -375,7 +375,7 @@ function wasmMB( api, wasmHeapByteLength ) {
  * @param geometryExpressIDs Geometry express IDs to free.
  * @return {number} How many were actually freed.
  */
-function releaseGeometries( api, modelID, geometryExpressIDs ) {
+function releaseGeometries( api, modelID, localIDs, geometryExpressIDs ) {
 
   const passthrough = api.getPassthrough( modelID )
   const model = passthrough?.model?.[ 0 ]
@@ -387,22 +387,29 @@ function releaseGeometries( api, modelID, geometryExpressIDs ) {
 
   let freed = 0
 
-  for ( const expressID of geometryExpressIDs ) {
-
-    const localID = model.getElementByExpressID?.( expressID )?.localID
-
-    if ( localID === void 0 ) {
-      continue
-    }
+  // Release by LOCAL ID, taken from the cache's own `add` calls, rather than by
+  // the express IDs of the payloads this batch copied. The two sets are not the
+  // same: the extractor creates natives that are never delivered as a payload —
+  // void and opening geometry consumed by a boolean, for instance. On
+  // `aggregate_master_voids.ifc` that is 2 assets created against 1 payload, and
+  // a release keyed on payloads leaves the other resident for the life of the
+  // model while reporting that everything it copied was freed. Keying on
+  // creations is what makes `bounded` actually bound the heap.
+  for ( const localID of localIDs ) {
 
     try {
       model.geometry.delete( localID )
-      geometryMap?.delete( expressID )
       ++freed
     } catch {
       // Never let a free break the measurement — a phase that cannot free
       // is a finding, not a crash.
     }
+  }
+
+  // Drop the compat GetGeometry entries too, so a later lookup degrades to the
+  // dummy instead of handing back a handle to freed memory.
+  for ( const expressID of geometryExpressIDs ) {
+    geometryMap?.delete( expressID )
   }
 
   return freed
@@ -619,6 +626,23 @@ async function runChild( phase, filePath, batchSize, shard ) {
   // measured at the cache, not inferred from a captured graph.
   let assetsCreated = 0
 
+  // Adds that land on a local ID the cache ALREADY holds. `IfcModelGeometry.add`
+  // is a bare `meshes_.set( localID, mesh )` (ifc_model_geometry.ts:75), so a
+  // replacement drops the previous `CanonicalMesh` from the map without calling
+  // `.delete()` on its native. That native is then unreachable — not by
+  // `releaseGeometries`, not by anything — so it leaks for the life of the
+  // model, in production as well as here. The rel-aggregates pass does exactly
+  // this (`aggregate_master_voids.ifc`: 2 created, 1 payload).
+  //
+  // Counted rather than worked around: a `bounded` run on a model with
+  // replacements cannot bound the heap, and the harness must say so instead of
+  // reporting the release of the survivors as success.
+  let assetsReplaced = 0
+
+  // Local IDs the cache created since the last release. `bounded` frees these
+  // rather than the copied payload IDs — see releaseGeometries.
+  const createdThisBatch = new Set()
+
   if ( deferred ) {
 
     const geometry = api.getPassthrough( modelID )?.model?.[ 0 ]?.geometry
@@ -626,9 +650,18 @@ async function runChild( phase, filePath, batchSize, shard ) {
     if ( geometry !== void 0 ) {
 
       const originalAdd = geometry.add.bind( geometry )
+      const originalGet = geometry.getByLocalID.bind( geometry )
 
       geometry.add = ( mesh ) => {
+
         ++assetsCreated
+
+        if ( originalGet( mesh.localID ) !== void 0 ) {
+          ++assetsReplaced
+        }
+
+        createdThisBatch.add( mesh.localID )
+
         return originalAdd( mesh )
       }
     }
@@ -682,7 +715,8 @@ async function runChild( phase, filePath, batchSize, shard ) {
         copyMs += performance.now() - tCopy
 
         if ( phase === 'bounded' ) {
-          released += releaseGeometries( api, modelID, copied )
+          released += releaseGeometries( api, modelID, createdThisBatch, copied )
+          createdThisBatch.clear()
         }
       }
 
@@ -708,6 +742,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
     batches,
     released,
     assetsCreated,
+    assetsReplaced,
     shard,
     sharded,
     wasmAfterOpenMB,
@@ -822,7 +857,9 @@ function spawnShards( phase, filePath, batchSize, count, shardMode ) {
  * separating before drawing conclusions: real serialisation, and duplicated
  * shared work (visible as a rising payload count).
  *
- * @param models Model paths.
+ * @param models Model entries `{path, allowEmpty}` from the models file — the
+ * `#empty` declaration has to reach here too, since this path never runs
+ * `verdicts()` and would otherwise accept a sweep that extracted nothing.
  * @param phase The phase to run.
  * @param batchSize Products per pump call.
  * @param counts Shard counts to sweep.
@@ -833,7 +870,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
 
   const rows = []
 
-  for ( const model of models ) {
+  for ( const { path: model, allowEmpty } of models ) {
 
     const name = path.basename( model )
     const byCount = {}
@@ -874,6 +911,19 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
         payloads: total( 'payloads' ),
         wasmPeakMBSum: results.reduce( ( sum, r ) => sum + r.wasmPeakMB, 0 ),
         wasmPeakMBMax: Math.max( ...results.map( ( r ) => r.wasmPeakMB ) ),
+      }
+
+      // Completing is not the same as doing something. A sharded run on a
+      // geometry-producing model that creates no assets means the extraction
+      // never fired, and every ratio below it is a ratio of nothing — the same
+      // hole the unsharded `pump` verdict closes, which this path never reaches.
+      // Checked on the N=1 baseline, because an individual shard at N>1 can
+      // legitimately own no products.
+      if ( count === 1 && byCount[ count ].assetsCreated === 0 && !allowEmpty ) {
+        throw new Error(
+            `${name}: the N=1 baseline created 0 geometry assets on a model not ` +
+            'declared geometry-free — the extraction never fired, so there is ' +
+            'nothing to scale' )
       }
 
       const base = byCount[ counts[ 0 ] ]
@@ -1022,11 +1072,17 @@ function verdicts( byPhase, phases, allowEmpty ) {
     // and would read as "release changed nothing" while nothing was released.
     // `releaseGeometries` swallows per-geometry failures so one bad free can't
     // end a run, so the count is the only evidence release actually happened.
-    if ( bounded.released !== bounded.payloads ) {
+    // Against CREATIONS, not copied payloads. The extractor makes natives that
+    // are never delivered (void/opening geometry consumed by a boolean), so
+    // `released === payloads` can hold while the heap still carries everything
+    // that was built but not handed out — the phase would look bounded and not
+    // be. `assetsCreated` comes from wrapping the cache's own `add`.
+    if ( bounded.released !== bounded.assetsCreated ) {
       out.push( {
-        text: `FAIL  bounded released ${bounded.released} of ${bounded.payloads} ` +
-          'copied geometries — the release path is failing, so any agreement ' +
-          'with copyout is vacuous',
+        text: `FAIL  bounded released ${bounded.released} of ` +
+          `${bounded.assetsCreated} geometries the extractor created ` +
+          `(${bounded.payloads} of them delivered as payloads) — the heap still ` +
+          'holds what was built but never handed out, so this run is not bounded',
         failed: true,
       } )
     }
@@ -1186,13 +1242,27 @@ function main() {
     // worse. Normalise instead of trusting the caller: dedupe, sort ascending,
     // and run a one-shard baseline whether or not it was asked for.
     const requested = shards.split( ',' ).map( Number )
+    // Validate BEFORE normalisation: `--shards 0` sorts ahead of the injected
+    // N=1 baseline, so `spawnShards` launches no children, the empty result
+    // list slips past the broken-child check, and the sweep prints
+    // `geometry=-Infinitys` and `NaNx` ratios against a zero-shard row while
+    // exiting 0.
+    const invalid = requested.filter(
+        ( count ) => !Number.isInteger( count ) || count < 1 )
+
+    if ( invalid.length > 0 ) {
+      console.error(
+          `--shards must be positive integers; got ${invalid.join( ', ' )}` )
+      process.exit( 2 )
+    }
+
     const counts = [ ...new Set( [ 1, ...requested ] ) ].sort( ( a, b ) => a - b )
 
     if ( counts.length !== requested.length ) {
       console.log( `note: added an N=1 baseline (sweeping ${counts.join( ',' )})` )
     }
 
-    return runShardSweep( models.map( ( entry ) => entry.path ), shardPhase,
+    return runShardSweep( models, shardPhase,
         batchSize, counts, jsonOut, shardMode( flag( '--shard-mode', 'roundrobin' ) ) )
   }
 
