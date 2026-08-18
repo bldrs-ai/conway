@@ -652,6 +652,82 @@ Deliberately small first step; each has a measurable exit.
   `GetVertexDataSize`/`GetIndexDataSize`. Which policy wins is a
   measurement the existing harness can run before any engine change.
 
+    **Implementation, second landed piece — a resident-geometry budget
+  (2026-08-18).** M3's items 1 and 2, "per-product wasm reclaim" and the
+  "budgeted arena", in the production pump rather than a harness.
+  `GeometryResidency` (`src/ifc/geometry_residency.ts`) holds an LRU over
+  both of a model's geometry stores against a byte ceiling, evicting at
+  each batch boundary. Configured at open (`GEOMETRY_BUDGET_MB`) or after
+  (`SetGeometryBudget`), and **unlimited by default**, because eviction
+  changes a contract: an evicted asset is gone from `GetGeometry` until
+  something re-extracts it, which is safe for a consumer that copies
+  payloads at delivery (Share#1640) and unsafe for one that fetches
+  lazily later.
+
+  **PSB.ifc at batch 8 — the size Share pumps at:**
+
+  | budget | live | wasm peak | delta meshes | geometry |
+  | --- | --- | --- | --- | --- |
+  | none | — | **1284 MB** | 7 764 | 25.7 s |
+  | **64 MB** | 64.0 MB | **298 MB** | 7 764 | **23.6 s** |
+  | 256 MB | 256.0 MB | 803 MB | 7 764 | 23.4 s |
+
+  MB-Khaya at batch 64: 102 → 85 MB under an 8 MB budget, and a 32 MB
+  budget never binds (live is 17.8 MB). D3D at batch 64: 52.5 s against
+  53.1 s unbudgeted, live held at 64.0 MB, 2.8 % more assets rebuilt.
+  **This is the memory gate, met on the production path at no wall-clock
+  cost** — and note the heap runs 3-4x the live budget, so a 512 MB heap
+  target means a budget nearer 128-192 MB. The gap is allocator overhead,
+  fragmentation, and the intermediate buffers a boolean leaves behind,
+  none of which the payload accounting can see.
+
+  **Why LRU rather than release-on-emit, decided by measurement.** The
+  harness gained an `lru` phase beside `bounded` so the two could be run
+  on the same models. Freeing everything a batch created is *correct* —
+  see the fixture below — but rebuilds geometry a later product still
+  maps: **+62.6 %** assets on MB-Khaya at batch 64, **+79.4 %** on D3D.
+  Evicting only what does not fit costs a fraction of that, because
+  extraction order has enough locality that recency predicts reuse where
+  creation order does not.
+
+  **The bug that eviction exposed, which predates it.** A native geometry
+  can be cached under more than one local ID — 1 448 of 23 692 adds on
+  D3D, 6 % — and `IfcModelGeometry.delete` freed it unconditionally. So
+  evicting one entry left its siblings pointing at freed memory, and
+  everything sharing that native re-extracted; a second eviction of the
+  same native aborted the load with a `BindingError`. The byte accounting
+  had the matching defect, charging per key rather than per native, so a
+  budget bound several times tighter than it read. **Residency is
+  therefore refcounted on the native object itself**, and the store asks
+  before freeing.
+
+  Two things worth keeping from how that was found. It presented as a
+  64 MB D3D load still running after an hour against 53 s unbudgeted, and
+  the obvious reading — the working set does not fit, LRU is thrashing —
+  was wrong: with correct accounting the working set fits in 64 MB
+  exactly. A "working-set floor" written to handle that supposed thrash
+  never fired on any model, including an absurd 1 MB budget on MB-Khaya
+  (38 % more rebuilds, no thrash), and was removed. And the first
+  published figures were *flattering* rather than merely wrong —
+  MB-Khaya's peak read 71 MB where it is really 85 MB, the difference
+  being natives freed while still referenced. **The hazard is not
+  specific to the budget**: any mass delete has it, `ReleaseModelGeometry`
+  included. Eviction is only the first caller to delete enough entries to
+  reach it.
+
+  Pinned by two tests (`ifc_api_deferred_open.test.ts`): a budget binds
+  and delivers the same placements as classic, and the default budget-free
+  path tracks nothing, frees nothing, and leaves every delivered geometry
+  fetchable. Both mutation-verified — disabling eviction on the
+  synchronous pump fails the first with `Expected <= 2048, Received
+  19440`, which is the bug the first version of this shipped by wiring
+  only the async pump.
+
+  **Still open in M3 after this:** evict/refill under *navigation* (this
+  measures a drain-once pass; the chunk region exists for churn, where a
+  general allocator fragments), viewport-ordered materialisation (the
+  pump extracts in file order), and the time-to-first-pixel gate itself.
+
     **This clears M3's memory gate on PSB** — "steady-state wasm heap
   under a configured budget (e.g. 512 MB) with the full model
   navigable" — with room to spare, and *without* the dedicated chunk
