@@ -1,13 +1,16 @@
 import { StepEntityConstructorAbstract } from '../step_entity_constructor'
+import { RecordEventHandler } from './record_event'
 
 
 /**
- * A per-record event handler. Receives a record's dense `localID` (assigned
- * in parse order from 0), its `expressID`, and its `typeID` (0 for
- * external-mapping records).
+ * A per-record event handler: a record's dense `localID` (assigned in parse
+ * order from 0), its `expressID`, its `typeID` (0 for external-mapping
+ * records), and the record's raw bytes as an un-materialised
+ * `(buffer, byteOffset, byteLength)` view over the live parse window.
+ * See {@link RecordEventHandler} — in particular, the bytes are only valid
+ * for the duration of the call.
  */
-export type RecordHandler<TypeIDType> =
-  ( localID: number, expressID: number, typeID: TypeIDType | undefined ) => void
+export type RecordHandler<TypeIDType> = RecordEventHandler<TypeIDType>
 
 
 /**
@@ -72,18 +75,27 @@ export class StreamingRecordDispatcher<TypeIDType extends number> {
    * @param localID The record's dense local ID.
    * @param expressID The record's express ID.
    * @param typeID The record's type ID (0 for external-mapping records).
+   * @param buffer The live parse window holding the record's bytes.
+   * @param byteOffset Offset of the record's first byte within `buffer`.
+   * @param byteLength Length of the record in bytes.
    */
   public readonly onRecordIndexed: RecordHandler<TypeIDType> =
-    ( localID: number, expressID: number, typeID: TypeIDType | undefined ): void => {
+    (
+        localID: number,
+        expressID: number,
+        typeID: TypeIDType | undefined,
+        buffer?: Uint8Array,
+        byteOffset?: number,
+        byteLength?: number ): void => {
 
       for ( const handler of this.any ) {
-        handler( localID, expressID, typeID )
+        handler( localID, expressID, typeID, buffer, byteOffset, byteLength )
       }
 
       if ( typeID !== void 0 ) {
         for ( const { set, handler } of this.typed ) {
           if ( set.has( typeID ) ) {
-            handler( localID, expressID, typeID )
+            handler( localID, expressID, typeID, buffer, byteOffset, byteLength )
           }
         }
       }

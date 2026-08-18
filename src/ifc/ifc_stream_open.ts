@@ -1,5 +1,6 @@
 import { ByteSource, ReadableByteSource, StoreByteSource } from '../step/parsing/byte_source'
 import { StepIndexColumns } from '../step/parsing/columnar_index'
+import { RecordEventHandler } from '../step/parsing/record_event'
 import {
   buildColumnarIndexStreaming,
   buildColumnarIndexStreamingAsync,
@@ -31,12 +32,13 @@ export interface StreamedIfcOpenOptions {
   maxResidentChunks?: number
 
   /**
-   * Live per-record event `(localID, expressID, typeID)` — the M2 seam for
-   * incremental consumers (type index, roots, cross-refs) that run while
-   * the model is still parsing. Must be synchronous and cheap.
+   * Live per-record event — the M2 seam for incremental consumers (type
+   * index, roots, cross-refs, names skeleton) that run while the model is
+   * still parsing. Must be synchronous and cheap; see
+   * {@link RecordEventHandler} for the payload and the window-lifetime rule
+   * on the record bytes it hands over.
    */
-  onRecordIndexed?:
-    ( localID: number, expressID: number, typeID: EntityTypesIfc | undefined ) => void
+  onRecordIndexed?: RecordEventHandler<EntityTypesIfc>
 }
 
 
