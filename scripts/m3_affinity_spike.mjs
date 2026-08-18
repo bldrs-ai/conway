@@ -398,9 +398,22 @@ function costModel( rows ) {
  * from a graph that blind agree because none of them has information, not
  * because placement cannot help. On MB-Khaya the capture sees 75 %.
  *
- * So D3D says nothing about the key either way until the capture covers the
- * rel-aggregates pass (see the caveats in the design doc), which on that
- * model evidently produces most of the geometry.
+ * With the capture fixed (both stores, the rel-aggregates pass, and
+ * aggregates placed by assignment rather than positionally), D3D answers —
+ * and splits the question in two. At N=4 against a 59 098 serial baseline:
+ *
+ *   roundrobin  83 177 assets (+40.7 %)  47.6s  1.18x
+ *   dispatch    81 639 assets (+38.1 %)  23.7s  2.34x
+ *   affinity    65 288 assets (+10.5 %)  29.0s  1.79x  shards 15896/29030/19585/2837
+ *
+ * Placement DOES help here — the oracle removes three quarters of the
+ * duplication — but this key does not reach it: on an assembly-heavy model
+ * the sharing lives below the representation, in profiles, boolean operands
+ * and void geometry, exactly where an attribute walk cannot see. Yet the key
+ * still wins the wall-clock, because it balances and the oracle does not.
+ * Best duplication and best wall-clock are different strategies on this
+ * model, and the gap between them (30 points, ~14s CPU) is the headroom a
+ * better key would recover.
  *
  * @param model The IFC model.
  * @param productLocalID The product.
