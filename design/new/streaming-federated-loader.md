@@ -561,17 +561,47 @@ Deliberately small first step; each has a measurable exit.
   accumulated with the number of geometries rather than with the batch
   and so masked the batch's effect entirely.)
 
-  **Retention is a correctness prerequisite, not an optimisation.**
-  Retain-nothing release breaks a real model: on `supercap.step` it
-  delivers **169 instances against 101**, because a later product
-  sharing a released geometry misses the cache, re-extracts, and appends
-  duplicate scene nodes — while `streamNewMeshes_`'s *positional*
-  per-entity watermarks desynchronise on top of it (a positional cursor
-  cannot survive an entry vanishing from the sequence it indexes). So
-  the shippable policy is refcount-on-asset (`SharedAssetPool`, already
-  written) plus an **asset-keyed delta capture**, which also deletes the
-  pump's O(batches × scene) re-walk. The 840 MB row is the measured
-  upper bound of the win, not a shippable configuration.
+  **Release did not break delivery anywhere in the smoke corpus.** With
+  every instance's product, geometry, transform, colour and
+  `occurrencePath` hashed, `bounded` is identical to `classic` on 11 of
+  12 models — same instances, same payloads, same placement. So the
+  corpus provides **no evidence that per-batch release changes what a
+  consumer receives**, which is the M3 invariant, and the 342 MB / 100 MB
+  rows are a real result rather than one bought by dropping geometry.
+
+  An earlier version of this section claimed the opposite — that
+  retain-nothing delivered 169 instances against 101 on `supercap.step`,
+  making retention a *measured* correctness prerequisite. That figure
+  came from a stale harness state and does not reproduce. Retracted.
+
+  **Retention is still required, but as a design argument, not a
+  measured one.** The mechanism is unchanged and real: the scene walk
+  resolves geometry through `model.geometry.getByLocalID` and skips what
+  it cannot find, so releasing an asset a later product shares makes
+  that product miss the cache and re-extract, appending duplicate scene
+  nodes — and `streamNewMeshes_`'s *positional* per-entity watermarks
+  cannot survive an entry vanishing from the sequence they index. This
+  corpus simply never triggers it at batch 64: shared geometry is copied
+  and released within the same batch that emits all of its instances.
+  A model that instances one definition across widely separated products
+  would, and finding or building that fixture is the next thing this
+  harness needs. The shippable policy is unchanged —
+  refcount-on-asset (`SharedAssetPool`, already written) plus an
+  **asset-keyed delta capture**, which also deletes the pump's
+  O(batches × scene) re-walk — but it is now justified by the code path
+  rather than by a number.
+
+  **The 12th model exposes something else, and it is a production bug.**
+  On `supercap.step` (AP214) the *deferred pump itself* diverges from
+  the classic walk before any release is involved: `ExtractGeometryBatch`
+  delivers **21 instances over 2 geometries** where `StreamAllMeshes`
+  delivers **101 over 6**. `copyout` — which releases nothing — diverges
+  exactly as `bounded` does, so release is not implicated. It is
+  deterministic across runs, reproduces before this branch merged M2,
+  and reproduces with the harness's native-clone handling removed. Since
+  the deferred pump is the path Share's demand/tiled rendering runs, an
+  AP214 assembly losing four fifths of its placed instances there is a
+  correctness bug in the production path, tracked separately from M3.
 
   **The worker pool is a live lever, and the MT result never tested it
   (measured 2026-08-18).** Two different parallelism axes were being

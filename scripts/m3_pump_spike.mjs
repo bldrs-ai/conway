@@ -96,21 +96,37 @@ class Digest {
   /**
    * Hash one placed instance into the order-independent accumulator.
    *
+   * @param placedGeometry The placed instance as delivered to the consumer.
    * @param expressID The product's express ID.
-   * @param geometryExpressID The geometry's express ID.
-   * @param transform The 16-element placement.
    */
-  placed( expressID, geometryExpressID, transform ) {
+  placed( placedGeometry, expressID ) {
 
     ++this.instances
 
     let hash = 2166136261
 
     hash = mix32( hash, expressID )
-    hash = mix32( hash, geometryExpressID )
+    hash = mix32( hash, placedGeometry.geometryExpressID )
 
-    for ( const component of transform ) {
+    for ( const component of placedGeometry.flatTransformation ) {
       hash = mix32( hash, quantise( component ) )
+    }
+
+    // Colour and occurrence path are delivered output, not metadata: colour is
+    // what the instance looks like, and `occurrencePath` is what a pick
+    // resolves to on an AP214 assembly where one definition appears many
+    // times. A batching or release regression that swapped either while
+    // preserving counts and transforms would otherwise pass this check.
+    const colour = placedGeometry.color
+
+    if ( colour !== void 0 ) {
+      for ( const channel of [ colour.x, colour.y, colour.z, colour.w ] ) {
+        hash = mix32( hash, quantise( channel ) )
+      }
+    }
+
+    for ( const step of placedGeometry.occurrencePath ?? [] ) {
+      hash = mix32( hash, step )
     }
 
     this.placedHash = ( this.placedHash + hash ) >>> 0
@@ -212,7 +228,7 @@ function copyBatchPayloads( api, modelID, meshes, seen, digest, retained ) {
 
       const placed = placedVector.get( i )
 
-      digest.placed( mesh.expressID, placed.geometryExpressID, placed.flatTransformation )
+      digest.placed( placed, mesh.expressID )
 
       if ( seen.has( placed.geometryExpressID ) ) {
         continue
@@ -389,10 +405,24 @@ function shardWorklists( api, modelID, shard, filePath ) {
     const assigned = assignment.shards.flat()
     const unique = new Set( assigned )
 
-    if ( assigned.length !== unique.size || unique.size !== products.length ) {
+    if ( assigned.length !== unique.size ) {
       throw new Error(
-          `assignment covers ${unique.size} unique products ` +
-          `(${assigned.length} entries) against a worklist of ${products.length}` )
+          `assignment lists ${assigned.length} entries for ${unique.size} ` +
+          `unique products — a product assigned twice is extracted twice` )
+    }
+
+    // Membership, not cardinality: an assignment of the right SIZE built from
+    // ids this worklist doesn't contain filters everything out and still
+    // prints a speedup (a one-product model with `[[999999999], []]` reported
+    // 40.63x on zero assets). Compare the sets.
+    const worklist = new Set( products )
+    const foreign = [ ...unique ].filter( ( id ) => !worklist.has( id ) )
+    const missing = products.filter( ( id ) => !unique.has( id ) )
+
+    if ( foreign.length > 0 || missing.length > 0 ) {
+      throw new Error(
+          `assignment does not match this worklist: ${foreign.length} ids ` +
+          `absent from it, ${missing.length} of its products unassigned` )
     }
 
     const mineSet = new Set( assignment.shards[ shard.index ] )
@@ -749,6 +779,95 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
   if ( jsonOut !== void 0 ) {
     fs.writeFileSync( jsonOut, `${JSON.stringify( rows, null, 2 )}\n` )
   }
+
+  if ( failures.length > 0 ) {
+    console.error( `\n${failures.length} model(s) failed the delivery check:` )
+
+    for ( const failure of failures ) {
+      console.error( `  ${failure}` )
+    }
+
+    process.exit( 1 )
+  }
+}
+
+/**
+ * Turn the phase rows into explicit verdicts, so a sweep that measured
+ * nothing fails instead of printing agreeable zeros.
+ *
+ * The digest comparison is the spike's whole correctness argument, and it has
+ * a vacuous mode: if no mesh callback ever fires, every payload phase reports
+ * `inst=0` with equal digests and the run looks like a clean pass. That is
+ * indistinguishable from success by eye, which is exactly how the other
+ * harness defects in this branch survived. So:
+ *
+ *  - `classic` delivering no instances on a geometry-producing model is a
+ *    FAILURE, not a silent zero. (A model that genuinely has no geometry is
+ *    reported as SKIP — its own row proves it, since classic is the
+ *    unmodified whole-model walk.)
+ *  - `copyout` must match `classic` exactly. It changes only WHEN extraction
+ *    happens, so any divergence is a real regression.
+ *  - `bounded` divergence is reported as a labelled DIFF rather than a
+ *    failure: retain-nothing release is expected to duplicate instances on a
+ *    model with shared geometry (`supercap.step`), and that finding is the
+ *    reason the phase exists.
+ *
+ * @param byPhase Results keyed by phase.
+ * @param phases The phases that ran.
+ * @return {object[]} `{text, failed}` lines.
+ */
+function verdicts( byPhase, phases ) {
+
+  const out = []
+  const classic = byPhase.classic
+
+  if ( classic?.instances === void 0 || !phases.includes( 'classic' ) ) {
+    return out
+  }
+
+  if ( classic.instances === 0 ) {
+    out.push( { text: 'SKIP  classic delivered no instances — model has no geometry', failed: false } )
+    return out
+  }
+
+  for ( const phase of [ 'copyout', 'bounded' ] ) {
+
+    const row = byPhase[ phase ]
+
+    if ( row?.instances === void 0 ) {
+      continue
+    }
+
+    if ( row.instances === 0 ) {
+      out.push( {
+        text: `FAIL  ${phase} delivered 0 instances against classic's ${classic.instances} ` +
+          '— the phase produced nothing, so its digest proves nothing',
+        failed: true,
+      } )
+      continue
+    }
+
+    const same = row.placedDigest === classic.placedDigest &&
+      row.payloadDigest === classic.payloadDigest
+
+    if ( same ) {
+      out.push( { text: `OK    ${phase} identical to classic (${row.instances} instances)`, failed: false } )
+      continue
+    }
+
+    const line =
+      `${phase} differs from classic: ${row.instances} instances vs ` +
+      `${classic.instances}, placed ${row.placedDigest} vs ${classic.placedDigest}, ` +
+      `payload ${row.payloadDigest} vs ${classic.payloadDigest}`
+
+    // Only `bounded` is allowed to differ, and only because retaining nothing
+    // is a deliberately unshippable policy — see the doc's retention section.
+    out.push( phase === 'bounded' ?
+      { text: `DIFF  ${line}`, failed: false } :
+      { text: `FAIL  ${line}`, failed: true } )
+  }
+
+  return out
 }
 
 /**
@@ -797,6 +916,7 @@ function main() {
       .filter( ( line ) => line.length > 0 && !line.startsWith( '#' ) )
 
   const rows = []
+  const failures = []
 
   if ( shards !== void 0 ) {
 
@@ -870,10 +990,31 @@ function main() {
     }
 
     console.log( `${name}\n  ${phases.map( cell ).join( '\n  ' )}` )
+
+    for ( const line of verdicts( byPhase, phases ) ) {
+      console.log( `  ${line.text}` )
+
+      if ( line.failed ) {
+        // `import * as process` gives a frozen namespace, so exitCode cannot
+        // be assigned — record and exit explicitly once every model is
+        // reported, so a failure never costs the rest of the sweep's output.
+        failures.push( `${name}: ${line.text}` )
+      }
+    }
   }
 
   if ( jsonOut !== void 0 ) {
     fs.writeFileSync( jsonOut, `${JSON.stringify( rows, null, 2 )}\n` )
+  }
+
+  if ( failures.length > 0 ) {
+    console.error( `\n${failures.length} model(s) failed the delivery check:` )
+
+    for ( const failure of failures ) {
+      console.error( `  ${failure}` )
+    }
+
+    process.exit( 1 )
   }
 }
 
