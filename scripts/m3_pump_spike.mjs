@@ -171,8 +171,17 @@ function exactPayloadDigest( payloads ) {
     hash = mix32( hash, vertices.length )
     hash = mix32( hash, indices.length )
 
-    for ( let i = 0; i < vertices.length; ++i ) {
-      hash = mix32( hash, quantise( vertices[ i ] ) )
+    // RAW BITS, not quantised values. `quantise` exists for placement, where
+    // the two paths compose f64 matrices differently and the last bits
+    // legitimately differ; applying it to vertices would put 1.0 and 1.0001
+    // in the same bucket and let a small tessellation change pass a check
+    // that claims byte-identical payloads. Vertices come from the same frozen
+    // native mirror on every path, so they are comparable bit-for-bit.
+    const vertexBits = new Uint32Array(
+        vertices.buffer, vertices.byteOffset, vertices.length )
+
+    for ( let i = 0; i < vertexBits.length; ++i ) {
+      hash = mix32( hash, vertexBits[ i ] )
     }
 
     for ( let i = 0; i < indices.length; ++i ) {
@@ -197,8 +206,12 @@ function mix32( hash, value ) {
 }
 
 /**
- * Quantise a float so an f32/f64 round-trip (native dmat4 vs copied floats)
- * doesn't read as divergence.
+ * Quantise a float for PLACEMENT comparison only.
+ *
+ * The two paths compose their f64 placement matrices in a different order, so
+ * the last bits legitimately differ; rounding to 1/1024 keeps that from
+ * reading as a divergence. Deliberately NOT used for vertex payloads, which
+ * are compared bit-for-bit — see {@link exactPayloadDigest}.
  *
  * @param value The float.
  * @return {number} An integer.
@@ -838,7 +851,37 @@ function verdicts( byPhase, phases, allowEmpty ) {
   // `bounded` releases, so this is the check the release claim rests on — and
   // `--phases copyout,bounded`, the most direct release-isolation run, has no
   // `classic` row at all.
-  if ( copyout?.instances !== void 0 && bounded?.instances !== void 0 ) {
+  // A phase that never opened the model has no `instances` at all, and one
+  // that delivered nothing has zero — and `0 === 0` with equal empty digests
+  // reads as agreement. Neither can support a comparison, so say so rather
+  // than passing quietly. (`allowEmpty` is the caller's declaration that the
+  // model genuinely has no geometry.)
+  for ( const phase of [ 'copyout', 'bounded' ] ) {
+
+    const row = byPhase[ phase ]
+
+    if ( row === void 0 || !phases.includes( phase ) ) {
+      continue
+    }
+
+    if ( row.instances === void 0 ) {
+      out.push( {
+        text: `FAIL  ${phase} did not complete (${row.failed ?? 'no result'}) ` +
+          '— nothing to compare',
+        failed: true,
+      } )
+    } else if ( row.instances === 0 && !allowEmpty ) {
+      out.push( {
+        text: `FAIL  ${phase} delivered 0 instances on a model not declared ` +
+          'geometry-free — extraction produced nothing, so its digest proves nothing',
+        failed: true,
+      } )
+    }
+  }
+
+  const bothDelivered = ( copyout?.instances ?? 0 ) > 0 && ( bounded?.instances ?? 0 ) > 0
+
+  if ( bothDelivered ) {
 
     // A release that THREW on every geometry also produces bounded ≡ copyout,
     // and would read as "release changed nothing" while nothing was released.
