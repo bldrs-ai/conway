@@ -23,6 +23,8 @@ import {
   IfcWall,
   IfcPropertySet,
 } from '../../ifc/ifc4_gen'
+import { MultiIndexSetCursorOr } from '../../indexing/multi_index_set_cursor_or'
+import { SingleIndexSetCursor } from '../../indexing/single_index_set_cursor'
 import { StepTypeIndexer } from '../indexing/step_type_indexer'
 import { BufferByteSource } from './byte_source'
 import { ColumnarIndexSink } from './columnar_index'
@@ -351,6 +353,55 @@ describe( 'PrefixTypeIndex', () => {
           expect( new Set( index.expressIDsOfTypes( IfcRoot as any ) ) )
               .toEqual( new Set( model.expressIDsOfTypes( IfcRoot ) ) )
         } )
+  } )
+
+  // Cursors come from LIFO pools, so "was it returned?" is observable by
+  // identity: park one in the pool, run a query, and see whether the next
+  // allocation hands back the same instance. A query that leaks its cursor
+  // leaves the pool empty and the next allocation is a fresh object.
+  //
+  // Both cursor kinds are covered because which one a query allocates depends
+  // on the size of the subtype closure — IfcProject's is a single type
+  // (SingleIndexSetCursor), a two-type query is a union
+  // (MultiIndexSetCursorOr). Testing only a subtyped query would park a single
+  // cursor that the query never touches, and pass no matter what.
+  describe.each( [
+    [ 'single-type', () => SingleIndexSetCursor.allocate( new Uint32Array( 2 ) ),
+      ( index: PrefixTypeIndex<EntityTypesIfc> ) =>
+        index.expressIDsOfTypes( IfcProject as any ) ],
+    [ 'multi-type', () => MultiIndexSetCursorOr.allocate( new Uint32Array( 2 ) ),
+      ( index: PrefixTypeIndex<EntityTypesIfc> ) =>
+        index.expressIDsOfTypes( IfcProject as any, IfcPropertySet as any ) ],
+  ] )( 'the %s cursor pool', ( _name, park, query ) => {
+
+    test.each( [
+      [ 'a fully consumed query', ( ids: IterableIterator<number> ) => {
+        for ( const _id of ids ) {
+          // drain
+        }
+      } ],
+      [ 'a query abandoned partway', ( ids: IterableIterator<number> ) => {
+        for ( const _id of ids ) {
+          break
+        }
+      } ],
+    ] )( 'gets its cursor back after %s', ( _consumeName, consume ) => {
+      // The abandoned case is the one that needs try/finally rather than a
+      // free() after the loop — a consumer breaking out of a query is
+      // ordinary, not exceptional.
+      const index = streamed()
+      const parked = park()
+
+      parked.free()
+
+      consume( query( index ) )
+
+      const reused = park()
+
+      reused.free()
+
+      expect( reused ).toBe( parked )
+    } )
   } )
 
   test( 'complex records are attributed to their mapped classes', () => {
