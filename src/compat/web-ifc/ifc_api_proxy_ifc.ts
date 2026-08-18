@@ -158,7 +158,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * batches - the watermark makes each instance captured exactly once,
    * in the same order the classic single walk would process it.
    */
-  private readonly demandCapturedCounts_ = new Map<number, number>()
+  /**
+   * How much of the scene array the delta capture has consumed. The scene
+   * is append-only, so this is a stable cursor: everything a batch adds
+   * sits above it. Replaces the per-entity walk watermark this used to
+   * keep, which existed only because the capture restarted its walk from
+   * zero every batch — an O(batches x scene) cost that dominated on
+   * instance-dense models (D3D: 562k instances, 1182 batches at size 64).
+   */
+  private demandSceneCursor_ = 0
+
+  /**
+   * Node indices walkFrom yielded without resolvable geometry. Retried on
+   * every later capture: geometry can appear after its node does, and a
+   * cursor only passes each index once. See IfcSceneBuilder.walkFrom.
+   */
+  private readonly demandPendingNodes_ = new Set<number>()
 
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
@@ -2205,23 +2220,51 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     let coordinationMatrix: ArrayLike<number> =
       this.demandCoordination_ ?? glmatrix.mat4.create()
-    const seenThisPass = new Map<number, number>()
     const deltas = new Map<number, PlacedGeometry[]>()
 
-    // eslint-disable-next-line no-unused-vars
-    for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
+    // Everything the scene has gained since the last capture, plus any
+    // node parked earlier for unresolvable geometry. Each node passes
+    // through exactly once, so no watermark is needed to suppress
+    // re-emission - the cursor IS the watermark, one for the whole scene
+    // rather than one per entity.
+    const capturedCursor = this.demandSceneCursor_
+    const pending = this.demandPendingNodes_
 
-      if (entity?.localID === void 0 || entity.expressID === void 0) {
-        continue
+    this.demandSceneCursor_ = scene.nodeCount
+
+    const candidates = function* (this: void ) {
+
+      for (const index of [...pending]) {
+
+        const retried = scene.walkNode(index)
+
+        if (retried === void 0 || retried[2] === void 0) {
+          continue
+        }
+
+        pending.delete(index)
+        yield retried
       }
 
-      // Per-entity walk position vs watermark: instances before the
-      // watermark were captured in an earlier call (append-only walk
-      // order makes the count a stable cursor).
-      const walkIndex = seenThisPass.get(entity.localID) ?? 0
-      seenThisPass.set(entity.localID, walkIndex + 1)
+      for (const candidate of scene.walkFrom(capturedCursor)) {
 
-      if (walkIndex < (this.demandCapturedCounts_.get(entity.localID) ?? 0)) {
+        if (candidate[2] === void 0) {
+          pending.add(candidate[5])
+          continue
+        }
+
+        yield candidate
+      }
+    }
+
+    // eslint-disable-next-line no-unused-vars
+    for (const [_, nativeTransform, geometry, material, entity] of candidates()) {
+
+      // `candidates` never yields an unresolved geometry — the undefined
+      // arm is the parked-node signal, handled there — but the tuple type
+      // allows it, so narrow here rather than asserting at each use.
+      if (geometry === void 0 ||
+          entity?.localID === void 0 || entity.expressID === void 0) {
         continue
       }
 
@@ -2340,10 +2383,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       mesh[0].push(placed)
       mesh[1].geometries = mesh[0]
-
-      this.demandCapturedCounts_.set(
-          entity.localID,
-          (this.demandCapturedCounts_.get(entity.localID) ?? 0) + 1)
 
       let delta = deltas.get(entity.expressID)
       if (delta === void 0) {

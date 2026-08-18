@@ -437,38 +437,141 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
       CanonicalMaterial | undefined,
       StepEntityBase<EntityTypesIfc> | undefined]> {
 
-    for (const node of this.scene_) {
+    for (let index = 0; index < this.scene_.length; ++index) {
 
-      if ( node instanceof IfcSceneGeometry && ( includeSpaces || !node.isSpace ) ) {
+      const resolved = this.resolveGeometryNode_(index, includeSpaces)
 
-        const parentIndex = node.parentIndex
-        const geometry = node.model.geometry?.getByLocalID(node.localID)
-
-        if (geometry === void 0) {
-          // console.log(`skipping due to null geometry, express ID:
-        //  ${  this.model.getElementByLocalID(node.localID)?.expressID}`)
-          continue
-        }
-
-        let parentNode: IfcSceneTransform | undefined
-
-        if (parentIndex !== void 0) {
-          parentNode = this.scene_[parentIndex] as IfcSceneTransform
-        }
-
-        const material =
-          this.materials.getMaterialByGeometryID(node.materialOverideLocalID ?? geometry.localID)
-
-        yield [
-          parentNode?.absoluteTransform,
-          parentNode?.absoluteNativeTransform,
-          geometry,
-          material !== void 0 ? material[0] : void 0,
-          node.relatedElementLocalId !== void 0 ?
-            this.model.getElementByLocalID(node.relatedElementLocalId) : void 0,
-        ]
+      // A node whose geometry doesn't resolve is skipped here, exactly as
+      // before. walkFrom's callers need to know about it (see there); a
+      // whole-scene walk simply has no use for it.
+      if (resolved === void 0 || resolved[2] === void 0) {
+        continue
       }
+
+      yield [resolved[0], resolved[1], resolved[2], resolved[3], resolved[4]]
     }
+  }
+
+  /**
+   * The number of nodes in the scene array. Append-only, so a caller that
+   * remembers this value has a stable cursor into the scene: everything
+   * added after it sits at a higher index.
+   *
+   * @return {number} The node count.
+   */
+  public get nodeCount(): number {
+    return this.scene_.length
+  }
+
+  /**
+   * Walk only the nodes added at or after `startIndex` — the incremental
+   * form of {@link walk}, for a consumer draining the scene in batches.
+   *
+   * Unlike `walk`, this yields nodes whose geometry does NOT resolve, with
+   * `undefined` in the geometry slot and the node's index last. That is
+   * deliberate: a cursor-based caller passes each index exactly once, so a
+   * node skipped for missing geometry would be lost forever, where the
+   * whole-scene walk would have picked it up on its next pass. Geometry can
+   * appear late — a product that maps geometry a release freed re-extracts
+   * it — so the caller must park those indices and retry them with
+   * {@link walkNode}. Yielding them is what makes that possible.
+   *
+   * @param startIndex First node index to consider.
+   * @param includeSpaces Include space geometry.
+   * @yields The walk tuple plus the node's index.
+   */
+  public* walkFrom(startIndex: number, includeSpaces: boolean = false):
+      IterableIterator<[readonly number[] | undefined,
+      NativeTransform4x4 | undefined,
+      CanonicalMesh | undefined,
+      CanonicalMaterial | undefined,
+      StepEntityBase<EntityTypesIfc> | undefined,
+      number]> {
+
+    for (let index = startIndex; index < this.scene_.length; ++index) {
+
+      const resolved = this.resolveGeometryNode_(index, includeSpaces)
+
+      if (resolved === void 0) {
+        continue
+      }
+
+      yield resolved
+    }
+  }
+
+  /**
+   * Resolve one node by index, for retrying a node {@link walkFrom} yielded
+   * without geometry.
+   *
+   * @param index The node's index in the scene array.
+   * @param includeSpaces Include space geometry.
+   * @return {[...]|undefined} The walk tuple plus the index, or undefined
+   * when the node isn't geometry this walk covers.
+   */
+  public walkNode(index: number, includeSpaces: boolean = false):
+      [readonly number[] | undefined,
+      NativeTransform4x4 | undefined,
+      CanonicalMesh | undefined,
+      CanonicalMaterial | undefined,
+      StepEntityBase<EntityTypesIfc> | undefined,
+      number] | undefined {
+
+    return this.resolveGeometryNode_(index, includeSpaces)
+  }
+
+  /**
+   * The shared body of walk/walkFrom/walkNode: one node in, one walk tuple
+   * out. Single-sourced so the incremental walk cannot drift from the whole
+   * -scene one — a drift here would show up as geometry placed differently
+   * depending on batch size.
+   *
+   * @param index The node's index in the scene array.
+   * @param includeSpaces Include space geometry.
+   * @return {[...]|undefined} Undefined when the node isn't a geometry node
+   * this walk covers; otherwise the tuple, whose geometry slot is undefined
+   * if the geometry doesn't currently resolve.
+   */
+  private resolveGeometryNode_(index: number, includeSpaces: boolean):
+      [readonly number[] | undefined,
+      NativeTransform4x4 | undefined,
+      CanonicalMesh | undefined,
+      CanonicalMaterial | undefined,
+      StepEntityBase<EntityTypesIfc> | undefined,
+      number] | undefined {
+
+    const node = this.scene_[index]
+
+    if (!(node instanceof IfcSceneGeometry) || (!includeSpaces && node.isSpace)) {
+      return void 0
+    }
+
+    const geometry = node.model.geometry?.getByLocalID(node.localID)
+
+    if (geometry === void 0) {
+      return [void 0, void 0, void 0, void 0, void 0, index]
+    }
+
+    const parentIndex = node.parentIndex
+
+    let parentNode: IfcSceneTransform | undefined
+
+    if (parentIndex !== void 0) {
+      parentNode = this.scene_[parentIndex] as IfcSceneTransform
+    }
+
+    const material =
+      this.materials.getMaterialByGeometryID(node.materialOverideLocalID ?? geometry.localID)
+
+    return [
+      parentNode?.absoluteTransform,
+      parentNode?.absoluteNativeTransform,
+      geometry,
+      material !== void 0 ? material[0] : void 0,
+      node.relatedElementLocalId !== void 0 ?
+        this.model.getElementByLocalID(node.relatedElementLocalId) : void 0,
+      index,
+    ]
   }
 
   /**
