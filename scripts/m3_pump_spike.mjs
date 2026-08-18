@@ -908,6 +908,8 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
         cpuMsTotal: total( 'geometryCpuMs' ),
         instances: total( 'instances' ),
         assetsCreated: total( 'assetsCreated' ),
+        assetsReplaced: total( 'assetsReplaced' ),
+        released: total( 'released' ),
         payloads: total( 'payloads' ),
         wasmPeakMBSum: results.reduce( ( sum, r ) => sum + r.wasmPeakMB, 0 ),
         wasmPeakMBMax: Math.max( ...results.map( ( r ) => r.wasmPeakMB ) ),
@@ -924,6 +926,22 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
             `${name}: the N=1 baseline created 0 geometry assets on a model not ` +
             'declared geometry-free — the extraction never fired, so there is ' +
             'nothing to scale' )
+      }
+
+      // `bounded` is defined by its release policy, so a sweep of it that did
+      // not release measured a different phase than the one it reports. The
+      // sweep never reaches `verdicts()`, and `releaseGeometries` swallows
+      // per-geometry failures so a broken free surfaces nowhere else — the
+      // aggregate count is the only evidence. Summed across shards, because
+      // each child releases only what it created.
+      if ( phase === 'bounded' &&
+           byCount[ count ].released !== byCount[ count ].assetsCreated ) {
+        throw new Error(
+            `${name}: at N=${count}, bounded released ` +
+            `${byCount[ count ].released} of ${byCount[ count ].assetsCreated} ` +
+            'geometries the extractor created — the release policy that defines ' +
+            'this phase did not run, so its timing and memory rows describe ' +
+            'something else' )
       }
 
       const base = byCount[ counts[ 0 ] ]
@@ -1250,6 +1268,16 @@ function main() {
         allowEmpty: /\s#empty\s*$/.test( line ),
       } ) )
 
+  // An empty or comment-only manifest yields an empty `models` array, and both
+  // exit paths then complete having probed nothing — with `--json`, publishing
+  // `[]` as a successful artifact. A generated or mis-pathed corpus must fail
+  // rather than pass vacuously.
+  if ( models.length === 0 ) {
+    console.error(
+        `${modelsFile} lists no models — nothing to measure` )
+    process.exit( 2 )
+  }
+
   const rows = []
   const failures = []
 
@@ -1261,6 +1289,18 @@ function main() {
     // WHOLE model while the output labelled them shards and computed a
     // speedup from them. Default to the deferred extract phase, and refuse the
     // non-deferred one rather than publishing invalid scaling.
+    // One sweep runs one phase, and taking `phases[0]` from a list meant
+    // `--phases pump,bounded` ran `pump` and reported it while the caller
+    // believed they had also measured the release. Reject rather than pick:
+    // the sweep is a per-phase experiment, so asking for two is a question
+    // this invocation cannot answer, not a preference to be resolved silently.
+    if ( only !== void 0 && phases.length > 1 ) {
+      console.error(
+          `--shards runs one phase per sweep; got ${phases.length} ` +
+          `(${phases.join( ', ' )}). Run them as separate invocations.` )
+      process.exit( 2 )
+    }
+
     const shardPhase = only !== void 0 ? phases[ 0 ] : 'extractonly'
 
     if ( shardPhase === 'classic' ) {
