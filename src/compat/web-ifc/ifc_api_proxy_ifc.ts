@@ -60,6 +60,15 @@ import { CanonicalMeshType } from '../../index'
 // a deferred model's remaining products synchronously.
 const DEFERRED_DRAIN_BATCH = 256
 
+/* How many later captures re-check a scene node whose geometry did not
+ * resolve when its index passed the cursor, before giving up on it. See
+ * demandPendingNodes_ for why the bound exists and why the value is
+ * generous rather than tuned: nothing in the corpus, PSB or D3D parks a
+ * node at all, and a node that is waiting on anything real is waiting on
+ * the very next extraction, not the eighth. */
+// eslint-disable-next-line no-magic-numbers
+const DEMAND_PARKED_NODE_RETRIES = 8
+
 /* Moving-window size for the streamed columnar parse (matches the
  * ifc_stream_open default; the window bounds parse-time scratch, not
  * the source buffer, which the model keeps resident here). */
@@ -169,11 +178,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandSceneCursor_ = 0
 
   /**
-   * Node indices walkFrom yielded without resolvable geometry. Retried on
-   * every later capture: geometry can appear after its node does, and a
-   * cursor only passes each index once. See IfcSceneBuilder.walkFrom.
+   * Node indices walkFrom yielded without resolvable geometry, against the
+   * number of times a later capture has re-checked them. Parked because a
+   * cursor passes each index once, where the whole-scene walk this replaced
+   * re-checked every node on every call. See IfcSceneBuilder.walkFrom.
+   *
+   * Bounded by DEMAND_PARKED_NODE_RETRIES because not every unresolved node
+   * is waiting on something: extraction can append a scene node and then
+   * fail to cache geometry for it (extractSweptDiskSolid returns early on a
+   * failed directrix; extractRepresentationItem still calls addGeometry),
+   * and no amount of re-checking makes a deterministic failure resolve.
+   * Retrying those forever would be O(batches x unresolvable) — still under
+   * the O(batches x scene) this replaced, but unbounded in batch count for
+   * no benefit. Expiring after a fixed number of attempts makes the total
+   * retry work O(retries x unresolvable) regardless of batch size.
+   *
+   * Measured at zero on every model available here — the 12-model smoke
+   * corpus, PSB, and D3D (which logs exactly the malformed-geometry errors
+   * that produce this case) all park nothing — so this path is a
+   * correctness guard rather than a hot path, and its constant is chosen to
+   * be generous rather than tuned.
    */
-  private readonly demandPendingNodes_ = new Set<number>()
+  private readonly demandPendingNodes_ = new Map<number, number>()
 
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
@@ -2234,11 +2260,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const candidates = function* (this: void ) {
 
-      for (const index of [...pending]) {
+      for (const [index, attempts] of [...pending]) {
 
         const retried = scene.walkNode(index)
 
         if (retried === void 0 || retried[2] === void 0) {
+
+          if (attempts + 1 >= DEMAND_PARKED_NODE_RETRIES) {
+            pending.delete(index)
+          } else {
+            pending.set(index, attempts + 1)
+          }
+
           continue
         }
 
@@ -2249,7 +2282,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       for (const candidate of scene.walkFrom(capturedCursor)) {
 
         if (candidate[2] === void 0) {
-          pending.add(candidate[5])
+          pending.set(candidate[5], 0)
           continue
         }
 
