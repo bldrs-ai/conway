@@ -430,6 +430,8 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
    * the canonical material and the associated step element as it walks the hierarchy.
    * @param walkTemporary Include temporary items.
    */
+  private geometryNodeVisits_ = 0
+
   public* walk(includeSpaces: boolean = false):
       IterableIterator<[readonly number[] | undefined,
       NativeTransform4x4 | undefined,
@@ -461,6 +463,25 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
    */
   public get nodeCount(): number {
     return this.scene_.length
+  }
+
+  /**
+   * How many times a node has been considered by any walk form since this
+   * scene was built.
+   *
+   * Exists so the *complexity* of an incremental consumer can be asserted
+   * rather than timed: a capture that walks only what the scene gained
+   * visits each node about once for the whole load, where one that
+   * re-walks from zero visits every node once per call. Output parity
+   * cannot distinguish those — both deliver the same meshes — so without
+   * this a regression from O(new nodes) back to O(batches x scene) passes
+   * every correctness test while restoring the cost. See the batch-size
+   * invariance test in ifc_api_deferred_open.test.ts.
+   *
+   * @return {number} The visit count.
+   */
+  public get geometryNodeVisits(): number {
+    return this.geometryNodeVisits_
   }
 
   /**
@@ -539,6 +560,8 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
       CanonicalMaterial | undefined,
       StepEntityBase<EntityTypesIfc> | undefined,
       number] | undefined {
+
+    ++this.geometryNodeVisits_
 
     const node = this.scene_[index]
 
