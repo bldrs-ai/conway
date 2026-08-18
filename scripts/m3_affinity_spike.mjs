@@ -124,7 +124,16 @@ async function capture( filePath, outPath ) {
   passthrough.ensureDemandWorklists_()
 
   const products = passthrough.demandProducts_ ?? []
-  const geometry = passthrough.model[ 0 ].geometry
+
+  // Both stores: extraction puts opening and boolean-operand meshes in
+  // `voidGeometry`, and a capture watching only `geometry` records a graph
+  // missing every asset that lives there — the same blind spot the pump
+  // spike had before it was fixed.
+  const stores = [ passthrough.model[ 0 ].geometry, passthrough.model[ 0 ].voidGeometry ]
+    .filter( ( store ) => store !== void 0 )
+
+  const geometry = stores[ 0 ]
+  const aggregates = passthrough.demandAggregates_ ?? []
   const extraction = passthrough.conwayGeometry_
 
   // Instrument the cache rather than the extractor: `add` is every asset this
@@ -133,22 +142,32 @@ async function capture( filePath, outPath ) {
   // would have to reproduce.
   const created = new Set()
   const reused = new Set()
-  const originalAdd = geometry.add.bind( geometry )
-  const originalGet = geometry.getByLocalID.bind( geometry )
 
-  geometry.add = ( mesh ) => {
-    created.add( mesh.localID )
-    return originalAdd( mesh )
-  }
+  for ( const store of stores ) {
 
-  geometry.getByLocalID = ( localID ) => {
-    const hit = originalGet( localID )
+    const originalAdd = store.add.bind( store )
+    const originalGet = store.getByLocalID.bind( store )
 
-    if ( hit !== void 0 && !created.has( localID ) ) {
-      reused.add( localID )
+    // Keyed per store: local IDs are store-relative, so a bare ID would
+    // conflate an opening with an unrelated body and make two products look
+    // like they share an asset when they share nothing.
+    const key = ( localID ) => ( localID * 2 ) + ( store.isVoid ? 1 : 0 )
+
+    store.add = ( mesh ) => {
+      created.add( key( mesh.localID ) )
+      return originalAdd( mesh )
     }
 
-    return hit
+    store.getByLocalID = ( localID ) => {
+
+      const hit = originalGet( localID )
+
+      if ( hit !== void 0 && !created.has( key( localID ) ) ) {
+        reused.add( key( localID ) )
+      }
+
+      return hit
+    }
   }
 
   const rows = []
@@ -192,6 +211,47 @@ async function capture( filePath, outPath ) {
       console.log( `  ${index}/${products.length} products, ` +
         `${( ( performance.now() - t0 ) / 1000 ).toFixed( 1 )}s` )
     }
+  }
+
+  // The second pass, which this script used to skip entirely. On
+  // assembly-heavy models it is not a detail: D3D captured 1 592 assets
+  // against the 59 098 a real extraction creates — 2.7 % — because its
+  // geometry lives almost wholly under IfcElementAssembly aggregates, and a
+  // graph that blind makes every placement strategy look identical.
+  //
+  // Captured as rows like any other work unit, flagged so a partition can
+  // tell them apart: the pump shards aggregates separately from products.
+  for ( let index = 0; index < aggregates.length; ++index ) {
+
+    created.clear()
+    reused.clear()
+
+    const start = performance.now()
+
+    let failed = false
+
+    try {
+      extraction.extractRelAggregateGeometry( aggregates[ index ] )
+    } catch {
+      failed = true
+      ++failures
+    }
+
+    // demandAggregates_ holds ENTITIES, not local IDs, unlike
+    // demandProducts_. Serialising one directly makes the graph unwritable
+    // (circular structure), and using it as a key would compare by identity.
+    const aggregateLocalID =
+      aggregates[ index ]?.localID ?? aggregates[ index ]
+
+    rows.push( {
+      product: aggregateLocalID,
+      aggregate: true,
+      ms: performance.now() - start,
+      created: [ ...created ],
+      reused: [ ...reused ],
+      dispatchKey: dispatchKeyOf( passthrough.model[ 0 ], aggregateLocalID ),
+      ...( failed ? { failed: true } : {} ),
+    } )
   }
 
   const totalMs = performance.now() - t0
@@ -606,15 +666,27 @@ function emitAssignment( graphPath, count, strategy, outPath ) {
   const shardOf = assign( strategy, rows, count, costModel( rows ) )
   const shards = Array.from( { length: count }, () => [] )
 
+  // Products and aggregates are separate worklists in the pump, drained by
+  // separate cursors, so they are emitted separately. Placing only products
+  // would leave the pass that creates most of an assembly model's geometry
+  // spread positionally — which is how D3D came to look unshardable.
+  const aggregateShards = Array.from( { length: count }, () => [] )
+
   for ( let index = 0; index < rows.length; ++index ) {
-    shards[ shardOf[ index ] ].push( rows[ index ].product )
+
+    const target = rows[ index ].aggregate ? aggregateShards : shards
+
+    target[ shardOf[ index ] ].push( rows[ index ].product )
   }
 
   fs.writeFileSync( outPath,
-      `${JSON.stringify( { model: graph.model, strategy, count, shards } )}\n` )
+      `${JSON.stringify( {
+        model: graph.model, strategy, count, shards, aggregateShards,
+      } )}\n` )
 
   console.log(
-      `${strategy} N=${count}: ${shards.map( ( s ) => s.length ).join( '/' )} products → ${outPath}` )
+      `${strategy} N=${count}: ${shards.map( ( s ) => s.length ).join( '/' )} products, ` +
+      `${aggregateShards.map( ( s ) => s.length ).join( '/' )} aggregates → ${outPath}` )
 }
 
 /**
