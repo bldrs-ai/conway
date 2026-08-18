@@ -391,58 +391,68 @@ function wasmMB( api, wasmHeapByteLength ) {
  * @param geometryExpressIDs Geometry express IDs to free.
  * @return {number} How many were actually freed.
  */
-function releaseGeometries( api, modelID, localIDs, geometryExpressIDs ) {
+function releaseGeometries( api, modelID, created, geometryExpressIDs ) {
 
   const passthrough = api.getPassthrough( modelID )
   const model = passthrough?.model?.[ 0 ]
   const geometryMap = passthrough?.model?.[ 3 ]
 
   if ( model === void 0 ) {
-    return 0
+    return { freed: 0, alreadyGone: 0 }
   }
 
   let freed = 0
 
   // Created natives the ENGINE already reclaimed before we got here.
-  // `IfcGeometryExtraction` calls `model.geometry.deleteTemporaries()`
-  // (ifc_geometry_extraction.ts:7690), which drops temporary meshes AND
+  // `IfcGeometryExtraction` calls `deleteTemporaries()` on both stores
+  // (ifc_geometry_extraction.ts:7690-7691), which drops temporary meshes AND
   // deletes their natives, so a localID counted at `add` can legitimately be
   // gone by release time. Tracked separately rather than ignored: what must
   // hold is that nothing created is still resident, and "we freed it" and
   // "the engine freed it" are both ways of satisfying that.
   let alreadyGone = 0
 
-  // Release by LOCAL ID, taken from the cache's own `add` calls, rather than by
-  // the express IDs of the payloads this batch copied. The two sets are not the
-  // same: the extractor creates natives that are never delivered as a payload —
-  // void and opening geometry consumed by a boolean, for instance. On
-  // `aggregate_master_voids.ifc` that is 2 assets created against 1 payload, and
-  // a release keyed on payloads leaves the other resident for the life of the
-  // model while reporting that everything it copied was freed. Keying on
-  // creations is what makes `bounded` actually bound the heap.
-  for ( const localID of localIDs ) {
+  // BOTH geometry stores. `IfcStepModel` carries `geometry` and a separate
+  // `voidGeometry` (ifc_step_model.ts:27), and extraction adds to both —
+  // opening and boolean-operand meshes land in `voidGeometry`
+  // (ifc_geometry_extraction.ts:995, 1112, 1595). Releasing only `geometry`
+  // left those resident for the life of the model while the counters, which
+  // also only watched `geometry`, reported everything freed. Local IDs are
+  // per-store, so the two sets are kept and released separately.
+  const stores = [
+    [ model.geometry, created.geometry ],
+    [ model.voidGeometry, created.voidGeometry ],
+  ]
 
-    try {
+  for ( const [ store, localIDs ] of stores ) {
 
-      // `IfcModelGeometry.delete` returns void and silently returns when the
-      // local ID is absent, so "the call did not throw" is not evidence that
-      // anything was freed — and `released === assetsCreated` was resting on
-      // exactly that. Require the observable transition instead: present
-      // before, absent after. A no-op now fails to increment, which is what
-      // makes the release counters mean what the verdicts claim they mean.
-      if ( model.geometry.getByLocalID( localID ) === void 0 ) {
-        ++alreadyGone
-        continue
+    if ( store === void 0 ) {
+      continue
+    }
+
+    for ( const localID of localIDs ) {
+
+      try {
+
+        // `IfcModelGeometry.delete` returns void and silently returns when the
+        // local ID is absent, so "the call did not throw" is not evidence that
+        // anything was freed — and `released === assetsCreated` was resting on
+        // exactly that. Require the observable transition instead: present
+        // before, absent after.
+        if ( store.getByLocalID( localID ) === void 0 ) {
+          ++alreadyGone
+          continue
+        }
+
+        store.delete( localID )
+
+        if ( store.getByLocalID( localID ) === void 0 ) {
+          ++freed
+        }
+      } catch {
+        // Never let a free break the measurement — a phase that cannot free
+        // is a finding, not a crash.
       }
-
-      model.geometry.delete( localID )
-
-      if ( model.geometry.getByLocalID( localID ) === void 0 ) {
-        ++freed
-      }
-    } catch {
-      // Never let a free break the measurement — a phase that cannot free
-      // is a finding, not a crash.
     }
   }
 
@@ -692,20 +702,31 @@ async function runChild( phase, filePath, batchSize, shard ) {
   // overwrite is visible rather than silently unbounded.
   let assetsReplaced = 0
 
-  // Local IDs the cache created since the last release. `bounded` frees these
-  // rather than the copied payload IDs — see releaseGeometries.
-  const createdThisBatch = new Set()
+  // Local IDs each store created since the last release. `bounded` frees these
+  // rather than the copied payload IDs — see releaseGeometries. Kept per store
+  // because local IDs are store-relative.
+  const createdThisBatch = { geometry: new Set(), voidGeometry: new Set() }
 
   if ( deferred ) {
 
-    const geometry = api.getPassthrough( modelID )?.model?.[ 0 ]?.geometry
+    const ifcModel = api.getPassthrough( modelID )?.model?.[ 0 ]
 
-    if ( geometry !== void 0 ) {
+    // Both stores: extraction adds opening and boolean-operand meshes to
+    // `voidGeometry`, and watching only `geometry` meant those natives were
+    // neither counted nor released while the counters reported everything
+    // freed.
+    for ( const store of [ 'geometry', 'voidGeometry' ] ) {
 
-      const originalAdd = geometry.add.bind( geometry )
-      const originalGet = geometry.getByLocalID.bind( geometry )
+      const cache = ifcModel?.[ store ]
 
-      geometry.add = ( mesh ) => {
+      if ( cache === void 0 ) {
+        continue
+      }
+
+      const originalAdd = cache.add.bind( cache )
+      const originalGet = cache.getByLocalID.bind( cache )
+
+      cache.add = ( mesh ) => {
 
         ++assetsCreated
 
@@ -713,7 +734,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
           ++assetsReplaced
         }
 
-        createdThisBatch.add( mesh.localID )
+        createdThisBatch[ store ].add( mesh.localID )
 
         return originalAdd( mesh )
       }
@@ -779,7 +800,8 @@ async function runChild( phase, filePath, batchSize, shard ) {
 
           released += release.freed
           selfFreed += release.alreadyGone
-          createdThisBatch.clear()
+          createdThisBatch.geometry.clear()
+          createdThisBatch.voidGeometry.clear()
         }
       }
 
