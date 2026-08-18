@@ -470,6 +470,81 @@ Deliberately small first step; each has a measurable exit.
   (viewport-ordered). Exit: PSB time-to-first-pixel < 25 % of full-load
   time; steady-state wasm heap under a configured budget (e.g. 512 MB)
   with the full model *navigable* (tiles fill/evict on demand).
+
+  **Status 2026-08-18 — machinery shipped, discipline not in the
+  production path; re-scoped to bounded high-water.** Every part exists
+  and is tested (`DemandGeometryQueue`, `ChunkedPool` →
+  `SharedAssetPool` → `GeometryTilePool`, the C++ `TilePool` twin +
+  `createWasmTileBackend`, `IfcTileAssetExtractor`, the per-product
+  `extractProductGeometryByLocalID` seam), and outside tests nothing
+  consumes any of it: Share runs the shim's durable batch pump, which
+  extracts every product into `model.geometry` and holds it for the life
+  of the tab. Measured with `scripts/m3_pump_spike.mjs` (child process
+  per phase; placements and payloads hashed per phase so "M3 changes
+  *when*, not *what*" is a check, not a claim).
+
+  **PSB.ifc — 902 MB, node, 4-core sandbox, batch = 256:**
+
+  | phase | open | geometry | total | wasm peak | RSS |
+  | --- | --- | --- | --- | --- | --- |
+  | `classic` — `OpenModel` + `StreamAllMeshes` | 37.0 s | 2.0 s | 39.0 s | **1956 MB** | 3906 MB |
+  | `pump` — deferred, batched, no copy-out | 14.1 s | 22.6 s | 36.7 s | 1284 MB | 2831 MB |
+  | `copyout` — + per-batch payload copy-out | 12.9 s | 24.8 s | 37.7 s | 1956 MB | 3440 MB |
+  | `bounded` — + per-batch native release | 13.1 s | 23.9 s | **37.0 s** | **840 MB** | 2289 MB |
+
+  Identical placement and payload digests across `classic`, `copyout`
+  and `bounded`. Four readings:
+
+  1. **The geometry residency is the entire wasm heap.** The deferred
+     open reaches end-of-parse at **16 MB** of wasm; classic is already
+     at 1283 MB when `OpenModel` returns. Parsing costs no meaningful
+     wasm — so a parse-phase memory regression is never wasm-side, which
+     also redirects the Share-side "+1.7 GB parsing" hunt away from wasm
+     ArrayBuffers.
+  2. **The tab holds ~6× the geometry it delivers.** 23 454 instances
+     over 20 178 distinct geometries are **334 MB** of vertex+index
+     payload against a 1956 MB high-water. The gap is never releasing,
+     not the model.
+  3. **`GetGeometry` is itself a memory event: +672 MB.** Reading a
+     geometry's floats materialises a per-geometry mirror in the wasm
+     heap that is never dropped (`pump` 1284 MB vs `copyout` 1956 MB on
+     identical extraction). Every consumer that reads its own vertices
+     pays it, and it is invisible to any probe that doesn't.
+  4. **Bounding it is free** — `bounded` is 5.1 % *faster* end-to-end.
+
+  **Batch size is not the remaining lever.** `bounded` at batch = 32
+  reaches 727 MB (36.6 s, identical digests) against 840 MB at batch =
+  256 — an 8× smaller working set buys 113 MB. So the residual is not
+  the in-flight batch: it is the natives this policy never releases
+  (the rel-aggregates pass, materials, temporaries) plus the extraction
+  scratch's own high-water. Getting under the 512 MB gate and *staying*
+  there under evict/refill churn is what the dedicated chunk region is
+  for — which is the two-regime argument above, arrived at from
+  measurement rather than from first principles.
+
+  **Retention is a correctness prerequisite, not an optimisation.**
+  Retain-nothing release breaks a real model: on `supercap.step` it
+  delivers **169 instances against 101**, because a later product
+  sharing a released geometry misses the cache, re-extracts, and appends
+  duplicate scene nodes — while `streamNewMeshes_`'s *positional*
+  per-entity watermarks desynchronise on top of it (a positional cursor
+  cannot survive an entry vanishing from the sequence it indexes). So
+  the shippable policy is refcount-on-asset (`SharedAssetPool`, already
+  written) plus an **asset-keyed delta capture**, which also deletes the
+  pump's O(batches × scene) re-walk. The 840 MB row is the measured
+  upper bound of the win, not a shippable configuration.
+
+  Scope moved out by measurement rather than by preference: the
+  **geometry worker pool** (browser MT nets zero-to-negative —
+  Share#1610, conway-geom#148; "extraction off the main thread" survives
+  as a separate UI-responsiveness item), **demand ordering** (Share-side
+  priority into a queue that exists; does not gate the memory result),
+  and the **per-product native free blocker** (`IfcModelGeometry.delete`
+  already frees the native, and freeing into the general heap returns ~0
+  RSS — the missing piece was policy and retention, never a C++
+  surface). The time-to-first-pixel exit criterion predates the
+  streaming preview channel and is re-aimed at the preview→durable
+  handover, tracked Share-side.
 - **M4 — Range ByteSource + index sidecar.** S2. Exit: second visit to a
   remote PSB with sidecar reaches first pixel without fetching > 10 % of
   the file; property panel opens with < 1 MB fetched.
