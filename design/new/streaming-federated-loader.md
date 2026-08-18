@@ -561,7 +561,98 @@ Deliberately small first step; each has a measurable exit.
   checked only that every *copied* geometry was freed — a check that
   cannot see this class of leak at all.)
 
-  **This clears M3's memory gate on PSB** — "steady-state wasm heap
+  **Implementation, first landed piece — the delta capture is
+  incremental (2026-08-18).** `streamNewMeshes_` re-walked the WHOLE
+  scene on every pump call, using per-entity watermarks to suppress
+  instances it had already emitted, so the capture cost
+  O(batches x scene). The scene array is append-only, so one cursor into
+  it carries the same information every per-entity watermark did, and
+  the walk becomes O(new nodes). `IfcSceneBuilder` gained
+  `walkFrom`/`walkNode`/`nodeCount`, with all three walk forms resolving
+  a node through one private helper so the incremental and whole-scene
+  forms cannot drift — a drift there would place geometry differently
+  depending on batch size.
+
+  `walkFrom` deliberately yields nodes whose geometry does NOT resolve,
+  with their index, because a cursor passes each index once: the
+  whole-scene walk picked such a node up on a later pass and a cursor
+  would lose it forever. Geometry does appear after its node — a product
+  re-extracting geometry an earlier release freed is exactly that case —
+  so those indices are parked and retried.
+
+  Measured with a minimal driver (`ExtractGeometryBatch` with a counting
+  callback, no payload copies, no digests) so the numbers are the
+  engine's, not the harness's:
+
+  | model | batch | before | after |
+  | --- | --- | --- | --- |
+  | **PSB.ifc** (23 454 instances) | 8 | 37.0 s | **25.3 s** (1.47x) |
+  | PSB.ifc | 64 | 27.3 s | 25.1 s (1.09x) |
+  | **D3D.ifc** (562 367 instances) | 64 | 198.6 s | **66.8 s** (2.97x) |
+  | D3D.ifc | 256 | 102.2 s | 69.9 s (1.46x) |
+  | D3D.ifc | 8 | not run | 68.8 s |
+
+  Identical delta-mesh counts across every run (PSB 7 764, D3D 192 022),
+  and identical placement and payload digests on the smoke corpus and
+  the shared-representation fixture.
+
+  Two consequences beyond the raw speedup:
+
+  1. **Batch size is now nearly free in time.** D3D runs 69.9 / 66.8 /
+     68.8 s at batch 256 / 64 / 8, where before it went 102 s -> 199 s
+     from 256 to 64 alone. The memory knob the milestone specifies can
+     therefore be turned without buying memory with wall-clock, which
+     is what the phase table above appeared to show.
+  2. **Share is at the worst point of the old curve.** It pumps at batch
+     8 (`DEMAND_EXTRACT_BATCH_SIZE` / `ASYNC_DEMAND_EXTRACT_BATCH_SIZE`),
+     so this lands directly on its Geometry stage rather than on a
+     wasm-side figure its load log cannot see.
+
+  The D3D batch-8 *before* row is deliberately absent rather than
+  extrapolated: at ~8x the batch-64 cost it is a ~25-minute run, and an
+  extrapolation printed beside measurements reads as one.
+
+  **The re-extraction tax, and why release is not yet refcounted.** The
+  spike's `bounded` phase frees everything a batch created. The
+  `data/mapped_shared_representation.ifc` fixture — one
+  `IfcRepresentationMap` mapped by two products 15 apart, so any batch
+  size from 2 to 15 separates them — was built to test whether that
+  loses instances. **It does not**: identical instances and identical
+  digests, because the later product simply re-extracts. What it costs
+  is that re-extraction, and the fixture prices it exactly (15 assets
+  without release, 16 with).
+
+  On real models the tax is large, and it grows as the batch shrinks —
+  the opposite direction from the memory it buys:
+
+  | model | batch | assets, no release | assets, naive release | tax |
+  | --- | --- | --- | --- | --- |
+  | MB-Khaya.ifc | 256 | 7 193 | 9 289 | +29.1 % |
+  | MB-Khaya.ifc | 64 | 7 193 | 11 699 | +62.6 % |
+  | MB-Khaya.ifc | 32 | 7 193 | 12 653 | +75.9 % |
+  | D3D.ifc | 256 | 59 098 | 89 770 | +51.9 % |
+  | D3D.ifc | 64 | 59 098 | 106 048 | +79.4 % |
+  | PSB.ifc | 256 | 20 511 | 20 779 | +1.3 % |
+  | PSB.ifc | 32 | 20 511 | 21 040 | +2.6 % |
+
+  PSB is the wrong model to design this on: at +1.3 % it says naive
+  release is free. MB-Khaya and D3D reuse representations heavily and
+  pay 30-79 %. Note this is the SAME phenomenon as the +27 % duplication
+  round-robin sharding produced (Part 3 below) — shared representation
+  geometry rebuilt because whoever needed it was not holding it — so one
+  mechanism should address both.
+
+  Open, and next: the policy that keeps the memory without the tax. A
+  refcount over `IfcRepresentationMap` usage is one candidate; an LRU
+  eviction that fires only when live asset bytes exceed the configured
+  budget is another, needs no dependency graph, and is the shape conway
+  already uses for chunks (`ChunkedPool`/`SharedAssetPool`). The budget
+  cannot be driven off `wasmHeapByteLength` — that heap is grow-only, so
+  it never observes a release — so it has to track live asset bytes via
+  `GetVertexDataSize`/`GetIndexDataSize`. Which policy wins is a
+  measurement the existing harness can run before any engine change.
+
+    **This clears M3's memory gate on PSB** — "steady-state wasm heap
   under a configured budget (e.g. 512 MB) with the full model
   navigable" — with room to spare, and *without* the dedicated chunk
   region. That does not retire the chunk region: this measures a single
