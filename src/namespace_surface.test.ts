@@ -23,7 +23,7 @@ describe( 'plane namespace surface', () => {
     expect( typeof stream.sidecarMatchesSource ).toBe( 'function' )
     expect( typeof stream.hashSource ).toBe( 'function' )
     expect( typeof stream.StreamingRecordDispatcher ).toBe( 'function' )
-    expect( typeof stream.IncrementalTypeIndex ).toBe( 'function' )
+    expect( typeof stream.PrefixTypeIndex ).toBe( 'function' )
   } )
 
   test( 'demand exposes the residency/extraction plane', () => {
