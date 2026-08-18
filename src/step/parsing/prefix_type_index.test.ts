@@ -182,6 +182,38 @@ describe( 'PrefixTypeIndex', () => {
     expect( seenInEvent ).toEqual( [ [ 1 ] ] )
   } )
 
+  test( 'an early query on a small file does not freeze the view', () => {
+    // index.ifc has fewer records than the default minimumRecords, so it sits
+    // entirely in the "rebuild is trivial, stay exact" regime. Querying from
+    // the very first event must not pin the view to that one-record prefix
+    // for the rest of the parse — least of all after it finishes.
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const index = new PrefixTypeIndex<EntityTypesIfc>(
+        sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ) )
+
+    let queriedEarly = false
+
+    buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        ( localID ) => {
+          if ( localID === 0 ) {
+            expect( [ ...index.expressIDsOfTypes( IfcRoot as any ) ] ).toHaveLength( 0 )
+            queriedEarly = true
+          }
+        },
+        sink )
+
+    expect( queriedEarly ).toBe( true )
+    expect( sink.topLevelCount ).toBeLessThan( 1024 )
+
+    const final = new Set( index.expressIDsOfTypes( IfcRoot as any ) )
+    const resident = new Set( model.expressIDsOfTypes( IfcRoot ) )
+
+    expect( final ).toEqual( resident )
+  } )
+
   test( 'a sink reset invalidates the view instead of pacing past it', () => {
     // The streaming builder's grow-and-restart resets the sink. Growth pacing
     // alone would never notice: the count drops, and a restarted parse can

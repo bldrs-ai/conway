@@ -37,6 +37,13 @@ const DEFAULT_MINIMUM_RECORDS = 1024
  * continuously, ~0 if you query rarely). Callers that want a specific moment —
  * a preview generation, a progress tick — call {@link refresh} themselves.
  *
+ * Two regimes, and the boundary matters: at or below `minimumRecords` a
+ * rebuild is trivial, so every query with new records behind it rebuilds and
+ * the view is exact; above it, growth pacing applies and a query may see a
+ * view up to `growthFactor` stale. The staleness a caller can observe is
+ * therefore bounded by the growth factor — never by whatever prefix happened
+ * to be current the first time it asked.
+ *
  * Queries are only ever answered from a built index, so a caller that has
  * never queried has paid nothing.
  */
@@ -128,10 +135,21 @@ export class PrefixTypeIndex<TypeIDType extends number> {
       return
     }
 
-    const stale = parsed > Math.max(
-        this.minimumRecords_, this.builtAtRecords_ * this.growthFactor_ )
+    if ( parsed === this.builtAtRecords_ ) {
+      return
+    }
 
-    if ( stale ) {
+    // Below the minimum a rebuild is trivial, so the view is kept exact:
+    // pacing here would buy nothing, and — because the threshold is absolute
+    // rather than relative to the last build — it would freeze a small file's
+    // view at whatever prefix happened to be current when it was first
+    // queried, permanently, including after the parse finishes.
+    if ( parsed <= this.minimumRecords_ ) {
+      this.refresh()
+      return
+    }
+
+    if ( parsed >= this.builtAtRecords_ * this.growthFactor_ ) {
       this.refresh()
     }
   }
