@@ -2,6 +2,7 @@ import { RecordEventHandler } from '../step/parsing/record_event'
 import { RecordFieldCursor } from '../step/parsing/record_field_cursor'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import {
+  IfcContext,
   IfcObjectDefinition,
   IfcRelAggregates,
   IfcRelContainedInSpatialStructure,
@@ -20,6 +21,16 @@ import { StreamingRecordDispatcher } from '../step/parsing/streaming_record_disp
 const ATTRIBUTE_GLOBAL_ID = 0
 const ATTRIBUTE_NAME = 2
 const ATTRIBUTE_LONG_NAME = 7
+
+/**
+ * `LongName` sits at a different position on `IfcContext` (`IfcProject`'s
+ * supertype) than on `IfcSpatialElement`, because the two branches inherit
+ * different prefixes — 5 against 7. The generated getters disagree the same
+ * way (`IfcContext.extractString( 5, … )` vs
+ * `IfcSpatialElement.extractString( 7, … )`), and reading the wrong one
+ * silently yields a different attribute, not an error.
+ */
+const ATTRIBUTE_CONTEXT_LONG_NAME = 5
 const ATTRIBUTE_AGGREGATES_RELATING = 4
 const ATTRIBUTE_AGGREGATES_RELATED = 5
 const ATTRIBUTE_CONTAINED_RELATED = 4
@@ -33,6 +44,9 @@ const INITIAL_EDGES = 1024
  * record, so it must not be a scan of the closure array.
  */
 const SPATIAL_TYPES = new Set<EntityTypesIfc>( IfcSpatialElement.query )
+
+/** The context closure — `IfcProject` and friends, whose `LongName` is at 5. */
+const CONTEXT_TYPES = new Set<EntityTypesIfc>( IfcContext.query )
 
 
 /** One node of the skeleton: what a tree row needs, and nothing else. */
@@ -175,10 +189,12 @@ export class IfcSpatialSkeleton {
       node.name = name
     }
 
-    // LongName is what spatial rows actually display when Name is a code;
-    // only spatial elements have the attribute at all.
-    if ( SPATIAL_TYPES.has( typeID ) ) {
-      const longName = this.cursor_.string( ATTRIBUTE_LONG_NAME )
+    // LongName is what a row actually displays when Name is a code. Only
+    // spatial elements and contexts carry it, at different positions.
+    const longNameAt = this.longNameAttribute( typeID )
+
+    if ( longNameAt !== void 0 ) {
+      const longName = this.cursor_.string( longNameAt )
 
       if ( longName !== void 0 ) {
         node.longName = longName
@@ -186,6 +202,21 @@ export class IfcSpatialSkeleton {
     }
 
     this.nodes_.set( expressID, node )
+  }
+
+  /**
+   * Where this type keeps `LongName`, if it has one.
+   *
+   * @param typeID The record's concrete type.
+   * @return {number | undefined} The attribute index, or undefined for types
+   * that carry no `LongName` at all.
+   */
+  private longNameAttribute( typeID: EntityTypesIfc ): number | undefined {
+    if ( SPATIAL_TYPES.has( typeID ) ) {
+      return ATTRIBUTE_LONG_NAME
+    }
+
+    return CONTEXT_TYPES.has( typeID ) ? ATTRIBUTE_CONTEXT_LONG_NAME : void 0
   }
 
   /**

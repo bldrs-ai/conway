@@ -104,8 +104,15 @@ describe( 'IfcSpatialSkeleton', () => {
     expect( node.globalId ).toBe( entity.GlobalId )
     expect( node.name ?? null ).toBe( entity.Name ?? null )
 
-    if ( node.longName !== void 0 ) {
+    // Asserted from the MODEL's side: if the entity has a LongName, the
+    // skeleton must have it too. Testing `node.longName !== undefined` first
+    // would pass a skeleton that silently dropped every LongName it should
+    // have captured — which is exactly how reading the wrong attribute
+    // position for IfcContext went unnoticed.
+    if ( typeof entity.LongName === 'string' ) {
       expect( node.longName ).toBe( entity.LongName )
+    } else {
+      expect( node.longName ).toBeUndefined()
     }
 
     for ( const child of node.children ) {
@@ -137,6 +144,48 @@ describe( 'IfcSpatialSkeleton', () => {
     expect( storey ).toBeDefined()
     expect( storey!.type ).toBe( EntityTypesIfc.IFCBUILDINGSTOREY )
     expect( storey!.name ).toBe( 'Thing' )
+  } )
+
+  test( 'LongName is read from each branch\'s own attribute position', () => {
+    // IfcContext keeps LongName at 5 and IfcSpatialElement at 7, because the
+    // two branches inherit different prefixes. A single hard-coded position
+    // reads some other attribute — silently, since both are optional strings.
+    const source = [
+      'ISO-10303-21;',
+      'HEADER;',
+      'FILE_DESCRIPTION((\'\'),\'\');',
+      'FILE_NAME(\'\',\'\',(\'\'),(\'\'),\'\',\'\',\'\');',
+      'FILE_SCHEMA((\'IFC4\'));',
+      'ENDSEC;',
+      'DATA;',
+      '#1= IFCPROJECT(\'p\',$,\'PRJ-001\',$,$,\'Riverside Tower\',$,$,$);',
+      '#2= IFCSITE(\'s\',$,\'SITE-A\',$,$,$,$,\'North Parcel\',$,$,$,$,$,$);',
+      '#3= IFCRELAGGREGATES(\'r\',$,$,$,#1,(#2));',
+      'ENDSEC;',
+      'END-ISO-10303-21;',
+      '',
+    ].join( '\n' )
+
+    const skeleton = new IfcSpatialSkeleton()
+    const dispatcher = new StreamingRecordDispatcher<EntityTypesIfc>()
+
+    skeleton.subscribe( dispatcher )
+
+    const result = buildIndexStreaming(
+        new BufferByteSource( new TextEncoder().encode( source ) ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        dispatcher.onRecordIndexed )
+
+    expect( result.result ).toBe( ParseResult.COMPLETE )
+
+    const project = skeleton.node( 1 )
+    const site = skeleton.node( 2 )
+
+    expect( project?.name ).toBe( 'PRJ-001' )
+    expect( project?.longName ).toBe( 'Riverside Tower' )
+    expect( site?.name ).toBe( 'SITE-A' )
+    expect( site?.longName ).toBe( 'North Parcel' )
   } )
 
   test( 'the tree is answerable mid-parse and only grows', () => {
