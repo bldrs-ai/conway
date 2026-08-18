@@ -647,6 +647,43 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api6.CloseModel( unbudgetedID )
   }, 240000 )
 
+  test( 'a budget set mid-load accounts for what is already cached', async () => {
+
+    // The case SetGeometryBudget exists for: a tab already under pressure,
+    // where extraction started unbudgeted. The bookkeeping is fed by
+    // noteAdded, which no-ops while unlimited, so without seeding this
+    // model would start counting from zero — evicting nothing until it had
+    // extracted a budget's worth MORE geometry, while reporting the ceiling
+    // as satisfied and leaving the pre-existing residency permanent.
+    const api8 = new IfcAPI()
+    await api8.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const modelID = await api8.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    // Pump the WHOLE model unbudgeted first, so everything this model will
+    // ever cache is already resident when the budget arrives.
+    for ( ; ; ) {
+      const { extracted, remaining } = api8.ExtractGeometryBatch( modelID, 4 )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    // Enabling now must SEE that geometry. A budget above it proves the
+    // seeding happened at all; the assertion is that live is non-zero, not
+    // that it is under the ceiling — an unseeded implementation also
+    // reports "under", which is exactly why it is the wrong check.
+    const generous = api8.SetGeometryBudget( modelID, 64 )
+
+    expect( generous!.liveBytes ).toBeGreaterThan( 0 )
+
+    api8.CloseModel( modelID )
+  }, 240000 )
+
   test( 'no budget is the default, and evicts nothing', async () => {
 
     // The contract eviction changes — GetGeometry serving an evicted asset —

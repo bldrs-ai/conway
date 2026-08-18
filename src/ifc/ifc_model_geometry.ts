@@ -19,7 +19,12 @@ export class IfcModelGeometry implements ModelGeometry {
    * @param model The model this is from
    * @param isVoid
    */
-  constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {}
+  constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {
+
+    // So a budget enabled after extraction has started can seed from what
+    // this already holds — see GeometryResidency.setBudgetBytes.
+    model.geometryResidency.registerStore( this )
+  }
 
   /**
    * Get the number of items in this.

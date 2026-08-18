@@ -83,6 +83,10 @@ export class GeometryResidency {
   private readonly natives_ =
     new Map< object, { bytes: number, keys: Set< number > } >()
 
+  /* The stores feeding this, so enabling a budget can seed from what is
+   * ALREADY cached. See setBudgetBytes. */
+  private readonly stores_: IfcModelGeometry[] = []
+
   /**
    * @return {boolean} Whether a finite budget is configured. Every hook below
    * returns immediately when this is false, so an unbudgeted model pays one
@@ -115,6 +119,16 @@ export class GeometryResidency {
   }
 
   /**
+   * Register a store so a budget enabled later can see what it already
+   * holds.
+   *
+   * @param store The store.
+   */
+  public registerStore( store: IfcModelGeometry ): void {
+    this.stores_.push( store )
+  }
+
+  /**
    * Set the budget. A non-finite or non-positive value disables eviction,
    * which is the default and the behaviour every consumer had before this
    * existed.
@@ -122,6 +136,19 @@ export class GeometryResidency {
    * Raising or lowering it takes effect at the next eviction pass rather than
    * immediately, so a caller that lowers the budget mid-load does not stall
    * the current batch freeing memory.
+   *
+   * **Enabling seeds from what is already cached.** The bookkeeping is fed
+   * by `noteAdded`, which no-ops while unlimited, so a model that pumped
+   * batches before a budget arrived — or one whose budget was disabled and
+   * re-enabled — would start counting from zero and evict nothing until it
+   * had extracted a budget's worth MORE geometry. The pre-existing residency
+   * would sit there permanently while liveBytes reported the ceiling was
+   * satisfied. That is precisely the case SetGeometryBudget exists for: a
+   * tab already under pressure.
+   *
+   * Seeding takes the stores in iteration order, which is extraction order,
+   * so the recency order it produces is oldest-first — the right guess when
+   * no better information survived.
    *
    * @param bytes The new ceiling, or Infinity to disable.
    */
@@ -139,7 +166,27 @@ export class GeometryResidency {
       return
     }
 
+    const wasDisabled = !this.enabled
+
     this.budgetBytes_ = bytes
+
+    if ( wasDisabled ) {
+      this.seedFromStores_()
+    }
+  }
+
+  /**
+   * Account for everything the stores already hold, for a budget enabled
+   * after extraction has started.
+   */
+  private seedFromStores_(): void {
+
+    for ( const store of this.stores_ ) {
+
+      for ( const mesh of store ) {
+        this.noteAdded( store, mesh )
+      }
+    }
   }
 
   /**
