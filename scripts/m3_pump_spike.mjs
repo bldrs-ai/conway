@@ -62,7 +62,13 @@ import * as path from 'node:path'
 import * as process from 'node:process'
 import { performance } from 'node:perf_hooks'
 
-const PHASES = [ 'classic', 'pump', 'copyout', 'bounded' ]
+const PHASES = [ 'classic', 'pump', 'copyout', 'bounded', 'lru' ]
+
+/* Default live-asset budget for the `lru` phase, in MB. Chosen as the
+ * milestone's own example figure ("steady-state wasm heap under a
+ * configured budget (e.g. 512 MB)") so the default run answers the
+ * milestone's question rather than one of my own. */
+const DEFAULT_BUDGET_MB = 512
 
 /**
  * Phases that never pass a meshCallback, so `streamNewMeshes_` — the
@@ -640,7 +646,7 @@ function shardWorklists( api, modelID, shard, filePath ) {
  * @param batchSize Products per pump call.
  * @param shard Optional `{index, count}` — extract only this shard's products.
  */
-async function runChild( phase, filePath, batchSize, shard ) {
+async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
 
   const { IfcAPI, LogLevel } =
     await import( '../compiled/src/compat/web-ifc/ifc_api.js' )
@@ -660,7 +666,8 @@ async function runChild( phase, filePath, batchSize, shard ) {
   // real cost of delivery rather than the cost of hashing and forgetting.
   const retainedPayloads = []
   const deferred = phase !== 'classic'
-  const copies = phase === 'copyout' || phase === 'bounded'
+  const copies =
+    phase === 'copyout' || phase === 'bounded' || phase === 'lru'
   const emits = !EXTRACT_ONLY_PHASES.has( phase )
 
   const settings = {
@@ -683,6 +690,17 @@ async function runChild( phase, filePath, batchSize, shard ) {
   if ( modelID < 0 ) {
     console.log( JSON.stringify( { phase, failed: 'open' } ) )
     return
+  }
+
+  // The `lru` phase measures the ENGINE's policy, not a simulation of it.
+  // An earlier version evicted from the harness with its own per-key
+  // accounting while the production residency stayed disabled — which
+  // reproduced, exactly, the two bugs the engine fixed: it freed a native
+  // the first time any of its aliases was evicted, leaving the others
+  // dangling, and charged that native's bytes once per alias. Numbers taken
+  // that way are the withdrawn ones. Drive the real thing instead.
+  if ( phase === 'lru' ) {
+    api.SetGeometryBudget( modelID, budgetMB )
   }
 
   const sharded = deferred && shard !== void 0 ?
@@ -752,6 +770,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
   let batches = 0
   let released = 0
 
+
   // Created natives the engine reclaimed itself (temporaries). Reported so the
   // release invariant can be "nothing created is still resident" rather than
   // "we personally freed everything", which is false by construction.
@@ -783,21 +802,37 @@ async function runChild( phase, filePath, batchSize, shard ) {
     for ( ;; ) {
 
       const batchMeshes = []
+      let copied = []
+
+      // Copy INSIDE the callback, not after the pump returns. The engine
+      // evicts at the end of the batch that delivered these meshes, so a
+      // copy deferred until after `ExtractGeometryBatch` returns can reach
+      // for a native the budget has already freed — `GetGeometry(...)
+      // .clone()` on a deleted handle aborts the load with a BindingError,
+      // reproducible whenever one batch delivers more than the budget
+      // holds. Copying at delivery is also what the contract asks of a
+      // consumer, so the harness now models the consumer it documents.
       const { extracted, remaining } = emits ?
         api.ExtractGeometryBatch( modelID, batchSize, ( mesh ) => {
+
           batchMeshes.push( mesh )
+
+          if ( copies ) {
+
+            const tMeshCopy = performance.now()
+
+            copied = copied.concat(
+                copyBatchPayloads(
+                    api, modelID, [ mesh ], seen, digest, retainedPayloads ) )
+
+            copyMs += performance.now() - tMeshCopy
+          }
         } ) :
         api.ExtractGeometryBatch( modelID, batchSize )
 
       ++batches
 
       if ( copies ) {
-
-        const tCopy = performance.now()
-        const copied =
-          copyBatchPayloads( api, modelID, batchMeshes, seen, digest, retainedPayloads )
-
-        copyMs += performance.now() - tCopy
 
         if ( phase === 'bounded' ) {
 
@@ -806,6 +841,14 @@ async function runChild( phase, filePath, batchSize, shard ) {
 
           released += release.freed
           selfFreed += release.alreadyGone
+          createdThisBatch.geometry.clear()
+          createdThisBatch.voidGeometry.clear()
+        }
+
+        if ( phase === 'lru' ) {
+
+          // Nothing to do: the ENGINE evicts, on its own refcounted
+          // accounting. See the SetGeometryBudget call at open.
           createdThisBatch.geometry.clear()
           createdThisBatch.voidGeometry.clear()
         }
@@ -846,6 +889,13 @@ async function runChild( phase, filePath, batchSize, shard ) {
     payloads: digest.payloads,
     payloadMB: digest.payloadBytes / BYTES_PER_MB,
     retainedPayloadBuffers: retainedPayloads.length,
+
+    // What the ENGINE says it is holding, for the `lru` phase — read back
+    // rather than tracked here, so the row cannot disagree with the policy
+    // that produced it.
+    liveMB: phase === 'lru' ?
+      ( api.SetGeometryBudget( modelID, budgetMB )?.liveBytes ?? 0 ) / BYTES_PER_MB :
+      0,
     placedDigest: exactPlacedDigest( digest.placedRecords ),
     payloadDigest: exactPayloadDigest( retainedPayloads ),
   } ) )
@@ -858,9 +908,10 @@ async function runChild( phase, filePath, batchSize, shard ) {
  * @param filePath The model.
  * @param batchSize Products per pump call.
  * @param shard Optional `{index, count}` — extract only this shard's products.
+ * @param budgetMB Live-asset ceiling for the `lru` phase, in MB.
  * @return {object} The child's JSON result.
  */
-function spawnChild( phase, filePath, batchSize, shard ) {
+function spawnChild( phase, filePath, batchSize, shard, budgetMB ) {
 
   const args = [
     '--expose-gc', `--max-old-space-size=${CHILD_MAX_OLD_SPACE_MB}`,
@@ -871,8 +922,12 @@ function spawnChild( phase, filePath, batchSize, shard ) {
     args.push( `${shard.index}/${shard.count}` )
   }
 
+  // The budget rides in the environment rather than as another positional,
+  // because the shard argument is already optional-positional and a second
+  // one would make `--child lru model 64 512` ambiguous with a shard spec.
   const out = execFileSync( process.execPath, args,
-      { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT } )
+      { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT,
+        env: { ...process.env, M3_BUDGET_MB: String( budgetMB ) } } )
 
   return JSON.parse( out.trim().split( '\n' ).at( -1 ) )
 }
@@ -1352,7 +1407,9 @@ function main() {
       mode: argv[ 5 ] ?? 'roundrobin',
     } : void 0
 
-    return runChild( argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ), shard )
+    return runChild(
+        argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ), shard,
+        Number( process.env.M3_BUDGET_MB ?? DEFAULT_BUDGET_MB ) )
   }
 
   const flag = ( name, fallback ) => {
@@ -1367,7 +1424,7 @@ function main() {
   // the phase and shard-mode validation above exists to prevent, one level up.
   const KNOWN_FLAGS = new Set( [
     '--models', '--batch', '--repeats', '--json', '--phases', '--shards',
-    '--shard-mode' ] )
+    '--shard-mode', '--budget-mb' ] )
 
   // Every flag here takes an operand, and a flag whose operand is missing is
   // worse than an unknown one: `--phases pump --shards` leaves `--shards`
@@ -1421,6 +1478,17 @@ function main() {
         `--repeats must be a positive integer; got ${flag( '--repeats' )}` )
     process.exit( 2 )
   }
+  const budgetMB = Number( flag( '--budget-mb', DEFAULT_BUDGET_MB ) )
+
+  // Same reasoning as --batch: a budget of 0 or NaN would evict everything
+  // or nothing while the row still printed a number, which is the
+  // mislabelled-experiment failure this file keeps guarding against.
+  if ( !Number.isInteger( budgetMB ) || budgetMB < 1 ) {
+    console.error(
+        `--budget-mb must be a positive integer; got ${flag( '--budget-mb' )}` )
+    process.exit( 2 )
+  }
+
   const jsonOut = flag( '--json' )
   const only = flag( '--phases' )
   const phases = only !== void 0 ? only.split( ',' ) : PHASES
@@ -1448,7 +1516,8 @@ function main() {
     console.error(
         'usage: m3_pump_spike.mjs --models <file with one path per line> ' +
         '[--batch N] [--repeats N] [--phases a,b] [--json out] ' +
-        '[--shards 1,2,4] [--shard-mode roundrobin|contiguous]' )
+        '[--shards 1,2,4] [--shard-mode roundrobin|contiguous] ' +
+        '[--budget-mb N]' )
     process.exit( 2 )
   }
 
@@ -1562,7 +1631,7 @@ function main() {
       const runs = []
 
       for ( let repeat = 0; repeat < repeats; ++repeat ) {
-        runs.push( spawnChild( phase, model, batchSize ) )
+        runs.push( spawnChild( phase, model, batchSize, void 0, budgetMB ) )
       }
 
       // Correctness is checked on EVERY repeat; only the timing comes from the

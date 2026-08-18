@@ -5,6 +5,7 @@ import {StepIndexEntry} from '../step/parsing/step_parser'
 import {StepIndexColumns} from '../step/parsing/columnar_index'
 import {StepTypeIndexer} from '../step/indexing/step_type_indexer'
 import {MultiIndexSet} from '../indexing/multi_index_set'
+import { GeometryResidency } from './geometry_residency'
 import { IfcModelGeometry } from './ifc_model_geometry'
 import { IfcModelProfile } from './ifc_model_profile'
 import IfcStepExternalMapping from './ifc_step_external_mapping'
@@ -23,6 +24,9 @@ export default class IfcStepModel extends StepModelBase< EntityTypesIfc > {
 
   public readonly typeIndex: MultiIndexSet< EntityTypesIfc >
   public readonly externalMappingType = IfcStepExternalMapping
+  /* Declared BEFORE the stores: field initialisers run in order, and both
+   * stores call into this on their first add. */
+  public readonly geometryResidency = new GeometryResidency()
   public readonly geometry = new IfcModelGeometry( this )
   public readonly voidGeometry = new IfcModelGeometry( this, true )
   public readonly profiles = new IfcModelProfile(this)

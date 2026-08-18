@@ -522,6 +522,37 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   }
 
   /**
+   * The products owning geometry nodes whose geometry does not currently
+   * resolve — everything that would be silently missing from a whole-scene
+   * walk right now.
+   *
+   * Exists for recovery after eviction: a budget can free geometry that the
+   * accumulated per-entity meshes still reference, and re-extracting the
+   * owning products is what puts it back. Returns owners rather than nodes
+   * because extraction is per-product.
+   *
+   * @return {Set<number>} Local IDs of the owning products, possibly empty.
+   */
+  public unresolvedGeometryOwners(): Set< number > {
+
+    const owners = new Set< number >()
+
+    for ( const node of this.scene_ ) {
+
+      if ( !( node instanceof IfcSceneGeometry ) ||
+           node.relatedElementLocalId === void 0 ) {
+        continue
+      }
+
+      if ( node.model.geometry?.getByLocalID( node.localID ) === void 0 ) {
+        owners.add( node.relatedElementLocalId )
+      }
+    }
+
+    return owners
+  }
+
+  /**
    * Resolve one node by index, for retrying a node {@link walkFrom} yielded
    * without geometry.
    *

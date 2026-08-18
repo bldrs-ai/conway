@@ -131,6 +131,46 @@ interface IfcProxyLoadState {
 /**
  * The proxy for IFC from the shim.
  */
+/**
+ * The placements of a FlatMesh whose native geometry is still alive.
+ *
+ * There is no "is this deleted" predicate on the binding, so liveness is
+ * probed by the cheapest call that touches the native and throws when it is
+ * gone. Only used on the degraded StreamAllMeshes path, where the
+ * alternative is handing a consumer a handle that aborts on read.
+ *
+ * @param mesh The accumulated per-entity mesh.
+ * @param geometryMap Express ID to [geometry, material, transform].
+ * @return {PlacedGeometry[]} The placements still backed by live geometry.
+ */
+function livePlacements(
+    mesh: FlatMesh,
+    geometryMap: Map<number, [GeometryObject, CanonicalMaterial, number[]]> ):
+    PlacedGeometry[] {
+
+  const live: PlacedGeometry[] = []
+
+  for (let where = 0; where < mesh.geometries.size(); ++where) {
+
+    const placed = mesh.geometries.get(where)
+    const entry = geometryMap.get(placed.geometryExpressID)
+
+    if (entry === void 0) {
+      continue
+    }
+
+    try {
+      entry[0].GetVertexDataSize()
+      live.push(placed)
+    } catch {
+      /* Native freed by eviction — drop the placement. */
+    }
+  }
+
+  return live
+}
+
+
 export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   fs?: any = undefined
@@ -307,6 +347,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       conwayGeometry,
       geometryTimeInMs: executionTimeInMs,
     } = loadState
+
+    // M3's budgeted arena. Applied here rather than at parse time because
+    // the model only exists now, and eviction cannot matter before the first
+    // pump batch anyway. Absent or non-positive leaves it unlimited, which
+    // is every pre-existing consumer's behaviour.
+    if ( settings?.GEOMETRY_BUDGET_MB !== void 0 ) {
+
+      model.geometryResidency.setBudgetBytes(
+          settings.GEOMETRY_BUDGET_MB * BYTES_PER_MIB )
+    }
 
     // get linear scaling factor
     this.linearScalingFactor = conwayGeometry.getLinearScalingFactor()
@@ -2069,9 +2119,25 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
+    // Capture before eviction — and capture even when nobody asked for
+    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
+    // every batch and captures once at the end (see streamAllMeshes), which
+    // works only while geometry survives to be captured. With a budget it
+    // does not: anything evicted before that final capture can no longer be
+    // resolved, so those instances vanish from the model with no error. On
+    // the shared-representation fixture at a 2 KiB budget that path
+    // delivered 3 placements against classic's 16.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
+    } else if (this.model[0].geometryResidency.enabled) {
+      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
     }
+
+    // Evict AFTER the capture, never before: the delta capture resolves each
+    // new node's geometry to emit it, so evicting first would drop assets
+    // this batch is about to deliver and re-extract them immediately. A
+    // no-op unless a budget is configured.
+    this.model[0].geometryResidency.evictToBudget()
 
     const remaining = (products.length - this.demandCursor_) +
         (aggregates.length - this.demandAggregatesCursor_)
@@ -2191,9 +2257,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
+    // Capture before eviction — and capture even when nobody asked for
+    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
+    // every batch and captures once at the end (see streamAllMeshes), which
+    // works only while geometry survives to be captured. With a budget it
+    // does not: anything evicted before that final capture can no longer be
+    // resolved, so those instances vanish from the model with no error. On
+    // the shared-representation fixture at a 2 KiB budget that path
+    // delivered 3 placements against classic's 16.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
+    } else if (this.model[0].geometryResidency.enabled) {
+      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
     }
+
+    // Evict AFTER the capture, never before: the delta capture resolves
+    // each new node's geometry to emit it, so evicting first would drop
+    // assets this batch is about to deliver and re-extract them at once.
+    // A no-op unless a budget is configured. Both pumps need this — the
+    // async twin is what Share drives, this one is what a synchronous
+    // embedder and the test suite drive, and a budget honoured on only
+    // one of them is a budget that silently does not apply.
+    this.model[0].geometryResidency.evictToBudget()
 
     const remaining = (products.length - this.demandCursor_) +
         (aggregates.length - this.demandAggregatesCursor_)
@@ -2233,6 +2318,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback Receives one delta FlatMesh per entity that
    * gained instances this call.
    */
+  /**
+   * Set the resident-geometry budget, in bytes, after the open.
+   *
+   * The setting form (GEOMETRY_BUDGET_MB) fixes the budget for a model's
+   * lifetime; this exists because the right number is a property of the
+   * device and the moment — a tab under pressure wants a smaller one than
+   * the same tab on load — and re-opening an 860 MB model to change it is
+   * not a real option.
+   *
+   * Takes effect at the next pump batch, so lowering it mid-load does not
+   * stall the current one freeing memory.
+   *
+   * @param bytes The ceiling; non-finite or non-positive disables eviction.
+   * @return {{budgetBytes: number, liveBytes: number}} The budget now in
+   * force and what is currently accounted resident.
+   */
+  public setGeometryBudget( bytes: number ): { budgetBytes: number, liveBytes: number } {
+
+    const residency = this.model[0].geometryResidency
+
+    residency.setBudgetBytes( bytes )
+
+    return { budgetBytes: residency.budgetBytes, liveBytes: residency.liveBytes }
+  }
+
   private streamNewMeshes_(
       meshCallback: (mesh: FlatMesh) => void ): void {
 
@@ -2470,20 +2580,102 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // completion and serve the accumulated full per-entity meshes.
     if (this.deferredMode_) {
 
-      const noCallback = void 0
+      // A budget cannot hold across this call, and pretending otherwise
+      // hands the consumer freed memory.
+      //
+      // StreamAllMeshes asks for the WHOLE model at once and delivers every
+      // entity after the drain completes, so a consumer reading geometry in
+      // its callback — the classic contract, and the only way to copy a
+      // payload here — reaches natives evicted batches ago. Capturing before
+      // eviction (see the pumps) saves the FlatMesh metadata but not the
+      // natives it points at, so it fixes the silent-omission half of this
+      // and not the dangling half.
+      //
+      // So the budget is suspended for the call and restored after, with one
+      // eviction pass to trim what the drain accumulated. The peak during
+      // StreamAllMeshes is therefore the UNBUDGETED peak, which is what
+      // asking for every mesh at once means. A consumer that wants the
+      // budget honoured throughout should pump ExtractGeometryBatch and copy
+      // per batch, which is what Share does.
+      const residency = this.model[0].geometryResidency
+      const suspendedBudgetBytes = residency.budgetBytes
 
-      while (this.extractGeometryBatch(
-          DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
-        // draining
+      // Degraded, and said so once. Suspending stops future eviction, but
+      // nothing recovers what a caller's own budgeted batches already freed:
+      // the accumulated meshes reference natives that are gone, and
+      // re-extracting the owning products restores geometry under NEW local
+      // IDs, so the old meshes still fail to resolve while a fresh capture
+      // emits the same instances again (21 placements against classic's 16
+      // on the shared-representation fixture). Rather than hand out dangling
+      // handles, this delivers what is still resident and drops the rest —
+      // see the filter below. Properly serving this combination needs the
+      // meshes re-keyed onto re-extracted geometry, which is follow-up work.
+      const degraded = residency.everEvicted
+
+      residency.setBudgetBytes(0)
+
+      try {
+
+        const noCallback = void 0
+
+        while (this.extractGeometryBatch(
+            DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
+          // draining
+        }
+        this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+
+        const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
+          this.model
+
+        let droppedInstances = 0
+        let droppedEntities = 0
+
+        meshMap.forEach((mesh) => {
+
+          if (degraded) {
+
+            const live = livePlacements(mesh[1], geometryMaterialTransformMap)
+
+            droppedInstances += mesh[1].geometries.size() - live.length
+
+            if (live.length === 0) {
+              ++droppedEntities
+              return
+            }
+          }
+
+          vectorFlatMesh.push(mesh[1])
+          meshCallback(mesh[1])
+        })
+
+        // One line for the whole call, not one per dropped instance: this
+        // fires on a path that may drop thousands, and a per-instance log
+        // would bury the fact that anything was dropped at all.
+        if (degraded) {
+          Logger.warning(
+              `[geometry budget] StreamAllMeshes served a model that evicted ` +
+              `under a budget: ${droppedInstances} instance(s) across ` +
+              `${droppedEntities} entit(ies) were dropped because their ` +
+              `geometry was freed. Pump ExtractGeometryBatch and copy at ` +
+              `delivery to receive everything.`)
+        }
+
+      } finally {
+
+        // In a finally because meshCallback is the CALLER's code: if it
+        // throws — including from a geometry read — an early return would
+        // leave the model permanently unbudgeted, holding the unbudgeted
+        // drain's whole resident set, with nothing to signal it.
+        if (Number.isFinite(suspendedBudgetBytes)) {
+
+          // Restoring seeds from everything now resident; the pass then
+          // trims to the ceiling, so the model is back under budget by the
+          // time this returns rather than at some later pump that may never
+          // come.
+          residency.setBudgetBytes(suspendedBudgetBytes)
+          residency.evictToBudget()
+        }
       }
-      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
-
-      const [, , meshMap, , vectorFlatMesh] = this.model
-
-      meshMap.forEach((mesh) => {
-        vectorFlatMesh.push(mesh[1])
-        meshCallback(mesh[1])
-      })
 
       return
     }

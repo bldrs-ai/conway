@@ -19,7 +19,12 @@ export class IfcModelGeometry implements ModelGeometry {
    * @param model The model this is from
    * @param isVoid
    */
-  constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {}
+  constructor( public readonly model: IfcStepModel, public readonly isVoid: boolean = false ) {
+
+    // So a budget enabled after extraction has started can seed from what
+    // this already holds — see GeometryResidency.setBudgetBytes.
+    model.geometryResidency.registerStore( this )
+  }
 
   /**
    * Get the number of items in this.
@@ -41,7 +46,10 @@ export class IfcModelGeometry implements ModelGeometry {
 
         this.meshes_.delete( key )
 
-        if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+        const isLastReference =
+          this.model.geometryResidency.releaseReference( this, key )
+
+        if (value.type === CanonicalMeshType.BUFFER_GEOMETRY && isLastReference) {
 
           value.geometry.delete()
         }
@@ -73,6 +81,7 @@ export class IfcModelGeometry implements ModelGeometry {
     }
 
     this.meshes_.set(mesh.localID, mesh)
+    this.model.geometryResidency.noteAdded( this, mesh )
   }
 
   /**
@@ -88,7 +97,16 @@ export class IfcModelGeometry implements ModelGeometry {
 
       this.meshes_.delete(localID)
 
-      if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+      // Freeing the native is the residency's call, not ours: a native can be
+      // cached under more than one local ID (6 % of D3D's), and freeing one
+      // entry's copy leaves its siblings pointing at freed memory with no
+      // diagnostic until something reads them. releaseReference returns true
+      // for the last reference — and unconditionally when no budget is
+      // configured, which is exactly the behaviour this had before.
+      const isLastReference =
+        this.model.geometryResidency.releaseReference( this, localID )
+
+      if (value.type === CanonicalMeshType.BUFFER_GEOMETRY && isLastReference) {
 
         value.geometry.delete()
       }
@@ -102,6 +120,11 @@ export class IfcModelGeometry implements ModelGeometry {
    * @return {CanonicalMesh | undefined}
    */
   public getByLocalID(localID: number): CanonicalMesh | undefined {
+
+    // Recency for the residency budget. Gated inside noteUsed on whether a
+    // budget is configured at all, because this is the scene walk's hot path.
+    this.model.geometryResidency.noteUsed( this, localID )
+
     return this.meshes_.get(localID)
   }
 
