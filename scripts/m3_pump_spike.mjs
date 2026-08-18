@@ -62,80 +62,105 @@ const REPO_ROOT = path.dirname( path.dirname( new URL( import.meta.url ).pathnam
 const CHILD_MAX_OLD_SPACE_MB = 12288
 
 /**
- * FNV-1a over the geometry a phase actually delivers. Fed the placement and
- * the payload bytes, so a phase that drops an instance, reorders placement,
- * or serves different vertices diverges — the "same output, different
- * timing" invariant M3 is held to.
+ * A digest of the geometry a phase delivers: each instance and each payload
+ * is hashed on its own, and the per-item hashes are combined **commutatively**
+ * (summed mod 2^32). Order-independent by construction, because emission
+ * order is exactly what M3 is allowed to change — the classic walk emits in
+ * scene order, the pump in batch order, and the delta contract already tells
+ * consumers to accumulate additively. An order-sensitive rolling hash reports
+ * that reordering as a content change (it did, on `Right_Hand.step`, where a
+ * sorted dump of both paths is byte-identical).
+ *
+ * What still diverges: a dropped, duplicated, differently-placed or
+ * differently-tessellated instance — which is the invariant worth holding.
  */
 class Digest {
 
   constructor() {
-    this.hash = 2166136261
+    this.placedHash = 0
+    this.payloadHash = 0
     this.instances = 0
     this.payloads = 0
     this.payloadBytes = 0
   }
 
   /**
-   * Mix one 32-bit value in.
-   *
-   * @param value Any number; non-integers are mixed through their float bits.
-   */
-  mix( value ) {
-    this.hash = Math.imul( this.hash ^ ( value | 0 ), 16777619 ) >>> 0
-  }
-
-  /**
-   * Mix a float, quantised so f32/f64 round-trips through the two paths
-   * (native dmat4 vs copied floats) don't produce spurious divergence.
-   *
-   * @param value The float to mix.
-   */
-  mixFloat( value ) {
-    this.mix( Math.round( value * 1024 ) )
-  }
-
-  /**
-   * Mix one placed instance.
+   * Hash one placed instance into the order-independent accumulator.
    *
    * @param expressID The product's express ID.
    * @param geometryExpressID The geometry's express ID.
    * @param transform The 16-element placement.
    */
   placed( expressID, geometryExpressID, transform ) {
+
     ++this.instances
-    this.mix( expressID )
-    this.mix( geometryExpressID )
+
+    let hash = 2166136261
+
+    hash = mix32( hash, expressID )
+    hash = mix32( hash, geometryExpressID )
 
     for ( const component of transform ) {
-      this.mixFloat( component )
+      hash = mix32( hash, quantise( component ) )
     }
+
+    this.placedHash = ( this.placedHash + hash ) >>> 0
   }
 
   /**
-   * Mix one geometry payload (mixed once per geometry, as it is emitted).
+   * Hash one geometry payload (once per geometry, as it is emitted).
    *
+   * @param geometryExpressID The geometry's express ID.
    * @param vertices Interleaved position+normal floats.
    * @param indices Triangle indices.
    */
-  payload( vertices, indices ) {
+  payload( geometryExpressID, vertices, indices ) {
+
     ++this.payloads
     this.payloadBytes += vertices.byteLength + indices.byteLength
-    this.mix( vertices.length )
-    this.mix( indices.length )
+
+    let hash = 2166136261
+
+    hash = mix32( hash, geometryExpressID )
+    hash = mix32( hash, vertices.length )
+    hash = mix32( hash, indices.length )
 
     // Sample rather than hash every float: a full hash of PSB's ~2 GB of
     // vertex data would dominate the measurement it is there to validate.
     // Stride 97 (prime, > any vertex stride) so the sample can't alias to
     // one component of the interleaved layout.
     for ( let i = 0; i < vertices.length; i += 97 ) {
-      this.mixFloat( vertices[ i ] )
+      hash = mix32( hash, quantise( vertices[ i ] ) )
     }
 
     for ( let i = 0; i < indices.length; i += 97 ) {
-      this.mix( indices[ i ] )
+      hash = mix32( hash, indices[ i ] )
     }
+
+    this.payloadHash = ( this.payloadHash + hash ) >>> 0
   }
+}
+
+/**
+ * One FNV-1a step.
+ *
+ * @param hash The running hash.
+ * @param value A 32-bit value.
+ * @return {number} The updated hash.
+ */
+function mix32( hash, value ) {
+  return Math.imul( hash ^ ( value | 0 ), 16777619 ) >>> 0
+}
+
+/**
+ * Quantise a float so an f32/f64 round-trip (native dmat4 vs copied floats)
+ * doesn't read as divergence.
+ *
+ * @param value The float.
+ * @return {number} An integer.
+ */
+function quantise( value ) {
+  return Math.round( value * 1024 )
 }
 
 /** Retained JS working set, after a collect so transient garbage isn't counted. */
@@ -184,7 +209,7 @@ function copyBatchPayloads( api, modelID, meshes, seen, digest ) {
       const indices = api.GetIndexArray(
           geometry.GetIndexData(), geometry.GetIndexDataSize() ).slice()
 
-      digest.payload( vertices, indices )
+      digest.payload( placed.geometryExpressID, vertices, indices )
       copied.push( placed.geometryExpressID )
     }
   }
@@ -369,7 +394,8 @@ async function runChild( phase, filePath, batchSize ) {
     instances: digest.instances,
     payloads: digest.payloads,
     payloadMB: digest.payloadBytes / BYTES_PER_MB,
-    digest: digest.hash >>> 0,
+    placedDigest: digest.placedHash,
+    payloadDigest: digest.payloadHash,
   } ) )
 }
 
@@ -463,7 +489,8 @@ function main() {
         ` (${( ( row.totalMs / base.totalMs - 1 ) * 100 ).toFixed( 1 )}%)` : ''
 
       return `${phase}=${row.totalMs.toFixed( 0 )}ms${pct} ` +
-        `wasm=${row.wasmPeakMB.toFixed( 0 )}MB inst=${row.instances} digest=${row.digest}`
+        `wasm=${row.wasmPeakMB.toFixed( 0 )}MB inst=${row.instances} ` +
+        `placed=${row.placedDigest} payload=${row.payloadDigest}`
     }
 
     console.log( `${name}\n  ${phases.map( cell ).join( '\n  ' )}` )
