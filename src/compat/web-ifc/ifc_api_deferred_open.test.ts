@@ -553,6 +553,142 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     expect( oneAtATime.visits ).toBeLessThan( allAtOnce.visits * 2 )
   }, 240000 )
 
+  test( 'a geometry budget evicts to fit, and delivers the same meshes', async () => {
+
+    // M3's budgeted arena. Two properties, and they pull against each other:
+    // the budget must actually bind (or it is decoration), and binding must
+    // not change what the consumer receives (or it is a corruption).
+    //
+    // The fixture is the shared-representation one deliberately: it is the
+    // case where eviction is most likely to lose something, because a
+    // product 15 products later maps geometry an aggressive budget will
+    // have thrown away. It re-extracts instead, which is the whole design
+    // — correctness does not depend on the budget, only cost does.
+    const api6 = new IfcAPI()
+    await api6.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const classicID = api6.OpenModel( fixture, SETTINGS )
+    const classicPlacements: string[] = []
+
+    api6.StreamAllMeshes( classicID, ( mesh ) => {
+      for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+        const placed = mesh.geometries.get( where )
+        classicPlacements.push(
+            `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+      }
+    } )
+
+    const deferredID = await api6.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    // A budget in BYTES, not MB: this model's whole live set is a few KB, so
+    // a 1 MB budget would never bind and the test would pass while proving
+    // nothing. SetGeometryBudget takes MB, hence the fraction.
+    const budgetBytes = 2048
+    const applied =
+      api6.SetGeometryBudget( deferredID, budgetBytes / ( 1024 * 1024 ) )
+
+    expect( applied?.budgetBytes ).toBe( budgetBytes )
+
+    const pumped: string[] = []
+
+    for ( ; ; ) {
+
+      const { extracted, remaining } = api6.ExtractGeometryBatch(
+          deferredID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              const placed = mesh.geometries.get( where )
+              pumped.push(
+                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            }
+          } )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    // Bound honoured: reading the budget back reports what is resident now,
+    // after the last batch's eviction pass.
+    const settled = api6.SetGeometryBudget( deferredID, budgetBytes / ( 1024 * 1024 ) )
+
+    expect( settled?.liveBytes ).toBeLessThanOrEqual( budgetBytes )
+
+    // ...and it bound because there was more than that to hold, not because
+    // the model is tiny. Without this the assertion above passes on an empty
+    // model, which is the shape of check this file keeps getting wrong.
+    const unbudgetedID = await api6.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    api6.SetGeometryBudget( unbudgetedID, Number.MAX_SAFE_INTEGER )
+
+    for ( ; ; ) {
+      const { extracted, remaining } = api6.ExtractGeometryBatch( unbudgetedID, 4 )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    const unbudgeted =
+      api6.SetGeometryBudget( unbudgetedID, Number.MAX_SAFE_INTEGER )
+
+    expect( unbudgeted!.liveBytes ).toBeGreaterThan( budgetBytes )
+
+    // Same meshes, same placements, evicted or not.
+    expect( pumped.slice().sort() ).toEqual( classicPlacements.slice().sort() )
+
+    api6.CloseModel( classicID )
+    api6.CloseModel( deferredID )
+    api6.CloseModel( unbudgetedID )
+  }, 240000 )
+
+  test( 'no budget is the default, and evicts nothing', async () => {
+
+    // The contract eviction changes — GetGeometry serving an evicted asset —
+    // must not change for anyone who did not ask for it. A model opened
+    // without GEOMETRY_BUDGET_MB tracks nothing and frees nothing.
+    const api7 = new IfcAPI()
+    await api7.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const modelID = await api7.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    const geometryIDs: number[] = []
+
+    for ( ; ; ) {
+
+      const { extracted, remaining } = api7.ExtractGeometryBatch(
+          modelID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              geometryIDs.push( mesh.geometries.get( where ).geometryExpressID )
+            }
+          } )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( geometryIDs.length ).toBeGreaterThan( 0 )
+
+    // Every delivered geometry is still fetchable at the end of the load —
+    // the lazy-fetch consumer an unbudgeted model is allowed to be.
+    for ( const geometryID of geometryIDs ) {
+      expect( api7.GetGeometry( modelID, geometryID ).GetVertexDataSize() )
+          .toBeGreaterThan( 0 )
+    }
+
+    api7.CloseModel( modelID )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )
