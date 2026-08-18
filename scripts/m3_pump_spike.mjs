@@ -27,8 +27,8 @@
  *              everything, retain nothing).
  *
  * Every phase copies out the same payloads (`classic`/`copyout`/`bounded`)
- * or none (`pump`), and hashes them into a digest so the M3 exit criterion —
- * *M3 changes when work happens, not what it produces* — is checked rather
+ * or none (`pump`), and hashes them into a digest so the M3 exit criterion
+ * (M3 changes when work happens, not what it produces) is checked rather
  * than assumed. `bounded` releasing everything is expected to LOSE instances
  * whose geometry is shared with a later product (the scene walk skips a
  * released geometry); the digest and instance counts are what size that
@@ -45,7 +45,7 @@
  *                                  [--batch 64] [--repeats 1] [--json out]
  *   node scripts/m3_pump_spike.mjs --child <phase> <path> <batch>  # internal
  */
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as process from 'node:process'
@@ -163,7 +163,11 @@ function quantise( value ) {
   return Math.round( value * 1024 )
 }
 
-/** Retained JS working set, after a collect so transient garbage isn't counted. */
+/**
+ * Retained JS working set, after a collect so transient garbage isn't counted.
+ *
+ * @return {number} Megabytes.
+ */
 function retainedMB() {
   globalThis.gc?.()
   const usage = process.memoryUsage()
@@ -274,13 +278,62 @@ function releaseGeometries( api, modelID, geometryExpressIDs ) {
 }
 
 /**
+ * Cut the pump's worklists down to one shard, round-robin by position.
+ *
+ * This is the across-product parallelism axis the design doc specifies
+ * ("products are naturally independent at tessellation time") — the one a
+ * pool of workers, each holding its OWN wasm instance, would exploit. It is
+ * NOT the axis the MT build parallelises: pthreads inside one instance split
+ * the work *within* a product's tessellation while a single JS driver feeds
+ * them serially. Each process here is one such worker, minus the postMessage
+ * plumbing: own instance, own heap, own driver.
+ *
+ * Round-robin rather than contiguous ranges, because product cost varies by
+ * orders of magnitude and file order is spatially clustered — contiguous
+ * shards would measure the imbalance rather than the scaling.
+ *
+ * Reaches into the passthrough's worklist fields deliberately: the shard is a
+ * measurement fixture, not a proposed API. What ships is a queue that hands
+ * out product IDs, which is `DemandGeometryQueue`'s job.
+ *
+ * @param api The IfcAPI instance.
+ * @param modelID The open model.
+ * @param shard `{index, count}`.
+ * @return {object|undefined} What this shard owns.
+ */
+function shardWorklists( api, modelID, shard ) {
+
+  const passthrough = api.getPassthrough( modelID )
+
+  if ( passthrough?.ensureDemandWorklists_ === void 0 ) {
+    return void 0
+  }
+
+  passthrough.ensureDemandWorklists_()
+
+  const products = passthrough.demandProducts_ ?? []
+  const aggregates = passthrough.demandAggregates_ ?? []
+  const mine = ( _, index ) => index % shard.count === shard.index
+
+  passthrough.demandProducts_ = products.filter( mine )
+  passthrough.demandAggregates_ = aggregates.filter( mine )
+
+  return {
+    products: passthrough.demandProducts_.length,
+    ofProducts: products.length,
+    aggregates: passthrough.demandAggregates_.length,
+  }
+}
+
+/**
  * Run one phase against one model in this (child) process.
  *
  * @param phase One of PHASES.
  * @param filePath The model.
  * @param batchSize Products per pump call.
+ * @param shard Optional `{index, count}` — extract only this shard's products.
  */
-async function runChild( phase, filePath, batchSize ) {
+async function runChild( phase, filePath, batchSize, shard ) {
 
   const { IfcAPI, LogLevel } =
     await import( '../compiled/src/compat/web-ifc/ifc_api.js' )
@@ -318,6 +371,9 @@ async function runChild( phase, filePath, batchSize ) {
     console.log( JSON.stringify( { phase, failed: 'open' } ) )
     return
   }
+
+  const sharded = deferred && shard !== void 0 ?
+    shardWorklists( api, modelID, shard ) : void 0
 
   let wasmPeakMB = wasmMB( api, wasmHeapByteLength )
   const wasmAfterOpenMB = wasmPeakMB
@@ -386,6 +442,8 @@ async function runChild( phase, filePath, batchSize ) {
     totalMs: openMs + geometryMs,
     batches,
     released,
+    shard,
+    sharded,
     wasmAfterOpenMB,
     wasmPeakMB,
     wasmEndMB: wasmMB( api, wasmHeapByteLength ),
@@ -405,27 +463,148 @@ async function runChild( phase, filePath, batchSize ) {
  * @param phase One of PHASES.
  * @param filePath The model.
  * @param batchSize Products per pump call.
+ * @param shard Optional `{index, count}` — extract only this shard's products.
  * @return {object} The child's JSON result.
  */
-function spawnChild( phase, filePath, batchSize ) {
+function spawnChild( phase, filePath, batchSize, shard ) {
 
-  const out = execFileSync( process.execPath, [
+  const args = [
     '--expose-gc', `--max-old-space-size=${CHILD_MAX_OLD_SPACE_MB}`,
     process.argv[ 1 ], '--child', phase, filePath, String( batchSize ),
-  ], { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT } )
+  ]
+
+  if ( shard !== void 0 ) {
+    args.push( `${shard.index}/${shard.count}` )
+  }
+
+  const out = execFileSync( process.execPath, args,
+      { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT } )
 
   return JSON.parse( out.trim().split( '\n' ).at( -1 ) )
 }
 
 /**
- * Sweep phases over models.
+ * Run one phase as N concurrent shards, each in its own process with its own
+ * wasm instance — the worker-pool shape, measured without building workers.
+ * Wall-clock is the slowest shard, since they run at the same time.
+ *
+ * @param phase One of PHASES.
+ * @param filePath The model.
+ * @param batchSize Products per pump call.
+ * @param count How many shards.
+ * @return {Promise<object[]>} One result per shard.
+ */
+function spawnShards( phase, filePath, batchSize, count ) {
+
+  const running = []
+
+  for ( let index = 0; index < count; ++index ) {
+
+    const args = [
+      '--expose-gc', `--max-old-space-size=${CHILD_MAX_OLD_SPACE_MB}`,
+      process.argv[ 1 ], '--child', phase, filePath, String( batchSize ),
+      `${index}/${count}`,
+    ]
+
+    running.push( new Promise( ( resolve, reject ) => {
+      execFile( process.execPath, args,
+          { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT },
+          ( error, stdout ) => {
+            if ( error !== null ) {
+              reject( error )
+              return
+            }
+            resolve( JSON.parse( stdout.trim().split( '\n' ).at( -1 ) ) )
+          } )
+    } ) )
+  }
+
+  return Promise.all( running )
+}
+
+/**
+ * Scaling sweep for the across-product axis: run the same extraction as N
+ * concurrent one-shard processes and report wall-clock against N = 1.
+ *
+ * Each shard pays its own parse, so only the GEOMETRY phase is comparable —
+ * in the real design the index is built once and shared with the pool as
+ * typed-array columns (transferable / SAB), which is exactly what M2's
+ * columns-from-birth index made possible. Shards also re-extract any geometry
+ * they share, so sub-linear scaling here has two distinct causes worth
+ * separating before drawing conclusions: real serialisation, and duplicated
+ * shared work (visible as a rising payload count).
+ *
+ * @param models Model paths.
+ * @param phase The phase to run.
+ * @param batchSize Products per pump call.
+ * @param counts Shard counts to sweep.
+ * @param jsonOut Optional output path.
+ */
+async function runShardSweep( models, phase, batchSize, counts, jsonOut ) {
+
+  const rows = []
+
+  for ( const model of models ) {
+
+    const name = path.basename( model )
+    const byCount = {}
+
+    for ( const count of counts ) {
+
+      const t0 = performance.now()
+      const results = await spawnShards( phase, model, batchSize, count )
+      const wallMs = performance.now() - t0
+
+      const total = ( key ) => results.reduce( ( sum, r ) => sum + ( r[ key ] ?? 0 ), 0 )
+      const slowestGeometryMs = Math.max( ...results.map( ( r ) => r.geometryMs ) )
+
+      byCount[ count ] = {
+        count,
+        wallMs,
+        slowestGeometryMs,
+        geometryMsPerShard: results.map( ( r ) => Math.round( r.geometryMs ) ),
+        instances: total( 'instances' ),
+        payloads: total( 'payloads' ),
+        wasmPeakMBSum: results.reduce( ( sum, r ) => sum + r.wasmPeakMB, 0 ),
+        wasmPeakMBMax: Math.max( ...results.map( ( r ) => r.wasmPeakMB ) ),
+      }
+
+      const base = byCount[ counts[ 0 ] ]
+      const speedup = base.slowestGeometryMs / slowestGeometryMs
+
+      console.log(
+          `${name} shards=${count} geometry=${( slowestGeometryMs / 1000 ).toFixed( 1 )}s ` +
+          `(${speedup.toFixed( 2 )}x) per-shard=${byCount[ count ].geometryMsPerShard.join( '/' )} ` +
+          `inst=${byCount[ count ].instances} payloads=${byCount[ count ].payloads} ` +
+          `wasmMax=${byCount[ count ].wasmPeakMBMax.toFixed( 0 )}MB ` +
+          `wasmSum=${byCount[ count ].wasmPeakMBSum.toFixed( 0 )}MB` )
+    }
+
+    rows.push( { name, model, batchSize, phase, byCount } )
+  }
+
+  if ( jsonOut !== void 0 ) {
+    fs.writeFileSync( jsonOut, `${JSON.stringify( rows, null, 2 )}\n` )
+  }
+}
+
+/**
+ * Sweep phases over models, or shard counts when `--shards` is given.
+ *
+ * @return {Promise<void>|void} The shard sweep's promise, when sweeping.
  */
 function main() {
 
   const argv = process.argv.slice( 2 )
 
   if ( argv[ 0 ] === '--child' ) {
-    return runChild( argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ) )
+    const spec = argv[ 4 ]
+    const shard = spec !== void 0 ? {
+      index: Number( spec.split( '/' )[ 0 ] ),
+      count: Number( spec.split( '/' )[ 1 ] ),
+    } : void 0
+
+    return runChild( argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ), shard )
   }
 
   const flag = ( name, fallback ) => {
@@ -439,6 +618,7 @@ function main() {
   const jsonOut = flag( '--json' )
   const only = flag( '--phases' )
   const phases = only !== void 0 ? only.split( ',' ) : PHASES
+  const shards = flag( '--shards' )
 
   if ( modelsFile === void 0 ) {
     console.error(
@@ -453,6 +633,10 @@ function main() {
       .filter( ( line ) => line.length > 0 && !line.startsWith( '#' ) )
 
   const rows = []
+
+  if ( shards !== void 0 ) {
+    return runShardSweep( models, phases[ 0 ], batchSize, shards.split( ',' ).map( Number ), jsonOut )
+  }
 
   for ( const model of models ) {
 
