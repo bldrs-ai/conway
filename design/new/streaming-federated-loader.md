@@ -63,9 +63,12 @@ The remaining structural residencies — the things this doc exists to kill:
 1. **Parse-time source residency.** `parseDataToModel` needs the entire
    source as one contiguous buffer. The spill only happens *post*-parse.
    Peak = source + index. This is the "constant-memory parse" gap.
-2. **Grow-only wasm geometry heap.** ~2 GB on PSB at steady state.
-   Geometry is extracted eagerly for the whole model and stays resident in
-   the wasm heap even after the GLB/scene is built.
+2. **Grow-only wasm geometry heap.** 1283 MB on PSB at steady state
+   (measured 2026-08-18; earlier ~2 GB figures included a measurement
+   harness's own leaked native clones). Geometry is extracted eagerly for
+   the whole model and stays resident in the wasm heap even after the
+   GLB/scene is built — see the M3 status below, where per-batch release
+   takes this to 342 MB at batch 256 and 84 MB at batch 32.
 3. **Eager whole-model geometry extraction.** Even with a bounded heap,
    extracting *everything up front* is O(model) time before first pixel
    and O(model) scene memory after.
@@ -470,6 +473,287 @@ Deliberately small first step; each has a measurable exit.
   (viewport-ordered). Exit: PSB time-to-first-pixel < 25 % of full-load
   time; steady-state wasm heap under a configured budget (e.g. 512 MB)
   with the full model *navigable* (tiles fill/evict on demand).
+
+  **Status 2026-08-18 — machinery shipped, discipline not in the
+  production path; re-scoped to bounded high-water.** Every part exists
+  and is tested (`DemandGeometryQueue`, `ChunkedPool` →
+  `SharedAssetPool` → `GeometryTilePool`, the C++ `TilePool` twin +
+  `createWasmTileBackend`, `IfcTileAssetExtractor`, the per-product
+  `extractProductGeometryByLocalID` seam), and outside tests nothing
+  consumes any of it: Share runs the shim's durable batch pump, which
+  extracts every product into `model.geometry` and holds it for the life
+  of the tab. Measured with `scripts/m3_pump_spike.mjs` (child process
+  per phase; placements and payloads hashed per phase so "M3 changes
+  *when*, not *what*" is a check, not a claim).
+
+  **PSB.ifc — 902 MB, node, 4-core sandbox, batch = 256:**
+
+  | phase | open | geometry | total | wasm peak | RSS | JS retained |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | `classic` — `OpenModel` + `StreamAllMeshes` | 48 s | 8 s | 56 s | **1283 MB** | 3577 MB | 1566 MB |
+  | `pump` — deferred, batched, no copy-out | 13 s | 35 s | 48 s | 1283 MB | 2827 MB | 1255 MB |
+  | `copyout` — + per-batch payload copy-out | 13 s | 33 s | 46 s | 1283 MB | 3025 MB | 1597 MB |
+  | `bounded` — + per-batch native release | 13 s | 25 s | **38 s** | **342 MB** | 2048 MB | 1589 MB |
+
+  Every payload-carrying phase **holds** its copied vertex and index
+  buffers until it reports (40 356 typed arrays, 334 MB on PSB), because
+  a consumer building a navigable scene keeps them — hashing and
+  dropping them would report a JS working set nobody actually has, and
+  would hide the GC pressure of holding it. They are retained exactly as
+  `GetVertexArray`/`GetIndexArray` return them: those already hand back
+  owning copies (`getSubArray` ends with `slice(0)`), so a defensive
+  `.slice()` on top would double every payload and leave the first
+  generation as garbage — inflating the very columns this table reports. Compare rows within this
+  table only: absolute wall-clock on this box moves ±25 % between runs,
+  so the cross-run deltas that matter are the memory columns, which are
+  stable and reproduce.
+
+  Identical placement and payload digests across `classic`, `copyout`
+  and `bounded` **on PSB, the model this table measures** — corpus-wide
+  the deferred phases match `classic` on 11 of 12 models and each other
+  on all 12; see the smoke-corpus paragraph below for the
+  `supercap.step` exception. Four readings:
+
+  1. **The geometry residency is the entire wasm heap.** The deferred
+     open reaches end-of-parse at **16 MB** of wasm; classic is already
+     at 1283 MB when `OpenModel` returns. Parsing costs no meaningful
+     wasm — so a parse-phase memory regression is never wasm-side, which
+     also redirects the Share-side "+1.7 GB parsing" hunt away from wasm
+     ArrayBuffers.
+  2. **The tab holds ~4× the geometry it delivers.** 23 454 instances
+     over 20 178 distinct geometries are **334 MB** of vertex+index
+     payload against a 1283 MB high-water. The gap is never releasing,
+     not the model.
+  3. **Reading vertices costs no extra wasm.** `pump` (no copy-out) and
+     `copyout` peak identically at 1283 MB, so serving a consumer its
+     own geometry is free on the wasm side — the payload is copied out
+     to JS and the native is untouched. An earlier version of this
+     section claimed `GetGeometry` cost +672 MB; that was the spike
+     harness leaking, not the engine. `GetGeometry` returns
+     `geometryObject.clone()` — an *owning* native copy — and the
+     harness never deleted it, so it accumulated one clone per geometry
+     inside the heap it was measuring. Consumers of this API must delete
+     what it hands them; conway's own paths already do.
+  4. **Releasing costs nothing measurable.** `bounded` is the fastest
+     row here, but the spread between rows (~24 %) sits inside this
+     box's run-to-run wall-clock variance (~25 %), so the honest claim is
+     the negative one: **no release overhead is distinguishable from
+     noise**, across every run taken. Establishing that release is
+     genuinely *faster* would need repeated timings with the variance
+     separated out, which nothing here depends on — the memory columns
+     are the result, and they are stable.
+
+  **The high-water becomes O(batch), which is the whole point.**
+  `bounded` at batch = 32 reaches **84 MB** (identical digests) against
+  342 MB at batch = 256. The residency now tracks the in-flight
+  working set the way the design says it should, rather than the model:
+  1283 MB → 342 MB → 84 MB as the batch shrinks, at no wall-clock cost.
+
+  Release is keyed on what the extractor **creates**, not on what it
+  delivers. The two differ: natives are built that never reach a
+  consumer as a payload — void and opening geometry consumed by a
+  boolean — and a release keyed on delivered payloads leaves those
+  resident for the life of the model. On PSB that is 403 of 20 581
+  assets, and on MB-Khaya 3 347 of 8 947 (37 %). Correcting it is what
+  moves the batch-32 row from 100 MB to 84 MB; the batch-256 row is
+  unchanged at 342 MB, because at that size the in-flight set dominates
+  the residue. (An earlier version of this section reported 100 MB and
+  checked only that every *copied* geometry was freed — a check that
+  cannot see this class of leak at all.)
+
+  **This clears M3's memory gate on PSB** — "steady-state wasm heap
+  under a configured budget (e.g. 512 MB) with the full model
+  navigable" — with room to spare, and *without* the dedicated chunk
+  region. That does not retire the chunk region: this measures a single
+  drain-once pass, and the region exists for what happens under
+  evict/refill *churn*, where a general allocator fragments and never
+  gives the pages back. But the ordering changes — the pump discipline
+  alone reaches the gate, and the region is what keeps it there.
+
+  (An earlier version of this section reported 840 MB and 727 MB for
+  these two rows and concluded batch size was not a lever. Both figures
+  were inflated by the harness's leaked `GetGeometry` clones, which
+  accumulated with the number of geometries rather than with the batch
+  and so masked the batch's effect entirely.)
+
+  **Release did not break delivery anywhere in the smoke corpus.** With
+  every instance's product, geometry, transform, colour and
+  `occurrencePath` hashed, and **every delivered vertex and index byte
+  fed to SHA-256** (at report time, so it costs the timings nothing —
+  and over raw bytes rather than quantised values, so a small
+  tessellation change cannot land in the same bucket; two runs that
+  deliver different geometry agreeing would require a SHA-256
+  collision, which is the honest bound — an earlier 32-bit rolling hash
+  could not support the "cannot compare equal" wording this paragraph
+  used to carry), `bounded` is identical to `classic` on 11 of
+  12 models — same instances, same payloads, same placement — and
+  identical to **`copyout` on all 12**, with each run also asserting
+  that release actually happened (every copied geometry freed — a
+  release path that threw would otherwise produce the same agreement
+  while releasing nothing). That second comparison is the
+  one the release policy rests on: `copyout` and `bounded` run the same
+  deferred extraction and differ *only* in that `bounded` releases, so
+  agreement means release changed nothing, while checking each against
+  `classic` alone cannot tell — on the one model where the deferred path
+  itself diverges, a release regression would hide inside a difference
+  that is already expected. So the corpus provides **no evidence that
+  per-batch release changes what a consumer receives**, which is the M3
+  invariant, and the 342 MB / 84 MB rows are a real result rather than
+  one bought by dropping geometry.
+
+  An earlier version of this section claimed the opposite — that
+  retain-nothing delivered 169 instances against 101 on `supercap.step`,
+  making retention a *measured* correctness prerequisite. That figure
+  came from a stale harness state and does not reproduce. Retracted.
+
+  **Retention is still required, but as a design argument, not a
+  measured one.** The mechanism is unchanged and real: the scene walk
+  resolves geometry through `model.geometry.getByLocalID` and skips what
+  it cannot find, so releasing an asset a later product shares makes
+  that product miss the cache and re-extract, appending duplicate scene
+  nodes — and `streamNewMeshes_`'s *positional* per-entity watermarks
+  cannot survive an entry vanishing from the sequence they index. This
+  corpus simply never triggers it at batch 64: shared geometry is copied
+  and released within the same batch that emits all of its instances.
+  A model that instances one definition across widely separated products
+  would, and finding or building that fixture is the next thing this
+  harness needs. The shippable policy is unchanged —
+  refcount-on-asset (`SharedAssetPool`, already written) plus an
+  **asset-keyed delta capture**, which also deletes the pump's
+  O(batches × scene) re-walk — but it is now justified by the code path
+  rather than by a number.
+
+  **The 12th model exposes something else, and it is a production bug.**
+  On `supercap.step` (AP214) the *deferred pump itself* diverges from
+  the classic walk before any release is involved: `ExtractGeometryBatch`
+  delivers **21 instances over 2 geometries** where `StreamAllMeshes`
+  delivers **101 over 6**. `copyout` — which releases nothing — diverges
+  exactly as `bounded` does, so release is not implicated. It is
+  deterministic across runs, reproduces before this branch merged M2,
+  and reproduces with the harness's native-clone handling removed. Since
+  the deferred pump is the path Share's demand/tiled rendering runs, an
+  AP214 assembly losing four fifths of its placed instances there is a
+  correctness bug in the production path, tracked separately from M3.
+
+  **The worker pool is a live lever, and the MT result never tested it
+  (measured 2026-08-18).** Two different parallelism axes were being
+  conflated. What conway-geom#148 measured is *pthreads inside one wasm
+  instance*: the C++ pool splits work **within** a product's
+  tessellation, on a **shared** heap, fed by **one serial JS driver** —
+  and its three suspects (main-thread `Atomics.wait` busy-spin,
+  `memory.grow` stalling every thread, pool oversubscription) are all
+  properties of that shape. What this doc's "Parallelism / multi-core"
+  section actually specifies is the other axis: N workers, each with its
+  **own** instance and heap and driver, pulling **disjoint products**.
+  Every one of those suspects is structurally absent there — separate
+  linear memories, and a worker may legally block — and #148's own
+  listed fix is "run extraction in a dedicated worker".
+
+  Measured by sharding the product worklist round-robin across N
+  independent processes (own instance, own heap, own driver — a worker
+  minus the postMessage plumbing), single-threaded wasm so one worker
+  means one core, on a 4-core box:
+
+  | model | N=1 | N=2 | N=3 | N=4 | total CPU N=1 → N=4 |
+  | --- | --- | --- | --- | --- | --- |
+  | **PSB.ifc** geometry | 23.1 s | 12.6 s (1.84×) | 9.8 s (2.37×) | **8.9 s (2.59×)** | 30.5 s → 35.2 s (+15 %) |
+  | **MB-Khaya.ifc** geometry | 4.0 s | 2.9 s (1.37×) | 2.8 s (1.41×) | 2.9 s (1.39×) | 7.2 s → 10.1 s (+40 %) |
+
+  **PSB scales.** 2.59× on 4 cores is 86 % of what this box can give:
+  one extraction process already burns 1.32 cores (main thread plus V8
+  GC/JIT — the allocation-heavy JS driver's own tax), which caps the
+  achievable speedup at 4 / 1.32 ≈ 3.0×. Per-worker wasm peak also falls
+  with N (1283 → 364 MB), so sharding is a **memory** lever as well as a
+  time one, and it composes with the bounded pump rather than competing.
+
+  **MB-Khaya does not**, and the reason is visible in the CPU column
+  rather than the wall-clock: sharding it costs +40 % total CPU against
+  PSB's +15 %. A small model that reuses representations heavily has
+  products that are *not* independent — round-robin scatters shared
+  geometry across every shard and each one re-extracts it. Contiguous
+  sharding, which preserves file-order locality, duplicates less and
+  scales better (1.52× vs 1.39×).
+
+  **The partition wants affinity by shared asset**, not by product — the
+  same definition/occurrence boundary `SharedAssetPool` draws for
+  retention. One boundary, two payoffs. Measured rather than assumed:
+  `scripts/m3_affinity_spike.mjs` captures the real product↔asset graph
+  (one instrumented extraction pass recording, per product, which assets
+  it created, which it reused, and how long it took), replays candidate
+  partitions against it, and can emit any of them as per-shard product
+  lists so the **real extractor** runs the partition the simulation
+  scored.
+
+  **MB-Khaya, N=4, single-threaded shards, against a one-shard baseline
+  of 4.3 s / 7.5 s CPU / 6851 assets:**
+
+  | partition | geometry | total CPU | assets created |
+  | --- | --- | --- | --- |
+  | round-robin | 3.2 s | 11.2 s | 8678 (**+27 %**) |
+  | affinity — hash the product's primary asset | 2.3 s | **7.5 s** | **6851** (+0 %) |
+  | claim — first worker to touch an asset owns it | **2.2 s** | 7.8 s | **6851** (+0 %) |
+
+  Both asset-aware partitions eliminate the duplication **completely**:
+  four shards create exactly the assets one shard does, and total CPU
+  returns to the serial baseline, so nothing is wasted. The wall-clock
+  follows — 2.2 s against round-robin's 3.2 s at the same shard count,
+  which is 1.95× against the serial baseline where round-robin manages
+  1.34×. Per-worker wasm peak drops too (83 → 33 MB), because a shard
+  that doesn't re-extract shared geometry doesn't hold it either.
+
+  **What this validates, precisely: a precomputed partition.** Both
+  strategies are scored and emitted *offline*, from a captured graph
+  that already knows every product's created/reused assets and its
+  measured cost before anything is dispatched. That is an oracle. It
+  establishes the ceiling — the duplication is entirely addressable by
+  placement, and asset-aware placement reaches the serial CPU floor —
+  but it is not yet a scheduler.
+
+  **What it does not validate: an online first-touch rule.** A live
+  worker cannot know that a pending product follows an existing owner
+  until it has discovered that product's assets, and discovering them by
+  extracting is exactly the duplication the rule exists to avoid. So
+  "first worker to touch an asset owns it" needs a **dispatch-time key**
+  — something derivable from the index without extracting, i.e. the
+  product's representation / mapped-source ID read straight from the
+  columns. That key is cheap and it is the natural candidate; whether it
+  partitions as well as the oracle is the next measurement, not a
+  settled result. Until it is taken, the honest statement is: asset
+  affinity is worth ~27 % of CPU and ~1.5× of wall-clock on a
+  representation-heavy model, and an online scheduler that approximates
+  it is the thing to design.
+
+  Three caveats the numbers carry. The partition table above was
+  produced twice, and the first version was wrong in two ways worth
+  recording rather than quietly fixing. It reported that neither
+  asset-aware partition changed anything — because the harness's
+  assignment path had been dropped in an unrelated edit, so every
+  "partition" was silently running round-robin; the tell was two
+  different partitions producing *byte-identical* asset counts. And the
+  sweep's own N=1 row, when an assignment was active, handed the
+  baseline child one shard's products while treating it as the whole
+  model, so the ratios those runs printed were nonsense (the published
+  figures came from a separate unassigned baseline, which is the only
+  reason the conclusion survived). Both are fixed; the lesson is the one
+  this file keeps relearning, that a measurement which cannot fail is
+  not a measurement. Each shard also pays its own parse here, so
+  only the geometry phase is comparable; the shipping design parses once
+  and hands workers transferable index columns, which is exactly what
+  M2/M7's columns-from-birth index made possible (before it, sharding
+  meant shipping an object-form index or letting the event stream
+  schedule). Even so, end-to-end wall with four redundant parses still
+  falls 39.4 s → 26.9 s. And a 4-core box cannot answer how this scales
+  at 8–16 cores; it can only show the axis is real.
+
+  Scope moved out by measurement rather than by preference:
+  **demand ordering** (Share-side
+  priority into a queue that exists; does not gate the memory result),
+  and the **per-product native free blocker** (`IfcModelGeometry.delete`
+  already frees the native, and freeing into the general heap returns ~0
+  RSS — the missing piece was policy and retention, never a C++
+  surface). The time-to-first-pixel exit criterion predates the
+  streaming preview channel and is re-aimed at the preview→durable
+  handover, tracked Share-side.
 - **M4 — Range ByteSource + index sidecar.** S2. Exit: second visit to a
   remote PSB with sidecar reaches first pixel without fetching > 10 % of
   the file; property panel opens with < 1 MB fetched.
