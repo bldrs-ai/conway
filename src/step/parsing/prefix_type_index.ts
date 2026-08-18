@@ -203,24 +203,34 @@ export class PrefixTypeIndex<TypeIDType extends number> {
     const firstInlineElement = columns.firstInlineElement
     const cursor = this.index_!.cursor( ...typeIDs )
 
-    while ( cursor.step() ) {
-      const high = cursor.high
+    // Cursors are pooled, and a generator can be abandoned mid-iteration (a
+    // `break`, a `find`), so the release has to survive early exit — hence
+    // try/finally rather than a free() after the loop. Mirrors
+    // StepModelBase.expressIDsOfTypes, which this is the prefix twin of; a
+    // live consumer querying every generation would otherwise churn a cursor
+    // per query for the pool's whole lifetime.
+    try {
+      while ( cursor.step() ) {
+        const high = cursor.high
 
-      let low = cursor.low
+        let low = cursor.low
 
-      while ( low !== 0 ) {
-        const lowestOneHot = extractOneHotLow( low )
+        while ( low !== 0 ) {
+          const lowestOneHot = extractOneHotLow( low )
 
-        low ^= ( 1 << lowestOneHot )
+          low ^= ( 1 << lowestOneHot )
 
-        const localID = high | lowestOneHot
+          const localID = high | lowestOneHot
 
-        // Inline entities carry no express ID — the same guard the model's
-        // expressIDsOfTypes applies over its own columns.
-        if ( localID < firstInlineElement ) {
-          yield expressIDs[ localID ]
+          // Inline entities carry no express ID — the same guard the model's
+          // expressIDsOfTypes applies over its own columns.
+          if ( localID < firstInlineElement ) {
+            yield expressIDs[ localID ]
+          }
         }
       }
+    } finally {
+      cursor.free()
     }
   }
 

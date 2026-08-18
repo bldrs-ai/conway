@@ -23,6 +23,8 @@ import {
   IfcWall,
   IfcPropertySet,
 } from '../../ifc/ifc4_gen'
+import { MultiIndexSetCursorOr } from '../../indexing/multi_index_set_cursor_or'
+import { SingleIndexSetCursor } from '../../indexing/single_index_set_cursor'
 import { StepTypeIndexer } from '../indexing/step_type_indexer'
 import { BufferByteSource } from './byte_source'
 import { ColumnarIndexSink } from './columnar_index'
@@ -33,6 +35,11 @@ import { ParseResult } from './step_parser'
 let bytes: Uint8Array
 let model: any
 
+// The resident parse's top-level entries, in parse order — the independent
+// ground truth the property test below reconstructs prefixes from. It never
+// goes near the streaming path, so it cannot agree with a bug by sharing one.
+let residentEntries: any[]
+
 beforeAll( () => {
   bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
 
@@ -40,7 +47,48 @@ beforeAll( () => {
 
   IfcStepParser.Instance.parseHeader( input )
   model = IfcStepParser.Instance.parseDataToModel( input )[ 1 ]
+
+  const groundTruthInput = new ParsingBuffer( bytes )
+
+  IfcStepParser.Instance.parseHeader( groundTruthInput )
+  residentEntries = IfcStepParser.Instance.parseDataBlock( groundTruthInput )[ 0 ].elements
 } )
+
+/**
+ * The express IDs a correct index would hold over the first `records`
+ * top-level records, computed straight from the resident parse.
+ *
+ * @param records How many records the view covers.
+ * @param closure The queried subtype closure, as raw type IDs.
+ * @return {Set<number>} The expected express IDs.
+ */
+function expectedOverPrefix( records: number, closure: number[] ): Set<number> {
+  const wanted = new Set<number>( closure )
+  const result = new Set<number>()
+
+  for ( let localID = 0; localID < records; ++localID ) {
+    const entry = residentEntries[ localID ]
+
+    if ( entry === void 0 ) {
+      break
+    }
+
+    if ( entry.typeID !== void 0 && wanted.has( entry.typeID ) ) {
+      result.add( entry.expressID )
+      continue
+    }
+
+    // Complex records carry their real classes in the multi-mapping.
+    for ( const mapped of entry.multiMapping ?? [] ) {
+      if ( mapped.typeID !== void 0 && wanted.has( mapped.typeID ) ) {
+        result.add( entry.expressID )
+        break
+      }
+    }
+  }
+
+  return result
+}
 
 /**
  * Stream index.ifc into a sink, optionally pausing at `stopAfter` records to
@@ -234,6 +282,126 @@ describe( 'PrefixTypeIndex', () => {
 
     expect( [ ...index.expressIDsOfTypeIDs( 5 ) ] ).toEqual( [ 99 ] )
     expect( index.generation ).toBe( 2 )
+  } )
+
+  // Property sweep: whatever the query cadence and pacing, two invariants must
+  // hold at every query, and between them they pin the whole contract —
+  //   consistency: the view equals a resident parse of exactly the records it
+  //     claims to cover (`recordCount`), so it is never a mix of prefixes;
+  //   freshness:   `recordCount` is either current, or within `growthFactor`
+  //     of current, so a view can go stale but can never be abandoned.
+  // Each of the mid-parse bugs found in review violated one of these; asserting
+  // only the final state (as the first tests here did) passes through all of
+  // them, because everything is exact once the parse returns.
+  describe.each( [
+    [ 'default pacing', { growthFactor: 2.0, minimumRecords: 1024 } ],
+    [ 'paced from the start', { growthFactor: 2.0, minimumRecords: 0 } ],
+    [ 'coarse pacing', { growthFactor: 4.0, minimumRecords: 8 } ],
+    [ 'fine pacing', { growthFactor: 1.25, minimumRecords: 32 } ],
+    [ 'never paced', { growthFactor: 1.0, minimumRecords: 0 } ],
+  ] )( 'invariants under %s', ( _name, options ) => {
+
+    test.each( [ 1, 7, 97, 0 ] )(
+        'hold when queried every %i records (0 = only at the end)',
+        ( cadence ) => {
+
+          const closure = IfcRoot.query as unknown as number[]
+          const sink = new ColumnarIndexSink<EntityTypesIfc>()
+          const index = new PrefixTypeIndex<EntityTypesIfc>(
+              sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ), options )
+
+          let queries = 0
+
+          /** Query once and assert both invariants against the ground truth. */
+          const queryAndCheck = () => {
+            const parsed = sink.topLevelCount
+            const view = new Set( index.expressIDsOfTypes( IfcRoot as any ) )
+
+            ++queries
+
+            expect( view ).toEqual( expectedOverPrefix( index.recordCount, closure ) )
+
+            const fresh = index.recordCount === parsed ||
+              parsed < index.recordCount * options.growthFactor
+
+            expect( fresh ).toBe( true )
+          }
+
+          const result = buildIndexStreaming(
+              new BufferByteSource( bytes ),
+              IfcStepParser.Instance,
+              4 * 1024,
+              cadence === 0 ?
+                void 0 :
+                ( localID ) => {
+                  if ( localID % cadence === 0 ) {
+                    queryAndCheck()
+                  }
+                },
+              sink )
+
+          expect( result.result ).toBe( ParseResult.COMPLETE )
+
+          queryAndCheck()
+
+          expect( queries ).toBeGreaterThan( 0 )
+
+          // And an explicit refresh always lands on the whole file, whatever
+          // the pacing left behind.
+          index.refresh()
+
+          expect( new Set( index.expressIDsOfTypes( IfcRoot as any ) ) )
+              .toEqual( new Set( model.expressIDsOfTypes( IfcRoot ) ) )
+        } )
+  } )
+
+  // Cursors come from LIFO pools, so "was it returned?" is observable by
+  // identity: park one in the pool, run a query, and see whether the next
+  // allocation hands back the same instance. A query that leaks its cursor
+  // leaves the pool empty and the next allocation is a fresh object.
+  //
+  // Both cursor kinds are covered because which one a query allocates depends
+  // on the size of the subtype closure — IfcProject's is a single type
+  // (SingleIndexSetCursor), a two-type query is a union
+  // (MultiIndexSetCursorOr). Testing only a subtyped query would park a single
+  // cursor that the query never touches, and pass no matter what.
+  describe.each( [
+    [ 'single-type', () => SingleIndexSetCursor.allocate( new Uint32Array( 2 ) ),
+      ( index: PrefixTypeIndex<EntityTypesIfc> ) =>
+        index.expressIDsOfTypes( IfcProject as any ) ],
+    [ 'multi-type', () => MultiIndexSetCursorOr.allocate( new Uint32Array( 2 ) ),
+      ( index: PrefixTypeIndex<EntityTypesIfc> ) =>
+        index.expressIDsOfTypes( IfcProject as any, IfcPropertySet as any ) ],
+  ] )( 'the %s cursor pool', ( _name, park, query ) => {
+
+    test.each( [
+      [ 'a fully consumed query', ( ids: IterableIterator<number> ) => {
+        for ( const _id of ids ) {
+          // drain
+        }
+      } ],
+      [ 'a query abandoned partway', ( ids: IterableIterator<number> ) => {
+        for ( const _id of ids ) {
+          break
+        }
+      } ],
+    ] )( 'gets its cursor back after %s', ( _consumeName, consume ) => {
+      // The abandoned case is the one that needs try/finally rather than a
+      // free() after the loop — a consumer breaking out of a query is
+      // ordinary, not exceptional.
+      const index = streamed()
+      const parked = park()
+
+      parked.free()
+
+      consume( query( index ) )
+
+      const reused = park()
+
+      reused.free()
+
+      expect( reused ).toBe( parked )
+    } )
   } )
 
   test( 'complex records are attributed to their mapped classes', () => {
