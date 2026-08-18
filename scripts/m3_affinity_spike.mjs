@@ -261,6 +261,15 @@ function costModel( rows ) {
  */
 function assign( strategy, rows, count, cost ) {
 
+  // `claim` is the fall-through below, so an unrecognised value would emit a
+  // claim partition while the emitted assignment and every printed line
+  // attributed it to the name the caller typed — `--strategy cliam` producing
+  // real numbers for an algorithm that never ran. Refuse instead.
+  if ( !STRATEGIES.includes( strategy ) ) {
+    throw new Error(
+        `unknown strategy '${strategy}' — expected one of ${STRATEGIES.join( ', ' )}` )
+  }
+
   if ( strategy === 'roundrobin' ) {
     return rows.map( ( _, index ) => index % count )
   }

@@ -563,10 +563,14 @@ Deliberately small first step; each has a measurable exit.
 
   **Release did not break delivery anywhere in the smoke corpus.** With
   every instance's product, geometry, transform, colour and
-  `occurrencePath` hashed, and **every delivered vertex and index hashed
-  by raw bit pattern** (at report time, so exactness costs the timings
-  nothing — and unquantised, so two payloads that differ in any bit
-  cannot compare equal), `bounded` is identical to `classic` on 11 of
+  `occurrencePath` hashed, and **every delivered vertex and index byte
+  fed to SHA-256** (at report time, so it costs the timings nothing —
+  and over raw bytes rather than quantised values, so a small
+  tessellation change cannot land in the same bucket; two runs that
+  deliver different geometry agreeing would require a SHA-256
+  collision, which is the honest bound — an earlier 32-bit rolling hash
+  could not support the "cannot compare equal" wording this paragraph
+  used to carry), `bounded` is identical to `classic` on 11 of
   12 models — same instances, same payloads, same placement — and
   identical to **`copyout` on all 12**, with each run also asserting
   that release actually happened (every copied geometry freed — a

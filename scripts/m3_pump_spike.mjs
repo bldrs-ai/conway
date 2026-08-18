@@ -46,6 +46,7 @@
  *   node scripts/m3_pump_spike.mjs --child <phase> <path> <batch>  # internal
  */
 import { execFile, execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as process from 'node:process'
@@ -72,8 +73,10 @@ const CHILD_MAX_OLD_SPACE_MB = 12288
 
 /**
  * A digest of the geometry a phase delivers: each instance and each payload
- * is hashed on its own, and the per-item hashes are combined **commutatively**
- * (summed mod 2^32). Order-independent by construction, because emission
+ * is SHA-256'd on its own, and the per-item digests are combined by sorting
+ * them and hashing the concatenation — **order-independent**, and unlike a
+ * modular sum it preserves multiplicity, so a dropped or duplicated item
+ * still moves the result. Order-independent by construction, because emission
  * order is exactly what M3 is allowed to change — the classic walk emits in
  * scene order, the pump in batch order, and the delta contract already tells
  * consumers to accumulate additively. An order-sensitive rolling hash reports
@@ -86,7 +89,7 @@ const CHILD_MAX_OLD_SPACE_MB = 12288
 class Digest {
 
   constructor() {
-    this.placedHash = 0
+    this.placedRecords = []
     this.instances = 0
     this.payloads = 0
     this.payloadBytes = 0
@@ -102,13 +105,14 @@ class Digest {
 
     ++this.instances
 
-    let hash = 2166136261
-
-    hash = mix32( hash, expressID )
-    hash = mix32( hash, placedGeometry.geometryExpressID )
+    // Record the canonical field list; hash it at report time. Hashing here
+    // would put the cost of the check inside the measurement the check exists
+    // to validate, and the instance count is small next to the payloads this
+    // run already retains.
+    const record = [ expressID, placedGeometry.geometryExpressID ]
 
     for ( const component of placedGeometry.flatTransformation ) {
-      hash = mix32( hash, quantise( component ) )
+      record.push( quantise( component ) )
     }
 
     // Colour and occurrence path are delivered output, not metadata: colour is
@@ -118,17 +122,11 @@ class Digest {
     // preserving counts and transforms would otherwise pass this check.
     const colour = placedGeometry.color
 
-    if ( colour !== void 0 ) {
-      for ( const channel of [ colour.x, colour.y, colour.z, colour.w ] ) {
-        hash = mix32( hash, quantise( channel ) )
-      }
-    }
+    record.push( colour === void 0 ? 'nocolour' :
+      [ colour.x, colour.y, colour.z, colour.w ].map( quantise ).join( ',' ) )
+    record.push( ( placedGeometry.occurrencePath ?? [] ).join( '.' ) )
 
-    for ( const step of placedGeometry.occurrencePath ?? [] ) {
-      hash = mix32( hash, step )
-    }
-
-    this.placedHash = ( this.placedHash + hash ) >>> 0
+    this.placedRecords.push( record.join( '|' ) )
   }
 
   /**
@@ -148,61 +146,91 @@ class Digest {
 }
 
 /**
- * Hash EVERY delivered byte, commutatively across payloads.
+ * Combine per-item digests into one order-independent digest.
  *
- * Sampling (this previously hashed one element in 97) cannot support a
- * "same payloads" claim: a tessellation change touching only unsampled
- * vertices, with the array lengths preserved, produces an identical digest.
- * Run at report time, after the timers have stopped, so exactness costs the
- * measurement nothing.
+ * Sorting the hex digests and hashing the concatenation is order-independent
+ * without being lossy the way a modular sum is: a sum mod 2^32 lets distinct
+ * SETS of per-item hashes collide (and lets two changes cancel), whereas the
+ * sorted list preserves multiplicity, so a duplicated or dropped item moves
+ * the result.
  *
- * @param payloads `{geometryExpressID, vertices, indices}` in emission order.
- * @return {number} Order-independent digest.
+ * @param itemDigests Hex digests, one per item, in any order.
+ * @return {string} Hex digest of the multiset.
  */
-function exactPayloadDigest( payloads ) {
+function combineDigests( itemDigests ) {
 
-  let total = 0
+  const combined = createHash( 'sha256' )
 
-  for ( const { geometryExpressID, vertices, indices } of payloads ) {
-
-    let hash = 2166136261
-
-    hash = mix32( hash, geometryExpressID )
-    hash = mix32( hash, vertices.length )
-    hash = mix32( hash, indices.length )
-
-    // RAW BITS, not quantised values. `quantise` exists for placement, where
-    // the two paths compose f64 matrices differently and the last bits
-    // legitimately differ; applying it to vertices would put 1.0 and 1.0001
-    // in the same bucket and let a small tessellation change pass a check
-    // that claims byte-identical payloads. Vertices come from the same frozen
-    // native mirror on every path, so they are comparable bit-for-bit.
-    const vertexBits = new Uint32Array(
-        vertices.buffer, vertices.byteOffset, vertices.length )
-
-    for ( let i = 0; i < vertexBits.length; ++i ) {
-      hash = mix32( hash, vertexBits[ i ] )
-    }
-
-    for ( let i = 0; i < indices.length; ++i ) {
-      hash = mix32( hash, indices[ i ] )
-    }
-
-    total = ( total + hash ) >>> 0
+  for ( const digest of itemDigests.slice().sort() ) {
+    combined.update( digest )
   }
 
-  return total
+  return combined.digest( 'hex' )
 }
 
 /**
- * One FNV-1a step.
+ * Digest EVERY delivered byte, commutatively across payloads.
  *
- * @param hash The running hash.
- * @param value A 32-bit value.
- * @return {number} The updated hash.
+ * SHA-256 over the raw bytes, not a 32-bit rolling hash. The claim this
+ * supports is "two runs delivering different payloads do not agree", and a
+ * 32-bit value cannot support it: an arbitrarily large payload collapsed to
+ * 32 bits has collisions by counting alone, so a real tessellation change
+ * could print OK. At 256 bits, disagreeing runs colliding requires a SHA-256
+ * collision — which is the honest bound, and is why the digest is stated as
+ * cryptographic rather than exact.
+ *
+ * Byte-for-byte comparison is not available here: each phase runs in its own
+ * child process and reports over stdout, so the parent never holds two
+ * phases' payloads at once. A digest is what crosses that boundary.
+ *
+ * Lengths and the geometry ID are framed into the hash separately so that
+ * concatenation cannot alias — a payload of (a, b) and one of (ab, ) are
+ * different inputs.
+ *
+ * Runs at report time, after the timers have stopped, so exactness costs the
+ * measurement nothing.
+ *
+ * @param payloads `{geometryExpressID, vertices, indices}` in emission order.
+ * @return {string} Order-independent hex digest.
  */
-function mix32( hash, value ) {
-  return Math.imul( hash ^ ( value | 0 ), 16777619 ) >>> 0
+function exactPayloadDigest( payloads ) {
+
+  const itemDigests = []
+
+  for ( const { geometryExpressID, vertices, indices } of payloads ) {
+
+    const item = createHash( 'sha256' )
+
+    item.update(
+        `${geometryExpressID}:${vertices.length}:${indices.length}:` )
+
+    // RAW BYTES, not quantised values. `quantise` exists for placement, where
+    // the two paths compose f64 matrices differently and the last bits
+    // legitimately differ; applying it to vertices would put 1.0 and 1.0001
+    // in the same bucket and let a small tessellation change pass a check
+    // that claims identical payloads. Vertices come from the same frozen
+    // native mirror on every path, so they are comparable bit-for-bit.
+    item.update( new Uint8Array(
+        vertices.buffer, vertices.byteOffset, vertices.byteLength ) )
+    item.update( new Uint8Array(
+        indices.buffer, indices.byteOffset, indices.byteLength ) )
+
+    itemDigests.push( item.digest( 'hex' ) )
+  }
+
+  return combineDigests( itemDigests )
+}
+
+/**
+ * Digest the placed instances a phase delivered.
+ *
+ * @param records Canonical per-instance field strings from {@link Digest}.
+ * @return {string} Order-independent hex digest.
+ */
+function exactPlacedDigest( records ) {
+
+  return combineDigests( records.map(
+      ( record ) => createHash( 'sha256' ).update( record ).digest( 'hex' ) ) )
 }
 
 /**
@@ -476,13 +504,25 @@ function shardWorklists( api, modelID, shard, filePath ) {
   // and exporters emit spatially and structurally clustered — so instances
   // sharing a representation tend to land on the same shard. Which one wins
   // says whether the ceiling is imbalance or duplicated shared work.
-  const perShard = Math.ceil( products.length / shard.count )
-  const mine = shard.mode === 'contiguous' ?
-    ( _, index ) => Math.floor( index / perShard ) === shard.index :
-    ( _, index ) => index % shard.count === shard.index
+  // Each worklist gets its own span: products and aggregates are independent
+  // lists of different lengths, so a span sized from the products would push
+  // the (shorter) aggregate list entirely into the early shards — 2/1/0/0 on
+  // index.ifc's 7 products and 3 aggregates, where a contiguous split is
+  // 1/1/1/0. Aggregate extraction is real geometry work, so that imbalance
+  // lands in the slowest-shard timing the scaling table reports.
+  const mineOf = ( length ) => {
 
-  passthrough.demandProducts_ = products.filter( mine )
-  passthrough.demandAggregates_ = aggregates.filter( mine )
+    if ( shard.mode !== 'contiguous' ) {
+      return ( _, index ) => index % shard.count === shard.index
+    }
+
+    const perShard = Math.ceil( length / shard.count )
+
+    return ( _, index ) => Math.floor( index / perShard ) === shard.index
+  }
+
+  passthrough.demandProducts_ = products.filter( mineOf( products.length ) )
+  passthrough.demandAggregates_ = aggregates.filter( mineOf( aggregates.length ) )
 
   return {
     products: passthrough.demandProducts_.length,
@@ -652,7 +692,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
     payloads: digest.payloads,
     payloadMB: digest.payloadBytes / BYTES_PER_MB,
     retainedPayloadBuffers: retainedPayloads.length,
-    placedDigest: digest.placedHash,
+    placedDigest: exactPlacedDigest( digest.placedRecords ),
     payloadDigest: exactPayloadDigest( retainedPayloads ),
   } ) )
 }
@@ -837,6 +877,8 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
  *
  * @param byPhase Results keyed by phase.
  * @param phases The phases that ran.
+ * @param allowEmpty The caller's declaration (`#empty` in the models file)
+ * that this model genuinely has no geometry, so a zero is not a broken probe.
  * @return {object[]} `{text, failed}` lines.
  */
 function verdicts( byPhase, phases, allowEmpty ) {
@@ -856,11 +898,37 @@ function verdicts( byPhase, phases, allowEmpty ) {
   // reads as agreement. Neither can support a comparison, so say so rather
   // than passing quietly. (`allowEmpty` is the caller's declaration that the
   // model genuinely has no geometry.)
-  for ( const phase of [ 'copyout', 'bounded' ] ) {
+  //
+  // Every REQUESTED phase is checked, not just the ones a later comparison
+  // happens to name. Restricting this to `copyout`/`bounded` left `--phases
+  // classic` and `--phases pump` exiting 0 on a failed open: the row printed
+  // `failed`, no comparison referenced it, and the guards below returned
+  // early. A phase the caller asked for and did not get is a failed run
+  // whether or not anything compares it.
+  for ( const phase of phases ) {
 
     const row = byPhase[ phase ]
 
-    if ( row === void 0 || !phases.includes( phase ) ) {
+    if ( row === void 0 ) {
+      out.push( {
+        text: `FAIL  ${phase} produced no result at all — the child did not report`,
+        failed: true,
+      } )
+      continue
+    }
+
+    // `pump` deliberately passes no meshCallback, so it delivers no instances
+    // by construction; its purpose is the wasm/timing columns. Judging it on
+    // instance count would fail every healthy run.
+    if ( EXTRACT_ONLY_PHASES.has( phase ) || phase === 'pump' ) {
+
+      if ( row.failed !== void 0 ) {
+        out.push( {
+          text: `FAIL  ${phase} did not complete (${row.failed})`,
+          failed: true,
+        } )
+      }
+
       continue
     }
 
@@ -870,6 +938,15 @@ function verdicts( byPhase, phases, allowEmpty ) {
           '— nothing to compare',
         failed: true,
       } )
+    } else if ( phase === 'classic' ) {
+
+      // Zero instances on `classic` is judged by the dedicated block below,
+      // which is the only place that can report SKIP: classic is the
+      // unmodified whole-model walk, so its own row is what distinguishes a
+      // geometry-free model from a broken probe. Falling through here too
+      // would file the same failure twice.
+      continue
+
     } else if ( row.instances === 0 && !allowEmpty ) {
       out.push( {
         text: `FAIL  ${phase} delivered 0 instances on a model not declared ` +
