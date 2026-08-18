@@ -194,9 +194,13 @@ function retainedMB() {
  * @param seen Geometry express IDs already copied (shared/mapped geometry is
  * copied once, like the preview channel's emittedGeometry_).
  * @param digest Digest to feed.
+ * @param retained Array the copied payloads are appended to, so they stay
+ * reachable for the life of the measurement — a consumer building a navigable
+ * scene keeps its vertex and index buffers, so dropping them here would report
+ * a JS working set no real consumer has.
  * @return {number[]} Geometry express IDs copied by this call.
  */
-function copyBatchPayloads( api, modelID, meshes, seen, digest ) {
+function copyBatchPayloads( api, modelID, meshes, seen, digest, retained ) {
 
   const copied = []
 
@@ -223,6 +227,7 @@ function copyBatchPayloads( api, modelID, meshes, seen, digest ) {
           geometry.GetIndexData(), geometry.GetIndexDataSize() ).slice()
 
       digest.payload( placed.geometryExpressID, vertices, indices )
+      retained.push( vertices, indices )
       copied.push( placed.geometryExpressID )
     }
   }
@@ -365,6 +370,11 @@ async function runChild( phase, filePath, batchSize, shard ) {
 
   const digest = new Digest()
   const seen = new Set()
+
+  // Every payload a phase copies out, held until the child reports. This is
+  // what a consumer that renders the model holds, so retained/RSS describe the
+  // real cost of delivery rather than the cost of hashing and forgetting.
+  const retainedPayloads = []
   const deferred = phase !== 'classic'
   const copies = phase === 'copyout' || phase === 'bounded'
   const emits = !EXTRACT_ONLY_PHASES.has( phase )
@@ -435,7 +445,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
 
     const tCopy = performance.now()
 
-    copyBatchPayloads( api, modelID, meshes, seen, digest )
+    copyBatchPayloads( api, modelID, meshes, seen, digest, retainedPayloads )
     copyMs += performance.now() - tCopy
 
     wasmPeakMB = Math.max( wasmPeakMB, wasmMB( api, wasmHeapByteLength ) )
@@ -456,7 +466,8 @@ async function runChild( phase, filePath, batchSize, shard ) {
       if ( copies ) {
 
         const tCopy = performance.now()
-        const copied = copyBatchPayloads( api, modelID, batchMeshes, seen, digest )
+        const copied =
+          copyBatchPayloads( api, modelID, batchMeshes, seen, digest, retainedPayloads )
 
         copyMs += performance.now() - tCopy
 
@@ -497,6 +508,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
     instances: digest.instances,
     payloads: digest.payloads,
     payloadMB: digest.payloadBytes / BYTES_PER_MB,
+    retainedPayloadBuffers: retainedPayloads.length,
     placedDigest: digest.placedHash,
     payloadDigest: digest.payloadHash,
   } ) )
@@ -529,6 +541,26 @@ function spawnChild( phase, filePath, batchSize, shard ) {
 }
 
 /**
+ * Environment for a shard child: single-threaded wasm, unconditionally.
+ *
+ * A shard models ONE worker holding one wasm instance, so it must be one
+ * core. `pThreadsAllowed()` returns true in node whenever `SharedArrayBuffer`
+ * exists unless `FORCE_SINGLE_THREAD` is exactly `'true'`, so a shard child
+ * that merely inherits the ambient environment loads the MT module and starts
+ * its own pthread pool. N shards then measure N nested thread pools
+ * oversubscribing the box — which is not the across-product axis this sweep
+ * exists to isolate, and reads as a scaling ceiling that isn't one.
+ *
+ * Set here rather than left to the caller: an invocation that forgets it
+ * produces plausible, wrong numbers rather than an error.
+ *
+ * @return {object} The child environment.
+ */
+function shardEnv() {
+  return { ...process.env, FORCE_SINGLE_THREAD: 'true' }
+}
+
+/**
  * Run one phase as N concurrent shards, each in its own process with its own
  * wasm instance — the worker-pool shape, measured without building workers.
  * Wall-clock is the slowest shard, since they run at the same time.
@@ -554,7 +586,7 @@ function spawnShards( phase, filePath, batchSize, count, shardMode ) {
 
     running.push( new Promise( ( resolve, reject ) => {
       execFile( process.execPath, args,
-          { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT },
+          { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT, env: shardEnv() },
           ( error, stdout ) => {
             if ( error !== null ) {
               reject( error )
@@ -686,7 +718,22 @@ function main() {
   const rows = []
 
   if ( shards !== void 0 ) {
-    return runShardSweep( models, phases[ 0 ], batchSize,
+
+    // `classic` opens without DEFER_GEOMETRY, so the pump worklists never
+    // exist and the shard filter never runs: every child would extract the
+    // WHOLE model while the output labelled them shards and computed a
+    // speedup from them. Default to the deferred extract phase, and refuse a
+    // non-deferred one rather than publishing invalid scaling.
+    const shardPhase = only !== void 0 ? phases[ 0 ] : 'extractonly'
+
+    if ( shardPhase === 'classic' ) {
+      console.error(
+          'shard sweeps need a deferred phase (extractonly/pump/copyout/bounded); ' +
+          '`classic` extracts the whole model in every child' )
+      process.exit( 2 )
+    }
+
+    return runShardSweep( models, shardPhase, batchSize,
         shards.split( ',' ).map( Number ), jsonOut, flag( '--shard-mode', 'roundrobin' ) )
   }
 

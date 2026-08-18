@@ -485,12 +485,21 @@ Deliberately small first step; each has a measurable exit.
 
   **PSB.ifc — 902 MB, node, 4-core sandbox, batch = 256:**
 
-  | phase | open | geometry | total | wasm peak | RSS |
-  | --- | --- | --- | --- | --- | --- |
-  | `classic` — `OpenModel` + `StreamAllMeshes` | 37.0 s | 2.0 s | 39.0 s | **1956 MB** | 3906 MB |
-  | `pump` — deferred, batched, no copy-out | 14.1 s | 22.6 s | 36.7 s | 1284 MB | 2831 MB |
-  | `copyout` — + per-batch payload copy-out | 12.9 s | 24.8 s | 37.7 s | 1956 MB | 3440 MB |
-  | `bounded` — + per-batch native release | 13.1 s | 23.9 s | **37.0 s** | **840 MB** | 2289 MB |
+  | phase | open | geometry | total | wasm peak | RSS | JS retained |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | `classic` — `OpenModel` + `StreamAllMeshes` | 53 s | 8 s | 61 s | **1956 MB** | 4202 MB | 1576 MB |
+  | `pump` — deferred, batched, no copy-out | 14 s | 33 s | 47 s | 1284 MB | 2829 MB | 1255 MB |
+  | `copyout` — + per-batch payload copy-out | 14 s | 39 s | 53 s | 1956 MB | 3640 MB | 1597 MB |
+  | `bounded` — + per-batch native release | 13 s | 27 s | **40 s** | **840 MB** | 2494 MB | 1589 MB |
+
+  Every payload-carrying phase **holds** its copied vertex and index
+  buffers until it reports (40 356 typed arrays, 334 MB on PSB), because
+  a consumer building a navigable scene keeps them — hashing and
+  dropping them would report a JS working set nobody actually has, and
+  would hide the GC pressure of holding it. Compare rows within this
+  table only: absolute wall-clock on this box moves ±25 % between runs,
+  so the cross-run deltas that matter are the memory columns, which are
+  stable and reproduce.
 
   Identical placement and payload digests across `classic`, `copyout`
   and `bounded`. Four readings:
@@ -510,7 +519,9 @@ Deliberately small first step; each has a measurable exit.
      heap that is never dropped (`pump` 1284 MB vs `copyout` 1956 MB on
      identical extraction). Every consumer that reads its own vertices
      pays it, and it is invisible to any probe that doesn't.
-  4. **Bounding it is free** — `bounded` is 5.1 % *faster* end-to-end.
+  4. **Bounding it is free** — `bounded` is the *fastest* row, not a
+     trade. Releasing costs nothing measurable and removes allocator
+     pressure about as fast as it adds calls.
 
   **Batch size is not the remaining lever.** `bounded` at batch = 32
   reaches 727 MB (36.6 s, identical digests) against 840 MB at batch =
@@ -571,10 +582,32 @@ Deliberately small first step; each has a measurable exit.
   products that are *not* independent — round-robin scatters shared
   geometry across every shard and each one re-extracts it. Contiguous
   sharding, which preserves file-order locality, duplicates less and
-  scales better (1.52× vs 1.39×). So the partition wants **affinity by
-  shared asset**, not by product — the same definition/occurrence
-  boundary `SharedAssetPool` draws for retention. One boundary, two
-  payoffs.
+  scales better (1.52× vs 1.39×).
+
+  **Partition ownership is an open question, not a settled one.** The
+  obvious answer — affinity by shared asset, the same
+  definition/occurrence boundary `SharedAssetPool` draws for retention —
+  was tested and **did not work**. `scripts/m3_affinity_spike.mjs`
+  captures the real product↔asset graph (one instrumented extraction
+  pass recording, per product, which assets it created, which it reused,
+  and how long it took) and replays partitions against it. Simulated, it
+  is decisive: on MB-Khaya at N=4, round-robin costs +46 % duplicated CPU
+  (against +40 % measured, so the cost model calibrates) while
+  asset-affinity and an adaptive claim-the-asset partition both reach
+  +0 %. Run against the real extractor, neither moves anything —
+  round-robin and claim both create **8678 assets** against a
+  single-shard **6851**, so the +27 % duplication is real and completely
+  independent of where products are placed.
+
+  Two known defects in that model, either of which could explain it: the
+  capture drives only the per-product seam, so it never sees the
+  **rel-aggregates pass** (5363 assets recorded against the 6851 really
+  created), and that pass is sharded positionally — re-running shared
+  master-void work per shard no matter what the product partition does.
+  If the duplication turns out to live there, the answer is "give
+  aggregates an owner", not "partition products by definition". Until
+  aggregates are captured and replayed, this doc records the mechanism
+  and declines to name the key.
 
   Two caveats the numbers carry. Each shard pays its own parse here, so
   only the geometry phase is comparable; the shipping design parses once
