@@ -329,6 +329,19 @@ function costModel( rows ) {
  * Falls back to the shape representation's own local ID, then to the product
  * itself (unique, so placement degrades to positional for that product).
  *
+ * **Validated on MB-Khaya, inconclusive on D3D, and the difference is this
+ * script's coverage rather than the key's.** MB-Khaya: 7 193 assets at N=4
+ * against a 7 193 serial baseline, matching both oracles exactly. D3D: every
+ * strategy lands within 0.8 % of round-robin, which reads like a negative
+ * result until you check what the capture saw — 1 592 assets against the
+ * 59 098 the real extraction creates, i.e. 2.7 %. Three strategies placing
+ * from a graph that blind agree because none of them has information, not
+ * because placement cannot help. On MB-Khaya the capture sees 75 %.
+ *
+ * So D3D says nothing about the key either way until the capture covers the
+ * rel-aggregates pass (see the caveats in the design doc), which on that
+ * model evidently produces most of the geometry.
+ *
  * @param model The IFC model.
  * @param productLocalID The product.
  * @return {number} A placement key.
