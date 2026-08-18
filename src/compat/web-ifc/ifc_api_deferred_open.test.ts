@@ -684,6 +684,47 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api8.CloseModel( modelID )
   }, 240000 )
 
+  test( 'StreamAllMeshes on a budgeted deferred model keeps every instance', async () => {
+
+    // The drain path, which is where a budget is most dangerous. Deferred
+    // StreamAllMeshes pumps every batch with NO callback and captures once
+    // at the end — fine while geometry survives to be captured, and silently
+    // lossy once a budget is evicting: anything freed before that final
+    // capture can no longer be resolved, so its instances vanish with no
+    // error at all. At a 2 KiB budget this delivered 3 placements against
+    // classic's 16.
+    const api9 = new IfcAPI()
+    await api9.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const classicID = api9.OpenModel( fixture, SETTINGS )
+    let classicPlacements = 0
+
+    api9.StreamAllMeshes( classicID, ( mesh ) => {
+      classicPlacements += mesh.geometries.size()
+    } )
+
+    const deferredID = await api9.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    // Tight enough that eviction fires during the drain, not after it.
+    api9.SetGeometryBudget( deferredID, 2048 / ( 1024 * 1024 ) )
+
+    let drainedPlacements = 0
+
+    api9.StreamAllMeshes( deferredID, ( mesh ) => {
+      drainedPlacements += mesh.geometries.size()
+    } )
+
+    expect( classicPlacements ).toBeGreaterThan( 0 )
+    expect( drainedPlacements ).toBe( classicPlacements )
+
+    api9.CloseModel( classicID )
+    api9.CloseModel( deferredID )
+  }, 240000 )
+
   test( 'no budget is the default, and evicts nothing', async () => {
 
     // The contract eviction changes — GetGeometry serving an evicted asset —

@@ -2079,8 +2079,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
+    // Capture before eviction — and capture even when nobody asked for
+    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
+    // every batch and captures once at the end (see streamAllMeshes), which
+    // works only while geometry survives to be captured. With a budget it
+    // does not: anything evicted before that final capture can no longer be
+    // resolved, so those instances vanish from the model with no error. On
+    // the shared-representation fixture at a 2 KiB budget that path
+    // delivered 3 placements against classic's 16.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
+    } else if (this.model[0].geometryResidency.enabled) {
+      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
     }
 
     // Evict AFTER the capture, never before: the delta capture resolves each
@@ -2207,8 +2217,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
+    // Capture before eviction — and capture even when nobody asked for
+    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
+    // every batch and captures once at the end (see streamAllMeshes), which
+    // works only while geometry survives to be captured. With a budget it
+    // does not: anything evicted before that final capture can no longer be
+    // resolved, so those instances vanish from the model with no error. On
+    // the shared-representation fixture at a 2 KiB budget that path
+    // delivered 3 placements against classic's 16.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
+    } else if (this.model[0].geometryResidency.enabled) {
+      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
     }
 
     // Evict AFTER the capture, never before: the delta capture resolves

@@ -802,21 +802,37 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
     for ( ;; ) {
 
       const batchMeshes = []
+      let copied = []
+
+      // Copy INSIDE the callback, not after the pump returns. The engine
+      // evicts at the end of the batch that delivered these meshes, so a
+      // copy deferred until after `ExtractGeometryBatch` returns can reach
+      // for a native the budget has already freed — `GetGeometry(...)
+      // .clone()` on a deleted handle aborts the load with a BindingError,
+      // reproducible whenever one batch delivers more than the budget
+      // holds. Copying at delivery is also what the contract asks of a
+      // consumer, so the harness now models the consumer it documents.
       const { extracted, remaining } = emits ?
         api.ExtractGeometryBatch( modelID, batchSize, ( mesh ) => {
+
           batchMeshes.push( mesh )
+
+          if ( copies ) {
+
+            const tMeshCopy = performance.now()
+
+            copied = copied.concat(
+                copyBatchPayloads(
+                    api, modelID, [ mesh ], seen, digest, retainedPayloads ) )
+
+            copyMs += performance.now() - tMeshCopy
+          }
         } ) :
         api.ExtractGeometryBatch( modelID, batchSize )
 
       ++batches
 
       if ( copies ) {
-
-        const tCopy = performance.now()
-        const copied =
-          copyBatchPayloads( api, modelID, batchMeshes, seen, digest, retainedPayloads )
-
-        copyMs += performance.now() - tCopy
 
         if ( phase === 'bounded' ) {
 
