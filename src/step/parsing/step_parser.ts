@@ -8,6 +8,7 @@ import {
   EncodedUnicodeCharacter as EncodedAsciiCharacter,
   encodeToken,
 } from '../../parsing/token_parsing'
+import { RecordEventHandler } from './record_event'
 import StepAttributeMap, { ATTRIBUTE_PARSE_TYPE } from './step_attribute_map'
 import StepCommentParser from './step_comment_parser'
 import { decodeUtf8 } from './decode_utf8'
@@ -495,21 +496,19 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
    * buffer; the callback may rebase the buffer's window in place. Must be
    * synchronous on this driver — a returned Promise is a caller bug.
    * @param onRecordIndexed Called as each top-level record is indexed, with
-   * its localID, expressID and typeID (0 for external-mapping records) — the
-   * seam for incremental semantic consumers (type index, roots registry,
-   * names skeleton). Must be synchronous and cheap; expensive work belongs on
-   * a demand queue, not the parse path.
+   * its localID, expressID, typeID (0 for external-mapping records) and the
+   * record's bytes as an un-materialised `(buffer, byteOffset, byteLength)`
+   * window view — the seam for incremental semantic consumers (type index,
+   * roots registry, names skeleton). See {@link RecordEventHandler} for the
+   * window-lifetime rule. Must be synchronous and cheap; expensive work
+   * belongs on a demand queue, not the parse path.
    * @param onProgress Optional byte-cursor progress callback.
    * @return {BlockParseResult} The parsing result, including the index and result enum.
    */
   public parseDataBlockStreamed(
       input: ParsingBuffer,
       onRecordBoundary: ( input: ParsingBuffer ) => void | Promise<void>,
-      onRecordIndexed?: (
-        localID: number,
-        expressID: number,
-        typeID: TypeIDType | undefined,
-        recordBytes?: Uint8Array ) => void,
+      onRecordIndexed?: RecordEventHandler<TypeIDType>,
       onProgress?: ParseProgressCallback,
       sink?: StepIndexSink<TypeIDType> ): BlockParseResult<TypeIDType> {
 
@@ -556,11 +555,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   public async parseDataBlockStreamedAsync(
       input: ParsingBuffer,
       onRecordBoundary: ( input: ParsingBuffer ) => void | Promise<void>,
-      onRecordIndexed?: (
-        localID: number,
-        expressID: number,
-        typeID: TypeIDType | undefined,
-        recordBytes?: Uint8Array ) => void,
+      onRecordIndexed?: RecordEventHandler<TypeIDType>,
       onProgress?: ParseProgressCallback,
       sink?: StepIndexSink<TypeIDType>,
       yieldIntervalMs: number = DEFAULT_PARSE_YIELD_INTERVAL_MS ):
@@ -652,11 +647,7 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
   private* parseDataBlockIncremental(
       input: ParsingBuffer,
       onRecordBoundary?: ( input: ParsingBuffer ) => void | Promise<void>,
-      onRecordIndexed?: (
-        localID: number,
-        expressID: number,
-        typeID: TypeIDType | undefined,
-        recordBytes?: Uint8Array ) => void,
+      onRecordIndexed?: RecordEventHandler<TypeIDType>,
       sink?: StepIndexSink<TypeIDType> ):
       Generator<number | Promise<void>, BlockParseResult<TypeIDType>, undefined> {
 
@@ -945,16 +936,6 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           return syntaxError()
         }
 
-        {
-          const recordLen = input.address - startElement
-          onRecordIndexed?.(
-              topLevelCount,
-              expressID,
-              0 as TypeIDType,
-              input.buffer.subarray( input.cursor - recordLen, input.cursor ) )
-        }
-        ++topLevelCount
-
         pushEntry(
             {
               address: startElement,
@@ -964,6 +945,22 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
               inlineEntities: inlineElements,
               multiMapping: multiElements
             })
+
+        // AFTER the entry is indexed, so a consumer that queries the index
+        // from this event sees the record the event is about — the columns
+        // are the source of truth a prefix-derived consumer reads. Still
+        // before the window can slide, so the record bytes stay valid.
+        {
+          const recordLen = input.address - startElement
+          onRecordIndexed?.(
+              topLevelCount,
+              expressID,
+              0 as TypeIDType,
+              input.buffer,
+              input.cursor - recordLen,
+              recordLen )
+        }
+        ++topLevelCount
 
         multiElements = void 0
         continue
@@ -1122,16 +1119,6 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return syntaxError()
       }
 
-      {
-        const recordLen = input.address - startElement
-        onRecordIndexed?.(
-            topLevelCount,
-            expressID,
-            foundItem,
-            input.buffer.subarray( input.cursor - recordLen, input.cursor ) )
-      }
-      ++topLevelCount
-
       pushEntry(
           {
             address: startElement,
@@ -1140,6 +1127,19 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
             expressID: expressID,
             inlineEntities: inlineElements,
           })
+
+      // See the external-mapping site above: indexed first, then announced.
+      {
+        const recordLen = input.address - startElement
+        onRecordIndexed?.(
+            topLevelCount,
+            expressID,
+            foundItem,
+            input.buffer,
+            input.cursor - recordLen,
+            recordLen )
+      }
+      ++topLevelCount
     }
 
     // Got here without finding an end of the section.

@@ -9,7 +9,13 @@ import { beforeAll, describe, expect, test } from '@jest/globals'
 
 import ParsingBuffer from '../parsing/parsing_buffer'
 import IfcStepParser from './ifc_step_parser'
-import { openStreamedIfcModel, openStreamedIfcModelFromStore } from './ifc_stream_open'
+import {
+  ifcPrefixTypeIndex,
+  openStreamedIfcModel,
+  openStreamedIfcModelFromStore,
+} from './ifc_stream_open'
+import { ColumnarIndexSink } from '../step/parsing/columnar_index'
+import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { BufferByteSource } from '../step/parsing/byte_source'
 import { InMemoryStepByteStore } from '../step/step_buffer_provider'
 import { ParseResult } from '../step/parsing/step_parser'
@@ -33,6 +39,39 @@ beforeAll( () => {
 } )
 
 describe( 'openStreamedIfcModel (Phase B3)', () => {
+
+  test( 'a caller-owned sink makes the type index queryable mid-parse', () => {
+    // The composed path a consumer of @bldrs-ai/conway/stream actually has:
+    // own the sink, hand it to the open, and read the index while the parse
+    // is still filling it. Without the sink seam the columns only exist once
+    // the open returns, which is too late for anything incremental.
+    const indexSink = new ColumnarIndexSink<EntityTypesIfc>()
+    const types = ifcPrefixTypeIndex( indexSink, { growthFactor: 1.0, minimumRecords: 0 } )
+
+    const midParse: number[] = []
+
+    const open = openStreamedIfcModel(
+        new BufferByteSource( bytes ),
+        new InMemoryStepByteStore( bytes ),
+        {
+          pool: 4 * 1024,
+          indexSink,
+          onRecordIndexed: ( localID ) => {
+            if ( localID === 64 || localID === 128 ) {
+              midParse.push( [ ...types.expressIDsOfTypes( IfcRoot ) ].length )
+            }
+          },
+        } )
+
+    expect( open.result ).toBe( ParseResult.COMPLETE )
+    expect( midParse ).toHaveLength( 2 )
+    expect( midParse[ 0 ] ).toBeLessThanOrEqual( midParse[ 1 ] )
+
+    const finalCount = [ ...types.expressIDsOfTypes( IfcRoot ) ].length
+
+    expect( midParse[ 1 ] ).toBeLessThanOrEqual( finalCount )
+    expect( finalCount ).toBe( [ ...residentModel.expressIDsOfTypes( IfcRoot ) ].length )
+  } )
 
   test( 'opens a model matching the resident parse, with header and columns', () => {
     const open = openStreamedIfcModel(

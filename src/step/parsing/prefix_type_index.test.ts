@@ -1,0 +1,429 @@
+/* eslint-disable no-magic-numbers */
+// M2 (#393): the type index over the records parsed so far.
+//
+// Two things are pinned here, and they are the two the event-fed
+// IncrementalTypeIndex this replaces got wrong:
+//   1. final membership equals the resident model's type index — the exit
+//      criterion "consumers produce output identical to today's end-of-parse
+//      construction";
+//   2. complex (multi-mapped) records are attributed to their mapped classes,
+//      which is invisible to a consumer reading the record event's typeID
+//      (complex records arrive there as 0).
+import * as fs from 'fs'
+
+import { beforeAll, describe, expect, test } from '@jest/globals'
+
+import ParsingBuffer from '../../parsing/parsing_buffer'
+import IfcStepParser from '../../ifc/ifc_step_parser'
+import EntityTypesIfc, { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import {
+  IfcRoot,
+  IfcProduct,
+  IfcProject,
+  IfcWall,
+  IfcPropertySet,
+} from '../../ifc/ifc4_gen'
+import { MultiIndexSetCursorOr } from '../../indexing/multi_index_set_cursor_or'
+import { SingleIndexSetCursor } from '../../indexing/single_index_set_cursor'
+import { StepTypeIndexer } from '../indexing/step_type_indexer'
+import { BufferByteSource } from './byte_source'
+import { ColumnarIndexSink } from './columnar_index'
+import { PrefixTypeIndex } from './prefix_type_index'
+import { buildIndexStreaming } from './streaming_index_builder'
+import { ParseResult } from './step_parser'
+
+let bytes: Uint8Array
+let model: any
+
+// The resident parse's top-level entries, in parse order — the independent
+// ground truth the property test below reconstructs prefixes from. It never
+// goes near the streaming path, so it cannot agree with a bug by sharing one.
+let residentEntries: any[]
+
+beforeAll( () => {
+  bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+
+  const input = new ParsingBuffer( bytes )
+
+  IfcStepParser.Instance.parseHeader( input )
+  model = IfcStepParser.Instance.parseDataToModel( input )[ 1 ]
+
+  const groundTruthInput = new ParsingBuffer( bytes )
+
+  IfcStepParser.Instance.parseHeader( groundTruthInput )
+  residentEntries = IfcStepParser.Instance.parseDataBlock( groundTruthInput )[ 0 ].elements
+} )
+
+/**
+ * The express IDs a correct index would hold over the first `records`
+ * top-level records, computed straight from the resident parse.
+ *
+ * @param records How many records the view covers.
+ * @param closure The queried subtype closure, as raw type IDs.
+ * @return {Set<number>} The expected express IDs.
+ */
+function expectedOverPrefix( records: number, closure: number[] ): Set<number> {
+  const wanted = new Set<number>( closure )
+  const result = new Set<number>()
+
+  for ( let localID = 0; localID < records; ++localID ) {
+    const entry = residentEntries[ localID ]
+
+    if ( entry === void 0 ) {
+      break
+    }
+
+    if ( entry.typeID !== void 0 && wanted.has( entry.typeID ) ) {
+      result.add( entry.expressID )
+      continue
+    }
+
+    // Complex records carry their real classes in the multi-mapping.
+    for ( const mapped of entry.multiMapping ?? [] ) {
+      if ( mapped.typeID !== void 0 && wanted.has( mapped.typeID ) ) {
+        result.add( entry.expressID )
+        break
+      }
+    }
+  }
+
+  return result
+}
+
+/**
+ * Stream index.ifc into a sink, optionally pausing at `stopAfter` records to
+ * hand the caller a mid-parse view, and return the index over that sink.
+ *
+ * @param onRecord Optional per-record hook, so a test can query the index
+ * while the parse is still filling the sink behind it.
+ * @return {PrefixTypeIndex} The index over the (fully parsed) sink.
+ */
+function streamed(
+    onRecord?: ( index: PrefixTypeIndex<EntityTypesIfc>, localID: number ) => void ):
+    PrefixTypeIndex<EntityTypesIfc> {
+
+  const sink = new ColumnarIndexSink<EntityTypesIfc>()
+  const index = new PrefixTypeIndex<EntityTypesIfc>(
+      sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ) )
+
+  const result = buildIndexStreaming(
+      new BufferByteSource( bytes ),
+      IfcStepParser.Instance,
+      4 * 1024,
+      onRecord === void 0 ? void 0 : ( localID ) => onRecord( index, localID ),
+      sink )
+
+  expect( result.result ).toBe( ParseResult.COMPLETE )
+
+  return index
+}
+
+describe( 'PrefixTypeIndex', () => {
+
+  test.each( [
+    [ 'IfcRoot', IfcRoot ],
+    [ 'IfcProduct', IfcProduct ],
+    [ 'IfcWall', IfcWall ],
+    [ 'IfcPropertySet', IfcPropertySet ],
+  ] )( 'final membership matches the resident type index for %s', ( _name, ctor ) => {
+    const index = streamed()
+
+    const prefix = new Set( index.expressIDsOfTypes( ctor as any ) )
+    const resident = new Set( model.expressIDsOfTypes( ctor ) )
+
+    expect( prefix ).toEqual( resident )
+  } )
+
+  test( 'a multi-type query unions the subtype closures', () => {
+    const index = streamed()
+
+    const prefix =
+      new Set( index.expressIDsOfTypes( IfcWall as any, IfcPropertySet as any ) )
+    const resident = new Set( model.expressIDsOfTypes( IfcWall, IfcPropertySet ) )
+
+    expect( prefix ).toEqual( resident )
+  } )
+
+  test( 'nothing is built until something is queried', () => {
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const index = new PrefixTypeIndex<EntityTypesIfc>(
+        sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ) )
+
+    expect( index.generation ).toBe( 0 )
+    expect( index.recordCount ).toBe( 0 )
+
+    // The whole point of deriving rather than pushing: a consumer that never
+    // asks pays nothing, however long the parse ran.
+    buildIndexStreaming(
+        new BufferByteSource( bytes ), IfcStepParser.Instance, 4 * 1024, void 0, sink )
+
+    expect( index.generation ).toBe( 0 )
+  } )
+
+  test( 'a mid-parse query answers over the prefix, and grows with it', () => {
+    // Rebuild on every record so the view tracks the parse exactly; the
+    // default growth pacing is about cost, not correctness.
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const index = new PrefixTypeIndex<EntityTypesIfc>(
+        sink,
+        new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ),
+        { growthFactor: 1.0, minimumRecords: 0 } )
+
+    const counts: number[] = []
+
+    buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        ( localID ) => {
+          if ( localID === 64 || localID === 128 ) {
+            counts.push( [ ...index.expressIDsOfTypes( IfcRoot as any ) ].length )
+          }
+        },
+        sink )
+
+    const final = [ ...index.expressIDsOfTypes( IfcRoot as any ) ].length
+    const resident = [ ...model.expressIDsOfTypes( IfcRoot ) ].length
+
+    expect( counts ).toHaveLength( 2 )
+    expect( counts[ 0 ] ).toBeLessThanOrEqual( counts[ 1 ] )
+    expect( counts[ 1 ] ).toBeLessThanOrEqual( final )
+    expect( final ).toBe( resident )
+  } )
+
+  test( 'a record is indexed before its own event fires', () => {
+    // The event announces record N; a consumer querying the index from that
+    // event must see N, not 0..N-1. One record makes the off-by-one total:
+    // the only record in the file would be invisible to the only event.
+    const source = [
+      'ISO-10303-21;',
+      'HEADER;',
+      'FILE_DESCRIPTION((\'\'),\'\');',
+      'FILE_NAME(\'\',\'\',(\'\'),(\'\'),\'\',\'\',\'\');',
+      'FILE_SCHEMA((\'IFC4\'));',
+      'ENDSEC;',
+      'DATA;',
+      '#1= IFCPROJECT(\'p\',$,\'Only Record\',$,$,$,$,$,$);',
+      'ENDSEC;',
+      'END-ISO-10303-21;',
+      '',
+    ].join( '\n' )
+
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const index = new PrefixTypeIndex<EntityTypesIfc>(
+        sink,
+        new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ),
+        { growthFactor: 1.0, minimumRecords: 0 } )
+
+    const seenInEvent: number[][] = []
+
+    const result = buildIndexStreaming(
+        new BufferByteSource( new TextEncoder().encode( source ) ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        () => {
+          seenInEvent.push( [ ...index.expressIDsOfTypes( IfcProject as any ) ] )
+        },
+        sink )
+
+    expect( result.result ).toBe( ParseResult.COMPLETE )
+    expect( seenInEvent ).toEqual( [ [ 1 ] ] )
+  } )
+
+  test( 'an early query on a small file does not freeze the view', () => {
+    // index.ifc has fewer records than the default minimumRecords, so it sits
+    // entirely in the "rebuild is trivial, stay exact" regime. Querying from
+    // the very first event must not pin the view to that one-record prefix
+    // for the rest of the parse — least of all after it finishes.
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const index = new PrefixTypeIndex<EntityTypesIfc>(
+        sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ) )
+
+    let queriedEarly = false
+
+    buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        ( localID ) => {
+          if ( localID === 0 ) {
+            expect( [ ...index.expressIDsOfTypes( IfcRoot as any ) ] ).toHaveLength( 0 )
+            queriedEarly = true
+          }
+        },
+        sink )
+
+    expect( queriedEarly ).toBe( true )
+    expect( sink.topLevelCount ).toBeLessThan( 1024 )
+
+    const final = new Set( index.expressIDsOfTypes( IfcRoot as any ) )
+    const resident = new Set( model.expressIDsOfTypes( IfcRoot ) )
+
+    expect( final ).toEqual( resident )
+  } )
+
+  test( 'a sink reset invalidates the view instead of pacing past it', () => {
+    // The streaming builder's grow-and-restart resets the sink. Growth pacing
+    // alone would never notice: the count drops, and a restarted parse can
+    // finish below the threshold the abandoned pass already built at.
+    const sink = new ColumnarIndexSink<number>()
+    const index = new PrefixTypeIndex<number>(
+        sink, new StepTypeIndexer<number>( 16 ) )
+
+    for ( let record = 0; record < 8; ++record ) {
+      sink.pushTopLevel( { address: record, length: 1, typeID: 5, expressID: record + 1 } )
+    }
+
+    expect( [ ...index.expressIDsOfTypeIDs( 5 ) ] ).toHaveLength( 8 )
+    expect( index.generation ).toBe( 1 )
+
+    sink.reset()
+    sink.pushTopLevel( { address: 0, length: 1, typeID: 5, expressID: 99 } )
+
+    expect( [ ...index.expressIDsOfTypeIDs( 5 ) ] ).toEqual( [ 99 ] )
+    expect( index.generation ).toBe( 2 )
+  } )
+
+  // Property sweep: whatever the query cadence and pacing, two invariants must
+  // hold at every query, and between them they pin the whole contract —
+  //   consistency: the view equals a resident parse of exactly the records it
+  //     claims to cover (`recordCount`), so it is never a mix of prefixes;
+  //   freshness:   `recordCount` is either current, or within `growthFactor`
+  //     of current, so a view can go stale but can never be abandoned.
+  // Each of the mid-parse bugs found in review violated one of these; asserting
+  // only the final state (as the first tests here did) passes through all of
+  // them, because everything is exact once the parse returns.
+  describe.each( [
+    [ 'default pacing', { growthFactor: 2.0, minimumRecords: 1024 } ],
+    [ 'paced from the start', { growthFactor: 2.0, minimumRecords: 0 } ],
+    [ 'coarse pacing', { growthFactor: 4.0, minimumRecords: 8 } ],
+    [ 'fine pacing', { growthFactor: 1.25, minimumRecords: 32 } ],
+    [ 'never paced', { growthFactor: 1.0, minimumRecords: 0 } ],
+  ] )( 'invariants under %s', ( _name, options ) => {
+
+    test.each( [ 1, 7, 97, 0 ] )(
+        'hold when queried every %i records (0 = only at the end)',
+        ( cadence ) => {
+
+          const closure = IfcRoot.query as unknown as number[]
+          const sink = new ColumnarIndexSink<EntityTypesIfc>()
+          const index = new PrefixTypeIndex<EntityTypesIfc>(
+              sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ), options )
+
+          let queries = 0
+
+          /** Query once and assert both invariants against the ground truth. */
+          const queryAndCheck = () => {
+            const parsed = sink.topLevelCount
+            const view = new Set( index.expressIDsOfTypes( IfcRoot as any ) )
+
+            ++queries
+
+            expect( view ).toEqual( expectedOverPrefix( index.recordCount, closure ) )
+
+            const fresh = index.recordCount === parsed ||
+              parsed < index.recordCount * options.growthFactor
+
+            expect( fresh ).toBe( true )
+          }
+
+          const result = buildIndexStreaming(
+              new BufferByteSource( bytes ),
+              IfcStepParser.Instance,
+              4 * 1024,
+              cadence === 0 ?
+                void 0 :
+                ( localID ) => {
+                  if ( localID % cadence === 0 ) {
+                    queryAndCheck()
+                  }
+                },
+              sink )
+
+          expect( result.result ).toBe( ParseResult.COMPLETE )
+
+          queryAndCheck()
+
+          expect( queries ).toBeGreaterThan( 0 )
+
+          // And an explicit refresh always lands on the whole file, whatever
+          // the pacing left behind.
+          index.refresh()
+
+          expect( new Set( index.expressIDsOfTypes( IfcRoot as any ) ) )
+              .toEqual( new Set( model.expressIDsOfTypes( IfcRoot ) ) )
+        } )
+  } )
+
+  // Cursors come from LIFO pools, so "was it returned?" is observable by
+  // identity: park one in the pool, run a query, and see whether the next
+  // allocation hands back the same instance. A query that leaks its cursor
+  // leaves the pool empty and the next allocation is a fresh object.
+  //
+  // Both cursor kinds are covered because which one a query allocates depends
+  // on the size of the subtype closure — IfcProject's is a single type
+  // (SingleIndexSetCursor), a two-type query is a union
+  // (MultiIndexSetCursorOr). Testing only a subtyped query would park a single
+  // cursor that the query never touches, and pass no matter what.
+  describe.each( [
+    [ 'single-type', () => SingleIndexSetCursor.allocate( new Uint32Array( 2 ) ),
+      ( index: PrefixTypeIndex<EntityTypesIfc> ) =>
+        index.expressIDsOfTypes( IfcProject as any ) ],
+    [ 'multi-type', () => MultiIndexSetCursorOr.allocate( new Uint32Array( 2 ) ),
+      ( index: PrefixTypeIndex<EntityTypesIfc> ) =>
+        index.expressIDsOfTypes( IfcProject as any, IfcPropertySet as any ) ],
+  ] )( 'the %s cursor pool', ( _name, park, query ) => {
+
+    test.each( [
+      [ 'a fully consumed query', ( ids: IterableIterator<number> ) => {
+        for ( const _id of ids ) {
+          // drain
+        }
+      } ],
+      [ 'a query abandoned partway', ( ids: IterableIterator<number> ) => {
+        for ( const _id of ids ) {
+          break
+        }
+      } ],
+    ] )( 'gets its cursor back after %s', ( _consumeName, consume ) => {
+      // The abandoned case is the one that needs try/finally rather than a
+      // free() after the loop — a consumer breaking out of a query is
+      // ordinary, not exceptional.
+      const index = streamed()
+      const parked = park()
+
+      parked.free()
+
+      consume( query( index ) )
+
+      const reused = park()
+
+      reused.free()
+
+      expect( reused ).toBe( parked )
+    } )
+  } )
+
+  test( 'complex records are attributed to their mapped classes', () => {
+    // Built by hand rather than parsed: the point is precisely the shape the
+    // record event cannot express — one address, typeID 0, several mapped
+    // classes hanging off it.
+    const sink = new ColumnarIndexSink<number>()
+
+    sink.pushTopLevel( { address: 0, length: 10, typeID: 5, expressID: 1 } )
+    sink.pushTopLevel( {
+      address: 10,
+      length: 20,
+      typeID: 0,
+      expressID: 2,
+      multiMapping: [ { address: 12, length: 5, typeID: 7 } ],
+    } )
+
+    const index = new PrefixTypeIndex<number>(
+        sink, new StepTypeIndexer<number>( 16 ) )
+
+    expect( [ ...index.expressIDsOfTypeIDs( 5 ) ] ).toEqual( [ 1 ] )
+    expect( [ ...index.expressIDsOfTypeIDs( 7 ) ] ).toEqual( [ 2 ] )
+    expect( [ ...index.types() ] ).toEqual( expect.arrayContaining( [ 5, 7 ] ) )
+  } )
+} )

@@ -7,8 +7,11 @@
  * — no per-record object phase), reads its source bytes on demand through a
  * windowed provider over a {@link StepExternalByteStore} (e.g. OPFS), and
  * serializes its index to a revisit sidecar whose payload IS the columns.
- * Incremental consumers (type index, cross-refs) subscribe to per-record
- * events via {@link StreamingRecordDispatcher} while the parse runs.
+ * Consumers work against the parse as it runs two ways: membership-shaped
+ * ones ({@link PrefixTypeIndex}) derive from a prefix snapshot of the columns
+ * at a cadence they choose, and byte-shaped ones subscribe to per-record
+ * events via {@link StreamingRecordDispatcher} (issue #393 for why the split
+ * is where it is).
  *
  * This is the conway-native namespace for new-era consumers. The web-ifc
  * compat shim (`@bldrs-ai/conway/web-ifc`) adapts parts of this surface to
@@ -19,6 +22,7 @@ export {
   openStreamedIfcModel,
   openStreamedIfcModelAsync,
   openStreamedIfcModelFromStore,
+  ifcPrefixTypeIndex,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
 } from '../ifc/ifc_stream_open'
@@ -44,7 +48,7 @@ export {
   StepBufferProvider,
   WindowedStepBufferProvider,
 } from '../step/step_buffer_provider'
-export { StepIndexColumns } from '../step/parsing/columnar_index'
+export { StepIndexColumns, ColumnarIndexSink } from '../step/parsing/columnar_index'
 export {
   serializeIndexSidecarFromColumns,
   deserializeIndexSidecarToColumns,
@@ -55,4 +59,8 @@ export {
   StreamingRecordDispatcher,
   RecordHandler,
 } from '../step/parsing/streaming_record_dispatcher'
-export { IncrementalTypeIndex } from '../step/parsing/incremental_type_index'
+export { PrefixTypeIndex } from '../step/parsing/prefix_type_index'
+export { StepTypeIndexer } from '../step/indexing/step_type_indexer'
+export { RecordEventHandler } from '../step/parsing/record_event'
+export { RecordFieldCursor } from '../step/parsing/record_field_cursor'
+export { IfcSpatialSkeleton, SkeletonNode } from '../ifc/ifc_spatial_skeleton'

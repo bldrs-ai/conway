@@ -178,8 +178,13 @@ indexStream.onAnyRecord(...)          // the firehose, for tools
 Standard consumers we'd ship:
 - **Header + units + schema** (available within the first window — this
   is what makes progressive UI honest).
-- **Type index** (today's `MultiIndexSet`, built incrementally instead of
-  at end of parse).
+- **Type index** (today's `MultiIndexSet`, available before end of parse).
+  *Correction, 2026-08-18:* not an event consumer. Since the index is
+  columnar from birth (M7 — which postdates this section), the cheap and
+  correct way to have it early is to run the production indexer over a
+  prefix snapshot of the columns. Pushing records into per-type sets cost
+  +88 % of parse and +254 MB on PSB and missed the complex records'
+  mapped classes outright. See M2b under Milestones for the measurements.
 - **Spatial skeleton**: project → site → building → storey → product
   *names* tree (the `'names'` mode from #373), emitted as it becomes
   resolvable. This is the browser's "sitemap".
@@ -193,6 +198,16 @@ their own compact structures). Anything expensive (geometry!) must NOT
 run in the event path — it goes through the demand queue below. This is
 the lesson from the props-sweep regressions: keep the hot pass free of
 churn.
+
+The sharper form of that rule, after the 2026-08-18 spike: **only put a
+consumer on the event path if it needs the record's bytes while the
+window still holds them.** Everything else — membership, counts, ids —
+is already in the columns and is cheaper (and, for complex records, only
+*correct*) when derived from a prefix snapshot at whatever cadence the
+consumer actually needs. The event payload is
+`(localID, expressID, typeID, buffer, byteOffset, byteLength)`, with the
+byte view left un-materialised so a handler that ignores it pays nothing;
+the bytes are valid only for the duration of the call.
 
 ### 3. Demand-driven, evictable geometry (the browser part)
 
@@ -364,11 +379,10 @@ Deliberately small first step; each has a measurable exit.
     `OpenModelStream`. Full "no full-source moment" for the geometry phase
     waits on M3.
 - **M2 — Record events + incremental consumers.** Event bus with type-set
-  subscription; type index, names skeleton, roots registry, header become
-  incremental consumers; `ON_MODEL_INFO` fires from first window. Exit:
-  spatial tree UI populates while PSB still parsing; props capture works
-  pre-geometry. (First task: scope conway-geom per-product native
-  geometry free — it gates M3.)
+  subscription; names skeleton on the event stream, type index / roots /
+  header derived from the prefix columns; `ON_MODEL_INFO` fires from first
+  window. Exit: spatial tree UI populates while PSB still parsing; props
+  capture works pre-geometry.
   - **M2a — event core (in progress).** The streaming parse now emits a
     per-record event `(localID, expressID, typeID)` live as each top-level
     record is indexed (`parseDataBlockStreamed` / `buildIndexStreaming`
@@ -383,11 +397,74 @@ Deliberately small first step; each has a measurable exit.
     finished model. External-mapping records (typeID 0) reach `onAnyRecord`
     only; concrete-type resolution for them is the incremental type-index
     consumer (M2b).
-  - **M2b — standard consumers (next).** Incremental type index
-    (multi-mapping-aware), spatial names skeleton, property-roots + header
-    consumers; wire `ON_MODEL_INFO` from the first window. This is where
-    the "spatial tree populates while parsing" exit criterion lands, plus
-    the conway-geom per-product-free scoping that gates M3.
+  - **M2b — standard consumers (in progress; re-shaped 2026-08-18).**
+    Header/`ON_MODEL_INFO` from the first window landed with the open
+    paths. The rest split in two by *what the consumer needs*, which the
+    spike below settled:
+    - **Membership-shaped consumers — type index, roots, property-roots —
+      derive from a prefix column snapshot** (`ColumnarIndexSink.snapshot()`
+      → `StepTypeIndexer.createFromColumns`), not from the event stream.
+      `PrefixTypeIndex` is that consumer; incrementality is a cadence knob
+      (rebuild when a query is more than a growth factor stale), so a
+      caller that never queries pays nothing. This gets end-of-parse
+      parity *by construction* — it is the same indexer call the model
+      makes — including the complex entries' mapped classes.
+    - **Byte-shaped consumers stay on the event stream**, because they
+      need a record's bytes while the window still holds them. The
+      spatial **names skeleton** is the one standard consumer that
+      genuinely does (Name / LongName / GlobalId + the spatial rel edges);
+      it is what carries the "spatial tree populates while parsing" exit
+      criterion, and it deletes Share's post-parse `'names'` sweep.
+      `IfcSpatialSkeleton` subscribes to `IfcObjectDefinition` for names
+      and to the two containment relationships for edges, reading fields
+      straight out of the window through `RecordFieldCursor` (the
+      production tokenizer over the record's bytes — no model, no entity,
+      nothing allocated per record). Edges are appended as integer pairs
+      and only linked into a tree when `tree()` is called, which is what
+      makes "resolvable" mean "present when you asked" rather than a
+      pending-reference table. Measured on PSB: **+1.6 %** parse
+      (min-of-3, 8,191 → 8,326 ms) and ~5 MB, for 13.5 k nodes and 7.9 k
+      edges available *during* the parse. The cost is dominated by having
+      subscriptions attached at all, not by the skeleton's own work — a
+      pair of subscriptions that merely count measured the same — which
+      is why the dispatcher now resolves a record's handlers with one
+      `Map` lookup regardless of how many consumers are attached.
+    - **Forward references need no pending-refs table.** With the skeleton
+      resolving edges at snapshot time, "resolvable" is "present in this
+      generation", and a hostile ordering degenerates to "resolvable at
+      end of stream" — the behaviour M2 asked for, with nothing to
+      maintain.
+    - **Struck:** the conway-geom per-product-free scoping. The 2026-08-16
+      triage measured eviction-into-freelists returning ~0 RSS, and M3 is
+      re-scoped to bounded high-water via per-batch copy-out + native
+      release. It no longer gates M3 and is not M2's work.
+
+    **Spike (2026-08-18, `scripts/m2_consumer_spike.mjs`).** PSB.ifc,
+    9,382,205 records, node, 4-core sandbox; baseline is the production
+    columnar streaming parse (8,236 ms / 237 MB retained):
+
+    | consumer shape | parse | vs base | retained | concrete types |
+    | --- | --- | --- | --- | --- |
+    | empty event handler | 8,307 ms | +0.9 % | 214 MB | — |
+    | type-set subscription + compact capture | 8,324 ms | +1.1 % | 220 MB | — |
+    | event-fed `Set`-per-type index | 15,481 ms | **+88.0 %** | 491 MB | **83** |
+    | derived once from finished columns | 8,253 ms | +0.2 % | 318 MB | **95** |
+    | derived at 2× growth (14 rebuilds, queryable mid-parse) | 8,780 ms | +7.2 % | 323 MB | **95** |
+
+    Three findings. (1) The event-fed type index was not merely expensive
+    but **wrong** — 83 types against the production indexer's 95, because
+    complex records arrive on the stream as `typeID 0` with their mapped
+    classes stripped; it failed M2's own "identical to end-of-parse
+    construction" gate and has been removed. (2) The seam was charging
+    every consumer for bytes nobody read: both emission sites allocated a
+    per-record `subarray` for `recordBytes` (argument evaluation is
+    skipped when the hook is `undefined`, so the no-consumer baseline
+    never paid it and it stayed invisible) — 9.4 M allocations, +5.7 %
+    wall-clock and +46 MB. The event now hands over
+    `(buffer, byteOffset, byteLength)` and a handler materialises the view
+    only if it wants the bytes; the +0.9 % row above is post-fix.
+    (3) Type-set dispatch over the #383 `query` closures costs nothing at
+    9.4 M records — that half of M2 is vindicated as designed.
 - **M3 — Demand-driven geometry.** Work queue + budgeted arena +
   per-product wasm reclaim; load-time progressive materialisation
   (viewport-ordered). Exit: PSB time-to-first-pixel < 25 % of full-load

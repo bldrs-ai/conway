@@ -12,6 +12,7 @@ performance investigation needs already exists here.
 | `benchmark.cjs` | Timing sweep over a model corpus |
 | `generate_flame_graph.cjs` | Flame graph from a `yarn cli-profile` run |
 | `stream_corpus_sweep.mjs` | Streaming-loader sweep across the corpus |
+| `m2_consumer_spike.mjs` | What a semantic consumer costs on the streaming parse's record-event path (M2/#393): event-fed vs derived-from-columns, per model |
 | `step_nonproduct_survey.py` | Survey of non-product STEP entity usage across the corpus |
 | `setup-emsdk.sh`, `build-codex.sh`, `build-gha.sh` | Toolchain and build drivers |
 | `code-gen.cjs`, `gen-web-ifc-types.cjs` | Schema code generation |
