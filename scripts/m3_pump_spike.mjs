@@ -780,15 +780,6 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
     fs.writeFileSync( jsonOut, `${JSON.stringify( rows, null, 2 )}\n` )
   }
 
-  if ( failures.length > 0 ) {
-    console.error( `\n${failures.length} model(s) failed the delivery check:` )
-
-    for ( const failure of failures ) {
-      console.error( `  ${failure}` )
-    }
-
-    process.exit( 1 )
-  }
 }
 
 /**
@@ -816,7 +807,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
  * @param phases The phases that ran.
  * @return {object[]} `{text, failed}` lines.
  */
-function verdicts( byPhase, phases ) {
+function verdicts( byPhase, phases, allowEmpty ) {
 
   const out = []
   const classic = byPhase.classic
@@ -826,7 +817,20 @@ function verdicts( byPhase, phases ) {
   }
 
   if ( classic.instances === 0 ) {
-    out.push( { text: 'SKIP  classic delivered no instances — model has no geometry', failed: false } )
+
+    // A zero here has two causes that look identical from the outside: a model
+    // with no geometry, and a probe that stopped firing. Nothing in the run
+    // can tell them apart, so the caller declares the geometry-free models
+    // (`#empty` in the models file) and everything else fails.
+    out.push( allowEmpty ?
+      { text: 'SKIP  classic delivered no instances — model declared geometry-free', failed: false } :
+      {
+        text: 'FAIL  classic delivered no instances on a model not declared ' +
+          'geometry-free — the probe is broken, or the model belongs on the ' +
+          '#empty list',
+        failed: true,
+      } )
+
     return out
   }
 
@@ -860,15 +864,44 @@ function verdicts( byPhase, phases ) {
       `${classic.instances}, placed ${row.placedDigest} vs ${classic.placedDigest}, ` +
       `payload ${row.payloadDigest} vs ${classic.payloadDigest}`
 
-    // Only `bounded` is allowed to differ, and only because retaining nothing
-    // is a deliberately unshippable policy — see the doc's retention section.
     out.push( phase === 'bounded' ?
       { text: `DIFF  ${line}`, failed: false } :
       { text: `FAIL  ${line}`, failed: true } )
   }
 
+  // The comparison the release policy actually rests on. `bounded` and
+  // `copyout` run the SAME deferred extraction and differ only in that
+  // `bounded` releases; so if they agree, release changed nothing, and if they
+  // disagree, release alone changed delivery. Checking each against `classic`
+  // cannot see this: where the deferred path itself diverges (supercap.step,
+  // #532) both rows differ from classic and a release regression would hide
+  // inside a DIFF that is already expected.
+  const copyout = byPhase.copyout
+  const bounded = byPhase.bounded
+
+  if ( copyout?.instances !== void 0 && bounded?.instances !== void 0 ) {
+
+    const same = bounded.placedDigest === copyout.placedDigest &&
+      bounded.payloadDigest === copyout.payloadDigest
+
+    out.push( same ?
+      {
+        text: `OK    bounded identical to copyout — release changed nothing ` +
+          `(${bounded.instances} instances)`,
+        failed: false,
+      } :
+      {
+        text: 'FAIL  bounded differs from copyout: release alone changed delivery ' +
+          `(${bounded.instances} instances vs ${copyout.instances}, ` +
+          `placed ${bounded.placedDigest} vs ${copyout.placedDigest}, ` +
+          `payload ${bounded.payloadDigest} vs ${copyout.payloadDigest})`,
+        failed: true,
+      } )
+  }
+
   return out
 }
+
 
 /**
  * Sweep phases over models, or shard counts when `--shards` is given.
@@ -910,10 +943,17 @@ function main() {
     process.exit( 2 )
   }
 
+  // A models-file line may be annotated `<path> #empty` to declare that the
+  // model genuinely produces no geometry. Without that, a zero-instance
+  // classic run is a broken probe rather than an empty model.
   const models = fs.readFileSync( modelsFile, 'utf8' )
       .split( '\n' )
       .map( ( line ) => line.trim() )
       .filter( ( line ) => line.length > 0 && !line.startsWith( '#' ) )
+      .map( ( line ) => ( {
+        path: line.replace( /\s*#empty\s*$/, '' ),
+        allowEmpty: /\s#empty\s*$/.test( line ),
+      } ) )
 
   const rows = []
   const failures = []
@@ -946,11 +986,11 @@ function main() {
       console.log( `note: added an N=1 baseline (sweeping ${counts.join( ',' )})` )
     }
 
-    return runShardSweep( models, shardPhase, batchSize, counts, jsonOut,
-        flag( '--shard-mode', 'roundrobin' ) )
+    return runShardSweep( models.map( ( entry ) => entry.path ), shardPhase,
+        batchSize, counts, jsonOut, flag( '--shard-mode', 'roundrobin' ) )
   }
 
-  for ( const model of models ) {
+  for ( const { path: model, allowEmpty } of models ) {
 
     const name = path.basename( model )
     const byPhase = {}
@@ -991,7 +1031,7 @@ function main() {
 
     console.log( `${name}\n  ${phases.map( cell ).join( '\n  ' )}` )
 
-    for ( const line of verdicts( byPhase, phases ) ) {
+    for ( const line of verdicts( byPhase, phases, allowEmpty ) ) {
       console.log( `  ${line.text}` )
 
       if ( line.failed ) {

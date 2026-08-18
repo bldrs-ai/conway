@@ -564,10 +564,17 @@ Deliberately small first step; each has a measurable exit.
   **Release did not break delivery anywhere in the smoke corpus.** With
   every instance's product, geometry, transform, colour and
   `occurrencePath` hashed, `bounded` is identical to `classic` on 11 of
-  12 models — same instances, same payloads, same placement. So the
-  corpus provides **no evidence that per-batch release changes what a
-  consumer receives**, which is the M3 invariant, and the 342 MB / 100 MB
-  rows are a real result rather than one bought by dropping geometry.
+  12 models — same instances, same payloads, same placement — and
+  identical to **`copyout` on all 12**. That second comparison is the
+  one the release policy rests on: `copyout` and `bounded` run the same
+  deferred extraction and differ *only* in that `bounded` releases, so
+  agreement means release changed nothing, while checking each against
+  `classic` alone cannot tell — on the one model where the deferred path
+  itself diverges, a release regression would hide inside a difference
+  that is already expected. So the corpus provides **no evidence that
+  per-batch release changes what a consumer receives**, which is the M3
+  invariant, and the 342 MB / 100 MB rows are a real result rather than
+  one bought by dropping geometry.
 
   An earlier version of this section claimed the opposite — that
   retain-nothing delivered 169 instances against 101 on `supercap.step`,
