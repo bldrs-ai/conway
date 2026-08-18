@@ -620,22 +620,42 @@ Deliberately small first step; each has a measurable exit.
   1.34×. Per-worker wasm peak drops too (83 → 33 MB), because a shard
   that doesn't re-extract shared geometry doesn't hold it either.
 
-  `claim` is the cheaper rule to implement and the one to build: it
-  needs no global plan, only "first worker to touch an asset owns it,
-  and a product whose assets are owned follows them" — a worker rips
-  through a run and hands off when it meets something new. `affinity`
-  hashing is marginally better on CPU and marginally worse on balance,
-  which is what you would expect from a static partition against an
-  adaptive one.
+  **What this validates, precisely: a precomputed partition.** Both
+  strategies are scored and emitted *offline*, from a captured graph
+  that already knows every product's created/reused assets and its
+  measured cost before anything is dispatched. That is an oracle. It
+  establishes the ceiling — the duplication is entirely addressable by
+  placement, and asset-aware placement reaches the serial CPU floor —
+  but it is not yet a scheduler.
 
-  Three caveats the numbers carry. The partition table above was itself
-  produced twice: the first run reported that neither asset-aware
-  partition changed anything, because the harness's assignment path had
-  been dropped in an unrelated edit and every "partition" was silently
-  running round-robin. The lesson is the one this whole file keeps
-  relearning — a measurement that cannot fail is not a measurement, and
-  the tell was that two different partitions produced *byte-identical*
-  asset counts. Each shard also pays its own parse here, so
+  **What it does not validate: an online first-touch rule.** A live
+  worker cannot know that a pending product follows an existing owner
+  until it has discovered that product's assets, and discovering them by
+  extracting is exactly the duplication the rule exists to avoid. So
+  "first worker to touch an asset owns it" needs a **dispatch-time key**
+  — something derivable from the index without extracting, i.e. the
+  product's representation / mapped-source ID read straight from the
+  columns. That key is cheap and it is the natural candidate; whether it
+  partitions as well as the oracle is the next measurement, not a
+  settled result. Until it is taken, the honest statement is: asset
+  affinity is worth ~27 % of CPU and ~1.5× of wall-clock on a
+  representation-heavy model, and an online scheduler that approximates
+  it is the thing to design.
+
+  Three caveats the numbers carry. The partition table above was
+  produced twice, and the first version was wrong in two ways worth
+  recording rather than quietly fixing. It reported that neither
+  asset-aware partition changed anything — because the harness's
+  assignment path had been dropped in an unrelated edit, so every
+  "partition" was silently running round-robin; the tell was two
+  different partitions producing *byte-identical* asset counts. And the
+  sweep's own N=1 row, when an assignment was active, handed the
+  baseline child one shard's products while treating it as the whole
+  model, so the ratios those runs printed were nonsense (the published
+  figures came from a separate unassigned baseline, which is the only
+  reason the conclusion survived). Both are fixed; the lesson is the one
+  this file keeps relearning, that a measurement which cannot fail is
+  not a measurement. Each shard also pays its own parse here, so
   only the geometry phase is comparable; the shipping design parses once
   and hands workers transferable index columns, which is exactly what
   M2/M7's columns-from-birth index made possible (before it, sharding

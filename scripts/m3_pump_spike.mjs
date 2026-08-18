@@ -343,6 +343,29 @@ function shardWorklists( api, modelID, shard ) {
 
     const assignment =
       JSON.parse( fs.readFileSync( process.env.M3_ASSIGNMENT, 'utf8' ) )
+
+    // An assignment is cut for ONE shard count. The sweep always runs an N=1
+    // baseline (see the count normalisation in main), and handing that child
+    // `shards[0]` would give it a quarter of the products while the sweep
+    // treated it as the whole model — every ratio computed against it would be
+    // silently wrong. The baseline runs the full unassigned worklist; any
+    // other mismatch is a caller error rather than something to paper over.
+    if ( shard.count === 1 ) {
+
+      return {
+        products: products.length,
+        ofProducts: products.length,
+        aggregates: aggregates.length,
+        strategy: `${assignment.strategy} (baseline: full worklist)`,
+      }
+    }
+
+    if ( assignment.shards.length !== shard.count ) {
+      throw new Error(
+          `assignment is cut for ${assignment.shards.length} shards, ` +
+          `sweep is running ${shard.count}` )
+    }
+
     const mineSet = new Set( assignment.shards[ shard.index ] )
 
     passthrough.demandProducts_ = products.filter( ( id ) => mineSet.has( id ) )

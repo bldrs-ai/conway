@@ -421,7 +421,8 @@ function emitAssignment( graphPath, count, strategy, outPath ) {
     shards[ shardOf[ index ] ].push( rows[ index ].product )
   }
 
-  fs.writeFileSync( outPath, `${JSON.stringify( { model: graph.model, strategy, shards } )}\n` )
+  fs.writeFileSync( outPath,
+      `${JSON.stringify( { model: graph.model, strategy, count, shards } )}\n` )
 
   console.log(
       `${strategy} N=${count}: ${shards.map( ( s ) => s.length ).join( '/' )} products → ${outPath}` )
