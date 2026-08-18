@@ -29,11 +29,21 @@
  * Every phase copies out the same payloads (`classic`/`copyout`/`bounded`)
  * or none (`pump`), and hashes them into a digest so the M3 exit criterion
  * (M3 changes when work happens, not what it produces) is checked rather
- * than assumed. `bounded` releasing everything is expected to LOSE instances
- * whose geometry is shared with a later product (the scene walk skips a
- * released geometry); the digest and instance counts are what size that
- * loss, and therefore what sizes the retention/refcount rule the production
- * pump needs (SharedAssetPool, per the design doc).
+ * than assumed. A `bounded`/`copyout` difference is a FAILURE: those two run
+ * identical extraction and differ only in that `bounded` releases, so any
+ * divergence means release changed what a consumer receives.
+ *
+ * Retain-nothing release CAN lose instances in principle — the scene walk
+ * resolves geometry through `getByLocalID` and skips what it cannot find, so
+ * releasing an asset a later product shares makes that product re-extract —
+ * but this corpus never triggers it at batch 64, because shared geometry is
+ * released within the batch that emits all of its instances. (An earlier
+ * version of this comment said the loss was expected and measured, citing
+ * 169 instances against 101 on `supercap.step`. That came from the
+ * payload-keyed release this harness no longer uses; `bounded` is now
+ * identical to `copyout` on all 12 models. Retracted — see the design doc.)
+ * The retention rule the production pump needs (SharedAssetPool) is
+ * therefore justified by the code path, not by a number from here.
  *
  * The headline number is `wasmPeakMB`: the high-water mark of the wasm
  * linear memory, read through `wasmHeapByteLength` (the module's cached
@@ -645,15 +655,17 @@ async function runChild( phase, filePath, batchSize, shard ) {
 
   // Adds that land on a local ID the cache ALREADY holds. `IfcModelGeometry.add`
   // is a bare `meshes_.set( localID, mesh )` (ifc_model_geometry.ts:75), so a
-  // replacement drops the previous `CanonicalMesh` from the map without calling
-  // `.delete()` on its native. That native is then unreachable — not by
-  // `releaseGeometries`, not by anything — so it leaks for the life of the
-  // model, in production as well as here. The rel-aggregates pass does exactly
-  // this (`aggregate_master_voids.ifc`: 2 created, 1 payload).
+  // replacement would drop the previous `CanonicalMesh` from the map without
+  // calling `.delete()` on its native, leaving it unreachable — not by
+  // `releaseGeometries`, not by anything — for the life of the model.
   //
-  // Counted rather than worked around: a `bounded` run on a model with
-  // replacements cannot bound the heap, and the harness must say so instead of
-  // reporting the release of the survivors as success.
+  // NOT observed. This counter exists because that leak is possible by
+  // inspection, not because anything here exhibits it: every model measured
+  // reports `assetsReplaced = 0`, `aggregate_master_voids.ifc` included. Its
+  // 2-created/1-delivered split is two DISTINCT assets, one of them never
+  // handed out — which is the create-vs-deliver gap the release keying fixes,
+  // a different mechanism entirely. Counted so that a model which does
+  // overwrite is visible rather than silently unbounded.
   let assetsReplaced = 0
 
   // Local IDs the cache created since the last release. `bounded` frees these
