@@ -63,9 +63,12 @@ The remaining structural residencies — the things this doc exists to kill:
 1. **Parse-time source residency.** `parseDataToModel` needs the entire
    source as one contiguous buffer. The spill only happens *post*-parse.
    Peak = source + index. This is the "constant-memory parse" gap.
-2. **Grow-only wasm geometry heap.** ~2 GB on PSB at steady state.
-   Geometry is extracted eagerly for the whole model and stays resident in
-   the wasm heap even after the GLB/scene is built.
+2. **Grow-only wasm geometry heap.** 1283 MB on PSB at steady state
+   (measured 2026-08-18; earlier ~2 GB figures included a measurement
+   harness's own leaked native clones). Geometry is extracted eagerly for
+   the whole model and stays resident in the wasm heap even after the
+   GLB/scene is built — see the M3 status below, where per-batch release
+   takes this to 342 MB at batch 256 and 100 MB at batch 32.
 3. **Eager whole-model geometry extraction.** Even with a bounded heap,
    extracting *everything up front* is O(model) time before first pixel
    and O(model) scene memory after.
@@ -487,10 +490,10 @@ Deliberately small first step; each has a measurable exit.
 
   | phase | open | geometry | total | wasm peak | RSS | JS retained |
   | --- | --- | --- | --- | --- | --- | --- |
-  | `classic` — `OpenModel` + `StreamAllMeshes` | 44 s | 8 s | 52 s | **1956 MB** | 4182 MB | 1566 MB |
-  | `pump` — deferred, batched, no copy-out | 13 s | 31 s | 44 s | 1284 MB | 2828 MB | 1255 MB |
-  | `copyout` — + per-batch payload copy-out | 13 s | 30 s | 43 s | 1956 MB | 3632 MB | 1597 MB |
-  | `bounded` — + per-batch native release | 13 s | 24 s | **37 s** | **840 MB** | 2486 MB | 1589 MB |
+  | `classic` — `OpenModel` + `StreamAllMeshes` | 48 s | 8 s | 56 s | **1283 MB** | 3577 MB | 1566 MB |
+  | `pump` — deferred, batched, no copy-out | 13 s | 35 s | 48 s | 1283 MB | 2827 MB | 1255 MB |
+  | `copyout` — + per-batch payload copy-out | 13 s | 33 s | 46 s | 1283 MB | 3025 MB | 1597 MB |
+  | `bounded` — + per-batch native release | 13 s | 25 s | **38 s** | **342 MB** | 2048 MB | 1589 MB |
 
   Every payload-carrying phase **holds** its copied vertex and index
   buffers until it reports (40 356 typed arrays, 334 MB on PSB), because
@@ -514,15 +517,20 @@ Deliberately small first step; each has a measurable exit.
      wasm — so a parse-phase memory regression is never wasm-side, which
      also redirects the Share-side "+1.7 GB parsing" hunt away from wasm
      ArrayBuffers.
-  2. **The tab holds ~6× the geometry it delivers.** 23 454 instances
+  2. **The tab holds ~4× the geometry it delivers.** 23 454 instances
      over 20 178 distinct geometries are **334 MB** of vertex+index
-     payload against a 1956 MB high-water. The gap is never releasing,
+     payload against a 1283 MB high-water. The gap is never releasing,
      not the model.
-  3. **`GetGeometry` is itself a memory event: +672 MB.** Reading a
-     geometry's floats materialises a per-geometry mirror in the wasm
-     heap that is never dropped (`pump` 1284 MB vs `copyout` 1956 MB on
-     identical extraction). Every consumer that reads its own vertices
-     pays it, and it is invisible to any probe that doesn't.
+  3. **Reading vertices costs no extra wasm.** `pump` (no copy-out) and
+     `copyout` peak identically at 1283 MB, so serving a consumer its
+     own geometry is free on the wasm side — the payload is copied out
+     to JS and the native is untouched. An earlier version of this
+     section claimed `GetGeometry` cost +672 MB; that was the spike
+     harness leaking, not the engine. `GetGeometry` returns
+     `geometryObject.clone()` — an *owning* native copy — and the
+     harness never deleted it, so it accumulated one clone per geometry
+     inside the heap it was measuring. Consumers of this API must delete
+     what it hands them; conway's own paths already do.
   4. **Releasing costs nothing measurable.** `bounded` is the fastest
      row here, but the spread between rows (~24 %) sits inside this
      box's run-to-run wall-clock variance (~25 %), so the honest claim is
@@ -532,15 +540,26 @@ Deliberately small first step; each has a measurable exit.
      separated out, which nothing here depends on — the memory columns
      are the result, and they are stable.
 
-  **Batch size is not the remaining lever.** `bounded` at batch = 32
-  reaches 727 MB (36.6 s, identical digests) against 840 MB at batch =
-  256 — an 8× smaller working set buys 113 MB. So the residual is not
-  the in-flight batch: it is the natives this policy never releases
-  (the rel-aggregates pass, materials, temporaries) plus the extraction
-  scratch's own high-water. Getting under the 512 MB gate and *staying*
-  there under evict/refill churn is what the dedicated chunk region is
-  for — which is the two-regime argument above, arrived at from
-  measurement rather than from first principles.
+  **The high-water becomes O(batch), which is the whole point.**
+  `bounded` at batch = 32 reaches **100 MB** (37.5 s, identical digests)
+  against 342 MB at batch = 256. The residency now tracks the in-flight
+  working set the way the design says it should, rather than the model:
+  1283 MB → 342 MB → 100 MB as the batch shrinks, at no wall-clock cost.
+
+  **This clears M3's memory gate on PSB** — "steady-state wasm heap
+  under a configured budget (e.g. 512 MB) with the full model
+  navigable" — with room to spare, and *without* the dedicated chunk
+  region. That does not retire the chunk region: this measures a single
+  drain-once pass, and the region exists for what happens under
+  evict/refill *churn*, where a general allocator fragments and never
+  gives the pages back. But the ordering changes — the pump discipline
+  alone reaches the gate, and the region is what keeps it there.
+
+  (An earlier version of this section reported 840 MB and 727 MB for
+  these two rows and concluded batch size was not a lever. Both figures
+  were inflated by the harness's leaked `GetGeometry` clones, which
+  accumulated with the number of geometries rather than with the batch
+  and so masked the batch's effect entirely.)
 
   **Retention is a correctness prerequisite, not an optimisation.**
   Retain-nothing release breaks a real model: on `supercap.step` it

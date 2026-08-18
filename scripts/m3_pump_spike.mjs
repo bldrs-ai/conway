@@ -235,6 +235,14 @@ function copyBatchPayloads( api, modelID, meshes, seen, digest, retained ) {
       digest.payload( placed.geometryExpressID, vertices, indices )
       retained.push( vertices, indices )
       copied.push( placed.geometryExpressID )
+
+      // `GetGeometry` hands back `geometryObject.clone()` — an OWNING native
+      // copy, not a view (`IfcApiProxyIfc.getGeometry` → C++ `Geometry::Clone`,
+      // which copies the vectors). Embind will not free it until finalization,
+      // which is nondeterministic, so a harness that forgets this accumulates
+      // one clone per geometry inside the very wasm heap it is measuring.
+      // Delete it the moment its bytes are in JS.
+      geometry.delete()
     }
   }
 
@@ -319,9 +327,10 @@ function releaseGeometries( api, modelID, geometryExpressIDs ) {
  * @param api The IfcAPI instance.
  * @param modelID The open model.
  * @param shard `{index, count}`.
+ * @param filePath The model being run, checked against the assignment's own.
  * @return {object|undefined} What this shard owns.
  */
-function shardWorklists( api, modelID, shard ) {
+function shardWorklists( api, modelID, shard, filePath ) {
 
   const passthrough = api.getPassthrough( modelID )
 
@@ -344,6 +353,15 @@ function shardWorklists( api, modelID, shard ) {
     const assignment =
       JSON.parse( fs.readFileSync( process.env.M3_ASSIGNMENT, 'utf8' ) )
 
+    // Local IDs are model-relative, so an assignment from another model
+    // filters to an arbitrary overlapping subset and drops the rest — which
+    // still runs, and still prints a speedup. Refuse instead: a wrong number
+    // is worse than no number.
+    if ( assignment.model !== void 0 && assignment.model !== filePath ) {
+      throw new Error(
+          `assignment was captured from ${assignment.model}, running ${filePath}` )
+    }
+
     // An assignment is cut for ONE shard count. The sweep always runs an N=1
     // baseline (see the count normalisation in main), and handing that child
     // `shards[0]` would give it a quarter of the products while the sweep
@@ -364,6 +382,17 @@ function shardWorklists( api, modelID, shard ) {
       throw new Error(
           `assignment is cut for ${assignment.shards.length} shards, ` +
           `sweep is running ${shard.count}` )
+    }
+
+    // Every product exactly once across shards, or the sweep is measuring a
+    // partition of something other than this model's worklist.
+    const assigned = assignment.shards.flat()
+    const unique = new Set( assigned )
+
+    if ( assigned.length !== unique.size || unique.size !== products.length ) {
+      throw new Error(
+          `assignment covers ${unique.size} unique products ` +
+          `(${assigned.length} entries) against a worklist of ${products.length}` )
     }
 
     const mineSet = new Set( assignment.shards[ shard.index ] )
@@ -454,7 +483,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
   }
 
   const sharded = deferred && shard !== void 0 ?
-    shardWorklists( api, modelID, shard ) : void 0
+    shardWorklists( api, modelID, shard, filePath ) : void 0
 
   // Count what this process actually builds. Summed across shards against a
   // single-shard run, this is the REAL duplication a partition causes —
