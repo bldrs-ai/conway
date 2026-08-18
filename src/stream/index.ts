@@ -22,6 +22,7 @@ export {
   openStreamedIfcModel,
   openStreamedIfcModelAsync,
   openStreamedIfcModelFromStore,
+  ifcPrefixTypeIndex,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
 } from '../ifc/ifc_stream_open'
@@ -47,7 +48,7 @@ export {
   StepBufferProvider,
   WindowedStepBufferProvider,
 } from '../step/step_buffer_provider'
-export { StepIndexColumns } from '../step/parsing/columnar_index'
+export { StepIndexColumns, ColumnarIndexSink } from '../step/parsing/columnar_index'
 export {
   serializeIndexSidecarFromColumns,
   deserializeIndexSidecarToColumns,
@@ -59,6 +60,7 @@ export {
   RecordHandler,
 } from '../step/parsing/streaming_record_dispatcher'
 export { PrefixTypeIndex } from '../step/parsing/prefix_type_index'
+export { StepTypeIndexer } from '../step/indexing/step_type_indexer'
 export { RecordEventHandler } from '../step/parsing/record_event'
 export { RecordFieldCursor } from '../step/parsing/record_field_cursor'
 export { IfcSpatialSkeleton, SkeletonNode } from '../ifc/ifc_spatial_skeleton'

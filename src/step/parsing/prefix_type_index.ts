@@ -33,7 +33,7 @@ const DEFAULT_MINIMUM_RECORDS = 1024
  * The consequence for callers is that incrementality is a **cadence knob**
  * rather than an architecture. Nothing happens per record; a rebuild happens
  * when someone asks for a view that is more than `growthFactor` stale (14
- * rebuilds over a PSB parse at the default 2.0, +16.7 % if you query
+ * rebuilds over a PSB parse at the default 2.0, +7.2 % if you query
  * continuously, ~0 if you query rarely). Callers that want a specific moment —
  * a preview generation, a progress tick — call {@link refresh} themselves.
  *
@@ -114,6 +114,16 @@ export class PrefixTypeIndex<TypeIDType extends number> {
     const parsed = this.sink_.topLevelCount
 
     if ( this.index_ === void 0 ) {
+      this.refresh()
+      return
+    }
+
+    // A count that went BACKWARDS means the sink was reset — the streaming
+    // builder's grow-and-restart. The current view then describes records the
+    // restarted parse has not reached again, and growth pacing would never
+    // catch it (the new parse may finish below the old threshold), so it is
+    // rebuilt immediately rather than paced.
+    if ( parsed < this.builtAtRecords_ ) {
       this.refresh()
       return
     }

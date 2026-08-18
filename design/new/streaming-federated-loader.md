@@ -449,7 +449,7 @@ Deliberately small first step; each has a measurable exit.
     | type-set subscription + compact capture | 8,324 ms | +1.1 % | 220 MB | — |
     | event-fed `Set`-per-type index | 15,481 ms | **+88.0 %** | 491 MB | **83** |
     | derived once from finished columns | 8,253 ms | +0.2 % | 318 MB | **95** |
-    | derived at 2× growth (14 rebuilds, queryable mid-parse) | 9,615 ms | +16.7 % | 318 MB | **95** |
+    | derived at 2× growth (14 rebuilds, queryable mid-parse) | 8,780 ms | +7.2 % | 323 MB | **95** |
 
     Three findings. (1) The event-fed type index was not merely expensive
     but **wrong** — 83 types against the production indexer's 95, because

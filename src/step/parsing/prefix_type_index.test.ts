@@ -137,6 +137,28 @@ describe( 'PrefixTypeIndex', () => {
     expect( final ).toBe( resident )
   } )
 
+  test( 'a sink reset invalidates the view instead of pacing past it', () => {
+    // The streaming builder's grow-and-restart resets the sink. Growth pacing
+    // alone would never notice: the count drops, and a restarted parse can
+    // finish below the threshold the abandoned pass already built at.
+    const sink = new ColumnarIndexSink<number>()
+    const index = new PrefixTypeIndex<number>(
+        sink, new StepTypeIndexer<number>( 16 ) )
+
+    for ( let record = 0; record < 8; ++record ) {
+      sink.pushTopLevel( { address: record, length: 1, typeID: 5, expressID: record + 1 } )
+    }
+
+    expect( [ ...index.expressIDsOfTypeIDs( 5 ) ] ).toHaveLength( 8 )
+    expect( index.generation ).toBe( 1 )
+
+    sink.reset()
+    sink.pushTopLevel( { address: 0, length: 1, typeID: 5, expressID: 99 } )
+
+    expect( [ ...index.expressIDsOfTypeIDs( 5 ) ] ).toEqual( [ 99 ] )
+    expect( index.generation ).toBe( 2 )
+  } )
+
   test( 'complex records are attributed to their mapped classes', () => {
     // Built by hand rather than parsed: the point is precisely the shape the
     // record event cannot express — one address, typeID 0, several mapped

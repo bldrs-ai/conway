@@ -279,10 +279,15 @@ async function runDerivedChild( phase, filePath ) {
 
   source.close()
 
+  // generationMs is time spent INSIDE buildIndexStreaming (the rebuilds run
+  // synchronously in the record hook), so parseMs already contains it — only
+  // the separately timed final build is additive.
   console.log( JSON.stringify( {
     phase,
-    ms: parseMs + generationMs + finalIndexMs,
+    ms: parseMs + finalIndexMs,
     parseMs,
+    inParseIndexMs: generationMs,
+    finalIndexMs,
     indexMs: generationMs + finalIndexMs,
     generations,
     types: [ ...lastIndex.types() ].length,

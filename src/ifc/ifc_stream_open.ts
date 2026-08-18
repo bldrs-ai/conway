@@ -1,5 +1,5 @@
 import { ByteSource, ReadableByteSource, StoreByteSource } from '../step/parsing/byte_source'
-import { StepIndexColumns } from '../step/parsing/columnar_index'
+import { ColumnarIndexSink, StepIndexColumns } from '../step/parsing/columnar_index'
 import { RecordEventHandler } from '../step/parsing/record_event'
 import {
   buildColumnarIndexStreaming,
@@ -11,7 +11,9 @@ import {
   StepExternalByteStore,
   WindowedStepBufferProvider,
 } from '../step/step_buffer_provider'
-import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
+import EntityTypesIfc, { EntityTypesIfcCount } from './ifc4_gen/entity_types_ifc.gen'
+import { PrefixTypeIndex } from '../step/parsing/prefix_type_index'
+import { StepTypeIndexer } from '../step/indexing/step_type_indexer'
 import IfcStepModel from './ifc_step_model'
 import IfcStepParser from './ifc_step_parser'
 
@@ -39,6 +41,14 @@ export interface StreamedIfcOpenOptions {
    * on the record bytes it hands over.
    */
   onRecordIndexed?: RecordEventHandler<EntityTypesIfc>
+
+  /**
+   * Caller-owned index sink. Pass one to hold the columns *while* the parse
+   * runs — the seam a prefix-derived consumer reads
+   * ({@link ifcPrefixTypeIndex}). Without it the columns only exist once the
+   * open returns, which is too late for anything mid-parse.
+   */
+  indexSink?: ColumnarIndexSink<EntityTypesIfc>
 }
 
 
@@ -109,7 +119,8 @@ export function openStreamedIfcModel(
       source,
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
-      options?.onRecordIndexed )
+      options?.onRecordIndexed,
+      options?.indexSink )
 
   if ( result !== ParseResult.COMPLETE ) {
     return { model: void 0, result, header, columns, stats }
@@ -125,6 +136,37 @@ export function openStreamedIfcModel(
     columns,
     stats,
   }
+}
+
+
+/**
+ * A type index over the IFC records parsed so far, paired with the schema's
+ * production indexer — the composed form of {@link PrefixTypeIndex} that a
+ * caller needs, since the index is only useful mid-parse if it reads the same
+ * live sink the open is filling.
+ *
+ * ```ts
+ * const indexSink = new ColumnarIndexSink<EntityTypesIfc>()
+ * const types = ifcPrefixTypeIndex( indexSink )
+ * const open = await openStreamedIfcModelAsync( source, store, {
+ *   indexSink,
+ *   onProgress: () => reveal( types.expressIDsOfTypes( IfcProduct ) ),
+ * } )
+ * ```
+ *
+ * @param sink The sink passed to the open as `indexSink`.
+ * @param options Rebuild pacing (see {@link PrefixTypeIndex}).
+ * @param options.growthFactor Record growth before a query rebuilds.
+ * @param options.minimumRecords Count below which pacing is skipped.
+ * @return {PrefixTypeIndex<EntityTypesIfc>} The index over that sink.
+ */
+export function ifcPrefixTypeIndex(
+    sink: ColumnarIndexSink<EntityTypesIfc>,
+    options?: { growthFactor?: number, minimumRecords?: number } ):
+    PrefixTypeIndex<EntityTypesIfc> {
+
+  return new PrefixTypeIndex<EntityTypesIfc>(
+      sink, new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ), options )
 }
 
 
@@ -158,7 +200,9 @@ export async function openStreamedIfcModelAsync(
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
       options?.onRecordIndexed,
-      options?.onProgress )
+      options?.onProgress,
+      void 0,
+      options?.indexSink )
 
   if ( result !== ParseResult.COMPLETE ) {
     return { model: void 0, result, header, columns, stats }

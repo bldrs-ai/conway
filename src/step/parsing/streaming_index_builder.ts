@@ -394,16 +394,19 @@ export interface StreamingColumnarIndexResult<TypeIDType> {
  * @param parser The STEP parser (typed to the schema).
  * @param pool Target window size in bytes.
  * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
+ * @param sink Optional caller-owned sink. Pass one to hold the *live* columns
+ * while the parse runs — that is what a prefix-derived consumer
+ * ({@link import('./prefix_type_index').PrefixTypeIndex}) reads. Omit it and
+ * the columns only exist once this returns.
  * @return {StreamingColumnarIndexResult} Columns, header, result, stats.
  */
 export function buildColumnarIndexStreaming<TypeIDType extends number>(
     source: ByteSource,
     parser: StepParser<TypeIDType>,
     pool: number,
-    onRecordIndexed?: RecordEventHandler<TypeIDType> ):
+    onRecordIndexed?: RecordEventHandler<TypeIDType>,
+    sink: ColumnarIndexSink<TypeIDType> = new ColumnarIndexSink<TypeIDType>() ):
     StreamingColumnarIndexResult<TypeIDType> {
-
-  const sink = new ColumnarIndexSink<TypeIDType>()
 
   const { header, result, stats } =
     buildIndexStreaming( source, parser, pool, onRecordIndexed, sink )
@@ -424,6 +427,9 @@ export function buildColumnarIndexStreaming<TypeIDType extends number>(
  * @param onRecordIndexed Optional per-record event (see buildIndexStreaming).
  * @param onProgress Optional absolute byte-cursor progress callback.
  * @param yieldIntervalMs Minimum ms between event-loop yields.
+ * @param sink Optional caller-owned sink (see
+ * {@link buildColumnarIndexStreaming}) — the seam for reading the columns
+ * while the parse is still running.
  * @return {Promise<StreamingColumnarIndexResult>} Columns, header, result,
  * stats.
  */
@@ -433,10 +439,9 @@ export async function buildColumnarIndexStreamingAsync<TypeIDType extends number
     pool: number,
     onRecordIndexed?: RecordEventHandler<TypeIDType>,
     onProgress?: ( absoluteByteCursor: number ) => unknown,
-    yieldIntervalMs?: number ):
+    yieldIntervalMs?: number,
+    sink: ColumnarIndexSink<TypeIDType> = new ColumnarIndexSink<TypeIDType>() ):
     Promise<StreamingColumnarIndexResult<TypeIDType>> {
-
-  const sink = new ColumnarIndexSink<TypeIDType>()
 
   const { header, result, stats } = await buildIndexStreamingAsync(
       source, parser, pool, onRecordIndexed, sink, onProgress, yieldIntervalMs )
