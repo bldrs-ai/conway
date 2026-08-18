@@ -534,10 +534,59 @@ Deliberately small first step; each has a measurable exit.
   pump's O(batches × scene) re-walk. The 840 MB row is the measured
   upper bound of the win, not a shippable configuration.
 
-  Scope moved out by measurement rather than by preference: the
-  **geometry worker pool** (browser MT nets zero-to-negative —
-  Share#1610, conway-geom#148; "extraction off the main thread" survives
-  as a separate UI-responsiveness item), **demand ordering** (Share-side
+  **The worker pool is a live lever, and the MT result never tested it
+  (measured 2026-08-18).** Two different parallelism axes were being
+  conflated. What conway-geom#148 measured is *pthreads inside one wasm
+  instance*: the C++ pool splits work **within** a product's
+  tessellation, on a **shared** heap, fed by **one serial JS driver** —
+  and its three suspects (main-thread `Atomics.wait` busy-spin,
+  `memory.grow` stalling every thread, pool oversubscription) are all
+  properties of that shape. What this doc's "Parallelism / multi-core"
+  section actually specifies is the other axis: N workers, each with its
+  **own** instance and heap and driver, pulling **disjoint products**.
+  Every one of those suspects is structurally absent there — separate
+  linear memories, and a worker may legally block — and #148's own
+  listed fix is "run extraction in a dedicated worker".
+
+  Measured by sharding the product worklist round-robin across N
+  independent processes (own instance, own heap, own driver — a worker
+  minus the postMessage plumbing), single-threaded wasm so one worker
+  means one core, on a 4-core box:
+
+  | model | N=1 | N=2 | N=3 | N=4 | total CPU N=1 → N=4 |
+  | --- | --- | --- | --- | --- | --- |
+  | **PSB.ifc** geometry | 23.1 s | 12.6 s (1.84×) | 9.8 s (2.37×) | **8.9 s (2.59×)** | 30.5 s → 35.2 s (+15 %) |
+  | **MB-Khaya.ifc** geometry | 4.0 s | 2.9 s (1.37×) | 2.8 s (1.41×) | 2.9 s (1.39×) | 7.2 s → 10.1 s (+40 %) |
+
+  **PSB scales.** 2.59× on 4 cores is 86 % of what this box can give:
+  one extraction process already burns 1.32 cores (main thread plus V8
+  GC/JIT — the allocation-heavy JS driver's own tax), which caps the
+  achievable speedup at 4 / 1.32 ≈ 3.0×. Per-worker wasm peak also falls
+  with N (1283 → 364 MB), so sharding is a **memory** lever as well as a
+  time one, and it composes with the bounded pump rather than competing.
+
+  **MB-Khaya does not**, and the reason is visible in the CPU column
+  rather than the wall-clock: sharding it costs +40 % total CPU against
+  PSB's +15 %. A small model that reuses representations heavily has
+  products that are *not* independent — round-robin scatters shared
+  geometry across every shard and each one re-extracts it. Contiguous
+  sharding, which preserves file-order locality, duplicates less and
+  scales better (1.52× vs 1.39×). So the partition wants **affinity by
+  shared asset**, not by product — the same definition/occurrence
+  boundary `SharedAssetPool` draws for retention. One boundary, two
+  payoffs.
+
+  Two caveats the numbers carry. Each shard pays its own parse here, so
+  only the geometry phase is comparable; the shipping design parses once
+  and hands workers transferable index columns, which is exactly what
+  M2/M7's columns-from-birth index made possible (before it, sharding
+  meant shipping an object-form index or letting the event stream
+  schedule). Even so, end-to-end wall with four redundant parses still
+  falls 39.4 s → 26.9 s. And a 4-core box cannot answer how this scales
+  at 8–16 cores; it can only show the axis is real.
+
+  Scope moved out by measurement rather than by preference:
+  **demand ordering** (Share-side
   priority into a queue that exists; does not gate the memory result),
   and the **per-product native free blocker** (`IfcModelGeometry.delete`
   already frees the native, and freeing into the general heap returns ~0
