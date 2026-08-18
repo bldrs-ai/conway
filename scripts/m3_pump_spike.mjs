@@ -1352,6 +1352,22 @@ function main() {
     // WHOLE model while the output labelled them shards and computed a
     // speedup from them. Default to the deferred extract phase, and refuse the
     // non-deferred one rather than publishing invalid scaling.
+    // `--repeats` is consumed by the per-model path only; the sweep ignores
+    // it entirely, so `--shards 4 --repeats 3` ran ONE sweep and published a
+    // single-sample timing to a caller who asked for three. Rejected rather
+    // than honoured, for the same reason as a phase list: the sweep is a
+    // different experiment shape (N shard counts, each a concurrent fan-out),
+    // and repeating it is a change to what is measured rather than a knob —
+    // the round-16 cross-repeat agreement check is defined over per-phase
+    // child rows, which a sweep does not produce.
+    if ( repeats !== 1 ) {
+      console.error(
+          `--repeats is not supported with --shards (got ${repeats}); the sweep ` +
+          'measures scaling across shard counts, not repeated samples. Run the ' +
+          'sweep more than once if you need repeats.' )
+      process.exit( 2 )
+    }
+
     // One sweep runs one phase, and taking `phases[0]` from a list meant
     // `--phases pump,bounded` ran `pump` and reported it while the caller
     // believed they had also measured the release. Reject rather than pick:
