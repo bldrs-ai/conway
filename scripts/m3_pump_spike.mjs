@@ -87,7 +87,6 @@ class Digest {
 
   constructor() {
     this.placedHash = 0
-    this.payloadHash = 0
     this.instances = 0
     this.payloads = 0
     this.payloadBytes = 0
@@ -133,16 +132,38 @@ class Digest {
   }
 
   /**
-   * Hash one geometry payload (once per geometry, as it is emitted).
+   * Record one geometry payload. The bytes are NOT hashed here: hashing every
+   * float inside the copy loop would put the cost of the check inside the
+   * measurement the check exists to validate. The payloads are retained
+   * anyway (a consumer keeps them), so the exact digest is computed once at
+   * report time by {@link exactPayloadDigest}.
    *
-   * @param geometryExpressID The geometry's express ID.
    * @param vertices Interleaved position+normal floats.
    * @param indices Triangle indices.
    */
-  payload( geometryExpressID, vertices, indices ) {
-
+  payload( vertices, indices ) {
     ++this.payloads
     this.payloadBytes += vertices.byteLength + indices.byteLength
+  }
+}
+
+/**
+ * Hash EVERY delivered byte, commutatively across payloads.
+ *
+ * Sampling (this previously hashed one element in 97) cannot support a
+ * "same payloads" claim: a tessellation change touching only unsampled
+ * vertices, with the array lengths preserved, produces an identical digest.
+ * Run at report time, after the timers have stopped, so exactness costs the
+ * measurement nothing.
+ *
+ * @param payloads `{geometryExpressID, vertices, indices}` in emission order.
+ * @return {number} Order-independent digest.
+ */
+function exactPayloadDigest( payloads ) {
+
+  let total = 0
+
+  for ( const { geometryExpressID, vertices, indices } of payloads ) {
 
     let hash = 2166136261
 
@@ -150,20 +171,18 @@ class Digest {
     hash = mix32( hash, vertices.length )
     hash = mix32( hash, indices.length )
 
-    // Sample rather than hash every float: a full hash of PSB's ~2 GB of
-    // vertex data would dominate the measurement it is there to validate.
-    // Stride 97 (prime, > any vertex stride) so the sample can't alias to
-    // one component of the interleaved layout.
-    for ( let i = 0; i < vertices.length; i += 97 ) {
+    for ( let i = 0; i < vertices.length; ++i ) {
       hash = mix32( hash, quantise( vertices[ i ] ) )
     }
 
-    for ( let i = 0; i < indices.length; i += 97 ) {
+    for ( let i = 0; i < indices.length; ++i ) {
       hash = mix32( hash, indices[ i ] )
     }
 
-    this.payloadHash = ( this.payloadHash + hash ) >>> 0
+    total = ( total + hash ) >>> 0
   }
+
+  return total
 }
 
 /**
@@ -248,8 +267,8 @@ function copyBatchPayloads( api, modelID, meshes, seen, digest, retained ) {
       const indices = api.GetIndexArray(
           geometry.GetIndexData(), geometry.GetIndexDataSize() )
 
-      digest.payload( placed.geometryExpressID, vertices, indices )
-      retained.push( vertices, indices )
+      digest.payload( vertices, indices )
+      retained.push( { geometryExpressID: placed.geometryExpressID, vertices, indices } )
       copied.push( placed.geometryExpressID )
 
       // `GetGeometry` hands back `geometryObject.clone()` — an OWNING native
@@ -621,7 +640,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
     payloadMB: digest.payloadBytes / BYTES_PER_MB,
     retainedPayloadBuffers: retainedPayloads.length,
     placedDigest: digest.placedHash,
-    payloadDigest: digest.payloadHash,
+    payloadDigest: exactPayloadDigest( retainedPayloads ),
   } ) )
 }
 
@@ -811,6 +830,46 @@ function verdicts( byPhase, phases, allowEmpty ) {
 
   const out = []
   const classic = byPhase.classic
+  const copyout = byPhase.copyout
+  const bounded = byPhase.bounded
+
+  // FIRST, and independent of `classic`: the comparison that isolates release.
+  // `copyout` and `bounded` run identical extraction and differ only in that
+  // `bounded` releases, so this is the check the release claim rests on — and
+  // `--phases copyout,bounded`, the most direct release-isolation run, has no
+  // `classic` row at all.
+  if ( copyout?.instances !== void 0 && bounded?.instances !== void 0 ) {
+
+    // A release that THREW on every geometry also produces bounded ≡ copyout,
+    // and would read as "release changed nothing" while nothing was released.
+    // `releaseGeometries` swallows per-geometry failures so one bad free can't
+    // end a run, so the count is the only evidence release actually happened.
+    if ( bounded.released !== bounded.payloads ) {
+      out.push( {
+        text: `FAIL  bounded released ${bounded.released} of ${bounded.payloads} ` +
+          'copied geometries — the release path is failing, so any agreement ' +
+          'with copyout is vacuous',
+        failed: true,
+      } )
+    }
+
+    const same = bounded.placedDigest === copyout.placedDigest &&
+      bounded.payloadDigest === copyout.payloadDigest
+
+    out.push( same ?
+      {
+        text: `OK    bounded identical to copyout — release changed nothing ` +
+          `(${bounded.instances} instances, ${bounded.released} released)`,
+        failed: false,
+      } :
+      {
+        text: 'FAIL  bounded differs from copyout: release alone changed delivery ' +
+          `(${bounded.instances} instances vs ${copyout.instances}, ` +
+          `placed ${bounded.placedDigest} vs ${copyout.placedDigest}, ` +
+          `payload ${bounded.payloadDigest} vs ${copyout.payloadDigest})`,
+        failed: true,
+      } )
+  }
 
   if ( classic?.instances === void 0 || !phases.includes( 'classic' ) ) {
     return out
@@ -869,39 +928,8 @@ function verdicts( byPhase, phases, allowEmpty ) {
       { text: `FAIL  ${line}`, failed: true } )
   }
 
-  // The comparison the release policy actually rests on. `bounded` and
-  // `copyout` run the SAME deferred extraction and differ only in that
-  // `bounded` releases; so if they agree, release changed nothing, and if they
-  // disagree, release alone changed delivery. Checking each against `classic`
-  // cannot see this: where the deferred path itself diverges (supercap.step,
-  // #532) both rows differ from classic and a release regression would hide
-  // inside a DIFF that is already expected.
-  const copyout = byPhase.copyout
-  const bounded = byPhase.bounded
-
-  if ( copyout?.instances !== void 0 && bounded?.instances !== void 0 ) {
-
-    const same = bounded.placedDigest === copyout.placedDigest &&
-      bounded.payloadDigest === copyout.payloadDigest
-
-    out.push( same ?
-      {
-        text: `OK    bounded identical to copyout — release changed nothing ` +
-          `(${bounded.instances} instances)`,
-        failed: false,
-      } :
-      {
-        text: 'FAIL  bounded differs from copyout: release alone changed delivery ' +
-          `(${bounded.instances} instances vs ${copyout.instances}, ` +
-          `placed ${bounded.placedDigest} vs ${copyout.placedDigest}, ` +
-          `payload ${bounded.payloadDigest} vs ${copyout.payloadDigest})`,
-        failed: true,
-      } )
-  }
-
   return out
 }
-
 
 /**
  * Sweep phases over models, or shard counts when `--shards` is given.

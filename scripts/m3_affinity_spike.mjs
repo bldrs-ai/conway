@@ -125,6 +125,7 @@ async function capture( filePath, outPath ) {
   }
 
   const rows = []
+  let failures = 0
   const t0 = performance.now()
 
   for ( let index = 0; index < products.length; ++index ) {
@@ -134,11 +135,17 @@ async function capture( filePath, outPath ) {
 
     const start = performance.now()
 
+    let failed = false
+
     try {
       extraction.extractProductGeometryByLocalID( products[ index ] )
     } catch {
-      // A product that cannot extract still occupies a partition slot; record
-      // it with whatever it touched rather than dropping it from the graph.
+      // Record the failure rather than writing an ordinary-looking row: the
+      // row's assets and duration describe a partial extraction, and a
+      // partition scored or emitted from it would be built on work the real
+      // pump never completed. `--simulate` and `--emit` refuse such a graph.
+      failed = true
+      ++failures
     }
 
     rows.push( {
@@ -146,6 +153,7 @@ async function capture( filePath, outPath ) {
       ms: performance.now() - start,
       created: [ ...created ],
       reused: [ ...reused ],
+      ...( failed ? { failed: true } : {} ),
     } )
 
     if ( index > 0 && index % 20000 === 0 ) {
@@ -167,15 +175,43 @@ async function capture( filePath, outPath ) {
     model: filePath,
     products: rows.length,
     assets: assets.size,
+    failures,
     totalMs,
     rows,
   } )}\n` )
+
+  if ( failures > 0 ) {
+    console.error(
+        `${failures} of ${rows.length} products failed to extract — this graph ` +
+        'describes work the real pump would not have completed, and --simulate ' +
+        'and --emit will refuse it' )
+  }
 
   console.log(
       `${path.basename( filePath )}: ${rows.length} products, ` +
       `${assets.size} assets, ${( totalMs / 1000 ).toFixed( 1 )}s extract → ${outPath}` )
 
   api.CloseModel( modelID )
+}
+
+/**
+ * Reject a capture that contains failed extractions.
+ *
+ * A partition scored or emitted from partial rows would be a partition of
+ * work that never happened, and the numbers would look ordinary.
+ *
+ * @param graph The captured graph.
+ */
+function rejectIfIncomplete( graph ) {
+
+  const failed = graph.failures ?? graph.rows.filter( ( row ) => row.failed ).length
+
+  if ( failed > 0 ) {
+    console.error(
+        `capture has ${failed} failed extraction(s) of ${graph.rows.length} ` +
+        'products; re-capture before simulating or emitting from it' )
+    process.exit( 1 )
+  }
 }
 
 /**
@@ -347,6 +383,9 @@ function evaluate( rows, shardOf, count, cost ) {
 function simulate( graphPath, counts ) {
 
   const graph = JSON.parse( fs.readFileSync( graphPath, 'utf8' ) )
+
+  rejectIfIncomplete( graph )
+
   const rows = graph.rows
   const cost = costModel( rows )
 
@@ -413,6 +452,9 @@ function simulate( graphPath, counts ) {
 function emitAssignment( graphPath, count, strategy, outPath ) {
 
   const graph = JSON.parse( fs.readFileSync( graphPath, 'utf8' ) )
+
+  rejectIfIncomplete( graph )
+
   const rows = graph.rows
   const shardOf = assign( strategy, rows, count, costModel( rows ) )
   const shards = Array.from( { length: count }, () => [] )
