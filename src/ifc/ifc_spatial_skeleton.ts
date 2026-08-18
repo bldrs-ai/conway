@@ -134,7 +134,7 @@ export class IfcSpatialSkeleton {
   }
 
   /**
-   * Record a named object definition. Bound for direct use as a subscription.   *
+   * Record a named object definition. Bound for direct use as a subscription.
    *
    * @param localID The record's dense local ID.
    * @param expressID The record's express ID.
@@ -190,7 +190,7 @@ export class IfcSpatialSkeleton {
 
   /**
    * Record the containment edges of one relationship. Bound for direct use as
-   * a subscription.   *
+   * a subscription.
    *
    * @param localID The record's dense local ID.
    * @param expressID The record's express ID.
