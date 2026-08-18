@@ -149,8 +149,14 @@ class Digest {
     // preserving counts and transforms would otherwise pass this check.
     const colour = placedGeometry.color
 
+    // Colour is recorded RAW. `quantise` exists for the placement transform,
+    // where the two paths compose f64 matrices in a different order so the last
+    // bits legitimately differ. Colour has no such phase-dependent arithmetic —
+    // it is carried through unchanged — so rounding it to 1/1024 only creates a
+    // bucket in which a real appearance change (1 vs 1.0001) compares equal,
+    // against a check that claims delivery is invariant.
     record.push( colour === void 0 ? 'nocolour' :
-      [ colour.x, colour.y, colour.z, colour.w ].map( quantise ).join( ',' ) )
+      [ colour.x, colour.y, colour.z, colour.w ].join( ',' ) )
     record.push( ( placedGeometry.occurrencePath ?? [] ).join( '.' ) )
 
     this.placedRecords.push( record.join( '|' ) )
@@ -1094,7 +1100,14 @@ function verdicts( byPhase, phases, allowEmpty ) {
   // extractor makes natives that are never delivered (void/opening geometry
   // consumed by a boolean), so `released === payloads` can hold while the heap
   // still carries everything built but not handed out.
-  if ( ( bounded?.instances ?? 0 ) > 0 &&
+  // Gated on the row having COMPLETED, not on it having delivered instances.
+  // A model can create native intermediates without emitting any placed
+  // instance — an `IfcOpeningElement`-only fixture reports `assetsCreated = 1`
+  // with `instances = 0` — and an instance-count gate skipped the release check
+  // exactly there, so a bounded run could retain the created native and still
+  // exit 0. What must hold is "everything created was released", which is
+  // meaningful whenever the phase ran at all.
+  if ( bounded !== void 0 && bounded.failed === void 0 &&
        bounded.released !== bounded.assetsCreated ) {
     out.push( {
       text: `FAIL  bounded released ${bounded.released} of ` +
@@ -1226,6 +1239,16 @@ function main() {
     process.exit( 2 )
   }
   const repeats = Number( flag( '--repeats', 1 ) )
+
+  // Fractional values were silently rounded up by the loop (`1.5` ran two
+  // children) — a sampling configuration different from the one reported.
+  // `Infinity` spawned children forever, and zero/negative/non-numeric left
+  // `runs` empty so the later `reduce` threw with nothing useful to say.
+  if ( !Number.isInteger( repeats ) || repeats < 1 ) {
+    console.error(
+        `--repeats must be a positive integer; got ${flag( '--repeats' )}` )
+    process.exit( 2 )
+  }
   const jsonOut = flag( '--json' )
   const only = flag( '--phases' )
   const phases = only !== void 0 ? only.split( ',' ) : PHASES
