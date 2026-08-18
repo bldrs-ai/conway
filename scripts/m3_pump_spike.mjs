@@ -403,6 +403,15 @@ function releaseGeometries( api, modelID, localIDs, geometryExpressIDs ) {
 
   let freed = 0
 
+  // Created natives the ENGINE already reclaimed before we got here.
+  // `IfcGeometryExtraction` calls `model.geometry.deleteTemporaries()`
+  // (ifc_geometry_extraction.ts:7690), which drops temporary meshes AND
+  // deletes their natives, so a localID counted at `add` can legitimately be
+  // gone by release time. Tracked separately rather than ignored: what must
+  // hold is that nothing created is still resident, and "we freed it" and
+  // "the engine freed it" are both ways of satisfying that.
+  let alreadyGone = 0
+
   // Release by LOCAL ID, taken from the cache's own `add` calls, rather than by
   // the express IDs of the payloads this batch copied. The two sets are not the
   // same: the extractor creates natives that are never delivered as a payload —
@@ -414,8 +423,23 @@ function releaseGeometries( api, modelID, localIDs, geometryExpressIDs ) {
   for ( const localID of localIDs ) {
 
     try {
+
+      // `IfcModelGeometry.delete` returns void and silently returns when the
+      // local ID is absent, so "the call did not throw" is not evidence that
+      // anything was freed — and `released === assetsCreated` was resting on
+      // exactly that. Require the observable transition instead: present
+      // before, absent after. A no-op now fails to increment, which is what
+      // makes the release counters mean what the verdicts claim they mean.
+      if ( model.geometry.getByLocalID( localID ) === void 0 ) {
+        ++alreadyGone
+        continue
+      }
+
       model.geometry.delete( localID )
-      ++freed
+
+      if ( model.geometry.getByLocalID( localID ) === void 0 ) {
+        ++freed
+      }
     } catch {
       // Never let a free break the measurement — a phase that cannot free
       // is a finding, not a crash.
@@ -428,7 +452,7 @@ function releaseGeometries( api, modelID, localIDs, geometryExpressIDs ) {
     geometryMap?.delete( expressID )
   }
 
-  return freed
+  return { freed, alreadyGone }
 }
 
 /**
@@ -700,6 +724,11 @@ async function runChild( phase, filePath, batchSize, shard ) {
   const wasmAfterOpenMB = wasmPeakMB
   let batches = 0
   let released = 0
+
+  // Created natives the engine reclaimed itself (temporaries). Reported so the
+  // release invariant can be "nothing created is still resident" rather than
+  // "we personally freed everything", which is false by construction.
+  let selfFreed = 0
   let copyMs = 0
 
   const cpuBefore = process.cpuUsage()
@@ -744,7 +773,12 @@ async function runChild( phase, filePath, batchSize, shard ) {
         copyMs += performance.now() - tCopy
 
         if ( phase === 'bounded' ) {
-          released += releaseGeometries( api, modelID, createdThisBatch, copied )
+
+          const release =
+            releaseGeometries( api, modelID, createdThisBatch, copied )
+
+          released += release.freed
+          selfFreed += release.alreadyGone
           createdThisBatch.clear()
         }
       }
@@ -770,6 +804,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
     totalMs: openMs + geometryMs,
     batches,
     released,
+    selfFreed,
     assetsCreated,
     assetsReplaced,
     shard,
@@ -939,6 +974,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
         assetsCreated: total( 'assetsCreated' ),
         assetsReplaced: total( 'assetsReplaced' ),
         released: total( 'released' ),
+        selfFreed: total( 'selfFreed' ),
         payloads: total( 'payloads' ),
         wasmPeakMBSum: results.reduce( ( sum, r ) => sum + r.wasmPeakMB, 0 ),
         wasmPeakMBMax: Math.max( ...results.map( ( r ) => r.wasmPeakMB ) ),
@@ -981,13 +1017,16 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
       // aggregate count is the only evidence. Summed across shards, because
       // each child releases only what it created.
       if ( phase === 'bounded' &&
-           byCount[ count ].released !== byCount[ count ].assetsCreated ) {
+           byCount[ count ].released + byCount[ count ].selfFreed !==
+             byCount[ count ].assetsCreated ) {
         throw new Error(
-            `${name}: at N=${count}, bounded released ` +
-            `${byCount[ count ].released} of ${byCount[ count ].assetsCreated} ` +
-            'geometries the extractor created — the release policy that defines ' +
-            'this phase did not run, so its timing and memory rows describe ' +
-            'something else' )
+            `${name}: at N=${count}, bounded accounted for ` +
+            `${byCount[ count ].released + byCount[ count ].selfFreed} of ` +
+            `${byCount[ count ].assetsCreated} geometries the extractor ` +
+            `created (${byCount[ count ].released} released, ` +
+            `${byCount[ count ].selfFreed} reclaimed by the engine) — the ` +
+            'release policy that defines this phase did not run, so its ' +
+            'timing and memory rows describe something else' )
       }
 
       const base = byCount[ counts[ 0 ] ]
@@ -1039,10 +1078,18 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
  *    unmodified whole-model walk.)
  *  - `copyout` must match `classic` exactly. It changes only WHEN extraction
  *    happens, so any divergence is a real regression.
- *  - `bounded` divergence is reported as a labelled DIFF rather than a
- *    failure: retain-nothing release is expected to duplicate instances on a
- *    model with shared geometry (`supercap.step`), and that finding is the
- *    reason the phase exists.
+ *  - `bounded` must match `copyout` exactly. Those two run identical
+ *    extraction and differ ONLY in that `bounded` releases, so any divergence
+ *    means release changed what a consumer receives — a failure, not a
+ *    finding. Measured: identical on all 12 corpus models.
+ *  - `bounded` vs `classic` is reported without failing, because on a model
+ *    where the deferred path itself diverges the `copyout`-vs-`classic`
+ *    comparison already reports it, and failing twice for one cause would
+ *    read as two. (`supercap.step` is that model, and the cause is the
+ *    deferred pump — #532 — not release. An earlier version of this comment
+ *    said retain-nothing release was expected to duplicate instances there;
+ *    that came from the payload-keyed release replaced in round 11.
+ *    Retracted.)
  *
  * @param byPhase Results keyed by phase.
  * @param phases The phases that ran.
@@ -1159,13 +1206,21 @@ function verdicts( byPhase, phases, allowEmpty ) {
   // exactly there, so a bounded run could retain the created native and still
   // exit 0. What must hold is "everything created was released", which is
   // meaningful whenever the phase ran at all.
+  // The invariant is "nothing the extractor created is still resident", which
+  // `released` alone cannot express: the engine reclaims its own temporaries
+  // via `deleteTemporaries`, so some created natives are legitimately gone
+  // before release runs (91 of 11 357 on MB-Khaya). Those count as accounted
+  // for, not as released. A native that is neither freed by us nor already
+  // gone is the actual leak, and only that fails.
   if ( bounded !== void 0 && bounded.failed === void 0 &&
-       bounded.released !== bounded.assetsCreated ) {
+       bounded.released + ( bounded.selfFreed ?? 0 ) !== bounded.assetsCreated ) {
     out.push( {
-      text: `FAIL  bounded released ${bounded.released} of ` +
+      text: `FAIL  bounded accounted for ` +
+        `${bounded.released + ( bounded.selfFreed ?? 0 )} of ` +
         `${bounded.assetsCreated} geometries the extractor created ` +
-        `(${bounded.payloads} of them delivered as payloads) — the heap still ` +
-        'holds what was built but never handed out, so this run is not bounded',
+        `(${bounded.released} released here, ${bounded.selfFreed ?? 0} already ` +
+        'freed by the engine) — the remainder is still resident, so this run ' +
+        'is not bounded',
       failed: true,
     } )
   }
@@ -1458,6 +1513,7 @@ function main() {
         run.instances !== reference.instances ||
         run.payloads !== reference.payloads ||
         run.released !== reference.released ||
+        run.selfFreed !== reference.selfFreed ||
         run.assetsCreated !== reference.assetsCreated ||
         run.placedDigest !== reference.placedDigest ||
         run.payloadDigest !== reference.payloadDigest )

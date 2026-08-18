@@ -207,18 +207,24 @@ async function capture( filePath, outPath ) {
     rows,
   } )}\n` )
 
-  if ( failures > 0 ) {
-    console.error(
-        `${failures} of ${rows.length} products failed to extract — this graph ` +
-        'describes work the real pump would not have completed, and --simulate ' +
-        'and --emit will refuse it' )
-  }
-
   console.log(
       `${path.basename( filePath )}: ${rows.length} products, ` +
       `${assets.size} assets, ${( totalMs / 1000 ).toFixed( 1 )}s extract → ${outPath}` )
 
   api.CloseModel( modelID )
+
+  // Non-zero, not just a printed warning. `--simulate` and `--emit` refuse an
+  // incomplete graph, but that only helps if one of them runs next; a capture
+  // step in a script or CI job reads the exit status, and a graph the script
+  // itself says cannot represent completed work must not be reported as a
+  // successful capture.
+  if ( failures > 0 ) {
+    console.error(
+        `${failures} of ${rows.length} products failed to extract — this graph ` +
+        'describes work the real pump would not have completed, and --simulate ' +
+        'and --emit will refuse it' )
+    process.exit( 1 )
+  }
 }
 
 /**
