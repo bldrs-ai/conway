@@ -397,116 +397,6 @@ function wasmMB( api, wasmHeapByteLength ) {
  * @param geometryExpressIDs Geometry express IDs to free.
  * @return {number} How many were actually freed.
  */
-/**
- * Approximate the wasm-side bytes an asset occupies.
- *
- * Payload only — vertex and index data, 4 bytes per element. The
- * allocator's real footprint is larger (per-object overhead,
- * fragmentation, and the intermediate buffers a boolean leaves behind),
- * and none of that is reachable from here, so a budget expressed in these
- * units is a proxy that runs proportional to the real thing rather than
- * equal to it. Read wasmPeakMB for what a given budget actually bought.
- *
- * @param mesh The canonical mesh being cached.
- * @return {number} Approximate bytes, or 0 when the geometry is not a
- * native buffer (a lazy thunk, a string, or an already-freed handle).
- */
-function assetBytes( mesh ) {
-
-  const geometry = mesh?.geometry
-
-  if ( typeof geometry?.GetVertexDataSize !== 'function' ) {
-    return 0
-  }
-
-  try {
-    // eslint-disable-next-line no-magic-numbers
-    return geometry.GetVertexDataSize() * 8 + geometry.GetIndexDataSize() * 4
-  } catch {
-    return 0
-  }
-}
-
-
-/**
- * Evict least-recently-used assets until live asset bytes fit a budget.
- *
- * The third release policy, and the one that needs neither a dependency
- * graph nor a dispatch-time key. `bounded` frees everything a batch
- * created, which is correct but rebuilds shared geometry a later product
- * still maps — 29 % of MB-Khaya's assets at batch 256, 79 % of D3D's at
- * batch 64. A budget frees only what does not fit, so an asset a later
- * product needs survives whenever there is room for it, and the batch
- * size stops being the thing that decides residency.
- *
- * Budgeted on LIVE ASSET BYTES, not on `wasmHeapByteLength`. The wasm heap
- * is grow-only: it never shrinks when an asset is freed, so a controller
- * driven by it would evict once, observe no change, and evict everything.
- * What a budget can actually control is the live set, and the heap
- * high-water follows it.
- *
- * Sizes come from the native geometry, matching `IfcModelGeometry
- * .calculateGeometrySize`'s own convention: vertex elements are doubles
- * (8 bytes), index elements are 4. An earlier version of this counted
- * vertices at 4 bytes, which made every budget figure mean about half
- * what it said. That is the payload, not the
- * allocator's true footprint — the real cost carries per-object overhead
- * and fragmentation this cannot see — so treat the budget as a knob whose
- * units are approximately-payload-bytes, and read `wasmPeakMB` for what
- * it actually bought.
- *
- * @param api The IfcAPI instance.
- * @param modelID The open model.
- * @param resident LRU state: `{ order: Map<key, bytes>, live: number }`,
- * where `order`'s insertion sequence IS the recency order (a Map re-set
- * moves nothing, so touches delete-then-set).
- * @param budgetBytes Live-byte ceiling.
- * @return {{evicted: number, freedBytes: number}} What this pass reclaimed.
- */
-function evictToBudget( api, modelID, resident, budgetBytes ) {
-
-  const model = api.getPassthrough( modelID )?.model?.[ 0 ]
-
-  if ( model === void 0 ) {
-    return { evicted: 0, freedBytes: 0 }
-  }
-
-  let evicted = 0
-  let freedBytes = 0
-
-  for ( const [ key, bytes ] of resident.order ) {
-
-    if ( resident.live <= budgetBytes ) {
-      break
-    }
-
-    const [ storeName, localIDText ] = key.split( ':' )
-    const store = model[ storeName ]
-    const localID = Number( localIDText )
-
-    resident.order.delete( key )
-    resident.live -= bytes
-
-    if ( store === void 0 || store.getByLocalID( localID ) === void 0 ) {
-      // Already gone (the extractor reclaims its own temporaries), so it
-      // no longer occupies the budget either — dropping it from the
-      // accounting above is the whole fix.
-      continue
-    }
-
-    try {
-      store.delete( localID )
-      ++evicted
-      freedBytes += bytes
-    } catch {
-      /* A store that cannot free is a finding, not a crash. */
-    }
-  }
-
-  return { evicted, freedBytes }
-}
-
-
 function releaseGeometries( api, modelID, created, geometryExpressIDs ) {
 
   const passthrough = api.getPassthrough( modelID )
@@ -802,6 +692,17 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
     return
   }
 
+  // The `lru` phase measures the ENGINE's policy, not a simulation of it.
+  // An earlier version evicted from the harness with its own per-key
+  // accounting while the production residency stayed disabled — which
+  // reproduced, exactly, the two bugs the engine fixed: it freed a native
+  // the first time any of its aliases was evicted, leaving the others
+  // dangling, and charged that native's bytes once per alias. Numbers taken
+  // that way are the withdrawn ones. Drive the real thing instead.
+  if ( phase === 'lru' ) {
+    api.SetGeometryBudget( modelID, budgetMB )
+  }
+
   const sharded = deferred && shard !== void 0 ?
     shardWorklists( api, modelID, shard, filePath ) : void 0
 
@@ -829,9 +730,6 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
   // rather than the copied payload IDs — see releaseGeometries. Kept per store
   // because local IDs are store-relative.
   const createdThisBatch = { geometry: new Set(), voidGeometry: new Set() }
-
-  // LRU state for the `lru` phase: insertion order IS recency order.
-  const resident = { order: new Map(), live: 0 }
 
   if ( deferred ) {
 
@@ -862,43 +760,7 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
 
         createdThisBatch[ store ].add( mesh.localID )
 
-        if ( phase === 'lru' ) {
-
-          const key = `${store}:${mesh.localID}`
-          const previous = resident.order.get( key )
-
-          if ( previous !== void 0 ) {
-            resident.live -= previous
-            resident.order.delete( key )
-          }
-
-          const bytes = assetBytes( mesh )
-
-          resident.order.set( key, bytes )
-          resident.live += bytes
-        }
-
         return originalAdd( mesh )
-      }
-
-      // Recency, not just residency: a getByLocalID is the engine reaching
-      // for an asset, which is exactly the signal LRU needs and the signal
-      // a creation-keyed policy like `bounded` throws away. Re-inserting
-      // moves the key to the end of the Map's insertion order.
-      if ( phase === 'lru' ) {
-
-        cache.getByLocalID = ( localID ) => {
-
-          const key = `${store}:${localID}`
-          const bytes = resident.order.get( key )
-
-          if ( bytes !== void 0 ) {
-            resident.order.delete( key )
-            resident.order.set( key, bytes )
-          }
-
-          return originalGet( localID )
-        }
       }
     }
   }
@@ -908,11 +770,6 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
   let batches = 0
   let released = 0
 
-  // Live-byte ceiling for the `lru` phase, and the high-water the policy
-  // actually held — reported next to wasmPeakMB so the proxy can be
-  // checked against the real heap rather than trusted.
-  const budgetBytes = budgetMB * BYTES_PER_MB
-  let liveHighWaterMB = 0
 
   // Created natives the engine reclaimed itself (temporaries). Reported so the
   // release invariant can be "nothing created is still resident" rather than
@@ -974,11 +831,8 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
 
         if ( phase === 'lru' ) {
 
-          const evicted = evictToBudget( api, modelID, resident, budgetBytes )
-
-          released += evicted.evicted
-          liveHighWaterMB =
-            Math.max( liveHighWaterMB, resident.live / BYTES_PER_MB )
+          // Nothing to do: the ENGINE evicts, on its own refcounted
+          // accounting. See the SetGeometryBudget call at open.
           createdThisBatch.geometry.clear()
           createdThisBatch.voidGeometry.clear()
         }
@@ -1019,6 +873,13 @@ async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
     payloads: digest.payloads,
     payloadMB: digest.payloadBytes / BYTES_PER_MB,
     retainedPayloadBuffers: retainedPayloads.length,
+
+    // What the ENGINE says it is holding, for the `lru` phase — read back
+    // rather than tracked here, so the row cannot disagree with the policy
+    // that produced it.
+    liveMB: phase === 'lru' ?
+      ( api.SetGeometryBudget( modelID, budgetMB )?.liveBytes ?? 0 ) / BYTES_PER_MB :
+      0,
     placedDigest: exactPlacedDigest( digest.placedRecords ),
     payloadDigest: exactPayloadDigest( retainedPayloads ),
   } ) )

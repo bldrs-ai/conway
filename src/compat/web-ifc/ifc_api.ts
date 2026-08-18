@@ -93,9 +93,14 @@ export interface Loadersettings {
    * asserts) and unsafe for one that keeps geometry IDs and fetches them
    * lazily later.
    *
-   * Budgeted on payload bytes — vertex and index buffers, the same
-   * accounting as `calculateGeometrySize`. The wasm heap runs at a multiple
-   * of this and cannot be used as the signal itself: it is grow-only, so it
+   * Budgeted on each native's `getAllocationSize` — vertices, triangles,
+   * edges, the triangle-edge structures and the float vertex mirror. That is
+   * deliberately NOT the vertex+index payload `calculateGeometrySize`
+   * reports: the extra structures are real wasm bytes, so a ceiling that
+   * ignored them would bind later than its number suggests.
+   *
+   * The wasm heap still runs at a multiple of the budget (3-4x on the models
+   * measured) and cannot be used as the signal itself: it is grow-only, so it
    * never falls when a native is freed. Expect the heap high-water to track
    * the budget proportionally rather than equal it.
    */
@@ -937,7 +942,8 @@ export class IfcAPI {
    * payloads at delivery and unsafe for one that fetches lazily later.
    *
    * @param modelID handle retrieved by an open
-   * @param megabytes the ceiling, in MB of payload bytes
+   * @param megabytes the ceiling, in MB of native allocation (see
+   * GEOMETRY_BUDGET_MB for what that counts)
    * @return {object|undefined} the budget now in force and the bytes
    * currently accounted resident, or undefined for unknown models and for
    * passthroughs with no evictable geometry store (AP214/STEP).

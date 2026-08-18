@@ -2,11 +2,10 @@ import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { IfcModelGeometry } from './ifc_model_geometry'
 
 
-/* Bytes per element of the two native buffers, matching
- * IfcModelGeometry.calculateGeometrySize: vertices are doubles, indices are
- * 32-bit. Getting this wrong does not break the policy — it is proportional
- * either way — but it makes the configured budget mean something other than
- * what it says. */
+/* Fallback sizing only, for a native that cannot report its own allocation:
+ * vertices are doubles, indices are 32-bit, matching
+ * IfcModelGeometry.calculateGeometrySize. The primary measure is
+ * getAllocationSize — see meshBytes. */
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_VERTEX_ELEMENT = 8
 // eslint-disable-next-line no-magic-numbers
@@ -55,6 +54,14 @@ const BYTES_PER_MIB = 1024 * 1024
  * multiple this cannot see (an 8 MB live set sat under an 85 MB heap on
  * MB-Khaya, the difference being allocator overhead, fragmentation, and the
  * intermediate buffers a boolean leaves behind).
+ *
+ * **What a byte is here.** The native's own `getAllocationSize` — vertices,
+ * triangles, edges, the triangle-edge structures and the float vertex
+ * mirror — not the vertex+index payload `calculateGeometrySize` reports.
+ * The two differ materially, so the unit is named rather than implied: an
+ * 8 MB budget is 8 MB of native allocation, and binds sooner than 8 MB of
+ * payload would. Allocation is the honest unit for a memory ceiling; the
+ * payload figure only counts what a consumer would copy out.
  *
  * **The contract this changes.** An evicted asset is gone from
  * `GetGeometry`/`getByLocalID` until something re-extracts it. That is safe
@@ -402,8 +409,9 @@ function meshBytes( mesh: CanonicalMesh ): number {
   try {
 
     // The native's own accounting where it offers one — it knows about the
-    // buffers this cannot see. Falls back to the payload estimate, which is
-    // what calculateGeometrySize uses.
+    // edge and triangle-edge structures and the float mirror that the
+    // payload estimate cannot see, and those are real wasm bytes. Falls
+    // back to the payload estimate only for a native without it.
     const allocated = mesh.geometry.getAllocationSize?.()
 
     if ( typeof allocated === 'number' && allocated > 0 ) {
