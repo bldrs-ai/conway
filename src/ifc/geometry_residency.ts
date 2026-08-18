@@ -76,6 +76,11 @@ export class GeometryResidency {
 
   private liveBytes_ = 0
 
+  /* Whether anything has ever been evicted from this model. Sticky: once a
+   * native has been freed, the accumulated per-entity meshes may reference
+   * geometry that is gone, and no later change of budget puts it back. */
+  private everEvicted_ = false
+
   /* Insertion order IS recency order: re-setting an existing key does not
    * move it, so a touch deletes before setting. */
   private readonly order_ = new Map< number, { store: IfcModelGeometry, native: object } >()
@@ -126,6 +131,13 @@ export class GeometryResidency {
    */
   public get residentCount(): number {
     return this.order_.size
+  }
+
+  /**
+   * @return {boolean} Whether this model has ever had geometry evicted.
+   */
+  public get everEvicted(): boolean {
+    return this.everEvicted_
   }
 
   /**
@@ -361,6 +373,7 @@ export class GeometryResidency {
 
       entry.store.delete( localID )
 
+      this.everEvicted_ = true
       ++evicted
       freedBytes += bytes
     }

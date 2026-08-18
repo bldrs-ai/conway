@@ -2560,30 +2560,58 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       const residency = this.model[0].geometryResidency
       const suspendedBudgetBytes = residency.budgetBytes
 
+      // Refused rather than served wrong. Suspending stops future eviction,
+      // but nothing recovers what a caller's own budgeted batches already
+      // freed: the accumulated per-entity meshes reference natives that are
+      // gone, and re-extracting the owning products restores geometry under
+      // NEW local IDs, so the old meshes still fail to resolve while a fresh
+      // capture emits the same instances a second time (21 placements
+      // against classic's 16 on the shared-representation fixture, one
+      // duplicate per rehydrated product). Serving either of those quietly
+      // is worse than saying no.
+      if (residency.everEvicted) {
+
+        throw new Error(
+            'StreamAllMeshes cannot serve a model that has evicted geometry ' +
+            'under a memory budget: the accumulated meshes reference natives ' +
+            'that were freed. Pump ExtractGeometryBatch and copy each batch ' +
+            'at delivery, or open the model without GEOMETRY_BUDGET_MB.')
+      }
+
       residency.setBudgetBytes(0)
 
-      const noCallback = void 0
+      try {
 
-      while (this.extractGeometryBatch(
-          DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
-        // draining
-      }
-      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+        const noCallback = void 0
 
-      const [, , meshMap, , vectorFlatMesh] = this.model
+        while (this.extractGeometryBatch(
+            DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
+          // draining
+        }
+        this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
 
-      meshMap.forEach((mesh) => {
-        vectorFlatMesh.push(mesh[1])
-        meshCallback(mesh[1])
-      })
+        const [, , meshMap, , vectorFlatMesh] = this.model
 
-      if (Number.isFinite(suspendedBudgetBytes)) {
+        meshMap.forEach((mesh) => {
+          vectorFlatMesh.push(mesh[1])
+          meshCallback(mesh[1])
+        })
 
-        // Restoring seeds from everything now resident; the pass then trims
-        // to the ceiling, so the model is back under budget by the time this
-        // returns rather than at some later pump that may never come.
-        residency.setBudgetBytes(suspendedBudgetBytes)
-        residency.evictToBudget()
+      } finally {
+
+        // In a finally because meshCallback is the CALLER's code: if it
+        // throws — including from a geometry read — an early return would
+        // leave the model permanently unbudgeted, holding the unbudgeted
+        // drain's whole resident set, with nothing to signal it.
+        if (Number.isFinite(suspendedBudgetBytes)) {
+
+          // Restoring seeds from everything now resident; the pass then
+          // trims to the ceiling, so the model is back under budget by the
+          // time this returns rather than at some later pump that may never
+          // come.
+          residency.setBudgetBytes(suspendedBudgetBytes)
+          residency.evictToBudget()
+        }
       }
 
       return
