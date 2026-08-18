@@ -63,6 +63,33 @@ const PHASES = [ 'classic', 'pump', 'copyout', 'bounded' ]
  */
 const EXTRACT_ONLY_PHASES = new Set( [ 'extractonly' ] )
 
+/**
+ * How `--shards` splits the worklists. Anything else is a caller error, not a
+ * silent default: an unrecognised mode used to fall through to round-robin
+ * while every printed line and the JSON kept the label the caller typed, so
+ * `--shard-mode contigous` produced a plausible "contiguous" table measuring
+ * round-robin. Same failure the `--strategy` validation fixes in the affinity
+ * harness.
+ */
+const SHARD_MODES = [ 'roundrobin', 'contiguous' ]
+
+/**
+ * Validate a shard mode, or exit.
+ *
+ * @param mode The caller's `--shard-mode`.
+ * @return {string} The same mode, once known to be supported.
+ */
+function shardMode( mode ) {
+
+  if ( !SHARD_MODES.includes( mode ) ) {
+    console.error(
+        `unknown shard mode '${mode}' — expected one of ${SHARD_MODES.join( ', ' )}` )
+    process.exit( 2 )
+  }
+
+  return mode
+}
+
 const DEFAULT_BATCH = 64
 const BYTES_PER_MB = 1024 * 1024
 
@@ -817,6 +844,22 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
       const results = await spawnShards( phase, model, batchSize, count, shardMode )
       const wallMs = performance.now() - t0
 
+      // Shard sweeps never reach `verdicts()`, so nothing else here can refuse
+      // a child that didn't run. A child whose open failed reports
+      // `{failed: 'open'}` with no `geometryMs`, and the aggregation below
+      // happily turns that into `Math.max( ..., undefined )` → `geometry=NaNs`
+      // beside a zero asset count, and exits 0. A sweep that measured nothing
+      // must not print a scaling table.
+      const broken = results.filter(
+          ( result ) => result.failed !== void 0 || result.geometryMs === void 0 )
+
+      if ( broken.length > 0 ) {
+        throw new Error(
+            `${name}: ${broken.length} of ${count} shard child(ren) did not ` +
+            `complete (${broken.map( ( r ) => r.failed ?? 'no timing' ).join( ', ' )}) ` +
+            '— refusing to report a sweep over work that did not happen' )
+      }
+
       const total = ( key ) => results.reduce( ( sum, r ) => sum + ( r[ key ] ?? 0 ), 0 )
       const slowestGeometryMs = Math.max( ...results.map( ( r ) => r.geometryMs ) )
 
@@ -919,12 +962,27 @@ function verdicts( byPhase, phases, allowEmpty ) {
 
     // `pump` deliberately passes no meshCallback, so it delivers no instances
     // by construction; its purpose is the wasm/timing columns. Judging it on
-    // instance count would fail every healthy run.
+    // instance count would fail every healthy run — but "no instances by
+    // construction" is not "no evidence required". A regression in the demand
+    // worklist or in `ExtractGeometryBatch` that made the pump extract nothing
+    // leaves `failed` undefined and every count at zero, and a timing probe
+    // that never fired would report a healthy-looking run.
+    //
+    // `assetsCreated` is the evidence: the child wraps `geometry.add`, so a
+    // non-zero count means tessellation actually produced assets. Sharded runs
+    // are exempt because a shard can legitimately own no products.
     if ( EXTRACT_ONLY_PHASES.has( phase ) || phase === 'pump' ) {
 
       if ( row.failed !== void 0 ) {
         out.push( {
           text: `FAIL  ${phase} did not complete (${row.failed})`,
+          failed: true,
+        } )
+      } else if ( row.shard === void 0 && !allowEmpty && ( row.assetsCreated ?? 0 ) === 0 ) {
+        out.push( {
+          text: `FAIL  ${phase} created 0 geometry assets on a model not ` +
+            'declared geometry-free — the extraction never fired, so its ' +
+            'timing and memory columns measure nothing',
           failed: true,
         } )
       }
@@ -1135,7 +1193,7 @@ function main() {
     }
 
     return runShardSweep( models.map( ( entry ) => entry.path ), shardPhase,
-        batchSize, counts, jsonOut, flag( '--shard-mode', 'roundrobin' ) )
+        batchSize, counts, jsonOut, shardMode( flag( '--shard-mode', 'roundrobin' ) ) )
   }
 
   for ( const { path: model, allowEmpty } of models ) {

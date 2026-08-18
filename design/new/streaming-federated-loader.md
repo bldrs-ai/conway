@@ -509,7 +509,10 @@ Deliberately small first step; each has a measurable exit.
   stable and reproduce.
 
   Identical placement and payload digests across `classic`, `copyout`
-  and `bounded`. Four readings:
+  and `bounded` **on PSB, the model this table measures** — corpus-wide
+  the deferred phases match `classic` on 11 of 12 models and each other
+  on all 12; see the smoke-corpus paragraph below for the
+  `supercap.step` exception. Four readings:
 
   1. **The geometry residency is the entire wasm heap.** The deferred
      open reaches end-of-parse at **16 MB** of wasm; classic is already
