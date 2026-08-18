@@ -394,10 +394,11 @@ function localIDOf( key: number ): number {
 
 
 /**
- * Approximate the native bytes an asset holds.
+ * The native bytes an asset holds.
  *
  * @param mesh The mesh.
- * @return {number} Payload bytes, or 0 for anything that is not a native
+ * @return {number} Native allocation bytes where the geometry reports them,
+ * the vertex+index payload otherwise, or 0 for anything that is not a native
  * buffer geometry (a lazy thunk, a string, an already-freed handle).
  */
 function meshBytes( mesh: CanonicalMesh ): number {

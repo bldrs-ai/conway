@@ -677,9 +677,13 @@ Deliberately small first step; each has a measurable exit.
   53.1 s unbudgeted, live held at 64.0 MB, 2.8 % more assets rebuilt.
   **This is the memory gate, met on the production path at no wall-clock
   cost** — and note the heap runs 3-4x the live budget, so a 512 MB heap
-  target means a budget nearer 128-192 MB. The gap is allocator overhead,
-  fragmentation, and the intermediate buffers a boolean leaves behind,
-  none of which the payload accounting can see.
+  target means a budget nearer 128-192 MB. The budget's unit is each
+  native's `getAllocationSize` (vertices, triangles, edges, the
+  triangle-edge structures, the float vertex mirror), NOT the vertex+index
+  payload `calculateGeometrySize` reports; the remaining 3-4x is allocator
+  overhead and fragmentation. An earlier version of this section
+  attributed the whole gap to overhead, which double-counted structures
+  the budget already charges for.
 
   **Why LRU rather than release-on-emit, decided by measurement.** The
   harness gained an `lru` phase beside `bounded` so the two could be run
