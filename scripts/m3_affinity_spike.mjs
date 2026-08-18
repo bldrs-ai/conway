@@ -60,7 +60,7 @@ import { performance } from 'node:perf_hooks'
 
 const DEFAULT_SHARD_COUNTS = [ 2, 3, 4, 8 ]
 
-const STRATEGIES = [ 'roundrobin', 'contiguous', 'affinity', 'claim' ]
+const STRATEGIES = [ 'roundrobin', 'contiguous', 'affinity', 'claim', 'dispatch' ]
 
 /**
  * Validate shard counts, or exit.
@@ -180,6 +180,11 @@ async function capture( filePath, outPath ) {
       ms: performance.now() - start,
       created: [ ...created ],
       reused: [ ...reused ],
+
+      // What a LIVE scheduler could know before extracting — see
+      // dispatchKeyOf. Captured beside the oracle's created/reused sets
+      // precisely so the two can be compared.
+      dispatchKey: dispatchKeyOf( passthrough.model[ 0 ], products[ index ] ),
       ...( failed ? { failed: true } : {} ),
     } )
 
@@ -303,6 +308,68 @@ function costModel( rows ) {
 }
 
 /**
+ * The identity a live scheduler could use to place a product, read from the
+ * index WITHOUT extracting it.
+ *
+ * This is the question the affinity result leaves open. `affinity` and
+ * `claim` place products using the assets they turn out to touch — knowledge
+ * that exists only after extraction, i.e. an oracle. A real worker decides
+ * before it starts, so its key must come from attributes:
+ *
+ *   IfcProduct.Representation -> IfcProductDefinitionShape.Representations[]
+ *     -> IfcShapeRepresentation.Items[] -> IfcMappedItem.MappingSource
+ *       -> IfcRepresentationMap
+ *
+ * Pointer-chasing over columns M2 already builds, so it costs nothing next
+ * to tessellation. What it CANNOT see is sharing below the representation:
+ * a profile swept along different directrices, boolean operands, void
+ * geometry. Whether that matters is exactly what comparing this key against
+ * the oracle measures.
+ *
+ * Falls back to the shape representation's own local ID, then to the product
+ * itself (unique, so placement degrades to positional for that product).
+ *
+ * @param model The IFC model.
+ * @param productLocalID The product.
+ * @return {number} A placement key.
+ */
+function dispatchKeyOf( model, productLocalID ) {
+
+  try {
+
+    const product = model.getElementByLocalID( productLocalID )
+    const definition = product?.Representation
+
+    if ( definition === void 0 || definition === null ) {
+      return productLocalID
+    }
+
+    for ( const representation of definition.Representations ?? [] ) {
+
+      for ( const item of representation?.Items ?? [] ) {
+
+        const source = item?.MappingSource
+
+        if ( source?.localID !== void 0 ) {
+          return source.localID
+        }
+      }
+
+      if ( representation?.localID !== void 0 ) {
+        return representation.localID
+      }
+    }
+
+    return productLocalID
+
+  } catch {
+
+    return productLocalID
+  }
+}
+
+
+/**
  * Assign products to shards by strategy.
  *
  * @param strategy One of STRATEGIES.
@@ -336,6 +403,12 @@ function assign( strategy, rows, count, cost ) {
   // shared definition is exactly the case that matters, and voting on the
   // created set alone ignores the only edge that can duplicate work.
   const assetsOf = ( row ) => [ ...row.created, ...row.reused ]
+
+  if ( strategy === 'dispatch' ) {
+    // The online candidate: placement from the pre-extraction key alone. Its
+    // distance from affinity/claim IS the cost of not having an oracle.
+    return rows.map( ( row, index ) => ( row.dispatchKey ?? index ) % count )
+  }
 
   if ( strategy === 'affinity' ) {
     // Primary asset = the lowest-numbered asset the product touches: a stable
