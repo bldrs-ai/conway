@@ -1213,6 +1213,24 @@ function main() {
   const phases = only !== void 0 ? only.split( ',' ) : PHASES
   const shards = flag( '--shards' )
 
+  // Validate every requested phase centrally, so a typo cannot reach either
+  // exit path. `runChild` derives its behaviour by exclusion — `deferred =
+  // phase !== 'classic'`, `copies = phase === 'copyout' || 'bounded'` — so an
+  // unrecognised name silently becomes a deferred, non-copying hybrid that
+  // resembles no supported phase, runs, and publishes a timing row. That is
+  // the mislabelled-experiment failure again (`--shard-mode contigous`,
+  // `--strategy cliam`), and the shard path reached it after rejecting only
+  // `classic`.
+  const unknownPhases = phases.filter(
+      ( phase ) => !PHASES.includes( phase ) && !EXTRACT_ONLY_PHASES.has( phase ) )
+
+  if ( unknownPhases.length > 0 ) {
+    console.error(
+        `unknown phase(s) ${unknownPhases.join( ', ' )} — expected one of ` +
+        `${[ ...PHASES, ...EXTRACT_ONLY_PHASES ].join( ', ' )}` )
+    process.exit( 2 )
+  }
+
   if ( modelsFile === void 0 ) {
     console.error(
         'usage: m3_pump_spike.mjs --models <file with one path per line> ' +
@@ -1237,10 +1255,11 @@ function main() {
 
   if ( shards !== void 0 ) {
 
-    // `classic` opens without DEFER_GEOMETRY, so the pump worklists never
+    // The phase name is already known-valid (checked above). What remains is
+    // that `classic` opens without DEFER_GEOMETRY, so the pump worklists never
     // exist and the shard filter never runs: every child would extract the
     // WHOLE model while the output labelled them shards and computed a
-    // speedup from them. Default to the deferred extract phase, and refuse a
+    // speedup from them. Default to the deferred extract phase, and refuse the
     // non-deferred one rather than publishing invalid scaling.
     const shardPhase = only !== void 0 ? phases[ 0 ] : 'extractonly'
 
