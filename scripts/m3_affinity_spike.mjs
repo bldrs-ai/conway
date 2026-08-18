@@ -198,8 +198,12 @@ async function capture( filePath, outPath ) {
     }
   }
 
+  // Absolute, resolved against the CAPTURE's cwd — the sweep's shard children
+  // run from the repo root, so a relative path recorded here would later
+  // resolve against a different directory and the guard would reject the model
+  // for not being itself (or, worse, accept a different file of the same name).
   fs.writeFileSync( outPath, `${JSON.stringify( {
-    model: filePath,
+    model: path.resolve( filePath ),
     products: rows.length,
     assets: assets.size,
     failures,
@@ -546,10 +550,28 @@ async function main() {
   const KNOWN_FLAGS = new Set( [
     '--capture', '--emit', '--simulate', '--out', '--strategy', '--shards' ] )
 
-  for ( const token of argv ) {
-    if ( token.startsWith( '--' ) && !KNOWN_FLAGS.has( token ) ) {
+  // Every flag here takes an operand. A recognised flag with none —
+  // `--emit graph.json --shards` — leaves the flag reading `undefined` and
+  // falls through to its default, which is the same silent
+  // wrong-configuration failure as an ignored flag, one step later.
+  for ( let index = 0; index < argv.length; ++index ) {
+
+    const token = argv[ index ]
+
+    if ( !token.startsWith( '--' ) ) {
+      continue
+    }
+
+    if ( !KNOWN_FLAGS.has( token ) ) {
       console.error(
           `unknown flag ${token} (known: ${[ ...KNOWN_FLAGS ].join( ', ' )})` )
+      process.exit( 2 )
+    }
+
+    const value = argv[ index + 1 ]
+
+    if ( value === void 0 || value.startsWith( '--' ) ) {
+      console.error( `${token} requires a value` )
       process.exit( 2 )
     }
   }

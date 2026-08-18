@@ -1369,10 +1369,30 @@ function main() {
     '--models', '--batch', '--repeats', '--json', '--phases', '--shards',
     '--shard-mode' ] )
 
-  for ( const token of argv ) {
-    if ( token.startsWith( '--' ) && !KNOWN_FLAGS.has( token ) ) {
+  // Every flag here takes an operand, and a flag whose operand is missing is
+  // worse than an unknown one: `--phases pump --shards` leaves `--shards`
+  // undefined, so the sweep silently takes the unsharded path and exits 0
+  // having measured a configuration the caller did not ask for. A value that
+  // itself looks like a flag is the same mistake with the operand eaten by the
+  // next token.
+  for ( let index = 0; index < argv.length; ++index ) {
+
+    const token = argv[ index ]
+
+    if ( !token.startsWith( '--' ) ) {
+      continue
+    }
+
+    if ( !KNOWN_FLAGS.has( token ) ) {
       console.error(
           `unknown flag ${token} (known: ${[ ...KNOWN_FLAGS ].join( ', ' )})` )
+      process.exit( 2 )
+    }
+
+    const value = argv[ index + 1 ]
+
+    if ( value === void 0 || value.startsWith( '--' ) ) {
+      console.error( `${token} requires a value` )
       process.exit( 2 )
     }
   }
