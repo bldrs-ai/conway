@@ -40,9 +40,11 @@ export class IfcModelGeometry implements ModelGeometry {
       if ( value.temporary ) {
 
         this.meshes_.delete( key )
-        this.model.geometryResidency.noteRemoved( this, key )
 
-        if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+        const isLastReference =
+          this.model.geometryResidency.releaseReference( this, key )
+
+        if (value.type === CanonicalMeshType.BUFFER_GEOMETRY && isLastReference) {
 
           value.geometry.delete()
         }
@@ -89,9 +91,17 @@ export class IfcModelGeometry implements ModelGeometry {
     if (value !== void 0) {
 
       this.meshes_.delete(localID)
-      this.model.geometryResidency.noteRemoved( this, localID )
 
-      if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
+      // Freeing the native is the residency's call, not ours: a native can be
+      // cached under more than one local ID (6 % of D3D's), and freeing one
+      // entry's copy leaves its siblings pointing at freed memory with no
+      // diagnostic until something reads them. releaseReference returns true
+      // for the last reference — and unconditionally when no budget is
+      // configured, which is exactly the behaviour this had before.
+      const isLastReference =
+        this.model.geometryResidency.releaseReference( this, localID )
+
+      if (value.type === CanonicalMeshType.BUFFER_GEOMETRY && isLastReference) {
 
         value.geometry.delete()
       }
