@@ -936,6 +936,20 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
           return syntaxError()
         }
 
+        pushEntry(
+            {
+              address: startElement,
+              length: input.address - startElement,
+              typeID: 0 as TypeIDType, // external mapping special case.
+              expressID: expressID,
+              inlineEntities: inlineElements,
+              multiMapping: multiElements
+            })
+
+        // AFTER the entry is indexed, so a consumer that queries the index
+        // from this event sees the record the event is about — the columns
+        // are the source of truth a prefix-derived consumer reads. Still
+        // before the window can slide, so the record bytes stay valid.
         {
           const recordLen = input.address - startElement
           onRecordIndexed?.(
@@ -947,16 +961,6 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
               recordLen )
         }
         ++topLevelCount
-
-        pushEntry(
-            {
-              address: startElement,
-              length: input.address - startElement,
-              typeID: 0 as TypeIDType, // external mapping special case.
-              expressID: expressID,
-              inlineEntities: inlineElements,
-              multiMapping: multiElements
-            })
 
         multiElements = void 0
         continue
@@ -1115,6 +1119,16 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
         return syntaxError()
       }
 
+      pushEntry(
+          {
+            address: startElement,
+            length: input.address - startElement,
+            typeID: foundItem,
+            expressID: expressID,
+            inlineEntities: inlineElements,
+          })
+
+      // See the external-mapping site above: indexed first, then announced.
       {
         const recordLen = input.address - startElement
         onRecordIndexed?.(
@@ -1126,15 +1140,6 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
             recordLen )
       }
       ++topLevelCount
-
-      pushEntry(
-          {
-            address: startElement,
-            length: input.address - startElement,
-            typeID: foundItem,
-            expressID: expressID,
-            inlineEntities: inlineElements,
-          })
     }
 
     // Got here without finding an end of the section.

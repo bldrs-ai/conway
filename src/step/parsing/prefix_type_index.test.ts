@@ -16,7 +16,13 @@ import { beforeAll, describe, expect, test } from '@jest/globals'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import EntityTypesIfc, { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
-import { IfcRoot, IfcProduct, IfcWall, IfcPropertySet } from '../../ifc/ifc4_gen'
+import {
+  IfcRoot,
+  IfcProduct,
+  IfcProject,
+  IfcWall,
+  IfcPropertySet,
+} from '../../ifc/ifc4_gen'
 import { StepTypeIndexer } from '../indexing/step_type_indexer'
 import { BufferByteSource } from './byte_source'
 import { ColumnarIndexSink } from './columnar_index'
@@ -135,6 +141,45 @@ describe( 'PrefixTypeIndex', () => {
     expect( counts[ 0 ] ).toBeLessThanOrEqual( counts[ 1 ] )
     expect( counts[ 1 ] ).toBeLessThanOrEqual( final )
     expect( final ).toBe( resident )
+  } )
+
+  test( 'a record is indexed before its own event fires', () => {
+    // The event announces record N; a consumer querying the index from that
+    // event must see N, not 0..N-1. One record makes the off-by-one total:
+    // the only record in the file would be invisible to the only event.
+    const source = [
+      'ISO-10303-21;',
+      'HEADER;',
+      'FILE_DESCRIPTION((\'\'),\'\');',
+      'FILE_NAME(\'\',\'\',(\'\'),(\'\'),\'\',\'\',\'\');',
+      'FILE_SCHEMA((\'IFC4\'));',
+      'ENDSEC;',
+      'DATA;',
+      '#1= IFCPROJECT(\'p\',$,\'Only Record\',$,$,$,$,$,$);',
+      'ENDSEC;',
+      'END-ISO-10303-21;',
+      '',
+    ].join( '\n' )
+
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const index = new PrefixTypeIndex<EntityTypesIfc>(
+        sink,
+        new StepTypeIndexer<EntityTypesIfc>( EntityTypesIfcCount ),
+        { growthFactor: 1.0, minimumRecords: 0 } )
+
+    const seenInEvent: number[][] = []
+
+    const result = buildIndexStreaming(
+        new BufferByteSource( new TextEncoder().encode( source ) ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        () => {
+          seenInEvent.push( [ ...index.expressIDsOfTypes( IfcProject as any ) ] )
+        },
+        sink )
+
+    expect( result.result ).toBe( ParseResult.COMPLETE )
+    expect( seenInEvent ).toEqual( [ [ 1 ] ] )
   } )
 
   test( 'a sink reset invalidates the view instead of pacing past it', () => {
