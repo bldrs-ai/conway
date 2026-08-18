@@ -1064,28 +1064,32 @@ function verdicts( byPhase, phases, allowEmpty ) {
     }
   }
 
+  // Release is a property of `bounded` ALONE, so it is checked whenever a
+  // completed `bounded` row exists — not from inside the cross-phase guard
+  // below. `--phases bounded` is a supported invocation and has no `copyout`
+  // row, so gating this on both phases meant the one filter that runs *only*
+  // the release phase was the one that never verified the release.
+  //
+  // `releaseGeometries` swallows per-geometry failures so a single bad free
+  // can't end a measurement; the count is therefore the only evidence release
+  // actually happened. Compared against CREATIONS, not copied payloads: the
+  // extractor makes natives that are never delivered (void/opening geometry
+  // consumed by a boolean), so `released === payloads` can hold while the heap
+  // still carries everything built but not handed out.
+  if ( ( bounded?.instances ?? 0 ) > 0 &&
+       bounded.released !== bounded.assetsCreated ) {
+    out.push( {
+      text: `FAIL  bounded released ${bounded.released} of ` +
+        `${bounded.assetsCreated} geometries the extractor created ` +
+        `(${bounded.payloads} of them delivered as payloads) — the heap still ` +
+        'holds what was built but never handed out, so this run is not bounded',
+      failed: true,
+    } )
+  }
+
   const bothDelivered = ( copyout?.instances ?? 0 ) > 0 && ( bounded?.instances ?? 0 ) > 0
 
   if ( bothDelivered ) {
-
-    // A release that THREW on every geometry also produces bounded ≡ copyout,
-    // and would read as "release changed nothing" while nothing was released.
-    // `releaseGeometries` swallows per-geometry failures so one bad free can't
-    // end a run, so the count is the only evidence release actually happened.
-    // Against CREATIONS, not copied payloads. The extractor makes natives that
-    // are never delivered (void/opening geometry consumed by a boolean), so
-    // `released === payloads` can hold while the heap still carries everything
-    // that was built but not handed out — the phase would look bounded and not
-    // be. `assetsCreated` comes from wrapping the cache's own `add`.
-    if ( bounded.released !== bounded.assetsCreated ) {
-      out.push( {
-        text: `FAIL  bounded released ${bounded.released} of ` +
-          `${bounded.assetsCreated} geometries the extractor created ` +
-          `(${bounded.payloads} of them delivered as payloads) — the heap still ` +
-          'holds what was built but never handed out, so this run is not bounded',
-        failed: true,
-      } )
-    }
 
     const same = bounded.placedDigest === copyout.placedDigest &&
       bounded.payloadDigest === copyout.payloadDigest
@@ -1192,6 +1196,17 @@ function main() {
 
   const modelsFile = flag( '--models' )
   const batchSize = Number( flag( '--batch', DEFAULT_BATCH ) )
+
+  // `pumpGeometryBatch_` clamps with `Math.max( batchSize, 1 )`, so `--batch 0`
+  // runs at 1 while every printed line and the JSON still say 0 — and the whole
+  // point of the batch sweep is that the label identifies the configuration
+  // that ran. A non-numeric value is worse: `NaN` never advances the demand
+  // cursor, so the child loops forever rather than failing.
+  if ( !Number.isInteger( batchSize ) || batchSize < 1 ) {
+    console.error(
+        `--batch must be a positive integer; got ${flag( '--batch' )}` )
+    process.exit( 2 )
+  }
   const repeats = Number( flag( '--repeats', 1 ) )
   const jsonOut = flag( '--json' )
   const only = flag( '--phases' )
