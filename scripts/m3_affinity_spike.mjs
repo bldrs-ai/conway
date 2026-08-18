@@ -538,6 +538,22 @@ async function main() {
     return index >= 0 ? argv[ index + 1 ] : fallback
   }
 
+  // Reject flags this script doesn't know rather than ignoring them. `--count 2`
+  // (the pump spike's spelling of `--shards`) silently emitted the default
+  // 4-way assignment, which the sweep then refused as "cut for 4, running 2" —
+  // a confusing failure two commands downstream of the typo. Same reason the
+  // pump spike validates its own flags before measuring anything.
+  const KNOWN_FLAGS = new Set( [
+    '--capture', '--emit', '--simulate', '--out', '--strategy', '--shards' ] )
+
+  for ( const token of argv ) {
+    if ( token.startsWith( '--' ) && !KNOWN_FLAGS.has( token ) ) {
+      console.error(
+          `unknown flag ${token} (known: ${[ ...KNOWN_FLAGS ].join( ', ' )})` )
+      process.exit( 2 )
+    }
+  }
+
   const captureModel = flag( '--capture' )
 
   if ( captureModel !== void 0 ) {
@@ -556,8 +572,10 @@ async function main() {
 
   if ( graphPath === void 0 ) {
     console.error(
-        'usage: m3_affinity_spike.mjs --capture <model> --out graph.json\n' +
-        '       m3_affinity_spike.mjs --simulate graph.json [--shards 2,3,4]' )
+        'usage: m3_affinity_spike.mjs --capture <model> [--out graph.json]\n' +
+        '       m3_affinity_spike.mjs --simulate graph.json [--shards 2,3,4]\n' +
+        '       m3_affinity_spike.mjs --emit graph.json [--strategy claim] ' +
+        '[--shards 4] [--out assignment.json]' )
     process.exit( 2 )
   }
 

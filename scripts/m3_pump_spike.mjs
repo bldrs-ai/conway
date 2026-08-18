@@ -528,7 +528,13 @@ function shardWorklists( api, modelID, shard, filePath ) {
     // filters to an arbitrary overlapping subset and drops the rest — which
     // still runs, and still prints a speedup. Refuse instead: a wrong number
     // is worse than no number.
-    if ( assignment.model !== void 0 && assignment.model !== filePath ) {
+    //
+    // Compare resolved paths, not the raw strings: the capture is normally
+    // taken with a relative path (`data/block.ifc`) while the sweep re-invokes
+    // its children with an absolute one, and a guard that rejects a model for
+    // being spelled differently than itself is a guard nobody can use.
+    if ( assignment.model !== void 0 &&
+         path.resolve( assignment.model ) !== path.resolve( filePath ) ) {
       throw new Error(
           `assignment was captured from ${assignment.model}, running ${filePath}` )
     }
@@ -1354,6 +1360,23 @@ function main() {
     return index >= 0 ? argv[ index + 1 ] : fallback
   }
 
+  // Reject flags this script doesn't know rather than ignoring them. A
+  // near-miss spelling (`--model` for `--models`, `--count` for `--shards`)
+  // otherwise falls through to the flag's default and measures a
+  // configuration nobody asked for — the same mislabelled-experiment failure
+  // the phase and shard-mode validation above exists to prevent, one level up.
+  const KNOWN_FLAGS = new Set( [
+    '--models', '--batch', '--repeats', '--json', '--phases', '--shards',
+    '--shard-mode' ] )
+
+  for ( const token of argv ) {
+    if ( token.startsWith( '--' ) && !KNOWN_FLAGS.has( token ) ) {
+      console.error(
+          `unknown flag ${token} (known: ${[ ...KNOWN_FLAGS ].join( ', ' )})` )
+      process.exit( 2 )
+    }
+  }
+
   const modelsFile = flag( '--models' )
   const batchSize = Number( flag( '--batch', DEFAULT_BATCH ) )
 
@@ -1404,7 +1427,8 @@ function main() {
   if ( modelsFile === void 0 ) {
     console.error(
         'usage: m3_pump_spike.mjs --models <file with one path per line> ' +
-        '[--batch N] [--repeats N] [--phases a,b] [--json out]' )
+        '[--batch N] [--repeats N] [--phases a,b] [--json out] ' +
+        '[--shards 1,2,4] [--shard-mode roundrobin|contiguous]' )
     process.exit( 2 )
   }
 
