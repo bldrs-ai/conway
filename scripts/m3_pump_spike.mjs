@@ -450,8 +450,19 @@ function shardWorklists( api, modelID, shard, filePath ) {
 
   const passthrough = api.getPassthrough( modelID )
 
+  // No demand worklists means nothing to partition — AP214/STEP passthroughs
+  // don't carry the seam. Returning silently left the filter unapplied, so
+  // every "shard" extracted the WHOLE model while the sweep labelled them
+  // shards and computed a speedup from them: `ap214-multibody-part.step`
+  // reported 7 instances at N=1 and 14 at N=2, which is two full extractions,
+  // not a partition. Refuse — a shard sweep of a format whose demand units
+  // aren't shardable is not a measurement.
   if ( passthrough?.ensureDemandWorklists_ === void 0 ) {
-    return void 0
+    throw new Error(
+        `${filePath}: this model's passthrough has no demand worklists ` +
+        '(AP214/STEP), so the shard filter cannot apply and every child would ' +
+        'extract the whole model — shard sweeps need an IFC model until ' +
+        'AP214 demand units are shardable' )
   }
 
   passthrough.ensureDemandWorklists_()
@@ -970,8 +981,20 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
       const base = byCount[ counts[ 0 ] ]
       const speedup = base.slowestGeometryMs / slowestGeometryMs
 
+      // Label by what RAN, not by what was requested. With `M3_ASSIGNMENT`
+      // set, `shardWorklists` ignores the positional mode entirely and applies
+      // the emitted partition, so printing the CLI mode attributed an affinity
+      // or claim measurement to `roundrobin`. The children report the strategy
+      // they actually used; take it from them.
+      const strategies = [ ...new Set(
+          results.map( ( r ) => r.sharded?.strategy ).filter(
+              ( strategy ) => strategy !== void 0 ) ) ]
+
+      byCount[ count ].strategy = strategies.length > 0 ?
+        strategies.join( '+' ) : shardMode
+
       console.log(
-          `${name} ${shardMode} shards=${count} geometry=${( slowestGeometryMs / 1000 ).toFixed( 1 )}s ` +
+          `${name} ${byCount[ count ].strategy} shards=${count} geometry=${( slowestGeometryMs / 1000 ).toFixed( 1 )}s ` +
           `(${speedup.toFixed( 2 )}x) per-shard=${byCount[ count ].geometryMsPerShard.join( '/' )} ` +
           `cpu=${( byCount[ count ].cpuMsTotal / 1000 ).toFixed( 1 )}s ` +
           `inst=${byCount[ count ].instances} assets=${byCount[ count ].assetsCreated} ` +
