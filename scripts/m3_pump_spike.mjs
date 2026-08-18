@@ -394,6 +394,26 @@ async function runChild( phase, filePath, batchSize, shard ) {
   const sharded = deferred && shard !== void 0 ?
     shardWorklists( api, modelID, shard ) : void 0
 
+  // Count what this process actually builds. Summed across shards against a
+  // single-shard run, this is the REAL duplication a partition causes —
+  // measured at the cache, not inferred from a captured graph.
+  let assetsCreated = 0
+
+  if ( deferred ) {
+
+    const geometry = api.getPassthrough( modelID )?.model?.[ 0 ]?.geometry
+
+    if ( geometry !== void 0 ) {
+
+      const originalAdd = geometry.add.bind( geometry )
+
+      geometry.add = ( mesh ) => {
+        ++assetsCreated
+        return originalAdd( mesh )
+      }
+    }
+  }
+
   let wasmPeakMB = wasmMB( api, wasmHeapByteLength )
   const wasmAfterOpenMB = wasmPeakMB
   let batches = 0
@@ -466,6 +486,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
     totalMs: openMs + geometryMs,
     batches,
     released,
+    assetsCreated,
     shard,
     sharded,
     wasmAfterOpenMB,
@@ -591,6 +612,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
         geometryMsPerShard: results.map( ( r ) => Math.round( r.geometryMs ) ),
         cpuMsTotal: total( 'geometryCpuMs' ),
         instances: total( 'instances' ),
+        assetsCreated: total( 'assetsCreated' ),
         payloads: total( 'payloads' ),
         wasmPeakMBSum: results.reduce( ( sum, r ) => sum + r.wasmPeakMB, 0 ),
         wasmPeakMBMax: Math.max( ...results.map( ( r ) => r.wasmPeakMB ) ),
@@ -603,7 +625,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
           `${name} ${shardMode} shards=${count} geometry=${( slowestGeometryMs / 1000 ).toFixed( 1 )}s ` +
           `(${speedup.toFixed( 2 )}x) per-shard=${byCount[ count ].geometryMsPerShard.join( '/' )} ` +
           `cpu=${( byCount[ count ].cpuMsTotal / 1000 ).toFixed( 1 )}s ` +
-          `inst=${byCount[ count ].instances} payloads=${byCount[ count ].payloads} ` +
+          `inst=${byCount[ count ].instances} assets=${byCount[ count ].assetsCreated} ` +
           `wasmMax=${byCount[ count ].wasmPeakMBMax.toFixed( 0 )}MB ` +
           `wasmSum=${byCount[ count ].wasmPeakMBSum.toFixed( 0 )}MB` )
     }
