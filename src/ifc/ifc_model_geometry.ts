@@ -40,6 +40,7 @@ export class IfcModelGeometry implements ModelGeometry {
       if ( value.temporary ) {
 
         this.meshes_.delete( key )
+        this.model.geometryResidency.noteRemoved( this, key )
 
         if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -73,6 +74,7 @@ export class IfcModelGeometry implements ModelGeometry {
     }
 
     this.meshes_.set(mesh.localID, mesh)
+    this.model.geometryResidency.noteAdded( this, mesh )
   }
 
   /**
@@ -87,6 +89,7 @@ export class IfcModelGeometry implements ModelGeometry {
     if (value !== void 0) {
 
       this.meshes_.delete(localID)
+      this.model.geometryResidency.noteRemoved( this, localID )
 
       if (value.type === CanonicalMeshType.BUFFER_GEOMETRY) {
 
@@ -102,6 +105,11 @@ export class IfcModelGeometry implements ModelGeometry {
    * @return {CanonicalMesh | undefined}
    */
   public getByLocalID(localID: number): CanonicalMesh | undefined {
+
+    // Recency for the residency budget. Gated inside noteUsed on whether a
+    // budget is configured at all, because this is the scene walk's hot path.
+    this.model.geometryResidency.noteUsed( this, localID )
+
     return this.meshes_.get(localID)
   }
 

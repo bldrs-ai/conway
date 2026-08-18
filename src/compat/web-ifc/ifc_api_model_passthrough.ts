@@ -22,6 +22,13 @@ export interface IfcApiModelPassthrough {
   /** Metres per model unit (see IfcAPI.GetLinearScalingFactor). */
   linearScalingFactor?: number
 
+  /**
+   * Set the resident-geometry budget in bytes (conway extension, M3) —
+   * see IfcAPI.SetGeometryBudget. Optional so non-IFC passthroughs, whose
+   * models have no evictable geometry store, simply do not offer it.
+   */
+  setGeometryBudget?( bytes: number ): { budgetBytes: number, liveBytes: number }
+
   extractGeometryBatch?(
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void): {extracted: number, remaining: number}

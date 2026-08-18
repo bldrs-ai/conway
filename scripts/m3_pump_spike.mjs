@@ -62,7 +62,13 @@ import * as path from 'node:path'
 import * as process from 'node:process'
 import { performance } from 'node:perf_hooks'
 
-const PHASES = [ 'classic', 'pump', 'copyout', 'bounded' ]
+const PHASES = [ 'classic', 'pump', 'copyout', 'bounded', 'lru' ]
+
+/* Default live-asset budget for the `lru` phase, in MB. Chosen as the
+ * milestone's own example figure ("steady-state wasm heap under a
+ * configured budget (e.g. 512 MB)") so the default run answers the
+ * milestone's question rather than one of my own. */
+const DEFAULT_BUDGET_MB = 512
 
 /**
  * Phases that never pass a meshCallback, so `streamNewMeshes_` — the
@@ -391,6 +397,116 @@ function wasmMB( api, wasmHeapByteLength ) {
  * @param geometryExpressIDs Geometry express IDs to free.
  * @return {number} How many were actually freed.
  */
+/**
+ * Approximate the wasm-side bytes an asset occupies.
+ *
+ * Payload only — vertex and index data, 4 bytes per element. The
+ * allocator's real footprint is larger (per-object overhead,
+ * fragmentation, and the intermediate buffers a boolean leaves behind),
+ * and none of that is reachable from here, so a budget expressed in these
+ * units is a proxy that runs proportional to the real thing rather than
+ * equal to it. Read wasmPeakMB for what a given budget actually bought.
+ *
+ * @param mesh The canonical mesh being cached.
+ * @return {number} Approximate bytes, or 0 when the geometry is not a
+ * native buffer (a lazy thunk, a string, or an already-freed handle).
+ */
+function assetBytes( mesh ) {
+
+  const geometry = mesh?.geometry
+
+  if ( typeof geometry?.GetVertexDataSize !== 'function' ) {
+    return 0
+  }
+
+  try {
+    // eslint-disable-next-line no-magic-numbers
+    return geometry.GetVertexDataSize() * 8 + geometry.GetIndexDataSize() * 4
+  } catch {
+    return 0
+  }
+}
+
+
+/**
+ * Evict least-recently-used assets until live asset bytes fit a budget.
+ *
+ * The third release policy, and the one that needs neither a dependency
+ * graph nor a dispatch-time key. `bounded` frees everything a batch
+ * created, which is correct but rebuilds shared geometry a later product
+ * still maps — 29 % of MB-Khaya's assets at batch 256, 79 % of D3D's at
+ * batch 64. A budget frees only what does not fit, so an asset a later
+ * product needs survives whenever there is room for it, and the batch
+ * size stops being the thing that decides residency.
+ *
+ * Budgeted on LIVE ASSET BYTES, not on `wasmHeapByteLength`. The wasm heap
+ * is grow-only: it never shrinks when an asset is freed, so a controller
+ * driven by it would evict once, observe no change, and evict everything.
+ * What a budget can actually control is the live set, and the heap
+ * high-water follows it.
+ *
+ * Sizes come from the native geometry, matching `IfcModelGeometry
+ * .calculateGeometrySize`'s own convention: vertex elements are doubles
+ * (8 bytes), index elements are 4. An earlier version of this counted
+ * vertices at 4 bytes, which made every budget figure mean about half
+ * what it said. That is the payload, not the
+ * allocator's true footprint — the real cost carries per-object overhead
+ * and fragmentation this cannot see — so treat the budget as a knob whose
+ * units are approximately-payload-bytes, and read `wasmPeakMB` for what
+ * it actually bought.
+ *
+ * @param api The IfcAPI instance.
+ * @param modelID The open model.
+ * @param resident LRU state: `{ order: Map<key, bytes>, live: number }`,
+ * where `order`'s insertion sequence IS the recency order (a Map re-set
+ * moves nothing, so touches delete-then-set).
+ * @param budgetBytes Live-byte ceiling.
+ * @return {{evicted: number, freedBytes: number}} What this pass reclaimed.
+ */
+function evictToBudget( api, modelID, resident, budgetBytes ) {
+
+  const model = api.getPassthrough( modelID )?.model?.[ 0 ]
+
+  if ( model === void 0 ) {
+    return { evicted: 0, freedBytes: 0 }
+  }
+
+  let evicted = 0
+  let freedBytes = 0
+
+  for ( const [ key, bytes ] of resident.order ) {
+
+    if ( resident.live <= budgetBytes ) {
+      break
+    }
+
+    const [ storeName, localIDText ] = key.split( ':' )
+    const store = model[ storeName ]
+    const localID = Number( localIDText )
+
+    resident.order.delete( key )
+    resident.live -= bytes
+
+    if ( store === void 0 || store.getByLocalID( localID ) === void 0 ) {
+      // Already gone (the extractor reclaims its own temporaries), so it
+      // no longer occupies the budget either — dropping it from the
+      // accounting above is the whole fix.
+      continue
+    }
+
+    try {
+      store.delete( localID )
+      ++evicted
+      freedBytes += bytes
+    } catch {
+      /* A store that cannot free is a finding, not a crash. */
+    }
+  }
+
+  return { evicted, freedBytes }
+}
+
+
 function releaseGeometries( api, modelID, created, geometryExpressIDs ) {
 
   const passthrough = api.getPassthrough( modelID )
@@ -640,7 +756,7 @@ function shardWorklists( api, modelID, shard, filePath ) {
  * @param batchSize Products per pump call.
  * @param shard Optional `{index, count}` — extract only this shard's products.
  */
-async function runChild( phase, filePath, batchSize, shard ) {
+async function runChild( phase, filePath, batchSize, shard, budgetMB ) {
 
   const { IfcAPI, LogLevel } =
     await import( '../compiled/src/compat/web-ifc/ifc_api.js' )
@@ -660,7 +776,8 @@ async function runChild( phase, filePath, batchSize, shard ) {
   // real cost of delivery rather than the cost of hashing and forgetting.
   const retainedPayloads = []
   const deferred = phase !== 'classic'
-  const copies = phase === 'copyout' || phase === 'bounded'
+  const copies =
+    phase === 'copyout' || phase === 'bounded' || phase === 'lru'
   const emits = !EXTRACT_ONLY_PHASES.has( phase )
 
   const settings = {
@@ -713,6 +830,9 @@ async function runChild( phase, filePath, batchSize, shard ) {
   // because local IDs are store-relative.
   const createdThisBatch = { geometry: new Set(), voidGeometry: new Set() }
 
+  // LRU state for the `lru` phase: insertion order IS recency order.
+  const resident = { order: new Map(), live: 0 }
+
   if ( deferred ) {
 
     const ifcModel = api.getPassthrough( modelID )?.model?.[ 0 ]
@@ -742,7 +862,43 @@ async function runChild( phase, filePath, batchSize, shard ) {
 
         createdThisBatch[ store ].add( mesh.localID )
 
+        if ( phase === 'lru' ) {
+
+          const key = `${store}:${mesh.localID}`
+          const previous = resident.order.get( key )
+
+          if ( previous !== void 0 ) {
+            resident.live -= previous
+            resident.order.delete( key )
+          }
+
+          const bytes = assetBytes( mesh )
+
+          resident.order.set( key, bytes )
+          resident.live += bytes
+        }
+
         return originalAdd( mesh )
+      }
+
+      // Recency, not just residency: a getByLocalID is the engine reaching
+      // for an asset, which is exactly the signal LRU needs and the signal
+      // a creation-keyed policy like `bounded` throws away. Re-inserting
+      // moves the key to the end of the Map's insertion order.
+      if ( phase === 'lru' ) {
+
+        cache.getByLocalID = ( localID ) => {
+
+          const key = `${store}:${localID}`
+          const bytes = resident.order.get( key )
+
+          if ( bytes !== void 0 ) {
+            resident.order.delete( key )
+            resident.order.set( key, bytes )
+          }
+
+          return originalGet( localID )
+        }
       }
     }
   }
@@ -751,6 +907,12 @@ async function runChild( phase, filePath, batchSize, shard ) {
   const wasmAfterOpenMB = wasmPeakMB
   let batches = 0
   let released = 0
+
+  // Live-byte ceiling for the `lru` phase, and the high-water the policy
+  // actually held — reported next to wasmPeakMB so the proxy can be
+  // checked against the real heap rather than trusted.
+  const budgetBytes = budgetMB * BYTES_PER_MB
+  let liveHighWaterMB = 0
 
   // Created natives the engine reclaimed itself (temporaries). Reported so the
   // release invariant can be "nothing created is still resident" rather than
@@ -809,6 +971,17 @@ async function runChild( phase, filePath, batchSize, shard ) {
           createdThisBatch.geometry.clear()
           createdThisBatch.voidGeometry.clear()
         }
+
+        if ( phase === 'lru' ) {
+
+          const evicted = evictToBudget( api, modelID, resident, budgetBytes )
+
+          released += evicted.evicted
+          liveHighWaterMB =
+            Math.max( liveHighWaterMB, resident.live / BYTES_PER_MB )
+          createdThisBatch.geometry.clear()
+          createdThisBatch.voidGeometry.clear()
+        }
       }
 
       wasmPeakMB = Math.max( wasmPeakMB, wasmMB( api, wasmHeapByteLength ) )
@@ -858,9 +1031,10 @@ async function runChild( phase, filePath, batchSize, shard ) {
  * @param filePath The model.
  * @param batchSize Products per pump call.
  * @param shard Optional `{index, count}` — extract only this shard's products.
+ * @param budgetMB Live-asset ceiling for the `lru` phase, in MB.
  * @return {object} The child's JSON result.
  */
-function spawnChild( phase, filePath, batchSize, shard ) {
+function spawnChild( phase, filePath, batchSize, shard, budgetMB ) {
 
   const args = [
     '--expose-gc', `--max-old-space-size=${CHILD_MAX_OLD_SPACE_MB}`,
@@ -871,8 +1045,12 @@ function spawnChild( phase, filePath, batchSize, shard ) {
     args.push( `${shard.index}/${shard.count}` )
   }
 
+  // The budget rides in the environment rather than as another positional,
+  // because the shard argument is already optional-positional and a second
+  // one would make `--child lru model 64 512` ambiguous with a shard spec.
   const out = execFileSync( process.execPath, args,
-      { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT } )
+      { encoding: 'utf8', maxBuffer: 1 << 26, cwd: REPO_ROOT,
+        env: { ...process.env, M3_BUDGET_MB: String( budgetMB ) } } )
 
   return JSON.parse( out.trim().split( '\n' ).at( -1 ) )
 }
@@ -1352,7 +1530,9 @@ function main() {
       mode: argv[ 5 ] ?? 'roundrobin',
     } : void 0
 
-    return runChild( argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ), shard )
+    return runChild(
+        argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ), shard,
+        Number( process.env.M3_BUDGET_MB ?? DEFAULT_BUDGET_MB ) )
   }
 
   const flag = ( name, fallback ) => {
@@ -1367,7 +1547,7 @@ function main() {
   // the phase and shard-mode validation above exists to prevent, one level up.
   const KNOWN_FLAGS = new Set( [
     '--models', '--batch', '--repeats', '--json', '--phases', '--shards',
-    '--shard-mode' ] )
+    '--shard-mode', '--budget-mb' ] )
 
   // Every flag here takes an operand, and a flag whose operand is missing is
   // worse than an unknown one: `--phases pump --shards` leaves `--shards`
@@ -1421,6 +1601,17 @@ function main() {
         `--repeats must be a positive integer; got ${flag( '--repeats' )}` )
     process.exit( 2 )
   }
+  const budgetMB = Number( flag( '--budget-mb', DEFAULT_BUDGET_MB ) )
+
+  // Same reasoning as --batch: a budget of 0 or NaN would evict everything
+  // or nothing while the row still printed a number, which is the
+  // mislabelled-experiment failure this file keeps guarding against.
+  if ( !Number.isInteger( budgetMB ) || budgetMB < 1 ) {
+    console.error(
+        `--budget-mb must be a positive integer; got ${flag( '--budget-mb' )}` )
+    process.exit( 2 )
+  }
+
   const jsonOut = flag( '--json' )
   const only = flag( '--phases' )
   const phases = only !== void 0 ? only.split( ',' ) : PHASES
@@ -1448,7 +1639,8 @@ function main() {
     console.error(
         'usage: m3_pump_spike.mjs --models <file with one path per line> ' +
         '[--batch N] [--repeats N] [--phases a,b] [--json out] ' +
-        '[--shards 1,2,4] [--shard-mode roundrobin|contiguous]' )
+        '[--shards 1,2,4] [--shard-mode roundrobin|contiguous] ' +
+        '[--budget-mb N]' )
     process.exit( 2 )
   }
 
@@ -1562,7 +1754,7 @@ function main() {
       const runs = []
 
       for ( let repeat = 0; repeat < repeats; ++repeat ) {
-        runs.push( spawnChild( phase, model, batchSize ) )
+        runs.push( spawnChild( phase, model, batchSize, void 0, budgetMB ) )
       }
 
       // Correctness is checked on EVERY repeat; only the timing comes from the

@@ -308,6 +308,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryTimeInMs: executionTimeInMs,
     } = loadState
 
+    // M3's budgeted arena. Applied here rather than at parse time because
+    // the model only exists now, and eviction cannot matter before the first
+    // pump batch anyway. Absent or non-positive leaves it unlimited, which
+    // is every pre-existing consumer's behaviour.
+    if ( settings?.GEOMETRY_BUDGET_MB !== void 0 ) {
+
+      model.geometryResidency.setBudgetBytes(
+          settings.GEOMETRY_BUDGET_MB * BYTES_PER_MIB )
+    }
+
     // get linear scaling factor
     this.linearScalingFactor = conwayGeometry.getLinearScalingFactor()
 
@@ -2073,6 +2083,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.streamNewMeshes_(meshCallback)
     }
 
+    // Evict AFTER the capture, never before: the delta capture resolves each
+    // new node's geometry to emit it, so evicting first would drop assets
+    // this batch is about to deliver and re-extract them immediately. A
+    // no-op unless a budget is configured.
+    this.model[0].geometryResidency.evictToBudget()
+
     const remaining = (products.length - this.demandCursor_) +
         (aggregates.length - this.demandAggregatesCursor_)
 
@@ -2195,6 +2211,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.streamNewMeshes_(meshCallback)
     }
 
+    // Evict AFTER the capture, never before: the delta capture resolves
+    // each new node's geometry to emit it, so evicting first would drop
+    // assets this batch is about to deliver and re-extract them at once.
+    // A no-op unless a budget is configured. Both pumps need this — the
+    // async twin is what Share drives, this one is what a synchronous
+    // embedder and the test suite drive, and a budget honoured on only
+    // one of them is a budget that silently does not apply.
+    this.model[0].geometryResidency.evictToBudget()
+
     const remaining = (products.length - this.demandCursor_) +
         (aggregates.length - this.demandAggregatesCursor_)
 
@@ -2233,6 +2258,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback Receives one delta FlatMesh per entity that
    * gained instances this call.
    */
+  /**
+   * Set the resident-geometry budget, in bytes, after the open.
+   *
+   * The setting form (GEOMETRY_BUDGET_MB) fixes the budget for a model's
+   * lifetime; this exists because the right number is a property of the
+   * device and the moment — a tab under pressure wants a smaller one than
+   * the same tab on load — and re-opening an 860 MB model to change it is
+   * not a real option.
+   *
+   * Takes effect at the next pump batch, so lowering it mid-load does not
+   * stall the current one freeing memory.
+   *
+   * @param bytes The ceiling; non-finite or non-positive disables eviction.
+   * @return {{budgetBytes: number, liveBytes: number}} The budget now in
+   * force and what is currently accounted resident.
+   */
+  public setGeometryBudget( bytes: number ): { budgetBytes: number, liveBytes: number } {
+
+    const residency = this.model[0].geometryResidency
+
+    residency.setBudgetBytes( bytes )
+
+    return { budgetBytes: residency.budgetBytes, liveBytes: residency.liveBytes }
+  }
+
   private streamNewMeshes_(
       meshCallback: (mesh: FlatMesh) => void ): void {
 

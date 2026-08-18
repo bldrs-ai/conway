@@ -79,7 +79,33 @@ export interface Loadersettings {
    * Consumers must treat these as disposable. Ignored everywhere else.
    */
   ON_PREVIEW_MESH?: ( mesh: PreviewMeshPayload ) => void
+
+  /**
+   * Conway extension (DEFER_GEOMETRY only; M3's budgeted arena): cap the
+   * native geometry a model keeps resident, in MB. At each pump batch the
+   * least-recently-used assets are evicted until the live set fits.
+   * Unset — the default — keeps everything, which is what every consumer
+   * did before this existed.
+   *
+   * **This changes a contract, so it is opt-in.** An evicted asset is gone
+   * from `GetGeometry` until something re-extracts it, which is safe for a
+   * consumer that copies payloads at delivery (the invariant Share#1640
+   * asserts) and unsafe for one that keeps geometry IDs and fetches them
+   * lazily later.
+   *
+   * Budgeted on payload bytes — vertex and index buffers, the same
+   * accounting as `calculateGeometrySize`. The wasm heap runs at a multiple
+   * of this and cannot be used as the signal itself: it is grow-only, so it
+   * never falls when a native is freed. Expect the heap high-water to track
+   * the budget proportionally rather than equal it.
+   */
+  GEOMETRY_BUDGET_MB?: number
 }
+
+/* MB as the API's unit, bytes as the engine's: the budget is a number a
+ * human picks, and the accounting is in bytes. */
+// eslint-disable-next-line no-magic-numbers
+const BYTES_PER_MIB = 1024 * 1024
 
 /**
  * web-ifc compatible log levels (numeric values match web-ifc's enum so an
@@ -896,6 +922,38 @@ export class IfcAPI {
    * remaining: 0}` for unknown models or models without the deferred
    * pump (non-IFC / fully-extracted opens).
    */
+  /**
+   * Conway extension (M3's budgeted arena): cap the native geometry a model
+   * keeps resident, in MB, after it is already open. At each pump batch the
+   * least-recently-used assets are evicted until the live set fits. Pass 0
+   * or a non-finite value to remove the cap.
+   *
+   * Prefer this over the GEOMETRY_BUDGET_MB open setting when the right
+   * number depends on the device or the moment — reopening an 860 MB model
+   * to change a budget is not a real option.
+   *
+   * Same contract as the setting: an evicted asset is gone from GetGeometry
+   * until something re-extracts it, which is safe for a consumer that copies
+   * payloads at delivery and unsafe for one that fetches lazily later.
+   *
+   * @param modelID handle retrieved by an open
+   * @param megabytes the ceiling, in MB of payload bytes
+   * @return {object|undefined} the budget now in force and the bytes
+   * currently accounted resident, or undefined for unknown models and for
+   * passthroughs with no evictable geometry store (AP214/STEP).
+   */
+  SetGeometryBudget( modelID: number, megabytes: number ):
+      { budgetBytes: number, liveBytes: number } | undefined {
+
+    const result = this.models.get(modelID)
+
+    if (result?.setGeometryBudget === void 0) {
+      return void 0
+    }
+
+    return result.setGeometryBudget( megabytes * BYTES_PER_MIB )
+  }
+
   ExtractGeometryBatch(
       modelID: number,
       batchSize: number,
