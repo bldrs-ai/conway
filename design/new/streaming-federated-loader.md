@@ -487,16 +487,20 @@ Deliberately small first step; each has a measurable exit.
 
   | phase | open | geometry | total | wasm peak | RSS | JS retained |
   | --- | --- | --- | --- | --- | --- | --- |
-  | `classic` — `OpenModel` + `StreamAllMeshes` | 53 s | 8 s | 61 s | **1956 MB** | 4202 MB | 1576 MB |
-  | `pump` — deferred, batched, no copy-out | 14 s | 33 s | 47 s | 1284 MB | 2829 MB | 1255 MB |
-  | `copyout` — + per-batch payload copy-out | 14 s | 39 s | 53 s | 1956 MB | 3640 MB | 1597 MB |
-  | `bounded` — + per-batch native release | 13 s | 27 s | **40 s** | **840 MB** | 2494 MB | 1589 MB |
+  | `classic` — `OpenModel` + `StreamAllMeshes` | 44 s | 8 s | 52 s | **1956 MB** | 4182 MB | 1566 MB |
+  | `pump` — deferred, batched, no copy-out | 13 s | 31 s | 44 s | 1284 MB | 2828 MB | 1255 MB |
+  | `copyout` — + per-batch payload copy-out | 13 s | 30 s | 43 s | 1956 MB | 3632 MB | 1597 MB |
+  | `bounded` — + per-batch native release | 13 s | 24 s | **37 s** | **840 MB** | 2486 MB | 1589 MB |
 
   Every payload-carrying phase **holds** its copied vertex and index
   buffers until it reports (40 356 typed arrays, 334 MB on PSB), because
   a consumer building a navigable scene keeps them — hashing and
   dropping them would report a JS working set nobody actually has, and
-  would hide the GC pressure of holding it. Compare rows within this
+  would hide the GC pressure of holding it. They are retained exactly as
+  `GetVertexArray`/`GetIndexArray` return them: those already hand back
+  owning copies (`getSubArray` ends with `slice(0)`), so a defensive
+  `.slice()` on top would double every payload and leave the first
+  generation as garbage — inflating the very columns this table reports. Compare rows within this
   table only: absolute wall-clock on this box moves ±25 % between runs,
   so the cross-run deltas that matter are the memory columns, which are
   stable and reproduce.
@@ -519,9 +523,14 @@ Deliberately small first step; each has a measurable exit.
      heap that is never dropped (`pump` 1284 MB vs `copyout` 1956 MB on
      identical extraction). Every consumer that reads its own vertices
      pays it, and it is invisible to any probe that doesn't.
-  4. **Bounding it is free** — `bounded` is the *fastest* row, not a
-     trade. Releasing costs nothing measurable and removes allocator
-     pressure about as fast as it adds calls.
+  4. **Releasing costs nothing measurable.** `bounded` is the fastest
+     row here, but the spread between rows (~24 %) sits inside this
+     box's run-to-run wall-clock variance (~25 %), so the honest claim is
+     the negative one: **no release overhead is distinguishable from
+     noise**, across every run taken. Establishing that release is
+     genuinely *faster* would need repeated timings with the variance
+     separated out, which nothing here depends on — the memory columns
+     are the result, and they are stable.
 
   **Batch size is not the remaining lever.** `bounded` at batch = 32
   reaches 727 MB (36.6 s, identical digests) against 840 MB at batch =
@@ -584,32 +593,49 @@ Deliberately small first step; each has a measurable exit.
   sharding, which preserves file-order locality, duplicates less and
   scales better (1.52× vs 1.39×).
 
-  **Partition ownership is an open question, not a settled one.** The
-  obvious answer — affinity by shared asset, the same
-  definition/occurrence boundary `SharedAssetPool` draws for retention —
-  was tested and **did not work**. `scripts/m3_affinity_spike.mjs`
-  captures the real product↔asset graph (one instrumented extraction
-  pass recording, per product, which assets it created, which it reused,
-  and how long it took) and replays partitions against it. Simulated, it
-  is decisive: on MB-Khaya at N=4, round-robin costs +46 % duplicated CPU
-  (against +40 % measured, so the cost model calibrates) while
-  asset-affinity and an adaptive claim-the-asset partition both reach
-  +0 %. Run against the real extractor, neither moves anything —
-  round-robin and claim both create **8678 assets** against a
-  single-shard **6851**, so the +27 % duplication is real and completely
-  independent of where products are placed.
+  **The partition wants affinity by shared asset**, not by product — the
+  same definition/occurrence boundary `SharedAssetPool` draws for
+  retention. One boundary, two payoffs. Measured rather than assumed:
+  `scripts/m3_affinity_spike.mjs` captures the real product↔asset graph
+  (one instrumented extraction pass recording, per product, which assets
+  it created, which it reused, and how long it took), replays candidate
+  partitions against it, and can emit any of them as per-shard product
+  lists so the **real extractor** runs the partition the simulation
+  scored.
 
-  Two known defects in that model, either of which could explain it: the
-  capture drives only the per-product seam, so it never sees the
-  **rel-aggregates pass** (5363 assets recorded against the 6851 really
-  created), and that pass is sharded positionally — re-running shared
-  master-void work per shard no matter what the product partition does.
-  If the duplication turns out to live there, the answer is "give
-  aggregates an owner", not "partition products by definition". Until
-  aggregates are captured and replayed, this doc records the mechanism
-  and declines to name the key.
+  **MB-Khaya, N=4, single-threaded shards, against a one-shard baseline
+  of 4.3 s / 7.5 s CPU / 6851 assets:**
 
-  Two caveats the numbers carry. Each shard pays its own parse here, so
+  | partition | geometry | total CPU | assets created |
+  | --- | --- | --- | --- |
+  | round-robin | 3.2 s | 11.2 s | 8678 (**+27 %**) |
+  | affinity — hash the product's primary asset | 2.3 s | **7.5 s** | **6851** (+0 %) |
+  | claim — first worker to touch an asset owns it | **2.2 s** | 7.8 s | **6851** (+0 %) |
+
+  Both asset-aware partitions eliminate the duplication **completely**:
+  four shards create exactly the assets one shard does, and total CPU
+  returns to the serial baseline, so nothing is wasted. The wall-clock
+  follows — 2.2 s against round-robin's 3.2 s at the same shard count,
+  which is 1.95× against the serial baseline where round-robin manages
+  1.34×. Per-worker wasm peak drops too (83 → 33 MB), because a shard
+  that doesn't re-extract shared geometry doesn't hold it either.
+
+  `claim` is the cheaper rule to implement and the one to build: it
+  needs no global plan, only "first worker to touch an asset owns it,
+  and a product whose assets are owned follows them" — a worker rips
+  through a run and hands off when it meets something new. `affinity`
+  hashing is marginally better on CPU and marginally worse on balance,
+  which is what you would expect from a static partition against an
+  adaptive one.
+
+  Three caveats the numbers carry. The partition table above was itself
+  produced twice: the first run reported that neither asset-aware
+  partition changed anything, because the harness's assignment path had
+  been dropped in an unrelated edit and every "partition" was silently
+  running round-robin. The lesson is the one this whole file keeps
+  relearning — a measurement that cannot fail is not a measurement, and
+  the tell was that two different partitions produced *byte-identical*
+  asset counts. Each shard also pays its own parse here, so
   only the geometry phase is comparable; the shipping design parses once
   and hands workers transferable index columns, which is exactly what
   M2/M7's columns-from-birth index made possible (before it, sharding

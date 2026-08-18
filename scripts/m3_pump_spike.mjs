@@ -220,11 +220,17 @@ function copyBatchPayloads( api, modelID, meshes, seen, digest, retained ) {
 
       seen.add( placed.geometryExpressID )
 
+      // No .slice() here: `GetVertexArray`/`GetIndexArray` already return
+      // owning copies (`getSubArray` ends with `slice(0)`), so copying again
+      // would double every payload and leave the first generation as garbage —
+      // inflating copy time and GC pressure in exactly the measurement those
+      // columns exist to report. Retain what the API returns, which is what a
+      // consumer does.
       const geometry = api.GetGeometry( modelID, placed.geometryExpressID )
       const vertices = api.GetVertexArray(
-          geometry.GetVertexData(), geometry.GetVertexDataSize() ).slice()
+          geometry.GetVertexData(), geometry.GetVertexDataSize() )
       const indices = api.GetIndexArray(
-          geometry.GetIndexData(), geometry.GetIndexDataSize() ).slice()
+          geometry.GetIndexData(), geometry.GetIndexDataSize() )
 
       digest.payload( placed.geometryExpressID, vertices, indices )
       retained.push( vertices, indices )
@@ -327,6 +333,29 @@ function shardWorklists( api, modelID, shard ) {
 
   const products = passthrough.demandProducts_ ?? []
   const aggregates = passthrough.demandAggregates_ ?? []
+
+  // An explicit assignment (from m3_affinity_spike's --emit) overrides the
+  // positional rules: this is how a SIMULATED partition gets checked against
+  // the real extractor instead of being believed. Aggregates stay positional
+  // because the captured graph does not cover the rel-aggregates pass — which
+  // is itself one of the open questions about where the duplication lives.
+  if ( process.env.M3_ASSIGNMENT !== void 0 ) {
+
+    const assignment =
+      JSON.parse( fs.readFileSync( process.env.M3_ASSIGNMENT, 'utf8' ) )
+    const mineSet = new Set( assignment.shards[ shard.index ] )
+
+    passthrough.demandProducts_ = products.filter( ( id ) => mineSet.has( id ) )
+    passthrough.demandAggregates_ =
+      aggregates.filter( ( _, index ) => index % shard.count === shard.index )
+
+    return {
+      products: passthrough.demandProducts_.length,
+      ofProducts: products.length,
+      aggregates: passthrough.demandAggregates_.length,
+      strategy: assignment.strategy,
+    }
+  }
 
   // Round-robin spreads cost evenly but scatters shared geometry across every
   // shard, so each one re-extracts it. Contiguous keeps file-order locality —
@@ -733,8 +762,20 @@ function main() {
       process.exit( 2 )
     }
 
-    return runShardSweep( models, shardPhase, batchSize,
-        shards.split( ',' ).map( Number ), jsonOut, flag( '--shard-mode', 'roundrobin' ) )
+    // Every speedup in the sweep is a ratio against the FIRST count, and the
+    // function promises that is one shard. A list like `2,3,4` would silently
+    // make N=2 the baseline and print ratios against it; `4,1,2` would be
+    // worse. Normalise instead of trusting the caller: dedupe, sort ascending,
+    // and run a one-shard baseline whether or not it was asked for.
+    const requested = shards.split( ',' ).map( Number )
+    const counts = [ ...new Set( [ 1, ...requested ] ) ].sort( ( a, b ) => a - b )
+
+    if ( counts.length !== requested.length ) {
+      console.log( `note: added an N=1 baseline (sweeping ${counts.join( ',' )})` )
+    }
+
+    return runShardSweep( models, shardPhase, batchSize, counts, jsonOut,
+        flag( '--shard-mode', 'roundrobin' ) )
   }
 
   for ( const model of models ) {
