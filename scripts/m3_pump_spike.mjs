@@ -934,6 +934,23 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMo
             'nothing to scale' )
       }
 
+      // Creating assets is not delivering them. `copyout` and `bounded` exist
+      // to measure what a CONSUMER pays — the per-batch copy out of the wasm
+      // heap — so a regression in `streamNewMeshes_` or its callback that
+      // extracts normally while delivering nothing leaves `assetsCreated`
+      // healthy, every child completed, and (for `bounded`) every created
+      // asset released, so the release check passes too. The sweep would then
+      // publish copy and memory timings for copying that never happened.
+      // Delivery is the evidence those phases specifically need.
+      if ( count === 1 && ( phase === 'copyout' || phase === 'bounded' ) &&
+           byCount[ count ].payloads === 0 && !allowEmpty ) {
+        throw new Error(
+            `${name}: the N=1 baseline delivered 0 instances and 0 payloads on a ` +
+            `model not declared geometry-free, despite creating ` +
+            `${byCount[ count ].assetsCreated} assets — ${phase} measures the ` +
+            'copy-out of delivered geometry, and none was delivered' )
+      }
+
       // `bounded` is defined by its release policy, so a sweep of it that did
       // not release measured a different phase than the one it reports. The
       // sweep never reaches `verdicts()`, and `releaseGeometries` swallows
@@ -1376,9 +1393,34 @@ function main() {
         runs.push( spawnChild( phase, model, batchSize ) )
       }
 
-      // Min of N: wall-clock noise is one-sided, so the minimum is the
-      // least-contaminated estimate. Memory is taken from the same run so
-      // the row describes one coherent execution.
+      // Correctness is checked on EVERY repeat; only the timing comes from the
+      // fastest. Keeping just the minimum meant an intermittent failure — a
+      // flaky open, a callback that stopped firing, a release-count mismatch,
+      // a digest divergence — was discarded whenever a healthy sibling ran
+      // faster, which made `--repeats` least trustworthy for exactly the
+      // flakiness repetition exists to expose. Repeats disagreeing with each
+      // other is itself a finding: the same phase on the same model must
+      // deliver the same geometry every time.
+      const reference = runs[ 0 ]
+      const divergent = runs.filter( ( run ) =>
+        run.failed !== reference.failed ||
+        run.instances !== reference.instances ||
+        run.payloads !== reference.payloads ||
+        run.released !== reference.released ||
+        run.assetsCreated !== reference.assetsCreated ||
+        run.placedDigest !== reference.placedDigest ||
+        run.payloadDigest !== reference.payloadDigest )
+
+      if ( divergent.length > 0 ) {
+        failures.push( `${name}: ${phase} was not reproducible across ` +
+          `${repeats} repeats — ${divergent.length} run(s) differ from the ` +
+          'first in delivery, release or digest; the fastest row would have ' +
+          'hidden it' )
+      }
+
+      // Min of N for the reported row: wall-clock noise is one-sided, so the
+      // minimum is the least-contaminated estimate. Memory is taken from the
+      // same run so the row describes one coherent execution.
       byPhase[ phase ] =
         runs.reduce( ( a, b ) => ( ( a.totalMs ?? Infinity ) <= ( b.totalMs ?? Infinity ) ? a : b ) )
     }

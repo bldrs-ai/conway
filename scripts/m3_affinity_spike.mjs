@@ -63,6 +63,33 @@ const DEFAULT_SHARD_COUNTS = [ 2, 3, 4, 8 ]
 const STRATEGIES = [ 'roundrobin', 'contiguous', 'affinity', 'claim' ]
 
 /**
+ * Validate shard counts, or exit.
+ *
+ * `assign` builds `Array.from( {length: count} )` and indexes by `% count`, so
+ * a non-integer silently produces a partition of a different width than the
+ * one every printed line and the emitted `assignment.json` are labelled with —
+ * `2.5` allocates two shards and calls the result N=2.5 — or, with enough
+ * products, indexes a shard that was never allocated and crashes. Zero,
+ * negative, `NaN` and `Infinity` are all unusable in their own ways.
+ *
+ * @param counts The caller's `--shards` values.
+ * @return {number[]} The same counts, once known to be usable.
+ */
+function shardCounts( counts ) {
+
+  const invalid = counts.filter(
+      ( count ) => !Number.isInteger( count ) || count < 1 )
+
+  if ( invalid.length > 0 ) {
+    console.error(
+        `--shards must be positive integers; got ${invalid.join( ', ' )}` )
+    process.exit( 2 )
+  }
+
+  return counts
+}
+
+/**
  * Drive one real extraction pass with the geometry cache instrumented, and
  * record the product↔asset graph.
  *
@@ -514,7 +541,8 @@ async function main() {
   const emitFor = flag( '--emit' )
 
   if ( emitFor !== void 0 ) {
-    return emitAssignment( emitFor, Number( flag( '--shards', '4' ) ),
+    return emitAssignment( emitFor,
+        shardCounts( [ Number( flag( '--shards', '4' ) ) ] )[ 0 ],
         flag( '--strategy', 'claim' ), flag( '--out', 'assignment.json' ) )
   }
 
@@ -528,7 +556,8 @@ async function main() {
   }
 
   const counts = flag( '--shards' ) !== void 0 ?
-    flag( '--shards' ).split( ',' ).map( Number ) : DEFAULT_SHARD_COUNTS
+    shardCounts( flag( '--shards' ).split( ',' ).map( Number ) ) :
+    DEFAULT_SHARD_COUNTS
 
   simulate( graphPath, counts )
 }
