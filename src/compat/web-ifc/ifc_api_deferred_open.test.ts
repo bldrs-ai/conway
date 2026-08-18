@@ -386,6 +386,173 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api4.CloseModel( deferredID )
   }, 240000 )
 
+  test( 'shared representation survives a batch boundary, emitted once', async () => {
+
+    // data/mapped_shared_representation.ifc: one IfcRepresentationMap
+    // mapped by two products 15 products apart, so a batch size of 4
+    // guarantees they land in DIFFERENT batches. The smoke corpus cannot
+    // produce this shape — there every sharer of a definition falls
+    // inside one batch — so this is the only fixture that exercises the
+    // delta capture across a boundary where geometry is shared.
+    //
+    // It pins the cursor capture from both directions. Lose a parked or
+    // suffix node and the second mapped product goes missing; re-emit a
+    // node the cursor should have passed (the failure a reverted cursor
+    // or a broken watermark produces) and instances duplicate. Both show
+    // up as an instance-count mismatch against classic, which is why the
+    // comparison is against classic rather than a hard-coded number.
+    const api5 = new IfcAPI()
+    await api5.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const classicID = api5.OpenModel( fixture, SETTINGS )
+    const classicPlacements: string[] = []
+
+    api5.StreamAllMeshes( classicID, ( mesh ) => {
+      for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+        const placed = mesh.geometries.get( where )
+        classicPlacements.push(
+            `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+      }
+    } )
+
+    const deferredID = await api5.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+    const pumpedPlacements: string[] = []
+    let batches = 0
+
+    for ( ; ; ) {
+
+      const { extracted, remaining } = api5.ExtractGeometryBatch(
+          deferredID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              const placed = mesh.geometries.get( where )
+              pumpedPlacements.push(
+                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            }
+          } )
+
+      ++batches
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    // The boundary the fixture exists to create: with 16 products at
+    // batch 4, the two sharers cannot be in the same batch.
+    expect( batches ).toBeGreaterThan( 2 )
+
+    // Exact multiset equality — placement included, so an instance
+    // delivered at the wrong location fails as loudly as a missing one.
+    expect( pumpedPlacements.slice().sort() )
+        .toEqual( classicPlacements.slice().sort() )
+
+    // Emitted once each: a duplicate would survive the multiset check
+    // only if classic duplicated too, but state it directly since
+    // re-emission is the specific failure a broken cursor produces.
+    expect( new Set( pumpedPlacements ).size ).toBe( pumpedPlacements.length )
+
+    // Both users of the shared map are present, at their own placements
+    // — the shared SOURCE geometry appears under two distinct transforms.
+    const mappedTransforms = new Set( pumpedPlacements.map(
+        ( entry ) => entry.split( '@' )[ 1 ] ) )
+
+    expect( mappedTransforms.size ).toBe( pumpedPlacements.length )
+
+    api5.CloseModel( classicID )
+    api5.CloseModel( deferredID )
+  }, 240000 )
+
+  test( 'delta capture visits each scene node once, whatever the batch size', async () => {
+
+    // Output parity cannot see this. The whole-scene walk this replaced
+    // delivered exactly the same meshes; what changed is the COST of
+    // delivering them — it re-resolved every node on every call, so the
+    // capture was O(batches x scene). A revert would pass every
+    // correctness assertion in this file while restoring the 1.47-2.97x
+    // regression the PR description measures, so the complexity gets an
+    // assertion of its own.
+    //
+    // Counting node visits rather than timing: deterministic, and it
+    // fails the same way on a fast machine as a slow one.
+    const api6 = new IfcAPI()
+    await api6.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    /**
+     * Pump a fresh deferred model to completion and report how much
+     * scene walking it took.
+     *
+     * @param batchSize Products per ExtractGeometryBatch call.
+     * @return {Promise<{visits: number, nodes: number, batches: number}>}
+     * Node visits, final scene size, and calls taken.
+     */
+    async function pump( batchSize: number ):
+        Promise<{ visits: number, nodes: number, batches: number }> {
+
+      const modelID = await api6.OpenModelStreamed(
+          fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+      let batches = 0
+
+      for ( ; ; ) {
+
+        const { extracted, remaining } =
+          api6.ExtractGeometryBatch( modelID, batchSize, () => { /* drain */ } )
+
+        ++batches
+
+        if ( remaining === 0 && extracted === 0 ) {
+          break
+        }
+      }
+
+      const scene = ( api6.getPassthrough( modelID ) as unknown as
+        { model: [ unknown, { geometryNodeVisits: number, nodeCount: number } ] } )
+          .model[ 1 ]
+
+      // A revert that drops the counter along with the cursor would
+      // otherwise fail as `expected undefined to be less than 68`, which
+      // reads like a broken test rather than the regression it is.
+      expect( typeof scene?.geometryNodeVisits )
+          .toBe( 'number' )
+
+      const measured =
+        { visits: scene.geometryNodeVisits, nodes: scene.nodeCount, batches }
+
+      api6.CloseModel( modelID )
+
+      return measured
+    }
+
+    const oneAtATime = await pump( 1 )
+    const allAtOnce = await pump( 64 )
+
+    // The fixture is 16 products, so batch 1 really does take many calls
+    // — otherwise this asserts nothing.
+    expect( oneAtATime.batches ).toBeGreaterThan( 8 )
+    expect( allAtOnce.batches ).toBeLessThan( oneAtATime.batches )
+
+    // The invariant: total walking is a property of the SCENE, not of how
+    // many calls drained it. Allowing 2x the node count leaves room for
+    // the whole-model drain's own pass and for parked-node retries
+    // (DEMAND_PARKED_NODE_RETRIES each, and nothing in this corpus parks
+    // a node at all), while a per-call re-walk would land near
+    // batches x nodes — an order of magnitude clear of the bound.
+    expect( oneAtATime.visits ).toBeLessThan( oneAtATime.nodes * 2 )
+
+    // And it must not grow when the batch shrinks, which is the specific
+    // shape of the regression: same scene, ~16x the calls, same work.
+    expect( oneAtATime.visits ).toBeLessThan( allAtOnce.visits * 2 )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )

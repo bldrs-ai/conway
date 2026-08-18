@@ -60,6 +60,15 @@ import { CanonicalMeshType } from '../../index'
 // a deferred model's remaining products synchronously.
 const DEFERRED_DRAIN_BATCH = 256
 
+/* How many later captures re-check a scene node whose geometry did not
+ * resolve when its index passed the cursor, before giving up on it. See
+ * demandPendingNodes_ for why the bound exists and why the value is
+ * generous rather than tuned: nothing in the corpus, PSB or D3D parks a
+ * node at all, and a node that is waiting on anything real is waiting on
+ * the very next extraction, not the eighth. */
+// eslint-disable-next-line no-magic-numbers
+const DEMAND_PARKED_NODE_RETRIES = 8
+
 /* Moving-window size for the streamed columnar parse (matches the
  * ifc_stream_open default; the window bounds parse-time scratch, not
  * the source buffer, which the model keeps resident here). */
@@ -158,7 +167,39 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * batches - the watermark makes each instance captured exactly once,
    * in the same order the classic single walk would process it.
    */
-  private readonly demandCapturedCounts_ = new Map<number, number>()
+  /**
+   * How much of the scene array the delta capture has consumed. The scene
+   * is append-only, so this is a stable cursor: everything a batch adds
+   * sits above it. Replaces the per-entity walk watermark this used to
+   * keep, which existed only because the capture restarted its walk from
+   * zero every batch — an O(batches x scene) cost that dominated on
+   * instance-dense models (D3D: 562k instances, 1182 batches at size 64).
+   */
+  private demandSceneCursor_ = 0
+
+  /**
+   * Node indices walkFrom yielded without resolvable geometry, against the
+   * number of times a later capture has re-checked them. Parked because a
+   * cursor passes each index once, where the whole-scene walk this replaced
+   * re-checked every node on every call. See IfcSceneBuilder.walkFrom.
+   *
+   * Bounded by DEMAND_PARKED_NODE_RETRIES because not every unresolved node
+   * is waiting on something: extraction can append a scene node and then
+   * fail to cache geometry for it (extractSweptDiskSolid returns early on a
+   * failed directrix; extractRepresentationItem still calls addGeometry),
+   * and no amount of re-checking makes a deterministic failure resolve.
+   * Retrying those forever would be O(batches x unresolvable) — still under
+   * the O(batches x scene) this replaced, but unbounded in batch count for
+   * no benefit. Expiring after a fixed number of attempts makes the total
+   * retry work O(retries x unresolvable) regardless of batch size.
+   *
+   * Measured at zero on every model available here — the 12-model smoke
+   * corpus, PSB, and D3D (which logs exactly the malformed-geometry errors
+   * that produce this case) all park nothing — so this path is a
+   * correctness guard rather than a hot path, and its constant is chosen to
+   * be generous rather than tuned.
+   */
+  private readonly demandPendingNodes_ = new Map<number, number>()
 
   /** Cursor into demandProducts_ — products before it are extracted. */
   private demandCursor_ = 0
@@ -2205,23 +2246,58 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     let coordinationMatrix: ArrayLike<number> =
       this.demandCoordination_ ?? glmatrix.mat4.create()
-    const seenThisPass = new Map<number, number>()
     const deltas = new Map<number, PlacedGeometry[]>()
 
-    // eslint-disable-next-line no-unused-vars
-    for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
+    // Everything the scene has gained since the last capture, plus any
+    // node parked earlier for unresolvable geometry. Each node passes
+    // through exactly once, so no watermark is needed to suppress
+    // re-emission - the cursor IS the watermark, one for the whole scene
+    // rather than one per entity.
+    const capturedCursor = this.demandSceneCursor_
+    const pending = this.demandPendingNodes_
 
-      if (entity?.localID === void 0 || entity.expressID === void 0) {
-        continue
+    this.demandSceneCursor_ = scene.nodeCount
+
+    const candidates = function* (this: void ) {
+
+      for (const [index, attempts] of [...pending]) {
+
+        const retried = scene.walkNode(index)
+
+        if (retried === void 0 || retried[2] === void 0) {
+
+          if (attempts + 1 >= DEMAND_PARKED_NODE_RETRIES) {
+            pending.delete(index)
+          } else {
+            pending.set(index, attempts + 1)
+          }
+
+          continue
+        }
+
+        pending.delete(index)
+        yield retried
       }
 
-      // Per-entity walk position vs watermark: instances before the
-      // watermark were captured in an earlier call (append-only walk
-      // order makes the count a stable cursor).
-      const walkIndex = seenThisPass.get(entity.localID) ?? 0
-      seenThisPass.set(entity.localID, walkIndex + 1)
+      for (const candidate of scene.walkFrom(capturedCursor)) {
 
-      if (walkIndex < (this.demandCapturedCounts_.get(entity.localID) ?? 0)) {
+        if (candidate[2] === void 0) {
+          pending.set(candidate[5], 0)
+          continue
+        }
+
+        yield candidate
+      }
+    }
+
+    // eslint-disable-next-line no-unused-vars
+    for (const [_, nativeTransform, geometry, material, entity] of candidates()) {
+
+      // `candidates` never yields an unresolved geometry — the undefined
+      // arm is the parked-node signal, handled there — but the tuple type
+      // allows it, so narrow here rather than asserting at each use.
+      if (geometry === void 0 ||
+          entity?.localID === void 0 || entity.expressID === void 0) {
         continue
       }
 
@@ -2340,10 +2416,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       mesh[0].push(placed)
       mesh[1].geometries = mesh[0]
-
-      this.demandCapturedCounts_.set(
-          entity.localID,
-          (this.demandCapturedCounts_.get(entity.localID) ?? 0) + 1)
 
       let delta = deltas.get(entity.expressID)
       if (delta === void 0) {
