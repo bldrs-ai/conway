@@ -131,6 +131,46 @@ interface IfcProxyLoadState {
 /**
  * The proxy for IFC from the shim.
  */
+/**
+ * The placements of a FlatMesh whose native geometry is still alive.
+ *
+ * There is no "is this deleted" predicate on the binding, so liveness is
+ * probed by the cheapest call that touches the native and throws when it is
+ * gone. Only used on the degraded StreamAllMeshes path, where the
+ * alternative is handing a consumer a handle that aborts on read.
+ *
+ * @param mesh The accumulated per-entity mesh.
+ * @param geometryMap Express ID to [geometry, material, transform].
+ * @return {PlacedGeometry[]} The placements still backed by live geometry.
+ */
+function livePlacements(
+    mesh: FlatMesh,
+    geometryMap: Map<number, [GeometryObject, CanonicalMaterial, number[]]> ):
+    PlacedGeometry[] {
+
+  const live: PlacedGeometry[] = []
+
+  for (let where = 0; where < mesh.geometries.size(); ++where) {
+
+    const placed = mesh.geometries.get(where)
+    const entry = geometryMap.get(placed.geometryExpressID)
+
+    if (entry === void 0) {
+      continue
+    }
+
+    try {
+      entry[0].GetVertexDataSize()
+      live.push(placed)
+    } catch {
+      /* Native freed by eviction — drop the placement. */
+    }
+  }
+
+  return live
+}
+
+
 export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   fs?: any = undefined
@@ -2560,23 +2600,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       const residency = this.model[0].geometryResidency
       const suspendedBudgetBytes = residency.budgetBytes
 
-      // Refused rather than served wrong. Suspending stops future eviction,
-      // but nothing recovers what a caller's own budgeted batches already
-      // freed: the accumulated per-entity meshes reference natives that are
-      // gone, and re-extracting the owning products restores geometry under
-      // NEW local IDs, so the old meshes still fail to resolve while a fresh
-      // capture emits the same instances a second time (21 placements
-      // against classic's 16 on the shared-representation fixture, one
-      // duplicate per rehydrated product). Serving either of those quietly
-      // is worse than saying no.
-      if (residency.everEvicted) {
-
-        throw new Error(
-            'StreamAllMeshes cannot serve a model that has evicted geometry ' +
-            'under a memory budget: the accumulated meshes reference natives ' +
-            'that were freed. Pump ExtractGeometryBatch and copy each batch ' +
-            'at delivery, or open the model without GEOMETRY_BUDGET_MB.')
-      }
+      // Degraded, and said so once. Suspending stops future eviction, but
+      // nothing recovers what a caller's own budgeted batches already freed:
+      // the accumulated meshes reference natives that are gone, and
+      // re-extracting the owning products restores geometry under NEW local
+      // IDs, so the old meshes still fail to resolve while a fresh capture
+      // emits the same instances again (21 placements against classic's 16
+      // on the shared-representation fixture). Rather than hand out dangling
+      // handles, this delivers what is still resident and drops the rest —
+      // see the filter below. Properly serving this combination needs the
+      // meshes re-keyed onto re-extracted geometry, which is follow-up work.
+      const degraded = residency.everEvicted
 
       residency.setBudgetBytes(0)
 
@@ -2590,12 +2624,41 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
         this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
 
-        const [, , meshMap, , vectorFlatMesh] = this.model
+        const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
+          this.model
+
+        let droppedInstances = 0
+        let droppedEntities = 0
 
         meshMap.forEach((mesh) => {
+
+          if (degraded) {
+
+            const live = livePlacements(mesh[1], geometryMaterialTransformMap)
+
+            droppedInstances += mesh[1].geometries.size() - live.length
+
+            if (live.length === 0) {
+              ++droppedEntities
+              return
+            }
+          }
+
           vectorFlatMesh.push(mesh[1])
           meshCallback(mesh[1])
         })
+
+        // One line for the whole call, not one per dropped instance: this
+        // fires on a path that may drop thousands, and a per-instance log
+        // would bury the fact that anything was dropped at all.
+        if (degraded) {
+          Logger.warning(
+              `[geometry budget] StreamAllMeshes served a model that evicted ` +
+              `under a budget: ${droppedInstances} instance(s) across ` +
+              `${droppedEntities} entit(ies) were dropped because their ` +
+              `geometry was freed. Pump ExtractGeometryBatch and copy at ` +
+              `delivery to receive everything.`)
+        }
 
       } finally {
 
