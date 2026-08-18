@@ -53,6 +53,15 @@ import { performance } from 'node:perf_hooks'
 
 const PHASES = [ 'classic', 'pump', 'copyout', 'bounded' ]
 
+/**
+ * Phases that never pass a meshCallback, so `streamNewMeshes_` — the
+ * full-scene re-walk the pump does per batch — never runs. Differencing one
+ * of these against `pump` prices the walk separately from the extraction,
+ * which is what says whether the parallel ceiling is in the work or in the
+ * bookkeeping around it.
+ */
+const EXTRACT_ONLY_PHASES = new Set( [ 'extractonly' ] )
+
 const DEFAULT_BATCH = 64
 const BYTES_PER_MB = 1024 * 1024
 
@@ -313,7 +322,16 @@ function shardWorklists( api, modelID, shard ) {
 
   const products = passthrough.demandProducts_ ?? []
   const aggregates = passthrough.demandAggregates_ ?? []
-  const mine = ( _, index ) => index % shard.count === shard.index
+
+  // Round-robin spreads cost evenly but scatters shared geometry across every
+  // shard, so each one re-extracts it. Contiguous keeps file-order locality —
+  // and exporters emit spatially and structurally clustered — so instances
+  // sharing a representation tend to land on the same shard. Which one wins
+  // says whether the ceiling is imbalance or duplicated shared work.
+  const perShard = Math.ceil( products.length / shard.count )
+  const mine = shard.mode === 'contiguous' ?
+    ( _, index ) => Math.floor( index / perShard ) === shard.index :
+    ( _, index ) => index % shard.count === shard.index
 
   passthrough.demandProducts_ = products.filter( mine )
   passthrough.demandAggregates_ = aggregates.filter( mine )
@@ -349,6 +367,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
   const seen = new Set()
   const deferred = phase !== 'classic'
   const copies = phase === 'copyout' || phase === 'bounded'
+  const emits = !EXTRACT_ONLY_PHASES.has( phase )
 
   const settings = {
     COORDINATE_TO_ORIGIN: true,
@@ -381,6 +400,7 @@ async function runChild( phase, filePath, batchSize, shard ) {
   let released = 0
   let copyMs = 0
 
+  const cpuBefore = process.cpuUsage()
   const tGeometry = performance.now()
 
   if ( !deferred ) {
@@ -405,10 +425,11 @@ async function runChild( phase, filePath, batchSize, shard ) {
     for ( ;; ) {
 
       const batchMeshes = []
-      const { extracted, remaining } =
+      const { extracted, remaining } = emits ?
         api.ExtractGeometryBatch( modelID, batchSize, ( mesh ) => {
           batchMeshes.push( mesh )
-        } )
+        } ) :
+        api.ExtractGeometryBatch( modelID, batchSize )
 
       ++batches
 
@@ -433,11 +454,14 @@ async function runChild( phase, filePath, batchSize, shard ) {
   }
 
   const geometryMs = performance.now() - tGeometry
+  const cpu = process.cpuUsage( cpuBefore )
+  const geometryCpuMs = ( cpu.user + cpu.system ) / 1000
 
   console.log( JSON.stringify( {
     phase,
     openMs,
     geometryMs,
+    geometryCpuMs,
     copyMs,
     totalMs: openMs + geometryMs,
     batches,
@@ -492,9 +516,10 @@ function spawnChild( phase, filePath, batchSize, shard ) {
  * @param filePath The model.
  * @param batchSize Products per pump call.
  * @param count How many shards.
+ * @param shardMode 'roundrobin' or 'contiguous'.
  * @return {Promise<object[]>} One result per shard.
  */
-function spawnShards( phase, filePath, batchSize, count ) {
+function spawnShards( phase, filePath, batchSize, count, shardMode ) {
 
   const running = []
 
@@ -503,7 +528,7 @@ function spawnShards( phase, filePath, batchSize, count ) {
     const args = [
       '--expose-gc', `--max-old-space-size=${CHILD_MAX_OLD_SPACE_MB}`,
       process.argv[ 1 ], '--child', phase, filePath, String( batchSize ),
-      `${index}/${count}`,
+      `${index}/${count}`, shardMode,
     ]
 
     running.push( new Promise( ( resolve, reject ) => {
@@ -539,8 +564,9 @@ function spawnShards( phase, filePath, batchSize, count ) {
  * @param batchSize Products per pump call.
  * @param counts Shard counts to sweep.
  * @param jsonOut Optional output path.
+ * @param shardMode 'roundrobin' or 'contiguous'.
  */
-async function runShardSweep( models, phase, batchSize, counts, jsonOut ) {
+async function runShardSweep( models, phase, batchSize, counts, jsonOut, shardMode ) {
 
   const rows = []
 
@@ -552,7 +578,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut ) {
     for ( const count of counts ) {
 
       const t0 = performance.now()
-      const results = await spawnShards( phase, model, batchSize, count )
+      const results = await spawnShards( phase, model, batchSize, count, shardMode )
       const wallMs = performance.now() - t0
 
       const total = ( key ) => results.reduce( ( sum, r ) => sum + ( r[ key ] ?? 0 ), 0 )
@@ -563,6 +589,7 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut ) {
         wallMs,
         slowestGeometryMs,
         geometryMsPerShard: results.map( ( r ) => Math.round( r.geometryMs ) ),
+        cpuMsTotal: total( 'geometryCpuMs' ),
         instances: total( 'instances' ),
         payloads: total( 'payloads' ),
         wasmPeakMBSum: results.reduce( ( sum, r ) => sum + r.wasmPeakMB, 0 ),
@@ -573,8 +600,9 @@ async function runShardSweep( models, phase, batchSize, counts, jsonOut ) {
       const speedup = base.slowestGeometryMs / slowestGeometryMs
 
       console.log(
-          `${name} shards=${count} geometry=${( slowestGeometryMs / 1000 ).toFixed( 1 )}s ` +
+          `${name} ${shardMode} shards=${count} geometry=${( slowestGeometryMs / 1000 ).toFixed( 1 )}s ` +
           `(${speedup.toFixed( 2 )}x) per-shard=${byCount[ count ].geometryMsPerShard.join( '/' )} ` +
+          `cpu=${( byCount[ count ].cpuMsTotal / 1000 ).toFixed( 1 )}s ` +
           `inst=${byCount[ count ].instances} payloads=${byCount[ count ].payloads} ` +
           `wasmMax=${byCount[ count ].wasmPeakMBMax.toFixed( 0 )}MB ` +
           `wasmSum=${byCount[ count ].wasmPeakMBSum.toFixed( 0 )}MB` )
@@ -602,6 +630,7 @@ function main() {
     const shard = spec !== void 0 ? {
       index: Number( spec.split( '/' )[ 0 ] ),
       count: Number( spec.split( '/' )[ 1 ] ),
+      mode: argv[ 5 ] ?? 'roundrobin',
     } : void 0
 
     return runChild( argv[ 1 ], argv[ 2 ], Number( argv[ 3 ] ), shard )
@@ -635,7 +664,8 @@ function main() {
   const rows = []
 
   if ( shards !== void 0 ) {
-    return runShardSweep( models, phases[ 0 ], batchSize, shards.split( ',' ).map( Number ), jsonOut )
+    return runShardSweep( models, phases[ 0 ], batchSize,
+        shards.split( ',' ).map( Number ), jsonOut, flag( '--shard-mode', 'roundrobin' ) )
   }
 
   for ( const model of models ) {
