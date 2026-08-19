@@ -119,6 +119,13 @@ async function capture( filePath, outPath ) {
     throw new Error( `open failed: ${filePath}` )
   }
 
+  // The SHIPPED key, imported rather than reimplemented. A copy drifts —
+  // this one already had a different fallback order than production, so the
+  // published dispatch comparisons were validating something the engine does
+  // not do.
+  const { geometryDispatchKey } =
+    await import( '../compiled/src/ifc/geometry_dispatch.js' )
+
   const passthrough = api.getPassthrough( modelID )
 
   passthrough.ensureDemandWorklists_()
@@ -203,7 +210,7 @@ async function capture( filePath, outPath ) {
       // What a LIVE scheduler could know before extracting — see
       // dispatchKeyOf. Captured beside the oracle's created/reused sets
       // precisely so the two can be compared.
-      dispatchKey: dispatchKeyOf( passthrough.model[ 0 ], products[ index ] ),
+      dispatchKey: geometryDispatchKey( passthrough.model[ 0 ], products[ index ] ),
       ...( failed ? { failed: true } : {} ),
     } )
 
@@ -249,7 +256,12 @@ async function capture( filePath, outPath ) {
       ms: performance.now() - start,
       created: [ ...created ],
       reused: [ ...reused ],
-      dispatchKey: dispatchKeyOf( passthrough.model[ 0 ], aggregateLocalID ),
+      // Aggregates key on their RELATING OBJECT, matching what
+      // SetGeometryShard does: the relationship record is not a product, so
+      // keying on it would shard by record position.
+      dispatchKey: geometryDispatchKey(
+          passthrough.model[ 0 ],
+          aggregates[ index ]?.RelatingObject?.localID ?? aggregateLocalID ),
       ...( failed ? { failed: true } : {} ),
     } )
   }
@@ -366,94 +378,6 @@ function costModel( rows ) {
 
   return { assetCost, ownCost }
 }
-
-/**
- * The identity a live scheduler could use to place a product, read from the
- * index WITHOUT extracting it.
- *
- * This is the question the affinity result leaves open. `affinity` and
- * `claim` place products using the assets they turn out to touch — knowledge
- * that exists only after extraction, i.e. an oracle. A real worker decides
- * before it starts, so its key must come from attributes:
- *
- *   IfcProduct.Representation -> IfcProductDefinitionShape.Representations[]
- *     -> IfcShapeRepresentation.Items[] -> IfcMappedItem.MappingSource
- *       -> IfcRepresentationMap
- *
- * Pointer-chasing over columns M2 already builds, so it costs nothing next
- * to tessellation. What it CANNOT see is sharing below the representation:
- * a profile swept along different directrices, boolean operands, void
- * geometry. Whether that matters is exactly what comparing this key against
- * the oracle measures.
- *
- * Falls back to the shape representation's own local ID, then to the product
- * itself (unique, so placement degrades to positional for that product).
- *
- * **Validated on MB-Khaya, inconclusive on D3D, and the difference is this
- * script's coverage rather than the key's.** MB-Khaya: 7 193 assets at N=4
- * against a 7 193 serial baseline, matching both oracles exactly. D3D: every
- * strategy lands within 0.8 % of round-robin, which reads like a negative
- * result until you check what the capture saw — 1 592 assets against the
- * 59 098 the real extraction creates, i.e. 2.7 %. Three strategies placing
- * from a graph that blind agree because none of them has information, not
- * because placement cannot help. On MB-Khaya the capture sees 75 %.
- *
- * With the capture fixed (both stores, the rel-aggregates pass, and
- * aggregates placed by assignment rather than positionally), D3D answers —
- * and splits the question in two. At N=4 against a 59 098 serial baseline:
- *
- *   roundrobin  83 177 assets (+40.7 %)  47.6s  1.18x
- *   dispatch    81 639 assets (+38.1 %)  23.7s  2.34x
- *   affinity    65 288 assets (+10.5 %)  29.0s  1.79x  shards 15896/29030/19585/2837
- *
- * Placement DOES help here — the oracle removes three quarters of the
- * duplication — but this key does not reach it: on an assembly-heavy model
- * the sharing lives below the representation, in profiles, boolean operands
- * and void geometry, exactly where an attribute walk cannot see. Yet the key
- * still wins the wall-clock, because it balances and the oracle does not.
- * Best duplication and best wall-clock are different strategies on this
- * model, and the gap between them (30 points, ~14s CPU) is the headroom a
- * better key would recover.
- *
- * @param model The IFC model.
- * @param productLocalID The product.
- * @return {number} A placement key.
- */
-function dispatchKeyOf( model, productLocalID ) {
-
-  try {
-
-    const product = model.getElementByLocalID( productLocalID )
-    const definition = product?.Representation
-
-    if ( definition === void 0 || definition === null ) {
-      return productLocalID
-    }
-
-    for ( const representation of definition.Representations ?? [] ) {
-
-      for ( const item of representation?.Items ?? [] ) {
-
-        const source = item?.MappingSource
-
-        if ( source?.localID !== void 0 ) {
-          return source.localID
-        }
-      }
-
-      if ( representation?.localID !== void 0 ) {
-        return representation.localID
-      }
-    }
-
-    return productLocalID
-
-  } catch {
-
-    return productLocalID
-  }
-}
-
 
 /**
  * Assign products to shards by strategy.

@@ -71,6 +71,13 @@ async function runWorker( task ) {
   }
 
   const placements = []
+
+  // Payload digests too, not just placements. Identical express IDs and
+  // transforms can sit over different vertex data — a cache-order or
+  // master-void regression looks exactly like that — so a placement-only
+  // digest would report OK on visibly different geometry. Hashed once per
+  // geometry, since instances share it.
+  const payloads = new Map()
   const tGeometry = performance.now()
 
   for ( ;; ) {
@@ -85,6 +92,23 @@ async function runWorker( task ) {
             placements.push(
                 `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
                     .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+
+            if ( !payloads.has( placed.geometryExpressID ) ) {
+
+              const geometry = api.GetGeometry( modelID, placed.geometryExpressID )
+              const vertices = api.GetVertexArray(
+                  geometry.GetVertexData(), geometry.GetVertexDataSize() )
+              const indices = api.GetIndexArray(
+                  geometry.GetIndexData(), geometry.GetIndexDataSize() )
+
+              payloads.set( placed.geometryExpressID,
+                  createHash( 'sha256' )
+                      .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
+                          vertices.byteLength ) )
+                      .update( new Uint8Array( indices.buffer, indices.byteOffset,
+                          indices.byteLength ) )
+                      .digest( 'hex' ) )
+            }
           }
         } )
 
@@ -98,6 +122,7 @@ async function runWorker( task ) {
     openMs,
     geometryMs: performance.now() - tGeometry,
     placements,
+    payloads: [ ...payloads ].map( ( [ id, hash ] ) => `${id}:${hash}` ),
   }
 }
 
@@ -164,16 +189,35 @@ if ( !isMainThread ) {
     // Order-independent: shards finish in any order, and the union is a
     // multiset. Sorting before hashing is what makes two runs comparable.
     const union = results.flatMap( ( result ) => result.placements ).sort()
-    const digest = createHash( 'sha256' ).update( union.join( '\n' ) ).digest( 'hex' )
+
+    // Payload hashes are per geometry, so shards that both touched one report
+    // it twice; dedupe before hashing or the digest would depend on how the
+    // partition happened to split shared geometry.
+    const payloadUnion =
+      [ ...new Set( results.flatMap( ( result ) => result.payloads ) ) ].sort()
+
+    const digest = createHash( 'sha256' )
+        .update( union.join( '\n' ) )
+        .update( '\u0000' )
+        .update( payloadUnion.join( '\n' ) )
+        .digest( 'hex' )
 
     if ( referenceDigest === void 0 ) {
       referenceDigest = digest
       referenceWall = wallMs
     }
 
-    const verdict = digest === referenceDigest ?
+    const matched = digest === referenceDigest
+
+    // A partition that loses or alters geometry is not a slow result, it is a
+    // wrong one, and anything scripting this must not keep the timings.
+    if ( !matched ) {
+      process.exitCode = 1
+    }
+
+    const verdict = matched ?
       'OK   union matches the single-worker load' :
-      'FAIL union DIFFERS from the single-worker load'
+      'FAIL union DIFFERS from the single-worker load (placements or payloads)'
 
     const slowestGeometry = Math.max( ...results.map( ( r ) => r.geometryMs ) )
     const slowestOpen = Math.max( ...results.map( ( r ) => r.openMs ) )

@@ -2204,16 +2204,27 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
               geometryDispatchKey( this.model[0], localID ),
               this.shard_!.count ) === this.shard_!.index )
 
-      // Aggregates place by the SAME key, on the relating object: on an
+      // Aggregates place by the RELATING OBJECT's key — the assembly whose
+      // geometry the pass builds — not the relationship record's. An
+      // IfcRelAggregates is not an IfcProduct, so keying on it would fall
+      // straight through geometryDispatchKey to its own local ID and shard
+      // by record position while claiming to place by representation.
+      //
+      // This matters most exactly where placement matters most: on an
       // assembly-heavy model the rel-aggregates pass creates most of the
-      // geometry, so leaving it positional while placing products carefully
-      // gives placement almost nothing to control (measured on D3D, where
-      // that mistake made every strategy look identical).
+      // geometry, so getting it wrong leaves placement with almost nothing
+      // to control (measured on D3D, where that mistake made every strategy
+      // look identical).
       this.demandAggregates_ = this.shard_ === void 0 ?
-        aggregates : aggregates.filter( ( relAggregate ) =>
-          shardOfDispatchKey(
-              geometryDispatchKey( this.model[0], relAggregate.localID ),
-              this.shard_!.count ) === this.shard_!.index )
+        aggregates : aggregates.filter( ( relAggregate ) => {
+
+          const relating = relAggregate.RelatingObject
+
+          return shardOfDispatchKey(
+              geometryDispatchKey(
+                  this.model[0], relating?.localID ?? relAggregate.localID ),
+              this.shard_!.count ) === this.shard_!.index
+        } )
 
       this.demandCursor_ = 0
       this.demandAggregatesCursor_ = 0
