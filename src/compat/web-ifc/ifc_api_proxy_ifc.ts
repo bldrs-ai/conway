@@ -2297,11 +2297,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /**
    * Everything the pump could extract, before any shard narrows it.
    *
-   * Reads no record bytes — products come from the type index and aggregate
-   * targets from the geometry side — so it is identical on a resident and a
-   * windowed source, and both key computations start from the same lists in
-   * the same order. That order is what makes the keys align to the
+   * Unchanged from what the pump enumerated before sharding existed, and
+   * deliberately shared by both key computations so they start from the same
+   * lists in the same order — that order is what makes the keys align to the
    * worklists.
+   *
+   * The product walk itself reads no record bytes (the type index and the
+   * local-ID column answer it). `aggregateTargetLocalIDs` does scan the
+   * IfcRelAggregates records for their RelatedObjects, which on a windowed
+   * source is a read this function does not page for — pre-existing, and
+   * already swallowed per-record on its own side.
    *
    * @return {object} The unsharded product and rel-aggregates worklists.
    */
