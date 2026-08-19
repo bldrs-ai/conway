@@ -1995,6 +1995,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'source — use ExtractGeometryBatchAsync' )
     }
 
+    this.checkShardPreconditions_()
     this.ensureDemandWorklists_()
 
     return this.pumpGeometryBatch_(batchSize, meshCallback)
@@ -2019,6 +2020,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {extracted: 0, remaining: 0}
     }
 
+    this.checkShardPreconditions_()
     this.ensureDemandWorklists_()
 
     if (!this.model[0].isSourceExternal) {
@@ -2207,12 +2209,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           const key = geometryDispatchKey( this.model[0], localID )
 
           // A key equal to the product's own local ID means the walk found
-          // nothing to place by — no representation, or, on a windowed
-          // source, records that are not resident yet, since this filter
-          // runs before the pump's per-product prefetch. Placement then
-          // degrades to positional modulo, which is round-robin: it still
-          // partitions correctly, it just stops avoiding duplication.
-          // Counted so that degradation is visible rather than silent.
+          // nothing to place by — a product with no representation. That
+          // costs affinity, not correctness: the key is still a pure
+          // function of the product, so every worker computes the same one
+          // and the partition holds; it just stops avoiding duplication.
+          //
+          // Correctness would only break if the SAME product keyed
+          // differently in different workers, which is why windowed sources
+          // are refused outright (checkShardPreconditions_) rather than
+          // merely warned about — an earlier version of this comment had
+          // that wrong.
           key === localID ? ++positional : ++placed
 
           return shardOfDispatchKey( key, this.shard_!.count ) ===
@@ -2225,9 +2231,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             `[shard ${this.shard_.index}/${this.shard_.count}] ` +
             `${positional} of ${positional + placed} products have no ` +
             'placement key, so sharding is mostly positional and shared ' +
-            'geometry will be rebuilt per shard. On a windowed source this ' +
-            'means the key\'s records are not resident when the worklist ' +
-            'is built.')
+            'geometry will be rebuilt per shard.')
       }
 
       // Aggregates place by the RELATING OBJECT's key — the assembly whose
@@ -2244,11 +2248,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       this.demandAggregates_ = this.shard_ === void 0 ?
         aggregates : aggregates.filter( ( relAggregate ) => {
 
-          const relating = relAggregate.RelatingObject
+          // Guarded even though sharding now refuses windowed sources:
+          // this getter reads a record synchronously, and geometryDispatchKey's
+          // own try/catch is INSIDE the call, so a throw here would abort
+          // worklist construction for the whole model rather than place one
+          // aggregate by fallback. Depth-in-depth for a total function.
+          let relating: number | undefined
+
+          try {
+            relating = relAggregate.RelatingObject?.localID
+          } catch {
+            relating = void 0
+          }
 
           return shardOfDispatchKey(
               geometryDispatchKey(
-                  this.model[0], relating?.localID ?? relAggregate.localID ),
+                  this.model[0], relating ?? relAggregate.localID ),
               this.shard_!.count ) === this.shard_!.index
         } )
 
@@ -2315,6 +2330,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'wait for a shared coordination frame.')
     }
 
+    // Refused at claim time as well as at every pump (see
+    // checkShardPreconditions_, which carries the reasoning): whether the
+    // dispatch key resolves depends on which pages are resident in this
+    // worker, so workers disagree and the partition stops being a partition.
+    if (this.model[0].isSourceExternal) {
+
+      throw new Error(
+          'SetGeometryShard cannot be used with a windowed external ' +
+          'source: the dispatch key walks attribute records, whose ' +
+          'residency differs per worker, so workers would disagree about ' +
+          'which products they own.')
+    }
+
     if (!Number.isInteger(shard.count) || shard.count < 1 ||
         !Number.isInteger(shard.index) || shard.index < 0 ||
         shard.index >= shard.count) {
@@ -2335,23 +2363,71 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback Optional mesh consumer.
    * @return {object} `{extracted, remaining}`.
    */
-  private pumpGeometryBatch_(
-      batchSize: number,
-      meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
+  /**
+   * The conditions a sharded pump requires, re-checked on every batch.
+   *
+   * Not only in setGeometryShard, because `this.settings` is the CALLER'S
+   * object, held by reference, and the model reads it live — a caller can
+   * open with a flag off, claim a shard past the claim-time check, then set
+   * the flag on its own object. The check that has to hold is the one at the
+   * point the property is consumed, so this runs from both pump entries,
+   * upstream of every capture.
+   *
+   * Unsharded models are unaffected: every condition here is about workers
+   * having to agree with each other.
+   */
+  private checkShardPreconditions_(): void {
 
-    // Re-checked here, not only in setGeometryShard. `this.settings` is the
-    // CALLER'S object, held by reference, and streamNewMeshes_ reads
-    // COORDINATE_TO_ORIGIN live — so a caller that opens without it, claims
-    // a shard, then flips the flag on its own object would derive exactly
-    // the per-shard anchor the claim-time check exists to prohibit. The
-    // check that has to hold is the one at the point the frame is derived.
-    if (this.shard_ !== void 0 && this.settings?.COORDINATE_TO_ORIGIN === true) {
+    if (this.shard_ === void 0) {
+      return
+    }
+
+    // Each shard would derive its own recentre anchor from whichever product
+    // it extracts first (see demandCoordination_ in streamNewMeshes_), so a
+    // model spanning more than one recentre cell merges subsets shifted by
+    // whole grid cells.
+    if (this.settings?.COORDINATE_TO_ORIGIN === true) {
 
       throw new Error(
           'COORDINATE_TO_ORIGIN was enabled on a sharded model: each shard ' +
           'would derive its own recentre anchor from whichever product it ' +
           'extracts first, so merged output can be shifted between shards.')
     }
+
+    // A windowed source breaks the property the whole partition rests on:
+    // that every worker computes the SAME key for a product. geometryDispatchKey
+    // walks attribute records, and on a windowed source whether that walk
+    // succeeds depends on which pages happen to be resident in THIS worker —
+    // so one worker returns the mapped-source key while another catches the
+    // non-resident read and falls back to the product's local ID.
+    //
+    // That is not weaker affinity, it is a wrong partition. Two workers
+    // disagreeing about a product's key can have both modulo results select
+    // it (extracted twice) or neither (dropped silently). The union check in
+    // m3_worker_pool.mjs cannot see it either, because it runs on resident
+    // buffers where the walk always succeeds.
+    //
+    // Making this work needs a key that does not depend on residency —
+    // derived from the reference columns, or from a closure paged
+    // deterministically before the split. Until then it is refused: workers
+    // on a windowed store were already out of scope for this change (they
+    // need the OPFS-backed source, not a resident buffer per worker), so
+    // this closes a path that has no caller rather than removing a feature.
+    if (this.model[0].isSourceExternal) {
+
+      throw new Error(
+          'a geometry shard cannot be claimed on a windowed external ' +
+          'source: the dispatch key walks attribute records, so whether it ' +
+          'resolves depends on which pages are resident in each worker, and ' +
+          'workers that disagree about a product would extract it twice or ' +
+          'not at all.')
+    }
+  }
+
+
+  private pumpGeometryBatch_(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []

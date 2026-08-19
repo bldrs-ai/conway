@@ -973,6 +973,42 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     expect( () => api.ExtractGeometryBatch( modelID, 1 ) )
         .toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
 
+    // The async entry is a SEPARATE path — on an external source it never
+    // reaches pumpGeometryBatch_ at all — so the guard has to hold there
+    // independently. It was bypassed when the check lived in the pump.
+    await expect( api.ExtractGeometryBatchAsync( modelID, 1 ) )
+        .rejects.toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'an unsharded model is unaffected by the shard preconditions', async () => {
+
+    // The guards must be about workers agreeing with each other and nothing
+    // else. A model that never claims a shard recentres and pumps exactly as
+    // before — without this, the checks would be a behaviour change for
+    // every existing caller, Share included.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true } )
+
+    let delivered = 0
+
+    for ( ; ; ) {
+      const { extracted, remaining } = api.ExtractGeometryBatch(
+          modelID, 4, ( mesh ) => {
+            delivered += mesh.geometries.size()
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( delivered ).toBeGreaterThan( 0 )
+
     api.CloseModel( modelID )
   }, 240000 )
 
