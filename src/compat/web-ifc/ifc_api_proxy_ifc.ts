@@ -119,6 +119,10 @@ interface IfcProxyLoadState {
   /** Coordination matrix the parse-time preview channel derived (slice
    * A2) — adopted by the durable capture so both share one frame. */
   previewCoordinationMatrix?: number[]
+  /** True when a parse-time preview channel ran and emitted. Recorded
+   * separately from the matrix above, which only exists when recentring
+   * was on — sharding has to know about the preview either way. */
+  previewEmitted?: boolean
   allTimeStart: number
   stepHeader: StepHeader
   model: IfcStepModel
@@ -287,6 +291,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * memory.
    */
   private demandCoordination_?: number[]
+
+  /** Whether a parse-time preview channel already emitted for this model.
+   * The preview runs during open, before a shard can be claimed, so its
+   * output is never partitioned (see setGeometryShard). */
+  private previewEmitted_ = false
 
   /**
    * True while an adopted preview-channel coordination frame is still
@@ -458,6 +467,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // derivation and places exactly where the preview did. (Internal
     // only — getCoordinationMatrix stays identity, see
     // demandCoordination_.)
+    this.previewEmitted_ = loadState.previewEmitted === true
+
     if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
       this.demandCoordination_ = loadState.previewCoordinationMatrix
       this._isCoordinated = true
@@ -1013,6 +1024,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // (derived from the same first instance with the same math), so
         // preview payloads and durable meshes share one frame.
         previewCoordinationMatrix: previewChannel?.coordinationMatrix,
+        previewEmitted: previewChannel !== void 0,
         allTimeStart,
         stepHeader,
         model,
@@ -2344,6 +2356,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // once and handed to every worker. Until that exists, the combination
     // is an error rather than a quiet coordinate bug — which does mean the
     // pool cannot serve Share's own open settings yet.
+    // The preview channel runs during open, before a shard can be claimed,
+    // so its payloads are never partitioned: every worker performs the same
+    // capped preview extraction and emits the same imposters, and a pool
+    // forwarding those callbacks gets N overlapping copies. Only the
+    // durable pump is sharded.
+    //
+    // Refused rather than deduplicated, because the fix is to make the
+    // shard available during open so the preview path can filter by it —
+    // an open-signature change, not a dispatch one. Same shape as the
+    // other two refusals: close the path that has no caller, and name the
+    // precondition for reopening it.
+    if (this.previewEmitted_) {
+
+      throw new Error(
+          'SetGeometryShard cannot be used on a model opened with ' +
+          'ON_PREVIEW_MESH: the preview runs during open, before a shard ' +
+          'exists, so every worker would emit the same unpartitioned ' +
+          'preview payloads.')
+    }
+
     // Already-adopted frame, not just the current flag — see
     // checkShardPreconditions_, which carries the reasoning.
     if (this.demandCoordination_ !== void 0) {
@@ -2454,6 +2486,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // adopt a frame, then set the flag false on its own settings object
     // would pass a flag-only check while already sitting in a
     // preview-derived frame that other workers do not share.
+    if (this.previewEmitted_) {
+
+      throw new Error(
+          'a preview channel already emitted for this model, so it cannot ' +
+          'be sharded: the preview runs during open, before a shard ' +
+          'exists, so its payloads are not partitioned.')
+    }
+
     if (this.demandCoordination_ !== void 0) {
 
       throw new Error(

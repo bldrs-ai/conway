@@ -1172,6 +1172,40 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
         referenceApi.CloseModel( referenceID )
       }, 240000 )
 
+  test( 'a model opened with ON_PREVIEW_MESH cannot be sharded', async () => {
+
+    // The preview channel runs during OPEN, before a shard can be claimed,
+    // so its payloads are never partitioned: every worker in a pool would
+    // perform the same capped preview extraction and emit the same
+    // imposters, and a consumer forwarding those callbacks would receive N
+    // overlapping copies while only the durable pump was split.
+    //
+    // Note this is NOT covered by the adopted-frame guard: that one keys on
+    // demandCoordination_, which the preview only installs when recentring
+    // is on. With COORDINATE_TO_ORIGIN false there is no frame to catch,
+    // and the duplicated preview output is the whole problem.
+    const api = new IfcAPI()
+    await api.Init()
+
+    let previews = 0
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { ...SHARD_SETTINGS,
+          ON_PREVIEW_MESH: () => {
+            ++previews
+          } } as never )
+
+    // The preview really did run, so the refusal below is about something
+    // that happened rather than a flag nobody acted on.
+    expect( previews ).toBeGreaterThan( 0 )
+
+    expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+        .toThrow( /ON_PREVIEW_MESH/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
   test( 'a shard descriptor is snapshotted, not retained', async () => {
 
     // A coordinator configuring several instances from one reused object is
