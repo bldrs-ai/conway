@@ -30,6 +30,13 @@ export interface IfcApiModelPassthrough {
   setGeometryShard?( shard?: { index: number, count: number } ): void
 
   /**
+   * Supply the recentre frame instead of deriving one (conway extension,
+   * M3) — see IfcAPI.SetCoordinationFrame. Optional: passthroughs with no
+   * deferred pump (AP214/STEP) have no frame to supply.
+   */
+  setCoordinationFrame?( matrix?: number[] ): void
+
+  /**
    * Set the resident-geometry budget in bytes (conway extension, M3) —
    * see IfcAPI.SetGeometryBudget. Optional so non-IFC passthroughs, whose
    * models have no evictable geometry store, simply do not offer it.

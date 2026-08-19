@@ -114,6 +114,45 @@ an interior element now renders where its file puts it; the logo moved
   digest can't see it". Verify against a run rather than by reading the
   pipeline.
 
+## Supplying the frame instead of deriving it
+
+`SetCoordinationFrame(modelID, matrix)` hands a deferred model the frame
+to apply, rather than letting it derive one. It exists because deriving
+is a **per-instance** act, and M3's geometry worker pool runs N instances
+over one model: each starts on a different product, so each derives a
+different anchor, and the shards reassemble offset by whole grid cells.
+Individually plausible placements, a wrong picture.
+
+The workflow is derive-once-then-distribute. A coordinator opens the
+model (Share's parse-time preview channel already derives a frame during
+open), reads it back with `GetAppliedCoordinationMatrix`, and passes that
+matrix to every worker before its first batch. This is what lifts the
+`COORDINATE_TO_ORIGIN` refusal in `SetGeometryShard` — see
+[streaming-federated-loader.md](streaming-federated-loader.md) § M3.
+
+Three properties are deliberate:
+
+- **A supplied frame is final.** The adopted-preview revalidation above —
+  which re-derives when the first durable placement lands beyond the
+  budget — is disabled under a supplied frame. A worker that re-derived
+  would silently leave the frame its siblings are still using, which is
+  the failure this seam exists to prevent, arriving by another road.
+- **It must be set before the first batch.** Placements already emitted
+  carry whatever frame was in force when they were captured, and nothing
+  re-places them.
+- **It will not overwrite a frame the model derived for itself.** That
+  frame has already placed geometry; replacing it would leave that
+  geometry in the old space and everything after it in the new one.
+
+The grid is what makes this hard to test honestly. Shards whose first
+products sit tens of metres apart quantize to the *same* frame, so a
+per-shard anchor is invisible on every fixture in `data/` — including the
+georeferenced one, whose seven products span ~86m inside a single 1km
+cell. `data/index_georeferenced_multicell.ifc` spreads them 4km apart for
+exactly this reason, and
+`src/compat/web-ifc/geometry_shard_coordination.test.ts` asserts that
+span rather than assuming it.
+
 ## What is pinned, and where
 
 | Property | Test |
@@ -121,6 +160,7 @@ an interior element now renders where its file puts it; the logo moved
 | Model-zero below the budget, whatever the anchor; anchors either side of a grid line agree; unit-independent snapping above the budget | `src/compat/web-ifc/coordination_f64.test.ts` |
 | Near-origin model keeps authored coordinates; georeferenced model still recentres; classic and streamed opens agree | `src/compat/web-ifc/coordination_export_order.test.ts` |
 | The cross-format claim — `index.ifc` and `index.step` render in the same world box | Share: `src/Containers/indexStepLogo.spec.ts` |
+| A supplied frame is applied exactly, a different one moves the model, and N shards under one frame union to the single instance's placements | `src/compat/web-ifc/geometry_shard_coordination.test.ts` |
 
 The cross-format claim is pinned Share-side rather than here because
 through this surface the AP214 arm reports its placements at the origin

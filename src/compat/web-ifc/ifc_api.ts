@@ -976,6 +976,10 @@ export class IfcAPI {
    * first ExtractGeometryBatch — after that the worklists exist and narrowing
    * them would drop products already reported as pending, so it throws.
    *
+   * **Order matters against {@link SetCoordinationFrame}.** A model opened
+   * with COORDINATE_TO_ORIGIN is refused here unless a frame has already
+   * been supplied, so supply the frame first. The refusal names it.
+   *
    * @param modelID handle from a DEFER_GEOMETRY open
    * @param shard `{index, count}`, or omitted for the whole model
    * @return {boolean} false for unknown models and for passthroughs with no
@@ -992,6 +996,40 @@ export class IfcAPI {
     }
 
     result.setGeometryShard(shard)
+
+    return true
+  }
+
+  /**
+   * Conway extension (M3): supply the recentre frame a deferred model
+   * applies, instead of letting it derive one from its own first geometry.
+   *
+   * This is what makes COORDINATE_TO_ORIGIN and {@link SetGeometryShard}
+   * combinable. A derived frame is anchored on whichever product the
+   * instance extracts first, so N workers derive N frames and a model
+   * spanning more than one recentre cell reassembles with its shards offset
+   * by whole cells — individually plausible placements, a wrong picture.
+   * One frame handed to every worker removes the disagreement at the source.
+   *
+   * Typical use: the coordinator opens once (its parse-time preview channel
+   * derives a frame), reads it back with {@link GetAppliedCoordinationMatrix}, and
+   * passes it to every worker before their first batch.
+   *
+   * @param modelID handle from a DEFER_GEOMETRY open
+   * @param matrix column-major mat4 of 16 finite numbers, or omitted to drop
+   * a previously supplied frame
+   * @return {boolean} false for unknown models and for passthroughs with no
+   * deferred pump (AP214/STEP), which have no frame to supply
+   */
+  SetCoordinationFrame( modelID: number, matrix?: number[] ): boolean {
+
+    const result = this.models.get(modelID)
+
+    if (result?.setCoordinationFrame === void 0) {
+      return false
+    }
+
+    result.setCoordinationFrame(matrix)
 
     return true
   }
