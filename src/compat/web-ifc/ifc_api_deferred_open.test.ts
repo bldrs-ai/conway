@@ -855,8 +855,12 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     const wholeApi = new IfcAPI()
     await wholeApi.Init()
 
-    const wholeID = await wholeApi.OpenModelStreamed(
-        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+    // Sharding refuses COORDINATE_TO_ORIGIN — each shard would derive its
+    // own recentre anchor — so both sides of this comparison open without it.
+    const SHARD_SETTINGS =
+      { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+
+    const wholeID = await wholeApi.OpenModelStreamed( fixture, SHARD_SETTINGS )
 
     const whole: string[] = []
 
@@ -886,8 +890,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       const api = new IfcAPI()
       await api.Init()
 
-      const modelID = await api.OpenModelStreamed(
-          fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+      const modelID = await api.OpenModelStreamed( fixture, SHARD_SETTINGS )
 
       expect( api.SetGeometryShard( modelID, { index, count: shardCount } ) )
           .toBe( true )
@@ -935,7 +938,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
 
     const modelID = await api.OpenModelStreamed(
         new Uint8Array( fs.readFileSync( 'data/mapped_shared_representation.ifc' ) ),
-        { ...SETTINGS, DEFER_GEOMETRY: true } )
+        { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true } )
 
     api.ExtractGeometryBatch( modelID, 1 )
 

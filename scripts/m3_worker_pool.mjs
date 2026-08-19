@@ -58,8 +58,12 @@ async function runWorker( task ) {
   const bytes = new Uint8Array( fs.readFileSync( task.filePath ) )
   const tOpen = performance.now()
 
+  // No COORDINATE_TO_ORIGIN: the recentre anchor is derived from whichever
+  // product a model captures first, so shards would each derive their own
+  // and merge subsets shifted by whole grid cells on a model spanning more
+  // than one recentre cell. SetGeometryShard refuses the combination; this
+  // is the other half of that decision.
   const modelID = await api.OpenModelStreamed( bytes, {
-    COORDINATE_TO_ORIGIN: true,
     USE_FAST_BOOLS: true,
     DEFER_GEOMETRY: true,
   } )
@@ -89,25 +93,43 @@ async function runWorker( task ) {
 
             const placed = mesh.geometries.get( where )
 
+            // Entity, geometry, colour and transform. Without the entity a
+            // placement attributed to the wrong FlatMesh reads identical
+            // (picking and metadata differ, geometry does not); without the
+            // colour a different material resolving to the same mesh does
+            // too.
             placements.push(
-                `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                `${mesh.expressID}/${placed.geometryExpressID}` +
+                `#${placed.color.x},${placed.color.y},${placed.color.z},${placed.color.w}` +
+                `@${[ ...placed.flatTransformation ]
                     .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
 
             if ( !payloads.has( placed.geometryExpressID ) ) {
 
+              // GetGeometry hands back an OWNING clone, and embind
+              // finalization is nondeterministic — keeping one per geometry
+              // for the length of a run inflates both the timings this
+              // script reports and the memory it needs to report them.
               const geometry = api.GetGeometry( modelID, placed.geometryExpressID )
-              const vertices = api.GetVertexArray(
-                  geometry.GetVertexData(), geometry.GetVertexDataSize() )
-              const indices = api.GetIndexArray(
-                  geometry.GetIndexData(), geometry.GetIndexDataSize() )
 
-              payloads.set( placed.geometryExpressID,
-                  createHash( 'sha256' )
-                      .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
-                          vertices.byteLength ) )
-                      .update( new Uint8Array( indices.buffer, indices.byteOffset,
-                          indices.byteLength ) )
-                      .digest( 'hex' ) )
+              try {
+
+                const vertices = api.GetVertexArray(
+                    geometry.GetVertexData(), geometry.GetVertexDataSize() )
+                const indices = api.GetIndexArray(
+                    geometry.GetIndexData(), geometry.GetIndexDataSize() )
+
+                payloads.set( placed.geometryExpressID,
+                    createHash( 'sha256' )
+                        .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
+                            vertices.byteLength ) )
+                        .update( new Uint8Array( indices.buffer, indices.byteOffset,
+                            indices.byteLength ) )
+                        .digest( 'hex' ) )
+
+              } finally {
+                geometry.delete()
+              }
             }
           }
         } )

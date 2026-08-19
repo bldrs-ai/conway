@@ -2198,11 +2198,37 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         aggregates.push(relAggregate)
       }
 
+      let placed = 0
+      let positional = 0
+
       this.demandProducts_ = this.shard_ === void 0 ?
-        products : products.filter( ( localID ) =>
-          shardOfDispatchKey(
-              geometryDispatchKey( this.model[0], localID ),
-              this.shard_!.count ) === this.shard_!.index )
+        products : products.filter( ( localID ) => {
+
+          const key = geometryDispatchKey( this.model[0], localID )
+
+          // A key equal to the product's own local ID means the walk found
+          // nothing to place by — no representation, or, on a windowed
+          // source, records that are not resident yet, since this filter
+          // runs before the pump's per-product prefetch. Placement then
+          // degrades to positional modulo, which is round-robin: it still
+          // partitions correctly, it just stops avoiding duplication.
+          // Counted so that degradation is visible rather than silent.
+          key === localID ? ++positional : ++placed
+
+          return shardOfDispatchKey( key, this.shard_!.count ) ===
+            this.shard_!.index
+        } )
+
+      if ( this.shard_ !== void 0 && positional > placed ) {
+
+        Logger.warning(
+            `[shard ${this.shard_.index}/${this.shard_.count}] ` +
+            `${positional} of ${positional + placed} products have no ` +
+            'placement key, so sharding is mostly positional and shared ' +
+            'geometry will be rebuilt per shard. On a windowed source this ' +
+            'means the key\'s records are not resident when the worklist ' +
+            'is built.')
+      }
 
       // Aggregates place by the RELATING OBJECT's key — the assembly whose
       // geometry the pass builds — not the relationship record's. An
@@ -2264,6 +2290,29 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if (shard === void 0) {
       this.shard_ = void 0
       return
+    }
+
+    // Refused rather than silently wrong. With COORDINATE_TO_ORIGIN the
+    // recentre anchor is derived from the FIRST geometry a model captures
+    // (see demandCoordination_ in streamNewMeshes_), so shards that begin on
+    // different products derive different frames — and a model spanning more
+    // than one recentre cell then merges subsets shifted by whole grid cells.
+    // Nothing in a union-of-placements check catches that on a model sitting
+    // at the origin, which is every fixture here.
+    //
+    // Sharding a recentred model therefore needs one anchor agreed before
+    // the split: either derived independently of the shard, or established
+    // once and handed to every worker. Until that exists, the combination
+    // is an error rather than a quiet coordinate bug — which does mean the
+    // pool cannot serve Share's own open settings yet.
+    if (this.settings?.COORDINATE_TO_ORIGIN === true) {
+
+      throw new Error(
+          'SetGeometryShard cannot be combined with COORDINATE_TO_ORIGIN: ' +
+          'each shard would derive its own recentre anchor from whichever ' +
+          'product it happens to extract first, so merged output can be ' +
+          'shifted between shards. Open without COORDINATE_TO_ORIGIN, or ' +
+          'wait for a shared coordination frame.')
     }
 
     if (!Number.isInteger(shard.count) || shard.count < 1 ||
