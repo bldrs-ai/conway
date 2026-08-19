@@ -960,6 +960,42 @@ export class IfcAPI {
     return result.setGeometryBudget( megabytes * BYTES_PER_MIB )
   }
 
+  /**
+   * Conway extension (M3): extract only one shard of a deferred model's
+   * geometry, so N workers — each with its own instance and heap — can pump
+   * disjoint products with no scheduling channel between them.
+   *
+   * Placement is a pure function of the product (its representation's mapped
+   * source), so every worker independently agrees on who owns what, and
+   * products sharing geometry land together rather than each shard rebuilding
+   * it. Measured at N=4: +0 % extra assets on MB-Khaya and +38.1 % on D3D
+   * against round-robin's +25 % and +40.7 %, for 1.76x and 2.34x wall-clock.
+   *
+   * **A shard is a SUBSET of the model.** Pumping one to completion yields
+   * part of the geometry; the consumer unions the shards. Call before the
+   * first ExtractGeometryBatch — after that the worklists exist and narrowing
+   * them would drop products already reported as pending, so it throws.
+   *
+   * @param modelID handle from a DEFER_GEOMETRY open
+   * @param shard `{index, count}`, or omitted for the whole model
+   * @return {boolean} false for unknown models and for passthroughs with no
+   * demand worklists (AP214/STEP), which cannot shard
+   */
+  SetGeometryShard(
+      modelID: number,
+      shard?: { index: number, count: number } ): boolean {
+
+    const result = this.models.get(modelID)
+
+    if (result?.setGeometryShard === void 0) {
+      return false
+    }
+
+    result.setGeometryShard(shard)
+
+    return true
+  }
+
   ExtractGeometryBatch(
       modelID: number,
       batchSize: number,

@@ -23,6 +23,13 @@ export interface IfcApiModelPassthrough {
   linearScalingFactor?: number
 
   /**
+   * Claim one shard of this model's geometry (conway extension, M3) — see
+   * IfcAPI.SetGeometryShard. Optional: passthroughs without demand worklists
+   * (AP214/STEP) have nothing to shard.
+   */
+  setGeometryShard?( shard?: { index: number, count: number } ): void
+
+  /**
    * Set the resident-geometry budget in bytes (conway extension, M3) —
    * see IfcAPI.SetGeometryBudget. Optional so non-IFC passthroughs, whose
    * models have no evictable geometry store, simply do not offer it.

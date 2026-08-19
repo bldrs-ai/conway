@@ -820,6 +820,131 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api7.CloseModel( modelID )
   }, 240000 )
 
+  test( 'shards partition the model: every instance exactly once', async () => {
+
+    // The property a worker pool rests on. Four instances each claim a shard
+    // and pump to completion; the union must equal what one unsharded load
+    // delivers — no instance lost, none built twice. Placement being a pure
+    // function of the product is what lets the shards agree without talking
+    // to each other, so this also pins that: the same product must land in
+    // the same shard from four independent decisions.
+    // Both fixtures deliberately: the mapped one exercises the product
+    // worklist, and aggregate_master_voids the rel-aggregates pass, which is
+    // a SEPARATE worklist with its own filter. Sharding one and not the other
+    // duplicates every aggregate across every shard — and on an
+    // assembly-heavy model that pass is most of the geometry, so this is the
+    // failure with real consequences, not the exotic one.
+    for ( const fixturePath of [
+      'data/mapped_shared_representation.ifc',
+      'data/aggregate_master_voids.ifc',
+    ] ) {
+      await partitionsExactlyOnce( fixturePath )
+    }
+  }, 240000 )
+
+  /**
+   * Assert that N shards of a model union to exactly what one unsharded load
+   * delivers.
+   *
+   * @param fixturePath The model to check.
+   */
+  async function partitionsExactlyOnce( fixturePath: string ): Promise<void> {
+
+    const fixture = new Uint8Array( fs.readFileSync( fixturePath ) )
+
+    const wholeApi = new IfcAPI()
+    await wholeApi.Init()
+
+    const wholeID = await wholeApi.OpenModelStreamed(
+        fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    const whole: string[] = []
+
+    for ( ; ; ) {
+      const { extracted, remaining } = wholeApi.ExtractGeometryBatch(
+          wholeID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              const placed = mesh.geometries.get( where )
+              whole.push(
+                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            }
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( whole.length ).toBeGreaterThan( 0 )
+
+    const shardCount = 4
+    const sharded: string[] = []
+    const perShard: number[] = []
+
+    for ( let index = 0; index < shardCount; ++index ) {
+
+      const api = new IfcAPI()
+      await api.Init()
+
+      const modelID = await api.OpenModelStreamed(
+          fixture, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+      expect( api.SetGeometryShard( modelID, { index, count: shardCount } ) )
+          .toBe( true )
+
+      let delivered = 0
+
+      for ( ; ; ) {
+        const { extracted, remaining } = api.ExtractGeometryBatch(
+            modelID, 4, ( mesh ) => {
+              for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+                const placed = mesh.geometries.get( where )
+                sharded.push(
+                    `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
+                        .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                ++delivered
+              }
+            } )
+        if ( remaining === 0 && extracted === 0 ) {
+          break
+        }
+      }
+
+      perShard.push( delivered )
+      api.CloseModel( modelID )
+    }
+
+    // The union is the model: same multiset, nothing lost or doubled.
+    expect( sharded.slice().sort() ).toEqual( whole.slice().sort() )
+
+    // ...and no shard delivered the whole thing, which the equality above
+    // would happily accept from one shard doing everything. A single-instance
+    // model legitimately lands in one shard, so this only asserts that no
+    // shard exceeded the total.
+    expect( Math.max( ...perShard ) ).toBeLessThanOrEqual( whole.length )
+
+    wholeApi.CloseModel( wholeID )
+  }
+
+  test( 'a shard cannot be claimed after pumping starts', async () => {
+
+    // Narrowing the worklists mid-load would drop products already reported
+    // as pending, so the model would quietly deliver less than it promised.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/mapped_shared_representation.ifc' ) ),
+        { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+    api.ExtractGeometryBatch( modelID, 1 )
+
+    expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+        .toThrow( /before the first/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )

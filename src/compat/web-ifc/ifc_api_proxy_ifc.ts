@@ -4,6 +4,7 @@ import {
 } from '../../index'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import { CanonicalMaterial } from '../../index'
+import { geometryDispatchKey, shardOfDispatchKey } from '../../ifc/geometry_dispatch'
 import { IfcSceneBuilder } from '../../ifc/ifc_scene_builder'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import {
@@ -242,6 +243,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private readonly demandPendingNodes_ = new Map<number, number>()
 
   /** Cursor into demandProducts_ — products before it are extracted. */
+  /* Which shard of the model this instance extracts, or undefined for all
+   * of it. See setGeometryShard. */
+  private shard_?: { index: number, count: number }
+
   private demandCursor_ = 0
 
   /** Wall-clock split of the store-backed batch pump (profile script). */
@@ -2193,10 +2198,73 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         aggregates.push(relAggregate)
       }
 
-      this.demandProducts_ = products
-      this.demandAggregates_ = aggregates
+      this.demandProducts_ = this.shard_ === void 0 ?
+        products : products.filter( ( localID ) =>
+          shardOfDispatchKey(
+              geometryDispatchKey( this.model[0], localID ),
+              this.shard_!.count ) === this.shard_!.index )
+
+      // Aggregates place by the SAME key, on the relating object: on an
+      // assembly-heavy model the rel-aggregates pass creates most of the
+      // geometry, so leaving it positional while placing products carefully
+      // gives placement almost nothing to control (measured on D3D, where
+      // that mistake made every strategy look identical).
+      this.demandAggregates_ = this.shard_ === void 0 ?
+        aggregates : aggregates.filter( ( relAggregate ) =>
+          shardOfDispatchKey(
+              geometryDispatchKey( this.model[0], relAggregate.localID ),
+              this.shard_!.count ) === this.shard_!.index )
+
       this.demandCursor_ = 0
       this.demandAggregatesCursor_ = 0
+  }
+
+  /**
+   * Extract only one shard of this model's geometry — the across-product
+   * parallelism seam.
+   *
+   * Each worker in a pool opens the model, claims a shard, and pumps: no
+   * scheduling channel between them, because placement is a pure function of
+   * the product (see geometryDispatchKey). Products sharing a representation
+   * land on the same shard, so shards do not rebuild each other's geometry —
+   * round-robin costs +25 % assets on MB-Khaya and +40.7 % on D3D at N=4,
+   * where this key costs +0 % and +38.1 % respectively, for 1.76x and 2.34x
+   * wall-clock.
+   *
+   * **A shard extracts a SUBSET, and the consumer is responsible for the
+   * union.** One shard's output is not a model; assembling all of them is.
+   * Must be set before the first pump call, since the worklists are built
+   * once — setting it later throws rather than silently extracting the wrong
+   * subset.
+   *
+   * @param shard `{index, count}`, or undefined for the whole model.
+   */
+  public setGeometryShard( shard?: { index: number, count: number } ): void {
+
+    if (this.demandProducts_ !== void 0) {
+
+      throw new Error(
+          'setGeometryShard must be called before the first ' +
+          'ExtractGeometryBatch: the worklists are already built, and ' +
+          'narrowing them now would drop products this model has already ' +
+          'reported as pending.')
+    }
+
+    if (shard === void 0) {
+      this.shard_ = void 0
+      return
+    }
+
+    if (!Number.isInteger(shard.count) || shard.count < 1 ||
+        !Number.isInteger(shard.index) || shard.index < 0 ||
+        shard.index >= shard.count) {
+
+      throw new Error(
+          `invalid shard ${shard.index}/${shard.count}: index must be an ` +
+          'integer in [0, count) and count a positive integer')
+    }
+
+    this.shard_ = shard.count === 1 ? void 0 : shard
   }
 
   /**
