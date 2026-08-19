@@ -2356,6 +2356,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // once and handed to every worker. Until that exists, the combination
     // is an error rather than a quiet coordinate bug — which does mean the
     // pool cannot serve Share's own open settings yet.
+    // Sharding only means anything on the deferred pump: it narrows the
+    // worklists ensureDemandWorklists_ builds. A classic open has already
+    // extracted everything, so ExtractGeometryBatch returns zero work and
+    // StreamAllMeshes serves the whole scene — a coordinator that forgot
+    // DEFER_GEOMETRY would see every worker claim successfully and then
+    // receive the COMPLETE model from each, which is the silent-wrong
+    // outcome every other check here exists to prevent.
+    //
+    // Placed after the N=1 normalisation above: {index: 0, count: 1} is a
+    // request for the whole model, which is exactly what a classic open
+    // delivers, so there is nothing to refuse.
+    if (!this.deferredMode_) {
+
+      throw new Error(
+          'SetGeometryShard requires DEFER_GEOMETRY: a classic open has ' +
+          'already extracted the whole model, so a shard claim would be ' +
+          'accepted and then ignored, and every worker would deliver ' +
+          'everything.')
+    }
+
     // The preview channel runs during open, before a shard can be claimed,
     // so its payloads are never partitioned: every worker performs the same
     // capped preview extraction and emits the same imposters, and a pool

@@ -1206,6 +1206,33 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api.CloseModel( modelID )
   }, 240000 )
 
+  test( 'a shard cannot be claimed on a model opened without DEFER_GEOMETRY',
+      async () => {
+
+        // Sharding only narrows the deferred pump's worklists. A classic
+        // open has already extracted everything, so the claim would be
+        // accepted and then do nothing: ExtractGeometryBatch returns zero
+        // work and StreamAllMeshes serves the whole scene. A coordinator
+        // that forgot the flag would get the COMPLETE model from every
+        // worker while believing it had a partition.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true } )
+
+        expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+            .toThrow( /requires DEFER_GEOMETRY/ )
+
+        // N=1 is still fine: it asks for the whole model, which is exactly
+        // what a classic open delivers.
+        expect( api.SetGeometryShard( modelID, { index: 0, count: 1 } ) )
+            .toBe( true )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
   test( 'a shard descriptor is snapshotted, not retained', async () => {
 
     // A coordinator configuring several instances from one reused object is
