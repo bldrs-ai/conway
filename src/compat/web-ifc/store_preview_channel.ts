@@ -57,14 +57,23 @@ const TICK_BUDGET_MS = 20
  * them is not free; this caps the run rather than letting the deadline
  * be the only bound.
  *
- * Measured across the corpus in conway#542: ODA and Tekla are strictly
- * backward-referencing and never hit this, while ArchiCAD and
- * ST-Developer defer 100% of products. On the ArchiCAD files the last
- * record to arrive is always a LEAF — IfcDirection or
- * IfcCartesianPoint, not the placement and not the geometry — which is
- * why a head-only prefix cannot fix it however far it grows. (An
- * earlier version of this comment blamed Revit; no Revit file is in
- * that corpus, and the trait is not Revit's signature.)
+ * Measured across the corpus in conway#542, and note it is the WRITER
+ * that decides record order, not the authoring tool: files written by
+ * the ODA IFC SDK and Tekla's exporter are strictly backward-
+ * referencing and never hit this path, while DDS_IFC (Archicad's IFC
+ * add-on) and ST-DEVELOPER defer 100% of products. On the Archicad
+ * files the last record in a chain to arrive is always a LEAF —
+ * IfcDirection or IfcCartesianPoint, not the placement and not the
+ * geometry — which is why a head-only prefix cannot fix it however far
+ * it grows.
+ *
+ * An earlier version of this comment blamed Revit. The one
+ * Revit-authored file in that corpus is the BEST case measured (first
+ * preview mesh at 269 ms, zero deferrals) — though it was written out
+ * through the ODA SDK, so it says nothing about Revit's own exporter
+ * either way. The 398 MB Archicad file is the worst: 531 of 532
+ * attempts deferred, first mesh at 98.3% of the file, 8.9 s of blank
+ * screen.
  */
 const TICK_MAX_ATTEMPTS = 32
 
