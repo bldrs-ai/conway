@@ -2344,6 +2344,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // once and handed to every worker. Until that exists, the combination
     // is an error rather than a quiet coordinate bug — which does mean the
     // pool cannot serve Share's own open settings yet.
+    // Already-adopted frame, not just the current flag — see
+    // checkShardPreconditions_, which carries the reasoning.
+    if (this.demandCoordination_ !== void 0) {
+
+      throw new Error(
+          'SetGeometryShard cannot be used on a model that has already ' +
+          'adopted a recentre frame (for example via ON_PREVIEW_MESH): the ' +
+          'frame is derived from whichever geometry this instance saw ' +
+          'first, so workers would not share it.')
+    }
+
     if (this.settings?.COORDINATE_TO_ORIGIN === true) {
 
       throw new Error(
@@ -2410,6 +2421,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // it extracts first (see demandCoordination_ in streamNewMeshes_), so a
     // model spanning more than one recentre cell merges subsets shifted by
     // whole grid cells.
+    // Two questions, because neither answers the other. The FLAG says
+    // whether recentring is wanted from here on; demandCoordination_ says
+    // whether a frame has already been adopted. A caller that opened with
+    // ON_PREVIEW_MESH and COORDINATE_TO_ORIGIN, let the preview channel
+    // adopt a frame, then set the flag false on its own settings object
+    // would pass a flag-only check while already sitting in a
+    // preview-derived frame that other workers do not share.
+    if (this.demandCoordination_ !== void 0) {
+
+      throw new Error(
+          'a recentre frame has already been adopted on this model, so it ' +
+          'cannot be sharded: the frame came from whichever geometry this ' +
+          'instance saw first, and other workers will have adopted their ' +
+          'own.')
+    }
+
     if (this.settings?.COORDINATE_TO_ORIGIN === true) {
 
       throw new Error(

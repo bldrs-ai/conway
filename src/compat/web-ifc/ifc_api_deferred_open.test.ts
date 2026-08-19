@@ -1054,6 +1054,41 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api.CloseModel( modelID )
   }, 240000 )
 
+  test( 'a model that already adopted a recentre frame cannot be sharded',
+      async () => {
+
+        // WHITE-BOX, and deliberately so. The reported route here is
+        // ON_PREVIEW_MESH: the preview channel can install a coordination
+        // frame at OPEN, before any pump, after which a caller may set
+        // COORDINATE_TO_ORIGIN false on its own settings object and claim a
+        // shard — passing a flag-only guard while already sitting in a
+        // frame derived from whichever geometry THIS instance previewed.
+        //
+        // I could not get the preview channel to install a frame from a
+        // test (tried index.ifc and index_georeferenced.ifc; demandCoordination_
+        // stayed undefined), so this pins the guard on the state itself
+        // rather than pretending to reproduce the route to it. If the route
+        // is unreachable the guard is merely cheap; if it is reachable, this
+        // is what stops it.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ), SHARD_SETTINGS )
+
+        const passthrough = api.getPassthrough( modelID ) as unknown as
+          { demandCoordination_?: number[] }
+
+        // A frame adopted from somewhere other than the current flag.
+        passthrough.demandCoordination_ =
+          [ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1000, 2000, 3000, 1 ]
+
+        expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+            .toThrow( /already adopted a recentre frame/ )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
   test( 'a shard descriptor is snapshotted, not retained', async () => {
 
     // A coordinator configuring several instances from one reused object is
