@@ -1089,6 +1089,89 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
         api.CloseModel( modelID )
       }, 240000 )
 
+  test( 'a sharded model does not recentre even if a callback enables it',
+      async () => {
+
+        // The window codex found in round 9: ON_PROGRESS is invoked
+        // synchronously from beginPhase, INSIDE the first pump — after the
+        // precondition check for that batch has passed and before the
+        // capture reads the flag. A handler enabling COORDINATE_TO_ORIGIN
+        // there would have each worker derive its own frame despite the
+        // guard.
+        //
+        // Two windows of this shape were patched individually in earlier
+        // rounds, so this asserts BOTH halves of closing the class:
+        //   1. geometry delivered inside the window is not recentred, and
+        //   2. the refusal still fires on the next batch, so the caller is
+        //      told rather than quietly given a subset it cannot merge.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const settings: Record< string, unknown > = {
+          COORDINATE_TO_ORIGIN: false,
+          USE_FAST_BOOLS: true,
+          DEFER_GEOMETRY: true,
+          // Only once the GEOMETRY phase begins — inside the first pump,
+          // after the shard was claimed. Flipping it earlier is caught by
+          // the claim-time refusal, which is correct and not this window.
+          ON_PROGRESS: ( event: { phase: string } ) => {
+            if ( event.phase === 'geometry' ) {
+              settings.COORDINATE_TO_ORIGIN = true
+            }
+          },
+        }
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            settings as never )
+
+        expect( api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+            .toBe( true )
+
+        const windowed: string[] = []
+
+        api.ExtractGeometryBatch( modelID, 4, ( mesh ) => {
+          for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+            windowed.push( transformKey(
+                mesh.geometries.get( where ).flatTransformation ) )
+          }
+        } )
+
+        // The handler really did flip it, mid-pump.
+        expect( settings.COORDINATE_TO_ORIGIN ).toBe( true )
+
+        // (2) The refusal fires now that the flag is observable.
+        expect( () => api.ExtractGeometryBatch( modelID, 4 ) )
+            .toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
+
+        // (1) ...and nothing delivered inside the window was recentred:
+        // identical to a shard whose flag was never touched. A derived
+        // frame would move every transform.
+        const referenceApi = new IfcAPI()
+        await referenceApi.Init()
+
+        const referenceID = await referenceApi.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            SHARD_SETTINGS )
+
+        referenceApi.SetGeometryShard( referenceID, { index: 0, count: 2 } )
+
+        const reference: string[] = []
+
+        referenceApi.ExtractGeometryBatch( referenceID, 4, ( mesh ) => {
+          for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+            reference.push( transformKey(
+                mesh.geometries.get( where ).flatTransformation ) )
+          }
+        } )
+
+        expect( reference.length ).toBeGreaterThan( 0 )
+        expect( windowed ).toEqual( reference )
+
+        api.CloseModel( modelID )
+        referenceApi.CloseModel( referenceID )
+      }, 240000 )
+
   test( 'a shard descriptor is snapshotted, not retained', async () => {
 
     // A coordinator configuring several instances from one reused object is

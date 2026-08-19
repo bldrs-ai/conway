@@ -2411,6 +2411,32 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * Unsharded models are unaffected: every condition here is about workers
    * having to agree with each other.
    */
+  /**
+   * Whether this model should recentre — the question the CAPTURE path asks.
+   *
+   * Distinct from the refusals in checkShardPreconditions_, and deliberately
+   * so. Those refuse the combination when they can observe it; this makes
+   * the combination harmless when they cannot. A guard checks at one moment
+   * and the frame is derived at another, and the caller owns the settings
+   * object throughout — so anything running in between can flip the flag.
+   * ON_PROGRESS is one such window (it is invoked synchronously from
+   * beginPhase, between the precondition check and the first capture), and
+   * it is the third such window found in this review; patching each one as
+   * it turns up is losing strategy.
+   *
+   * So a sharded model never recentres, whatever the flag says at the
+   * instant the frame would be derived. The refusals still fire first in
+   * every observable case, which is what a caller should see; this is what
+   * makes a missed one merely refused-late rather than silently wrong.
+   *
+   * @return {boolean} Whether to derive and apply a recentre frame.
+   */
+  private recentreEnabled_(): boolean {
+
+    return this.shard_ === void 0 && this.settings?.COORDINATE_TO_ORIGIN === true
+  }
+
+
   private checkShardPreconditions_(): void {
 
     if (this.shard_ === void 0) {
@@ -2695,11 +2721,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
 
       const validatePreviewFrame = this.demandCoordinationFromPreview_ &&
-        this.settings?.COORDINATE_TO_ORIGIN === true
+        this.recentreEnabled_()
 
       let nativePt: Vector3
       if ((!this._isCoordinated || validatePreviewFrame) &&
-          this.settings?.COORDINATE_TO_ORIGIN) {
+          this.recentreEnabled_()) {
         nativePt = geometry.geometry.getPoint(0)
       }
 
@@ -2714,7 +2740,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // the recentre math runs in double precision (see coordination_f64).
       const geometryTransform = nativeTransform?.getValues()
 
-      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+      if (!this._isCoordinated && this.recentreEnabled_()) {
 
         const derived = deriveCoordinationF64(
             geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
@@ -2977,7 +3003,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
 
         let nativePt:Vector3
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           nativePt = geometry.geometry.getPoint(0)
         }
 
@@ -2993,7 +3019,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
 
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           // Persisted for getAppliedCoordination (Share#1634): report
@@ -3144,7 +3170,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
 
         let nativePt:Vector3
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           nativePt = geometry.geometry.getPoint(0)
         }
 
@@ -3160,7 +3186,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
 
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
@@ -3292,7 +3318,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
 
         let nativePt:Vector3
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           nativePt = geometry.geometry.getPoint(0)
         }
 
@@ -3308,7 +3334,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
 
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
