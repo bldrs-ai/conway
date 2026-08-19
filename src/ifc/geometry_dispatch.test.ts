@@ -149,6 +149,7 @@ interface DemandPassthrough {
   ensureDemandWorklistsAsync_(): Promise< void >
   demandProducts_?: number[]
   demandAggregates_?: { localID: number }[]
+  conwayGeometry_: { aggregateTargetLocalIDs(): Set< number > }
 }
 
 
@@ -238,6 +239,51 @@ describe( 'dispatch keys on a windowed source', () => {
         expect( Array.from( windowedKeys ) ).toEqual( Array.from( residentKeys ) )
 
         api.CloseModel( resident.modelID )
+        api.CloseModel( windowed.modelID )
+      }, 240000 )
+
+  test( 'aggregate targets survive a windowed source, so nothing is emitted twice',
+      async () => {
+
+        // The set of products the aggregates pass owns is read from the
+        // IfcRelAggregates records themselves. On a windowed source those
+        // pages are routinely gone by the first pump, the sync walk swallows
+        // the non-resident read, and the incomplete set is cached for the
+        // model's life — so a child it missed stays in the per-product
+        // worklist AND in the aggregates pass, and is emitted twice: once
+        // with the uncut content the deferral exists to suppress.
+        //
+        // Costs an unsharded windowed load the same duplicate, which is
+        // Share's own path (conway#538 review).
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const fixture = 'data/aggregate_master_voids.ifc'
+
+        const resident = await openDeferred( api, fixture, false )
+
+        resident.passthrough.ensureDemandWorklists_()
+
+        const expectedTargets = resident.passthrough.conwayGeometry_
+            .aggregateTargetLocalIDs().size
+        const expectedProducts = ( resident.passthrough.demandProducts_ ?? [] ).length
+
+        // The fixture has to HAVE an aggregate target, or the comparison
+        // below is two zeros agreeing.
+        expect( expectedTargets ).toBeGreaterThan( 0 )
+
+        api.CloseModel( resident.modelID )
+
+        const windowed = await openDeferred( api, fixture, true )
+
+        await windowed.passthrough.ensureDemandWorklistsAsync_()
+
+        expect( windowed.passthrough.conwayGeometry_
+            .aggregateTargetLocalIDs().size ).toBe( expectedTargets )
+        expect( ( windowed.passthrough.demandProducts_ ?? [] ).length )
+            .toBe( expectedProducts )
+
         api.CloseModel( windowed.modelID )
       }, 240000 )
 

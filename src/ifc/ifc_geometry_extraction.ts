@@ -6652,8 +6652,24 @@ export class IfcGeometryExtraction {
   // walk can both trigger it without duplicating work.
   private extractionMapsPrepared_ = false
 
+  /* Relationship records paged and scanned at once by
+   * ensureAggregateTargetLocalIDs. Each is a single small row, and the scan
+   * runs inside the wave, so this bounds what has to be resident
+   * simultaneously rather than what is read in total. */
+  // eslint-disable-next-line no-magic-numbers
+  private static readonly AGGREGATE_TARGET_WAVE_SIZE_ = 512
+
   // Lazy cache for aggregateTargetLocalIDs().
   private aggregateTargetLocalIDs_?: Set<number>
+
+  /* Whether the cached set came from the PAGED walk. A windowed source can
+   * cache an incomplete set from the sync walk (that is the defect
+   * ensureAggregateTargetLocalIDs fixes), and the cache is for the model's
+   * life — so the paged walk recomputes over a sync-built set rather than
+   * trusting whichever caller happened to arrive first. Ordering that
+   * decides correctness and is invisible when it breaks is not worth
+   * relying on. */
+  private aggregateTargetsPaged_ = false
 
   /**
    * Local IDs of every IfcProduct that is a RelatedObject of any
@@ -6685,45 +6701,163 @@ export class IfcGeometryExtraction {
     const productTypes = new Set< number >( IfcProduct.query )
 
     for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
-
-      try {
-
-        // RelatedObjects as express IDs — do not hydrate every child
-        // product (that paged most of the file during demand prep).
-        relAggregate.forEachReferenceInField(
-            REL_AGGREGATES_RELATED_OFFSET,
-            REL_AGGREGATES_RELATED_BASE,
-            REL_AGGREGATES_RELATED_DEPTH,
-            ( expressID ) => {
-
-              if ( expressID === void 0 ) {
-                return true
-              }
-
-              const relatedLocalID = this.model.resolveExpressID( expressID )
-
-              if ( relatedLocalID === void 0 ) {
-                return true
-              }
-
-              const typeID = this.model.typeIDOf( relatedLocalID )
-
-              if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-                targets.add( relatedLocalID )
-              }
-
-              return true
-            } )
-      } catch {
-        // Malformed relationship rows are tolerated exactly like the
-        // aggregates pass itself tolerates them (permissive catch) —
-        // their targets simply stay in the first-pass walk.
-      }
+      this.addAggregateTargets_( relAggregate, targets, productTypes )
     }
 
     this.aggregateTargetLocalIDs_ = targets
 
     return targets
+  }
+
+
+  /**
+   * Windowed twin of {@link aggregateTargetLocalIDs}: page each
+   * relationship record before scanning it, so the set is COMPLETE rather
+   * than whatever this instance's LRU happened to still hold.
+   *
+   * **This is a correctness fix, not a prefetch.** The sync walk reads each
+   * `IfcRelAggregates` record's bytes, and on a windowed source those pages
+   * are routinely gone by the first pump — the parse walked past them
+   * hundreds of megabytes ago. The per-record catch then swallows the
+   * non-resident read, the incomplete set is **cached for the model's
+   * life**, and every child it failed to record stays in the per-product
+   * worklist *as well as* in the aggregates pass. That product is then
+   * emitted twice: once with the uncut/placeholder content the deferral
+   * exists to suppress, and again from the aggregates pass. Measured on
+   * `aggregate_master_voids.ifc` behind 512-byte windows: 0 targets against
+   * a resident open's 1, and 3 demand products against 2.
+   *
+   * Paged in bounded waves, and the scan happens INSIDE each wave rather
+   * than after all of them: a model with many assemblies would otherwise
+   * need every relationship record resident at once, which is the residency
+   * ceiling this is supposed to respect.
+   *
+   * A non-resident read still throws from here — after this has paged the
+   * record, that is a defect in the paging, not a property of the file.
+   *
+   * @param waveSize Relationship records paged and scanned at once.
+   * @return {Promise<Set<number>>} The same set the sync twin caches.
+   */
+  public async ensureAggregateTargetLocalIDs(
+      waveSize: number = IfcGeometryExtraction.AGGREGATE_TARGET_WAVE_SIZE_ ): Promise< Set<number> > {
+
+    if ( !this.model.isSourceExternal ) {
+      return this.aggregateTargetLocalIDs()
+    }
+
+    if ( this.aggregateTargetsPaged_ ) {
+      return this.aggregateTargetLocalIDs_!
+    }
+
+    const targets = new Set<number>()
+    const productTypes = new Set< number >( IfcProduct.query )
+    const wave = Math.max( 1, Math.floor( waveSize ) )
+
+    let pending: IfcRelAggregates[] = []
+
+    const drain = async () => {
+
+      const pinned = new Set<number>()
+
+      try {
+
+        for ( const relAggregate of pending ) {
+          pinned.add( relAggregate.localID )
+          this.model.pinByLocalID( relAggregate.localID )
+        }
+
+        await Promise.all( [ ...pinned ].map(
+            ( localID ) => this.model.ensureResidentByLocalID( localID ) ) )
+
+        for ( const relAggregate of pending ) {
+          this.addAggregateTargets_( relAggregate, targets, productTypes, true )
+        }
+
+      } finally {
+        this.model.releaseSourceViews( pinned )
+        this.model.unpinLocalIDs( pinned )
+        pending = []
+      }
+    }
+
+    for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
+
+      pending.push( relAggregate )
+
+      if ( pending.length >= wave ) {
+        await drain()
+      }
+    }
+
+    if ( pending.length > 0 ) {
+      await drain()
+    }
+
+    this.aggregateTargetLocalIDs_ = targets
+    this.aggregateTargetsPaged_ = true
+
+    return targets
+  }
+
+
+  /**
+   * Record one relationship's product children.
+   *
+   * Shared by the sync and paged walks so there is a single definition of
+   * what an aggregate target is. Reads only this relationship's own record:
+   * children resolve through the express map and the typeID column, so the
+   * scan never hydrates a child product (doing so paged most of the file
+   * during demand prep).
+   *
+   * @param relAggregate The relationship to scan.
+   * @param targets Accumulator.
+   * @param productTypes The IfcProduct type set.
+   * @param strictResidency When set, a non-resident read propagates instead
+   * of being tolerated — for the paged walk, which has already made the
+   * record resident and so can only reach that error through a defect.
+   */
+  private addAggregateTargets_(
+      relAggregate: IfcRelAggregates,
+      targets: Set<number>,
+      productTypes: Set<number>,
+      strictResidency: boolean = false ): void {
+
+    try {
+
+      relAggregate.forEachReferenceInField(
+          REL_AGGREGATES_RELATED_OFFSET,
+          REL_AGGREGATES_RELATED_BASE,
+          REL_AGGREGATES_RELATED_DEPTH,
+          ( expressID ) => {
+
+            if ( expressID === void 0 ) {
+              return true
+            }
+
+            const relatedLocalID = this.model.resolveExpressID( expressID )
+
+            if ( relatedLocalID === void 0 ) {
+              return true
+            }
+
+            const typeID = this.model.typeIDOf( relatedLocalID )
+
+            if ( typeID !== void 0 && productTypes.has( typeID ) ) {
+              targets.add( relatedLocalID )
+            }
+
+            return true
+          } )
+    } catch ( error ) {
+
+      if ( strictResidency && error instanceof StepBufferNotResidentError ) {
+        throw error
+      }
+
+      // Malformed relationship rows are tolerated exactly like the
+      // aggregates pass itself tolerates them (permissive catch) —
+      // their targets simply stay in the first-pass walk.
+    }
   }
 
   /**

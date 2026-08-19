@@ -2268,6 +2268,20 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
+    // BEFORE collecting: the aggregate-target set is read from the
+    // IfcRelAggregates records themselves, and on a windowed source those
+    // pages are long gone by the first pump. The sync walk swallows the
+    // non-resident read and caches the incomplete set for the model's life,
+    // so a child it missed is extracted BOTH by the per-product worklist
+    // (with the uncut content that deferral exists to suppress) and again by
+    // the aggregates pass. Measured at 0 targets against a resident open's 1
+    // on aggregate_master_voids.ifc behind 512-byte windows.
+    //
+    // Not a sharding bug — it costs an unsharded windowed load the same
+    // duplicate — but this is the pump entry every windowed model reaches,
+    // so it is the place that can page first.
+    await this.conwayGeometry_.ensureAggregateTargetLocalIDs()
+
     const {products, aggregates} = this.collectDemandCandidates_()
 
     if (this.shard_ === void 0) {
@@ -2304,9 +2318,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    *
    * The product walk itself reads no record bytes (the type index and the
    * local-ID column answer it). `aggregateTargetLocalIDs` does scan the
-   * IfcRelAggregates records for their RelatedObjects, which on a windowed
-   * source is a read this function does not page for — pre-existing, and
-   * already swallowed per-record on its own side.
+   * IfcRelAggregates records, so a windowed caller must have paged them —
+   * `ensureDemandWorklistsAsync_` does, and carries the reasoning.
    *
    * @return {object} The unsharded product and rel-aggregates worklists.
    */
