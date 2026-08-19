@@ -2307,6 +2307,30 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
+    // Validated before anything is decided from it, so a malformed
+    // descriptor is reported as malformed rather than as whichever
+    // incompatibility it happens to trip first.
+    if (!Number.isInteger(shard.count) || shard.count < 1 ||
+        !Number.isInteger(shard.index) || shard.index < 0 ||
+        shard.index >= shard.count) {
+
+      throw new Error(
+          `invalid shard ${shard.index}/${shard.count}: index must be an ` +
+          'integer in [0, count) and count a positive integer')
+    }
+
+    // A single worker is the unsharded model, so it is normalised here —
+    // BEFORE the checks below, every one of which exists because workers
+    // have to agree with each other. One worker agrees with nobody, and a
+    // coordinator that calls this uniformly for its N=1 baseline is doing
+    // nothing that needs a shared frame or a residency-independent key.
+    // Refusing it would fail a configuration that is exactly equivalent to
+    // never having called this at all.
+    if (shard.count === 1) {
+      this.shard_ = void 0
+      return
+    }
+
     // Refused rather than silently wrong. With COORDINATE_TO_ORIGIN the
     // recentre anchor is derived from the FIRST geometry a model captures
     // (see demandCoordination_ in streamNewMeshes_), so shards that begin on
@@ -2343,15 +2367,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'which products they own.')
     }
 
-    if (!Number.isInteger(shard.count) || shard.count < 1 ||
-        !Number.isInteger(shard.index) || shard.index < 0 ||
-        shard.index >= shard.count) {
-
-      throw new Error(
-          `invalid shard ${shard.index}/${shard.count}: index must be an ` +
-          'integer in [0, count) and count a positive integer')
-    }
-
     // Snapshotted, not retained. A coordinator configuring several engine
     // instances from one descriptor object — mutating `index` between calls
     // — would otherwise leave every proxy pointing at the same object, and
@@ -2361,8 +2376,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     //
     // Same class as the settings-object aliasing above: values validated at
     // one moment and consumed at another have to be copied at the boundary.
-    this.shard_ = shard.count === 1 ?
-      void 0 : { index: shard.index, count: shard.count }
+    this.shard_ = { index: shard.index, count: shard.count }
   }
 
   /**

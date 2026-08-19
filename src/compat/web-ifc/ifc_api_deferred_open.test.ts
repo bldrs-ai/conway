@@ -982,6 +982,65 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api.CloseModel( modelID )
   }, 240000 )
 
+  test( 'a one-worker claim is accepted, whatever the model settings',
+      async () => {
+
+        // {index: 0, count: 1} IS the unsharded model, and a coordinator
+        // that calls this uniformly for its N=1 baseline is doing nothing
+        // that needs cross-worker agreement. The guards below it exist only
+        // because workers must agree with each other, so applying them to a
+        // single worker would fail a configuration equivalent to never
+        // having claimed at all — including on a recentred model, which is
+        // how Share opens.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true,
+              DEFER_GEOMETRY: true } )
+
+        expect( api.SetGeometryShard( modelID, { index: 0, count: 1 } ) )
+            .toBe( true )
+
+        let delivered = 0
+
+        for ( ; ; ) {
+          const { extracted, remaining } = api.ExtractGeometryBatch(
+              modelID, 4, ( mesh ) => {
+                delivered += mesh.geometries.size()
+              } )
+          if ( remaining === 0 && extracted === 0 ) {
+            break
+          }
+        }
+
+        // The whole model, not a subset, and no throw from the recentre
+        // guard on the pump either.
+        expect( delivered ).toBeGreaterThan( 0 )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
+  test( 'a malformed descriptor is reported as malformed', async () => {
+
+    // Validation runs before the incompatibility checks, so a bad
+    // descriptor on a recentred model says what is bad about it rather
+    // than blaming whichever guard it trips first.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true,
+          DEFER_GEOMETRY: true } )
+
+    expect( () => api.SetGeometryShard( modelID, { index: 3, count: 2 } ) )
+        .toThrow( /invalid shard/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
   test( 'a shard descriptor is snapshotted, not retained', async () => {
 
     // A coordinator configuring several instances from one reused object is
