@@ -13,6 +13,11 @@ import { FlatMesh, IfcAPI } from './ifc_api'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
+// Sharding refuses COORDINATE_TO_ORIGIN — each shard would derive its own
+// recentre anchor — so every sharded open here goes without it.
+const SHARD_SETTINGS =
+  { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+
 let api: IfcAPI
 let buffer: Uint8Array
 
@@ -855,11 +860,6 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     const wholeApi = new IfcAPI()
     await wholeApi.Init()
 
-    // Sharding refuses COORDINATE_TO_ORIGIN — each shard would derive its
-    // own recentre anchor — so both sides of this comparison open without it.
-    const SHARD_SETTINGS =
-      { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
-
     const wholeID = await wholeApi.OpenModelStreamed( fixture, SHARD_SETTINGS )
 
     const whole: string[] = []
@@ -980,6 +980,77 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
         .rejects.toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
 
     api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'a shard descriptor is snapshotted, not retained', async () => {
+
+    // A coordinator configuring several instances from one reused object is
+    // the natural way to write an in-process pool. If the descriptor were
+    // retained, every proxy would read its FINAL index at first pump —
+    // several workers claiming one shard, the rest of the model claimed by
+    // nobody — and each call would still have passed validation.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const descriptor = { index: 0, count: 2 }
+
+    const modelID = await api.OpenModelStreamed( fixture, SHARD_SETTINGS )
+
+    expect( api.SetGeometryShard( modelID, descriptor ) ).toBe( true )
+
+    // The coordinator moves on to configuring the next worker.
+    descriptor.index = 1
+
+    const delivered: string[] = []
+
+    for ( ; ; ) {
+      const { extracted, remaining } = api.ExtractGeometryBatch(
+          modelID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              delivered.push(
+                  `${mesh.expressID}/` +
+                  `${mesh.geometries.get( where ).geometryExpressID}` )
+            }
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    // Shard 0's contents, not shard 1's. Compared against a model that
+    // claims shard 0 from a descriptor nobody touches.
+    const referenceApi = new IfcAPI()
+    await referenceApi.Init()
+
+    const referenceID =
+      await referenceApi.OpenModelStreamed( fixture, SHARD_SETTINGS )
+
+    referenceApi.SetGeometryShard( referenceID, { index: 0, count: 2 } )
+
+    const reference: string[] = []
+
+    for ( ; ; ) {
+      const { extracted, remaining } = referenceApi.ExtractGeometryBatch(
+          referenceID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              reference.push(
+                  `${mesh.expressID}/` +
+                  `${mesh.geometries.get( where ).geometryExpressID}` )
+            }
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( reference.length ).toBeGreaterThan( 0 )
+    expect( delivered.sort() ).toEqual( reference.sort() )
+
+    api.CloseModel( modelID )
+    referenceApi.CloseModel( referenceID )
   }, 240000 )
 
   test( 'an unsharded model is unaffected by the shard preconditions', async () => {

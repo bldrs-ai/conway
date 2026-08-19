@@ -2352,7 +2352,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'integer in [0, count) and count a positive integer')
     }
 
-    this.shard_ = shard.count === 1 ? void 0 : shard
+    // Snapshotted, not retained. A coordinator configuring several engine
+    // instances from one descriptor object — mutating `index` between calls
+    // — would otherwise leave every proxy pointing at the same object, and
+    // ensureDemandWorklists_ reads it later, at first pump. Every descriptor
+    // would pass validation here and the partition would still collapse:
+    // several workers claiming the final index, nobody claiming the rest.
+    //
+    // Same class as the settings-object aliasing above: values validated at
+    // one moment and consumed at another have to be copied at the boundary.
+    this.shard_ = shard.count === 1 ?
+      void 0 : { index: shard.index, count: shard.count }
   }
 
   /**
