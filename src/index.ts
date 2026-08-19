@@ -98,4 +98,5 @@ export {
 export { IfcTileAssetExtractor, TileCommitBindings } from './ifc/ifc_tile_extractor'
 export { ChunkedPool, ChunkSpan } from './core/mem/chunked_pool'
 export { SharedAssetPool } from './core/mem/shared_asset_pool'
+export { geometryDispatchKey, shardOfDispatchKey } from './ifc/geometry_dispatch'
 export { GeometryTilePool, InstanceAssetSource, GeometryAsset } from './core/geometry_tile_pool'
