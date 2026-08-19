@@ -50,11 +50,21 @@ const TICK_BUDGET_MS = 20
  * Products a single tick may attempt, whatever the clock says.
  *
  * `deferDanglingPlacements` (Share#1744) defers any product whose
- * placement records the prefix does not hold yet, and Revit writes
- * per-product placements toward the file tail — so early ticks meet long
- * runs of products that cannot extract. Each such attempt still pages
- * source through the windowed provider, so a run of them is not free;
- * this caps the run rather than letting the deadline be the only bound.
+ * placement records the prefix does not hold yet, and some exporters
+ * write the tail of a placement chain toward the tail of the file — so
+ * early ticks meet long runs of products that cannot extract. Each such
+ * attempt still pages source through the windowed provider, so a run of
+ * them is not free; this caps the run rather than letting the deadline
+ * be the only bound.
+ *
+ * Measured across the corpus in conway#542: ODA and Tekla are strictly
+ * backward-referencing and never hit this, while ArchiCAD and
+ * ST-Developer defer 100% of products. On the ArchiCAD files the last
+ * record to arrive is always a LEAF — IfcDirection or
+ * IfcCartesianPoint, not the placement and not the geometry — which is
+ * why a head-only prefix cannot fix it however far it grows. (An
+ * earlier version of this comment blamed Revit; no Revit file is in
+ * that corpus, and the trait is not Revit's signature.)
  */
 const TICK_MAX_ATTEMPTS = 32
 
