@@ -13,6 +13,30 @@ import { FlatMesh, IfcAPI } from './ifc_api'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
+// Sharding refuses COORDINATE_TO_ORIGIN — each shard would derive its own
+// recentre anchor — so every sharded open here goes without it.
+const SHARD_SETTINGS =
+  { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+
+/**
+ * A transform's exact bytes, as a comparable string.
+ *
+ * Rounding would make these comparisons unable to fail: a transform that
+ * moved by less than half the last printed digit would serialize identically
+ * to the one it is being checked against. Every use below is asserting that
+ * two paths produce the SAME output, so the encoding has to be lossless.
+ *
+ * @param transform The flat transformation.
+ * @return {string} A lossless encoding of every component.
+ */
+function transformKey( transform: ArrayLike< number > ): string {
+
+  const exact = new Float64Array( transform )
+
+  return Buffer.from( exact.buffer, exact.byteOffset, exact.byteLength )
+      .toString( 'base64' )
+}
+
 let api: IfcAPI
 let buffer: Uint8Array
 
@@ -414,8 +438,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       for ( let where = 0; where < mesh.geometries.size(); ++where ) {
         const placed = mesh.geometries.get( where )
         classicPlacements.push(
-            `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
       }
     } )
 
@@ -431,8 +454,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
             for ( let where = 0; where < mesh.geometries.size(); ++where ) {
               const placed = mesh.geometries.get( where )
               pumpedPlacements.push(
-                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                  `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
             }
           } )
 
@@ -577,8 +599,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       for ( let where = 0; where < mesh.geometries.size(); ++where ) {
         const placed = mesh.geometries.get( where )
         classicPlacements.push(
-            `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
       }
     } )
 
@@ -603,8 +624,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
             for ( let where = 0; where < mesh.geometries.size(); ++where ) {
               const placed = mesh.geometries.get( where )
               pumped.push(
-                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                  `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
             }
           } )
 
@@ -818,6 +838,500 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     }
 
     api7.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'shards partition the model: every instance exactly once', async () => {
+
+    // The property a worker pool rests on. Four instances each claim a shard
+    // and pump to completion; the union must equal what one unsharded load
+    // delivers — no instance lost, none built twice. Placement being a pure
+    // function of the product is what lets the shards agree without talking
+    // to each other, so this also pins that: the same product must land in
+    // the same shard from four independent decisions.
+    // Both fixtures deliberately: the mapped one exercises the product
+    // worklist, and aggregate_master_voids the rel-aggregates pass, which is
+    // a SEPARATE worklist with its own filter. Sharding one and not the other
+    // duplicates every aggregate across every shard — and on an
+    // assembly-heavy model that pass is most of the geometry, so this is the
+    // failure with real consequences, not the exotic one.
+    for ( const fixturePath of [
+      'data/mapped_shared_representation.ifc',
+      'data/aggregate_master_voids.ifc',
+    ] ) {
+      await partitionsExactlyOnce( fixturePath )
+    }
+  }, 240000 )
+
+  /**
+   * Assert that N shards of a model union to exactly what one unsharded load
+   * delivers.
+   *
+   * @param fixturePath The model to check.
+   */
+  async function partitionsExactlyOnce( fixturePath: string ): Promise<void> {
+
+    const fixture = new Uint8Array( fs.readFileSync( fixturePath ) )
+
+    const wholeApi = new IfcAPI()
+    await wholeApi.Init()
+
+    const wholeID = await wholeApi.OpenModelStreamed( fixture, SHARD_SETTINGS )
+
+    const whole: string[] = []
+
+    for ( ; ; ) {
+      const { extracted, remaining } = wholeApi.ExtractGeometryBatch(
+          wholeID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              const placed = mesh.geometries.get( where )
+              whole.push(
+                  `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
+            }
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( whole.length ).toBeGreaterThan( 0 )
+
+    const shardCount = 4
+    const sharded: string[] = []
+    const perShard: number[] = []
+
+    for ( let index = 0; index < shardCount; ++index ) {
+
+      const api = new IfcAPI()
+      await api.Init()
+
+      const modelID = await api.OpenModelStreamed( fixture, SHARD_SETTINGS )
+
+      expect( api.SetGeometryShard( modelID, { index, count: shardCount } ) )
+          .toBe( true )
+
+      let delivered = 0
+
+      for ( ; ; ) {
+        const { extracted, remaining } = api.ExtractGeometryBatch(
+            modelID, 4, ( mesh ) => {
+              for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+                const placed = mesh.geometries.get( where )
+                sharded.push(
+                    `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
+                ++delivered
+              }
+            } )
+        if ( remaining === 0 && extracted === 0 ) {
+          break
+        }
+      }
+
+      perShard.push( delivered )
+      api.CloseModel( modelID )
+    }
+
+    // The union is the model: same multiset, nothing lost or doubled.
+    expect( sharded.slice().sort() ).toEqual( whole.slice().sort() )
+
+    // ...and no shard delivered the whole thing, which the equality above
+    // would happily accept from one shard doing everything. A single-instance
+    // model legitimately lands in one shard, so this only asserts that no
+    // shard exceeded the total.
+    expect( Math.max( ...perShard ) ).toBeLessThanOrEqual( whole.length )
+
+    wholeApi.CloseModel( wholeID )
+  }
+
+  test( 'a shard cannot be claimed after pumping starts', async () => {
+
+    // Narrowing the worklists mid-load would drop products already reported
+    // as pending, so the model would quietly deliver less than it promised.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/mapped_shared_representation.ifc' ) ),
+        { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true } )
+
+    api.ExtractGeometryBatch( modelID, 1 )
+
+    expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+        .toThrow( /before the first/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'enabling COORDINATE_TO_ORIGIN after claiming a shard is refused', async () => {
+
+    // The claim-time check alone is not enforcement: the proxy holds the
+    // CALLER'S settings object by reference and reads COORDINATE_TO_ORIGIN
+    // live when it derives the recentre frame. A caller that opens without
+    // it, claims a shard, then flips the flag would get per-shard anchors —
+    // subsets of a large-coordinate model shifted by whole grid cells,
+    // which no union-of-placements check catches on a fixture at the origin.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const settings =
+      { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/mapped_shared_representation.ifc' ) ),
+        settings )
+
+    expect( api.SetGeometryShard( modelID, { index: 0, count: 2 } ) ).toBe( true )
+
+    settings.COORDINATE_TO_ORIGIN = true
+
+    expect( () => api.ExtractGeometryBatch( modelID, 1 ) )
+        .toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
+
+    // The async entry is a SEPARATE path — on an external source it never
+    // reaches pumpGeometryBatch_ at all — so the guard has to hold there
+    // independently. It was bypassed when the check lived in the pump.
+    await expect( api.ExtractGeometryBatchAsync( modelID, 1 ) )
+        .rejects.toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'a one-worker claim is accepted, whatever the model settings',
+      async () => {
+
+        // {index: 0, count: 1} IS the unsharded model, and a coordinator
+        // that calls this uniformly for its N=1 baseline is doing nothing
+        // that needs cross-worker agreement. The guards below it exist only
+        // because workers must agree with each other, so applying them to a
+        // single worker would fail a configuration equivalent to never
+        // having claimed at all — including on a recentred model, which is
+        // how Share opens.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true,
+              DEFER_GEOMETRY: true } )
+
+        expect( api.SetGeometryShard( modelID, { index: 0, count: 1 } ) )
+            .toBe( true )
+
+        let delivered = 0
+
+        for ( ; ; ) {
+          const { extracted, remaining } = api.ExtractGeometryBatch(
+              modelID, 4, ( mesh ) => {
+                delivered += mesh.geometries.size()
+              } )
+          if ( remaining === 0 && extracted === 0 ) {
+            break
+          }
+        }
+
+        // The whole model, not a subset, and no throw from the recentre
+        // guard on the pump either.
+        expect( delivered ).toBeGreaterThan( 0 )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
+  test( 'a malformed descriptor is reported as malformed', async () => {
+
+    // Validation runs before the incompatibility checks, so a bad
+    // descriptor on a recentred model says what is bad about it rather
+    // than blaming whichever guard it trips first.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true,
+          DEFER_GEOMETRY: true } )
+
+    expect( () => api.SetGeometryShard( modelID, { index: 3, count: 2 } ) )
+        .toThrow( /invalid shard/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'a model that already adopted a recentre frame cannot be sharded',
+      async () => {
+
+        // WHITE-BOX, and deliberately so. The reported route here is
+        // ON_PREVIEW_MESH: the preview channel can install a coordination
+        // frame at OPEN, before any pump, after which a caller may set
+        // COORDINATE_TO_ORIGIN false on its own settings object and claim a
+        // shard — passing a flag-only guard while already sitting in a
+        // frame derived from whichever geometry THIS instance previewed.
+        //
+        // I could not get the preview channel to install a frame from a
+        // test (tried index.ifc and index_georeferenced.ifc; demandCoordination_
+        // stayed undefined), so this pins the guard on the state itself
+        // rather than pretending to reproduce the route to it. If the route
+        // is unreachable the guard is merely cheap; if it is reachable, this
+        // is what stops it.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ), SHARD_SETTINGS )
+
+        const passthrough = api.getPassthrough( modelID ) as unknown as
+          { demandCoordination_?: number[] }
+
+        // A frame adopted from somewhere other than the current flag.
+        passthrough.demandCoordination_ =
+          [ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1000, 2000, 3000, 1 ]
+
+        expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+            .toThrow( /already adopted a recentre frame/ )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
+  test( 'a sharded model does not recentre even if a callback enables it',
+      async () => {
+
+        // The window codex found in round 9: ON_PROGRESS is invoked
+        // synchronously from beginPhase, INSIDE the first pump — after the
+        // precondition check for that batch has passed and before the
+        // capture reads the flag. A handler enabling COORDINATE_TO_ORIGIN
+        // there would have each worker derive its own frame despite the
+        // guard.
+        //
+        // Two windows of this shape were patched individually in earlier
+        // rounds, so this asserts BOTH halves of closing the class:
+        //   1. geometry delivered inside the window is not recentred, and
+        //   2. the refusal still fires on the next batch, so the caller is
+        //      told rather than quietly given a subset it cannot merge.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const settings: Record< string, unknown > = {
+          COORDINATE_TO_ORIGIN: false,
+          USE_FAST_BOOLS: true,
+          DEFER_GEOMETRY: true,
+          // Only once the GEOMETRY phase begins — inside the first pump,
+          // after the shard was claimed. Flipping it earlier is caught by
+          // the claim-time refusal, which is correct and not this window.
+          ON_PROGRESS: ( event: { phase: string } ) => {
+            if ( event.phase === 'geometry' ) {
+              settings.COORDINATE_TO_ORIGIN = true
+            }
+          },
+        }
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            settings as never )
+
+        expect( api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+            .toBe( true )
+
+        const windowed: string[] = []
+
+        api.ExtractGeometryBatch( modelID, 4, ( mesh ) => {
+          for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+            windowed.push( transformKey(
+                mesh.geometries.get( where ).flatTransformation ) )
+          }
+        } )
+
+        // The handler really did flip it, mid-pump.
+        expect( settings.COORDINATE_TO_ORIGIN ).toBe( true )
+
+        // (2) The refusal fires now that the flag is observable.
+        expect( () => api.ExtractGeometryBatch( modelID, 4 ) )
+            .toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
+
+        // (1) ...and nothing delivered inside the window was recentred:
+        // identical to a shard whose flag was never touched. A derived
+        // frame would move every transform.
+        const referenceApi = new IfcAPI()
+        await referenceApi.Init()
+
+        const referenceID = await referenceApi.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            SHARD_SETTINGS )
+
+        referenceApi.SetGeometryShard( referenceID, { index: 0, count: 2 } )
+
+        const reference: string[] = []
+
+        referenceApi.ExtractGeometryBatch( referenceID, 4, ( mesh ) => {
+          for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+            reference.push( transformKey(
+                mesh.geometries.get( where ).flatTransformation ) )
+          }
+        } )
+
+        expect( reference.length ).toBeGreaterThan( 0 )
+        expect( windowed ).toEqual( reference )
+
+        api.CloseModel( modelID )
+        referenceApi.CloseModel( referenceID )
+      }, 240000 )
+
+  test( 'a model opened with ON_PREVIEW_MESH cannot be sharded', async () => {
+
+    // The preview channel runs during OPEN, before a shard can be claimed,
+    // so its payloads are never partitioned: every worker in a pool would
+    // perform the same capped preview extraction and emit the same
+    // imposters, and a consumer forwarding those callbacks would receive N
+    // overlapping copies while only the durable pump was split.
+    //
+    // Note this is NOT covered by the adopted-frame guard: that one keys on
+    // demandCoordination_, which the preview only installs when recentring
+    // is on. With COORDINATE_TO_ORIGIN false there is no frame to catch,
+    // and the duplicated preview output is the whole problem.
+    const api = new IfcAPI()
+    await api.Init()
+
+    let previews = 0
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { ...SHARD_SETTINGS,
+          ON_PREVIEW_MESH: () => {
+            ++previews
+          } } as never )
+
+    // The preview really did run, so the refusal below is about something
+    // that happened rather than a flag nobody acted on.
+    expect( previews ).toBeGreaterThan( 0 )
+
+    expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+        .toThrow( /ON_PREVIEW_MESH/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'a shard cannot be claimed on a model opened without DEFER_GEOMETRY',
+      async () => {
+
+        // Sharding only narrows the deferred pump's worklists. A classic
+        // open has already extracted everything, so the claim would be
+        // accepted and then do nothing: ExtractGeometryBatch returns zero
+        // work and StreamAllMeshes serves the whole scene. A coordinator
+        // that forgot the flag would get the COMPLETE model from every
+        // worker while believing it had a partition.
+        const api = new IfcAPI()
+        await api.Init()
+
+        const modelID = await api.OpenModelStreamed(
+            new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+            { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true } )
+
+        expect( () => api.SetGeometryShard( modelID, { index: 0, count: 2 } ) )
+            .toThrow( /requires DEFER_GEOMETRY/ )
+
+        // N=1 is still fine: it asks for the whole model, which is exactly
+        // what a classic open delivers.
+        expect( api.SetGeometryShard( modelID, { index: 0, count: 1 } ) )
+            .toBe( true )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
+  test( 'a shard descriptor is snapshotted, not retained', async () => {
+
+    // A coordinator configuring several instances from one reused object is
+    // the natural way to write an in-process pool. If the descriptor were
+    // retained, every proxy would read its FINAL index at first pump —
+    // several workers claiming one shard, the rest of the model claimed by
+    // nobody — and each call would still have passed validation.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const fixture = new Uint8Array(
+        fs.readFileSync( 'data/mapped_shared_representation.ifc' ) )
+
+    const descriptor = { index: 0, count: 2 }
+
+    const modelID = await api.OpenModelStreamed( fixture, SHARD_SETTINGS )
+
+    expect( api.SetGeometryShard( modelID, descriptor ) ).toBe( true )
+
+    // The coordinator moves on to configuring the next worker.
+    descriptor.index = 1
+
+    const delivered: string[] = []
+
+    for ( ; ; ) {
+      const { extracted, remaining } = api.ExtractGeometryBatch(
+          modelID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              delivered.push(
+                  `${mesh.expressID}/` +
+                  `${mesh.geometries.get( where ).geometryExpressID}` )
+            }
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    // Shard 0's contents, not shard 1's. Compared against a model that
+    // claims shard 0 from a descriptor nobody touches.
+    const referenceApi = new IfcAPI()
+    await referenceApi.Init()
+
+    const referenceID =
+      await referenceApi.OpenModelStreamed( fixture, SHARD_SETTINGS )
+
+    referenceApi.SetGeometryShard( referenceID, { index: 0, count: 2 } )
+
+    const reference: string[] = []
+
+    for ( ; ; ) {
+      const { extracted, remaining } = referenceApi.ExtractGeometryBatch(
+          referenceID, 4, ( mesh ) => {
+            for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+              reference.push(
+                  `${mesh.expressID}/` +
+                  `${mesh.geometries.get( where ).geometryExpressID}` )
+            }
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( reference.length ).toBeGreaterThan( 0 )
+    expect( delivered.sort() ).toEqual( reference.sort() )
+
+    api.CloseModel( modelID )
+    referenceApi.CloseModel( referenceID )
+  }, 240000 )
+
+  test( 'an unsharded model is unaffected by the shard preconditions', async () => {
+
+    // The guards must be about workers agreeing with each other and nothing
+    // else. A model that never claims a shard recentres and pumps exactly as
+    // before — without this, the checks would be a behaviour change for
+    // every existing caller, Share included.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ),
+        { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true } )
+
+    let delivered = 0
+
+    for ( ; ; ) {
+      const { extracted, remaining } = api.ExtractGeometryBatch(
+          modelID, 4, ( mesh ) => {
+            delivered += mesh.geometries.size()
+          } )
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+    }
+
+    expect( delivered ).toBeGreaterThan( 0 )
+
+    api.CloseModel( modelID )
   }, 240000 )
 
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {

@@ -595,8 +595,25 @@ function shardWorklists( api, modelID, shard, filePath ) {
     const mineSet = new Set( assignment.shards[ shard.index ] )
 
     passthrough.demandProducts_ = products.filter( ( id ) => mineSet.has( id ) )
-    passthrough.demandAggregates_ =
-      aggregates.filter( ( _, index ) => index % shard.count === shard.index )
+
+    // Aggregates by assignment when the capture covered them, positionally
+    // otherwise. This matters more than it sounds: on an assembly-heavy
+    // model the rel-aggregates pass creates most of the geometry, so
+    // sharding it positionally while carefully placing products leaves the
+    // placement with almost nothing to control — which is exactly why D3D
+    // first appeared to be indifferent to strategy.
+    if ( Array.isArray( assignment.aggregateShards ) ) {
+
+      const mineAggregates = new Set( assignment.aggregateShards[ shard.index ] )
+
+      passthrough.demandAggregates_ = aggregates.filter(
+          ( aggregate ) => mineAggregates.has( aggregate?.localID ?? aggregate ) )
+
+    } else {
+
+      passthrough.demandAggregates_ =
+        aggregates.filter( ( _, index ) => index % shard.count === shard.index )
+    }
 
     return {
       products: passthrough.demandProducts_.length,

@@ -4,6 +4,7 @@ import {
 } from '../../index'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import { CanonicalMaterial } from '../../index'
+import { geometryDispatchKey, shardOfDispatchKey } from '../../ifc/geometry_dispatch'
 import { IfcSceneBuilder } from '../../ifc/ifc_scene_builder'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import {
@@ -118,6 +119,10 @@ interface IfcProxyLoadState {
   /** Coordination matrix the parse-time preview channel derived (slice
    * A2) — adopted by the durable capture so both share one frame. */
   previewCoordinationMatrix?: number[]
+  /** True when a parse-time preview channel ran and emitted. Recorded
+   * separately from the matrix above, which only exists when recentring
+   * was on — sharding has to know about the preview either way. */
+  previewEmitted?: boolean
   allTimeStart: number
   stepHeader: StepHeader
   model: IfcStepModel
@@ -242,6 +247,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private readonly demandPendingNodes_ = new Map<number, number>()
 
   /** Cursor into demandProducts_ — products before it are extracted. */
+  /* Which shard of the model this instance extracts, or undefined for all
+   * of it. See setGeometryShard. */
+  private shard_?: { index: number, count: number }
+
   private demandCursor_ = 0
 
   /** Wall-clock split of the store-backed batch pump (profile script). */
@@ -282,6 +291,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * memory.
    */
   private demandCoordination_?: number[]
+
+  /** Whether a parse-time preview channel already emitted for this model.
+   * The preview runs during open, before a shard can be claimed, so its
+   * output is never partitioned (see setGeometryShard). */
+  private previewEmitted_ = false
 
   /**
    * True while an adopted preview-channel coordination frame is still
@@ -453,6 +467,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // derivation and places exactly where the preview did. (Internal
     // only — getCoordinationMatrix stays identity, see
     // demandCoordination_.)
+    this.previewEmitted_ = loadState.previewEmitted === true
+
     if (this.deferredMode_ && loadState.previewCoordinationMatrix !== void 0) {
       this.demandCoordination_ = loadState.previewCoordinationMatrix
       this._isCoordinated = true
@@ -1008,6 +1024,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // (derived from the same first instance with the same math), so
         // preview payloads and durable meshes share one frame.
         previewCoordinationMatrix: previewChannel?.coordinationMatrix,
+        previewEmitted: previewChannel !== void 0,
         allTimeStart,
         stepHeader,
         model,
@@ -1990,6 +2007,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'source — use ExtractGeometryBatchAsync' )
     }
 
+    this.checkShardPreconditions_()
     this.ensureDemandWorklists_()
 
     return this.pumpGeometryBatch_(batchSize, meshCallback)
@@ -2014,6 +2032,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {extracted: 0, remaining: 0}
     }
 
+    this.checkShardPreconditions_()
     this.ensureDemandWorklists_()
 
     if (!this.model[0].isSourceExternal) {
@@ -2193,10 +2212,234 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         aggregates.push(relAggregate)
       }
 
-      this.demandProducts_ = products
-      this.demandAggregates_ = aggregates
+      let placed = 0
+      let positional = 0
+
+      this.demandProducts_ = this.shard_ === void 0 ?
+        products : products.filter( ( localID ) => {
+
+          const key = geometryDispatchKey( this.model[0], localID )
+
+          // A key equal to the product's own local ID means the walk found
+          // nothing to place by — a product with no representation. That
+          // costs affinity, not correctness: the key is still a pure
+          // function of the product, so every worker computes the same one
+          // and the partition holds; it just stops avoiding duplication.
+          //
+          // Correctness would only break if the SAME product keyed
+          // differently in different workers, which is why windowed sources
+          // are refused outright (checkShardPreconditions_) rather than
+          // merely warned about — an earlier version of this comment had
+          // that wrong.
+          key === localID ? ++positional : ++placed
+
+          return shardOfDispatchKey( key, this.shard_!.count ) ===
+            this.shard_!.index
+        } )
+
+      if ( this.shard_ !== void 0 && positional > placed ) {
+
+        Logger.warning(
+            `[shard ${this.shard_.index}/${this.shard_.count}] ` +
+            `${positional} of ${positional + placed} products have no ` +
+            'placement key, so sharding is mostly positional and shared ' +
+            'geometry will be rebuilt per shard.')
+      }
+
+      // Aggregates place by the RELATING OBJECT's key — the assembly whose
+      // geometry the pass builds — not the relationship record's. An
+      // IfcRelAggregates is not an IfcProduct, so keying on it would fall
+      // straight through geometryDispatchKey to its own local ID and shard
+      // by record position while claiming to place by representation.
+      //
+      // This matters most exactly where placement matters most: on an
+      // assembly-heavy model the rel-aggregates pass creates most of the
+      // geometry, so getting it wrong leaves placement with almost nothing
+      // to control (measured on D3D, where that mistake made every strategy
+      // look identical).
+      this.demandAggregates_ = this.shard_ === void 0 ?
+        aggregates : aggregates.filter( ( relAggregate ) => {
+
+          // Guarded even though sharding now refuses windowed sources:
+          // this getter reads a record synchronously, and geometryDispatchKey's
+          // own try/catch is INSIDE the call, so a throw here would abort
+          // worklist construction for the whole model rather than place one
+          // aggregate by fallback. Depth-in-depth for a total function.
+          let relating: number | undefined
+
+          try {
+            relating = relAggregate.RelatingObject?.localID
+          } catch {
+            relating = void 0
+          }
+
+          return shardOfDispatchKey(
+              geometryDispatchKey(
+                  this.model[0], relating ?? relAggregate.localID ),
+              this.shard_!.count ) === this.shard_!.index
+        } )
+
       this.demandCursor_ = 0
       this.demandAggregatesCursor_ = 0
+  }
+
+  /**
+   * Extract only one shard of this model's geometry — the across-product
+   * parallelism seam.
+   *
+   * Each worker in a pool opens the model, claims a shard, and pumps: no
+   * scheduling channel between them, because placement is a pure function of
+   * the product (see geometryDispatchKey). Products sharing a representation
+   * land on the same shard, so shards do not rebuild each other's geometry —
+   * round-robin costs +25 % assets on MB-Khaya and +40.7 % on D3D at N=4,
+   * where this key costs +0 % and +38.1 % respectively, for 1.76x and 2.34x
+   * wall-clock.
+   *
+   * **A shard extracts a SUBSET, and the consumer is responsible for the
+   * union.** One shard's output is not a model; assembling all of them is.
+   * Must be set before the first pump call, since the worklists are built
+   * once — setting it later throws rather than silently extracting the wrong
+   * subset.
+   *
+   * @param shard `{index, count}`, or undefined for the whole model.
+   */
+  public setGeometryShard( shard?: { index: number, count: number } ): void {
+
+    if (this.demandProducts_ !== void 0) {
+
+      throw new Error(
+          'setGeometryShard must be called before the first ' +
+          'ExtractGeometryBatch: the worklists are already built, and ' +
+          'narrowing them now would drop products this model has already ' +
+          'reported as pending.')
+    }
+
+    if (shard === void 0) {
+      this.shard_ = void 0
+      return
+    }
+
+    // Validated before anything is decided from it, so a malformed
+    // descriptor is reported as malformed rather than as whichever
+    // incompatibility it happens to trip first.
+    if (!Number.isInteger(shard.count) || shard.count < 1 ||
+        !Number.isInteger(shard.index) || shard.index < 0 ||
+        shard.index >= shard.count) {
+
+      throw new Error(
+          `invalid shard ${shard.index}/${shard.count}: index must be an ` +
+          'integer in [0, count) and count a positive integer')
+    }
+
+    // A single worker is the unsharded model, so it is normalised here —
+    // BEFORE the checks below, every one of which exists because workers
+    // have to agree with each other. One worker agrees with nobody, and a
+    // coordinator that calls this uniformly for its N=1 baseline is doing
+    // nothing that needs a shared frame or a residency-independent key.
+    // Refusing it would fail a configuration that is exactly equivalent to
+    // never having called this at all.
+    if (shard.count === 1) {
+      this.shard_ = void 0
+      return
+    }
+
+    // Refused rather than silently wrong. With COORDINATE_TO_ORIGIN the
+    // recentre anchor is derived from the FIRST geometry a model captures
+    // (see demandCoordination_ in streamNewMeshes_), so shards that begin on
+    // different products derive different frames — and a model spanning more
+    // than one recentre cell then merges subsets shifted by whole grid cells.
+    // Nothing in a union-of-placements check catches that on a model sitting
+    // at the origin, which is every fixture here.
+    //
+    // Sharding a recentred model therefore needs one anchor agreed before
+    // the split: either derived independently of the shard, or established
+    // once and handed to every worker. Until that exists, the combination
+    // is an error rather than a quiet coordinate bug — which does mean the
+    // pool cannot serve Share's own open settings yet.
+    // Sharding only means anything on the deferred pump: it narrows the
+    // worklists ensureDemandWorklists_ builds. A classic open has already
+    // extracted everything, so ExtractGeometryBatch returns zero work and
+    // StreamAllMeshes serves the whole scene — a coordinator that forgot
+    // DEFER_GEOMETRY would see every worker claim successfully and then
+    // receive the COMPLETE model from each, which is the silent-wrong
+    // outcome every other check here exists to prevent.
+    //
+    // Placed after the N=1 normalisation above: {index: 0, count: 1} is a
+    // request for the whole model, which is exactly what a classic open
+    // delivers, so there is nothing to refuse.
+    if (!this.deferredMode_) {
+
+      throw new Error(
+          'SetGeometryShard requires DEFER_GEOMETRY: a classic open has ' +
+          'already extracted the whole model, so a shard claim would be ' +
+          'accepted and then ignored, and every worker would deliver ' +
+          'everything.')
+    }
+
+    // The preview channel runs during open, before a shard can be claimed,
+    // so its payloads are never partitioned: every worker performs the same
+    // capped preview extraction and emits the same imposters, and a pool
+    // forwarding those callbacks gets N overlapping copies. Only the
+    // durable pump is sharded.
+    //
+    // Refused rather than deduplicated, because the fix is to make the
+    // shard available during open so the preview path can filter by it —
+    // an open-signature change, not a dispatch one. Same shape as the
+    // other two refusals: close the path that has no caller, and name the
+    // precondition for reopening it.
+    if (this.previewEmitted_) {
+
+      throw new Error(
+          'SetGeometryShard cannot be used on a model opened with ' +
+          'ON_PREVIEW_MESH: the preview runs during open, before a shard ' +
+          'exists, so every worker would emit the same unpartitioned ' +
+          'preview payloads.')
+    }
+
+    // Already-adopted frame, not just the current flag — see
+    // checkShardPreconditions_, which carries the reasoning.
+    if (this.demandCoordination_ !== void 0) {
+
+      throw new Error(
+          'SetGeometryShard cannot be used on a model that has already ' +
+          'adopted a recentre frame (for example via ON_PREVIEW_MESH): the ' +
+          'frame is derived from whichever geometry this instance saw ' +
+          'first, so workers would not share it.')
+    }
+
+    if (this.settings?.COORDINATE_TO_ORIGIN === true) {
+
+      throw new Error(
+          'SetGeometryShard cannot be combined with COORDINATE_TO_ORIGIN: ' +
+          'each shard would derive its own recentre anchor from whichever ' +
+          'product it happens to extract first, so merged output can be ' +
+          'shifted between shards. Open without COORDINATE_TO_ORIGIN, or ' +
+          'wait for a shared coordination frame.')
+    }
+
+    // Refused at claim time as well as at every pump (see
+    // checkShardPreconditions_, which carries the reasoning): whether the
+    // dispatch key resolves depends on which pages are resident in this
+    // worker, so workers disagree and the partition stops being a partition.
+    if (this.model[0].isSourceExternal) {
+
+      throw new Error(
+          'SetGeometryShard cannot be used with a windowed external ' +
+          'source: the dispatch key walks attribute records, whose ' +
+          'residency differs per worker, so workers would disagree about ' +
+          'which products they own.')
+    }
+
+    // Snapshotted, not retained. A coordinator configuring several engine
+    // instances from one descriptor object — mutating `index` between calls
+    // — would otherwise leave every proxy pointing at the same object, and
+    // ensureDemandWorklists_ reads it later, at first pump. Every descriptor
+    // would pass validation here and the partition would still collapse:
+    // several workers claiming the final index, nobody claiming the rest.
+    //
+    // Same class as the settings-object aliasing above: values validated at
+    // one moment and consumed at another have to be copied at the boundary.
+    this.shard_ = { index: shard.index, count: shard.count }
   }
 
   /**
@@ -2207,6 +2450,118 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param meshCallback Optional mesh consumer.
    * @return {object} `{extracted, remaining}`.
    */
+  /**
+   * The conditions a sharded pump requires, re-checked on every batch.
+   *
+   * Not only in setGeometryShard, because `this.settings` is the CALLER'S
+   * object, held by reference, and the model reads it live — a caller can
+   * open with a flag off, claim a shard past the claim-time check, then set
+   * the flag on its own object. The check that has to hold is the one at the
+   * point the property is consumed, so this runs from both pump entries,
+   * upstream of every capture.
+   *
+   * Unsharded models are unaffected: every condition here is about workers
+   * having to agree with each other.
+   */
+  /**
+   * Whether this model should recentre — the question the CAPTURE path asks.
+   *
+   * Distinct from the refusals in checkShardPreconditions_, and deliberately
+   * so. Those refuse the combination when they can observe it; this makes
+   * the combination harmless when they cannot. A guard checks at one moment
+   * and the frame is derived at another, and the caller owns the settings
+   * object throughout — so anything running in between can flip the flag.
+   * ON_PROGRESS is one such window (it is invoked synchronously from
+   * beginPhase, between the precondition check and the first capture), and
+   * it is the third such window found in this review; patching each one as
+   * it turns up is losing strategy.
+   *
+   * So a sharded model never recentres, whatever the flag says at the
+   * instant the frame would be derived. The refusals still fire first in
+   * every observable case, which is what a caller should see; this is what
+   * makes a missed one merely refused-late rather than silently wrong.
+   *
+   * @return {boolean} Whether to derive and apply a recentre frame.
+   */
+  private recentreEnabled_(): boolean {
+
+    return this.shard_ === void 0 && this.settings?.COORDINATE_TO_ORIGIN === true
+  }
+
+
+  private checkShardPreconditions_(): void {
+
+    if (this.shard_ === void 0) {
+      return
+    }
+
+    // Each shard would derive its own recentre anchor from whichever product
+    // it extracts first (see demandCoordination_ in streamNewMeshes_), so a
+    // model spanning more than one recentre cell merges subsets shifted by
+    // whole grid cells.
+    // Two questions, because neither answers the other. The FLAG says
+    // whether recentring is wanted from here on; demandCoordination_ says
+    // whether a frame has already been adopted. A caller that opened with
+    // ON_PREVIEW_MESH and COORDINATE_TO_ORIGIN, let the preview channel
+    // adopt a frame, then set the flag false on its own settings object
+    // would pass a flag-only check while already sitting in a
+    // preview-derived frame that other workers do not share.
+    if (this.previewEmitted_) {
+
+      throw new Error(
+          'a preview channel already emitted for this model, so it cannot ' +
+          'be sharded: the preview runs during open, before a shard ' +
+          'exists, so its payloads are not partitioned.')
+    }
+
+    if (this.demandCoordination_ !== void 0) {
+
+      throw new Error(
+          'a recentre frame has already been adopted on this model, so it ' +
+          'cannot be sharded: the frame came from whichever geometry this ' +
+          'instance saw first, and other workers will have adopted their ' +
+          'own.')
+    }
+
+    if (this.settings?.COORDINATE_TO_ORIGIN === true) {
+
+      throw new Error(
+          'COORDINATE_TO_ORIGIN was enabled on a sharded model: each shard ' +
+          'would derive its own recentre anchor from whichever product it ' +
+          'extracts first, so merged output can be shifted between shards.')
+    }
+
+    // A windowed source breaks the property the whole partition rests on:
+    // that every worker computes the SAME key for a product. geometryDispatchKey
+    // walks attribute records, and on a windowed source whether that walk
+    // succeeds depends on which pages happen to be resident in THIS worker —
+    // so one worker returns the mapped-source key while another catches the
+    // non-resident read and falls back to the product's local ID.
+    //
+    // That is not weaker affinity, it is a wrong partition. Two workers
+    // disagreeing about a product's key can have both modulo results select
+    // it (extracted twice) or neither (dropped silently). The union check in
+    // m3_worker_pool.mjs cannot see it either, because it runs on resident
+    // buffers where the walk always succeeds.
+    //
+    // Making this work needs a key that does not depend on residency —
+    // derived from the reference columns, or from a closure paged
+    // deterministically before the split. Until then it is refused: workers
+    // on a windowed store were already out of scope for this change (they
+    // need the OPFS-backed source, not a resident buffer per worker), so
+    // this closes a path that has no caller rather than removing a feature.
+    if (this.model[0].isSourceExternal) {
+
+      throw new Error(
+          'a geometry shard cannot be claimed on a windowed external ' +
+          'source: the dispatch key walks attribute records, so whether it ' +
+          'resolves depends on which pages are resident in each worker, and ' +
+          'workers that disagree about a product would extract it twice or ' +
+          'not at all.')
+    }
+  }
+
+
   private pumpGeometryBatch_(
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
@@ -2426,11 +2781,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
 
       const validatePreviewFrame = this.demandCoordinationFromPreview_ &&
-        this.settings?.COORDINATE_TO_ORIGIN === true
+        this.recentreEnabled_()
 
       let nativePt: Vector3
       if ((!this._isCoordinated || validatePreviewFrame) &&
-          this.settings?.COORDINATE_TO_ORIGIN) {
+          this.recentreEnabled_()) {
         nativePt = geometry.geometry.getPoint(0)
       }
 
@@ -2445,7 +2800,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // the recentre math runs in double precision (see coordination_f64).
       const geometryTransform = nativeTransform?.getValues()
 
-      if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+      if (!this._isCoordinated && this.recentreEnabled_()) {
 
         const derived = deriveCoordinationF64(
             geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
@@ -2708,7 +3063,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
 
         let nativePt:Vector3
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           nativePt = geometry.geometry.getPoint(0)
         }
 
@@ -2724,7 +3079,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
 
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
           // Persisted for getAppliedCoordination (Share#1634): report
@@ -2875,7 +3230,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
 
         let nativePt:Vector3
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           nativePt = geometry.geometry.getPoint(0)
         }
 
@@ -2891,7 +3246,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
 
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
@@ -3023,7 +3378,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
 
         let nativePt:Vector3
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           nativePt = geometry.geometry.getPoint(0)
         }
 
@@ -3039,7 +3394,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // the recentre math runs in double precision (see coordination_f64).
         const geometryTransform = nativeTransform?.getValues()
 
-        if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
+        if (!this._isCoordinated && this.recentreEnabled_()) {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
