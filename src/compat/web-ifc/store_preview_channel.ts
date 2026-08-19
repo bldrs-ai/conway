@@ -23,6 +23,8 @@ import {
   NORMALIZE_MAT_F64,
 } from './coordination_f64'
 import { emitSpatialStructureImposters } from './spatial_imposter'
+import { DanglingPlacementError } from '../../ifc/dangling_placement_error'
+import Logger from '../../logging/logger'
 import {
   PreviewMeshPayload,
   releaseModelGeometry,
@@ -85,6 +87,16 @@ export class StorePreviewChannel {
 
   private stopped_ = false
   private emittedUnits_ = 0
+
+  /* Products a tick attempted but could not extract, and how many of those
+   * were specifically waiting on a placement chain the prefix does not hold
+   * yet. Reported at the end of the preview so a blank first load is
+   * attributable: "9 812 of 9 840 attempts deferred, 9 810 on placements" is
+   * a file-layout problem that a sharded parse addresses, and anything else
+   * is not (conway#542). */
+  private deferredUnits_ = 0
+
+  private deferredOnPlacement_ = 0
   private emittedBytes_ = 0
   private unitOrdinal_ = 0
   private lastInlineTick_ = 0
@@ -149,6 +161,28 @@ export class StorePreviewChannel {
 
   public get emittedUnits(): number {
     return this.emittedUnits_
+  }
+
+  /**
+   * Why the preview delivered as little as it did.
+   *
+   * `deferred` counts products a tick attempted and could not extract;
+   * `deferredOnPlacement` is the subset still waiting on a placement chain
+   * the prefix does not hold. A first load that shows nothing is a very
+   * different problem depending on that ratio — near 1.0 is the file-layout
+   * case a sharded parse attacks, anything else is not — and inferring it
+   * from a code comment is what conway#542 exists to stop.
+   *
+   * @return {object} `{emitted, deferred, deferredOnPlacement}`
+   */
+  public get previewYield(): {
+    emitted: number, deferred: number, deferredOnPlacement: number } {
+
+    return {
+      emitted: this.emittedUnits_,
+      deferred: this.deferredUnits_,
+      deferredOnPlacement: this.deferredOnPlacement_,
+    }
   }
 
   /** Products the current generation would run (test seam). */
@@ -273,6 +307,24 @@ export class StorePreviewChannel {
 
     this.stopped_ = true
     this.disposeGeneration_()
+
+    // Say why the preview delivered what it did, on the way out. The channel
+    // is a local of the open call — nothing outside holds it — so a counter
+    // that is not reported here is a counter nobody can read. And a first
+    // load that showed the user nothing is exactly the case where this line
+    // is the whole diagnosis: a deferral ratio near 1.0 ON PLACEMENTS is the
+    // file-layout problem a sharded parse attacks, and anything else is a
+    // different problem wearing the same blank screen (conway#542).
+    if ( this.deferredUnits_ > 0 ) {
+
+      const attempted = this.emittedUnits_ + this.deferredUnits_
+
+      Logger.info(
+          `[preview] emitted ${this.emittedUnits_} of ${attempted} attempted; ` +
+          `deferred ${this.deferredUnits_} ` +
+          `(${this.deferredOnPlacement_} waiting on placements ` +
+          `= ${( 100 * this.deferredOnPlacement_ / this.deferredUnits_ ).toFixed( 0 )}%)` )
+    }
   }
 
   /**
@@ -328,8 +380,17 @@ export class StorePreviewChannel {
         this.captureNewInstances_()
         ++this.emittedUnits_
       }
-    } catch {
-      // Forward-ref / unplaced — durable pump extracts later.
+    } catch ( error ) {
+      // Forward-ref / unplaced — durable pump extracts later. Counted by
+      // cause: a preview that stays blank because every product's placement
+      // is still ahead of the prefix wants a different fix from one blank
+      // for any other reason, and only this split can tell them apart
+      // (conway#542).
+      ++this.deferredUnits_
+
+      if ( error instanceof DanglingPlacementError ) {
+        ++this.deferredOnPlacement_
+      }
     } finally {
 
       model.releaseSourceViews( pins )

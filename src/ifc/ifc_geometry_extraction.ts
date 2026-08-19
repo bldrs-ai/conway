@@ -52,6 +52,7 @@ import {
 } from '../../dependencies/conway-geom'
 import { Uint32Sink } from '../step/parsing/uint32_sink'
 import { StepBufferNotResidentError } from '../step/step_buffer_provider'
+import { DanglingPlacementError } from './dangling_placement_error'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { CanonicalProfile } from '../core/canonical_profile'
@@ -5656,6 +5657,15 @@ export class IfcGeometryExtraction {
 
         this.extractPlacement(objectPlacement)
       }
+    } catch ( error ) {
+
+      // Tagged, not swallowed. The throw still propagates and callers still
+      // treat it as not-yet-extractable — but a preview tick that catches it
+      // can now say WHY a product deferred. Without that, a model whose
+      // preview stays blank is indistinguishable from one deferring for some
+      // other reason, and the fix for those is not the same (conway#542).
+      throw new DanglingPlacementError( product.localID, error )
+
     } finally {
 
       model.nullOnErrors = priorNullOnErrors
