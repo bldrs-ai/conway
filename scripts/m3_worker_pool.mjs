@@ -23,6 +23,7 @@
  *
  *   node --expose-gc scripts/m3_worker_pool.mjs <model> [--workers 1,2,4]
  */
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import * as path from 'node:path'
 import * as process from 'node:process'
@@ -34,6 +35,27 @@ const REPO_ROOT = path.resolve( fileURLToPath( new URL( '.', import.meta.url ) )
 const DEFAULT_WORKERS = [ 1, 2, 4 ]
 const BATCH_SIZE = 64
 const MS_PER_S = 1000
+
+
+/**
+ * A transform's exact bytes, as a comparable string.
+ *
+ * Rounding here would make the union check unable to fail: a shard that
+ * shifted a component by less than half the last printed digit would
+ * serialize identically to the reference and report OK on output that is
+ * not the same output. The whole point of this script is detecting that,
+ * so the encoding has to be lossless.
+ *
+ * @param {ArrayLike<number>} transform The flat transformation.
+ * @return {string} A lossless encoding of every component.
+ */
+function transformKey( transform ) {
+
+  const exact = new Float64Array( transform )
+
+  return Buffer.from( exact.buffer, exact.byteOffset, exact.byteLength )
+      .toString( 'base64' )
+}
 
 
 /**
@@ -101,8 +123,7 @@ async function runWorker( task ) {
             placements.push(
                 `${mesh.expressID}/${placed.geometryExpressID}` +
                 `#${placed.color.x},${placed.color.y},${placed.color.z},${placed.color.w}` +
-                `@${[ ...placed.flatTransformation ]
-                    .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                `@${transformKey( placed.flatTransformation )}` )
 
             if ( !payloads.has( placed.geometryExpressID ) ) {
 

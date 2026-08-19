@@ -18,6 +18,25 @@ const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 const SHARD_SETTINGS =
   { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
 
+/**
+ * A transform's exact bytes, as a comparable string.
+ *
+ * Rounding would make these comparisons unable to fail: a transform that
+ * moved by less than half the last printed digit would serialize identically
+ * to the one it is being checked against. Every use below is asserting that
+ * two paths produce the SAME output, so the encoding has to be lossless.
+ *
+ * @param transform The flat transformation.
+ * @return {string} A lossless encoding of every component.
+ */
+function transformKey( transform: ArrayLike< number > ): string {
+
+  const exact = new Float64Array( transform )
+
+  return Buffer.from( exact.buffer, exact.byteOffset, exact.byteLength )
+      .toString( 'base64' )
+}
+
 let api: IfcAPI
 let buffer: Uint8Array
 
@@ -419,8 +438,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       for ( let where = 0; where < mesh.geometries.size(); ++where ) {
         const placed = mesh.geometries.get( where )
         classicPlacements.push(
-            `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
       }
     } )
 
@@ -436,8 +454,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
             for ( let where = 0; where < mesh.geometries.size(); ++where ) {
               const placed = mesh.geometries.get( where )
               pumpedPlacements.push(
-                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                  `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
             }
           } )
 
@@ -582,8 +599,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
       for ( let where = 0; where < mesh.geometries.size(); ++where ) {
         const placed = mesh.geometries.get( where )
         classicPlacements.push(
-            `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+            `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
       }
     } )
 
@@ -608,8 +624,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
             for ( let where = 0; where < mesh.geometries.size(); ++where ) {
               const placed = mesh.geometries.get( where )
               pumped.push(
-                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                  `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
             }
           } )
 
@@ -870,8 +885,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
             for ( let where = 0; where < mesh.geometries.size(); ++where ) {
               const placed = mesh.geometries.get( where )
               whole.push(
-                  `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                      .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                  `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
             }
           } )
       if ( remaining === 0 && extracted === 0 ) {
@@ -903,8 +917,7 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
               for ( let where = 0; where < mesh.geometries.size(); ++where ) {
                 const placed = mesh.geometries.get( where )
                 sharded.push(
-                    `${placed.geometryExpressID}@${[ ...placed.flatTransformation ]
-                        .map( ( value ) => value.toFixed( 3 ) ).join( ',' )}` )
+                    `${placed.geometryExpressID}@${transformKey( placed.flatTransformation )}` )
                 ++delivered
               }
             } )
