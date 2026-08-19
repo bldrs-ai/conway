@@ -2339,6 +2339,20 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
+    // Re-checked here, not only in setGeometryShard. `this.settings` is the
+    // CALLER'S object, held by reference, and streamNewMeshes_ reads
+    // COORDINATE_TO_ORIGIN live — so a caller that opens without it, claims
+    // a shard, then flips the flag on its own object would derive exactly
+    // the per-shard anchor the claim-time check exists to prohibit. The
+    // check that has to hold is the one at the point the frame is derived.
+    if (this.shard_ !== void 0 && this.settings?.COORDINATE_TO_ORIGIN === true) {
+
+      throw new Error(
+          'COORDINATE_TO_ORIGIN was enabled on a sharded model: each shard ' +
+          'would derive its own recentre anchor from whichever product it ' +
+          'extracts first, so merged output can be shifted between shards.')
+    }
+
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
     const totalWork = products.length + aggregates.length

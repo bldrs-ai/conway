@@ -948,6 +948,34 @@ describe( 'OpenModelStreamed + DEFER_GEOMETRY', () => {
     api.CloseModel( modelID )
   }, 240000 )
 
+  test( 'enabling COORDINATE_TO_ORIGIN after claiming a shard is refused', async () => {
+
+    // The claim-time check alone is not enforcement: the proxy holds the
+    // CALLER'S settings object by reference and reads COORDINATE_TO_ORIGIN
+    // live when it derives the recentre frame. A caller that opens without
+    // it, claims a shard, then flips the flag would get per-shard anchors —
+    // subsets of a large-coordinate model shifted by whole grid cells,
+    // which no union-of-placements check catches on a fixture at the origin.
+    const api = new IfcAPI()
+    await api.Init()
+
+    const settings =
+      { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true, DEFER_GEOMETRY: true }
+
+    const modelID = await api.OpenModelStreamed(
+        new Uint8Array( fs.readFileSync( 'data/mapped_shared_representation.ifc' ) ),
+        settings )
+
+    expect( api.SetGeometryShard( modelID, { index: 0, count: 2 } ) ).toBe( true )
+
+    settings.COORDINATE_TO_ORIGIN = true
+
+    expect( () => api.ExtractGeometryBatch( modelID, 1 ) )
+        .toThrow( /COORDINATE_TO_ORIGIN was enabled on a sharded model/ )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
   test( 'ExtractGeometryBatch is a safe no-op on non-deferred models', async () => {
 
     const modelID = await api.OpenModelStreamed( buffer, SETTINGS )
