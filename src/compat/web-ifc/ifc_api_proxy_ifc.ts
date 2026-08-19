@@ -4,7 +4,13 @@ import {
 } from '../../index'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import { CanonicalMaterial } from '../../index'
-import { geometryDispatchKey, shardOfDispatchKey } from '../../ifc/geometry_dispatch'
+import {
+  computeDispatchKeys,
+  computeRelatingLocalIDs,
+  geometryDispatchKey,
+  relatingLocalIDOf,
+  shardOfDispatchKey,
+} from '../../ifc/geometry_dispatch'
 import { IfcSceneBuilder } from '../../ifc/ifc_scene_builder'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import {
@@ -309,6 +315,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * large-coordinate budget.
    */
   private demandCoordinationFromPreview_: boolean = false
+
+  /**
+   * True when the coordination frame was HANDED to this instance rather than
+   * derived from its own first geometry (see setCoordinationFrame).
+   *
+   * The distinction is what makes a recentred model shardable. A derived
+   * frame is anchored on whichever product this instance happened to extract
+   * first, so N workers derive N frames and their outputs merge shifted by
+   * whole recentre cells; a supplied one is the same for every worker by
+   * construction, which is the only property the refusals in
+   * checkShardPreconditions_ were ever protecting.
+   */
+  private coordinationSupplied_: boolean = false
 
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
@@ -2033,7 +2052,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
 
     this.checkShardPreconditions_()
-    this.ensureDemandWorklists_()
+    await this.ensureDemandWorklistsAsync_()
 
     if (!this.model[0].isSourceExternal) {
       return this.pumpGeometryBatch_(batchSize, meshCallback)
@@ -2186,102 +2205,326 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
-      // Aggregate-target products are extracted ONLY by the
-      // rel-aggregates pass below (with the relating object's master
-      // rel-voids), never by the per-product pass: extracting them here
-      // first would emit their instances with the uncut/placeholder
-      // content and the pass's later replacement would never reach an
-      // incremental consumer (it copies at delivery), while the pass's
-      // second scene instance would draw over the first (see
-      // aggregateTargetLocalIDs).
-      const aggregateTargets = this.conwayGeometry_.aggregateTargetLocalIDs()
+    const {products, aggregates} = this.collectDemandCandidates_()
 
-      const products: number[] = []
+    if (this.shard_ === void 0) {
+      this.adoptDemandWorklists_(products, aggregates)
+      return
+    }
 
-      for (const product of this.model[0].types(IfcProduct)) {
+    // Reachable only on a resident source: the sync pump refuses a windowed
+    // one outright, and the async pump routes a sharded model through
+    // ensureDemandWorklistsAsync_. Asserted rather than assumed, because the
+    // failure it guards against is a silently wrong partition — a walk that
+    // hit a non-resident record here would throw out of the load instead
+    // (see geometryDispatchKey), but the diagnostic would name a record
+    // rather than the missing await.
+    if (this.model[0].isSourceExternal) {
 
-        if (aggregateTargets.has(product.localID)) {
-          continue
-        }
-        products.push(product.localID)
-      }
+      throw new Error(
+          'a sharded windowed model needs the async worklist build, which ' +
+          'pages each product\'s dispatch closure — reached the synchronous ' +
+          'one instead')
+    }
 
-      const aggregates: IfcRelAggregates[] = []
+    const productKeys = new Uint32Array(products.length)
 
-      for (const relAggregate of this.model[0].types(IfcRelAggregates)) {
-        aggregates.push(relAggregate)
-      }
+    for (let where = 0; where < products.length; ++where) {
+      productKeys[where] = geometryDispatchKey(this.model[0], products[where])
+    }
 
-      let placed = 0
-      let positional = 0
+    const aggregateKeys = new Uint32Array(aggregates.length)
 
-      this.demandProducts_ = this.shard_ === void 0 ?
-        products : products.filter( ( localID ) => {
+    for (let where = 0; where < aggregates.length; ++where) {
+      aggregateKeys[where] = geometryDispatchKey(
+          this.model[0],
+          relatingLocalIDOf(this.model[0], aggregates[where].localID))
+    }
 
-          const key = geometryDispatchKey( this.model[0], localID )
-
-          // A key equal to the product's own local ID means the walk found
-          // nothing to place by — a product with no representation. That
-          // costs affinity, not correctness: the key is still a pure
-          // function of the product, so every worker computes the same one
-          // and the partition holds; it just stops avoiding duplication.
-          //
-          // Correctness would only break if the SAME product keyed
-          // differently in different workers, which is why windowed sources
-          // are refused outright (checkShardPreconditions_) rather than
-          // merely warned about — an earlier version of this comment had
-          // that wrong.
-          key === localID ? ++positional : ++placed
-
-          return shardOfDispatchKey( key, this.shard_!.count ) ===
-            this.shard_!.index
-        } )
-
-      if ( this.shard_ !== void 0 && positional > placed ) {
-
-        Logger.warning(
-            `[shard ${this.shard_.index}/${this.shard_.count}] ` +
-            `${positional} of ${positional + placed} products have no ` +
-            'placement key, so sharding is mostly positional and shared ' +
-            'geometry will be rebuilt per shard.')
-      }
-
-      // Aggregates place by the RELATING OBJECT's key — the assembly whose
-      // geometry the pass builds — not the relationship record's. An
-      // IfcRelAggregates is not an IfcProduct, so keying on it would fall
-      // straight through geometryDispatchKey to its own local ID and shard
-      // by record position while claiming to place by representation.
-      //
-      // This matters most exactly where placement matters most: on an
-      // assembly-heavy model the rel-aggregates pass creates most of the
-      // geometry, so getting it wrong leaves placement with almost nothing
-      // to control (measured on D3D, where that mistake made every strategy
-      // look identical).
-      this.demandAggregates_ = this.shard_ === void 0 ?
-        aggregates : aggregates.filter( ( relAggregate ) => {
-
-          // Guarded even though sharding now refuses windowed sources:
-          // this getter reads a record synchronously, and geometryDispatchKey's
-          // own try/catch is INSIDE the call, so a throw here would abort
-          // worklist construction for the whole model rather than place one
-          // aggregate by fallback. Depth-in-depth for a total function.
-          let relating: number | undefined
-
-          try {
-            relating = relAggregate.RelatingObject?.localID
-          } catch {
-            relating = void 0
-          }
-
-          return shardOfDispatchKey(
-              geometryDispatchKey(
-                  this.model[0], relating ?? relAggregate.localID ),
-              this.shard_!.count ) === this.shard_!.index
-        } )
-
-      this.demandCursor_ = 0
-      this.demandAggregatesCursor_ = 0
+    this.adoptShardedWorklists_(
+        products, aggregates, productKeys, aggregateKeys)
   }
+
+
+  /**
+   * Worklist build for a windowed source — the same partition, with the
+   * dispatch walk's records paged before they are read.
+   *
+   * Sharding a windowed model rests on every worker computing the SAME key
+   * for a product, and an inline walk cannot promise that: whether a record
+   * read resolves depends on which chunks THIS worker holds, so workers
+   * disagree and both moduli select a product (extracted twice) or neither
+   * (dropped). computeDispatchKeys pages each hop of the walk first, which
+   * is what makes the keys a function of the file rather than of paging —
+   * and is why the pool can finally serve a store-backed open, the only kind
+   * Share performs.
+   *
+   * Resident sources take the same route with the paging short-circuited, so
+   * there is one partition rather than a windowed one and a resident one.
+   */
+  private async ensureDemandWorklistsAsync_(): Promise<void> {
+
+    if (this.demandProducts_ !== void 0) {
+      return
+    }
+
+    const {products, aggregates} = this.collectDemandCandidates_()
+
+    if (this.shard_ === void 0) {
+      this.adoptDemandWorklists_(products, aggregates)
+      return
+    }
+
+    const productKeys = await computeDispatchKeys(this.model[0], products)
+
+    const aggregateKeys = await computeDispatchKeys(
+        this.model[0],
+        await computeRelatingLocalIDs(
+            this.model[0], aggregates.map((aggregate) => aggregate.localID)))
+
+    // Re-checked after the awaits: a concurrent pump could have built the
+    // worklists while this one was paging, and adopting a second set would
+    // reset the cursors under it, re-extracting everything already pumped.
+    if (this.demandProducts_ !== void 0) {
+      return
+    }
+
+    this.adoptShardedWorklists_(
+        products, aggregates, productKeys, aggregateKeys)
+  }
+
+
+  /**
+   * Everything the pump could extract, before any shard narrows it.
+   *
+   * Reads no record bytes — products come from the type index and aggregate
+   * targets from the geometry side — so it is identical on a resident and a
+   * windowed source, and both key computations start from the same lists in
+   * the same order. That order is what makes the keys align to the
+   * worklists.
+   *
+   * @return {object} The unsharded product and rel-aggregates worklists.
+   */
+  private collectDemandCandidates_():
+      {products: number[], aggregates: IfcRelAggregates[]} {
+
+    // Aggregate-target products are extracted ONLY by the
+    // rel-aggregates pass below (with the relating object's master
+    // rel-voids), never by the per-product pass: extracting them here
+    // first would emit their instances with the uncut/placeholder
+    // content and the pass's later replacement would never reach an
+    // incremental consumer (it copies at delivery), while the pass's
+    // second scene instance would draw over the first (see
+    // aggregateTargetLocalIDs).
+    const aggregateTargets = this.conwayGeometry_.aggregateTargetLocalIDs()
+
+    const products: number[] = []
+
+    for (const product of this.model[0].types(IfcProduct)) {
+
+      if (aggregateTargets.has(product.localID)) {
+        continue
+      }
+      products.push(product.localID)
+    }
+
+    const aggregates: IfcRelAggregates[] = []
+
+    for (const relAggregate of this.model[0].types(IfcRelAggregates)) {
+      aggregates.push(relAggregate)
+    }
+
+    return {products, aggregates}
+  }
+
+
+  /**
+   * Install the whole model's worklists — the unsharded case.
+   *
+   * @param products Every extractable product, in index order.
+   * @param aggregates Every rel-aggregates entry, in index order.
+   */
+  private adoptDemandWorklists_(
+      products: number[],
+      aggregates: IfcRelAggregates[]): void {
+
+    this.demandProducts_ = products
+    this.demandAggregates_ = aggregates
+    this.demandCursor_ = 0
+    this.demandAggregatesCursor_ = 0
+  }
+
+
+  /**
+   * Install the worklists narrowed to this instance's shard.
+   *
+   * Keys are passed in rather than computed here because where they come
+   * from is the whole difference between a resident and a windowed source —
+   * one walks the attributes directly, the other pages the walk's closure
+   * first — while the narrowing itself is identical. Separate from
+   * {@link adoptDemandWorklists_} so the keys are required by the signature
+   * rather than by a comment.
+   *
+   * @param products Every extractable product, in index order.
+   * @param aggregates Every rel-aggregates entry, in index order.
+   * @param productKeys Placement keys aligned to `products`.
+   * @param aggregateKeys Placement keys aligned to `aggregates`.
+   */
+  private adoptShardedWorklists_(
+      products: number[],
+      aggregates: IfcRelAggregates[],
+      productKeys: Uint32Array,
+      aggregateKeys: Uint32Array): void {
+
+    const shard = this.shard_!
+
+    let placed = 0
+    let positional = 0
+
+    this.demandProducts_ = products.filter((localID, where) => {
+
+      const key = productKeys[where]
+
+      // A key equal to the product's own local ID means the walk found
+      // nothing to place by — a product with no representation. That
+      // costs affinity, not correctness: the key is still a pure
+      // function of the product, so every worker computes the same one
+      // and the partition holds; it just stops avoiding duplication.
+      key === localID ? ++positional : ++placed
+
+      return shardOfDispatchKey(key, shard.count) === shard.index
+    })
+
+    if (positional > placed) {
+
+      Logger.warning(
+          `[shard ${shard.index}/${shard.count}] ` +
+          `${positional} of ${positional + placed} products have no ` +
+          'placement key, so sharding is mostly positional and shared ' +
+          'geometry will be rebuilt per shard.')
+    }
+
+    // Aggregates place by the RELATING OBJECT's key — the assembly whose
+    // geometry the pass builds — not the relationship record's. An
+    // IfcRelAggregates is not an IfcProduct, so keying on it would fall
+    // straight through geometryDispatchKey to its own local ID and shard
+    // by record position while claiming to place by representation.
+    //
+    // This matters most exactly where placement matters most: on an
+    // assembly-heavy model the rel-aggregates pass creates most of the
+    // geometry, so getting it wrong leaves placement with almost nothing
+    // to control (measured on D3D, where that mistake made every strategy
+    // look identical).
+    this.demandAggregates_ = aggregates.filter((relAggregate, where) =>
+      shardOfDispatchKey(aggregateKeys[where], shard.count) === shard.index)
+
+    this.demandCursor_ = 0
+    this.demandAggregatesCursor_ = 0
+  }
+
+
+  /**
+   * Hand this model the recentre frame to apply, instead of letting it
+   * derive one — the other half of what a worker pool needs.
+   *
+   * `COORDINATE_TO_ORIGIN` normally recentres a model onto an anchor taken
+   * from the FIRST geometry the instance captures. That is fine for one
+   * instance and fatal for N: each worker starts on a different product, so
+   * each derives a different frame, and a model spanning more than one
+   * recentre cell reassembles with its shards offset by whole cells. Nothing
+   * downstream can detect it — the placements are individually plausible.
+   *
+   * So the frame becomes an input. A coordinator derives it once (Share's
+   * parse-time preview channel already does, and
+   * {@link getAppliedCoordination} reports what any instance applied), hands
+   * the same matrix to every worker, and the shards agree by construction
+   * rather than by luck. This is what lifts the COORDINATE_TO_ORIGIN refusal
+   * in {@link setGeometryShard}.
+   *
+   * A supplied frame is FINAL. The adopted-preview path re-derives when the
+   * first durable placement lands outside the large-coordinate budget
+   * (Share#1634); that check is disabled here, because a worker that
+   * re-derived would silently leave the frame its siblings are still using.
+   * A coordinator that wants that validation runs it on its own instance,
+   * before it hands the frame out.
+   *
+   * Deferred models only, like sharding itself: a classic open has already
+   * placed everything by the time this could be called.
+   *
+   * Supply it BEFORE claiming a shard: {@link setGeometryShard} refuses a
+   * COORDINATE_TO_ORIGIN model that has no frame yet, so the reverse order
+   * fails at the claim rather than at the pump.
+   *
+   * @param matrix Column-major mat4 of 16 finite numbers, or undefined to
+   * drop a previously supplied frame and go back to deriving.
+   */
+  public setCoordinationFrame( matrix?: number[] ): void {
+
+    // Same "before the first pump" rule as setGeometryShard, and for a
+    // sharper reason: placements already emitted carry the old frame, and
+    // nothing re-places them, so a late call would leave one model in two
+    // coordinate systems.
+    if (this.demandProducts_ !== void 0) {
+
+      throw new Error(
+          'SetCoordinationFrame must be called before the first ' +
+          'ExtractGeometryBatch: placements already emitted carry the frame ' +
+          'that was in force when they were captured, and are not re-placed.')
+    }
+
+    if (!this.deferredMode_) {
+
+      throw new Error(
+          'SetCoordinationFrame requires DEFER_GEOMETRY: a classic open has ' +
+          'already placed every product, so a frame supplied now would be ' +
+          'accepted and then ignored.')
+    }
+
+    if (matrix === void 0) {
+
+      if (this.coordinationSupplied_) {
+        this.demandCoordination_ = void 0
+        this.coordinationSupplied_ = false
+        this._isCoordinated = false
+      }
+
+      return
+    }
+
+    if (matrix.length !== IDENTITY_MAT4.length ||
+        !matrix.every((element) => Number.isFinite(element))) {
+
+      throw new Error(
+          `invalid coordination frame: expected ${IDENTITY_MAT4.length} ` +
+          `finite numbers (column-major mat4), got ${matrix.length}`)
+    }
+
+    // A frame this instance DERIVED (or adopted from its own preview) is not
+    // one a coordinator can reconcile with — geometry has already been placed
+    // in it. Overwriting would leave that geometry in the old frame and
+    // everything after it in the new one.
+    if (this.demandCoordination_ !== void 0 && !this.coordinationSupplied_) {
+
+      throw new Error(
+          'this model has already adopted a coordination frame of its own ' +
+          '(a preview channel, or a first durable capture), so it cannot be ' +
+          'given another: geometry placed in the old frame is not re-placed.')
+    }
+
+    // Copied, not retained: a coordinator handing one array to N instances
+    // and mutating it between calls would otherwise leave every instance
+    // pointing at the last frame written. Same aliasing class as the shard
+    // descriptor below.
+    this.demandCoordination_ = [...matrix]
+    this.coordinationSupplied_ = true
+
+    // Stops the capture path from deriving over the top of it (see
+    // streamNewMeshes_), and stops the adopted-preview revalidation from
+    // replacing it.
+    this._isCoordinated = true
+    this.demandCoordinationFromPreview_ = false
+  }
+
 
   /**
    * Extract only one shard of this model's geometry — the across-product
@@ -2397,8 +2640,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
 
     // Already-adopted frame, not just the current flag — see
-    // checkShardPreconditions_, which carries the reasoning.
-    if (this.demandCoordination_ !== void 0) {
+    // checkShardPreconditions_, which carries the reasoning. A SUPPLIED
+    // frame is the exception both refusals exist to allow: it is the same
+    // matrix in every worker, so there is nothing left to disagree about.
+    if (this.demandCoordination_ !== void 0 && !this.coordinationSupplied_) {
 
       throw new Error(
           'SetGeometryShard cannot be used on a model that has already ' +
@@ -2407,27 +2652,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'first, so workers would not share it.')
     }
 
-    if (this.settings?.COORDINATE_TO_ORIGIN === true) {
+    if (this.settings?.COORDINATE_TO_ORIGIN === true && !this.coordinationSupplied_) {
 
       throw new Error(
-          'SetGeometryShard cannot be combined with COORDINATE_TO_ORIGIN: ' +
-          'each shard would derive its own recentre anchor from whichever ' +
-          'product it happens to extract first, so merged output can be ' +
-          'shifted between shards. Open without COORDINATE_TO_ORIGIN, or ' +
-          'wait for a shared coordination frame.')
-    }
-
-    // Refused at claim time as well as at every pump (see
-    // checkShardPreconditions_, which carries the reasoning): whether the
-    // dispatch key resolves depends on which pages are resident in this
-    // worker, so workers disagree and the partition stops being a partition.
-    if (this.model[0].isSourceExternal) {
-
-      throw new Error(
-          'SetGeometryShard cannot be used with a windowed external ' +
-          'source: the dispatch key walks attribute records, whose ' +
-          'residency differs per worker, so workers would disagree about ' +
-          'which products they own.')
+          'SetGeometryShard cannot be combined with COORDINATE_TO_ORIGIN ' +
+          'unless a coordination frame was supplied: each shard would ' +
+          'otherwise derive its own recentre anchor from whichever product ' +
+          'it happens to extract first, so merged output can be shifted ' +
+          'between shards. Call SetCoordinationFrame with one frame for the ' +
+          'whole pool, or open without COORDINATE_TO_ORIGIN.')
     }
 
     // Snapshotted, not retained. A coordinator configuring several engine
@@ -2476,12 +2709,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * it is the third such window found in this review; patching each one as
    * it turns up is losing strategy.
    *
-   * So a sharded model never recentres, whatever the flag says at the
-   * instant the frame would be derived. The refusals still fire first in
-   * every observable case, which is what a caller should see; this is what
-   * makes a missed one merely refused-late rather than silently wrong.
+   * So a sharded model never DERIVES a frame, whatever the flag says at the
+   * instant one would be derived. The refusals still fire first in every
+   * observable case, which is what a caller should see; this is what makes a
+   * missed one merely refused-late rather than silently wrong.
    *
-   * @return {boolean} Whether to derive and apply a recentre frame.
+   * Deriving is all this governs. A frame handed in by
+   * {@link setCoordinationFrame} is applied by the capture path
+   * unconditionally — that is the point of supplying one — and this staying
+   * false for a sharded model is exactly what keeps a worker from deriving
+   * over the top of it.
+   *
+   * @return {boolean} Whether to derive a recentre frame from this
+   * instance's first geometry.
    */
   private recentreEnabled_(): boolean {
 
@@ -2514,7 +2754,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'exists, so its payloads are not partitioned.')
     }
 
-    if (this.demandCoordination_ !== void 0) {
+    if (this.demandCoordination_ !== void 0 && !this.coordinationSupplied_) {
 
       throw new Error(
           'a recentre frame has already been adopted on this model, so it ' +
@@ -2523,42 +2763,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'own.')
     }
 
-    if (this.settings?.COORDINATE_TO_ORIGIN === true) {
+    if (this.settings?.COORDINATE_TO_ORIGIN === true && !this.coordinationSupplied_) {
 
       throw new Error(
-          'COORDINATE_TO_ORIGIN was enabled on a sharded model: each shard ' +
-          'would derive its own recentre anchor from whichever product it ' +
-          'extracts first, so merged output can be shifted between shards.')
+          'COORDINATE_TO_ORIGIN was enabled on a sharded model with no ' +
+          'supplied coordination frame: each shard would derive its own ' +
+          'recentre anchor from whichever product it extracts first, so ' +
+          'merged output can be shifted between shards. Supply one frame ' +
+          'for the pool with SetCoordinationFrame.')
     }
 
-    // A windowed source breaks the property the whole partition rests on:
-    // that every worker computes the SAME key for a product. geometryDispatchKey
-    // walks attribute records, and on a windowed source whether that walk
-    // succeeds depends on which pages happen to be resident in THIS worker —
-    // so one worker returns the mapped-source key while another catches the
-    // non-resident read and falls back to the product's local ID.
-    //
-    // That is not weaker affinity, it is a wrong partition. Two workers
-    // disagreeing about a product's key can have both modulo results select
-    // it (extracted twice) or neither (dropped silently). The union check in
-    // m3_worker_pool.mjs cannot see it either, because it runs on resident
-    // buffers where the walk always succeeds.
-    //
-    // Making this work needs a key that does not depend on residency —
-    // derived from the reference columns, or from a closure paged
-    // deterministically before the split. Until then it is refused: workers
-    // on a windowed store were already out of scope for this change (they
-    // need the OPFS-backed source, not a resident buffer per worker), so
-    // this closes a path that has no caller rather than removing a feature.
-    if (this.model[0].isSourceExternal) {
-
-      throw new Error(
-          'a geometry shard cannot be claimed on a windowed external ' +
-          'source: the dispatch key walks attribute records, so whether it ' +
-          'resolves depends on which pages are resident in each worker, and ' +
-          'workers that disagree about a product would extract it twice or ' +
-          'not at all.')
-    }
   }
 
 

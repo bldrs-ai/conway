@@ -917,6 +917,48 @@ Deliberately small first step; each has a measurable exit.
   falls 39.4 s → 26.9 s. And a 4-core box cannot answer how this scales
   at 8–16 cores; it can only show the axis is real.
 
+  **What a shard claim refused, and why both refusals are now lifted.**
+  The first shipping pool (conway#536) accepted a shard only on a
+  resident source with `COORDINATE_TO_ORIGIN` off. Neither restriction
+  was arbitrary, and neither survived contact with Share: Share opens
+  through `OpenModelStream` over OPFS — windowed — and it recentres. The
+  pool was therefore correct, tested, and unable to serve the one
+  consumer it exists for.
+
+  - **Windowed sources.** The dispatch key walks attribute records
+    (`product.Representation → Representations → Items → MappingSource`),
+    and on a windowed source whether a hop resolves depends on which
+    chunks *that worker* holds. A worker short of a page fell back to the
+    product's own local ID, so two workers computed different keys for
+    one product — and the modulo then selected it twice or not at all.
+    That is not weaker affinity, it is a broken partition, and a union
+    check over resident buffers cannot see it. The fix is to make the key
+    a function of the *file*: `computeDispatchKeys` pages the walk's own
+    closure — four hops, in pinned waves — before evaluating it, so every
+    worker reads the same bytes. Attribute failures still take the
+    documented fallback (every worker sees those); a **non-resident read
+    now propagates** instead of being swallowed, because a fallback taken
+    for a paging accident is the exact silent disagreement being removed.
+  - **`COORDINATE_TO_ORIGIN`.** The recentre anchor comes from the first
+    geometry an instance captures, so N workers derive N frames. The fix
+    is to stop deriving: `SetCoordinationFrame` makes the frame an
+    *input*. A coordinator derives it once — Share's parse-time preview
+    channel already does, and `GetAppliedCoordinationMatrix` reports it —
+    and hands the same matrix to every worker. A supplied frame is final:
+    the adopted-preview revalidation is disabled under it, since a worker
+    that re-derived would silently leave the frame its siblings still use.
+
+  Worth recording how nearly the test for the second one measured
+  nothing. Recentring **snaps to a 1 km grid** (`COORDINATION_SNAP_M`),
+  so shards whose first products sit tens of metres apart quantize to the
+  *same* frame and agree by accident — a per-shard anchor is observable
+  only on a model spanning more than one cell, which is what the original
+  refusal said and what no fixture in `data/` provided. Against
+  `index_georeferenced.ifc` the union test passed with the fix reverted.
+  `data/index_georeferenced_multicell.ifc` (the same model, its seven
+  products spread 4 km apart) is what makes it fail, and the test asserts
+  that span rather than trusting it.
+
   Scope moved out by measurement rather than by preference:
   **demand ordering** (Share-side
   priority into a queue that exists; does not gate the memory result),
