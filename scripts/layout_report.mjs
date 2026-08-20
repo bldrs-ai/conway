@@ -44,6 +44,13 @@
  * closure at any offset — which is what makes file layout stop mattering.
  *
  *   node scripts/layout_report.mjs <file> [...]
+ *   node scripts/layout_report.mjs <in.ifc> --emit-tail-placements <out.ifc>
+ *
+ * The second form writes a copy with every leaf point/direction record moved
+ * to the end of the DATA section, which is the Archicad shape reproduced at
+ * fixture scale: same records, same ids, same semantics, hostile order. That
+ * is how a deterministic test gets the deferral behaviour without shipping a
+ * 400 MB model.
  */
 import fs from 'fs'
 
@@ -556,7 +563,58 @@ function report(path) {
 }
 
 
+/**
+ * Rewrite a file with its leaf point/direction records moved to the end of
+ * the DATA section, preserving ids and text exactly.
+ *
+ * Record order is the only thing that changes, so the result parses to an
+ * identical model and differs only in when each record becomes indexable —
+ * which is precisely the variable under test.
+ *
+ * @param {string} inPath source file
+ * @param {string} outPath destination
+ */
+function emitTailPlacements(inPath, outPath) {
+  const buf = fs.readFileSync(inPath)
+  const head = []
+  const tail = []
+  let cursor = buf.indexOf('DATA;')
+  cursor = cursor < 0 ? 0 : cursor + 5
+  const prologue = buf.subarray(0, cursor)
+  let lastEnd = cursor
+
+  eachRecord(buf, (id, typeStart, typeEnd, start, end) => {
+    const name = buf.toString('latin1', typeStart, typeEnd).trim().toUpperCase()
+    ;(LEAF_NAMES.has(name) ? tail : head).push(buf.subarray(start, end))
+    lastEnd = end
+  })
+
+  const epilogue = buf.subarray(lastEnd)
+  const nl = Buffer.from('\n')
+  const parts = [prologue, nl]
+
+  for (const chunk of head) {
+    parts.push(chunk, nl)
+  }
+  for (const chunk of tail) {
+    parts.push(chunk, nl)
+  }
+  parts.push(epilogue)
+
+  fs.writeFileSync(outPath, Buffer.concat(parts))
+  console.log(
+    `${outPath}: ${head.length} records, then ${tail.length} leaf ` +
+    'point/direction records moved to the tail')
+}
+
+
 const args = process.argv.slice(2)
-for (const path of args) {
-  report(path)
+const emitAt = args.indexOf('--emit-tail-placements')
+
+if (emitAt >= 0) {
+  emitTailPlacements(args[0], args[emitAt + 1])
+} else {
+  for (const path of args) {
+    report(path)
+  }
 }

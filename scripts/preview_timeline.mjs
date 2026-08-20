@@ -13,12 +13,21 @@
  * is the number a first-time visitor experiences as "did anything happen".
  * `stop()` then prints the deferral split, which is the diagnosis when the
  * answer is "nothing happened for eight seconds".
+ *
+ * `--no-preview` opens with ON_PREVIEW_MESH unset, which is the control: the
+ * channel ticks inline on parse progress and pages source through the
+ * windowed provider on every attempt, INCLUDING the ones that go on to
+ * defer. Comparing the two parse times says whether a preview that delivers
+ * nothing is merely useless or is actively taxing the parse it is waiting
+ * for.
  */
 import * as fs from 'node:fs'
 import * as process from 'node:process'
 import { performance } from 'node:perf_hooks'
 
-const filePath = process.argv.slice(2).find((a) => !a.startsWith('--'))
+const argv = process.argv.slice(2)
+const noPreview = argv.includes('--no-preview')
+const filePath = argv.find((a) => !a.startsWith('--'))
 
 if (!filePath) {
   console.error('usage: preview_timeline.mjs <file.ifc>')
@@ -63,7 +72,7 @@ const SETTINGS = {
   COORDINATE_TO_ORIGIN: true,
   USE_FAST_BOOLS: true,
   DEFER_GEOMETRY: true,
-  ON_PREVIEW_MESH: () => {
+  ON_PREVIEW_MESH: noPreview ? undefined : () => {
     ++previewMeshes
     if (firstPreviewMs < 0) {
       firstPreviewMs = performance.now() - t0
@@ -88,7 +97,9 @@ const SETTINGS = {
   },
 }
 
-console.log(`file=${filePath} sizeMB=${sizeMB.toFixed(1)}`)
+console.log(
+  `file=${filePath} sizeMB=${sizeMB.toFixed(1)}` +
+  `${noPreview ? ' preview=OFF (control)' : ''}`)
 
 const modelID = await api.OpenModelStream(store, SETTINGS)
 const openMs = performance.now() - t0
