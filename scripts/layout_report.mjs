@@ -24,6 +24,25 @@
  * be a JS string, and record identity is a Uint32Array indexed by express ID
  * rather than a Map, which keeps a 9 M-record file in tens of MB.
  *
+ * A third curve simulates a SHARDED parse: N readers starting at even byte
+ * offsets and advancing together. A product is emittable once every record
+ * it needs sits inside the union of the scanned ranges — a very different
+ * question from "inside the leading prefix".
+ *
+ * That curve came out NEGATIVE, which is why it is worth keeping. Sharding
+ * the parse makes preview coverage strictly WORSE at equal bytes scanned,
+ * on every file in the corpus: at 70% scanned DOWA emits 19,854 products
+ * with one reader and 1 with four. Emission needs a product's whole closure
+ * scanned, a leading prefix is contiguous so a file-order-local closure is
+ * satisfied, and N readers replace that one region with N shorter ones and
+ * N-1 holes. Any closure spanning a hole is blocked, and more shards means
+ * more holes.
+ *
+ * The conclusion that survives: shard the INDEX BUILD, not the parse the
+ * preview reads. An offset/type index has no closure, so it shards without
+ * penalty, and once it is complete the windowed provider can page any
+ * closure at any offset — which is what makes file layout stop mattering.
+ *
  *   node scripts/layout_report.mjs <file> [...]
  */
 import fs from 'fs'
@@ -68,6 +87,9 @@ const LEAF_NAMES = new Set([
 
 /* Percentile buckets for the curves. */
 const BUCKETS = 1000
+
+/* Shard counts simulated for the sharded-parse curve. */
+const SHARD_COUNTS = [1, 2, 4, 8]
 
 
 /**
@@ -321,10 +343,25 @@ function report(path) {
   // already harvested every leaf point/direction, so a leaf never gates a
   // product. The gap between the two curves is what such a pass would buy.
   const leafFirstResolveAt = new Uint32Array(maxId + 1)
+
+  // For the sharded curve, the useful quantity is not an absolute offset but
+  // how far INTO ITS OWN BAND a required record sits: with N readers advancing
+  // together, a record at 90% of the file is reached at the same moment as one
+  // at 90% of any other band. Per shard count, carry the max of that fraction
+  // over the placement chain alongside the absolute max.
+  const shardChainProgress = SHARD_COUNTS.map(() => new Float64Array(maxId + 1))
+  const bandProgress = (offset, shards) => {
+    const band = Math.min(shards - 1, Math.floor(offset / size * shards))
+    return (offset - band * size / shards) / (size / shards)
+  }
+
   for (let id = 0; id <= maxId; ++id) {
     placementResolveAt[id] = offsetOf[id]
     placementBlocker[id] = id
     leafFirstResolveAt[id] = isLeaf[id] === 1 ? 0 : offsetOf[id]
+    for (let s = 0; s < SHARD_COUNTS.length; ++s) {
+      shardChainProgress[s][id] = bandProgress(offsetOf[id], SHARD_COUNTS[s])
+    }
   }
   for (let round = 0; round < 8; ++round) {
     let changed = false
@@ -335,6 +372,7 @@ function report(path) {
       let at = placementResolveAt[id]
       let leafAt = leafFirstResolveAt[id]
       let blocker = placementBlocker[id]
+      const shardAt = SHARD_COUNTS.map((unused, s) => shardChainProgress[s][id])
       eachRef(buf, argsFrom, end, (ref) => {
         if (ref <= maxId) {
           const refAt = placementResolveAt[ref]
@@ -346,8 +384,20 @@ function report(path) {
           if (leafRefAt > leafAt) {
             leafAt = leafRefAt
           }
+          for (let s = 0; s < SHARD_COUNTS.length; ++s) {
+            const p = shardChainProgress[s][ref]
+            if (p > shardAt[s]) {
+              shardAt[s] = p
+            }
+          }
         }
       })
+      for (let s = 0; s < SHARD_COUNTS.length; ++s) {
+        if (shardAt[s] > shardChainProgress[s][id]) {
+          shardChainProgress[s][id] = shardAt[s]
+          changed = true
+        }
+      }
       if (at > placementResolveAt[id]) {
         placementResolveAt[id] = at
         placementBlocker[id] = blocker
@@ -369,6 +419,7 @@ function report(path) {
   const productScanned = new Uint32Array(BUCKETS + 1)
   const productUsable = new Uint32Array(BUCKETS + 1)
   const productLeafFirst = new Uint32Array(BUCKETS + 1)
+  const productSharded = SHARD_COUNTS.map(() => new Uint32Array(BUCKETS + 1))
   let forward = 0
   let products = 0
   let productsDeferredByPlacement = 0
@@ -382,6 +433,8 @@ function report(path) {
     let hasPlacement = false
     let blocker = 0
     let leafPlacementAt = 0
+    const shardReady = SHARD_COUNTS.map(
+        (shards) => bandProgress(start, shards))
     eachRef(buf, argsFrom, end, (ref) => {
       if (ref > maxId) {
         return
@@ -404,6 +457,14 @@ function report(path) {
           leafPlacementAt = leafChainAt
         }
       }
+      for (let s = 0; s < SHARD_COUNTS.length; ++s) {
+        const p = Math.max(
+            bandProgress(at, SHARD_COUNTS[s]),
+            isPlacement[ref] === 1 ? shardChainProgress[s][ref] : 0)
+        if (p > shardReady[s]) {
+          shardReady[s] = p
+        }
+      }
     })
     if (resolveAt > end) {
       ++forward
@@ -419,6 +480,10 @@ function report(path) {
       productScanned[bucketOf(start)]++
       productUsable[bucketOf(readyAt)]++
       productLeafFirst[bucketOf(Math.max(resolveAt, leafPlacementAt))]++
+      for (let s = 0; s < SHARD_COUNTS.length; ++s) {
+        productSharded[s][Math.min(
+            BUCKETS, Math.floor(shardReady[s] * BUCKETS))]++
+      }
       if (placementAt > end) {
         ++productsDeferredByPlacement
         const name = typeNames[typeOf[blocker]] || '(unknown)'
@@ -432,6 +497,7 @@ function report(path) {
   const pScanned = cumulative(productScanned)
   const pUsable = cumulative(productUsable)
   const pLeaf = cumulative(productLeafFirst)
+  const pShard = productSharded.map(cumulative)
 
   console.log(`\n=== ${path}`)
   console.log(
@@ -463,6 +529,20 @@ function report(path) {
       `${String(ps).padStart(8)} ${String(pu).padStart(7)} ${pgap.toFixed(0).padStart(4)}% | ` +
       `${String(pLeaf[at]).padStart(9)}`)
   }
+
+  console.log(
+    '\n    sharded parse — placed products emittable, by per-shard progress:')
+  console.log(
+    `    progress | ${SHARD_COUNTS.map(
+        (n) => `N=${n}`.padStart(9)).join(' ')}`)
+  for (let pct = 10; pct <= 100; pct += 10) {
+    const at = Math.floor(BUCKETS * pct / 100)
+    console.log(
+      `    ${String(pct).padStart(7)}% | ` +
+      SHARD_COUNTS.map(
+          (unused, s) => String(pShard[s][at]).padStart(9)).join(' '))
+  }
+  console.log(`    (of ${products} placed products)`)
 
   if (blockedBy.size > 0) {
     const ranked = [...blockedBy.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
