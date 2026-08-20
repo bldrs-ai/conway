@@ -24,6 +24,7 @@ import {
 } from './coordination_f64'
 import { emitSpatialStructureImposters } from './spatial_imposter'
 import { DanglingPlacementError } from '../../ifc/dangling_placement_error'
+import { formatPreviewLine } from '../../core/progress_log'
 import Logger from '../../logging/logger'
 import {
   PreviewMeshPayload,
@@ -153,6 +154,19 @@ export class StorePreviewChannel {
   private retryCursor_ = 0
 
   private retriedUnits_ = 0
+
+  /**
+   * Ms from channel construction to the first PLACED PRODUCT payload —
+   * time-to-first-pixel, the number conway#542 exists to move. The spatial
+   * plates are deliberately not counted: they are the building's wireframe
+   * skeleton, they go out on a different schedule (see
+   * {@link maybeEmitEarlySpatialPlates_}), and counting them would report
+   * first pixels for a load whose products are all still deferring.
+   * {@link earlyPlateCount} is where those are visible.
+   */
+  private firstMeshMs_?: number
+
+  private readonly startedMs_ = Date.now()
   private emittedBytes_ = 0
   private unitOrdinal_ = 0
   private lastInlineTick_ = 0
@@ -220,8 +234,10 @@ export class StorePreviewChannel {
   }
 
   /**
-   * Why the preview delivered as little as it did.
+   * What the preview delivered, and how fast.
    *
+   * `firstMeshMs` is time-to-first-pixel measured from channel
+   * construction, undefined when no placed product was ever emitted.
    * `deferred` counts products a tick attempted and could not extract;
    * `deferredOnPlacement` is the subset still waiting on a placement chain
    * the prefix does not hold; `retried` counts attempts that were second
@@ -232,13 +248,15 @@ export class StorePreviewChannel {
    * case a sharded parse attacks, anything else is not — and inferring it
    * from a code comment is what conway#542 exists to stop.
    *
-   * @return {object} `{emitted, deferred, deferredOnPlacement}`
+   * @return {object} `{firstMeshMs, emitted, deferred, deferredOnPlacement,
+   * retried}`
    */
   public get previewYield(): {
-    emitted: number, deferred: number, deferredOnPlacement: number,
-    retried: number } {
+    firstMeshMs?: number, emitted: number, deferred: number,
+    deferredOnPlacement: number, retried: number } {
 
     return {
+      firstMeshMs: this.firstMeshMs_,
       emitted: this.emittedUnits_,
       deferred: this.deferredUnits_,
       deferredOnPlacement: this.deferredOnPlacement_,
@@ -369,23 +387,17 @@ export class StorePreviewChannel {
     this.stopped_ = true
     this.disposeGeneration_()
 
-    // Say why the preview delivered what it did, on the way out. The channel
-    // is a local of the open call — nothing outside holds it — so a counter
-    // that is not reported here is a counter nobody can read. And a first
-    // load that showed the user nothing is exactly the case where this line
-    // is the whole diagnosis: a deferral ratio near 1.0 ON PLACEMENTS is the
-    // file-layout problem a sharded parse attacks, and anything else is a
-    // different problem wearing the same blank screen (conway#542).
-    if ( this.deferredUnits_ > 0 ) {
-
-      const attempted = this.emittedUnits_ + this.deferredUnits_
-
-      Logger.info(
-          `[preview] emitted ${this.emittedUnits_} of ${attempted} attempted; ` +
-          `deferred ${this.deferredUnits_} ` +
-          `(${this.deferredOnPlacement_} waiting on placements ` +
-          `= ${( 100 * this.deferredOnPlacement_ / this.deferredUnits_ ).toFixed( 0 )}%); ` +
-          `${this.retriedUnits_} of those attempts were retries` )
+    // Say what the preview delivered, and how fast, on the way out. The
+    // channel is a local of the open call — nothing outside holds it — so a
+    // counter that is not reported here is a counter nobody can read. And a
+    // first load that showed the user nothing is exactly the case where this
+    // line is the whole diagnosis: a deferral ratio near 1.0 ON PLACEMENTS
+    // is the file-layout problem, and anything else is a different problem
+    // wearing the same blank screen (conway#542). Rendered by the shared
+    // load-log formatter, so the resident path's line and this one are the
+    // same line.
+    if ( this.emittedUnits_ > 0 || this.deferredUnits_ > 0 ) {
+      Logger.info( formatPreviewLine( this.previewYield ) )
     }
   }
 
@@ -899,6 +911,8 @@ export class StorePreviewChannel {
         this.emittedBytes_ +=
           ( vertexData.length + indexData.length ) * BYTES_PER_FLOAT
       }
+
+      this.firstMeshMs_ ??= Date.now() - this.startedMs_
 
       this.onMesh_( payload )
 
