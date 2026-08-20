@@ -281,6 +281,70 @@ describe( 'StorePreviewChannel', () => {
     channel.stop()
   }, 120000 )
 
+  test( 'a throwing prefix build retires the attempt, not the channel', async () => {
+
+    // A mid-parse prefix can be structurally incomplete, and building a
+    // generation over it throws. That must retire THIS attempt and then
+    // wait for index growth: without the wait the channel re-snapshots and
+    // re-throws on every tick, which is a snapshot copy of the whole prefix
+    // per tick on a file large enough to matter.
+    //
+    // The gate has to hold with NO active generation, because a build that
+    // throws is exactly the case that leaves none — that is why it is
+    // tested on its own rather than folded in with the growth gate.
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    let reportedRecords = sink.topLevelCount
+    let snapshots = 0
+
+    const flakySink = {
+      get topLevelCount() {
+        return reportedRecords
+      },
+      snapshot: () => {
+
+        if ( ++snapshots === 1 ) {
+          throw new Error( 'structurally incomplete prefix' )
+        }
+
+        return sink.snapshot()
+      },
+    } as unknown as ColumnarIndexSink< number >
+
+    const payloads: PreviewMeshPayload[] = []
+    const channel = new StorePreviewChannel(
+        store, flakySink, conwayGeometry, true,
+        ( mesh ) => payloads.push( mesh ), 64, 48 * 1024 * 1024, 1 )
+
+    await channel.drainForTest()
+
+    expect( snapshots ).toBe( 1 )
+    expect( payloads.length ).toBe( 0 )
+
+    // Same record count: the failure gate must hold the retry.
+    await channel.drainForTest()
+
+    expect( snapshots ).toBe( 1 )
+
+    // The index grows past the gate: the retry builds and emits.
+    reportedRecords *= 4
+
+    await channel.drainForTest()
+
+    expect( snapshots ).toBe( 2 )
+    expect( payloads.length ).toBeGreaterThan( 0 )
+
+    channel.stop()
+  }, 120000 )
+
   test( 'an unproductive tick does not decay the cadence', async () => {
 
     const sink = new ColumnarIndexSink< number >()

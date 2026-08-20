@@ -560,7 +560,16 @@ export class StorePreviewChannel {
       return false
     }
 
-    if ( active !== void 0 && !growthReady ) {
+    if ( active !== void 0 &&
+        records < this.lastSnapshotRecords_ * GENERATION_GROWTH_FACTOR ) {
+      return false
+    }
+
+    // Unconditional, unlike the snapshot gate above: a prefix whose build
+    // THREW leaves no active generation, so folding this into `growthReady`
+    // and testing it only when one exists would let a structurally
+    // incomplete prefix re-snapshot and re-throw on every tick.
+    if ( records < this.lastFailedSnapshotRecords_ * GENERATION_GROWTH_FACTOR ) {
       return false
     }
 
