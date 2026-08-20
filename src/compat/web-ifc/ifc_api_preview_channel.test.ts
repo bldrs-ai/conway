@@ -543,4 +543,259 @@ describe( 'StreamedPreviewChannel', () => {
       }
     }
   }, 240000 )
+
+  test( 'a tail-placement file recovers its deferred products', () => {
+
+    // The resident twin of the store channel's test for conway#542.
+    // data/index_tail_placements.ifc is index_georeferenced_multicell.ifc
+    // with every leaf point/direction record moved to the end of DATA —
+    // same ids, same text, hostile order. It is the Archicad shape at
+    // fixture scale: its products reference a placement chain that bottoms
+    // out after them, so an index stopping short of the tail cannot place
+    // any of them. The multicell fixture rather than index.ifc because it
+    // carries enough products that one attempt cannot exhaust the
+    // generation — which is what leaves the preemption path, not the
+    // exhaustion path, as the only way to rebuild.
+    const tailText = fs.readFileSync( 'data/index_tail_placements.ifc', 'utf8' )
+    const lines = tailText.split( '\n' )
+    const firstLeaf = lines.findIndex(
+        ( line ) => /=\s*IFC(CARTESIANPOINT|DIRECTION)/.test( line ) )
+
+    expect( firstLeaf ).toBeGreaterThan( 0 )
+
+    // A genuine prefix, closed off so it parses: every record up to the
+    // leaf block, and nothing after it. The full file is stage two.
+    const prefixText =
+      `${lines.slice( 0, firstLeaf ).join( '\n' )}\nENDSEC;\nEND-ISO-10303-21;\n`
+    const prefixBytes = new Uint8Array( Buffer.from( prefixText, 'latin1' ) )
+    const tailBytes = new Uint8Array( Buffer.from( tailText, 'latin1' ) )
+
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const payloads: PreviewMeshPayload[] = []
+
+    // The source buffer is the WHOLE file throughout, as it is on a
+    // resident open — only the index grows.
+    const channel = new StreamedPreviewChannel(
+        tailBytes, conwayGeometry, sink, ifcPreviewAdapter(), true,
+        ( mesh ) => payloads.push( mesh ), void 0, void 0, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // One unit per tick, so stage one leaves units UNATTEMPTED. That is
+    // what forces the preemption path: with units still pending, a channel
+    // that only rebuilds on exhaustion keeps its starved generation and
+    // never looks at the deferrals again.
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+
+    // Stage one: index only the prefix, then let the channel work it.
+    expect( buildIndexStreaming(
+        new BufferByteSource( prefixBytes ),
+        IfcStepParser.Instance,
+        POOL,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    internals.lastInlineTick_ = 0
+    channel.maybeTickInline()
+
+    const afterPrefix = channel.previewYield
+
+    // The fixture has to actually exercise the path, or the rest proves
+    // nothing about it — and units must be left over, or the rebuild would
+    // happen by exhaustion and prove nothing about preemption.
+    expect( afterPrefix.deferredOnPlacement ).toBeGreaterThan( 0 )
+    expect( afterPrefix.emitted ).toBe( 0 )
+    expect( afterPrefix.firstMeshMs ).toBeUndefined()
+    expect( internals.unitOrdinal_ )
+        .toBeLessThan( internals.generation_.generation.unitCount )
+
+    // Stage two: the same reset-and-replay the streaming builder performs
+    // when it grows its window, so top-level localIDs stay in dense parse
+    // order and the deferred ORDINALS the channel is holding still mean
+    // what they meant (see ColumnarIndexSink.reset).
+    sink.reset()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( tailBytes ),
+        IfcStepParser.Instance,
+        POOL,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    // Exactly one attempt in this tick. That is what makes this an
+    // assertion about PREEMPTION: with units still pending, a channel that
+    // rebuilds only on exhaustion spends the attempt on the next fresh unit
+    // against the old starved generation, and the retry never happens.
+    internals.lastInlineTick_ = 0
+    channel.maybeTickInline()
+
+    const afterFull = channel.previewYield
+
+    // Both halves of the fix, and `retried` is what separates them from a
+    // channel that merely got lucky on a later unit. Without the retry
+    // queue a deferred unit is attempted once, at the most index-starved
+    // generation it appears in, and abandoned. Without preemptive rebuilds
+    // the generation is kept while units remain, so the deferrals are never
+    // revisited against the longer index. Either one missing holds this at
+    // zero.
+    expect( afterFull.retried ).toBeGreaterThan( 0 )
+    expect( afterFull.emitted ).toBeGreaterThan( 0 )
+
+    // And the recovered products become pixels: one attempt per tick is
+    // what makes the assertions above about preemption, but a single unit
+    // need not be one that carries geometry (a site or a storey extracts
+    // and walks no buffer geometry), so let the channel run out the
+    // recovered queue before reading time-to-first-pixel.
+    internals.tickMaxAttempts_ = Number.MAX_SAFE_INTEGER
+    internals.lastInlineTick_ = 0
+    channel.maybeTickInline()
+
+    expect( payloads.length ).toBeGreaterThan( 0 )
+    expect( channel.previewYield.firstMeshMs ).toBeGreaterThanOrEqual( 0 )
+
+    channel.stop()
+  }, 240000 )
+
+  test( 'a generation is preempted only when it is deferring', () => {
+
+    // The counterweight. Rebuilding on index growth alone regressed the
+    // case that already worked: PSB, which defers nothing, went from a
+    // first mesh at 269ms to 495ms on the store path because it kept paying
+    // for rebuilds it had no use for. index.ifc is that shape at fixture
+    // scale, so the same two-stage growth must leave its generation alone.
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+
+    const channel = new StreamedPreviewChannel(
+        data, conwayGeometry, sink, ifcPreviewAdapter(), true,
+        () => { /* nothing asserted about payloads */ }, void 0, void 0, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // One unit per tick, so the generation is nowhere near exhausted when
+    // the index grows — otherwise the exhaustion path would rebuild and
+    // this would assert nothing about preemption.
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( data ),
+        IfcStepParser.Instance,
+        POOL,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    internals.lastInlineTick_ = 0
+    channel.maybeTickInline()
+
+    const snapshotRecords = internals.lastSnapshotRecords_ as number
+
+    expect( snapshotRecords ).toBeGreaterThan( 0 )
+    expect( channel.previewYield.deferredOnPlacement ).toBe( 0 )
+
+    // Index growth well past GENERATION_GROWTH_FACTOR, with units still
+    // pending and nothing deferring: the generation must be kept.
+    sink.reset()
+
+    for ( let repeat = 0; repeat < 3; ++repeat ) {
+      expect( buildIndexStreaming(
+          new BufferByteSource( data ),
+          IfcStepParser.Instance,
+          POOL,
+          void 0,
+          sink ).result ).toBe( ParseResult.COMPLETE )
+    }
+
+    expect( sink.topLevelCount ).toBeGreaterThan( snapshotRecords * 2 )
+
+    internals.lastInlineTick_ = 0
+    channel.maybeTickInline()
+
+    expect( internals.lastSnapshotRecords_ ).toBe( snapshotRecords )
+    expect( channel.previewYield.retried ).toBe( 0 )
+
+    channel.stop()
+  }, 240000 )
+
+  test( 'retry mode preempts a generation whose units captured nothing', () => {
+
+    // AP214's half of conway#542. `retryEmptyUnits` already re-runs empty
+    // units, so that schema never abandoned a deferral — but it kept a
+    // stale generation for the same reason the IFC path did: the growth
+    // gate sat behind "this generation still has units", and a scan that
+    // never finishes never reaches it. An empty unit is this schema's
+    // deferral signal (the adapter cannot classify a failure — an assembly
+    // unit simply produces no instances until the solids it references are
+    // indexed), so index growth must preempt mid-scan.
+    const UNIT_COUNT = 3
+    const runsPerGeneration: number[][] = []
+
+    let reportedRecords = 2048
+    const fakeSink = {
+      get topLevelCount() {
+        return reportedRecords
+      },
+      snapshot: () => ( {} ),
+    } as unknown as ColumnarIndexSink<EntityTypesIfc>
+
+    const makeGeneration = () => {
+      const runs: number[] = []
+      runsPerGeneration.push( runs )
+      return {
+        // Empty scene: units "execute" but never capture, so no unit ever
+        // completes and every generation re-runs all of them.
+        scene: { *walk() { /* no instances */ } },
+        unitCount: UNIT_COUNT,
+        linearScalingFactor: 1,
+        runUnits: ( from: number ) => {
+          runs.push( from )
+          return 1
+        },
+        geometryExpressID: () => void 0,
+        recenter: false,
+        dispose: () => { /* nothing native here */ },
+      }
+    }
+
+    const adapter = {
+      retryEmptyUnits: true,
+      buildGeneration: () => makeGeneration(),
+    }
+
+    const channel = new StreamedPreviewChannel(
+        data, conwayGeometry, fakeSink, adapter, false,
+        () => { /* no payloads expected */ }, void 0, void 0, 1 )
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const internals = channel as any
+
+    // One unit per tick, so the scan is deliberately left unfinished.
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    const forceTick = () => {
+      internals.lastInlineTick_ = 0
+      internals.tickIntervalMs_ = 0
+      channel.maybeTickInline()
+    }
+
+    // Generation 1 runs one unit, which captures nothing.
+    forceTick()
+    expect( runsPerGeneration.length ).toBe( 1 )
+    expect( runsPerGeneration[ 0 ] ).toEqual( [ 0 ] )
+
+    // The index grows past the gate with the scan still mid-list. Without
+    // preemption the channel keeps generation 1 and runs its unit 1; with
+    // it, a fresh generation restarts the scan against the longer index.
+    reportedRecords *= 4
+    forceTick()
+
+    expect( runsPerGeneration.length ).toBe( 2 )
+    expect( runsPerGeneration[ 1 ] ).toEqual( [ 0 ] )
+
+    channel.stop()
+  }, 240000 )
 } )
