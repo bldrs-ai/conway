@@ -548,12 +548,18 @@ async function main() {
       const timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
       const unameVal = os.arch();
       allStatus = 'fail';
-      // displayName is a model filename, and several models in the corpus are
-      // named with commas ("Wiesenplatz 7, 4057 Basel.ifc"); the OK path
-      // URL-encodes but this one does not, so it needs the quoting too.
+      // URL-encoded like the OK path above, which is the point: this row's
+      // `filename` is the key gen_delta_csv.cjs joins two runs on, and this
+      // branch used to write the raw displayName while EVERY other row in the
+      // file was encoded. A render-request failure on a model with a space in
+      // its name therefore wrote `S_Office_Integrated Design Archi.ifc` into a
+      // file where the same model's OK rows say
+      // `S_Office_Integrated%20Design%20Archi.ifc`, so the delta would emit
+      // two one-sided rows instead of the status transition — losing exactly
+      // the row a release comparison is for. One writer, one convention.
       const failLine = csvRow([
-        timestamp, 'FAIL', unameVal, 'N/A', displayName, 'N/A', 'N/A', 'N/A',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
+        timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
+        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
       ]);
       appendLineToFile(newResults, failLine);
 

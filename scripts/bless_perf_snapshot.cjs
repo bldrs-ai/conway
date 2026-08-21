@@ -30,10 +30,16 @@
  * The four columns perf.csv does not carry (schemaVersion, geometryMemoryMb,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
  * omitted, so the file keeps the 15-column shape every existing consumer and
- * GitHub's CSV viewer expect. gen_delta_csv.cjs reads none of the four as a
- * measurement — schemaVersion is carried through as a label and the other
- * three are not in the delta's column set at all — so the delta is unaffected
- * by their absence.
+ * GitHub's CSV viewer expect.
+ *
+ * Of those four, only geometryMemoryMb reaches the delta:
+ * preprocessorVersion/originatingSystem are not in its column set, and
+ * schemaVersion is carried through as a label. `geometryMemoryMbDelta` is
+ * therefore N/A on every row of a delta involving this snapshot — which is the
+ * honest answer, and it is only true because gen_delta_csv.cjs propagates an
+ * absent measurement instead of coercing it to 0. Coercing produced a
+ * fabricated `geometryMemoryMbDelta = -185.836` for SKYLARK250 — the entire
+ * baseline allocation reported as a memory win.
  *
  * HARNESS BOUNDARY. The committed `conway<version>-ci_*` snapshots to date
  * were produced by scripts/benchmark.cjs driving headless-three, i.e. conway
@@ -230,6 +236,10 @@ The memory columns are not: \`rssMb\` here excludes a GL context and a three.js
 scene graph. \`schemaVersion\`, \`geometryMemoryMb\`, \`preprocessorVersion\` and
 \`originatingSystem\` are \`N/A\` — the conway-native perf writer does not
 capture them.
+
+Because \`geometryMemoryMb\` is absent here, \`geometryMemoryMbDelta\` is \`N/A\`
+on every row of a delta against this snapshot. That is a missing measurement,
+not a zero: do not read it as "no change in geometry memory".
 
 ## Regenerating
 

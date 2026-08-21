@@ -438,8 +438,7 @@ jobs:
           case "$REF_NAME" in
             rc-*) VERSION="${REF_NAME#rc-}" ;;
             *)
-              echo "::notice::Ref '$REF_NAME' is not an rc-* tag; " \
-                   "skipping the blessed perf snapshot."
+              echo "::notice::Ref '$REF_NAME' is not an rc-* tag; skipping the blessed perf snapshot."
               exit 0
               ;;
           esac
