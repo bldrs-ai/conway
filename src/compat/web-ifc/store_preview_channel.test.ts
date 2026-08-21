@@ -1,10 +1,11 @@
 /* eslint-disable no-magic-numbers */
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, test } from '@jest/globals'
+import { beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import IfcStepParser from '../../ifc/ifc_step_parser'
+import Logger from '../../logging/logger'
 import { BufferByteSource } from '../../step/parsing/byte_source'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { ParseResult } from '../../step/parsing/step_parser'
@@ -593,4 +594,70 @@ describe( 'StorePreviewChannel', () => {
 
     api.CloseModel( id )
   } )
+
+  test( 'preemption preserves the unconsumed suffix of the retry queue', async () => {
+
+    // Codex round 1 on #543: preemption replaced retryQueue_ outright with
+    // this generation's fresh deferredForRetry_, discarding whatever the
+    // OLD queue's tail had not yet been popped. A retry queue can easily
+    // span more than one tick's TICK_MAX_ATTEMPTS budget, so index growth
+    // can preempt a generation mid-drain of it — and every un-popped entry
+    // is a product whose unitOrdinal_ has already passed, so replacing
+    // rather than concatenating strands it exactly the way abandoned
+    // deferrals were stranded before this queue existed (conway#542).
+    //
+    // The bug is purely mechanical (which array wins the assignment), so
+    // this seeds the private queue state directly and forces the growth
+    // gate via lastSnapshotRecords_, rather than engineering a real
+    // multi-tick deferral sequence — store_preview_channel.ts's extraction
+    // seam isn't pluggable the way the resident channel's
+    // PreviewSchemaAdapter is, so a real gen1/gen2 pair here means real
+    // IfcStepModel/IfcGeometryExtraction builds regardless.
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true,
+        () => { /* payloads not inspected */ }, 64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // Generation 1: a real, successful build (active must be defined for
+    // the preemption branch to even be reachable).
+    expect( await internals.ensureGeneration_() ).toBe( true )
+
+    // A retry queue spanning more than one tick's budget: 6 queued
+    // retries, only the first 3 consumed (retryCursor_ short of
+    // retryQueue_.length is exactly "mid-drain") before the index grew
+    // again. deferredForRetry_ is this generation's OWN fresh deferral —
+    // the only thing the buggy version kept.
+    internals.retryQueue_ = [ 10, 11, 12, 13, 14, 15 ]
+    internals.retryCursor_ = 3
+    internals.deferredForRetry_ = [ 99 ]
+
+    // Force the growth gate trivially open on the next check, without
+    // needing the sink to actually grow: the gate is a ratio against
+    // lastSnapshotRecords_, not an absolute count.
+    internals.lastSnapshotRecords_ = 1
+
+    // Preemption fires: active is defined, growthReady (real topLevelCount
+    // >= 1 * factor), and deferredForRetry_.length > 0.
+    expect( await internals.ensureGeneration_() ).toBe( true )
+
+    // The unconsumed suffix of the old queue (indices 3..5) must survive,
+    // carried ahead of this generation's own fresh deferral — not replaced
+    // by it.
+    expect( internals.retryQueue_ ).toEqual( [ 13, 14, 15, 99 ] )
+    expect( internals.retryCursor_ ).toBe( 0 )
+
+    channel.stop()
+  }, 120000 )
 } )

@@ -926,8 +926,19 @@ export class StreamedPreviewChannel {
     this.emptyUnitsThisGeneration_ = 0
 
     // Deferrals of the outgoing generation become this one's retry queue —
-    // the whole point of building it early.
-    this.retryQueue_ = this.deferredForRetry_
+    // the whole point of building it early. Carry the OLD queue's
+    // unconsumed suffix forward too, not just this generation's fresh
+    // deferrals: preemption can fire mid-drain of retryQueue_ (a tick's
+    // attempt budget against an index that grew enough to trigger a
+    // rebuild before the queue emptied), and every un-popped entry is a
+    // unit whose ordinal unitOrdinal_ has already passed — replacing the
+    // queue outright, rather than concatenating, would strand them exactly
+    // the way abandoned deferrals were stranded before this fix existed
+    // (conway#542, codex round 1 on #543).
+    this.retryQueue_ = [
+      ...this.retryQueue_.slice(this.retryCursor_),
+      ...this.deferredForRetry_,
+    ].slice(0, RETRY_QUEUE_MAX)
     this.retryCursor_ = 0
     this.deferredForRetry_ = []
 

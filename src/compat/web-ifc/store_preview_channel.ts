@@ -626,7 +626,19 @@ export class StorePreviewChannel {
       }
 
       this.disposeGeneration_()
-      this.retryQueue_ = this.deferredForRetry_
+      // Carry the OLD queue's unconsumed suffix forward, not just this
+      // generation's fresh deferrals. Preemption can fire mid-drain of
+      // retryQueue_ — bounded per-tick attempts (TICK_MAX_ATTEMPTS) against
+      // an index that grew enough to trigger a rebuild before the queue
+      // emptied — and every one of those un-popped entries is a product
+      // whose ordinal unitOrdinal_ has already passed, so replacing the
+      // queue outright (rather than concatenating) would strand them
+      // exactly the way abandoned deferrals were stranded before this fix
+      // existed (conway#542, codex round 1 on #543).
+      this.retryQueue_ = [
+        ...this.retryQueue_.slice( this.retryCursor_ ),
+        ...this.deferredForRetry_,
+      ].slice( 0, RETRY_QUEUE_MAX )
       this.retryCursor_ = 0
       this.deferredForRetry_ = []
       this.generation_ = {
