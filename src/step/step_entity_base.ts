@@ -23,6 +23,7 @@ import { stepBufferBase } from './step_buffer_provider'
 import { StepEntityConstructorAbstract } from './step_entity_constructor'
 import StepEntityInternalReference,
 { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
+import { DanglingReferenceError } from './dangling_reference_error'
 import StepModelBase from './step_model_base'
 
  
@@ -387,6 +388,33 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
 
   /**
+   * Classify a reference field that failed to resolve.
+   *
+   * `getElementByExpressID` / `getTypedElementByExpressID` answer
+   * `undefined` for two opposite causes: the record is not in the index at
+   * all, or it is indexed but is the wrong entity type. A mid-parse prefix
+   * reader must tell them apart — the first may resolve once more of the
+   * file is scanned, the second never will — so the absent case gets its
+   * own error type (see {@link DanglingReferenceError}). Called only on a
+   * throwing path, so the extra index lookup costs nothing in the common
+   * case.
+   *
+   * @param expressID The reference's target, or undefined when the field
+   * did not hold a reference at all (an unresolved inline element).
+   * @return {Error} The error to throw.
+   */
+  private unresolvedReferenceError_( expressID: number | undefined ): Error {
+
+    if ( expressID !== void 0 &&
+      this.model.resolveExpressID( expressID ) === void 0 ) {
+
+      return new DanglingReferenceError( expressID )
+    }
+
+    return new Error( 'Value in STEP was incorrectly typed' )
+  }
+
+  /**
    * Extract a reference from an offset, without type check.
    *
    * @param offset The offset in the vtable to extract from
@@ -424,11 +452,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
     if (value === void 0) {
       if (!optional) {
-        throw new Error('Value in STEP was incorrectly typed')
+        throw this.unresolvedReferenceError_( expressID )
       }
 
       if ( !this.model.nullOnErrors && stepExtractOptional(buffer, cursor, endCursor) !== null) {
-        throw new Error('Value in STEP was incorrectly typed')
+        throw this.unresolvedReferenceError_( expressID )
       }
 
       return null
@@ -772,11 +800,11 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
     if (value === void 0) {
       if (!optional) {
-        throw new Error('Value in STEP was incorrectly typed')
+        throw this.unresolvedReferenceError_( expressID )
       }
 
       if ( !model.nullOnErrors && stepExtractOptional(buffer, cursor, endCursor) !== null) {
-        throw new Error('Value in STEP was incorrectly typed')
+        throw this.unresolvedReferenceError_( expressID )
       }
 
       return null

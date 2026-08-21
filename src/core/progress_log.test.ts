@@ -5,6 +5,7 @@ import {
   formatBar,
   formatMb,
   formatModelLine,
+  formatPreviewLine,
   formatSeconds,
   stageLabel,
 } from './progress_log'
@@ -161,5 +162,97 @@ describe( 'LoadLogAccumulator', () => {
     // Indeterminate + complete → colon, no bar, no heap.
     expect( log.finishedLines()[ 0 ] ).toBe( 'Geometry: 12.400s' )
     expect( log.totalLine() ).toBe( 'Total: 12.400s' )
+  } )
+} )
+
+describe( 'formatPreviewLine', () => {
+
+  test( 'reports time-to-first-pixel and the deferral split', () => {
+
+    expect( formatPreviewLine( {
+      firstMeshMs: 275,
+      meshes: 1750,
+      emitted: 539,
+      deferred: 12,
+      deferredOnPlacement: 11,
+      retried: 8,
+    } ) ).toBe(
+        'Preview: first mesh 0.275s, 1750 meshes from 539 units, ' +
+        '12 deferred (11 on placements), 8 retried' )
+  } )
+
+  test( 'separates meshes delivered from units extracted', () => {
+
+    // Codex round 2 on #543. `emitted` counts units extraction ACCEPTED,
+    // and a unit that extracts cleanly can still place nothing: an IfcSite
+    // or IfcBuildingStorey has no Representation, so
+    // extractProductGeometry returns early while
+    // extractProductGeometryByLocalID still answers true. Folded into one
+    // number, the line contradicted itself -- "no mesh, 20 emitted" -- so
+    // meshes and units are reported separately and the mesh count is what
+    // firstMeshMs is consistent with.
+    expect( formatPreviewLine( {
+      meshes: 0,
+      emitted: 20,
+      deferred: 0,
+      deferredOnPlacement: 0,
+      retried: 0,
+    } ) ).toBe(
+        'Preview: no mesh, 0 meshes from 20 units, ' +
+        '0 deferred (0 on placements), 0 retried' )
+  } )
+
+  test( 'says so when the preview never emitted a mesh', () => {
+
+    // The load this line exists for: 532 attempts, one mesh's worth of
+    // nothing, and a deferral ratio of 1.0 on placements is what names the
+    // cause as file layout rather than "the preview is slow" (conway#542).
+    expect( formatPreviewLine( {
+      meshes: 0,
+      emitted: 0,
+      deferred: 532,
+      deferredOnPlacement: 531,
+      retried: 0,
+    } ) ).toBe(
+        'Preview: no mesh, 0 meshes from 0 units, ' +
+        '532 deferred (531 on placements), 0 retried' )
+  } )
+} )
+
+describe( 'LoadLogAccumulator preview line', () => {
+
+  test( 'renders between the stage lines and Total, and only when set', () => {
+
+    const log = new LoadLogAccumulator()
+
+    log.onProgress( { phase: 'dataParse', completed: 0, elapsedMs: 0 } )
+    log.onProgress( { phase: 'dataParse', completed: 1, total: 1, elapsedMs: 1000 } )
+    log.closeCurrentStage()
+
+    expect( log.allLines() ).toEqual( [
+      'Parsing: 1.000s',
+      'Total: 1.000s',
+    ] )
+
+    log.setPreviewStats( {
+      firstMeshMs: 275,
+      meshes: 6,
+      emitted: 4,
+      deferred: 0,
+      deferredOnPlacement: 0,
+      retried: 0,
+    } )
+
+    // The preview runs INSIDE Parsing, so it is not a stage — feeding it
+    // through onProgress would close Parsing and reopen it, splitting one
+    // parse across two lines.
+    expect( log.allLines() ).toEqual( [
+      'Parsing: 1.000s',
+      'Preview: first mesh 0.275s, 6 meshes from 4 units, ' +
+      '0 deferred (0 on placements), 0 retried',
+      'Total: 1.000s',
+    ] )
+
+    expect( log.finishedLines() ).toEqual( [ 'Parsing: 1.000s' ] )
   } )
 } )

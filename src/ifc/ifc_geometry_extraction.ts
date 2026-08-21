@@ -52,6 +52,8 @@ import {
 } from '../../dependencies/conway-geom'
 import { Uint32Sink } from '../step/parsing/uint32_sink'
 import { StepBufferNotResidentError } from '../step/step_buffer_provider'
+import { DanglingReferenceError } from '../step/dangling_reference_error'
+import { DanglingPlacementError } from './dangling_placement_error'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
 import { CanonicalProfile } from '../core/canonical_profile'
@@ -5629,6 +5631,12 @@ export class IfcGeometryExtraction {
    * IFCLOCALPLACEMENT ancestors and their axis/point records included,
    * since `extractPlacement` resolves them through the same layer.
    *
+   * Only an unresolved reference (`DanglingReferenceError`) is tagged as
+   * a deferral. A placement that is malformed rather than unscanned still
+   * throws, and still stops the product being extracted, but propagates
+   * untagged so the preview does not queue it for a retry that can never
+   * come good — see the catch below.
+   *
    * The throw intentionally propagates: the demand seam
    * (`extractProductGeometryByLocalID` callers, the preview adapter's
    * per-unit catch) already treats a throwing product as
@@ -5656,6 +5664,30 @@ export class IfcGeometryExtraction {
 
         this.extractPlacement(objectPlacement)
       }
+    } catch ( error ) {
+
+      // Tagged, not swallowed. The throw still propagates and callers still
+      // treat it as not-yet-extractable — but a preview tick that catches it
+      // can now say WHY a product deferred. Without that, a model whose
+      // preview stays blank is indistinguishable from one deferring for some
+      // other reason, and the fix for those is not the same (conway#542).
+      //
+      // Only an UNRESOLVED reference earns the tag. Everything else this
+      // chain can throw — a placement record of the wrong entity type, a
+      // select that does not hold an IfcAxis2Placement, a malformed axis
+      // literal — is a property of the file, not of how much of it has been
+      // scanned, so a longer prefix cannot change the answer. Tagging those
+      // put them in the preview's retry queue permanently, and a non-empty
+      // retry queue is also what triggers early generation PREEMPTION, so a
+      // single broken placement could keep buying rebuilds that could never
+      // satisfy it (codex round 1 on #543).
+      if ( error instanceof DanglingReferenceError ) {
+
+        throw new DanglingPlacementError( product.localID, error )
+      }
+
+      throw error
+
     } finally {
 
       model.nullOnErrors = priorNullOnErrors

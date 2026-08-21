@@ -17,6 +17,9 @@ import {
   deriveCoordinationF64,
   NORMALIZE_MAT_F64,
 } from './coordination_f64'
+import { DanglingPlacementError } from '../../ifc/dangling_placement_error'
+import { formatPreviewLine } from '../../core/progress_log'
+import Logger from '../../logging/logger'
 
 /* eslint-disable no-magic-numbers */
 
@@ -40,6 +43,27 @@ const FIRST_GENERATION_MIN_RECORDS = 1024
 /** A new generation only when the index grew this much past the previous
  * snapshot (bounds snapshot copies to O(GROWTH/(GROWTH-1)) of the file). */
 const GENERATION_GROWTH_FACTOR = 2.0
+
+/**
+ * Deferred units carried into the next generation for a second look.
+ *
+ * Twin of {@link StorePreviewChannel}'s queue, for the same defect: the
+ * channel was strictly forward-only, so a unit whose placement chain lay
+ * beyond the prefix was attempted once — at the earliest and therefore most
+ * index-starved generation it appeared in — and never again, because
+ * `unitOrdinal_` only ever advances and a rebuilt generation regenerates the
+ * unit list in the same dense parse order. On a file whose placement chains
+ * resolve late that throws nearly everything away: DOWA has 19,854 of its
+ * 45,860 products emittable once 70% of the file is indexed, and the store
+ * path emitted 1 before this queue existed (conway#542).
+ *
+ * A retry is affordable in a way a first attempt is not: a deferring attempt
+ * fails on an index lookup before any geometry is paged (~0.17 ms measured
+ * on the store path, against ~700 ms for a generation rebuild). The cap is
+ * here so the queue cannot grow with the model — it only has to keep
+ * DEFAULT_MAX_PREVIEW_UNITS worth of candidates in play.
+ */
+const RETRY_QUEUE_MAX = 4096
 
 /** Default cap on units the preview channel ever extracts. Preview
  * generations are throwaway extractions whose native geometry is not
@@ -99,6 +123,18 @@ export interface PreviewMeshPayload {
 }
 
 /**
+ * One unit a generation attempted and could not extract.
+ *
+ * `onPlacement` marks the subset waiting on a placement chain the prefix
+ * does not hold yet — the only cause worth a retry, because for any other
+ * cause a longer index does not change the answer.
+ */
+export interface PreviewDeferral {
+  ordinal: number
+  onPlacement: boolean
+}
+
+/**
  * A throwaway prefix extraction built by a {@link PreviewSchemaAdapter} —
  * one preview "generation" over a snapshot of the growing columnar index.
  */
@@ -123,6 +159,20 @@ export interface PreviewPrefixGeneration {
    * @return {number} Units actually executed.
    */
   runUnits( from: number, count: number ): number
+
+  /**
+   * Drain the units {@link runUnits} has swallowed an exception for since
+   * the last call — the channel's only view of them, because runUnits
+   * reports a count and the causes stay inside the adapter.
+   *
+   * Cleared by the read, so a caller that drains per unit attributes each
+   * deferral to the ordinal it just ran. Left unset by adapters that cannot
+   * classify their failures; the channel then queues no retries for that
+   * schema and behaves exactly as it did before conway#542.
+   *
+   * @return {PreviewDeferral[]} Deferrals since the last drain.
+   */
+  takeDeferrals?(): PreviewDeferral[]
 
   /**
    * ExpressID identifying a walked geometry (payload identity / dedup).
@@ -239,6 +289,14 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
       // entity materialization dominates per-generation cost.
       extraction.prepareDemandExtraction( true )
 
+      // Deferrals since the channel last drained them. Product ORDINALS,
+      // not localIDs: the channel replays them against a later generation,
+      // and `products` is enumerated off the type index in dense parse
+      // order, which a longer prefix only extends (see
+      // ColumnarIndexSink.snapshot) — so an ordinal means the same product
+      // in every generation that holds it.
+      let deferrals: PreviewDeferral[] = []
+
       return {
         scene: extraction.scene,
         unitCount: products.length,
@@ -253,12 +311,26 @@ export function ifcPreviewAdapter(): PreviewSchemaAdapter {
               if ( extraction.extractProductGeometryByLocalID( products[ where ] ) ) {
                 ++executed
               }
-            } catch {
+            } catch ( error ) {
               // Unparsed forward reference — the durable pump extracts
-              // this product from the full model later.
+              // this product from the full model later. Recorded by cause:
+              // a dangling placement is a product the index will be able
+              // to place once it is longer, and is the one case worth
+              // attempting again (conway#542).
+              deferrals.push( {
+                ordinal: where,
+                onPlacement: error instanceof DanglingPlacementError,
+              } )
             }
           }
           return executed
+        },
+        takeDeferrals: () => {
+          const drained = deferrals
+
+          deferrals = []
+
+          return drained
         },
         geometryExpressID: ( geometryLocalID ) =>
           model.getElementByLocalID( geometryLocalID )?.expressID,
@@ -385,7 +457,54 @@ export class StreamedPreviewChannel {
   private timer_?: ReturnType<typeof setTimeout>
 
   private emittedUnits_ = 0
+  /**
+   * Preview meshes handed to `onMesh`. Tracked apart from
+   * {@link emittedUnits_} because the two genuinely diverge: a unit can
+   * place several meshes, and a unit with no representation extracts
+   * cleanly while placing none. Reporting only units let the load log say
+   * "no mesh, 20 emitted" about one load (codex round 2 on #543).
+   */
+  private meshesEmitted_ = 0
   private emittedBytes_ = 0
+
+  /* Units a tick attempted and could not extract, and how many of those were
+   * specifically waiting on a placement chain the prefix does not hold yet.
+   * Reported on the way out so a blank first load is attributable rather
+   * than merely observed (conway#542). */
+  private deferredUnits_ = 0
+
+  private deferredOnPlacement_ = 0
+
+  /**
+   * Ordinals that deferred on a placement under the CURRENT generation,
+   * promoted to {@link retryQueue_} when the next one is built. Held
+   * separately so a retry always runs against a longer index than the
+   * attempt that failed — re-running one inside its own generation would
+   * fail identically and spin.
+   */
+  private deferredForRetry_: number[] = []
+
+  private retryQueue_: number[] = []
+
+  private retryCursor_ = 0
+
+  private retriedUnits_ = 0
+
+  /**
+   * Retry mode (adapter.retryEmptyUnits): units this generation ran that
+   * captured nothing. That schema's adapters cannot classify a failure —
+   * an assembly unit simply produces no instances until the solids it
+   * references are indexed — so an empty unit is its evidence that a
+   * longer index is the missing ingredient, standing in for
+   * {@link deferredForRetry_} in the preemption gate.
+   */
+  private emptyUnitsThisGeneration_ = 0
+
+  /** Ms from channel construction to the first payload handed to `onMesh`
+   * — time-to-first-pixel, the number conway#542 exists to move. */
+  private firstMeshMs_?: number
+
+  private readonly startedMs_ = Date.now()
 
   /** Ordinal cursor into the unit list (see the adapter's stability
    * notes). */
@@ -452,6 +571,15 @@ export class StreamedPreviewChannel {
   // in CI while passing locally. Production behaviour is unchanged.
   private tickBudgetMs_ = TICK_BUDGET_MS
 
+  // Companion seam to tickBudgetMs_, and unbounded in production: a resident
+  // unit attempt pages nothing (the store channel's TICK_MAX_ATTEMPTS exists
+  // because its attempts page source through a windowed provider), so the
+  // wall clock is the only bound worth paying for here. A test pins it so
+  // "this tick left units unattempted" — which is what separates a
+  // preemptive rebuild from an exhaustion one — is a fact rather than a race
+  // against the budget.
+  private tickMaxAttempts_ = Number.MAX_SAFE_INTEGER
+
   /** Begin ticking (call just before awaiting the parse). */
   public start(): void {
     this.schedule_()
@@ -512,12 +640,62 @@ export class StreamedPreviewChannel {
       // Never let a free break the open.
     }
     this.generation_ = void 0
+
+    // Say what the preview delivered on the way out. The channel is a local
+    // of the open call — nothing outside holds it — so a counter not
+    // reported here is a counter nobody can read. Same formatter as the
+    // store path, and the same one Share renders (core/progress_log), so a
+    // pasted browser log and a pasted CLI run read identically.
+    //
+    // Unconditional, not gated on emittedUnits_ or deferredUnits_ being
+    // nonzero: a channel that never reached firstGenerationMinRecords, or
+    // whose every generation build threw, is precisely the worst-case
+    // blank-first-load this issue exists to make diagnosable, and
+    // formatPreviewLine already renders that case as "no mesh, 0 emitted,
+    // 0 deferred". Suppressing the line there made an enabled preview that
+    // produced nothing indistinguishable from a preview that never ran
+    // (codex round 1 on #543).
+    Logger.info(formatPreviewLine(this.previewYield))
   }
 
   /** True when a cap was hit and the channel retired itself early. */
   public get capped(): boolean {
     return this.emittedUnits_ >= this.maxUnits ||
       this.emittedBytes_ >= this.maxBytes
+  }
+
+  /**
+   * What the preview delivered, and how fast.
+   *
+   * `firstMeshMs` is time-to-first-pixel measured from channel construction
+   * (immediately before the parse starts), undefined when nothing was ever
+   * emitted. `meshes` counts what actually reached the consumer, `emitted`
+   * counts the units extraction accepted — a unit can place several meshes
+   * and a unit with no representation places none, so the line reports
+   * both. `deferred` counts units a tick attempted and could not
+   * extract, `deferredOnPlacement` the subset waiting on a placement chain
+   * the prefix does not hold, and `retried` the attempts that were second
+   * looks at an earlier deferral — a retry path that has silently stopped
+   * firing shows up here rather than merely as a slower load.
+   *
+   * The same shape as {@link StorePreviewChannel.previewYield}, so both
+   * paths render through one formatter (core/progress_log).
+   *
+   * @return {object} `{firstMeshMs, meshes, emitted, deferred,
+   * deferredOnPlacement, retried}`
+   */
+  public get previewYield(): {
+    firstMeshMs?: number, meshes: number, emitted: number, deferred: number,
+    deferredOnPlacement: number, retried: number } {
+
+    return {
+      firstMeshMs: this.firstMeshMs_,
+      meshes: this.meshesEmitted_,
+      emitted: this.emittedUnits_,
+      deferred: this.deferredUnits_,
+      deferredOnPlacement: this.deferredOnPlacement_,
+      retried: this.retriedUnits_,
+    }
   }
 
   // eslint-disable-next-line require-jsdoc
@@ -557,6 +735,8 @@ export class StreamedPreviewChannel {
     const active = this.generation_!
     const { generation } = active
 
+    let attempts = 0
+
     if (this.adapter.retryEmptyUnits === true) {
 
       // Retry mode: scan the fixed unit list, skipping units that
@@ -565,6 +745,7 @@ export class StreamedPreviewChannel {
       // counts here are small by construction (assembly roots).
       while (this.retryScan_ < generation.unitCount &&
           this.emittedUnits_ < this.maxUnits &&
+          attempts < this.tickMaxAttempts_ &&
           Date.now() < deadline) {
 
         const ordinal = this.retryScan_++
@@ -573,11 +754,15 @@ export class StreamedPreviewChannel {
           continue
         }
 
+        ++attempts
+
         const executed = generation.runUnits(ordinal, 1)
 
         if (executed > 0 && this.captureNewInstances_() > 0) {
           this.completedUnits_.add(ordinal)
           ++this.emittedUnits_
+        } else {
+          ++this.emptyUnitsThisGeneration_
         }
       }
 
@@ -586,18 +771,62 @@ export class StreamedPreviewChannel {
 
     let extractedThisTick = 0
 
-    while (this.unitOrdinal_ < generation.unitCount &&
+    while (this.hasPendingUnits_(generation) &&
         this.emittedUnits_ + extractedThisTick < this.maxUnits &&
+        attempts < this.tickMaxAttempts_ &&
         Date.now() < deadline) {
 
-      const executed = generation.runUnits(this.unitOrdinal_, 1)
-      ++this.unitOrdinal_
-      extractedThisTick += executed
+      ++attempts
+
+      // Retries first: they are the units the index has most recently
+      // become able to place, and they are cheaper than a fresh attempt
+      // whichever way they go.
+      const isRetry = this.retryCursor_ < this.retryQueue_.length
+      const ordinal = isRetry ?
+        this.retryQueue_[this.retryCursor_++] : this.unitOrdinal_++
+
+      if (isRetry) {
+        ++this.retriedUnits_
+      }
+
+      extractedThisTick += generation.runUnits(ordinal, 1)
+      this.drainDeferrals_(generation)
     }
 
     if (extractedThisTick > 0) {
       this.captureNewInstances_()
       this.emittedUnits_ += extractedThisTick
+    }
+  }
+
+  /**
+   * Take the deferrals the generation accumulated for the unit just run and
+   * fold them into the counters, queueing the placement ones for a second
+   * look at the next generation.
+   *
+   * @param generation The generation that ran the unit.
+   */
+  private drainDeferrals_(generation: PreviewPrefixGeneration): void {
+
+    const deferrals = generation.takeDeferrals?.()
+
+    if (deferrals === void 0) {
+      return
+    }
+
+    for (const deferral of deferrals) {
+
+      ++this.deferredUnits_
+
+      if (!deferral.onPlacement) {
+        continue
+      }
+
+      ++this.deferredOnPlacement_
+
+      if (this.deferredForRetry_.length < RETRY_QUEUE_MAX) {
+        this.deferredForRetry_.push(deferral.ordinal)
+      }
     }
   }
 
@@ -611,12 +840,46 @@ export class StreamedPreviewChannel {
   private ensureGeneration_(): boolean {
 
     const active = this.generation_
+    const records = this.sink.topLevelCount
 
-    if (active !== void 0 && this.hasPendingUnits_(active.generation)) {
+    // Rebuild on INDEX GROWTH, not on running out of units. The order of
+    // these two tests is the whole behaviour of the channel on a large file.
+    //
+    // It used to keep the current generation for as long as that generation
+    // still had an unattempted unit, and only then consider rebuilding. A
+    // generation snapshotted at FIRST_GENERATION_MIN_RECORDS already lists
+    // thousands of products, and a tick attempts a handful of them per
+    // cadence interval, so on anything large the list never emptied and the
+    // rebuild never fired — the store path's twin of this gate left DOWA
+    // extracting against a snapshot of its first 1024 records for all 9 s of
+    // its parse, which is why 100% of its attempts deferred and its first
+    // mesh landed at 98.3% of the file (conway#542).
+    //
+    // Preempting makes generations arrive on the index's schedule —
+    // O(log records) of them, GENERATION_GROWTH_FACTOR apart — and the units
+    // the old generation had not reached carry over untouched, because
+    // `unitOrdinal_` indexes a dense parse-order list that a longer snapshot
+    // only extends.
+
+    // Eligibility to rebuild at all — the original growth gate, unchanged.
+    const growthReady =
+      records >= this.lastSnapshotRecords_ * GENERATION_GROWTH_FACTOR &&
+      records >= this.lastFailedSnapshotRecords_ * GENERATION_GROWTH_FACTOR
+
+    // Whether to rebuild EARLY, without waiting for the current generation's
+    // units to run out. Only worth it for a generation that is actually
+    // deferring: a longer index cannot help one whose units extract fine,
+    // and preempting anyway costs the case that already works best — on PSB,
+    // which defers nothing, unconditional preemption pushed the store path's
+    // first mesh from 269 ms out to 495 ms. Units waiting for a retry (or,
+    // in retry mode, units that captured nothing) are precisely the evidence
+    // that more index is the missing ingredient.
+    const preempt = active !== void 0 && growthReady && this.hasDeferred_()
+
+    if (!preempt && active !== void 0 &&
+        this.hasPendingUnits_(active.generation)) {
       return true
     }
-
-    const records = this.sink.topLevelCount
 
     if (records < this.firstGenerationMinRecords) {
       return false
@@ -657,10 +920,14 @@ export class StreamedPreviewChannel {
       return false
     }
 
+    // A generation that adds no new units is still worth building when
+    // deferred ones are waiting: what changed is the INDEX behind them,
+    // which is the only reason a retry could now succeed.
     const newGenerationPending = this.adapter.retryEmptyUnits === true ?
       generation.unitCount > 0 &&
         this.completedUnits_.size < generation.unitCount :
-      generation.unitCount > this.unitOrdinal_
+      generation.unitCount > this.unitOrdinal_ ||
+        this.deferredForRetry_.length > 0
 
     if (!newGenerationPending) {
       // Nothing this prefix can add — free it and wait for more records.
@@ -675,10 +942,28 @@ export class StreamedPreviewChannel {
 
     // Retry mode: a fresh generation re-runs every not-yet-captured unit.
     this.retryScan_ = 0
+    this.emptyUnitsThisGeneration_ = 0
 
-    // The outgoing generation's instances are all captured (a
-    // generation is only replaced once exhausted + captured) — free its
-    // native scenes before adopting the new one.
+    // Deferrals of the outgoing generation become this one's retry queue —
+    // the whole point of building it early. Carry the OLD queue's
+    // unconsumed suffix forward too, not just this generation's fresh
+    // deferrals: preemption can fire mid-drain of retryQueue_ (a tick's
+    // attempt budget against an index that grew enough to trigger a
+    // rebuild before the queue emptied), and every un-popped entry is a
+    // unit whose ordinal unitOrdinal_ has already passed — replacing the
+    // queue outright, rather than concatenating, would strand them exactly
+    // the way abandoned deferrals were stranded before this fix existed
+    // (conway#542, codex round 1 on #543).
+    this.retryQueue_ = [
+      ...this.retryQueue_.slice(this.retryCursor_),
+      ...this.deferredForRetry_,
+    ].slice(0, RETRY_QUEUE_MAX)
+    this.retryCursor_ = 0
+    this.deferredForRetry_ = []
+
+    // The outgoing generation's instances are all captured (capture runs
+    // per tick, after the units it ran) — free its native scenes before
+    // adopting the new one.
     try {
       active?.generation.dispose()
     } catch {
@@ -694,9 +979,27 @@ export class StreamedPreviewChannel {
   }
 
   /**
+   * Whether the current generation has produced evidence that a longer
+   * index would help it — the preemption gate. Classic mode: units queued
+   * for a retry. Retry mode: units that ran and captured nothing, since
+   * that schema's adapter cannot classify a failure.
+   *
+   * @return {boolean} True when this generation is deferring.
+   */
+  private hasDeferred_(): boolean {
+
+    if (this.adapter.retryEmptyUnits === true) {
+      return this.emptyUnitsThisGeneration_ > 0
+    }
+
+    return this.deferredForRetry_.length > 0
+  }
+
+  /**
    * Does the given generation still have units this channel would run —
    * retry mode: not-yet-captured ordinals ahead of the scan; classic
-   * mode: ordinals beyond the global forward-only cursor.
+   * mode: queued retries, or ordinals beyond the global forward-only
+   * cursor.
    *
    * @param generation The generation to check.
    * @return {boolean} True when a tick can make progress on it.
@@ -708,7 +1011,8 @@ export class StreamedPreviewChannel {
         this.completedUnits_.size < generation.unitCount
     }
 
-    return this.unitOrdinal_ < generation.unitCount
+    return this.retryCursor_ < this.retryQueue_.length ||
+      this.unitOrdinal_ < generation.unitCount
   }
 
   /**
@@ -847,7 +1151,10 @@ export class StreamedPreviewChannel {
           (vertexData.length + indexData.length) * BYTES_PER_FLOAT
       }
 
+      this.firstMeshMs_ ??= Date.now() - this.startedMs_
+
       this.onMesh(payload)
+      ++this.meshesEmitted_
       ++emitted
 
       if (this.emittedBytes_ >= this.maxBytes) {
@@ -873,12 +1180,28 @@ export class StreamedPreviewChannel {
 
       const active = this.generation_!
 
-      if (this.unitOrdinal_ >= active.generation.unitCount) {
+      // The classic-mode pending test, spelled out rather than shared with
+      // hasPendingUnits_: this seam walks the unit list forward whatever
+      // the adapter's retry semantics are (ap214_streamed_open.test.ts
+      // drains a retryEmptyUnits adapter through it), and retry mode's
+      // `retryScan_` is advanced by ticks only, so borrowing that test here
+      // would never terminate.
+      if (this.retryCursor_ >= this.retryQueue_.length &&
+          this.unitOrdinal_ >= active.generation.unitCount) {
         return
       }
 
-      const executed = active.generation.runUnits(this.unitOrdinal_, 1)
-      ++this.unitOrdinal_
+      const isRetry = this.retryCursor_ < this.retryQueue_.length
+      const ordinal = isRetry ?
+        this.retryQueue_[this.retryCursor_++] : this.unitOrdinal_++
+
+      if (isRetry) {
+        ++this.retriedUnits_
+      }
+
+      const executed = active.generation.runUnits(ordinal, 1)
+
+      this.drainDeferrals_(active.generation)
 
       if (executed > 0) {
         this.captureNewInstances_()

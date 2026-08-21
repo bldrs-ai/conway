@@ -13,11 +13,14 @@
  *
  *   Model: Arty_Z7.stp — AP214, 38.1 MB, SolidWorks 2021 (SwSTEP 2.0)
  *   Parsing [0%................100%] 3.2s, +210 MB heap
+ *   Preview: first mesh 0.275s, 539 emitted, 12 deferred (11 on placements), 8 retried
  *   Geometry [0%........56%] 41.0s, +388 MB heap
  *   Total: 44.7s, 512 → 1110 MB heap
  *
  * Stage lines own only their deltas (duration, heap growth); Total is not
  * additive — it is a separate before/after wall-clock + heap observation.
+ * The Preview line is not a stage either — it reports what the parse-time
+ * preview delivered while Parsing ran (see {@link formatPreviewLine}).
  */
 
 /** What a header parse can tell us before the full file parse (issue #301). */
@@ -153,6 +156,74 @@ export function formatModelLine( info: ModelInfo ): string {
   return `Model: ${name}${detail}`
 }
 
+/**
+ * What a parse-time preview channel delivered — structurally typed against
+ * both channels' `previewYield` (compat/web-ifc/{store,streamed}_preview_
+ * channel.ts) so this module stays import-free.
+ */
+export interface PreviewYieldLike {
+  /**
+   * Ms from the channel starting to the first mesh handed to the consumer;
+   * undefined when it never emitted one.
+   */
+  firstMeshMs?: number
+  /**
+   * Preview meshes actually handed to the consumer. Distinct from
+   * {@link emitted}: one unit can yield several meshes, and a unit with no
+   * representation yields none at all, so reporting only units produced the
+   * self-contradicting "no mesh, 20 emitted" (codex round 2 on #543).
+   */
+  meshes: number
+  /**
+   * Units the preview EXTRACTED — attempted and got a non-throwing answer
+   * from. Not a count of what reached the screen; that is
+   * {@link meshes}. This is the counter the channel's `maxUnits` cap
+   * measures, which is why it stays unit-shaped.
+   */
+  emitted: number
+  deferred: number
+  deferredOnPlacement: number
+  retried: number
+}
+
+/**
+ * The preview line: time-to-first-pixel, and why the preview delivered what
+ * it did.
+ *
+ * First pixels are the number that decides whether a first-time visitor
+ * sees their building or a blank canvas, and until conway#542 it was
+ * judged by eye — measurable only in a Node harness nobody runs in
+ * production. The deferral split is what makes a blank first load
+ * attributable rather than merely observed: a ratio near 1.0 ON PLACEMENTS
+ * is the file-layout case (an exporter that writes the leaf points and
+ * directions a product's placement chain bottoms out in toward the tail of
+ * the file), and anything else is a different problem wearing the same
+ * blank screen. `retried` is the second-look count — a retry path that has
+ * silently stopped firing shows up here rather than merely as a slower
+ * load.
+ *
+ * Meshes and units are reported separately because they diverge in both
+ * directions: one unit can place several meshes, and a unit with no
+ * representation (a site, a storey) extracts cleanly while placing none.
+ * Folding them into one "emitted" number let the line say "no mesh, 20
+ * emitted" about the same load (codex round 2 on #543).
+ *
+ * @param preview The channel's reported yield.
+ * @return {string} e.g. "Preview: first mesh 0.275s, 1750 meshes from 539
+ * units, 12 deferred (11 on placements), 8 retried"
+ */
+export function formatPreviewLine( preview: PreviewYieldLike ): string {
+
+  const first = preview.firstMeshMs !== void 0 ?
+    `first mesh ${formatSeconds( preview.firstMeshMs )}` : 'no mesh'
+
+  return `Preview: ${first}, ${preview.meshes} meshes ` +
+    `from ${preview.emitted} units, ` +
+    `${preview.deferred} deferred ` +
+    `(${preview.deferredOnPlacement} on placements), ` +
+    `${preview.retried} retried`
+}
+
 interface StageState {
   label: string
   startElapsedMs: number
@@ -230,6 +301,7 @@ export class LoadLogAccumulator {
   private firstHeapMb_: number | undefined
   private lastHeapMb_: number | undefined
   private modelLine_: string | undefined
+  private previewLine_: string | undefined
 
   /**
    * Record the model line (from header info) — kept with the report.
@@ -241,6 +313,23 @@ export class LoadLogAccumulator {
     this.modelLine_ = formatModelLine( info )
 
     return this.modelLine_
+  }
+
+  /**
+   * Record what the parse-time preview delivered — kept with the report
+   * and rendered between the stage lines and Total.
+   *
+   * Not a stage: the preview runs *inside* Parsing, so feeding it through
+   * onProgress would close the Parsing stage and reopen it, splitting one
+   * parse across two lines.
+   *
+   * @param preview The channel's reported yield.
+   * @return {string} The formatted preview line.
+   */
+  public setPreviewStats( preview: PreviewYieldLike ): string {
+    this.previewLine_ = formatPreviewLine( preview )
+
+    return this.previewLine_
   }
 
   /**
@@ -372,8 +461,9 @@ export class LoadLogAccumulator {
   }
 
   /**
-   * The full report: model line (if known), finished stage lines, then the
-   * Total line. Call closeCurrentStage() first at load end.
+   * The full report: model line (if known), finished stage lines, the
+   * preview line (if reported), then the Total line. Call
+   * closeCurrentStage() first at load end.
    *
    * @return {string[]} All report lines.
    */
@@ -385,6 +475,11 @@ export class LoadLogAccumulator {
     }
 
     lines.push( ...this.finished_ )
+
+    if ( this.previewLine_ !== void 0 ) {
+      lines.push( this.previewLine_ )
+    }
+
     lines.push( this.totalLine() )
 
     return lines

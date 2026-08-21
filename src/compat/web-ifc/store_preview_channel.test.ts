@@ -1,10 +1,11 @@
 /* eslint-disable no-magic-numbers */
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, test } from '@jest/globals'
+import { beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import IfcStepParser from '../../ifc/ifc_step_parser'
+import Logger from '../../logging/logger'
 import { BufferByteSource } from '../../step/parsing/byte_source'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { ParseResult } from '../../step/parsing/step_parser'
@@ -121,6 +122,229 @@ describe( 'StorePreviewChannel', () => {
 
     channel.stop()
   } )
+
+  test( 'a tail-placement file recovers its deferred products', async () => {
+
+    // data/index_tail_placements.ifc is index_georeferenced_multicell.ifc
+    // with every leaf point/direction record moved to the end of DATA --
+    // same ids, same text, hostile order. It is the Archicad shape at
+    // fixture scale: its products reference a placement chain that bottoms
+    // out after them, so an index stopping short of the tail cannot place
+    // any of them (conway#542). The multicell fixture rather than
+    // index.ifc because it carries enough products that a few ticks cannot
+    // exhaust the generation -- which is what leaves the preemption path,
+    // not the exhaustion path, as the only way to rebuild.
+    const tailText = fs.readFileSync( 'data/index_tail_placements.ifc', 'utf8' )
+    const lines = tailText.split( '\n' )
+    const firstLeaf = lines.findIndex(
+        ( line ) => /=\s*IFC(CARTESIANPOINT|DIRECTION)/.test( line ) )
+
+    expect( firstLeaf ).toBeGreaterThan( 0 )
+
+    // A genuine prefix, closed off so it parses: every record up to the
+    // leaf block, and nothing after it. The full file is stage two.
+    const prefixText =
+      `${lines.slice( 0, firstLeaf ).join( '\n' )}\nENDSEC;\nEND-ISO-10303-21;\n`
+    const prefixBytes = new Uint8Array( Buffer.from( prefixText, 'latin1' ) )
+    const tailBytes = new Uint8Array( Buffer.from( tailText, 'latin1' ) )
+
+    const store = new InMemoryStepByteStore( tailBytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true, () => { /* counted via yield */ },
+        64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // One product per tick, so stage one leaves products UNATTEMPTED. That
+    // is what forces the preemption path: with products still pending, a
+    // channel that only rebuilds on exhaustion keeps its starved generation
+    // and never looks at the deferrals again.
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+
+    // Stage one: index only the prefix, then let the channel work it.
+    expect( buildIndexStreaming(
+        new BufferByteSource( prefixBytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    internals.lastInlineTick_ = 0
+    await channel.maybeTickAsync()
+
+    const afterPrefix = channel.previewYield
+
+    // The fixture has to actually exercise the path, or the rest proves
+    // nothing about it -- and products must be left over, or the rebuild
+    // would happen by exhaustion and prove nothing about preemption.
+    expect( afterPrefix.deferredOnPlacement ).toBeGreaterThan( 0 )
+    expect( afterPrefix.emitted ).toBe( 0 )
+    expect( internals.unitOrdinal_ ).toBeLessThan( channel.productCount )
+
+    // Stage two: the same reset-and-replay the streaming builder itself
+    // performs when it grows its window, so top-level localIDs stay in
+    // dense parse order and the deferred ids the channel is holding still
+    // mean what they meant (see ColumnarIndexSink.reset).
+    sink.reset()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( tailBytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    // Exactly one tick, and one attempt inside it. That is what makes this
+    // an assertion about PREEMPTION: with products still pending, a channel
+    // that rebuilds only on exhaustion spends this tick on the next fresh
+    // product against the old starved generation, and the retry never
+    // happens.
+    internals.lastInlineTick_ = 0
+    await channel.maybeTickAsync()
+
+    const afterFull = channel.previewYield
+
+    // Both halves of the fix, and `retried` is what separates them from a
+    // channel that merely got lucky on a later product. Without the retry
+    // queue a deferred product is attempted once, at the most
+    // index-starved generation it appears in, and abandoned. Without
+    // preemptive rebuilds the generation is kept while products remain, so
+    // the deferrals are never revisited against the longer index. Either
+    // one missing holds this at zero.
+    expect( afterFull.retried ).toBeGreaterThan( 0 )
+    expect( afterFull.emitted ).toBeGreaterThan( 0 )
+
+    channel.stop()
+  }, 120000 )
+
+  test( 'a generation is preempted only when it is deferring', async () => {
+
+    // The counterweight. Rebuilding on index growth alone regressed the
+    // case that already worked: PSB, which defers nothing, went from a
+    // first mesh at 269ms to 495ms because it kept paying for rebuilds it
+    // had no use for. index.ifc is that shape at fixture scale, so the
+    // same two-stage growth must leave its generation alone.
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true, () => { /* nothing asserted */ },
+        64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // One product per tick, but with the wall clock lifted -- a zero
+    // budget would stop the tick before it ever built a generation.
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    internals.lastInlineTick_ = 0
+    await channel.maybeTickAsync()
+
+    const snapshotRecords = internals.lastSnapshotRecords_ as number
+
+    expect( snapshotRecords ).toBeGreaterThan( 0 )
+    expect( channel.previewYield.deferredOnPlacement ).toBe( 0 )
+
+    // Index growth well past GENERATION_GROWTH_FACTOR, with products still
+    // pending and nothing deferring: the generation must be kept.
+    sink.reset()
+
+    for ( let repeat = 0; repeat < 3; ++repeat ) {
+      expect( buildIndexStreaming(
+          new BufferByteSource( bytes ),
+          IfcStepParser.Instance,
+          4 * 1024,
+          void 0,
+          sink ).result ).toBe( ParseResult.COMPLETE )
+    }
+
+    expect( sink.topLevelCount ).toBeGreaterThan( snapshotRecords * 2 )
+
+    internals.lastInlineTick_ = 0
+    await channel.maybeTickAsync()
+
+    expect( internals.lastSnapshotRecords_ ).toBe( snapshotRecords )
+    expect( channel.previewYield.retried ).toBe( 0 )
+
+    channel.stop()
+  }, 120000 )
+
+  test( 'a throwing prefix build retires the attempt, not the channel', async () => {
+
+    // A mid-parse prefix can be structurally incomplete, and building a
+    // generation over it throws. That must retire THIS attempt and then
+    // wait for index growth: without the wait the channel re-snapshots and
+    // re-throws on every tick, which is a snapshot copy of the whole prefix
+    // per tick on a file large enough to matter.
+    //
+    // The gate has to hold with NO active generation, because a build that
+    // throws is exactly the case that leaves none — that is why it is
+    // tested on its own rather than folded in with the growth gate.
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    let reportedRecords = sink.topLevelCount
+    let snapshots = 0
+
+    const flakySink = {
+      get topLevelCount() {
+        return reportedRecords
+      },
+      snapshot: () => {
+
+        if ( ++snapshots === 1 ) {
+          throw new Error( 'structurally incomplete prefix' )
+        }
+
+        return sink.snapshot()
+      },
+    } as unknown as ColumnarIndexSink< number >
+
+    const payloads: PreviewMeshPayload[] = []
+    const channel = new StorePreviewChannel(
+        store, flakySink, conwayGeometry, true,
+        ( mesh ) => payloads.push( mesh ), 64, 48 * 1024 * 1024, 1 )
+
+    await channel.drainForTest()
+
+    expect( snapshots ).toBe( 1 )
+    expect( payloads.length ).toBe( 0 )
+
+    // Same record count: the failure gate must hold the retry.
+    await channel.drainForTest()
+
+    expect( snapshots ).toBe( 1 )
+
+    // The index grows past the gate: the retry builds and emits.
+    reportedRecords *= 4
+
+    await channel.drainForTest()
+
+    expect( snapshots ).toBe( 2 )
+    expect( payloads.length ).toBeGreaterThan( 0 )
+
+    channel.stop()
+  }, 120000 )
 
   test( 'an unproductive tick does not decay the cadence', async () => {
 
@@ -369,5 +593,184 @@ describe( 'StorePreviewChannel', () => {
     expect( spatial[ 0 ].color ).toEqual( { x: 0, y: 0, z: 0, w: 0.3 } )
 
     api.CloseModel( id )
+  } )
+
+  test( 'preemption preserves the unconsumed suffix of the retry queue', async () => {
+
+    // Codex round 1 on #543: preemption replaced retryQueue_ outright with
+    // this generation's fresh deferredForRetry_, discarding whatever the
+    // OLD queue's tail had not yet been popped. A retry queue can easily
+    // span more than one tick's TICK_MAX_ATTEMPTS budget, so index growth
+    // can preempt a generation mid-drain of it — and every un-popped entry
+    // is a product whose unitOrdinal_ has already passed, so replacing
+    // rather than concatenating strands it exactly the way abandoned
+    // deferrals were stranded before this queue existed (conway#542).
+    //
+    // The bug is purely mechanical (which array wins the assignment), so
+    // this seeds the private queue state directly and forces the growth
+    // gate via lastSnapshotRecords_, rather than engineering a real
+    // multi-tick deferral sequence — store_preview_channel.ts's extraction
+    // seam isn't pluggable the way the resident channel's
+    // PreviewSchemaAdapter is, so a real gen1/gen2 pair here means real
+    // IfcStepModel/IfcGeometryExtraction builds regardless.
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( bytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true,
+        () => { /* payloads not inspected */ }, 64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    // Generation 1: a real, successful build (active must be defined for
+    // the preemption branch to even be reachable).
+    expect( await internals.ensureGeneration_() ).toBe( true )
+
+    // A retry queue spanning more than one tick's budget: 6 queued
+    // retries, only the first 3 consumed (retryCursor_ short of
+    // retryQueue_.length is exactly "mid-drain") before the index grew
+    // again. deferredForRetry_ is this generation's OWN fresh deferral —
+    // the only thing the buggy version kept.
+    internals.retryQueue_ = [ 10, 11, 12, 13, 14, 15 ]
+    internals.retryCursor_ = 3
+    internals.deferredForRetry_ = [ 99 ]
+
+    // Force the growth gate trivially open on the next check, without
+    // needing the sink to actually grow: the gate is a ratio against
+    // lastSnapshotRecords_, not an absolute count.
+    internals.lastSnapshotRecords_ = 1
+
+    // Preemption fires: active is defined, growthReady (real topLevelCount
+    // >= 1 * factor), and deferredForRetry_.length > 0.
+    expect( await internals.ensureGeneration_() ).toBe( true )
+
+    // The unconsumed suffix of the old queue (indices 3..5) must survive,
+    // carried ahead of this generation's own fresh deferral — not replaced
+    // by it.
+    expect( internals.retryQueue_ ).toEqual( [ 13, 14, 15, 99 ] )
+    expect( internals.retryCursor_ ).toBe( 0 )
+
+    channel.stop()
+  }, 120000 )
+
+  test( 'a permanently malformed placement never enters the retry queue', async () => {
+
+    // Codex round 1 on #543: extractPlacementStrict_ tagged EVERY throw out
+    // of the strict placement read as DanglingPlacementError, so a placement
+    // that is broken rather than unscanned was classified as a file-layout
+    // deferral. That is not a cosmetic mislabel: the tag is what puts a
+    // product in deferredForRetry_, and a non-empty deferredForRetry_ is
+    // also the trigger for early generation PREEMPTION — so one malformed
+    // placement bought a full model/extraction rebuild on every growth step
+    // for a retry that could never come good.
+    //
+    // Two products, two causes, one file, so the assertion is about the
+    // SPLIT rather than about either case alone:
+    //
+    //   #334 RelativePlacement -> #345, an IFCPOLYGONALFACESET. Indexed
+    //        and present, but the field is an IfcAxis2Placement select, so
+    //        IfcLocalPlacement's generated getter rejects it. No amount of
+    //        further index changes that answer.
+    //   #408 Location -> #999999, which no record in the file defines.
+    //        Absent from the index, which on a prefix is exactly "not
+    //        scanned yet" — the case that must still defer and retry.
+    const text = fs.readFileSync( 'data/index.ifc', 'utf8' )
+
+    expect( text ).toContain( '#334= IFCLOCALPLACEMENT(#152,#333);' )
+    expect( text ).toContain( '#408= IFCAXIS2PLACEMENT3D(#406,#404,#402);' )
+    expect( text ).toContain( '#345= IFCPOLYGONALFACESET(' )
+    expect( text ).not.toContain( '#999999=' )
+
+    const brokenText = text
+        .replace(
+            '#334= IFCLOCALPLACEMENT(#152,#333);',
+            '#334= IFCLOCALPLACEMENT(#152,#345);' )
+        .replace(
+            '#408= IFCAXIS2PLACEMENT3D(#406,#404,#402);',
+            '#408= IFCAXIS2PLACEMENT3D(#999999,#404,#402);' )
+
+    const brokenBytes = new Uint8Array( Buffer.from( brokenText, 'latin1' ) )
+    const store = new InMemoryStepByteStore( brokenBytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    // The COMPLETE index, deliberately: it takes prefix-vs-tail out of the
+    // picture, so the only thing left to explain a deferral is the cause of
+    // the throw. It also means no generation is ever rebuilt (the record
+    // count cannot grow past the growth factor again), so the retry queue
+    // this inspects is the one the tick built and never drained.
+    expect( buildIndexStreaming(
+        new BufferByteSource( brokenBytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true, () => { /* not inspected */ },
+        64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    await channel.drainForTest()
+
+    const observed = channel.previewYield
+
+    // Both products fail to extract — the split is in how they are counted,
+    // and in which of them is worth another attempt.
+    expect( observed.deferred ).toBe( 2 )
+    expect( observed.deferredOnPlacement ).toBe( 1 )
+    expect( internals.deferredForRetry_ ).toHaveLength( 1 )
+
+    // And the rest of the file is unaffected: these two are the only
+    // products that lost their geometry.
+    expect( observed.emitted ).toBe( channel.productCount - 2 )
+
+    channel.stop()
+  }, 120000 )
+
+  test( 'reports a preview line even when nothing was ever attempted', () => {
+
+    // Codex round 1 on #543: stop() suppressed the Preview line unless
+    // emittedUnits_ or deferredUnits_ was nonzero. A channel that never
+    // reached firstGenerationMinRecords -- or whose every generation build
+    // threw -- leaves both at zero, and that is exactly the worst-case
+    // blank-first-load conway#542 exists to make diagnosable: an enabled
+    // preview that produced nothing must not read the same as a preview
+    // that never ran. formatPreviewLine already renders the zero case as
+    // "no mesh, 0 meshes from 0 units, 0 deferred".
+    const store = new InMemoryStepByteStore( bytes )
+    const emptySink = {
+      get topLevelCount() {
+        return 0
+      },
+      snapshot: () => {
+        throw new Error( 'must not be called: topLevelCount never grows' )
+      },
+    } as unknown as ColumnarIndexSink<number>
+
+    const infoSpy = jest.spyOn( Logger, 'info' ).mockImplementation( () => { /* silence */ } )
+
+    // Default firstGenerationMinRecords (1024): with topLevelCount pinned
+    // at 0, ensureGeneration_ never builds a generation, so the channel
+    // reaches stop() having attempted nothing at all.
+    const channel = new StorePreviewChannel(
+        store, emptySink, conwayGeometry, false,
+        () => { /* no payloads possible */ } )
+
+    channel.stop()
+
+    expect( infoSpy ).toHaveBeenCalledWith(
+        expect.stringContaining( 'Preview: no mesh, 0 meshes from 0 units, 0 deferred' ) )
+
+    infoSpy.mockRestore()
   } )
 } )
