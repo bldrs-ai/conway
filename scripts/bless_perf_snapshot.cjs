@@ -222,6 +222,66 @@ function findPreviousSnapshot(benchmarksDir, selfDirName, version) {
 }
 
 /**
+ * Is `name` a chronological conway-to-conway delta for THIS release?
+ *
+ * Matches `conway<engine1>_<version>_delta.csv`, i.e. the naming convention
+ * `main` writes, with this release's own version on the right-hand side.
+ *
+ * Deliberately narrow, because this predicate authorises deletion:
+ *
+ *   conway0.22.921_0.23.940_delta.csv        -> true  for 0.23.940
+ *   conway1.451.1357-ci_1.543.1513_delta.csv -> true  for 1.543.1513
+ *   webifc0.0.67_conway0.23.940_delta.csv    -> FALSE, does not start `conway`
+ *   performance-detail.csv / performance.csv -> false
+ *   README.md / index.html / 00-*.log.txt    -> false
+ *   conway0.22.921_0.23.940_delta.csv        -> FALSE for 1.543.1513
+ *
+ * The webifc case is the one that matters: a release directory legitimately
+ * holds one chronological delta AND one cross-engine delta per web-ifc version
+ * — conway0.23.940_test-models/ ships all three today — and those are a
+ * different comparison that this script does not own and must not touch.
+ *
+ * @param {string} name A directory entry name.
+ * @param {string} version Version being blessed, e.g. '1.543.1513'.
+ * @return {boolean} True when the file is this release's chronological delta.
+ */
+function isChronologicalDelta(name, version) {
+  const match = name.match(/^conway([^_]+)_(.+)_delta\.csv$/);
+
+  return match !== null && match[2] === version;
+}
+
+/**
+ * Remove this release's chronological delta(s) before writing the new one.
+ *
+ * The predecessor is not fixed for a given release: re-running an already
+ * blessed rc after an intermediate older snapshot has been backfilled selects
+ * a different predecessor and writes a differently NAMED file. Without this,
+ * the old one survives — the workflow stages the whole `benchmarks` directory
+ * — and the release ends up permanently carrying two deltas against different
+ * predecessors, while its regenerated README names only one of them. Whichever
+ * a reader opened would look authoritative.
+ *
+ * @param {string} outDir This release's snapshot directory.
+ * @param {string} version Version being blessed.
+ * @return {Array<string>} Names removed, for logging.
+ */
+function removeStaleDeltas(outDir, version) {
+  const removed = [];
+
+  for (const name of fs.readdirSync(outDir)) {
+    if (!isChronologicalDelta(name, version)) {
+      continue;
+    }
+
+    fs.rmSync(path.join(outDir, name), { force: true });
+    removed.push(name);
+  }
+
+  return removed;
+}
+
+/**
  * README recording which harness produced the snapshot.
  *
  * @param {Object} info Snapshot description.
@@ -316,6 +376,14 @@ function main() {
   const modelCount = writeDetailCsv(rows, detailPath, engine, timestamp);
   console.log(`Wrote ${modelCount} rows to ${detailPath}`);
 
+  // Before choosing a predecessor, not after: the new delta may be named
+  // differently from the committed one, so writing first and cleaning second
+  // would delete the file just written.
+  const removed = removeStaleDeltas(outDir, version);
+  if (removed.length > 0) {
+    console.log(`Removed superseded delta(s): ${removed.join(', ')}`);
+  }
+
   const previous = findPreviousSnapshot(benchmarksDir, dirName, version);
   let deltaName = '';
 
@@ -367,6 +435,8 @@ if (require.main === module) {
 module.exports = {
   DETAIL_COLUMNS,
   findPreviousSnapshot,
+  isChronologicalDelta,
+  removeStaleDeltas,
   readPerfCsv,
   versionCompare,
   writeDetailCsv,

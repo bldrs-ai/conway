@@ -18,9 +18,14 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { DETAIL_COLUMNS, findPreviousSnapshot, writeDetailCsv, versionCompare } =
+const {
+  DETAIL_COLUMNS, findPreviousSnapshot, isChronologicalDelta, removeStaleDeltas,
+  writeDetailCsv, versionCompare,
+} =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     DETAIL_COLUMNS: string[],
+    isChronologicalDelta: (name: string, version: string) => boolean,
+    removeStaleDeltas: (outDir: string, version: string) => string[],
     findPreviousSnapshot: (dir: string, self: string, version: string) =>
       { name: string, version: string, engine: string } | null,
     writeDetailCsv: (
@@ -255,5 +260,122 @@ describe('versionCompare', () => {
     expect(versionCompare('0.9.789', '0.23.940')).toBeLessThan(0)
     expect(versionCompare('1.543.1513', '1.451.1357')).toBeGreaterThan(0)
     expect(versionCompare('1.0.0', '1.0.0')).toBe(0)
+  })
+})
+
+describe('removeStaleDeltas', () => {
+
+  /** Everything a real release snapshot directory holds today. */
+  const RELEASE_DIR_CONTENTS = [
+    '00-command.log.txt',
+    '00-rendering-server.log.txt',
+    'README.md',
+    'conway0.22.921_0.23.940_delta.csv',
+    'index.html',
+    'performance-detail.csv',
+    'performance.csv',
+    'performance.err.txt',
+    'webifc0.0.56_conway0.23.940_delta.csv',
+    'webifc0.0.67_conway0.23.940_delta.csv',
+  ]
+
+  /**
+   * Populate a snapshot directory with the given entry names.
+   *
+   * @param names File names to create.
+   * @return The directory path.
+   */
+  function makeReleaseDir(names: string[]): string {
+    const dir = path.join(workDir, 'conway0.23.940_test-models')
+    fs.mkdirSync(dir, { recursive: true })
+    for (const name of names) {
+      fs.writeFileSync(path.join(dir, name), 'x')
+    }
+    return dir
+  }
+
+  test('removes only this release chronological delta', () => {
+    // The exact contents of benchmarks/conway0.23.940_test-models/, which
+    // legitimately carries one chronological delta AND two cross-engine ones.
+    const dir = makeReleaseDir(RELEASE_DIR_CONTENTS)
+
+    const removed = removeStaleDeltas(dir, '0.23.940')
+
+    expect(removed).toEqual(['conway0.22.921_0.23.940_delta.csv'])
+    expect(fs.readdirSync(dir).sort()).toEqual(
+      RELEASE_DIR_CONTENTS
+          .filter((n) => n !== 'conway0.22.921_0.23.940_delta.csv').sort())
+  })
+
+  test('leaves the cross-engine deltas alone — they are a different comparison', () => {
+    const dir = makeReleaseDir(RELEASE_DIR_CONTENTS)
+
+    removeStaleDeltas(dir, '0.23.940')
+
+    expect(fs.existsSync(path.join(dir, 'webifc0.0.56_conway0.23.940_delta.csv')))
+        .toBe(true)
+    expect(fs.existsSync(path.join(dir, 'webifc0.0.67_conway0.23.940_delta.csv')))
+        .toBe(true)
+  })
+
+  test('never touches the data files or the README', () => {
+    const dir = makeReleaseDir(RELEASE_DIR_CONTENTS)
+
+    removeStaleDeltas(dir, '0.23.940')
+
+    for (const kept of ['performance-detail.csv', 'performance.csv',
+      'performance.err.txt', 'README.md', 'index.html',
+      '00-command.log.txt', '00-rendering-server.log.txt']) {
+      expect(fs.existsSync(path.join(dir, kept))).toBe(true)
+    }
+  })
+
+  test('clears a delta whose predecessor changed, so only one survives', () => {
+    // The case codex found: an already-blessed rc re-run after an older
+    // snapshot was backfilled picks a different predecessor and writes a
+    // differently NAMED file, leaving two deltas against different
+    // predecessors in one directory with the README naming only one.
+    const dir = makeReleaseDir([
+      'performance-detail.csv',
+      'conway0.21.915_0.23.940_delta.csv',
+    ])
+
+    const removed = removeStaleDeltas(dir, '0.23.940')
+
+    expect(removed).toEqual(['conway0.21.915_0.23.940_delta.csv'])
+    expect(fs.readdirSync(dir)).toEqual(['performance-detail.csv'])
+  })
+
+  test('does not remove another release delta that happens to be present', () => {
+    const dir = makeReleaseDir([
+      'performance-detail.csv',
+      'conway0.22.921_0.23.940_delta.csv',
+    ])
+
+    expect(removeStaleDeltas(dir, '1.543.1513')).toEqual([])
+    expect(fs.existsSync(path.join(dir, 'conway0.22.921_0.23.940_delta.csv')))
+        .toBe(true)
+  })
+})
+
+describe('isChronologicalDelta', () => {
+
+  test('matches the naming convention and nothing else', () => {
+    expect(isChronologicalDelta('conway0.22.921_0.23.940_delta.csv', '0.23.940'))
+        .toBe(true)
+    expect(isChronologicalDelta(
+      'conway1.451.1357-ci_1.543.1513_delta.csv', '1.543.1513')).toBe(true)
+
+    // Cross-engine: starts with webifc, so never matched.
+    expect(isChronologicalDelta(
+      'webifc0.0.67_conway0.23.940_delta.csv', '0.23.940')).toBe(false)
+    // Wrong release.
+    expect(isChronologicalDelta(
+      'conway0.22.921_0.23.940_delta.csv', '1.543.1513')).toBe(false)
+    // Not a delta at all.
+    for (const name of ['performance-detail.csv', 'performance.csv',
+      'README.md', 'index.html', '00-command.log.txt']) {
+      expect(isChronologicalDelta(name, '0.23.940')).toBe(false)
+    }
   })
 })
