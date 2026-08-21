@@ -246,6 +246,16 @@ function eachRef(buf, from, to, onRef) {
       }
       continue
     }
+    // Comments, like strings, may legally contain `#123` text that is not a
+    // reference. eachRecord already skips them for exactly that reason;
+    // skipping strings here but not comments let a commented-out argument
+    // invent forward references and placement dependencies, which moves
+    // every curve this script reports (codex round 2 on #543).
+    if (ch === SLASH && buf[where + 1] === STAR) {
+      const end = buf.indexOf('*/', where + 2)
+      where = end < 0 || end + 2 > to ? to : end + 2
+      continue
+    }
     if (ch === HASH) {
       let cursor = where + 1
       let id = 0
@@ -370,7 +380,20 @@ function report(path) {
       shardChainProgress[s][id] = bandProgress(offsetOf[id], SHARD_COUNTS[s])
     }
   }
-  for (let round = 0; round < 8; ++round) {
+  // Iterate to a FIXED POINT, not a fixed round count. Each round propagates
+  // one more hop along a chain that runs against file order, so a hard stop
+  // at 8 left a deeper hierarchy partially resolved -- and a partially
+  // resolved chain reports its products as usable EARLIER than they are,
+  // which silently flatters every curve below (codex round 2 on #543).
+  // Convergence is guaranteed: each cell only ever increases and is bounded
+  // above by the largest record offset, so even a cyclic placement graph
+  // settles. The bound is a hang guard for a hostile file, not the
+  // termination condition, and blowing through it is reported rather than
+  // absorbed.
+  const PLACEMENT_ROUND_LIMIT = 64
+  let placementRounds = 0
+  let placementConverged = false
+  for (; placementRounds < PLACEMENT_ROUND_LIMIT; ++placementRounds) {
     let changed = false
     eachRecord(buf, (id, typeStart, typeEnd, start, end, argsFrom) => {
       if (isPlacement[id] === 0) {
@@ -416,8 +439,15 @@ function report(path) {
       }
     })
     if (!changed) {
+      placementConverged = true
       break
     }
+  }
+  if (!placementConverged) {
+    console.error(
+      `WARNING: placement chains did not converge in ${PLACEMENT_ROUND_LIMIT} ` +
+      'rounds; the product curves below understate when products become ' +
+      'usable.')
   }
 
   // Pass 2: bucket both curves.
