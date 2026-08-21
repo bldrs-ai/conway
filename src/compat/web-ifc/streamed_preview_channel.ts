@@ -457,6 +457,14 @@ export class StreamedPreviewChannel {
   private timer_?: ReturnType<typeof setTimeout>
 
   private emittedUnits_ = 0
+  /**
+   * Preview meshes handed to `onMesh`. Tracked apart from
+   * {@link emittedUnits_} because the two genuinely diverge: a unit can
+   * place several meshes, and a unit with no representation extracts
+   * cleanly while placing none. Reporting only units let the load log say
+   * "no mesh, 20 emitted" about one load (codex round 2 on #543).
+   */
+  private meshesEmitted_ = 0
   private emittedBytes_ = 0
 
   /* Units a tick attempted and could not extract, and how many of those were
@@ -661,7 +669,10 @@ export class StreamedPreviewChannel {
    *
    * `firstMeshMs` is time-to-first-pixel measured from channel construction
    * (immediately before the parse starts), undefined when nothing was ever
-   * emitted. `deferred` counts units a tick attempted and could not
+   * emitted. `meshes` counts what actually reached the consumer, `emitted`
+   * counts the units extraction accepted — a unit can place several meshes
+   * and a unit with no representation places none, so the line reports
+   * both. `deferred` counts units a tick attempted and could not
    * extract, `deferredOnPlacement` the subset waiting on a placement chain
    * the prefix does not hold, and `retried` the attempts that were second
    * looks at an earlier deferral — a retry path that has silently stopped
@@ -670,15 +681,16 @@ export class StreamedPreviewChannel {
    * The same shape as {@link StorePreviewChannel.previewYield}, so both
    * paths render through one formatter (core/progress_log).
    *
-   * @return {object} `{firstMeshMs, emitted, deferred, deferredOnPlacement,
-   * retried}`
+   * @return {object} `{firstMeshMs, meshes, emitted, deferred,
+   * deferredOnPlacement, retried}`
    */
   public get previewYield(): {
-    firstMeshMs?: number, emitted: number, deferred: number,
+    firstMeshMs?: number, meshes: number, emitted: number, deferred: number,
     deferredOnPlacement: number, retried: number } {
 
     return {
       firstMeshMs: this.firstMeshMs_,
+      meshes: this.meshesEmitted_,
       emitted: this.emittedUnits_,
       deferred: this.deferredUnits_,
       deferredOnPlacement: this.deferredOnPlacement_,
@@ -1142,6 +1154,7 @@ export class StreamedPreviewChannel {
       this.firstMeshMs_ ??= Date.now() - this.startedMs_
 
       this.onMesh(payload)
+      ++this.meshesEmitted_
       ++emitted
 
       if (this.emittedBytes_ >= this.maxBytes) {

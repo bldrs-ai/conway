@@ -129,6 +129,16 @@ export class StorePreviewChannel {
 
   private stopped_ = false
   private emittedUnits_ = 0
+  /**
+   * Preview meshes handed to `onMesh_`. Tracked apart from
+   * {@link emittedUnits_} because the two genuinely diverge: a product can
+   * place several meshes, and a product with no Representation extracts
+   * cleanly while placing none — `extractProductGeometry` returns early on
+   * a null Representation and `extractProductGeometryByLocalID` still
+   * answers true. Reporting only units let the load log say "no mesh, 20
+   * emitted" about one load (codex round 2 on #543).
+   */
+  private meshesEmitted_ = 0
 
   /* Products a tick attempted but could not extract, and how many of those
    * were specifically waiting on a placement chain the prefix does not hold
@@ -238,6 +248,9 @@ export class StorePreviewChannel {
    *
    * `firstMeshMs` is time-to-first-pixel measured from channel
    * construction, undefined when no placed product was ever emitted.
+   * `meshes` counts what actually reached the consumer, `emitted` counts
+   * the products extraction accepted — they are not the same number in
+   * either direction, so the line reports both.
    * `deferred` counts products a tick attempted and could not extract;
    * `deferredOnPlacement` is the subset still waiting on a placement chain
    * the prefix does not hold; `retried` counts attempts that were second
@@ -248,15 +261,16 @@ export class StorePreviewChannel {
    * case a sharded parse attacks, anything else is not — and inferring it
    * from a code comment is what conway#542 exists to stop.
    *
-   * @return {object} `{firstMeshMs, emitted, deferred, deferredOnPlacement,
-   * retried}`
+   * @return {object} `{firstMeshMs, meshes, emitted, deferred,
+   * deferredOnPlacement, retried}`
    */
   public get previewYield(): {
-    firstMeshMs?: number, emitted: number, deferred: number,
+    firstMeshMs?: number, meshes: number, emitted: number, deferred: number,
     deferredOnPlacement: number, retried: number } {
 
     return {
       firstMeshMs: this.firstMeshMs_,
+      meshes: this.meshesEmitted_,
       emitted: this.emittedUnits_,
       deferred: this.deferredUnits_,
       deferredOnPlacement: this.deferredOnPlacement_,
@@ -811,18 +825,22 @@ export class StorePreviewChannel {
   /**
    * Copy newly extracted instances out of wasm — same placement math
    * as {@link StreamedPreviewChannel}.
+   *
+   * @return {number} Meshes emitted by this pass.
    */
-  private captureNewInstances_(): void {
+  private captureNewInstances_(): number {
 
     const active = this.generation_!
 
     if ( active === void 0 ) {
-      return
+      return 0
     }
 
     const { extraction, capturedCounts } = active
     const scene = extraction.scene
     const seenThisPass = new Map< number, number >()
+
+    let emitted = 0
 
     type WalkTuple = [
       unknown,
@@ -935,10 +953,14 @@ export class StorePreviewChannel {
       this.firstMeshMs_ ??= Date.now() - this.startedMs_
 
       this.onMesh_( payload )
+      ++this.meshesEmitted_
+      ++emitted
 
       if ( this.emittedBytes_ >= this.maxBytes ) {
-        return
+        return emitted
       }
     }
+
+    return emitted
   }
 }

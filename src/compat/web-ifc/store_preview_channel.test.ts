@@ -746,7 +746,7 @@ describe( 'StorePreviewChannel', () => {
     // blank-first-load conway#542 exists to make diagnosable: an enabled
     // preview that produced nothing must not read the same as a preview
     // that never ran. formatPreviewLine already renders the zero case as
-    // "no mesh, 0 emitted, 0 deferred".
+    // "no mesh, 0 meshes from 0 units, 0 deferred".
     const store = new InMemoryStepByteStore( bytes )
     const emptySink = {
       get topLevelCount() {
@@ -769,7 +769,7 @@ describe( 'StorePreviewChannel', () => {
     channel.stop()
 
     expect( infoSpy ).toHaveBeenCalledWith(
-        expect.stringContaining( 'Preview: no mesh, 0 emitted, 0 deferred' ) )
+        expect.stringContaining( 'Preview: no mesh, 0 meshes from 0 units, 0 deferred' ) )
 
     infoSpy.mockRestore()
   } )

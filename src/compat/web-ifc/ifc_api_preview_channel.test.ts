@@ -882,7 +882,7 @@ describe( 'StreamedPreviewChannel', () => {
     // blank-first-load conway#542 exists to make diagnosable: an enabled
     // preview that produced nothing must not read the same as a preview
     // that never ran. formatPreviewLine already renders the zero case as
-    // "no mesh, 0 emitted, 0 deferred".
+    // "no mesh, 0 meshes from 0 units, 0 deferred".
     const fakeSink = {
       get topLevelCount() {
         return 0
@@ -903,7 +903,7 @@ describe( 'StreamedPreviewChannel', () => {
     channel.stop()
 
     expect( infoSpy ).toHaveBeenCalledWith(
-        expect.stringContaining( 'Preview: no mesh, 0 emitted, 0 deferred' ) )
+        expect.stringContaining( 'Preview: no mesh, 0 meshes from 0 units, 0 deferred' ) )
 
     infoSpy.mockRestore()
   } )

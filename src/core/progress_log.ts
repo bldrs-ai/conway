@@ -167,6 +167,19 @@ export interface PreviewYieldLike {
    * undefined when it never emitted one.
    */
   firstMeshMs?: number
+  /**
+   * Preview meshes actually handed to the consumer. Distinct from
+   * {@link emitted}: one unit can yield several meshes, and a unit with no
+   * representation yields none at all, so reporting only units produced the
+   * self-contradicting "no mesh, 20 emitted" (codex round 2 on #543).
+   */
+  meshes: number
+  /**
+   * Units the preview EXTRACTED — attempted and got a non-throwing answer
+   * from. Not a count of what reached the screen; that is
+   * {@link meshes}. This is the counter the channel's `maxUnits` cap
+   * measures, which is why it stays unit-shaped.
+   */
   emitted: number
   deferred: number
   deferredOnPlacement: number
@@ -189,16 +202,23 @@ export interface PreviewYieldLike {
  * silently stopped firing shows up here rather than merely as a slower
  * load.
  *
+ * Meshes and units are reported separately because they diverge in both
+ * directions: one unit can place several meshes, and a unit with no
+ * representation (a site, a storey) extracts cleanly while placing none.
+ * Folding them into one "emitted" number let the line say "no mesh, 20
+ * emitted" about the same load (codex round 2 on #543).
+ *
  * @param preview The channel's reported yield.
- * @return {string} e.g. "Preview: first mesh 0.275s, 539 emitted,
- * 12 deferred (11 on placements), 8 retried"
+ * @return {string} e.g. "Preview: first mesh 0.275s, 1750 meshes from 539
+ * units, 12 deferred (11 on placements), 8 retried"
  */
 export function formatPreviewLine( preview: PreviewYieldLike ): string {
 
   const first = preview.firstMeshMs !== void 0 ?
     `first mesh ${formatSeconds( preview.firstMeshMs )}` : 'no mesh'
 
-  return `Preview: ${first}, ${preview.emitted} emitted, ` +
+  return `Preview: ${first}, ${preview.meshes} meshes ` +
+    `from ${preview.emitted} units, ` +
     `${preview.deferred} deferred ` +
     `(${preview.deferredOnPlacement} on placements), ` +
     `${preview.retried} retried`
