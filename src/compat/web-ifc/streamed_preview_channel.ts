@@ -638,9 +638,16 @@ export class StreamedPreviewChannel {
     // reported here is a counter nobody can read. Same formatter as the
     // store path, and the same one Share renders (core/progress_log), so a
     // pasted browser log and a pasted CLI run read identically.
-    if ( this.emittedUnits_ > 0 || this.deferredUnits_ > 0 ) {
-      Logger.info(formatPreviewLine(this.previewYield))
-    }
+    //
+    // Unconditional, not gated on emittedUnits_ or deferredUnits_ being
+    // nonzero: a channel that never reached firstGenerationMinRecords, or
+    // whose every generation build threw, is precisely the worst-case
+    // blank-first-load this issue exists to make diagnosable, and
+    // formatPreviewLine already renders that case as "no mesh, 0 emitted,
+    // 0 deferred". Suppressing the line there made an enabled preview that
+    // produced nothing indistinguishable from a preview that never ran
+    // (codex round 1 on #543).
+    Logger.info(formatPreviewLine(this.previewYield))
   }
 
   /** True when a cap was hit and the channel retired itself early. */

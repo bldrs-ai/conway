@@ -872,4 +872,39 @@ describe( 'StreamedPreviewChannel', () => {
 
     channel.stop()
   }, 240000 )
+
+  test( 'reports a preview line even when nothing was ever attempted', () => {
+
+    // Codex round 1 on #543: stop() suppressed the Preview line unless
+    // emittedUnits_ or deferredUnits_ was nonzero. A channel that never
+    // reached firstGenerationMinRecords -- or whose every generation build
+    // threw -- leaves both at zero, and that is exactly the worst-case
+    // blank-first-load conway#542 exists to make diagnosable: an enabled
+    // preview that produced nothing must not read the same as a preview
+    // that never ran. formatPreviewLine already renders the zero case as
+    // "no mesh, 0 emitted, 0 deferred".
+    const fakeSink = {
+      get topLevelCount() {
+        return 0
+      },
+      snapshot: () => ( {} ),
+    } as unknown as ColumnarIndexSink<EntityTypesIfc>
+
+    const infoSpy = jest.spyOn( Logger, 'info' ).mockImplementation( () => { /* silence */ } )
+
+    // Default firstGenerationMinRecords (1024): with topLevelCount pinned
+    // at 0, ensureGeneration_ never builds a generation, so the channel
+    // reaches stop() having attempted nothing at all.
+    const channel = new StreamedPreviewChannel(
+        data, conwayGeometry, fakeSink,
+        { buildGeneration: () => { throw new Error( 'must not be called' ) } },
+        false, () => { /* no payloads possible */ } )
+
+    channel.stop()
+
+    expect( infoSpy ).toHaveBeenCalledWith(
+        expect.stringContaining( 'Preview: no mesh, 0 emitted, 0 deferred' ) )
+
+    infoSpy.mockRestore()
+  } )
 } )

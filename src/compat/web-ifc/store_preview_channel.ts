@@ -396,9 +396,16 @@ export class StorePreviewChannel {
     // wearing the same blank screen (conway#542). Rendered by the shared
     // load-log formatter, so the resident path's line and this one are the
     // same line.
-    if ( this.emittedUnits_ > 0 || this.deferredUnits_ > 0 ) {
-      Logger.info( formatPreviewLine( this.previewYield ) )
-    }
+    //
+    // Unconditional, not gated on emittedUnits_ or deferredUnits_ being
+    // nonzero: a channel that never reached firstGenerationMinRecords, or
+    // whose every generation build threw, is precisely the worst-case
+    // blank-first-load this issue exists to make diagnosable — and
+    // formatPreviewLine already renders that as "no mesh, 0 emitted, 0
+    // deferred". Suppressing the line there made an enabled preview that
+    // produced nothing indistinguishable from a preview that never ran
+    // (codex round 1 on #543).
+    Logger.info( formatPreviewLine( this.previewYield ) )
   }
 
   /**
@@ -626,6 +633,7 @@ export class StorePreviewChannel {
       }
 
       this.disposeGeneration_()
+
       // Carry the OLD queue's unconsumed suffix forward, not just this
       // generation's fresh deferrals. Preemption can fire mid-drain of
       // retryQueue_ — bounded per-tick attempts (TICK_MAX_ATTEMPTS) against
