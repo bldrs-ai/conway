@@ -661,6 +661,82 @@ describe( 'StorePreviewChannel', () => {
     channel.stop()
   }, 120000 )
 
+  test( 'a permanently malformed placement never enters the retry queue', async () => {
+
+    // Codex round 1 on #543: extractPlacementStrict_ tagged EVERY throw out
+    // of the strict placement read as DanglingPlacementError, so a placement
+    // that is broken rather than unscanned was classified as a file-layout
+    // deferral. That is not a cosmetic mislabel: the tag is what puts a
+    // product in deferredForRetry_, and a non-empty deferredForRetry_ is
+    // also the trigger for early generation PREEMPTION — so one malformed
+    // placement bought a full model/extraction rebuild on every growth step
+    // for a retry that could never come good.
+    //
+    // Two products, two causes, one file, so the assertion is about the
+    // SPLIT rather than about either case alone:
+    //
+    //   #334 RelativePlacement -> #345, an IFCPOLYGONALFACESET. Indexed
+    //        and present, but the field is an IfcAxis2Placement select, so
+    //        IfcLocalPlacement's generated getter rejects it. No amount of
+    //        further index changes that answer.
+    //   #408 Location -> #999999, which no record in the file defines.
+    //        Absent from the index, which on a prefix is exactly "not
+    //        scanned yet" — the case that must still defer and retry.
+    const text = fs.readFileSync( 'data/index.ifc', 'utf8' )
+
+    expect( text ).toContain( '#334= IFCLOCALPLACEMENT(#152,#333);' )
+    expect( text ).toContain( '#408= IFCAXIS2PLACEMENT3D(#406,#404,#402);' )
+    expect( text ).toContain( '#345= IFCPOLYGONALFACESET(' )
+    expect( text ).not.toContain( '#999999=' )
+
+    const brokenText = text
+        .replace(
+            '#334= IFCLOCALPLACEMENT(#152,#333);',
+            '#334= IFCLOCALPLACEMENT(#152,#345);' )
+        .replace(
+            '#408= IFCAXIS2PLACEMENT3D(#406,#404,#402);',
+            '#408= IFCAXIS2PLACEMENT3D(#999999,#404,#402);' )
+
+    const brokenBytes = new Uint8Array( Buffer.from( brokenText, 'latin1' ) )
+    const store = new InMemoryStepByteStore( brokenBytes )
+    const sink = new ColumnarIndexSink< number >()
+
+    // The COMPLETE index, deliberately: it takes prefix-vs-tail out of the
+    // picture, so the only thing left to explain a deferral is the cause of
+    // the throw. It also means no generation is ever rebuilt (the record
+    // count cannot grow past the growth factor again), so the retry queue
+    // this inspects is the one the tick built and never drained.
+    expect( buildIndexStreaming(
+        new BufferByteSource( brokenBytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true, () => { /* not inspected */ },
+        64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    await channel.drainForTest()
+
+    const observed = channel.previewYield
+
+    // Both products fail to extract — the split is in how they are counted,
+    // and in which of them is worth another attempt.
+    expect( observed.deferred ).toBe( 2 )
+    expect( observed.deferredOnPlacement ).toBe( 1 )
+    expect( internals.deferredForRetry_ ).toHaveLength( 1 )
+
+    // And the rest of the file is unaffected: these two are the only
+    // products that lost their geometry.
+    expect( observed.emitted ).toBe( channel.productCount - 2 )
+
+    channel.stop()
+  }, 120000 )
+
   test( 'reports a preview line even when nothing was ever attempted', () => {
 
     // Codex round 1 on #543: stop() suppressed the Preview line unless

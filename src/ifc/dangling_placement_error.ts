@@ -6,6 +6,14 @@
  * from a product extract — as "not yet extractable, leave it to the durable
  * pump".
  *
+ * Strictly "not in the prefix YET": the tag is applied only when the
+ * underlying throw is a `DanglingReferenceError`, i.e. the placement chain
+ * referenced a record the index does not hold. A placement that is present
+ * but broken (wrong entity type, a select that is not an axis placement)
+ * propagates untagged, because the channels use this tag to decide what to
+ * retry, and retrying a permanently broken placement also keeps the early
+ * generation-preemption trigger alive for nothing.
+ *
  * It exists only so that catch can ATTRIBUTE the deferral. The preview emits
  * a product once its whole closure sits inside the prefix, and Revit writes
  * per-product placements toward the file tail, so on those files early ticks
