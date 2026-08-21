@@ -400,7 +400,7 @@ Deliberately small first step; each has a measurable exit.
     finished model. External-mapping records (typeID 0) reach `onAnyRecord`
     only; concrete-type resolution for them is the incremental type-index
     consumer (M2b).
-  - **M2b — standard consumers (in progress; re-shaped 2026-08-18).**
+  - **M2b — standard consumers (re-shaped & finished 2026-08-18).**
     Header/`ON_MODEL_INFO` from the first window landed with the open
     paths. The rest split in two by *what the consumer needs*, which the
     spike below settled:
