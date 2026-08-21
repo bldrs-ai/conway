@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 
 /**
  * Generate a delta CSV from two performance-detail CSV files.
@@ -22,29 +23,28 @@ function generateDeltaCSV(csvPath1, csvPath2, outputCsvPath, isWebIfc = false) {
  * @returns {Array<Object>}
  */
 function readDataFromCsv(filepath) {
-  const fileContents = fs.readFileSync(filepath, 'utf8');
-  const lines = fileContents.split(/\r?\n/).filter((l) => l.trim() !== '');
+  // RFC 4180 rather than split(','): performance-detail.csv quotes the free
+  // text it lifts from the IFC header (preprocessorVersion,
+  // originatingSystem) and any model filename containing a comma, and a naive
+  // split would tear a quoted field back into extra cells — shifting every
+  // column after it and silently mis-joining the delta.
+  const records = parseCsv(fs.readFileSync(filepath, 'utf8'));
 
-  if (lines.length < 2) {
+  if (records.length < 2) {
     // Either empty or header-only => no data
     return [];
   }
 
-  // The first line is the header
-  const headers = lines[0].split(',').map((h) => h.trim());
+  const headers = records[0].map((h) => h.trim());
 
-  const data = [];
-  for (let i = 1; i < lines.length; i++) {
-    const row = lines[i].split(',');
+  return records.slice(1).map((row) => {
     const rowObj = {};
     headers.forEach((header, index) => {
       // Trim whitespace for each cell
-      const cell = row[index] ? row[index].trim() : '';
-      rowObj[header] = cell;
+      rowObj[header] = row[index] !== undefined ? row[index].trim() : '';
     });
-    data.push(rowObj);
-  }
-  return data;
+    return rowObj;
+  });
 }
 
 /**
@@ -94,12 +94,11 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
 
   const lines = [];
   // write the header
-  lines.push(csvHeader.join(','));
+  lines.push(csvRow(csvHeader));
 
   // write each row
   data.forEach((row) => {
-    const rowCells = csvHeader.map((col) => (row[col] != null ? row[col] : ''));
-    lines.push(rowCells.join(','));
+    lines.push(csvRow(csvHeader.map((col) => (row[col] != null ? row[col] : ''))));
   });
 
   fs.writeFileSync(csvFilename, lines.join('\n'), 'utf8');
