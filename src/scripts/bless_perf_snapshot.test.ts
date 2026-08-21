@@ -21,7 +21,7 @@ const require_ = createRequire(import.meta.url)
 const { DETAIL_COLUMNS, findPreviousSnapshot, writeDetailCsv, versionCompare } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     DETAIL_COLUMNS: string[],
-    findPreviousSnapshot: (dir: string, self: string) =>
+    findPreviousSnapshot: (dir: string, self: string, version: string) =>
       { name: string, version: string, engine: string } | null,
     writeDetailCsv: (
       rows: Record<string, string>[], out: string, engine: string,
@@ -149,7 +149,8 @@ describe('findPreviousSnapshot', () => {
     ])
 
     const previous =
-      findPreviousSnapshot(benchmarks, 'conway1.543.1513-ci_test-models')
+      findPreviousSnapshot(
+        benchmarks, 'conway1.543.1513-ci_test-models', '1.543.1513')
 
     expect(previous).not.toBeNull()
     expect(previous!.name).toBe('conway1.451.1357-ci_test-models')
@@ -165,7 +166,8 @@ describe('findPreviousSnapshot', () => {
     ])
 
     const previous =
-      findPreviousSnapshot(benchmarks, 'conway1.543.1513-ci_test-models')
+      findPreviousSnapshot(
+        benchmarks, 'conway1.543.1513-ci_test-models', '1.543.1513')
 
     expect(previous!.name).toBe('conway1.451.1357-ci_test-models')
   })
@@ -176,14 +178,74 @@ describe('findPreviousSnapshot', () => {
       ['webifc0.0.67_test-models', 'conway9.9.9-ci_test-models'])
 
     const previous =
-      findPreviousSnapshot(benchmarks, 'conway1.543.1513-ci_test-models')
+      findPreviousSnapshot(
+        benchmarks, 'conway1.543.1513-ci_test-models', '1.543.1513')
 
     expect(previous!.name).toBe('conway0.23.940_test-models')
   })
 
+  test('never selects a snapshot NEWER than the version being blessed', () => {
+    // Re-running an older rc- tag after a newer release has been blessed. An
+    // unbounded maximum picks conway1.600.1600-ci and writes
+    // `conway1.600.1600-ci_1.543.1513_delta.csv` into the OLDER release's
+    // directory — a delta claiming it changed relative to its own future.
+    const benchmarks = makeBenchmarks([
+      'conway1.451.1357-ci_test-models',
+      'conway1.543.1513-ci_test-models',
+      'conway1.600.1600-ci_test-models',
+    ])
+
+    const previous = findPreviousSnapshot(
+      benchmarks, 'conway1.543.1513-ci_test-models', '1.543.1513')
+
+    expect(previous!.name).toBe('conway1.451.1357-ci_test-models')
+  })
+
+  test('bounds strictly below, so an equal version is not a predecessor', () => {
+    // The same release under a different directory name (a different harness,
+    // say) is not its own predecessor.
+    const benchmarks = makeBenchmarks([
+      'conway1.543.1513_test-models',
+      'conway1.543.1513-ci_test-models',
+    ])
+
+    const previous = findPreviousSnapshot(
+      benchmarks, 'conway1.543.1513-ci_test-models', '1.543.1513')
+
+    expect(previous).toBeNull()
+  })
+
+  test('returns null rather than reaching upward when nothing precedes', () => {
+    // The first blessed release in a repo. No delta is the correct outcome;
+    // silently picking the nearest snapshot in either direction is not.
+    const benchmarks = makeBenchmarks(['conway1.600.1600-ci_test-models'])
+
+    expect(findPreviousSnapshot(
+      benchmarks, 'conway1.451.1357-ci_test-models', '1.451.1357')).toBeNull()
+  })
+
+  test('bounds numerically, not lexicographically', () => {
+    // Both of these directories really exist in test-models/benchmarks, and
+    // they are conway#533's trap: 0.23.940 is NEWER than 0.9.789 by number but
+    // sorts BELOW it as a string ('2' < '9' at the third character). A string
+    // bound therefore fails to exclude it, and since it is the numeric maximum
+    // it gets picked — handing the older release a delta against its future,
+    // which is the whole bug this bound exists to stop.
+    const benchmarks = makeBenchmarks([
+      'conway0.8.782_test-models',
+      'conway0.23.940_test-models',
+    ])
+
+    const previous = findPreviousSnapshot(
+      benchmarks, 'conway0.9.789_test-models', '0.9.789')
+
+    expect(previous!.name).toBe('conway0.8.782_test-models')
+  })
+
   test('returns null when there is no prior snapshot', () => {
-    expect(findPreviousSnapshot(path.join(workDir, 'nope'), 'x')).toBeNull()
-    expect(findPreviousSnapshot(makeBenchmarks([]), 'x')).toBeNull()
+    expect(findPreviousSnapshot(path.join(workDir, 'nope'), 'x', '1.0.0'))
+        .toBeNull()
+    expect(findPreviousSnapshot(makeBenchmarks([]), 'x', '1.0.0')).toBeNull()
   })
 })
 

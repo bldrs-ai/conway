@@ -153,18 +153,33 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
 }
 
 /**
- * Find the newest already-committed snapshot directory to diff against.
+ * Find the newest already-committed snapshot that PRECEDES this version.
  *
  * Only `conway<version>_<repo>` / `conway<version>-<suffix>_<repo>` names are
- * considered, and the directory being written now is excluded — otherwise a
- * re-run of the same rc would diff a snapshot against itself.
+ * considered, and a candidate must sort strictly below `version`.
+ *
+ * The strict upper bound is the point. Excluding only the directory being
+ * written is not enough: re-running an older `rc-*` tag after a newer release
+ * has been blessed would find the newer directory eligible, take it as the
+ * maximum, and write `conway1.600.1600-ci_1.543.1513_delta.csv` into the OLDER
+ * release's own record — a delta claiming that release changed relative to its
+ * own future. Bounding by version also subsumes the self-exclusion (a
+ * directory cannot sort strictly below its own version), but `selfDirName` is
+ * still passed and skipped so a same-version directory under a different name
+ * cannot be picked either.
+ *
+ * Comparison is versionCompare, i.e. numeric per component. Lexicographic
+ * order is wrong here and has bitten this repo before (#533): `1.394.1504`
+ * sorts BELOW `1.530.1503` numerically but ABOVE it as a string, and both
+ * spellings exist in the corpus.
  *
  * @param {string} benchmarksDir The repo's benchmarks/ directory.
  * @param {string} selfDirName Name of the directory this run is writing.
- * @return {{name: string, version: string, engine: string} | null} Previous
- *   snapshot, or null when there is none.
+ * @param {string} version Version being blessed, e.g. '1.543.1513'.
+ * @return {{name: string, version: string, engine: string} | null} Newest
+ *   snapshot strictly below `version`, or null when there is none.
  */
-function findPreviousSnapshot(benchmarksDir, selfDirName) {
+function findPreviousSnapshot(benchmarksDir, selfDirName, version) {
   if (!fs.existsSync(benchmarksDir)) {
     return null;
   }
@@ -178,6 +193,12 @@ function findPreviousSnapshot(benchmarksDir, selfDirName) {
 
     const match = entry.name.match(/^conway(\d+(?:\.\d+)*)(-[^_]+)?_/);
     if (!match) {
+      continue;
+    }
+
+    // Strictly below, so a newer blessed release can never be reported as the
+    // predecessor of an older one.
+    if (versionCompare(match[1], version) >= 0) {
       continue;
     }
 
@@ -243,8 +264,20 @@ not a zero: do not read it as "no change in geometry memory".
 
 ## Regenerating
 
-Push an \`rc-*\` tag, or run Actions → *RC regression (full corpus + baseline
-bless)* → Run workflow.
+Push an \`rc-*\` tag.
+
+To re-run without cutting a tag: Actions → *RC regression (full corpus +
+baseline bless)* → Run workflow, and in **"Use workflow from"** pick the
+\`rc-*\` **tag**, not a branch. The snapshot step gates on the ref being an
+\`rc-*\` tag — it takes the version from the tag name and has nothing to name the
+directory after otherwise — so dispatching from \`main\` runs the digest
+regression and **silently skips the perf snapshot**, finishing green having
+regenerated nothing. It says so in the job log:
+
+    ::notice::Ref 'main' is not an rc-* tag; skipping the blessed perf snapshot.
+
+If this directory is what you came to regenerate, that notice is the thing to
+check for.
 `;
 }
 
@@ -283,12 +316,16 @@ function main() {
   const modelCount = writeDetailCsv(rows, detailPath, engine, timestamp);
   console.log(`Wrote ${modelCount} rows to ${detailPath}`);
 
-  const previous = findPreviousSnapshot(benchmarksDir, dirName);
+  const previous = findPreviousSnapshot(benchmarksDir, dirName, version);
   let deltaName = '';
 
   if (previous === null) {
+    // Correct, not a fallback: the first blessed release in a repo, or a
+    // re-run of the oldest one, genuinely has no predecessor. Emitting no
+    // delta is right; reaching for the nearest snapshot in either direction
+    // would manufacture a comparison nobody asked for.
     console.warn(
-      `No previous snapshot in ${benchmarksDir}; delta not generated.`);
+      `No snapshot below ${version} in ${benchmarksDir}; delta not generated.`);
   } else {
     // Convention from the committed deltas, e.g.
     // conway0.22.921_0.23.940_delta.csv — engine1 in full, engine2 as the
