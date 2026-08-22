@@ -302,10 +302,25 @@ async function main() {
 
   // Every row this file gets is written through csvRow, header included, so
   // the column list and the records that fill it cannot drift apart.
+  //
+  // PEAK vs INSTANT (conway#552): `peakRssMb` is the render server process's
+  // high-water mark, scraped from the `Peak RSS:` the engine's Memory class
+  // logs (`process.resourceUsage().maxRSS`). `rssMb`, `heapUsedMb` and
+  // `heapTotalMb` are single `process.memoryUsage()` samples taken at the end
+  // of the load with no GC first — so `heapUsedMb` is live data plus
+  // uncollected garbage, and moves with GC timing. `geometryMemoryMb` is not
+  // a process metric at all: it is the vertex+index payload conway allocated
+  // for this model. Only the last of those is independent of what else the
+  // three.js host happens to be holding.
+  //
+  // Snapshots committed before #552 have neither `peakRssMb` in this header
+  // nor a `Peak RSS:` line to scrape; gen_delta_csv.cjs propagates the
+  // absence as N/A rather than differencing against zero, so old baselines
+  // stay readable and do not need re-blessing.
   const DETAIL_COLUMNS = [
     'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
     'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-    'rssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
+    'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
     'originatingSystem',
   ];
 
@@ -453,6 +468,7 @@ async function main() {
       let totalTimeMs = 'N/A';
       let geometryMemoryMb = 'N/A';
       let rssMb = 'N/A';
+      let peakRssMb = 'N/A';
       let heapUsedMb = 'N/A';
       let heapTotalMb = 'N/A';
       let preprocessorVersion = 'N/A';
@@ -472,6 +488,8 @@ async function main() {
           if (geomMemMatch) geometryMemoryMb = geomMemMatch[1];
           const rssMatch = logContents.match(/RSS ([\d.]+) MB/);
           if (rssMatch) rssMb = rssMatch[1];
+          const peakRssMatch = logContents.match(/Peak RSS: ([\d.]+) MB/);
+          if (peakRssMatch) peakRssMb = peakRssMatch[1];
           const heapUsedMatch = logContents.match(/Heap Used: ([\d.]+) MB/);
           if (heapUsedMatch) heapUsedMb = heapUsedMatch[1];
           const heapTotalMatch = logContents.match(/Heap Total: ([\d.]+) MB/);
@@ -490,6 +508,8 @@ async function main() {
         if (geomMemMatch) geometryMemoryMb = geomMemMatch[1];
         const rssMatch = logContents.match(/RSS ([\d.]+) MB/);
         if (rssMatch) rssMb = rssMatch[1];
+        const peakRssMatch = logContents.match(/Peak RSS: ([\d.]+) MB/);
+        if (peakRssMatch) peakRssMb = peakRssMatch[1];
         const heapUsedMatch = logContents.match(/Heap Used: ([\d.]+) MB/);
         if (heapUsedMatch) heapUsedMb = heapUsedMatch[1];
         const heapTotalMatch = logContents.match(/Heap Total: ([\d.]+) MB/);
@@ -512,6 +532,7 @@ async function main() {
         totalTimeMs,
         geometryMemoryMb,
         rssMb,
+        peakRssMb,
         heapUsedMb,
         heapTotalMb,
         preprocessorVersion,
@@ -559,7 +580,7 @@ async function main() {
       // the row a release comparison is for. One writer, one convention.
       const failLine = csvRow([
         timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
+        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
       ]);
       appendLineToFile(newResults, failLine);
 

@@ -87,10 +87,18 @@ export default class Memory {
     const rss = (memoryUsage.rss / 1024 / 1024).toFixed(3)
     const heapTotal = (memoryUsage.heapTotal / 1024 / 1024).toFixed(3)
     const heapUsed = (memoryUsage.heapUsed / 1024 / 1024).toFixed(3)
+    // The kernel's high-water mark for this process, which the three
+    // instants above cannot show: a load that transiently hit 5 GB and
+    // settled to 1 GB reports 1 GB in `RSS` and 5 GB here (conway#552).
+    // maxRSS is in kilobytes, unlike memoryUsage() which is in bytes.
+    const peakRss = (process.resourceUsage().maxRSS / 1024).toFixed(3)
     /* eslint-enable no-magic-numbers */
 
+    // `Peak RSS:` keeps its colon so that scripts/benchmark.cjs's existing
+    // `/RSS ([\d.]+) MB/` scrape cannot bind to it instead of the instant.
     return `Node Memory Usage: RSS ${rss} MB, ` +
            `Heap Total: ${heapTotal} MB, ` +
-           `Heap Used: ${heapUsed} MB`
+           `Heap Used: ${heapUsed} MB, ` +
+           `Peak RSS: ${peakRss} MB`
   }
 }

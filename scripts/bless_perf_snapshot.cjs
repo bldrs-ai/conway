@@ -19,27 +19,34 @@
  * TWO COLUMN SETS ARE IN PLAY, and they are not the same file:
  *
  *   perf.csv (input, written by src/ifc/ifc_regression_main.ts)
- *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,rssMb,heapUsedMb,
- *     heapTotalMb
+ *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,
+ *     rssMb,peakRssMb,heapUsedMb,heapTotalMb
  *
  *   performance-detail.csv (output, the committed convention)
  *     timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,
- *     geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,heapUsedMb,
+ *     geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,peakRssMb,heapUsedMb,
  *     heapTotalMb,preprocessorVersion,originatingSystem
  *
- * The four columns perf.csv does not carry (schemaVersion, geometryMemoryMb,
+ * The three columns perf.csv does not carry (schemaVersion,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
- * omitted, so the file keeps the 15-column shape every existing consumer and
- * GitHub's CSV viewer expect.
- *
- * Of those four, only geometryMemoryMb reaches the delta:
+ * omitted, so the file keeps the 16-column shape every existing consumer and
+ * GitHub's CSV viewer expect. None of the three reaches the delta:
  * preprocessorVersion/originatingSystem are not in its column set, and
- * schemaVersion is carried through as a label. `geometryMemoryMbDelta` is
- * therefore N/A on every row of a delta involving this snapshot — which is the
- * honest answer, and it is only true because gen_delta_csv.cjs propagates an
- * absent measurement instead of coercing it to 0. Coercing produced a
- * fabricated `geometryMemoryMbDelta = -185.836` for SKYLARK250 — the entire
- * baseline allocation reported as a memory win.
+ * schemaVersion is carried through as a label.
+ *
+ * PEAK vs INSTANT (conway#552). `peakRssMb` is the child process's kernel
+ * high-water mark; `rssMb`/`heapUsedMb`/`heapTotalMb` are single samples taken
+ * at the end of the load with no GC first. They are not interchangeable — see
+ * the column-by-column note on writePerfCsvIfRequested in
+ * src/ifc/ifc_regression_main.ts.
+ *
+ * OLD SNAPSHOTS LACK `peakRssMb`, and `geometryMemoryMb` was N/A on every
+ * conway-native snapshot before #552. gen_delta_csv.cjs propagates an absent
+ * measurement instead of coercing it to 0, so those deltas read N/A rather
+ * than a number. That guard is why baselines do not need re-blessing here.
+ * Coercion is not a hypothetical: it produced a fabricated
+ * `geometryMemoryMbDelta = -185.836` for SKYLARK250 — the entire baseline
+ * allocation reported as a memory win (#548).
  *
  * HARNESS BOUNDARY. The committed `conway<version>-ci_*` snapshots to date
  * were produced by scripts/benchmark.cjs driving headless-three, i.e. conway
@@ -47,9 +54,10 @@
  * parse/geometry/total are conway's own stage timings in both cases and are
  * broadly comparable on the same runner class, but the memory columns are
  * not: `rssMb` here excludes a GL context and a three.js scene graph, and
- * `geometryMemoryMb` is not measured at all. The README written alongside the
- * snapshot records which harness produced it so nobody differences across the
- * boundary without seeing it.
+ * `geometryMemoryMb`, while measured on both sides now, counts only conway's
+ * own vertex+index payload — the three.js host's copy of the same geometry is
+ * not in it. The README written alongside the snapshot records which harness
+ * produced it so nobody differences across the boundary without seeing it.
  */
 
 const fs = require('fs');
@@ -62,7 +70,7 @@ const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
 const DETAIL_COLUMNS = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-  'rssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
+  'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
   'originatingSystem',
 ];
 
@@ -139,8 +147,11 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
       row.parseTimeMs || UNMEASURED,
       row.geometryTimeMs || UNMEASURED,
       row.totalTimeMs || UNMEASURED,
-      UNMEASURED,
+      // Absent from every perf.csv written before #552, and from FAIL rows,
+      // which is why this reads the column instead of assuming it.
+      row.geometryMemoryMb || UNMEASURED,
       row.rssMb || UNMEASURED,
+      row.peakRssMb || UNMEASURED,
       row.heapUsedMb || UNMEASURED,
       row.heapTotalMb || UNMEASURED,
       UNMEASURED,
@@ -314,13 +325,20 @@ headless-three, i.e. conway inside a three.js host.
 \`parseTimeMs\` / \`geometryTimeMs\` / \`totalTimeMs\` are conway's own stage
 timings in both harnesses and are broadly comparable on the same runner class.
 The memory columns are not: \`rssMb\` here excludes a GL context and a three.js
-scene graph. \`schemaVersion\`, \`geometryMemoryMb\`, \`preprocessorVersion\` and
-\`originatingSystem\` are \`N/A\` — the conway-native perf writer does not
-capture them.
+scene graph, and \`geometryMemoryMb\` counts only conway's own vertex+index
+payload, without the host's copy of the same geometry. \`schemaVersion\`,
+\`preprocessorVersion\` and \`originatingSystem\` are \`N/A\` — the conway-native
+perf writer does not capture them.
 
-Because \`geometryMemoryMb\` is absent here, \`geometryMemoryMbDelta\` is \`N/A\`
-on every row of a delta against this snapshot. That is a missing measurement,
-not a zero: do not read it as "no change in geometry memory".
+\`peakRssMb\` is the load's high-water mark (the kernel's, via
+\`resourceUsage().maxRSS\`); \`rssMb\`, \`heapUsedMb\` and \`heapTotalMb\` are
+single samples taken at the end of the load with no GC first. Do not read the
+instants as peaks, or \`heapUsedMb\` as a live set — it includes garbage GC has
+not collected.
+
+Snapshots blessed before conway#552 carry neither \`peakRssMb\` nor a measured
+\`geometryMemoryMb\`, so those columns come out \`N/A\` in a delta against them.
+That is a missing measurement, not a zero: do not read it as "no change".
 
 ## Regenerating
 

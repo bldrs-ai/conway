@@ -45,14 +45,28 @@ function csvSafeString( from: string ): string {
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_MB = 1024 * 1024
 
+// Kilobytes per megabyte, for resourceUsage().maxRSS which reports kB.
+// eslint-disable-next-line no-magic-numbers
+const KB_PER_MB = 1024
+
 // Fixed-point precision for perf MB values.
 // eslint-disable-next-line no-magic-numbers
 const PERF_MB_PRECISION = 2
+
+/** Placeholder for a column this row has no measurement for. */
+const UNMEASURED = 'N/A'
 
 /**
  * Write a single-row per-file perf CSV at the given path, matching the
  * column layout of the IFC regression child so the batch aggregator can
  * merge STEP and IFC rows into one perf CSV. No-op when perfPath is empty.
+ *
+ * `peakRssMb` is the process high-water mark; `rssMb`, `heapUsedMb` and
+ * `heapTotalMb` are single instants sampled at write time, and
+ * `geometryMemoryMb` is conway's own vertex+index payload rather than a
+ * process metric. See the fuller column-by-column note on the IFC child's
+ * copy of this function (`src/ifc/ifc_regression_main.ts`), which is the
+ * writer these columns have to stay identical to.
  *
  * @param perfPath Path to write the CSV to. Empty string disables.
  * @param stepFile Source STEP file path (basename used as the row key).
@@ -60,6 +74,8 @@ const PERF_MB_PRECISION = 2
  * @param parseTimeMs Parse stage duration in ms.
  * @param geometryTimeMs Geometry extraction duration in ms.
  * @param totalTimeMs Sum of parse + geometry in ms.
+ * @param geometryMemoryBytes Geometry payload conway allocated, in bytes, or
+ * undefined where no geometry was extracted (written as N/A).
  */
 async function writePerfCsvIfRequested(
     perfPath: string,
@@ -68,6 +84,7 @@ async function writePerfCsvIfRequested(
     parseTimeMs: number,
     geometryTimeMs: number,
     totalTimeMs: number,
+    geometryMemoryBytes?: number,
 ): Promise<void> {
 
   if ( perfPath.length === 0 ) {
@@ -78,14 +95,21 @@ async function writePerfCsvIfRequested(
   const rssMb = ( mem.rss / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapUsedMb = ( mem.heapUsed / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapTotalMb = ( mem.heapTotal / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  // maxRSS is reported in kilobytes, unlike memoryUsage() which is in bytes.
+  const peakRssMb =
+    ( process.resourceUsage().maxRSS / KB_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const geometryMemoryMb = geometryMemoryBytes !== void 0 ?
+    ( geometryMemoryBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
+    UNMEASURED
 
   const fileName = csvSafeString( path.basename( stepFile ) )
 
   const header =
-    'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,rssMb,heapUsedMb,heapTotalMb\n'
+    'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
+    'rssMb,peakRssMb,heapUsedMb,heapTotalMb\n'
   const row =
     `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
-    `${rssMb},${heapUsedMb},${heapTotalMb}\n`
+    `${geometryMemoryMb},${rssMb},${peakRssMb},${heapUsedMb},${heapTotalMb}\n`
 
   try {
     await fsPromises.writeFile( perfPath, header + row )
@@ -288,8 +312,14 @@ function doWork() {
         const totalTimeMs = geomEndMs - parseStartMs
 
         const perfStatus = extraction === void 0 ? 'FAIL' : 'OK'
+        // Sized before anything downstream can release meshes, and only on
+        // the OK path: a failed extraction leaves a partial cache whose size
+        // is not this model's geometry footprint.
+        const geometryMemoryBytes = extraction !== void 0 ?
+          model.geometry.calculateGeometrySize() : void 0
         await writePerfCsvIfRequested(
-            perfPath, stepFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs)
+            perfPath, stepFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,
+            geometryMemoryBytes)
 
         // AFTP sizing pass: no-op unless the wasm module was built with
         // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).

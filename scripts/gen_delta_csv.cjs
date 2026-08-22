@@ -68,6 +68,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsPercentageChange',
         'geometryMemoryMbDelta',
         'rssMbDelta',
+        'peakRssMbDelta',
         'heapUsedMbDelta',
         'heapTotalMbDelta',
       ]
@@ -88,6 +89,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsPercentageChange',
         'geometryMemoryMbDelta',
         'rssMbDelta',
+        'peakRssMbDelta',
         'heapUsedMbDelta',
         'heapTotalMbDelta',
       ];
@@ -237,6 +239,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           ),
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
+          // Absent from every snapshot committed before #552; computeDelta
+          // reports that as N/A rather than differencing against zero.
+          peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
           heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
         });
@@ -255,6 +260,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
         });
@@ -278,6 +284,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
         });
@@ -313,6 +320,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsPercentageChange: totalTimePercentageChange,
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
+          // Absent from every snapshot committed before #552; computeDelta
+          // reports that as N/A rather than differencing against zero.
+          peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
           heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
         });
@@ -334,6 +344,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
         });
@@ -360,6 +371,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
         });

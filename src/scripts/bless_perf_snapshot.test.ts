@@ -8,8 +8,8 @@ import { createRequire } from 'module'
  * The rc-regression bless path's perf snapshot (scripts/bless_perf_snapshot.cjs).
  *
  * The `rebless` job measures the full corpus with
- * `ifc_regression_batch_main --perf`, whose 8-column perf.csv is a different
- * file from the 15-column `performance-detail.csv` the committed benchmark
+ * `ifc_regression_batch_main --perf`, whose 10-column perf.csv is a different
+ * file from the 16-column `performance-detail.csv` the committed benchmark
  * snapshots use. This pins the mapping between them — the shape a delta and
  * GitHub's CSV viewer both depend on — and the choice of predecessor to diff
  * against.
@@ -51,7 +51,7 @@ afterEach(() => {
 
 describe('writeDetailCsv', () => {
 
-  test('maps perf.csv onto the 15-column convention, N/A for unmeasured', () => {
+  test('maps perf.csv onto the 16-column convention, N/A for unmeasured', () => {
     const out = path.join(workDir, 'performance-detail.csv')
 
     writeDetailCsv(
@@ -61,7 +61,9 @@ describe('writeDetailCsv', () => {
         parseTimeMs: '1200',
         geometryTimeMs: '5400',
         totalTimeMs: '6600',
+        geometryMemoryMb: '185.84',
         rssMb: '812.50',
+        peakRssMb: '905.75',
         heapUsedMb: '410.25',
         heapTotalMb: '450.00',
       }],
@@ -90,18 +92,47 @@ describe('writeDetailCsv', () => {
     expect(cell('totalTimeMs')).toBe('6600')
     expect(cell('rssMb')).toBe('812.50')
 
+    // The two columns #552 added to the conway-native writer. geometryMemoryMb
+    // is what regressed: the writer stopped emitting it, and this mapping
+    // hardcoded N/A over it, so it read 0/107 on the 1.549 snapshot against
+    // 98/100 on 1.451. peakRssMb is the load's high-water mark, next to the
+    // end-of-load instant in rssMb.
+    expect(cell('geometryMemoryMb')).toBe('185.84')
+    expect(cell('peakRssMb')).toBe('905.75')
+
     // The committed snapshots URL-encode the filename and the delta joins on
     // it, so an unencoded name would simply fail to match the baseline row.
     expect(cell('filename'))
         .toBe('Snowdon%20Towers%20Sample%20Architectural_IFC4.ifc')
 
     // perf.csv does not carry these; they stay as placeholders rather than
-    // being dropped, so the row keeps its 15-column shape.
+    // being dropped, so the row keeps its 16-column shape.
     for (const column of
-      ['schemaVersion', 'geometryMemoryMb', 'preprocessorVersion',
-        'originatingSystem']) {
+      ['schemaVersion', 'preprocessorVersion', 'originatingSystem']) {
       expect(cell(column)).toBe('N/A')
     }
+  })
+
+  test('writes N/A for a perf.csv that predates the memory columns', () => {
+    // A perf.csv artifact written before #552 has neither geometryMemoryMb nor
+    // peakRssMb. The mapping must degrade to N/A rather than emitting
+    // 'undefined' into a column a delta then reads as a measurement.
+    const out = path.join(workDir, 'legacy.csv')
+
+    writeDetailCsv(
+      [{
+        file: 'old.ifc', status: 'OK', parseTimeMs: '1200',
+        geometryTimeMs: '5400', totalTimeMs: '6600', rssMb: '812.50',
+        heapUsedMb: '410.25', heapTotalMb: '450.00',
+      }],
+      out, 'conway1.543.1513-ci', '20260821221710')
+
+    const row = parseCsv(fs.readFileSync(out, 'utf8'))[1]
+    expect(row).toHaveLength(DETAIL_COLUMNS.length)
+    expect(row[DETAIL_COLUMNS.indexOf('geometryMemoryMb')]).toBe('N/A')
+    expect(row[DETAIL_COLUMNS.indexOf('peakRssMb')]).toBe('N/A')
+    // The columns it does carry are unaffected.
+    expect(row[DETAIL_COLUMNS.indexOf('rssMb')]).toBe('812.50')
   })
 
   test('carries a FAIL row through instead of dropping it', () => {
