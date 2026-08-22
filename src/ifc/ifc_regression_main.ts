@@ -303,7 +303,12 @@ async function main() {
 
   try {
 
-    await conwayGeom.initialize()
+    const initializationStatus = await conwayGeom.initialize()
+
+    if (!initializationStatus) {
+      console.error('Couldn\'t initialize conway-geom, exiting...')
+      return
+    }
 
     Environment.checkEnvironment()
     Logger.initializeWasmCallbacks()
@@ -476,22 +481,21 @@ function doWork() {
           model.nullOnErrors = !strict
 
           const geomStartMs = Date.now()
-          const result = await geometryExtraction(model)
+          const scene = geometryExtraction(model)
           const geomEndMs = Date.now()
           const geometryTimeMs = geomEndMs - geomStartMs
           const totalTimeMs = geomEndMs - parseStartMs
 
-          const perfStatus = result === void 0 ? 'FAIL' : 'OK'
+          const perfStatus = scene === void 0 ? 'FAIL' : 'OK'
           // Sized before anything downstream can release meshes, and only on
           // the OK path: a failed extraction leaves a partial cache whose size
           // is not this model's geometry footprint.
-          const geometryMemoryBytes = result !== void 0 ?
+          const geometryMemoryBytes = scene !== void 0 ?
             model.geometry.calculateGeometrySize() : void 0
           // The heap is grow-only, so this is the run's high-water mark even
-          // though it is read once, after the fact. geometryExtraction hands
-          // back the engine it brought up; there is no heap to measure when
-          // it failed before that.
-          const wasmModule = result?.[ 1 ].wasmModule
+          // though it is read once, after the fact. conwayGeom is the engine
+          // every extraction in this process runs against.
+          const wasmModule = conwayGeom.wasmModule
           const wasmHeapBytes = wasmModule !== void 0 ?
             wasmHeapByteLength( wasmModule ) : void 0
           // Instants captured here, where they have always been captured, so
@@ -537,7 +541,7 @@ function doWork() {
           // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).
           conwayGeom.dumpAllocTelemetry(path.basename(ifcFile))
 
-          if ( result === void 0 ) {
+          if ( scene === void 0 ) {
             Logger.error( 'Couldn\'t extract geometry')
           } else {
 
@@ -658,21 +662,24 @@ function doWork() {
 }
 
 /**
- * Function to extract Geometry from an IfcStepModel
+ * Function to extract Geometry from an IfcStepModel.
+ *
+ * Runs against the module-level `conwayGeom` that `main()` brought up, the
+ * way the AP214 child does. It used to construct and initialise a *second*
+ * `ConwayGeometry` here (conway#557), which made the engine that did the work
+ * a different object from the one `main()` initialised and
+ * `dumpAllocTelemetry` reported on — so the telemetry described an idle
+ * module, and the second engine's linear memory (106.5 MB on MB-Khaya
+ * against engine A's untouched 16 MB arena) was allocated inside the
+ * retention window and never released.
  *
  * @param model
+ * @return {IfcSceneBuilder | undefined} The extracted scene, or undefined on
+ * failure.
  */
-async function geometryExtraction(model: IfcStepModel):
-  Promise<[IfcSceneBuilder, ConwayGeometry] | undefined> {
+function geometryExtraction(model: IfcStepModel): IfcSceneBuilder | undefined {
 
-  const conwaywasm = new ConwayGeometry()
-  const initializationStatus = await conwaywasm.initialize()
-
-  if (!initializationStatus) {
-    return
-  }
-
-  const conwayModel = new IfcGeometryExtraction(conwaywasm, model)
+  const conwayModel = new IfcGeometryExtraction(conwayGeom, model)
 
   RegressionCaptureState.memoization = MemoizationCapture.FULL
 
@@ -685,5 +692,5 @@ async function geometryExtraction(model: IfcStepModel):
     return void 0
   }
 
-  return [scene, conwaywasm]
+  return scene
 }
