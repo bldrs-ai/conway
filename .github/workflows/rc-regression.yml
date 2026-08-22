@@ -286,10 +286,10 @@ jobs:
       # job and the private corpus is what sizes it. Measured wall times for
       # this step (GitHub Actions step timestamps):
       #
-      #   private, run 32550854090 (rc-1.549.1515, no settle)   19m55s  passed
-      #   private, run 32601766596 (same code, no settle)       19m12s  passed
-      #   private, run 32601886424 (with the #556 settle)       20m01s  KILLED
-      #   public,  run 32601886424 (with the settle)             5m15s  passed
+      #   private, run 32550854090 (@1e55a8e0, no settle)       19m55s  passed
+      #   private, run 32601766596 (@1e55a8e0, no settle)       19m12s  passed
+      #   private, run 32601886424 (@4c0d768b, #556 settle)     20m01s  KILLED
+      #   public,  run 32601886424 (@4c0d768b, #556 settle)      5m15s  passed
       #
       # The private step had been running at 19m55s against a 20-min cap —
       # 5 seconds of headroom — before this workflow gained a second pass.
