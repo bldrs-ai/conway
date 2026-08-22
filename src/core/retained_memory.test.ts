@@ -4,6 +4,7 @@ import {
   exposedGc,
   retainedMemoryMb,
   settleAndSampleMemory,
+  settleAndSampleMemoryForPerf,
 } from './retained_memory'
 
 
@@ -171,5 +172,55 @@ describe('retainedMemoryMb', () => {
     expect( retainedMemoryMb( void 0, retained ) ).toBeUndefined()
     expect( retainedMemoryMb( baseline, void 0 ) ).toBeUndefined()
     expect( retainedMemoryMb( void 0, void 0 ) ).toBeUndefined()
+  } )
+} )
+
+describe('settleAndSampleMemoryForPerf', () => {
+
+  test('forces no collection when no perf row is being written', async () => {
+    // The reason this gate exists. ifc_regression_batch_main launches EVERY
+    // child with --expose-gc, so `global.gc` is present on a digest-only run
+    // too; nothing but this check stops that run from paying two forced full
+    // collections per model for a figure writePerfCsvIfRequested discards.
+    // Asserting the RETURN VALUE alone would not catch a regression to an
+    // unconditional settle — undefined comes back either way once the
+    // baseline is undefined — so the collector call count is what is pinned.
+    let collections = 0
+
+    await withGc( () => {
+      ++collections
+    }, async () => {
+      expect( await settleAndSampleMemoryForPerf( '' ) ).toBeUndefined()
+    } )
+
+    expect( collections ).toBe( 0 )
+  } )
+
+  test('settles and samples when a perf row is being written', async () => {
+    // The other side of the gate: given a path, it must behave exactly like
+    // settleAndSampleMemory, two collections and all. A gate that also
+    // suppressed the wanted case would leave the columns permanently N/A.
+    let collections = 0
+
+    await withGc( () => {
+      ++collections
+    }, async () => {
+      const sample = await settleAndSampleMemoryForPerf( '/tmp/perf.csv' )
+
+      expect( sample ).not.toBeUndefined()
+      expect( typeof sample?.rssBytes ).toBe( 'number' )
+    } )
+
+    expect( collections ).toBe( 2 )
+  } )
+
+  test('still yields undefined for a wanted row with no collector', async () => {
+    // The gate must not become a second way to claim a measurement. With a
+    // perf path but no --expose-gc there is nothing to settle with, and the
+    // answer stays undefined -> N/A rather than an unsettled sample.
+    await withGc( void 0, async () => {
+      expect(
+          await settleAndSampleMemoryForPerf( '/tmp/perf.csv' ) ).toBeUndefined()
+    } )
   } )
 } )

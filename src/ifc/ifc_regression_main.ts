@@ -21,7 +21,7 @@ import { wasmHeapByteLength } from '../core/wasm_heap'
 import {
   RetainedMemoryMb,
   retainedMemoryMb,
-  settleAndSampleMemory,
+  settleAndSampleMemoryForPerf,
 } from '../core/retained_memory'
 import { materialHashes } from './ifc_material_cache_node'
 import { dumpGeometryOBJs, geometryHashes } from './ifc_model_geometry_node'
@@ -364,6 +364,11 @@ function doWork() {
 
           let indexIfcBuffer: Buffer | undefined
 
+          const strict = (argv['strict'] as boolean | undefined) ?? false
+          const digest = (argv['digest'] as boolean | undefined) ?? false
+          const verbose = (argv['verbose'] as boolean | undefined) ?? false
+          const perfPath = (argv['perf'] as string | undefined) ?? ''
+
           // Settled pre-load baseline for the retention columns (conway#554).
           // Here rather than at process start: `main()` has already brought
           // conway-geom up, so the wasm module's fixed cost sits below the
@@ -371,12 +376,12 @@ function doWork() {
           // constant. Before `readFileSync` because the source buffer is part
           // of what a load must give back, and outside the timed region
           // because `parseStartMs` has not been taken yet.
-          const memoryBaseline = await settleAndSampleMemory()
-
-          const strict = (argv['strict'] as boolean | undefined) ?? false
-          const digest = (argv['digest'] as boolean | undefined) ?? false
-          const verbose = (argv['verbose'] as boolean | undefined) ?? false
-          const perfPath = (argv['perf'] as string | undefined) ?? ''
+          //
+          // `...ForPerf` skips the settle entirely when no perf row is
+          // coming; the batch passes `--expose-gc` to every child, not just
+          // the ones given `--perf`. That gate is why the argv unpacking
+          // above had to move ahead of this line.
+          const memoryBaseline = await settleAndSampleMemoryForPerf( perfPath )
 
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
@@ -501,16 +506,28 @@ function doWork() {
           // (ifc_command_line_main.ts, ap214_command_line_main.ts) and so does
           // the loader, but the regression children just ran to process exit.
           // Without a teardown boundary there is nothing to measure retention
-          // ACROSS — a sample taken here would be the live model, not what
-          // survives it — so the call is added rather than the sample being
-          // taken without one. It runs after the digest-independent work and
+          // ACROSS, so the call is added rather than the sample being taken
+          // without one. Note what it does and does not release: it drops the
+          // vtable, the descriptor cache and the scratch parsing buffer, but
+          // NOT geometry/curves/profiles/materials or the source buffer — the
+          // digest below iterates those, so they must survive, and they are
+          // therefore inside the retention figure. See
+          // design/new/perf-measurement.md §Retention, "Where the boundaries
+          // are". It runs after the digest-independent work and
           // before the digest itself; `invalidate` drops JS-side caches that
           // rematerialise on demand, so the digest is unaffected (verified
           // byte-identical on Schependomlaan and index.ifc).
+          // Deliberately NOT gated on `perfPath`: the digest below runs after
+          // this call, so gating it would give perf and digest-only runs two
+          // different paths to the blessed output. One path, verified
+          // byte-identical, is worth more than the work it costs.
           model.invalidate( true )
 
-          memory.retained =
-            retainedMemoryMb( memoryBaseline, await settleAndSampleMemory() )
+          // Both sides come back undefined on a run with no `--perf`, so
+          // `retained` stays unset and the row would read N/A — except no row
+          // is written at all in that case.
+          memory.retained = retainedMemoryMb(
+              memoryBaseline, await settleAndSampleMemoryForPerf( perfPath ) )
 
           await writePerfCsvIfRequested(
               perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,

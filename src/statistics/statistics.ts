@@ -1,8 +1,14 @@
 import { versionString } from '../version/version'
 import { wasmType } from '../../dependencies/conway-geom'
 
-// Decimal places for the retained memory deltas in the load-summary line,
-// matching the MB precision the perf CSVs use.
+// Decimal places for the retained memory deltas in the load-summary line.
+// Three, matching the other MB fields on THIS line (Geometry Memory, WASM
+// Heap High-Water, and Memory.checkMemoryUsage's RSS/heap/external) — not the
+// two the regression children's perf CSVs use. That is deliberate, and the
+// two numbers are not in conflict: scripts/benchmark.cjs scrapes this line to
+// fill the loader-path CSV, so this constant is what sets that path's
+// precision, exactly as the existing 3-decimal fields already do. Lowering it
+// to 2 for "parity" would silently drop a digit from every loader-path row.
 const RETAINED_MB_PRECISION = 3
 
 /**

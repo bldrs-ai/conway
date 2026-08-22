@@ -80,9 +80,14 @@ export function exposedGc(): ( () => void ) | undefined {
 }
 
 /**
- * Whether a settled sample can be taken at all in this process. Callers use
- * this to decide between a measurement and N/A without paying for a
- * collection first.
+ * Whether a settled sample can be taken at all in this process, without
+ * paying for a collection to find out.
+ *
+ * No production caller: every call site instead calls
+ * `settleAndSampleMemory` and treats `undefined` as N/A, which is one branch
+ * rather than two and cannot drift out of agreement with the sampler. This
+ * stays exported as the cheap probe for tests that need to assert the
+ * no-collector path without a collector present.
  *
  * @return {boolean} True where both the collector and node's memory
  * accounting are available.
@@ -141,6 +146,34 @@ export async function settleAndSampleMemory():
     heapUsedBytes: usage.heapUsed,
     externalBytes: usage.external,
   }
+}
+
+/**
+ * The settled sample for a perf row, taken only when a perf row is coming.
+ *
+ * The gate is not an optimisation detail, it is the difference between
+ * charging a cost to a run that uses it and charging it to one that does not.
+ * `ifc_regression_batch_main.ts` launches EVERY regression child with
+ * `--expose-gc`, not only the ones given `--perf`, so a child that settles
+ * unconditionally makes a digest-only run pay two forced full collections per
+ * model for a figure `writePerfCsvIfRequested` immediately discards. Measured
+ * on node 22: one settle costs ~0.8 s on a 500 MB live heap and ~1.6 s on a
+ * 1 GB one.
+ *
+ * It lives here rather than inlined at each call site so both regression
+ * children share one definition of "is retention wanted", and so it can be
+ * pinned by a test — an unnecessary settle is invisible in the output, so
+ * nothing downstream would catch a regression to an unconditional one.
+ *
+ * @param perfPath The child's `--perf` destination. Empty means no perf row
+ * is being written, so no sample is taken and no collection is forced.
+ * @return {Promise<SettledMemorySample | undefined>} The settled sample, or
+ * undefined when no perf row is wanted or no collector is exposed.
+ */
+export async function settleAndSampleMemoryForPerf(
+    perfPath: string ): Promise<SettledMemorySample | undefined> {
+
+  return perfPath.length !== 0 ? settleAndSampleMemory() : void 0
 }
 
 /**

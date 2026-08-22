@@ -94,7 +94,7 @@ const DETAIL_COLUMNS = [
   'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
 ];
 
-/** Columns perf.csv does not measure; written as N/A to keep the 15-column shape. */
+/** Columns perf.csv does not measure; written as N/A to keep the 22-column shape. */
 const UNMEASURED = 'N/A';
 
 /**

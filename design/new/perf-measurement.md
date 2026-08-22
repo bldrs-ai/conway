@@ -163,18 +163,35 @@ single cycle rounds away; this does not close that off.
   extraction and the children simply ran to process exit — so #554
   added it. That is recorded rather than glossed: without a teardown
   boundary there is nothing to measure retention *across*, and a sample
-  taken at that point would be the live model rather than what survives
-  it. It runs after the perf figures are captured and before the
-  digest; `invalidate` drops JS-side caches that rematerialise on
-  demand, and the digests are byte-identical with and without it
-  (checked on AC20-FZK-Haus and DSA2).
+  taken at that point would be a strictly larger figure than what
+  survives the call. It runs after the perf figures are captured and
+  before the digest; `invalidate` drops JS-side caches that
+  rematerialise on demand, and the digests are byte-identical with and
+  without it (checked on AC20-FZK-Haus and DSA2).
+
+  **Read "teardown" as exactly that call, not as "drop all
+  references."** `invalidate(true)` clears the vtable builder, the
+  descriptor cache, the module-level scratch parsing buffer and the
+  lazy fields of complex entries (`src/step/step_model_base.ts`). It
+  does **not** touch `geometry`, `voidGeometry`, `curves`, `profiles`,
+  `materials` or the source buffer, and it cannot: the digest below it
+  iterates all of those, so they have to survive. The model payload
+  `geometryMemoryMb` measures is therefore *inside* every retention
+  figure, and so is the source `Buffer`. That is the metric working as
+  defined rather than a flaw in it — those bytes genuinely are still
+  held at the sample point — but it has a consequence worth stating
+  before anyone reads a trend: **a change that makes the live model
+  bigger moves these columns in the same direction a leak does.** Use
+  them to compare one pipeline against its own history, and read a
+  movement alongside `geometryMemoryMb` before calling it a leak.
 - *Baseline* is after engine/wasm init and immediately before the load,
   not at process start. Sampling before init would fold the wasm
   module's fixed cost into every model's retention and make them all
   look leaky by the same constant.
 
 **Two places the baseline cannot be where that rule wants it**, both
-worth knowing before reading a number:
+worth knowing before reading a number (the teardown caveat above is a
+third, and applies on every path):
 
 1. The **loader path** brings up its own `ConwayGeometry` per load,
    *inside* the region `allTimeStart` opens, so there is no point that

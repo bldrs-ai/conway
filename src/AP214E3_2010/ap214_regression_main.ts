@@ -14,7 +14,7 @@ import { wasmHeapByteLength } from '../core/wasm_heap'
 import {
   RetainedMemoryMb,
   retainedMemoryMb,
-  settleAndSampleMemory,
+  settleAndSampleMemoryForPerf,
 } from '../core/retained_memory'
 import Logger from '../logging/logger'
 import Environment from '../utilities/environment'
@@ -285,6 +285,10 @@ function doWork() {
 
         let stepBuffer: Buffer | undefined
 
+        const strict = (argv['strict'] as boolean | undefined) ?? false
+        const digest = (argv['digest'] as boolean | undefined) ?? false
+        const perfPath = (argv['perf'] as string | undefined) ?? ''
+
         // Settled pre-load baseline for the retention columns (conway#554).
         // Here rather than at process start: `main()` has already brought
         // conway-geom up, so the wasm module's fixed cost sits below the
@@ -292,11 +296,11 @@ function doWork() {
         // constant. Before `readFileSync` because the source buffer is part of
         // what a load must give back, and outside the timed region because
         // `parseStartMs` has not been taken yet.
-        const memoryBaseline = await settleAndSampleMemory()
-
-        const strict = (argv['strict'] as boolean | undefined) ?? false
-        const digest = (argv['digest'] as boolean | undefined) ?? false
-        const perfPath = (argv['perf'] as string | undefined) ?? ''
+        //
+        // `...ForPerf` skips the settle when no perf row is coming, for the
+        // reason recorded on that function: the batch passes `--expose-gc` to
+        // every child, not just the ones given `--perf`.
+        const memoryBaseline = await settleAndSampleMemoryForPerf( perfPath )
 
         try {
           stepBuffer = fs.readFileSync(stepFile)
@@ -417,10 +421,13 @@ function doWork() {
         // Teardown, then the settled retained sample. This path had no
         // explicit release before conway#554 — see the matching comment in
         // the IFC child, which records that finding in full.
+        // Not gated on `perfPath` — the digest runs after it, and one path to
+        // the blessed output beats saving the work. The settle below IS
+        // gated; see `memoryBaseline` above.
         model.invalidate( true )
 
-        memory.retained =
-          retainedMemoryMb( memoryBaseline, await settleAndSampleMemory() )
+        memory.retained = retainedMemoryMb(
+            memoryBaseline, await settleAndSampleMemoryForPerf( perfPath ) )
 
         await writePerfCsvIfRequested(
             perfPath, stepFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,

@@ -571,7 +571,10 @@ async function main() {
           // with a delta — the same hazard #552 handled for `Peak RSS:` and
           // `WASM Heap High-Water:`. `Heap-Used` and the trailing ` Delta:`
           // break the RSS / Heap Used / External bindings, and
-          // src/scripts/perf_csv_quoting.test.ts pins that they do.
+          // src/statistics/statistics_retained_memory.test.ts pins that they
+          // do — it runs these exact patterns over a real load-summary line
+          // and asserts the peak/instant columns still come out unchanged.
+          // Follow that pointer before respelling any line below.
           //
           // The sign is part of the pattern: retention is a difference and
           // can be negative, so a `[\d.]+` here would drop the minus and
