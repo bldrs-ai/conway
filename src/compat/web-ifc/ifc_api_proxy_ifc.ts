@@ -287,6 +287,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandAggregatesCursor_ = 0
 
   /**
+   * The relationship at demandAggregatesCursor_, part-way through its
+   * related products. A batch budget subdivides ONE relationship rather
+   * than being spent whole on it: an aggregate-structured model puts all
+   * of its geometry in this pass, so budgeting per relationship makes the
+   * budget meaningless and gives the caller a single unyielding call for
+   * the whole model (conway#549 §7 — SKYLARK250 gets two budget units for
+   * 1,992 products). Undefined between relationships.
+   */
+  private demandAggregateStepper_?: Generator< number, void, undefined >
+
+  /**
+   * Source pins and leaf spans held for the relationship
+   * demandAggregateStepper_ is walking, released when it finishes. They
+   * have to outlive the batch that started it: the pins are what keep the
+   * relationship's products readable, and re-running the prefetch per batch
+   * would re-walk every related product's closure per batch. This holds the
+   * same pins for the same span of work as before — that span just no
+   * longer has to fit in one pump call.
+   */
+  private demandAggregatePins_?: Set< number >
+
+  /** Leaf byte ranges pinned alongside demandAggregatePins_. */
+  private demandAggregateSpans_?: { address: number, length: number }[]
+
+  /**
    * Coordination matrix the deferred capture derived (or adopted from
    * the parse-time preview channel). Kept OFF the model tuple's slot 5
    * deliberately: classic streamAllMeshes derives its coordination into
@@ -2124,36 +2149,49 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
-    if (this.demandCursor_ >= products.length &&
-        this.demandAggregatesCursor_ < aggregates.length) {
+    // Budget spent per RELATED PRODUCT, stepping one relationship across as
+    // many batches as it takes, rather than per relationship — see
+    // demandAggregateStepper_ and conway#549 §7. The prefetch and its pins
+    // stay attached to the relationship, not to the batch, so a relationship
+    // that spans batches is paged in once.
+    if (this.demandCursor_ >= products.length) {
 
-      const aggregatesEnd = Math.min(
-          this.demandAggregatesCursor_ + (budget - extracted),
-          aggregates.length)
-
-      for (; this.demandAggregatesCursor_ < aggregatesEnd;
-        ++this.demandAggregatesCursor_) {
+      while (extracted < budget &&
+          (this.demandAggregateStepper_ !== void 0 ||
+            this.demandAggregatesCursor_ < aggregates.length)) {
 
         const relAggregate = aggregates[this.demandAggregatesCursor_]
-        const leafSpans: { address: number, length: number }[] = []
-        const pins =
-          await this.conwayGeometry_.ensureResidentForAggregateExtract(
-              relAggregate, leafSpans)
+
+        if (this.demandAggregateStepper_ === void 0) {
+
+          const leafSpans: { address: number, length: number }[] = []
+
+          this.demandAggregatePins_ =
+            await this.conwayGeometry_.ensureResidentForAggregateExtract(
+                relAggregate, leafSpans)
+          this.demandAggregateSpans_ = leafSpans
+          this.demandAggregateStepper_ =
+            this.conwayGeometry_.extractRelAggregateGeometryIncremental(
+                relAggregate)
+        }
+
+        let done = false
 
         try {
-          this.conwayGeometry_.extractRelAggregateGeometry(relAggregate)
-          ++extracted
+          done = this.demandAggregateStepper_.next().done === true
         } catch (error) {
           Logger.error(
               `Error extracting aggregate ${relAggregate.expressID}: ` +
               `${error instanceof Error ? error.message : String(error)}`)
-        } finally {
-          this.model[0].releaseSourceViews(pins)
-          this.model[0].unpinLocalIDs(pins)
-          for (const span of leafSpans) {
-            this.model[0].unpinAddressRange(span.address, span.length)
-          }
+          done = true
         }
+
+        if (done) {
+          this.releaseDemandAggregate_()
+          ++this.demandAggregatesCursor_
+        }
+
+        ++extracted
       }
     }
 
@@ -2366,6 +2404,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       products: number[],
       aggregates: IfcRelAggregates[]): void {
 
+    this.releaseDemandAggregate_()
+
     this.demandProducts_ = products
     this.demandAggregates_ = aggregates
     this.demandCursor_ = 0
@@ -2435,6 +2475,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // look identical).
     this.demandAggregates_ = aggregates.filter((relAggregate, where) =>
       shardOfDispatchKey(aggregateKeys[where], shard.count) === shard.index)
+
+    this.releaseDemandAggregate_()
 
     this.demandCursor_ = 0
     this.demandAggregatesCursor_ = 0
@@ -2794,6 +2836,37 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
 
+  /**
+   * Finish with the relationship demandAggregateStepper_ is on: close a
+   * stepper that has not run out (its finally frees the master rel-voids
+   * vector, which is native memory), and drop the source pins the async
+   * prefetch took for it.
+   *
+   * Safe to call when nothing is in flight — that is the whole point of
+   * calling it from the worklist installers, where a stepper left over from
+   * a previous walk would otherwise hold both.
+   */
+  private releaseDemandAggregate_(): void {
+
+    this.demandAggregateStepper_?.return()
+    this.demandAggregateStepper_ = void 0
+
+    const pins = this.demandAggregatePins_
+
+    if (pins !== void 0) {
+      this.model[0].releaseSourceViews(pins)
+      this.model[0].unpinLocalIDs(pins)
+      this.demandAggregatePins_ = void 0
+    }
+
+    for (const span of this.demandAggregateSpans_ ?? []) {
+      this.model[0].unpinAddressRange(span.address, span.length)
+    }
+
+    this.demandAggregateSpans_ = void 0
+  }
+
+
   private pumpGeometryBatch_(
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
@@ -2827,19 +2900,42 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // whole-model walk's second (rel-aggregates master-voids) pass with
     // the same per-call budget — batch-by-batch, not as one end-of-load
     // stall — so aggregate parts stream in cut, exactly once, with
-    // final content (see demandAggregates_).
-    if (this.demandCursor_ >= products.length &&
-        this.demandAggregatesCursor_ < aggregates.length) {
+    // final content (see demandAggregates_). The budget is spent per
+    // RELATED PRODUCT, stepping through one relationship across as many
+    // batches as it takes (demandAggregateStepper_), plus one unit for
+    // reaching the end of each relationship so an empty one still costs
+    // what it used to.
+    if (this.demandCursor_ >= products.length) {
 
-      const aggregatesEnd = Math.min(
-          this.demandAggregatesCursor_ + (budget - extracted),
-          aggregates.length)
+      while (extracted < budget &&
+          (this.demandAggregateStepper_ !== void 0 ||
+            this.demandAggregatesCursor_ < aggregates.length)) {
 
-      for (; this.demandAggregatesCursor_ < aggregatesEnd;
-        ++this.demandAggregatesCursor_) {
+        if (this.demandAggregateStepper_ === void 0) {
+          this.demandAggregateStepper_ =
+            this.conwayGeometry_.extractRelAggregateGeometryIncremental(
+                aggregates[this.demandAggregatesCursor_])
+        }
 
-        this.conwayGeometry_.extractRelAggregateGeometry(
-            aggregates[this.demandAggregatesCursor_])
+        let done: boolean
+
+        try {
+          done = this.demandAggregateStepper_.next().done === true
+        } catch (error) {
+          // Strict mode (MATERIAL_RELATED_OBJECTS_PERMISSIVE off) is the only
+          // way out of the stepper by exception. Drop the half-consumed
+          // stepper but leave the cursor, so a retry re-runs the
+          // relationship from the top exactly as it did when this was one
+          // unyielding call.
+          this.demandAggregateStepper_ = void 0
+          throw error
+        }
+
+        if (done) {
+          this.demandAggregateStepper_ = void 0
+          ++this.demandAggregatesCursor_
+        }
+
         ++extracted
       }
     }

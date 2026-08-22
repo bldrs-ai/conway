@@ -180,6 +180,7 @@ import {
   IfcTShapeProfileDef,
   IfcZShapeProfileDef,
   IfcRelAggregates,
+  IfcObjectDefinition,
   IfcTriangulatedFaceSet,
   IfcPolygonalBoundedHalfSpace,
   IfcSurface,
@@ -7381,13 +7382,37 @@ export class IfcGeometryExtraction {
             relating.localID, pinned, leafSpans )
       }
 
-      const related = relAggregate.RelatedObjects
+      // By express ID rather than through `relAggregate.RelatedObjects`, for
+      // the reason relatedObjectExpressIDs_ documents: the getter memoizes
+      // the whole related-product array onto the relationship, and this
+      // prefetch runs immediately before the extract that must not retain
+      // it (conway#549 §4). Falls back to the getter for a list holding a
+      // non-reference entry, so the two paths agree on what is in the list.
+      const relatedExpressIDs = this.relatedObjectExpressIDs_( relAggregate )
 
-      if ( related !== null && related !== void 0 ) {
+      if ( relatedExpressIDs === void 0 ) {
 
-        for ( const product of related ) {
+        const related = relAggregate.RelatedObjects
+
+        if ( related !== null && related !== void 0 ) {
+
+          for ( const product of related ) {
+            await this.ensureResidentForProductExtract(
+                product.localID, pinned, leafSpans )
+          }
+        }
+      } else {
+
+        for ( const relatedExpressID of relatedExpressIDs ) {
+
+          const relatedLocalID = this.model.resolveExpressID( relatedExpressID )
+
+          if ( relatedLocalID === void 0 ) {
+            continue
+          }
+
           await this.ensureResidentForProductExtract(
-              product.localID, pinned, leafSpans )
+              relatedLocalID, pinned, leafSpans )
         }
       }
 
@@ -7423,6 +7448,59 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Express IDs of one IfcRelAggregates' RelatedObjects, read straight off
+   * the relationship's own record.
+   *
+   * Deliberately NOT `relAggregate.RelatedObjects`: that generated getter
+   * memoizes the materialised entity array onto the relationship as
+   * `RelatedObjects_` (IfcRelAggregates.gen.ts), so every related product
+   * stays reachable for as long as the relationship does — and each product
+   * in turn memoizes the tessellation subtree its own getters walk
+   * (IfcPolyLoop.Polygon_, IfcCartesianPoint.Coordinates_, ...). The
+   * per-product graphs therefore SUM instead of overlapping. On SKYLARK250,
+   * whose 1,992 products are all aggregate targets, that is 2.7 GB of a
+   * 5.4 GB peak (conway#549 §4). Resolving one product at a time from IDs
+   * lets each graph die with its iteration, exactly as the ordinary product
+   * loop's iterator already does.
+   *
+   * The scan mirrors the getter's own parse — `forEachReferenceInField`
+   * runs the same optional/array-token walk over the same field
+   * coordinates — so it sees the same entries in the same order.
+   *
+   * @param relAggregate The relationship to read.
+   * @return {number[] | undefined} The related objects' express IDs in
+   * record order, or undefined when the list holds an entry that is not a
+   * `#N` reference — an inline entity, `$`, or junk. Only the generated
+   * getter can resolve (or reject) those, so the caller falls back to it
+   * rather than guessing.
+   */
+  private relatedObjectExpressIDs_(
+      relAggregate: IfcRelAggregates ): number[] | undefined {
+
+    const expressIDs: number[] = []
+
+    let allReferences = true
+
+    relAggregate.forEachReferenceInField(
+        REL_AGGREGATES_RELATED_OFFSET,
+        REL_AGGREGATES_RELATED_BASE,
+        REL_AGGREGATES_RELATED_DEPTH,
+        ( expressID ) => {
+
+          if ( expressID === void 0 ) {
+            allReferences = false
+            return false
+          }
+
+          expressIDs.push( expressID )
+
+          return true
+        } )
+
+    return allReferences ? expressIDs : void 0
+  }
+
+  /**
    * Extract one IfcRelAggregates' related products with the relating
    * object's ("master") rel-voids — the shared per-item body of the
    * whole-model walk's rel-aggregates loop and
@@ -7434,6 +7512,49 @@ export class IfcGeometryExtraction {
    */
   public extractRelAggregateGeometry( relAggregate: IfcRelAggregates ): void {
 
+    const stepper = this.extractRelAggregateGeometryIncremental( relAggregate )
+
+    let step = stepper.next()
+
+    while ( step.done !== true ) {
+      step = stepper.next()
+    }
+  }
+
+  /**
+   * Incremental twin of {@link extractRelAggregateGeometry}: identical
+   * extraction, suspending after each related product so a driver can
+   * report progress and yield to the event loop *inside* the relationship.
+   *
+   * Without this the whole rel-aggregates pass is a single unyielding call.
+   * On SKYLARK250 all 2,002 of the cooperative walk's suspension points
+   * fire in 16 ms — every product is an aggregate target, so the product
+   * loop skips them all — and the remaining ~60 s of real work runs inside
+   * two `extractRelAggregateGeometry` calls with no suspension point at
+   * all. That is the browser-tab hang in conway#549 §7, and it is
+   * independent of the memory fix: a small model with one big aggregate
+   * freezes the same way.
+   *
+   * Suspending here cannot show a caller a half-built product: the split is
+   * BETWEEN products, and each product's scene content is complete before
+   * the yield. Nor does it reorder emission — the products are visited in
+   * record order either way. Aggregate targets are skipped by the product
+   * pass (see aggregateTargetLocalIDs) and by the pump's product worklist,
+   * so a consumer that streams meshes mid-relationship sees the
+   * not-yet-reached products as absent rather than as uncut placeholders.
+   *
+   * @param relAggregate The rel-aggregates relationship to process.
+   * @yields {number} The number of related products extracted so far from
+   * THIS relationship, after each one.
+   */
+  public* extractRelAggregateGeometryIncremental(
+      relAggregate: IfcRelAggregates ): Generator< number, void, undefined > {
+
+    // Held outside the try so the finally can free it on the abandonment
+    // path too: a driver that stops consuming (stepper.return()) unwinds
+    // through here, and the vector is native memory the GC cannot reclaim.
+    let masterRelVoids: [ NativeVectorGeometry, number[] ] | undefined
+
     try {
 
       // Note, this is required because the relating object
@@ -7442,23 +7563,59 @@ export class IfcGeometryExtraction {
       // for all objects in the aggregate - CS
       const relatingObject = relAggregate.RelatingObject
 
-      const masterRelVoids =
+      masterRelVoids =
         relatingObject instanceof IfcProduct ?
           this.extractRelVoids( relatingObject ) :
           void 0
 
-      const relatedObjects = relAggregate.RelatedObjects
+      // Read before the first suspension point, deliberately: the scan
+      // reads the relationship's own record bytes, and a windowed source
+      // can page that record out while a later product is extracted.
+      const relatedExpressIDs = this.relatedObjectExpressIDs_( relAggregate )
 
-      for ( const productRepresentation of relatedObjects ) {
+      let extractedCount = 0
 
-        if ( productRepresentation instanceof IfcProduct ) {
+      if ( relatedExpressIDs === void 0 ) {
 
-          this.extractProductGeometry( productRepresentation, masterRelVoids )
+        // Non-reference entry in the list — fall back to the generated
+        // getter, the only thing that can resolve an inline entity (and the
+        // only thing that decides an entry is unresolvable). Rare enough
+        // that keeping its retention is the right trade against duplicating
+        // inline resolution here.
+        for ( const productRepresentation of relAggregate.RelatedObjects ) {
+
+          if ( productRepresentation instanceof IfcProduct ) {
+
+            this.extractProductGeometry( productRepresentation, masterRelVoids )
+
+            yield ++extractedCount
+          }
         }
-      }
+      } else {
 
-      if ( masterRelVoids !== void 0 ) {
-        masterRelVoids[ 0 ].delete()
+        for ( const relatedExpressID of relatedExpressIDs ) {
+
+          const relatedObject =
+            this.model.getTypedElementByExpressID(
+                relatedExpressID, IfcObjectDefinition )
+
+          if ( relatedObject === void 0 ) {
+
+            // What the getter does with the same entry: extractBufferElement
+            // returns undefined for a reference that resolves to nothing (or
+            // to something that is not an IfcObjectDefinition) and the getter
+            // throws this exact message. The catch below then skips the whole
+            // relationship, permissively, as it always has.
+            throw new Error( 'Value in STEP was incorrectly typed' )
+          }
+
+          if ( relatedObject instanceof IfcProduct ) {
+
+            this.extractProductGeometry( relatedObject, masterRelVoids )
+
+            yield ++extractedCount
+          }
+        }
       }
     } catch (ex) {
       if (ex instanceof Error) {
@@ -7471,6 +7628,11 @@ export class IfcGeometryExtraction {
         }
       } else {
         Logger.error('Unknown exception processing IfcRelAssociateMaterials.')
+      }
+    } finally {
+
+      if ( masterRelVoids !== void 0 ) {
+        masterRelVoids[ 0 ].delete()
       }
     }
   }
@@ -7798,18 +7960,26 @@ export class IfcGeometryExtraction {
 
       const products = this.model.types(IfcProduct)
 
-      // Prefix-sum counts (no iteration/materialization) — see typeCount.
-      // Slight over-count from multi-mapped elements just leaves the bar
-      // shy of 100% until endPhase; fine for progress.
-      const totalItems =
-        this.model.typeCount(IfcProduct) + this.model.typeCount(IfcRelAggregates)
-      let completedItems = 0
-
       // Products the aggregates pass re-extracts are SKIPPED here and
       // extracted exactly once, below, with the master rel-voids — one
       // scene instance per placement and no content replacement after
       // emission (see aggregateTargetLocalIDs).
       const aggregateTargets = this.aggregateTargetLocalIDs()
+
+      // Prefix-sum counts (no iteration/materialization) — see typeCount.
+      // Slight over-count from multi-mapped elements just leaves the bar
+      // shy of 100% until endPhase; fine for progress.
+      //
+      // Aggregate targets are counted TWICE on purpose — once for the tick
+      // the product loop spends skipping each of them, once for the tick
+      // the rel-aggregates pass spends extracting it. On a model whose
+      // products are all aggregate targets that is the difference between
+      // a bar that reaches 100% in the first 16 ms and then sits there for
+      // the entire extraction, and one that tracks the work.
+      let totalItems =
+        this.model.typeCount(IfcProduct) + this.model.typeCount(IfcRelAggregates) +
+        aggregateTargets.size
+      let completedItems = 0
 
       for (const product of products) {
 
@@ -7849,7 +8019,27 @@ export class IfcGeometryExtraction {
 
         yield [++completedItems, totalItems]
 
-        this.extractRelAggregateGeometry( relAggregate )
+        // Step the relationship rather than running it in one call: on an
+        // aggregate-structured model this pass IS the extraction, and
+        // without a suspension point inside it the cooperative driver
+        // awaits nothing for the whole of it (conway#549 §7). for-of, not a
+        // manual next() loop, so abandoning this generator closes the inner
+        // one and frees its master rel-voids vector.
+        const aggregateBase = completedItems
+
+        for ( const extractedInAggregate of
+          this.extractRelAggregateGeometryIncremental( relAggregate ) ) {
+
+          completedItems = aggregateBase + extractedInAggregate
+
+          // The total counts one item per product and one per relationship,
+          // so a product reached through more than one relationship can
+          // push completed past it. Widen rather than let the bar exceed
+          // 100% or go backwards.
+          totalItems = Math.max( totalItems, completedItems )
+
+          yield [completedItems, totalItems]
+        }
       }
 
       if ( RegressionCaptureState.memoization !== MemoizationCapture.FULL ) {
