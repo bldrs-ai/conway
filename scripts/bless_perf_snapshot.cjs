@@ -19,27 +19,43 @@
  * TWO COLUMN SETS ARE IN PLAY, and they are not the same file:
  *
  *   perf.csv (input, written by src/ifc/ifc_regression_main.ts)
- *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,rssMb,heapUsedMb,
- *     heapTotalMb
+ *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,
+ *     peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,
+ *     arrayBuffersMb
  *
  *   performance-detail.csv (output, the committed convention)
  *     timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,
- *     geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,heapUsedMb,
- *     heapTotalMb,preprocessorVersion,originatingSystem
+ *     geometryTimeMs,totalTimeMs,geometryMemoryMb,peakWasmHeapMb,rssMb,
+ *     peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb,
+ *     preprocessorVersion,originatingSystem
  *
- * The four columns perf.csv does not carry (schemaVersion, geometryMemoryMb,
+ * The three columns perf.csv does not carry (schemaVersion,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
- * omitted, so the file keeps the 15-column shape every existing consumer and
- * GitHub's CSV viewer expect.
- *
- * Of those four, only geometryMemoryMb reaches the delta:
+ * omitted, so the file keeps the 19-column shape every existing consumer and
+ * GitHub's CSV viewer expect. None of the three reaches the delta:
  * preprocessorVersion/originatingSystem are not in its column set, and
- * schemaVersion is carried through as a label. `geometryMemoryMbDelta` is
- * therefore N/A on every row of a delta involving this snapshot — which is the
- * honest answer, and it is only true because gen_delta_csv.cjs propagates an
- * absent measurement instead of coercing it to 0. Coercing produced a
- * fabricated `geometryMemoryMbDelta = -185.836` for SKYLARK250 — the entire
- * baseline allocation reported as a memory win.
+ * schemaVersion is carried through as a label.
+ *
+ * PEAK vs INSTANT (conway#552). `peakRssMb` is the child process's kernel
+ * high-water mark; `rssMb`/`heapUsedMb`/`heapTotalMb`/`externalMb`/
+ * `arrayBuffersMb` are single samples taken at the end of the load with no GC
+ * first. They are not interchangeable, `arrayBuffersMb` is a subset of
+ * `externalMb`, and no JS-side sum of them sees the wasm heap. `peakWasmHeapMb`
+ * is the column that does: emscripten's linear memory is grow-only, so a
+ * single reading of it is already the high-water mark. It is a THIRD quantity,
+ * distinct from `geometryMemoryMb` (the vertex+index payload) by an order of
+ * magnitude — see the column-by-column note on writePerfCsvIfRequested in
+ * src/ifc/ifc_regression_main.ts.
+ *
+ * OLD SNAPSHOTS LACK `peakWasmHeapMb`/`peakRssMb`/`externalMb`/
+ * `arrayBuffersMb`, and
+ * `geometryMemoryMb` was N/A on every
+ * conway-native snapshot before #552. gen_delta_csv.cjs propagates an absent
+ * measurement instead of coercing it to 0, so those deltas read N/A rather
+ * than a number. That guard is why baselines do not need re-blessing here.
+ * Coercion is not a hypothetical: it produced a fabricated
+ * `geometryMemoryMbDelta = -185.836` for SKYLARK250 — the entire baseline
+ * allocation reported as a memory win (#548).
  *
  * HARNESS BOUNDARY. The committed `conway<version>-ci_*` snapshots to date
  * were produced by scripts/benchmark.cjs driving headless-three, i.e. conway
@@ -47,9 +63,10 @@
  * parse/geometry/total are conway's own stage timings in both cases and are
  * broadly comparable on the same runner class, but the memory columns are
  * not: `rssMb` here excludes a GL context and a three.js scene graph, and
- * `geometryMemoryMb` is not measured at all. The README written alongside the
- * snapshot records which harness produced it so nobody differences across the
- * boundary without seeing it.
+ * `geometryMemoryMb`, while measured on both sides now, counts only conway's
+ * own vertex+index payload — the three.js host's copy of the same geometry is
+ * not in it. The README written alongside the snapshot records which harness
+ * produced it so nobody differences across the boundary without seeing it.
  */
 
 const fs = require('fs');
@@ -62,8 +79,8 @@ const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
 const DETAIL_COLUMNS = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-  'rssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
-  'originatingSystem',
+  'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
+  'externalMb', 'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
 ];
 
 /** Columns perf.csv does not measure; written as N/A to keep the 15-column shape. */
@@ -139,10 +156,16 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
       row.parseTimeMs || UNMEASURED,
       row.geometryTimeMs || UNMEASURED,
       row.totalTimeMs || UNMEASURED,
-      UNMEASURED,
+      // Absent from every perf.csv written before #552, and from FAIL rows,
+      // which is why this reads the column instead of assuming it.
+      row.geometryMemoryMb || UNMEASURED,
+      row.peakWasmHeapMb || UNMEASURED,
       row.rssMb || UNMEASURED,
+      row.peakRssMb || UNMEASURED,
       row.heapUsedMb || UNMEASURED,
       row.heapTotalMb || UNMEASURED,
+      row.externalMb || UNMEASURED,
+      row.arrayBuffersMb || UNMEASURED,
       UNMEASURED,
       UNMEASURED,
     ]));
@@ -314,13 +337,34 @@ headless-three, i.e. conway inside a three.js host.
 \`parseTimeMs\` / \`geometryTimeMs\` / \`totalTimeMs\` are conway's own stage
 timings in both harnesses and are broadly comparable on the same runner class.
 The memory columns are not: \`rssMb\` here excludes a GL context and a three.js
-scene graph. \`schemaVersion\`, \`geometryMemoryMb\`, \`preprocessorVersion\` and
-\`originatingSystem\` are \`N/A\` — the conway-native perf writer does not
-capture them.
+scene graph, and \`geometryMemoryMb\` counts only conway's own vertex+index
+payload, without the host's copy of the same geometry. \`schemaVersion\`,
+\`preprocessorVersion\` and \`originatingSystem\` are \`N/A\` — the conway-native
+perf writer does not capture them.
 
-Because \`geometryMemoryMb\` is absent here, \`geometryMemoryMbDelta\` is \`N/A\`
-on every row of a delta against this snapshot. That is a missing measurement,
-not a zero: do not read it as "no change in geometry memory".
+\`peakRssMb\` is the load's high-water mark (the kernel's, via
+\`resourceUsage().maxRSS\`); \`rssMb\`, \`heapUsedMb\`, \`heapTotalMb\`,
+\`externalMb\` and \`arrayBuffersMb\` are single samples taken at the end of the
+load with no GC first. Do not read the instants as peaks, or \`heapUsedMb\` as a
+live set — it includes garbage GC has not collected.
+
+\`externalMb\` is off-heap memory V8 knows about and \`arrayBuffersMb\` is its
+ArrayBuffer subset — that is where the source buffer and the parse structures
+live, invisible to \`heapUsedMb\`. Neither sees the wasm heap, so
+\`heapUsedMb + externalMb\` is not a substitute for RSS: on a 31 MB model it
+reads 284 MB against an RSS of 510 MB.
+
+\`peakWasmHeapMb\` is the wasm linear memory conway's geometry engine runs in,
+which nothing else here can see. It is grow-only, so one reading is the
+high-water mark. Do not read it as \`geometryMemoryMb\`: that column is the
+vertex+index payload a consumer would copy out, and the heap around it also
+holds allocator overhead, fragmentation and boolean intermediates — 8 MB of
+payload under an 85 MB heap on one model in this corpus.
+
+Snapshots blessed before conway#552 carry none of \`peakWasmHeapMb\`,
+\`peakRssMb\`, \`externalMb\` or \`arrayBuffersMb\`, nor a measured
+\`geometryMemoryMb\`, so those columns come out \`N/A\` in a delta against them. That is a missing
+measurement, not a zero: do not read it as "no change".
 
 ## Regenerating
 

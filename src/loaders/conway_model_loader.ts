@@ -15,9 +15,38 @@ import Memory from '../memory/memory'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
 import { extractModelInfo, parseFileHeader } from './loading_utilities'
+import { wasmHeapByteLength } from '../core/wasm_heap'
+import { Statistics } from '../statistics/statistics'
 
 const ONE_KB = 1024
 const ONE_MB = ONE_KB * ONE_KB
+
+/**
+ * Record the wasm heap's high-water mark on the run's statistics.
+ *
+ * The wasm heap only grows, so one reading of it is already the peak — there
+ * is nothing to sample and nothing to perturb. This is the only column that
+ * sees conway's native memory at all: `heapUsed`/`external` cannot (wasm init
+ * alone moves RSS by ~65 MB while moving `external` by under 2 MB), and
+ * `geometryMemory` is the vertex+index payload only, which on MB-Khaya is
+ * 8 MB live under an 85 MB wasm heap.
+ *
+ * Measured through wasmHeapByteLength rather than HEAPU8.length: the module's
+ * cached view can be a growth step behind the real heap (#485), and a
+ * high-water figure that under-reports is worse than none.
+ *
+ * @param statistics The run's statistics.
+ * @param conwayWasm The geometry engine whose heap to measure.
+ */
+function recordWasmHeapPeak(
+    statistics: Statistics, conwayWasm: ConwayGeometry ): void {
+
+  const wasmModule = conwayWasm.wasmModule
+
+  if ( wasmModule !== void 0 ) {
+    statistics.setWasmHeapPeak( wasmHeapByteLength( wasmModule ) / ONE_MB )
+  }
+}
 
 /**
  * Options threading the progress/yield contract (issue #301) through a load.
@@ -235,6 +264,8 @@ export class ConwayModelLoader {
                
               conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
+          recordWasmHeapPeak(statistics, conwayWasm)
+
           statistics.setGeometryTypeCounts(conwayModel.geometryTypeCounts)
 
           model.invalidate(true)
@@ -444,6 +475,8 @@ export class ConwayModelLoader {
           statistics.setGeometryMemory(
                
               conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
+
+          recordWasmHeapPeak(statistics, conwayWasm)
 
           const ifcProjectName = conwayModel.getIfcProjectName()
 

@@ -191,6 +191,7 @@ Check `scripts/` before building tooling — see
 | STEP support: schemas, coverage, known gaps | [design/new/step-support.md](design/new/step-support.md) |
 | STEP product structure and metadata (the AP242 wrinkle, NIST) | [design/new/step-metadata-nist.md](design/new/step-metadata-nist.md) |
 | Native GLB export from the CLI | [design/new/glb-native-export.md](design/new/glb-native-export.md) |
+| What the perf bench measures and why: peak vs retention, the three distinct native quantities, why `heapUsed + external` is not a stand-in for RSS, GC settling, and the rule for changing recorded fields | [design/new/perf-measurement.md](design/new/perf-measurement.md) |
 | Memory residency, streaming and federated loading | [design/new/memory-residency.md](design/new/memory-residency.md), [design/new/streaming-federated-loader.md](design/new/streaming-federated-loader.md) |
 | emsdk version, wasm build environment | [design/new/web-build-environment.md](design/new/web-build-environment.md), [design/new/emsdk-upgrade-scalable-allocator.md](design/new/emsdk-upgrade-scalable-allocator.md) |
 | Where a model lands in world space: `COORDINATE_TO_ORIGIN`, why the recentre snaps to a grid, why two exports of one object used to land 76m apart, what a frame change costs in re-blessing and saved cameras | [design/new/coordination-frame.md](design/new/coordination-frame.md) |

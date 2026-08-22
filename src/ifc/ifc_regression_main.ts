@@ -17,6 +17,7 @@ import fsPromises from 'fs/promises'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcBooleanResult } from './ifc4_gen'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
+import { wasmHeapByteLength } from '../core/wasm_heap'
 import { materialHashes } from './ifc_material_cache_node'
 import { dumpGeometryOBJs, geometryHashes } from './ifc_model_geometry_node'
 import { curveHashes, dumpCurveOBJs } from './ifc_model_curves_node'
@@ -51,20 +52,83 @@ function csvSafeString( from: string ): string {
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_MB = 1024 * 1024
 
+// Kilobytes per megabyte, for resourceUsage().maxRSS which reports kB.
+// eslint-disable-next-line no-magic-numbers
+const KB_PER_MB = 1024
+
 // Fixed-point precision for perf MB values.
 // eslint-disable-next-line no-magic-numbers
 const PERF_MB_PRECISION = 2
+
+/** Placeholder for a column this row has no measurement for. */
+const UNMEASURED = 'N/A'
 
 /**
  * Write a single-row per-file perf CSV at the given path. Memory snapshot is
  * taken at call time; for the OK path this is right after geometry extraction
  * — close to peak. No-op when perfPath is empty.
  *
- * Memory semantics: `rssMb` includes the conway-geom WASM heap (mmap'd into
- * the process) and is the load-bearing memory metric for geometry work.
+ * WHICH COLUMNS ARE PEAK AND WHICH ARE INSTANTS — they are not comparable and
+ * the difference is large (conway#552):
+ *
+ *   peakRssMb        PEAK. The kernel's high-water mark for this process
+ *                    (`resourceUsage().maxRSS`, kB), i.e. the number that
+ *                    decides whether a browser tab or a runner survives the
+ *                    load. Free to read and perturbs nothing.
+ *   rssMb            INSTANT. One `memoryUsage()` sample at write time. A run
+ *                    that transiently hit 5 GB and settled to 1 GB reports
+ *                    1 GB here and 5 GB in peakRssMb.
+ *   heapUsedMb       INSTANT, and *not* live set: it is live data plus
+ *                    whatever garbage GC has not collected yet, so it moves
+ *                    with GC timing. Measuring SKYLARK250 this way gives
+ *                    2547 MB where the same run's live heap after two forced
+ *                    full GCs is 981 MB. A live-heap column would need forced
+ *                    GC, which wrecks the timing columns, so it is not here.
+ *   heapTotalMb      INSTANT. V8's reserved heap.
+ *   externalMb       INSTANT. Off-heap bytes V8 knows about, which heapUsed
+ *                    does not include and which are a real part of the
+ *                    footprint: on MB-Khaya (31 MB IFC) `readFileSync` alone
+ *                    moves this 1.7 -> 33.1 MB while heapUsed does not move.
+ *   arrayBuffersMb   INSTANT, and a SUBSET of externalMb — the ArrayBuffer
+ *                    share of it, which is where the source buffer and the
+ *                    parse structures land (31.5 of that 33.1 MB).
+ *   geometryMemoryMb Not a process metric at all: the vertex+index PAYLOAD
+ *                    conway itself allocated for this model, summed by
+ *                    `calculateGeometrySize()` — what a consumer would copy
+ *                    out. Unlike rss/heap it excludes everything the harness
+ *                    happens to be holding, and unlike peakWasmHeapMb it
+ *                    excludes everything the allocator is holding.
+ *   peakWasmHeapMb   PEAK, and the only column that sees conway's native
+ *                    memory. Emscripten's linear memory grows and never
+ *                    shrinks, so one reading of `wasmHeapByteLength` IS the
+ *                    high-water mark — nothing to sample, nothing perturbed.
+ *                    Read through that helper rather than `HEAPU8.length`,
+ *                    whose cached view can be a growth step behind the real
+ *                    heap (#485); a high-water figure that under-reports is
+ *                    worse than none. This is NOT geometryMemoryMb: it
+ *                    includes allocator overhead, fragmentation and the
+ *                    intermediate buffers a boolean leaves behind, which on
+ *                    MB-Khaya is an 85 MB heap over an 8 MB live payload.
+ *
+ * There is deliberately no `heapUsed + external` total. It looks like a
+ * portable stand-in for RSS and is not one: on that same model it reads
+ * 284 MB against an RSS of 510 MB after geometry, and wasm init alone adds
+ * ~65 MB of RSS while moving `external` by under 2 MB. Emscripten's heap is
+ * structurally invisible to JS-side accounting, so such a total would be
+ * blind to exactly the memory this bench exists to track. peakRssMb is the
+ * headline.
+ *
+ * `rssMb` and `peakRssMb` include the conway-geom WASM heap (mmap'd into the
+ * process) and are the load-bearing memory metrics for geometry work.
  * `heapUsedMb` / `heapTotalMb` are V8-only — useful for tracking JS-side
  * allocation pressure but they exclude WASM-side buffers. Expect a large
  * gap between rss and heap on geometry-heavy models.
+ *
+ * The column list here is shared with the AP214 regression child
+ * (`ap214_regression_main.ts`): `aggregatePerfCsvs` in
+ * `ifc_regression_batch_main.ts` keeps the header of whichever per-file CSV it
+ * reads first and concatenates the rest as rows, so a mixed IFC/STEP corpus
+ * mislabels every column if the two writers drift apart.
  *
  * @param perfPath Path to write the CSV to. Empty string disables.
  * @param ifcFile Source IFC file path (basename used as the row key).
@@ -72,6 +136,10 @@ const PERF_MB_PRECISION = 2
  * @param parseTimeMs Parse stage duration in ms.
  * @param geometryTimeMs Geometry extraction duration in ms.
  * @param totalTimeMs Sum of parse + geometry in ms.
+ * @param geometryMemoryBytes Geometry payload conway allocated, in bytes, or
+ * undefined where no geometry was extracted (written as N/A).
+ * @param wasmHeapBytes Wasm linear-memory high-water in bytes, or undefined
+ * where the module was never brought up (written as N/A).
  */
 async function writePerfCsvIfRequested(
     perfPath: string,
@@ -80,6 +148,8 @@ async function writePerfCsvIfRequested(
     parseTimeMs: number,
     geometryTimeMs: number,
     totalTimeMs: number,
+    geometryMemoryBytes?: number,
+    wasmHeapBytes?: number,
 ): Promise<void> {
 
   if ( perfPath.length === 0 ) {
@@ -90,14 +160,29 @@ async function writePerfCsvIfRequested(
   const rssMb = ( mem.rss / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapUsedMb = ( mem.heapUsed / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapTotalMb = ( mem.heapTotal / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const externalMb = ( mem.external / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const arrayBuffersMb =
+    ( mem.arrayBuffers / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  // maxRSS is reported in kilobytes, unlike memoryUsage() which is in bytes.
+  const peakRssMb =
+    ( process.resourceUsage().maxRSS / KB_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const geometryMemoryMb = geometryMemoryBytes !== void 0 ?
+    ( geometryMemoryBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
+    UNMEASURED
+  const peakWasmHeapMb = wasmHeapBytes !== void 0 ?
+    ( wasmHeapBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
+    UNMEASURED
 
   const fileName = csvSafeString( path.basename( ifcFile ) )
 
   const header =
-    'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,rssMb,heapUsedMb,heapTotalMb\n'
+    'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
+    'peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,' +
+    'arrayBuffersMb\n'
   const row =
     `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
-    `${rssMb},${heapUsedMb},${heapTotalMb}\n`
+    `${geometryMemoryMb},${peakWasmHeapMb},${rssMb},${peakRssMb},` +
+    `${heapUsedMb},${heapTotalMb},${externalMb},${arrayBuffersMb}\n`
 
   try {
     await fsPromises.writeFile( perfPath, header + row )
@@ -307,8 +392,21 @@ function doWork() {
           const totalTimeMs = geomEndMs - parseStartMs
 
           const perfStatus = result === void 0 ? 'FAIL' : 'OK'
+          // Sized before anything downstream can release meshes, and only on
+          // the OK path: a failed extraction leaves a partial cache whose size
+          // is not this model's geometry footprint.
+          const geometryMemoryBytes = result !== void 0 ?
+            model.geometry.calculateGeometrySize() : void 0
+          // The heap is grow-only, so this is the run's high-water mark even
+          // though it is read once, after the fact. geometryExtraction hands
+          // back the engine it brought up; there is no heap to measure when
+          // it failed before that.
+          const wasmModule = result?.[ 1 ].wasmModule
+          const wasmHeapBytes = wasmModule !== void 0 ?
+            wasmHeapByteLength( wasmModule ) : void 0
           await writePerfCsvIfRequested(
-              perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs)
+              perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,
+              geometryMemoryBytes, wasmHeapBytes)
 
           // AFTP sizing pass: no-op unless the wasm module was built with
           // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).

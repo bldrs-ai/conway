@@ -67,9 +67,13 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
         'geometryMemoryMbDelta',
+        'peakWasmHeapMbDelta',
         'rssMbDelta',
+        'peakRssMbDelta',
         'heapUsedMbDelta',
         'heapTotalMbDelta',
+        'externalMbDelta',
+        'arrayBuffersMbDelta',
       ]
     : [
         'timestamp',
@@ -87,9 +91,13 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
         'geometryMemoryMbDelta',
+        'peakWasmHeapMbDelta',
         'rssMbDelta',
+        'peakRssMbDelta',
         'heapUsedMbDelta',
         'heapTotalMbDelta',
+        'externalMbDelta',
+        'arrayBuffersMbDelta',
       ];
 
   const lines = [];
@@ -236,9 +244,20 @@ function computeDeltas(data1, data2, isWebIfc = false) {
             entry2.totalTimeMs
           ),
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
+          // A different quantity from geometryMemoryMb, not a rescaling of it:
+          // the wasm heap holds allocator overhead and boolean intermediates
+          // the payload figure excludes. Also absent before #552.
+          peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
+          // Absent from every snapshot committed before #552; computeDelta
+          // reports that as N/A rather than differencing against zero.
+          peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
           heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
+          // Also absent before #552. arrayBuffersMb is a subset of externalMb,
+          // so the two deltas are not independent — read them together.
+          externalMbDelta: computeDelta('externalMb', entry2, entry1),
+          arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
         });
       } else {
         // Present in data1, missing in data2
@@ -254,9 +273,13 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
@@ -277,9 +300,13 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
@@ -312,9 +339,20 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: totalTimeDelta,
           totalTimeMsPercentageChange: totalTimePercentageChange,
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
+          // A different quantity from geometryMemoryMb, not a rescaling of it:
+          // the wasm heap holds allocator overhead and boolean intermediates
+          // the payload figure excludes. Also absent before #552.
+          peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
+          // Absent from every snapshot committed before #552; computeDelta
+          // reports that as N/A rather than differencing against zero.
+          peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
           heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
+          // Also absent before #552. arrayBuffersMb is a subset of externalMb,
+          // so the two deltas are not independent — read them together.
+          externalMbDelta: computeDelta('externalMb', entry2, entry1),
+          arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
         });
       } else {
         deltas.push({
@@ -333,9 +371,13 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
@@ -359,9 +401,13 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
+          peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
