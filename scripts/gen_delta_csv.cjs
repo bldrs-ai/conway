@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 
 /**
  * Generate a delta CSV from two performance-detail CSV files.
@@ -22,29 +23,28 @@ function generateDeltaCSV(csvPath1, csvPath2, outputCsvPath, isWebIfc = false) {
  * @returns {Array<Object>}
  */
 function readDataFromCsv(filepath) {
-  const fileContents = fs.readFileSync(filepath, 'utf8');
-  const lines = fileContents.split(/\r?\n/).filter((l) => l.trim() !== '');
+  // RFC 4180 rather than split(','): performance-detail.csv quotes the free
+  // text it lifts from the IFC header (preprocessorVersion,
+  // originatingSystem) and any model filename containing a comma, and a naive
+  // split would tear a quoted field back into extra cells — shifting every
+  // column after it and silently mis-joining the delta.
+  const records = parseCsv(fs.readFileSync(filepath, 'utf8'));
 
-  if (lines.length < 2) {
+  if (records.length < 2) {
     // Either empty or header-only => no data
     return [];
   }
 
-  // The first line is the header
-  const headers = lines[0].split(',').map((h) => h.trim());
+  const headers = records[0].map((h) => h.trim());
 
-  const data = [];
-  for (let i = 1; i < lines.length; i++) {
-    const row = lines[i].split(',');
+  return records.slice(1).map((row) => {
     const rowObj = {};
     headers.forEach((header, index) => {
       // Trim whitespace for each cell
-      const cell = row[index] ? row[index].trim() : '';
-      rowObj[header] = cell;
+      rowObj[header] = row[index] !== undefined ? row[index].trim() : '';
     });
-    data.push(rowObj);
-  }
-  return data;
+    return rowObj;
+  });
 }
 
 /**
@@ -94,15 +94,105 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
 
   const lines = [];
   // write the header
-  lines.push(csvHeader.join(','));
+  lines.push(csvRow(csvHeader));
 
   // write each row
   data.forEach((row) => {
-    const rowCells = csvHeader.map((col) => (row[col] != null ? row[col] : ''));
-    lines.push(rowCells.join(','));
+    lines.push(csvRow(csvHeader.map((col) => (row[col] != null ? row[col] : ''))));
   });
 
   fs.writeFileSync(csvFilename, lines.join('\n'), 'utf8');
+}
+
+/**
+ * Canonical form of a `filename` cell for joining, i.e. URL-decoded.
+ *
+ * scripts/benchmark.cjs URL-encodes the filename on its OK path but wrote the
+ * raw name on its render-failure path, so one committed CSV can hold both
+ * spellings of one model. That is fixed at the writer now, but the CSVs it
+ * already wrote are history and this join still has to read them.
+ *
+ * @param {string} filename
+ * @returns {string} The decoded name, or the input when it does not decode.
+ */
+function canonicalFilename(filename) {
+  try {
+    return decodeURIComponent(filename);
+  } catch (e) {
+    // A lone '%' that is not a valid escape throws here, and a real model
+    // filename can contain one. Such a name is already its own canonical form.
+    return filename;
+  }
+}
+
+/**
+ * Index one run's rows by filename, with a canonical-form fallback.
+ *
+ * The fallback is deliberately NOT a replacement for exact matching: an exact
+ * hit always wins, and reconcileIndexes then strips any canonical key that is
+ * ambiguous. So a corpus that really did contain both `a b.ifc` and
+ * `a%20b.ifc` as distinct files still joins each to its own counterpart or to
+ * nothing, rather than silently collapsing them.
+ *
+ * @param {Array<Object>} data Row objects for one run.
+ * @returns {{exact: Object, canonical: Map<string, Object>,
+ *            ambiguous: Set<string>}}
+ */
+function buildFilenameIndex(data) {
+  const exact = {};
+  data.forEach((entry) => {
+    exact[entry.filename] = entry;
+  });
+
+  const canonical = new Map();
+  const ambiguous = new Set();
+
+  for (const filename of Object.keys(exact)) {
+    const key = canonicalFilename(filename);
+    if (canonical.has(key)) {
+      ambiguous.add(key);
+      continue;
+    }
+    canonical.set(key, exact[filename]);
+  }
+
+  return { exact, canonical, ambiguous };
+}
+
+/**
+ * Drop every ambiguous canonical key from BOTH indexes.
+ *
+ * Ambiguity has to be judged across the pair, not per side. If one run holds
+ * both `a b.ifc` and `a%20b.ifc` while the other holds only `a b.ifc`, then
+ * the side with one row is locally unambiguous — and its single entry would be
+ * matched twice, once exactly and once through the fallback, reporting the same
+ * measurement as the counterpart of two different models. Removing the key
+ * from both sides leaves the exact match intact and the other filename
+ * correctly one-sided.
+ *
+ * @param {{canonical: Map<string, Object>, ambiguous: Set<string>}} index1
+ * @param {{canonical: Map<string, Object>, ambiguous: Set<string>}} index2
+ * @returns {void}
+ */
+function reconcileIndexes(index1, index2) {
+  for (const key of [...index1.ambiguous, ...index2.ambiguous]) {
+    index1.canonical.delete(key);
+    index2.canonical.delete(key);
+  }
+}
+
+/**
+ * Look one filename up in an index: exact match first, canonical form second.
+ *
+ * @param {{exact: Object, canonical: Map<string, Object>}} index
+ * @param {string} filename
+ * @returns {Object | undefined} The matching row, or undefined.
+ */
+function lookupByFilename(index, filename) {
+  if (Object.prototype.hasOwnProperty.call(index.exact, filename)) {
+    return index.exact[filename];
+  }
+  return index.canonical.get(canonicalFilename(filename));
 }
 
 /**
@@ -113,16 +203,14 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
  * @returns {Array<Object>} array of delta rows
  */
 function computeDeltas(data1, data2, isWebIfc = false) {
-  // Build lookup by filename for each data set
-  const data1ByFile = {};
-  data1.forEach((entry) => {
-    data1ByFile[entry.filename] = entry;
-  });
+  const index1 = buildFilenameIndex(data1);
+  const index2 = buildFilenameIndex(data2);
 
-  const data2ByFile = {};
-  data2.forEach((entry) => {
-    data2ByFile[entry.filename] = entry;
-  });
+  reconcileIndexes(index1, index2);
+
+  // Kept as plain objects so the iteration order below is unchanged.
+  const data1ByFile = index1.exact;
+  const data2ByFile = index2.exact;
 
   const deltas = [];
 
@@ -130,7 +218,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
     // Process files present in data1
     for (const filename of Object.keys(data1ByFile)) {
       const entry1 = data1ByFile[filename];
-      const entry2 = data2ByFile[filename];
+      const entry2 = lookupByFilename(index2, filename);
 
       if (entry2) {
         deltas.push({
@@ -175,7 +263,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
 
     // Process files present in data2 but not in data1
     for (const filename of Object.keys(data2ByFile)) {
-      if (!data1ByFile[filename]) {
+      if (!lookupByFilename(index1, filename)) {
         const entry2 = data2ByFile[filename];
         deltas.push({
           loadStatus1: 'N/A',
@@ -199,7 +287,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
     // Original functionality (compute full delta)
     for (const filename of Object.keys(data1ByFile)) {
       const entry1 = data1ByFile[filename];
-      const entry2 = data2ByFile[filename];
+      const entry2 = lookupByFilename(index2, filename);
 
       if (entry2) {
         const totalTimeDelta = computeDelta('totalTimeMs', entry2, entry1);
@@ -253,7 +341,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
     }
 
     for (const filename of Object.keys(data2ByFile)) {
-      if (!data1ByFile[filename]) {
+      if (!lookupByFilename(index1, filename)) {
         const entry2 = data2ByFile[filename];
         deltas.push({
           timestamp: entry2.timestamp,
@@ -283,14 +371,34 @@ function computeDeltas(data1, data2, isWebIfc = false) {
 }
 
 /**
- * Computes the numeric difference of a field between two entries (entry2 - entry1).
+ * Computes the numeric difference of a field between two entries (entry2 - entry1),
+ * or 'N/A' when either side has no measurement.
+ *
+ * The N/A guard is load-bearing, not defensive. Treating an absent measurement
+ * as 0 does not produce a missing number, it produces a WRONG one: a matched
+ * row whose newer side has no geometryMemoryMb reported
+ * `geometryMemoryMbDelta = -185.836` for SKYLARK250 — a fabricated 100%
+ * memory win, on the single model someone would most want a real memory
+ * number for. The same coercion made every FAIL row lie: the committed
+ * conway0.22.921_0.23.940_delta.csv reports `totalTimeMsDelta = 12` and
+ * `Infinity` for bath-csg-solid.ifc going FAIL -> OK, and `0` / `0%` for
+ * KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc failing at both versions — "no
+ * change" where the truth is "no data".
+ *
  * @param {string} field
  * @param {Object} entry2
  * @param {Object} entry1
- * @returns {number}
+ * @returns {number | string} The difference, or 'N/A'.
  */
 function computeDelta(field, entry2, entry1) {
-  return parseValue(entry2[field]) - parseValue(entry1[field]);
+  const newVal = parseValue(entry2[field]);
+  const oldVal = parseValue(entry1[field]);
+
+  if (newVal === null || oldVal === null) {
+    return 'N/A';
+  }
+
+  return newVal - oldVal;
 }
 
 /**
@@ -304,6 +412,11 @@ function computePercentageChange(oldValue, newValue) {
   const oldVal = parseValue(oldValue);
   const newVal = parseValue(newValue);
 
+  // Same reasoning as computeDelta: an absent measurement is not zero.
+  if (oldVal === null || newVal === null) {
+    return 'N/A';
+  }
+
   if (oldVal === 0) {
     if (newVal > 0) {
       return 'Infinity';
@@ -316,23 +429,29 @@ function computePercentageChange(oldValue, newValue) {
 }
 
 /**
- * Safely parse a string or number to float; 'N/A' or empty => 0.0
+ * Parse a string or number to float, or null when there is no measurement.
+ *
+ * Returns null — NOT 0 — for absent/'N/A'/unparseable input, so callers can
+ * tell "the value is zero" apart from "there is no value". A real 0 is
+ * meaningful here: web-ifc rows carry parseTimeMs/geometryTimeMs of literally
+ * 0 because that engine does not split the stages.
+ *
  * @param {string | number} value
- * @returns {number}
+ * @returns {number | null}
  */
 function parseValue(value) {
   if (value == null) {
-    return 0.0;
+    return null;
   }
   if (typeof value === 'number') {
     return value;
   }
   const trimmed = value.trim();
   if (trimmed === '' || trimmed.toUpperCase() === 'N/A') {
-    return 0.0;
+    return null;
   }
   const floatVal = Number(trimmed);
-  return isNaN(floatVal) ? 0.0 : floatVal;
+  return isNaN(floatVal) ? null : floatVal;
 }
 
 // If you want to run it as a standalone script:

@@ -27,6 +27,7 @@ const os = require('os');
 const crypto = require('crypto');
 const urlModule = require('url');
 const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
+const { csvRow } = require('./csv_rfc4180.cjs');
 
 // When set (BENCHMARK_ANONYMIZE=1), every model IDENTIFIER emitted to a place
 // that can become public — console lines, the performance-detail CSV, PNG
@@ -299,11 +300,16 @@ async function main() {
   const errorLogFile = path.join(outputDir, 'performance.err.txt');
   const tempServerOutputFile = path.join(outputDir, '00-rendering-server.log.txt');
 
-  fs.writeFileSync(
-    newResults,
-    "timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,heapUsedMb,heapTotalMb,preprocessorVersion,originatingSystem\n",
-    'utf8'
-  );
+  // Every row this file gets is written through csvRow, header included, so
+  // the column list and the records that fill it cannot drift apart.
+  const DETAIL_COLUMNS = [
+    'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
+    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
+    'rssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
+    'originatingSystem',
+  ];
+
+  fs.writeFileSync(newResults, csvRow(DETAIL_COLUMNS) + "\n", 'utf8');
 
   [basicStatsFilename, errorLogFile].forEach((f) => {
     if (fs.existsSync(f)) fs.unlinkSync(f);
@@ -361,7 +367,8 @@ async function main() {
 
     // Skip excluded files.
     if (excludeSet.has(baseFilename)) {
-      appendLineToFile(basicStatsFilename, `skip, 0s, ${filePath.replace(modelDir + '/', '')}`);
+      appendLineToFile(basicStatsFilename,
+          csvRow(['skip', '0s', filePath.replace(modelDir + '/', '')]));
       continue;
     }
 
@@ -405,16 +412,19 @@ async function main() {
       if (!success) {
         curlSuccess = false;
         appendLineToFile(errorLogFile, `Error processing file ${url}`);
-        appendLineToFile(basicStatsFilename, `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
+        appendLineToFile(basicStatsFilename,
+            csvRow(['error', `${deltaTimeSec}s`, filePath.replace(modelDir + '/', '')]));
       } else {
-        appendLineToFile(basicStatsFilename, `ok, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
+        appendLineToFile(basicStatsFilename,
+            csvRow(['ok', `${deltaTimeSec}s`, filePath.replace(modelDir + '/', '')]));
       }
     } catch (err) {
       curlSuccess = false;
       const modelEndTime = Date.now();
       const deltaTimeSec = ((modelEndTime - modelStartTime) / 1000).toFixed(2);
       appendLineToFile(errorLogFile, `Error processing file ${url}: ${err.message}`);
-      appendLineToFile(basicStatsFilename, `error, ${deltaTimeSec}s, ${filePath.replace(modelDir + '/', '')}`);
+      appendLineToFile(basicStatsFilename,
+            csvRow(['error', `${deltaTimeSec}s`, filePath.replace(modelDir + '/', '')]));
     }
 
     // Flush and close the server-output stream on BOTH paths before reading
@@ -490,7 +500,7 @@ async function main() {
         originatingSystem = 0;
       }
 
-      const line = [
+      const line = csvRow([
         timestamp,
         loadStatus,
         unameVal,
@@ -506,7 +516,7 @@ async function main() {
         heapTotalMb,
         preprocessorVersion,
         originatingSystem
-      ].join(',');
+      ]);
       appendLineToFile(newResults, line);
 
       if (loadStatus === 'OK') {
@@ -538,7 +548,19 @@ async function main() {
       const timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
       const unameVal = os.arch();
       allStatus = 'fail';
-      const failLine = `${timestamp},FAIL,${unameVal},N/A,${displayName},N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A`;
+      // URL-encoded like the OK path above, which is the point: this row's
+      // `filename` is the key gen_delta_csv.cjs joins two runs on, and this
+      // branch used to write the raw displayName while EVERY other row in the
+      // file was encoded. A render-request failure on a model with a space in
+      // its name therefore wrote `S_Office_Integrated Design Archi.ifc` into a
+      // file where the same model's OK rows say
+      // `S_Office_Integrated%20Design%20Archi.ifc`, so the delta would emit
+      // two one-sided rows instead of the status transition — losing exactly
+      // the row a release comparison is for. One writer, one convention.
+      const failLine = csvRow([
+        timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
+        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
+      ]);
       appendLineToFile(newResults, failLine);
 
       failCount++;
@@ -581,7 +603,7 @@ async function main() {
 
   const endTime = Date.now();
   const deltaTimeSec = ((endTime - startTime) / 1000).toFixed(2);
-  appendLineToFile(basicStatsFilename, `${allStatus}, ${deltaTimeSec}s, ALL_FILES`);
+  appendLineToFile(basicStatsFilename, csvRow([allStatus, `${deltaTimeSec}s`, 'ALL_FILES']));
 
   console.log(
     `Benchmark complete: ${okCount} OK, ${failCount} FAIL of ` +
