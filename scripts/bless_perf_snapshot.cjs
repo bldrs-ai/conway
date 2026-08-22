@@ -465,13 +465,13 @@ has not been measured to disagree.
 ([conway#557](https://github.com/bldrs-ai/conway/issues/557)).** The IFC
 regression child used to build a *second* \`ConwayGeometry\` inside
 \`geometryExtraction\`, so that engine's linear memory was allocated inside
-the retention window and never released — against the 16 MB idle arena of the
-engine \`main()\` had initialised, worth a ~55-60 MB constant on every IFC row
+the retention window and never released while the engine \`main()\` had
+initialised sat idle. It measured as a ~55-60 MB constant on every IFC row
 regardless of model size, plus its \`initialize()\` inside \`geometryTimeMs\`.
 From #557 on both regression children extract on the single engine they
-initialised before the baseline, so the two are the same shape and this file's
-IFC and STEP rows no longer differ by construction. What does NOT survive that
-boundary is a comparison with an older snapshot: IFC \`retainedRssMb\`,
+initialised before the baseline, so their retention columns are the same shape
+and an IFC row here no longer carries a term a STEP row cannot. What does NOT
+survive that boundary is a comparison with an older snapshot: IFC \`retainedRssMb\`,
 \`peakRssMb\` and \`geometryTimeMs\` all step down once at #557 on unchanged
 geometry — MB-Khaya's \`retainedRssMb\` 379-389 to 326-333, \`index.ifc\` 58.96
 to 2.38, \`IfcOpenHouse_IFC4\`'s \`geometryTimeMs\` 156 to 70 ms, with digests
