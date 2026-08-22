@@ -318,7 +318,7 @@ jobs:
           import csv, sys
           rows = list(csv.DictReader(open(sys.argv[1])))
           rows.sort(key=lambda r: r.get('filename',''))
-          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','peakWasmHeapMb','rssMb','peakRssMb','heapUsedMb']
+          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','peakWasmHeapMb','rssMb','peakRssMb','heapUsedMb','retainedRssMb']
           print("| " + " | ".join(cols) + " |")
           print("|" + " --- |" * len(cols))
           for r in rows:

@@ -11,7 +11,7 @@ import { createRequire } from 'module'
  * `preprocessorVersion` and `originatingSystem` are free text lifted straight
  * out of an IFC/STEP FILE_NAME header. Emitted unquoted, a value like
  * `Trimble Nova (Build = 16.2.0.15, Compile = Sep 23 2021)` splits the record
- * into 20 columns against a 19-column header — which is exactly what five
+ * into 23 columns against a 22-column header — which is exactly what five
  * committed rows in test-models / test-models-private did, and why GitHub's
  * CSV viewer refused to render them.
  *
@@ -45,14 +45,25 @@ const NASTY_PREPROCESSOR =
   'Trimble Nova (Build = 16.2.0.15, Compile = "Sep 23 2021")'
 
 /** Columns in the delta CSV, per the committed `*_delta.csv` convention. */
-const DELTA_COLUMN_COUNT = 22
+const DELTA_COLUMN_COUNT = 25
 
 const DETAIL_HEADER = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
   'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
-  'externalMb', 'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
+  'externalMb', 'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb',
+  'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
 ]
+
+/**
+ * The three retention columns #554 added, absent from every older snapshot.
+ * They are a different KIND of column from the four above: signed deltas
+ * across a load/teardown cycle rather than peaks or instants, so a missing
+ * one coerced to 0 would read as "this release leaks nothing" — the most
+ * reassuring possible lie.
+ */
+const COLUMNS_ADDED_IN_554 =
+  ['retainedRssMb', 'retainedHeapUsedMb', 'retainedExternalMb']
 
 /** The four memory columns #552 added, absent from every older snapshot. */
 const COLUMNS_ADDED_IN_552 =
@@ -64,7 +75,17 @@ const COLUMNS_ADDED_IN_552 =
  * has to keep working as an input forever.
  */
 const LEGACY_DETAIL_HEADER =
-  DETAIL_HEADER.filter((column) => !COLUMNS_ADDED_IN_552.includes(column))
+  DETAIL_HEADER.filter((column) =>
+    !COLUMNS_ADDED_IN_552.includes(column) &&
+    !COLUMNS_ADDED_IN_554.includes(column))
+
+/**
+ * The header a snapshot blessed between #552 and #554 carries: every peak and
+ * instant, no retention. Real files in the corpus have this shape, so it has
+ * to keep differencing cleanly against a run that does measure retention.
+ */
+const PRE_554_DETAIL_HEADER =
+  DETAIL_HEADER.filter((column) => !COLUMNS_ADDED_IN_554.includes(column))
 
 /**
  * Build a performance-detail.csv row the way scripts/benchmark.cjs does —
@@ -78,7 +99,8 @@ function detailRow(filename: string, totalTimeMs: string): string {
   return csvRow([
     '20260811153721', 'OK', 'x64', 'conway1.451.1357', filename, 'IFC2X3',
     '71', '245', totalTimeMs, '0.776', '46.500', '300.859', '412.320',
-    '137.000', '157.582', '38.100', '36.400', NASTY_PREPROCESSOR, 'N/A',
+    '137.000', '157.582', '38.100', '36.400', '4.500', '1.250', '-0.750',
+    NASTY_PREPROCESSOR, 'N/A',
   ])
 }
 
@@ -126,7 +148,7 @@ describe('performance-detail.csv rows', () => {
     const records = parseCsv(text)
 
     expect(records).toHaveLength(2)
-    // The whole point: 19 columns, not 20.
+    // The whole point: 22 columns, not 23.
     expect(records[0]).toHaveLength(DETAIL_HEADER.length)
     expect(records[1]).toHaveLength(DETAIL_HEADER.length)
 
@@ -166,7 +188,7 @@ describe('gen_delta_csv.cjs', () => {
     return filePath
   }
 
-  test('joins on filename across quoted fields and emits 22 columns', () => {
+  test('joins on filename across quoted fields and emits 25 columns', () => {
     const older = writeDetail('older.csv', [
       detailRow('mep.ifc', '400'),
       detailRow('only-in-older.ifc', '100'),
@@ -231,7 +253,8 @@ describe('gen_delta_csv.cjs', () => {
   const SKYLARK_1_451 = csvRow([
     '20260811154725', 'OK', 'x64', 'conway1.451.1357', 'skylark.ifc', 'IFC4',
     '5729', '42572', '48303', '185.836', '1283.000', '5495.645', '5601.500',
-    '3865.072', '3952.602', '432.500', '430.250', NASTY_PREPROCESSOR, 'N/A',
+    '3865.072', '3952.602', '432.500', '430.250', '120.500', '48.250',
+    '2.125', NASTY_PREPROCESSOR, 'N/A',
   ])
 
   test('reports an absent measurement as N/A, not as a delta against zero', () => {
@@ -247,7 +270,8 @@ describe('gen_delta_csv.cjs', () => {
     const withoutMemory = csvRow([
       '20260821154725', 'OK', 'x64', 'conway1.543.1513-ci', 'skylark.ifc',
       'N/A', '8035', '72371', '80406', 'N/A', 'N/A', '5379.12', '5488.40',
-      '3793.69', '3877.96', '428.30', '426.10', 'N/A', 'N/A',
+      '3793.69', '3877.96', '428.30', '426.10', 'N/A', 'N/A', 'N/A', 'N/A',
+      'N/A',
     ])
 
     const older = writeDetail('mem-older.csv', [SKYLARK_1_451])
@@ -274,7 +298,8 @@ describe('gen_delta_csv.cjs', () => {
     const newerMemory = csvRow([
       '20260821154725', 'OK', 'x64', 'conway1.550.1516-ci', 'skylark.ifc',
       'N/A', '8035', '72371', '80406', '190.836', '1281.000', '5379.12',
-      '5488.50', '3793.69', '3877.96', '433.500', '431.250', 'N/A', 'N/A',
+      '5488.50', '3793.69', '3877.96', '433.500', '431.250', '118.500',
+      '45.250', '2.125', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('gmem-older.csv', [SKYLARK_1_451])
@@ -304,7 +329,8 @@ describe('gen_delta_csv.cjs', () => {
     const newerOffHeap = csvRow([
       '20260821154725', 'OK', 'x64', 'conway1.550.1516-ci', 'skylark.ifc',
       'N/A', '8035', '72371', '80406', '185.836', '1283.000', '5495.645',
-      '5601.500', '3865.072', '3952.602', '433.500', '431.250', 'N/A', 'N/A',
+      '5601.500', '3865.072', '3952.602', '433.500', '431.250', '120.500',
+      '48.250', '2.125', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('ext-older.csv', [SKYLARK_1_451])
@@ -321,6 +347,103 @@ describe('gen_delta_csv.cjs', () => {
     expect(row[header.indexOf('arrayBuffersMbDelta')]).toBe('1')
     // Both are real measurements here, so neither may fall back to N/A.
     expect(row[header.indexOf('heapUsedMbDelta')]).toBe('0')
+  })
+
+  test('differences the retention columns when both sides measured them', () => {
+    // The other direction from the N/A test below: with two runs that both
+    // settled, a change in what a load/teardown cycle leaves behind has to
+    // reach the delta as a number. This is the only signal in the file for a
+    // leak — every other memory column is a peak or an instant, and a leak
+    // that fits inside the peak is invisible to all of them.
+    const newerRetention = csvRow([
+      '20260821154725', 'OK', 'x64', 'conway1.550.1516-ci', 'skylark.ifc',
+      'N/A', '8035', '72371', '80406', '185.836', '1283.000', '5495.645',
+      '5601.500', '3865.072', '3952.602', '432.500', '430.250', '110.500',
+      '38.250', '-1.875', 'N/A', 'N/A',
+    ])
+
+    const older = writeDetail('ret-older.csv', [SKYLARK_1_451])
+    const newer = writeDetail('ret-newer.csv', [newerRetention])
+    const out = path.join(workDir, 'ret-delta.csv')
+
+    generateDeltaCSV(older, newer, out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+    const header = records[0]
+    const row = records[1]
+
+    // 110.5 - 120.5 and 38.25 - 48.25: the cycle now holds 10 MB less RSS and
+    // 10 MB less live heap than it did.
+    expect(row[header.indexOf('retainedRssMbDelta')]).toBe('-10')
+    expect(row[header.indexOf('retainedHeapUsedMbDelta')]).toBe('-10')
+    // 2.125 -> -1.875, i.e. a cycle that used to retain off-heap bytes now
+    // gives back more than it took. The sign has to survive: rounding a
+    // negative retention to zero would hide the fix, and dropping the minus
+    // would report it as a 4 MB regression.
+    expect(row[header.indexOf('retainedExternalMbDelta')]).toBe('-4')
+  })
+
+  test('reports the #554 columns as N/A against a snapshot blessed before them', () => {
+    // A #552-era snapshot has every peak and instant this file knows about
+    // and no retention columns at all. Coercing those absences to 0 would
+    // report the new run as retaining exactly nothing more than a baseline
+    // that never measured retention — a clean bill of health manufactured
+    // out of a missing measurement, which is the #548 failure with a
+    // different column name.
+    const pre554Row = csvRow([
+      '20260811153651', 'OK', 'x64', 'conway1.543.1513-ci', 'skylark.ifc',
+      'IFC4', '5729', '42572', '48303', '185.836', '1283.000', '5495.645',
+      '5601.500', '3865.072', '3952.602', '432.500', '430.250',
+      NASTY_PREPROCESSOR, 'N/A',
+    ])
+
+    const older =
+      writeDetail('pre554-older.csv', [pre554Row], PRE_554_DETAIL_HEADER)
+    const newer = writeDetail('pre554-newer.csv', [SKYLARK_1_451])
+    const out = path.join(workDir, 'pre554-delta.csv')
+
+    generateDeltaCSV(older, newer, out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+    const header = records[0]
+    const row = records[1]
+
+    expect(row[header.indexOf('retainedRssMbDelta')]).toBe('N/A')
+    expect(row[header.indexOf('retainedHeapUsedMbDelta')]).toBe('N/A')
+    expect(row[header.indexOf('retainedExternalMbDelta')]).toBe('N/A')
+    // No re-blessing: everything both files carry still computes, so an old
+    // baseline stays usable for every column it actually measured.
+    expect(row[header.indexOf('totalTimeMsDelta')]).toBe('0')
+    expect(row[header.indexOf('peakWasmHeapMbDelta')]).toBe('0')
+    expect(row[header.indexOf('peakRssMbDelta')]).toBe('0')
+  })
+
+  test('reports a run that could not settle as N/A, not as zero retention', () => {
+    // `--expose-gc` absent on one side: the child wrote N/A into the three
+    // retention columns rather than an unsettled difference. That must
+    // propagate. A zero here would be the worst possible reading — "this
+    // release retains nothing" — from a run that measured nothing.
+    const unsettled = csvRow([
+      '20260821154725', 'OK', 'x64', 'conway1.550.1516-ci', 'skylark.ifc',
+      'N/A', '8035', '72371', '80406', '185.836', '1283.000', '5495.645',
+      '5601.500', '3865.072', '3952.602', '432.500', '430.250', 'N/A', 'N/A',
+      'N/A', 'N/A', 'N/A',
+    ])
+
+    const older = writeDetail('unsettled-older.csv', [SKYLARK_1_451])
+    const newer = writeDetail('unsettled-newer.csv', [unsettled])
+    const out = path.join(workDir, 'unsettled-delta.csv')
+
+    generateDeltaCSV(older, newer, out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+    const header = records[0]
+    const row = records[1]
+
+    expect(row[header.indexOf('retainedRssMbDelta')]).toBe('N/A')
+    expect(row[header.indexOf('retainedHeapUsedMbDelta')]).toBe('N/A')
+    expect(row[header.indexOf('retainedExternalMbDelta')]).toBe('N/A')
+    expect(row[header.indexOf('totalTimeMsDelta')]).toBe('32103')
   })
 
   test('reports the #552 columns as N/A against a header that lacks them', () => {
@@ -365,7 +488,7 @@ describe('gen_delta_csv.cjs', () => {
     const failRow = csvRow([
       '20260821153721', 'FAIL', 'x64', 'conway1.543.1513', 'flipper.ifc',
       'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-      'N/A', 'N/A', 'N/A', 'N/A',
+      'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('fail-older.csv', [okRow])

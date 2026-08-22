@@ -16,6 +16,11 @@ import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
 import { extractModelInfo, parseFileHeader } from './loading_utilities'
 import { wasmHeapByteLength } from '../core/wasm_heap'
+import {
+  SettledMemorySample,
+  retainedMemoryMb,
+  settleAndSampleMemory,
+} from '../core/retained_memory'
 import { Statistics } from '../statistics/statistics'
 
 const ONE_KB = 1024
@@ -46,6 +51,39 @@ function recordWasmHeapPeak(
   if ( wasmModule !== void 0 ) {
     statistics.setWasmHeapPeak( wasmHeapByteLength( wasmModule ) / ONE_MB )
   }
+}
+
+/**
+ * Record what this load left behind, as a delta against the settled sample
+ * taken before it started (conway#554).
+ *
+ * Call this AFTER `model.invalidate(true)` and AFTER the total-time clock has
+ * been stopped. Both halves matter: before the teardown the figure would be
+ * the live model rather than what survives it, and inside the timed region
+ * the settle's two forced collections would land in `totalTimeMs`. The whole
+ * reason this metric is cheap is that neither sample touches the measured
+ * window — see design/new/perf-measurement.md §"Sampling".
+ *
+ * Records nothing when the settle could not run (no `--expose-gc`); the
+ * statistics then format as N/A, which is the honest answer. An unsettled
+ * difference is GC-timing noise and would be read as a leak.
+ *
+ * @param statistics The run's statistics.
+ * @param baseline The settled sample taken before the load, if any.
+ */
+async function recordRetainedMemory(
+    statistics: Statistics,
+    baseline: SettledMemorySample | undefined ): Promise<void> {
+
+  const retained = retainedMemoryMb( baseline, await settleAndSampleMemory() )
+
+  if ( retained === void 0 ) {
+    return
+  }
+
+  statistics.setRetainedRss( retained.rssMb )
+  statistics.setRetainedHeapUsed( retained.heapUsedMb )
+  statistics.setRetainedExternal( retained.externalMb )
 }
 
 /**
@@ -100,6 +138,22 @@ export class ConwayModelLoader {
       maximumCSGDepth: number = 20,
       modelID: number = 0,
       options?: ModelLoadOptions ): Promise<[Model, Scene]> {
+
+    // Settled pre-load baseline for the retention columns (conway#554),
+    // taken before the clock starts so the two forced collections cannot
+    // reach `totalTimeMs`.
+    //
+    // The issue asks for a baseline taken AFTER engine/wasm init, so a
+    // model's retention does not carry the module's fixed cost. That point
+    // does not exist outside the timed region here: this loader brings up its
+    // own `ConwayGeometry` per load, inside the window `allTimeStart` opens.
+    // Taking the baseline at entry keeps the no-perturbation property, at the
+    // cost of counting that per-load module against the cycle — which is a
+    // real retention on this path, since nothing releases it. The regression
+    // children initialise once in `main()` and so do get the after-init
+    // baseline; the two are therefore not comparable across pipelines, the
+    // same caveat `geometryMemoryMb` already carries.
+    const memoryBaseline = await settleAndSampleMemory()
 
     const allTimeStart = Date.now()
 
@@ -314,6 +368,10 @@ export class ConwayModelLoader {
 
             statistics.setMemoryStatistics(Memory.checkMemoryUsage())
           }
+
+          // After the teardown above and after the clock stopped; see
+          // recordRetainedMemory.
+          await recordRetainedMemory(statistics, memoryBaseline)
 
           Logger.displayLogs()
           Logger.printStatistics(modelID)
@@ -533,6 +591,10 @@ export class ConwayModelLoader {
 
             statistics.setMemoryStatistics(Memory.checkMemoryUsage())
           }
+
+          // After the teardown above and after the clock stopped; see
+          // recordRetainedMemory.
+          await recordRetainedMemory(statistics, memoryBaseline)
 
           Logger.displayLogs()
           Logger.printStatistics(modelID)

@@ -74,6 +74,9 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'heapTotalMbDelta',
         'externalMbDelta',
         'arrayBuffersMbDelta',
+        'retainedRssMbDelta',
+        'retainedHeapUsedMbDelta',
+        'retainedExternalMbDelta',
       ]
     : [
         'timestamp',
@@ -98,6 +101,9 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'heapTotalMbDelta',
         'externalMbDelta',
         'arrayBuffersMbDelta',
+        'retainedRssMbDelta',
+        'retainedHeapUsedMbDelta',
+        'retainedExternalMbDelta',
       ];
 
   const lines = [];
@@ -258,6 +264,16 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // so the two deltas are not independent — read them together.
           externalMbDelta: computeDelta('externalMb', entry2, entry1),
           arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
+          // A delta OF a delta: each side is already retained-minus-baseline
+          // for its own run, so this is "did the cycle get leakier". Absent
+          // from every snapshot before #554, and N/A in any run whose
+          // children had no --expose-gc, both of which computeDelta reports
+          // as N/A rather than differencing against zero.
+          retainedRssMbDelta: computeDelta('retainedRssMb', entry2, entry1),
+          retainedHeapUsedMbDelta:
+            computeDelta('retainedHeapUsedMb', entry2, entry1),
+          retainedExternalMbDelta:
+            computeDelta('retainedExternalMb', entry2, entry1),
         });
       } else {
         // Present in data1, missing in data2
@@ -280,6 +296,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           heapTotalMbDelta: 'N/A',
           externalMbDelta: 'N/A',
           arrayBuffersMbDelta: 'N/A',
+          retainedRssMbDelta: 'N/A',
+          retainedHeapUsedMbDelta: 'N/A',
+          retainedExternalMbDelta: 'N/A',
         });
       }
     }
@@ -307,6 +326,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           heapTotalMbDelta: 'N/A',
           externalMbDelta: 'N/A',
           arrayBuffersMbDelta: 'N/A',
+          retainedRssMbDelta: 'N/A',
+          retainedHeapUsedMbDelta: 'N/A',
+          retainedExternalMbDelta: 'N/A',
         });
       }
     }
@@ -353,6 +375,16 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // so the two deltas are not independent — read them together.
           externalMbDelta: computeDelta('externalMb', entry2, entry1),
           arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
+          // A delta OF a delta: each side is already retained-minus-baseline
+          // for its own run, so this is "did the cycle get leakier". Absent
+          // from every snapshot before #554, and N/A in any run whose
+          // children had no --expose-gc, both of which computeDelta reports
+          // as N/A rather than differencing against zero.
+          retainedRssMbDelta: computeDelta('retainedRssMb', entry2, entry1),
+          retainedHeapUsedMbDelta:
+            computeDelta('retainedHeapUsedMb', entry2, entry1),
+          retainedExternalMbDelta:
+            computeDelta('retainedExternalMb', entry2, entry1),
         });
       } else {
         deltas.push({
@@ -378,6 +410,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           heapTotalMbDelta: 'N/A',
           externalMbDelta: 'N/A',
           arrayBuffersMbDelta: 'N/A',
+          retainedRssMbDelta: 'N/A',
+          retainedHeapUsedMbDelta: 'N/A',
+          retainedExternalMbDelta: 'N/A',
         });
       }
     }
@@ -408,6 +443,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           heapTotalMbDelta: 'N/A',
           externalMbDelta: 'N/A',
           arrayBuffersMbDelta: 'N/A',
+          retainedRssMbDelta: 'N/A',
+          retainedHeapUsedMbDelta: 'N/A',
+          retainedExternalMbDelta: 'N/A',
         });
       }
     }

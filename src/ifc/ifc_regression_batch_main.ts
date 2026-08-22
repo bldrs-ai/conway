@@ -12,6 +12,46 @@ import pLimit from 'p-limit'
 const errorCSVHeader = 'message,count,expressids,file'
 const exec = promisify( childProcess.exec )
 
+/** Node flags every regression child is launched with, GC aside. */
+const CHILD_NODE_FLAGS = '--experimental-specifier-resolution=node'
+
+/**
+ * Whether to launch regression children with `--expose-gc`.
+ *
+ * That flag is what makes the retention columns measurable at all
+ * (conway#554): without it `global.gc` is undefined, a child cannot run the
+ * `gc(); await setImmediate(); gc()` settle, and it writes `N/A` for
+ * `retainedRssMb` / `retainedHeapUsedMb` / `retainedExternalMb` rather than an
+ * unsettled difference. Passing it was measured before it was adopted:
+ * MB-Khaya through the IFC path with the flag passed but no `gc()` call
+ * anywhere, off/on interleaved to control for page-cache warmth, moved
+ * geometry time by 31 ms against a 375 ms within-group spread with the sign
+ * flipping between stages — no effect distinguishable from run-to-run noise.
+ *
+ * That the FLAG is free does not by itself establish that CALLING `gc()` is,
+ * and `CONWAY_PERF_EXPOSE_GC` is what makes that testable. The design says
+ * both samples sit outside the timed region — baseline before the load,
+ * retained sample after teardown — so a run with the flag and a run without
+ * should produce the same timing columns from identical code. Set the
+ * variable to `0`, `false` or `off` for the without side of that A/B. If the
+ * timing columns move between the two, the settle is reaching the measured
+ * window, and that is a bug rather than a tolerance.
+ *
+ * @return {boolean} True unless CONWAY_PERF_EXPOSE_GC disables it.
+ */
+function exposeGcRequested(): boolean {
+
+  const setting = process.env.CONWAY_PERF_EXPOSE_GC
+
+  if ( setting === void 0 ) {
+    return true
+  }
+
+  const normalized = setting.trim().toLowerCase()
+
+  return normalized !== '0' && normalized !== 'false' && normalized !== 'off'
+}
+
  
 /**
  * Safe execute a process command with cancellation support.
@@ -356,7 +396,11 @@ async function runForFile(filePath: string,
     './compiled/src/AP214E3_2010/ap214_regression_main.js' :
     './compiled/src/ifc/ifc_regression_main.js'
 
-  const safeExecCommand = `node --experimental-specifier-resolution=node ${childScript} -d${perfFlag} "${filePath}" "${outputPath}"`
+  const exposeGcFlag = exposeGcRequested() ? ' --expose-gc' : ''
+
+  const safeExecCommand =
+    `node ${CHILD_NODE_FLAGS}${exposeGcFlag} ${childScript} -d${perfFlag} ` +
+    `"${filePath}" "${outputPath}"`
 
   console.log(`Current File: ${filePath}`)
 

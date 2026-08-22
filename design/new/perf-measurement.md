@@ -45,6 +45,10 @@ A retained-delta would have looked healthy on SKYLARK while the tab
 froze. A peak says nothing about whether the third load in a session
 starts from a clean floor. Record both.
 
+Since conway#554 we do. The delta half is three columns —
+`retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb` — described
+under "Retention" below.
+
 ## The metrics
 
 ### Process-level
@@ -119,6 +123,155 @@ grow-only makes it a high-water mark for free, with no sampling.
 Use `wasmHeapByteLength`, **not** `HEAPU8.length`: the module's cached view
 can be a growth step behind the real heap (#485), and a high-water figure
 that under-reports is worse than none.
+
+### Retention (conway#554)
+
+| column | source | peak, instant or delta |
+|---|---|---|
+| `retainedRssMb` | settled `memoryUsage().rss` | **delta** |
+| `retainedHeapUsedMb` | settled `memoryUsage().heapUsed` | **delta** |
+| `retainedExternalMb` | settled `memoryUsage().external` | **delta** |
+
+Each is one settled sample taken **after the model was torn down** minus
+one settled sample taken **before the load began**, so it is what a full
+load/teardown cycle left behind. They are the only columns in the file
+that answer *do we leak?*; every other memory column answers *does this
+survive?*, and a leak that fits inside the peak is invisible to all of
+them.
+
+They are **signed**. A cycle can legitimately end below its baseline,
+and clamping that at zero would make an improvement indistinguishable
+from no change.
+
+They read **`N/A` wherever `global.gc` was not exposed**. See
+"`--expose-gc`" below.
+
+**The shape: option 1, load → teardown → settle → sample, same
+process.** conway#554 listed three options, the other two being N
+repeats of one model and N different models in sequence. Option 1 was
+chosen. The consequence worth stating is that one cycle *is* one
+model-load, so retention is a per-model figure and belongs as ordinary
+columns on `performance-detail.csv` rather than in a CSV of its own.
+The repetition options remain the way to catch slow accumulation that a
+single cycle rounds away; this does not close that off.
+
+**Where the boundaries are.**
+
+- *Teardown* is `model.invalidate(true)`. On the loader path that call
+  already existed (`src/loaders/conway_model_loader.ts`). On the
+  regression children it did **not** — the CLIs both called it after
+  extraction and the children simply ran to process exit — so #554
+  added it. That is recorded rather than glossed: without a teardown
+  boundary there is nothing to measure retention *across*, and a sample
+  taken at that point would be the live model rather than what survives
+  it. It runs after the perf figures are captured and before the
+  digest; `invalidate` drops JS-side caches that rematerialise on
+  demand, and the digests are byte-identical with and without it
+  (checked on AC20-FZK-Haus and DSA2).
+- *Baseline* is after engine/wasm init and immediately before the load,
+  not at process start. Sampling before init would fold the wasm
+  module's fixed cost into every model's retention and make them all
+  look leaky by the same constant.
+
+**Two places the baseline cannot be where that rule wants it**, both
+worth knowing before reading a number:
+
+1. The **loader path** brings up its own `ConwayGeometry` per load,
+   *inside* the region `allTimeStart` opens, so there is no point that
+   is both after init and outside the timed region. The baseline is
+   taken at function entry instead — which keeps the no-perturbation
+   property, at the cost of counting that per-load module against the
+   cycle. Nothing releases it, so that is a real retention on that
+   path, but it is a large constant sitting on top of the model-specific
+   figure.
+2. The **IFC regression child** initialises one engine in `main()` and
+   then `geometryExtraction` constructs a *second* one, which is the
+   engine the extraction actually runs against. Measured on MB-Khaya:
+   engine A holds a 16 MB initial arena and does no work, engine B
+   holds 106.5 MB. So roughly 100 MB of that model's 388 MB
+   `retainedRssMb` is engine B's linear memory, created inside the
+   window and never freed. The AP214 child uses the single module-level
+   engine and has no such term.
+
+So, exactly as with `geometryMemoryMb`, **do not difference a retention
+figure across pipelines.** Within one pipeline the figure is stable: five
+MB-Khaya runs through the IFC child gave `retainedRssMb` 382.86-390.98,
+`retainedHeapUsedMb` 10.76-10.80, `retainedExternalMb` 47.77 every time.
+
+**No `retainedWasmHeapMb`.** conway#554 proposed one and it is
+deliberately excluded. `wasmHeapByteLength` is grow-only — it does not
+fall when natives are freed — so over a single cycle a "retained wasm
+heap" would always equal `peakWasmHeapMb` wearing a different name. A
+metric whose name lies about what it measures is exactly what this file
+exists to prevent. The wasm side is covered by `peakWasmHeapMb`. A
+genuine native-retention figure needs live allocation (the native's own
+`getAllocationSize`, the third quantity in the table above), which is a
+larger change.
+
+### `--expose-gc`, and the N/A fallback
+
+The settle needs `global.gc`, which node only defines under
+`--expose-gc`. Before #554 nothing in the repo passed it, so the
+retention columns could not have been measured at all.
+
+Both halves of the decision are implemented:
+
+- **The flag is passed.** `ifc_regression_batch_main.ts` launches every
+  regression child with it, and `scripts/benchmark.cjs` puts it in the
+  render server's `NODE_OPTIONS`. `CONWAY_PERF_EXPOSE_GC=0` (also
+  `false`, `off`) turns it off in both places — see the A/B below for
+  why that switch exists.
+- **`N/A` is emitted where it is absent.** `settleAndSampleMemory`
+  returns `undefined` rather than falling back to an unsettled
+  `process.memoryUsage()`, and every writer turns that into `N/A`.
+
+That fallback is not a nicety. An unsettled retention figure is
+GC-timing noise wearing a number, and it would be read as a leak
+signal — the same family as the `parseValue` -> `0.0` fabrication #548
+fixed. SKYLARK250's 2547 MB un-GC'd against 981 MB settled is the scale
+of noise on offer.
+
+Passing the flag was measured before it was adopted, on #554: MB-Khaya
+through the IFC path, flag passed but no `gc()` call anywhere,
+off/on interleaved with the page cache pre-warmed, moved geometry time
+by 31 ms against a 375 ms within-group spread, sign flipping between
+stages. (A first pass suggested a 10% speedup; all the off-runs had run
+first, so a cold page cache loaded the first sample. Interleaving
+removed it entirely.)
+
+### The timing property, and how to check it by measurement
+
+**Both samples sit outside the timed region** — baseline before the
+load starts, retained sample after teardown — so the forced collections
+never run inside the window that produces `parseTimeMs` /
+`geometryTimeMs` / `totalTimeMs`. This is the whole reason option 1
+costs nothing, and unlike live-heap peak sampling it is a property that
+can be *tested* rather than asserted: with the code identical, a run
+with `--expose-gc` and a run without differ only in whether the settle
+executes.
+
+- **Timing columns hold** -> the property is confirmed.
+- **Timing columns move** -> the settle is leaking into the measured
+  window, which is a bug to fix before anything is blessed against
+  those numbers.
+
+Measured that way at implementation time, MB-Khaya through the IFC
+regression child, five runs per side interleaved:
+
+| | parse (mean of 5) | geometry (mean of 5) | total (mean of 5) |
+|---|---|---|---|
+| gc off | 578.2 ms | 4067.0 ms | 4645.2 ms |
+| gc on | 588.0 ms | 4103.8 ms | 4691.8 ms |
+| difference | +9.8 ms | +36.8 ms | +46.6 ms |
+| within-group spread | 25-55 ms | 166-201 ms | 185-218 ms |
+
+Every difference is well inside the spread of its own group, which is
+what the design predicts. n=5 does not exclude an effect of about 1%;
+it does exclude anything that would matter to a regression signal.
+
+`CONWAY_PERF_EXPOSE_GC` exists so this A/B can be run against a released
+build without editing code — otherwise "flag off" would mean "different
+code", and the comparison would prove nothing about either variable.
 
 ## Rejected: `total = heapUsed + external` as the headline
 
@@ -211,7 +364,7 @@ against a regression-child figure. Tracked separately.
 | 1.451 → 1.543 | `geometryMemoryMb` silently became `N/A` | the conway-native perf writers never emitted it; the gap was written into a test as intended behaviour rather than fixed |
 | #548 | delta stops fabricating values for missing columns | `parseValue` returned `0.0`; see "The rule for changing fields" |
 | #552 (via #553) | add `peakRssMb`, `externalMb`, `arrayBuffersMb`, `peakWasmHeapMb`; restore `geometryMemoryMb` | memory was one un-GC'd instant, and the wasm heap was invisible |
-| #554 | *open* — retention across a load/teardown cycle | nothing measures what is held after teardown |
+| #554 | add `retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb`; pass `--expose-gc` to the regression children and the render server; add the teardown the regression children never had | nothing measured what is held after teardown, and a peak cannot see it |
 
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads
 **185.22** against the **185.836** recorded at 1.451.

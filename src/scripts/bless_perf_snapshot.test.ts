@@ -8,8 +8,8 @@ import { createRequire } from 'module'
  * The rc-regression bless path's perf snapshot (scripts/bless_perf_snapshot.cjs).
  *
  * The `rebless` job measures the full corpus with
- * `ifc_regression_batch_main --perf`, whose 13-column perf.csv is a different
- * file from the 19-column `performance-detail.csv` the committed benchmark
+ * `ifc_regression_batch_main --perf`, whose 16-column perf.csv is a different
+ * file from the 22-column `performance-detail.csv` the committed benchmark
  * snapshots use. This pins the mapping between them — the shape a delta and
  * GitHub's CSV viewer both depend on — and the choice of predecessor to diff
  * against.
@@ -51,7 +51,7 @@ afterEach(() => {
 
 describe('writeDetailCsv', () => {
 
-  test('maps perf.csv onto the 19-column convention, N/A for unmeasured', () => {
+  test('maps perf.csv onto the 22-column convention, N/A for unmeasured', () => {
     const out = path.join(workDir, 'performance-detail.csv')
 
     writeDetailCsv(
@@ -69,6 +69,9 @@ describe('writeDetailCsv', () => {
         heapTotalMb: '450.00',
         externalMb: '96.40',
         arrayBuffersMb: '94.10',
+        retainedRssMb: '132.75',
+        retainedHeapUsedMb: '41.50',
+        retainedExternalMb: '-2.25',
       }],
       out, 'conway1.543.1513-ci', '20260821221710')
 
@@ -105,6 +108,12 @@ describe('writeDetailCsv', () => {
     // is a far larger number than the geometryMemoryMb payload beside it.
     expect(cell('geometryMemoryMb')).toBe('185.84')
     expect(cell('peakWasmHeapMb')).toBe('1283.00')
+    // The #554 retention columns. Signed, and the negative one is the point:
+    // a cycle can end below its baseline, and clamping that to 0 would hide
+    // the direction a fix moves the number in.
+    expect(cell('retainedRssMb')).toBe('132.75')
+    expect(cell('retainedHeapUsedMb')).toBe('41.50')
+    expect(cell('retainedExternalMb')).toBe('-2.25')
     expect(cell('peakRssMb')).toBe('905.75')
     expect(cell('externalMb')).toBe('96.40')
     expect(cell('arrayBuffersMb')).toBe('94.10')
@@ -124,9 +133,11 @@ describe('writeDetailCsv', () => {
 
   test('writes N/A for a perf.csv that predates the memory columns', () => {
     // A perf.csv artifact written before #552 has none of geometryMemoryMb,
-    // peakWasmHeapMb, peakRssMb, externalMb or arrayBuffersMb. The mapping must degrade to
-    // N/A rather than emitting 'undefined' into a column a delta then reads
-    // as a measurement.
+    // peakWasmHeapMb, peakRssMb, externalMb or arrayBuffersMb, and one
+    // written before #554 has none of the retention columns either — as does
+    // any run whose children had no --expose-gc to settle with. The mapping
+    // must degrade to N/A rather than emitting 'undefined' into a column a
+    // delta then reads as a measurement.
     const out = path.join(workDir, 'legacy.csv')
 
     writeDetailCsv(
@@ -144,6 +155,9 @@ describe('writeDetailCsv', () => {
     expect(row[DETAIL_COLUMNS.indexOf('peakRssMb')]).toBe('N/A')
     expect(row[DETAIL_COLUMNS.indexOf('externalMb')]).toBe('N/A')
     expect(row[DETAIL_COLUMNS.indexOf('arrayBuffersMb')]).toBe('N/A')
+    expect(row[DETAIL_COLUMNS.indexOf('retainedRssMb')]).toBe('N/A')
+    expect(row[DETAIL_COLUMNS.indexOf('retainedHeapUsedMb')]).toBe('N/A')
+    expect(row[DETAIL_COLUMNS.indexOf('retainedExternalMb')]).toBe('N/A')
     // The columns it does carry are unaffected.
     expect(row[DETAIL_COLUMNS.indexOf('rssMb')]).toBe('812.50')
   })

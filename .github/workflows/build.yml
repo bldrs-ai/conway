@@ -1180,7 +1180,7 @@ jobs:
               print("performance-detail.csv is empty.")
               sys.exit(0)
           rows.sort(key=lambda r: r.get('filename',''))
-          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','peakWasmHeapMb','rssMb','peakRssMb','heapUsedMb']
+          cols = ['filename','loadStatus','schemaVersion','parseTimeMs','geometryTimeMs','totalTimeMs','geometryMemoryMb','peakWasmHeapMb','rssMb','peakRssMb','heapUsedMb','retainedRssMb']
           print("| " + " | ".join(cols) + " |")
           print("|" + " --- |" * len(cols))
           for r in rows:
@@ -1250,8 +1250,13 @@ jobs:
           # sample; both are N/A against a baseline blessed before conway#552.
           # Δ external is off-heap bytes heapUsed cannot see. Its arrayBuffers
           # subset is in the CSV rather than here, to keep this table readable.
-          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','peakWasmHeapMbDelta','rssMbDelta','peakRssMbDelta','externalMbDelta']
-          headers = ['file','prev ms','curr ms','Δ ms','Δ %','Δ geomMem MB','Δ wasm heap MB','Δ RSS MB','Δ peak RSS MB','Δ external MB']
+          # Δ retained RSS is a delta OF a delta: each side is already what one
+          # load/teardown cycle left behind (conway#554), so a positive number
+          # here means the cycle got leakier. N/A before #554, and in any run
+          # whose children had no --expose-gc. Its heapUsed/external siblings
+          # are in the CSV rather than here, same readability trade.
+          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','peakWasmHeapMbDelta','rssMbDelta','peakRssMbDelta','externalMbDelta','retainedRssMbDelta']
+          headers = ['file','prev ms','curr ms','Δ ms','Δ %','Δ geomMem MB','Δ wasm heap MB','Δ RSS MB','Δ peak RSS MB','Δ external MB','Δ retained RSS MB']
           print(f"### Δ vs previous run [#{prev_run_id}](https://github.com/bldrs-ai/conway/actions/runs/{prev_run_id})")
           print()
           print("| " + " | ".join(headers) + " |")
@@ -1497,7 +1502,7 @@ jobs:
                   'max': f"{max(vals):.0f}",
                   'stddev': f"{(statistics.stdev(vals) if len(vals) > 1 else 0):.0f}",
               }
-          cols = ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb', 'peakWasmHeapMb', 'rssMb', 'peakRssMb']
+          cols = ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb', 'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'retainedRssMb']
           s = {c: col_stats(c) for c in cols}
           print(f"**Pass/fail**: {len(ok_rows)} passing / {fail} failing of {total} total.")
           print()
@@ -1600,6 +1605,7 @@ jobs:
           peak_d   = col_stats('peakRssMbDelta',    [parse_num(r.get('peakRssMbDelta','')) for r in common])
           ext_d    = col_stats('externalMbDelta',   [parse_num(r.get('externalMbDelta','')) for r in common])
           wasm_d   = col_stats('peakWasmHeapMbDelta', [parse_num(r.get('peakWasmHeapMbDelta','')) for r in common])
+          ret_d    = col_stats('retainedRssMbDelta', [parse_num(r.get('retainedRssMbDelta','')) for r in common])
           # Track regressions/improvements at a glance.
           pct_vals = [parse_pct(r.get('totalTimeMsPercentageChange','')) for r in common]
           pct_vals = [v for v in pct_vals if v is not None]
@@ -1611,9 +1617,9 @@ jobs:
           print(f"**Models compared (OK on both sides)**: {len(common)} of {len(rows)} delta rows.")
           print(f"**Regressed / improved / flat (by totalTimeMs)**: {regr} / {impr} / {flat}.")
           print()
-          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','peakWasmHeapMbDelta','rssMbDelta','peakRssMbDelta','externalMbDelta']
-          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %','Δ geomMem MB','Δ wasm heap MB','Δ RSS MB','Δ peak RSS MB','Δ external MB']
-          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d, 'geometryMemoryMbDelta': gmem_d, 'peakWasmHeapMbDelta': wasm_d, 'rssMbDelta': rss_d, 'peakRssMbDelta': peak_d, 'externalMbDelta': ext_d}
+          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','peakWasmHeapMbDelta','rssMbDelta','peakRssMbDelta','externalMbDelta','retainedRssMbDelta']
+          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %','Δ geomMem MB','Δ wasm heap MB','Δ RSS MB','Δ peak RSS MB','Δ external MB','Δ retained RSS MB']
+          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d, 'geometryMemoryMbDelta': gmem_d, 'peakWasmHeapMbDelta': wasm_d, 'rssMbDelta': rss_d, 'peakRssMbDelta': peak_d, 'externalMbDelta': ext_d, 'retainedRssMbDelta': ret_d}
           print("| " + " | ".join(headers) + " |")
           print("|" + " --- |" * len(headers))
           for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:
