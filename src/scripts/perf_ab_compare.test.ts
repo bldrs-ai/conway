@@ -240,6 +240,23 @@ describe('summariseColumn', () => {
     expect(stat.medianRatio).toBeCloseTo(2.0)
   })
 
+  test('a zero on the control side is floored, not dropped uncounted', () => {
+    // 0 ms is BELOW the 10 ms floor, so it belongs in `floored`. Testing
+    // `off === 0` ahead of the floor dropped such a row out of both counts,
+    // leaving n + floored unable to account for every pair - which the
+    // module header promises they can. Reachable: box.ifc parses in 1 ms in
+    // the committed snapshots, one Date.now() tick from 0, and a
+    // zero-geometry model's geometryTimeMs is the same story.
+    const stat = summariseColumn(
+      pairs([{ geometryTimeMs: '0' }, { geometryTimeMs: '200' }],
+        [{ geometryTimeMs: '0' }, { geometryTimeMs: '100' }]),
+      'geometryTimeMs', true)
+
+    expect(stat.floored).toBe(1)
+    expect(stat.n).toBe(1)
+    expect(stat.floored + stat.n).toBe(2)
+  })
+
   test('the floor is not applied to the memory columns', () => {
     const stat = summariseColumn(
       pairs([{ heapUsedMb: '5.0' }], [{ heapUsedMb: '8.0' }]),

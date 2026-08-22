@@ -382,9 +382,11 @@ The memory columns are not: \`rssMb\` here excludes a GL context and a three.js
 scene graph, and \`geometryMemoryMb\` counts only conway's own vertex+index
 payload, without the host's copy of the same geometry. \`schemaVersion\`,
 \`preprocessorVersion\` and \`originatingSystem\` are \`N/A\` — the conway-native
-perf writer does not capture them. Every other column is measured — with the
-exception of a row whose \`loadStatus\` is not \`OK\`, which carries \`N/A\` for
-the stages the load never reached.
+perf writer does not capture them. Every other column is measured, with two
+exceptions. A row whose \`loadStatus\` is not \`OK\` carries \`N/A\` for the
+stages the load never reached. And the three retention columns carry \`N/A\`
+whenever the run had no \`--expose-gc\` to settle with, on an \`OK\` row as
+much as a failed one — see below.
 
 **"Comparable on the same runner class" is doing real work in that sentence.**
 Two conway CI regression jobs an hour apart, on near-identical code, came out
@@ -396,10 +398,13 @@ measurement unless it is far larger than 1.5x.
 \`parseTimeMs\` additionally is **not** comparable across the conway#554
 boundary. From #554 on, a forced collection settles the heap immediately
 before the parse clock starts, so the parse runs from a collected floor
-instead of collecting engine-init garbage inside the timed window. Measured
-locally over 12 interleaved pairs on two 2.5 MB models, that is worth 13-16%
-of \`parseTimeMs\`, in the direction of the newer snapshot looking faster with
-nothing in the parser having changed.
+instead of collecting engine-init garbage inside the timed window. **That is
+an absolute cost, not a percentage.** Measured locally over 12 interleaved
+pairs it was 9-12 ms per load on two 2.5 MB models — 13-16% only because
+their parse takes about 60 ms — and it is not resolvable at all against
+MB-Khaya's 578 ms parse. So it tilts a fast model's parse in the direction of
+the newer snapshot looking faster with nothing in the parser having changed,
+and leaves a slow model's alone.
 
 \`peakRssMb\` is the load's high-water mark (the kernel's, via
 \`resourceUsage().maxRSS\`); \`rssMb\`, \`heapUsedMb\`, \`heapTotalMb\`,
@@ -445,25 +450,42 @@ allocation (\`getAllocationSize\`), which is what a residency budget governs.
 The three differ by an order of magnitude and none of them converts into
 another.
 
-**Two columns are comparable only within one pipeline, and this file mixes
-two.** IFC models are measured by the IFC regression child and STEP models by
-the AP214 one. \`geometryMemoryMb\` is sampled at different points under
-different CSG options in the two — 16.8 vs 22.3 MB for the same model through
-two conway pipelines
-([conway#555](https://github.com/bldrs-ai/conway/issues/555)). The retention
-columns carry their own split: the IFC child brings up a *second* wasm engine
-inside the measured window and never frees it, so roughly 100 MB of an IFC
-model's \`retainedRssMb\` is that engine rather than the model, while the
-AP214 child has no such term
-([conway#557](https://github.com/bldrs-ai/conway/issues/557)). Difference
-these two columns against the same pipeline's own history — never an IFC row
-against a STEP row, and never a CLI figure against one from here.
+**\`geometryMemoryMb\` is comparable only within one writer, and the writers
+that disagree are not the two in this file.** The IFC **CLI** and the IFC
+regression child read 16.8 vs 22.3 MB for the same model: the same
+\`calculateGeometrySize()\`, sampled at different points in two pipelines
+running different CSG options
+([conway#555](https://github.com/bldrs-ai/conway/issues/555)). Every row here
+comes from a regression child, so the hazard is differencing one of these
+figures against a CLI-produced one — which a delta will do without saying so.
+IFC rows against STEP rows within this file is a different pair, and that pair
+has not been measured to disagree.
+
+**The retention columns carried a second, unrelated split until conway#557
+([conway#557](https://github.com/bldrs-ai/conway/issues/557)).** The IFC
+regression child used to build a *second* \`ConwayGeometry\` inside
+\`geometryExtraction\`, so that engine's linear memory was allocated inside
+the retention window and never released — against the 16 MB idle arena of the
+engine \`main()\` had initialised, worth a ~55-60 MB constant on every IFC row
+regardless of model size, plus its \`initialize()\` inside \`geometryTimeMs\`.
+From #557 on both regression children extract on the single engine they
+initialised before the baseline, so the two are the same shape and this file's
+IFC and STEP rows no longer differ by construction. What does NOT survive that
+boundary is a comparison with an older snapshot: IFC \`retainedRssMb\`,
+\`peakRssMb\` and \`geometryTimeMs\` all step down once at #557 on unchanged
+geometry — MB-Khaya's \`retainedRssMb\` 379-389 to 326-333, \`index.ifc\` 58.96
+to 2.38, \`IfcOpenHouse_IFC4\`'s \`geometryTimeMs\` 156 to 70 ms, with digests
+byte-identical throughout. The one cross-pipeline split left is the loader
+path, which brings up a \`ConwayGeometry\` per load inside its own timed
+region; nothing in this file comes from there.
 
 Snapshots blessed before conway#552 carry none of \`peakWasmHeapMb\`,
 \`peakRssMb\`, \`externalMb\` or \`arrayBuffersMb\`, nor a measured
 \`geometryMemoryMb\`, and nothing blessed before conway#554 carries the three
 retention columns, so those columns come out \`N/A\` in a delta against them. That is a missing
-measurement, not a zero: do not read it as "no change".
+measurement, not a zero: do not read it as "no change". A snapshot blessed
+before conway#557 carries those columns but populated differently on its IFC
+rows; see the #557 note above before differencing one.
 
 ## Regenerating
 

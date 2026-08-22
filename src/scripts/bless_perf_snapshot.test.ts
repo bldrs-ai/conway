@@ -488,6 +488,45 @@ describe('renderReadme', () => {
     expect(text).toContain('The control pass is never blessed')
   })
 
+  test('the N/A inventory covers the retention columns, not just FAIL rows', () => {
+    // A settle-less snapshot used to assert both 'Every other column is
+    // measured - with the exception of a row whose loadStatus is not OK' and
+    // 'Retention is `N/A` on every row here', four paragraphs apart in one
+    // file. The retention columns read N/A on an OK row whenever the run had
+    // no --expose-gc, which is exactly the run this branch describes.
+    const text = renderReadme({ ...info, retentionCount: 0 })
+
+    expect(text).toContain('Retention is `N/A` on every row here')
+    expect(text).not.toContain('Every other column is measured — with the')
+    expect(text).toContain('the three retention columns carry `N/A`')
+    expect(text).toContain('on an `OK` row as\nmuch as a failed one')
+  })
+
+  test('attributes the geometryMemoryMb split to the writers #555 measured', () => {
+    // #555 measured 16.8 vs 22.3 MB between `ifc_command_line_main` and the
+    // IFC regression child - two IFC pipelines. MB-Khaya never reaches the
+    // AP214 child, so pinning that figure to the IFC-row-vs-STEP-row split
+    // this file mixes would cite evidence for a claim it does not support.
+    const text = renderReadme(info)
+
+    expect(text).toContain('The IFC **CLI** and the IFC\nregression child read 16.8 vs 22.3 MB')
+    expect(text).toContain('has not been measured to disagree')
+  })
+
+  test('describes the second-engine term as closed by #557, not as current', () => {
+    // conway#557 landed: both regression children now extract on the engine
+    // main() initialised. A README still saying an IFC row carries ~100 MB of
+    // second engine would be describing a world that no longer exists - and
+    // the boundary that DOES matter now is that pre-#557 snapshots carry the
+    // constant and this one does not.
+    const text = renderReadme(info)
+
+    expect(text).toContain('carried a second, unrelated split until conway#557')
+    expect(text).toContain('~55-60 MB constant on every IFC row')
+    expect(text).not.toContain('roughly 100 MB')
+    expect(text).toContain('A snapshot blessed\nbefore conway#557')
+  })
+
   test('warns off the misreadings the columns invite', () => {
     const text = renderReadme(info)
 

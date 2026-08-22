@@ -373,7 +373,11 @@ excluded properly.
 
 Measured while wiring the CI A/B up: 12 interleaved pairs on a dev
 machine, four models through the IFC regression child, one batch run
-per side per pair.
+per side per pair. Taken against pre-#557 code, so the absolute
+`geometryTimeMs` figures below no longer reproduce — #557 removed a
+second `initialize()` from inside that window (IfcOpenHouse_IFC4 156 ->
+70 ms). It cannot touch the parse column: the second engine was
+constructed in `geometryExtraction`, after `parseEndMs`.
 
 | model | parse, gc on | parse, gc off |
 |---|---|---|
@@ -388,6 +392,19 @@ is the property holding. `parseTimeMs` did: **13-16% lower with the
 flag on** on the two mid-size models, with the ranges barely
 overlapping.
 
+**It is an absolute cost, and it does not generalise up the corpus.**
+The gap is 8.7 and 11.5 ms on the two 2.5 MB models and 0.4 and 1.2 ms
+on the two small ones; the fraction reads 13-16% only because those two
+parses take about 60 ms. The MB-Khaya table further up is the same
+effect at the other end of the range and is *not* a contradiction of
+this one: 578.2 ms gc-off against 588.0 ms gc-on, n=5 — the opposite
+sign, and well inside a 25-55 ms within-group spread, which is what a
+~10 ms shift looks like when it is 1.7% of the figure it is shifting.
+So expect the corpus-wide median `parseTimeMs` ratio the rc job reports
+to sit far nearer 1.00 than 0.85, weighted as it is by models that
+parse in hundreds of ms, and read a per-model ratio against that
+model's own parse time rather than against the percentage.
+
 The mechanism is the pre-load settle, not the flag. `--expose-gc` alone
 measured neutral in two separate experiments (#554). What moves parse
 is that the settle's two collections run immediately before
@@ -400,12 +417,15 @@ sampled at end of load, downstream of the baseline settle.
 
 Two consequences worth stating before anyone reads a trend:
 
-1. **`parseTimeMs` is not comparable across the #554 boundary.** Older
-   blessed snapshots were taken with no pre-load settle, so their parse
-   figures carry a collection this one does not. A delta across that
-   boundary shows a parse improvement that is a change of methodology,
-   not of the parser. Same for `heapUsedMb` and `rssMb`, in the other
-   direction.
+1. **`parseTimeMs` is not comparable across the #554 boundary** for
+   anything that parses quickly. Older blessed snapshots were taken
+   with no pre-load settle, so their parse figures carry a collection
+   this one does not. A delta across that boundary shows a parse
+   improvement that is a change of methodology, not of the parser —
+   about 10 ms of it, so material on a 60 ms parse and lost in the
+   noise on a 600 ms one. Same for `heapUsedMb` and `rssMb`, in the
+   other direction. Distinct from the #557 boundary, which moves
+   `geometryTimeMs` and the memory columns on IFC rows only.
 2. **The control pass's memory columns are not a defect report.** Only
    the timing columns carry the question the A/B is asking; the memory
    rows in the comparison output are there so their (expected)

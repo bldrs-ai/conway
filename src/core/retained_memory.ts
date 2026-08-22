@@ -119,10 +119,12 @@ export function canSettleMemory(): boolean {
  * in the timing columns between them is down to the settle. The SIGN says
  * which way: gc-on slower is the settle leaking into the measured window,
  * which is a bug; gc-on faster is the pre-load settle taking engine-init
- * garbage OUT of that window, which is why `parseTimeMs` measures 13-16%
- * lower with the flag on. `rc-regression.yml` runs both conditions in one
- * job; see design/new/perf-measurement.md §"The settle also cleans the
- * window".
+ * garbage OUT of that window. That is an absolute cost of about 10 ms per
+ * load, measured as 13-16% of `parseTimeMs` on models that parse in ~60 ms
+ * and unresolvable against one that parses in 578 ms, so read a ratio
+ * against the model's own parse time. `rc-regression.yml` runs both
+ * conditions in one job; see design/new/perf-measurement.md §"The settle
+ * also cleans the window".
  *
  * @return {Promise<SettledMemorySample | undefined>} The settled sample, or
  * undefined where no collector is exposed — in which case the caller emits

@@ -50,7 +50,7 @@
  * THE MEMORY COLUMNS ARE EXPECTED TO MOVE, and their movement is not a
  * finding. The flag-on pass settles the heap immediately before the load, so
  * its end-of-load `heapUsedMb` / `rssMb` sample starts from a collected floor
- * that the flag-off pass never gets. Measured locally over four interleaved
+ * that the flag-off pass never gets. Measured locally over 12 interleaved
  * pairs on four models, `heapUsedMb` ran 5-11 MB lower with the flag on, every
  * time. They are reported for information and explicitly not read as a defect;
  * only the timing columns carry the question.
@@ -235,12 +235,23 @@ function summariseColumn(pairs, column, applyFloor) {
     const on = numeric(pair.blessed[column]);
     const off = numeric(pair.control[column]);
 
-    if (on === null || off === null || off === 0) {
+    if (on === null || off === null) {
       continue;
     }
 
+    // Floor BEFORE the divide-by-zero guard. A 0 ms stage is below the floor
+    // by definition, so testing `off === 0` first dropped such a row out of
+    // both `n` and `floored` and left the report's counts unable to account
+    // for every pair — which is exactly what the header promises they can.
+    // Not hypothetical: box.ifc parses in 1 ms in the committed snapshots,
+    // one `Date.now()` tick away from 0, and a zero-geometry model's
+    // `geometryTimeMs` is the same story.
     if (applyFloor && (on < RATIO_FLOOR_MS || off < RATIO_FLOOR_MS)) {
       ++floored;
+      continue;
+    }
+
+    if (off === 0) {
       continue;
     }
 
@@ -402,11 +413,18 @@ function renderMarkdown(comparison, label) {
       'and is not a defect in the blessed pass: the settle collects ' +
       'immediately before `parseStartMs`, so the blessed pass enters the ' +
       'timed region with the init garbage already paid for while the control ' +
-      'pass carries it in and collects it inside the window. Measured ' +
-      'locally over 12 interleaved pairs, `parseTimeMs` ran 13-16% LOWER ' +
-      'with the flag on; see design/new/perf-measurement.md. What it does ' +
-      'mean is that a `parseTimeMs` from a post-conway#554 blessed snapshot ' +
-      'is not comparable with one from before it.');
+      'pass carries it in and collects it inside the window. **That is an ' +
+      'absolute cost, not a percentage.** Measured locally over 12 ' +
+      'interleaved pairs it was 9-12 ms of `parseTimeMs` on two 2.5 MB ' +
+      'models — 13-16% only because their parse takes about 60 ms — while ' +
+      'MB-Khaya\'s 578 ms parse showed no resolvable effect at n=5, in the ' +
+      'other direction and well inside its own spread. Expect this median to ' +
+      'sit far nearer 1.00 than 0.85 for that reason, and read a per-model ' +
+      'ratio against that model\'s own parse time rather than against the ' +
+      'percentage; see design/new/perf-measurement.md. What it does mean is ' +
+      'that a `parseTimeMs` from a post-conway#554 blessed snapshot is not ' +
+      'comparable with one from before it — materially so on a fast parse, ' +
+      'unresolvably on a slow one.');
   out.push('');
   out.push(
       'Model file I/O is outside all three columns (`parseStartMs` is taken ' +

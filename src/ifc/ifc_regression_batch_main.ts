@@ -42,8 +42,9 @@ const CHILD_NODE_FLAGS = '--experimental-specifier-resolution=node'
  * Read any movement with its sign. Gc-on SLOWER means the settle is reaching
  * the measured window, which is a bug rather than a tolerance. Gc-on FASTER
  * means the opposite — the pre-load settle collects engine-init garbage that
- * the flag-off run collects inside the timed region instead, worth 13-16% of
- * `parseTimeMs` when measured.
+ * the flag-off run collects inside the timed region instead. That is about
+ * 10 ms per load: 13-16% of `parseTimeMs` on a model that parses in ~60 ms,
+ * and lost in the noise on one that parses in 578 ms.
  *
  * @return {boolean} True unless CONWAY_PERF_EXPOSE_GC disables it.
  */
