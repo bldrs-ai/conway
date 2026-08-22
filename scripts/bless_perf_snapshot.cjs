@@ -21,17 +21,18 @@
  *   perf.csv (input, written by src/ifc/ifc_regression_main.ts)
  *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,
  *     peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,
- *     arrayBuffersMb
+ *     arrayBuffersMb,retainedRssMb,retainedHeapUsedMb,retainedExternalMb
  *
  *   performance-detail.csv (output, the committed convention)
  *     timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,
  *     geometryTimeMs,totalTimeMs,geometryMemoryMb,peakWasmHeapMb,rssMb,
  *     peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb,
+ *     retainedRssMb,retainedHeapUsedMb,retainedExternalMb,
  *     preprocessorVersion,originatingSystem
  *
  * The three columns perf.csv does not carry (schemaVersion,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
- * omitted, so the file keeps the 19-column shape every existing consumer and
+ * omitted, so the file keeps the 22-column shape every existing consumer and
  * GitHub's CSV viewer expect. None of the three reaches the delta:
  * preprocessorVersion/originatingSystem are not in its column set, and
  * schemaVersion is carried through as a label.
@@ -47,7 +48,16 @@
  * magnitude — see the column-by-column note on writePerfCsvIfRequested in
  * src/ifc/ifc_regression_main.ts.
  *
- * OLD SNAPSHOTS LACK `peakWasmHeapMb`/`peakRssMb`/`externalMb`/
+ * PEAK vs DELTA (conway#554). `retainedRssMb`/`retainedHeapUsedMb`/
+ * `retainedExternalMb` are none of the above: each is a settled sample taken
+ * after the model was torn down minus a settled sample taken before the load
+ * began, so they answer "do we leak?" where every other memory column answers
+ * "does this survive?". They are signed, and `N/A` wherever the child ran
+ * without `--expose-gc` to settle with. There is no `retainedWasmHeapMb`
+ * because the wasm heap is grow-only and would just restate the peak.
+ *
+ * OLD SNAPSHOTS LACK the #554 retention columns as well as
+ * `peakWasmHeapMb`/`peakRssMb`/`externalMb`/
  * `arrayBuffersMb`, and
  * `geometryMemoryMb` was N/A on every
  * conway-native snapshot before #552. gen_delta_csv.cjs propagates an absent
@@ -80,10 +90,11 @@ const DETAIL_COLUMNS = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
   'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
-  'externalMb', 'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
+  'externalMb', 'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb',
+  'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
 ];
 
-/** Columns perf.csv does not measure; written as N/A to keep the 15-column shape. */
+/** Columns perf.csv does not measure; written as N/A to keep the 22-column shape. */
 const UNMEASURED = 'N/A';
 
 /**
@@ -166,6 +177,11 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
       row.heapTotalMb || UNMEASURED,
       row.externalMb || UNMEASURED,
       row.arrayBuffersMb || UNMEASURED,
+      // Absent from every perf.csv written before #554, and N/A in any run
+      // whose children had no --expose-gc to settle with.
+      row.retainedRssMb || UNMEASURED,
+      row.retainedHeapUsedMb || UNMEASURED,
+      row.retainedExternalMb || UNMEASURED,
       UNMEASURED,
       UNMEASURED,
     ]));
@@ -354,6 +370,14 @@ live, invisible to \`heapUsedMb\`. Neither sees the wasm heap, so
 \`heapUsedMb + externalMb\` is not a substitute for RSS: on a 31 MB model it
 reads 284 MB against an RSS of 510 MB.
 
+\`retainedRssMb\`, \`retainedHeapUsedMb\` and \`retainedExternalMb\` are the only
+columns here that answer *do we leak?* rather than *does this survive?*: each
+is a settled sample taken after the model was torn down minus a settled sample
+taken before the load began, so it is what one full load/teardown cycle left
+behind. They are signed — a cycle can end below its baseline — and they read
+\`N/A\` wherever the run had no \`--expose-gc\` to settle with, because an
+unsettled difference is GC timing rather than retention.
+
 \`peakWasmHeapMb\` is the wasm linear memory conway's geometry engine runs in,
 which nothing else here can see. It is grow-only, so one reading is the
 high-water mark. Do not read it as \`geometryMemoryMb\`: that column is the
@@ -363,7 +387,8 @@ payload under an 85 MB heap on one model in this corpus.
 
 Snapshots blessed before conway#552 carry none of \`peakWasmHeapMb\`,
 \`peakRssMb\`, \`externalMb\` or \`arrayBuffersMb\`, nor a measured
-\`geometryMemoryMb\`, so those columns come out \`N/A\` in a delta against them. That is a missing
+\`geometryMemoryMb\`, and nothing blessed before conway#554 carries the three
+retention columns, so those columns come out \`N/A\` in a delta against them. That is a missing
 measurement, not a zero: do not read it as "no change".
 
 ## Regenerating

@@ -136,6 +136,37 @@ function sleep(sec) {
 const SERVER_PORT = 8001;
 
 /**
+ * NODE_OPTIONS for the render server, adding `--expose-gc` unless
+ * CONWAY_PERF_EXPOSE_GC turns it off.
+ *
+ * Without the flag the loader's `global.gc` is undefined, it cannot run the
+ * `gc(); await setImmediate(); gc()` settle, and the three retention columns
+ * (conway#554) come out N/A for every model — a permanently empty column in
+ * the committed snapshots. NODE_OPTIONS rather than the spawn command because
+ * the server is started through `yarn serve`, so the flag has to reach a node
+ * process this script does not launch directly; `--expose-gc` is on node 22's
+ * NODE_OPTIONS allowlist (verified against the node this runs on, not
+ * remembered).
+ *
+ * Any NODE_OPTIONS already in the environment is preserved — dropping it
+ * would silently discard a caller's heap or inspector settings.
+ *
+ * The same variable gates the regression children (see
+ * `exposeGcRequested` in src/ifc/ifc_regression_batch_main.ts), so one
+ * setting flips both sides of the timing A/B the retention design is meant to
+ * be checked by.
+ * @returns {string|undefined} the NODE_OPTIONS to launch the server with.
+ */
+function serverNodeOptions() {
+  const setting = (process.env.CONWAY_PERF_EXPOSE_GC || '').trim().toLowerCase();
+  const existing = process.env.NODE_OPTIONS;
+  if (setting === '0' || setting === 'false' || setting === 'off') {
+    return existing;
+  }
+  return existing ? `${existing} --expose-gc` : '--expose-gc';
+}
+
+/**
  * Poll until an HTTP server answers on the given port, or time out.
  * A fixed post-spawn sleep races the server boot (yarn + node startup can
  * exceed it on a loaded machine) and then every render fails with
@@ -320,16 +351,29 @@ async function main() {
   // three.js host is on top of a GL context and a scene graph it also cannot
   // see. peakRssMb is the headline.
   //
+  // RETENTION (conway#554). `retainedRssMb`, `retainedHeapUsedMb` and
+  // `retainedExternalMb` are the only columns here that answer "do we leak?"
+  // rather than "does this survive?": each is a settled sample taken after the
+  // model was torn down minus a settled sample taken before the load began.
+  // Signed, because a cycle can legitimately end below its baseline. They read
+  // `N/A` unless the render server runs with `--expose-gc` (see
+  // SERVER_NODE_OPTIONS below) — an unsettled difference is GC-timing noise,
+  // and emitting it as a retention figure would read as a leak. There is
+  // deliberately no `retainedWasmHeapMb`: the wasm heap is grow-only, so over
+  // one cycle it could only restate `peakWasmHeapMb` under a name claiming to
+  // mean something else.
+  //
   // Snapshots committed before #552 have none of these three columns in this
   // header, nor the log lines to scrape them from; gen_delta_csv.cjs
   // propagates the absence as N/A rather than differencing against zero, so
-  // old baselines stay readable and do not need re-blessing.
+  // old baselines stay readable and do not need re-blessing. The same is true
+  // of the #554 retention columns against everything blessed before them.
   const DETAIL_COLUMNS = [
     'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
     'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
     'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
-    'externalMb', 'arrayBuffersMb', 'preprocessorVersion',
-    'originatingSystem',
+    'externalMb', 'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb',
+    'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
   ];
 
   fs.writeFileSync(newResults, csvRow(DETAIL_COLUMNS) + "\n", 'utf8');
@@ -397,7 +441,12 @@ async function main() {
 
     // Start the server.
     const serverCmd = `yarn serve${engineSuffix}`;
-    const serverChild = spawn(serverCmd, { cwd: serverDir, shell: true, detached:true });
+    const serverChild = spawn(serverCmd, {
+      cwd: serverDir,
+      shell: true,
+      detached: true,
+      env: { ...process.env, NODE_OPTIONS: serverNodeOptions() },
+    });
     const writeStream = fs.createWriteStream(tempServerOutputFile, { flags: 'w' });
     serverChild.stdout.pipe(writeStream);
     serverChild.stderr.pipe(writeStream);
@@ -482,6 +531,9 @@ async function main() {
       let heapTotalMb = 'N/A';
       let externalMb = 'N/A';
       let arrayBuffersMb = 'N/A';
+      let retainedRssMb = 'N/A';
+      let retainedHeapUsedMb = 'N/A';
+      let retainedExternalMb = 'N/A';
       let preprocessorVersion = 'N/A';
       let originatingSystem = 'N/A';
 
@@ -512,6 +564,30 @@ async function main() {
           if (externalMatch) externalMb = externalMatch[1];
           const arrayBuffersMatch =
             logContents.match(/ArrayBuffers: ([\d.]+) MB/);
+          // Distinct spellings, and deliberately so: every scrape in this
+          // file matches NON-globally, so the first hit in the log wins. A
+          // line reading `Retained Heap Used:` would bind to the
+          // /Heap Used: .../ pattern above and silently overwrite heapUsedMb
+          // with a delta — the same hazard #552 handled for `Peak RSS:` and
+          // `WASM Heap High-Water:`. `Heap-Used` and the trailing ` Delta:`
+          // break the RSS / Heap Used / External bindings, and
+          // src/statistics/statistics_retained_memory.test.ts pins that they
+          // do — it runs these exact patterns over a real load-summary line
+          // and asserts the peak/instant columns still come out unchanged.
+          // Follow that pointer before respelling any line below.
+          //
+          // The sign is part of the pattern: retention is a difference and
+          // can be negative, so a `[\d.]+` here would drop the minus and
+          // report a freed cycle as a retained one.
+          const retainedRssMatch =
+            logContents.match(/Retained RSS Delta: (-?[\d.]+) MB/);
+          if (retainedRssMatch) retainedRssMb = retainedRssMatch[1];
+          const retainedHeapUsedMatch =
+            logContents.match(/Retained Heap-Used Delta: (-?[\d.]+) MB/);
+          if (retainedHeapUsedMatch) retainedHeapUsedMb = retainedHeapUsedMatch[1];
+          const retainedExternalMatch =
+            logContents.match(/Retained External Delta: (-?[\d.]+) MB/);
+          if (retainedExternalMatch) retainedExternalMb = retainedExternalMatch[1];
           if (arrayBuffersMatch) arrayBuffersMb = arrayBuffersMatch[1];
           const schemaVersionMatch = logContents.match(/Version: (IFC[^\s]+)/);
           if (schemaVersionMatch) schemaVersion = schemaVersionMatch[1].slice(0, -1);
@@ -539,6 +615,17 @@ async function main() {
         const externalMatch = logContents.match(/External: ([\d.]+) MB/);
         if (externalMatch) externalMb = externalMatch[1];
         const arrayBuffersMatch = logContents.match(/ArrayBuffers: ([\d.]+) MB/);
+        // See the conway branch above for why these spellings, and why the
+        // sign is inside the capture.
+        const retainedRssMatch =
+          logContents.match(/Retained RSS Delta: (-?[\d.]+) MB/);
+        if (retainedRssMatch) retainedRssMb = retainedRssMatch[1];
+        const retainedHeapUsedMatch =
+          logContents.match(/Retained Heap-Used Delta: (-?[\d.]+) MB/);
+        if (retainedHeapUsedMatch) retainedHeapUsedMb = retainedHeapUsedMatch[1];
+        const retainedExternalMatch =
+          logContents.match(/Retained External Delta: (-?[\d.]+) MB/);
+        if (retainedExternalMatch) retainedExternalMb = retainedExternalMatch[1];
         if (arrayBuffersMatch) arrayBuffersMb = arrayBuffersMatch[1];
         parseTimeMs = 0;
         geometryTimeMs = 0;
@@ -564,6 +651,9 @@ async function main() {
         heapTotalMb,
         externalMb,
         arrayBuffersMb,
+        retainedRssMb,
+        retainedHeapUsedMb,
+        retainedExternalMb,
         preprocessorVersion,
         originatingSystem
       ]);
@@ -610,7 +700,7 @@ async function main() {
       const failLine = csvRow([
         timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
         'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-        'N/A', 'N/A', 'N/A',
+        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
       ]);
       appendLineToFile(newResults, failLine);
 

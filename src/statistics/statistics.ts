@@ -1,6 +1,43 @@
 import { versionString } from '../version/version'
 import { wasmType } from '../../dependencies/conway-geom'
 
+// Decimal places for the retained memory deltas in the load-summary line.
+// Three, matching the other MB fields on THIS line (Geometry Memory, WASM
+// Heap High-Water, and Memory.checkMemoryUsage's RSS/heap/external) — not the
+// two the regression children's perf CSVs use. That is deliberate, and the
+// two numbers are not in conflict: scripts/benchmark.cjs scrapes this line to
+// fill the loader-path CSV, so this constant is what sets that path's
+// precision, exactly as the existing 3-decimal fields already do. Lowering it
+// to 2 for "parity" would silently drop a digit from every loader-path row.
+const RETAINED_MB_PRECISION = 3
+
+/**
+ * Render one retention delta for the load-summary line.
+ *
+ * Two constraints on the spelling, and both are load-bearing.
+ *
+ * (1) The scrape in scripts/benchmark.cjs matches each memory quantity
+ * NON-globally, so the FIRST occurrence in the log wins. `Heap Used: `,
+ * `External: ` and `RSS ` followed by a number are already claimed by
+ * peak/instant columns, so a retained line spelled `Retained Heap Used:`
+ * would silently overwrite `heapUsedMb` with a delta. `Heap-Used` and the
+ * trailing ` Delta:` break every one of those bindings — see the header
+ * comment on DETAIL_COLUMNS in that file.
+ *
+ * (2) An absent measurement prints `N/A`, not a number and not `0`. A
+ * retention delta is only meaningful between two settled samples; where
+ * `global.gc` was not exposed the settle never ran, and emitting a zero (or
+ * an unsettled difference) would read as "nothing retained" rather than
+ * "not measured". Same failure #548 fixed in the delta writer.
+ *
+ * @param value The delta in MB, or undefined where the settle could not run.
+ * @return {string} `-1.234 MB`, or `N/A`.
+ */
+function formatRetained(value: number | undefined): string {
+  return value !== void 0 ?
+    `${value.toFixed(RETAINED_MB_PRECISION)} MB` : 'N/A'
+}
+
 /**
  * Class to compile a list of runtime statistics for models and memory
  */
@@ -13,6 +50,9 @@ export class Statistics {
   private totalTime: number | undefined
   private geometryMemory: number | undefined
   private wasmHeapPeak: number | undefined
+  private retainedRss: number | undefined
+  private retainedHeapUsed: number | undefined
+  private retainedExternal: number | undefined
   private preprocessorVersion: string | undefined
   private originatingSystem: string | undefined
   private memoryStatistics: string | undefined
@@ -154,6 +194,69 @@ export class Statistics {
    */
   setWasmHeapPeak(value: number) {
     this.wasmHeapPeak = value
+  }
+
+  /**
+   * RSS still held after the model was torn down, over a settled pre-load
+   * baseline (conway#554).
+   *
+   * @return {number | undefined} - retained RSS in MB, or undefined where the
+   * settle could not run
+   */
+  getRetainedRss(): number | undefined {
+    return this.retainedRss
+  }
+
+  /**
+   * Both samples behind this figure are settled (`gc(); await setImmediate();
+   * gc()`) and both sit outside the timed region, so recording it costs the
+   * timing columns nothing. Leave it undefined rather than passing an
+   * unsettled difference: that is GC-timing noise, and it would be read as a
+   * leak signal.
+   *
+   * @param value - retained RSS in MB, signed
+   */
+  setRetainedRss(value: number) {
+    this.retainedRss = value
+  }
+
+  /**
+   * V8 live heap still held after teardown, over the settled pre-load
+   * baseline (conway#554).
+   *
+   * @return {number | undefined} - retained heapUsed in MB, or undefined
+   * where the settle could not run
+   */
+  getRetainedHeapUsed(): number | undefined {
+    return this.retainedHeapUsed
+  }
+
+  /**
+   *
+   * @param value - retained heapUsed in MB, signed
+   */
+  setRetainedHeapUsed(value: number) {
+    this.retainedHeapUsed = value
+  }
+
+  /**
+   * Off-heap bytes still held after teardown, over the settled pre-load
+   * baseline (conway#554). This is where a released source buffer or parse
+   * structure that is still pinned shows up; heapUsed cannot see them.
+   *
+   * @return {number | undefined} - retained external in MB, or undefined
+   * where the settle could not run
+   */
+  getRetainedExternal(): number | undefined {
+    return this.retainedExternal
+  }
+
+  /**
+   *
+   * @param value - retained external in MB, signed
+   */
+  setRetainedExternal(value: number) {
+    this.retainedExternal = value
   }
 
   /**
@@ -311,6 +414,10 @@ export class Statistics {
 
     const products = this.productCount !== void 0 ?
       `Products: ${this.productCount}, ` : ''
+    const retained =
+      `Retained RSS Delta: ${formatRetained(this.retainedRss)}, ` +
+      `Retained Heap-Used Delta: ${formatRetained(this.retainedHeapUsed)}, ` +
+      `Retained External Delta: ${formatRetained(this.retainedExternal)}, `
     const breakdown = this.formatGeometryTypeCounts()
     const geometryTypes = breakdown !== void 0 ? `, Geometry Types: ${breakdown}` : ''
 
@@ -321,6 +428,7 @@ export class Statistics {
             `Total Time: ${this.totalTime} ms, ` +
             `Geometry Memory: ${this.geometryMemory?.toFixed(3)} MB, ` +
             `WASM Heap High-Water: ${this.wasmHeapPeak?.toFixed(3)} MB, ` +
+            retained +
             products +
             `Memory Statistics: ${this.memoryStatistics}, ` +
             `Preprocessor Version: ${this.preprocessorVersion}, ` +
