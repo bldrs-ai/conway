@@ -18,6 +18,11 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcBooleanResult } from './ifc4_gen'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { wasmHeapByteLength } from '../core/wasm_heap'
+import {
+  RetainedMemoryMb,
+  retainedMemoryMb,
+  settleAndSampleMemory,
+} from '../core/retained_memory'
 import { materialHashes } from './ifc_material_cache_node'
 import { dumpGeometryOBJs, geometryHashes } from './ifc_model_geometry_node'
 import { curveHashes, dumpCurveOBJs } from './ifc_model_curves_node'
@@ -62,6 +67,56 @@ const PERF_MB_PRECISION = 2
 
 /** Placeholder for a column this row has no measurement for. */
 const UNMEASURED = 'N/A'
+
+/**
+ * The memory figures one perf row carries, each captured at the point in the
+ * load where it means what its column name says — not at write time.
+ *
+ * That separation is the reason this exists. The retention columns cannot be
+ * filled until after the teardown, but `rssMb`/`heapUsedMb`/`externalMb` are
+ * defined as end-of-load instants; sampling them after a teardown and two
+ * forced collections would silently redefine four already-blessed columns
+ * into something else. So the instants are captured where they always were,
+ * carried here, and written later alongside the retention delta.
+ */
+interface PerfMemory {
+
+  /** Unsettled `process.memoryUsage()`, at the end of the load. */
+  instant: NodeJS.MemoryUsage
+
+  /** Kernel high-water RSS, in kB (`resourceUsage().maxRSS`). */
+  peakRssKb: number
+
+  /** Geometry payload conway allocated, in bytes, if geometry was extracted. */
+  geometryMemoryBytes?: number
+
+  /** Wasm linear-memory high-water in bytes, if the module came up. */
+  wasmHeapBytes?: number
+
+  /**
+   * Retention over the cycle, from two settled samples straddling the load.
+   * Undefined where the settle could not run, which is written as N/A.
+   */
+  retained?: RetainedMemoryMb
+}
+
+/**
+ * Capture the end-of-load memory figures for a perf row.
+ *
+ * @param geometryMemoryBytes Geometry payload conway allocated, in bytes.
+ * @param wasmHeapBytes Wasm linear-memory high-water in bytes.
+ * @return {PerfMemory} The captured figures, with retention still unset.
+ */
+function capturePerfMemory(
+    geometryMemoryBytes?: number, wasmHeapBytes?: number ): PerfMemory {
+
+  return {
+    instant: process.memoryUsage(),
+    peakRssKb: process.resourceUsage().maxRSS,
+    geometryMemoryBytes,
+    wasmHeapBytes,
+  }
+}
 
 /**
  * Write a single-row per-file perf CSV at the given path. Memory snapshot is
@@ -109,6 +164,21 @@ const UNMEASURED = 'N/A'
  *                    includes allocator overhead, fragmentation and the
  *                    intermediate buffers a boolean leaves behind, which on
  *                    MB-Khaya is an 85 MB heap over an 8 MB live payload.
+ *   retainedRssMb    DELTA, and the only columns here that answer "do we
+ *   retainedHeapUsedMb  leak?" rather than "does this survive?" (conway#554).
+ *   retainedExternalMb  Each is a settled sample taken after the model was
+ *                    torn down minus a settled sample taken before the load,
+ *                    so it is what one full load/teardown cycle left behind.
+ *                    Signed: a cycle can legitimately end below its baseline.
+ *                    Both samples sit outside the timed region, so the forced
+ *                    collections never reach parse/geometry/total time.
+ *                    `N/A` where `global.gc` was not exposed — an unsettled
+ *                    difference is GC-timing noise, and SKYLARK250's 2547 vs
+ *                    981 MB shows how much of it there is.
+ *                    There is deliberately NO retainedWasmHeapMb:
+ *                    `wasmHeapByteLength` is grow-only, so over one cycle it
+ *                    could only ever repeat peakWasmHeapMb under a name that
+ *                    claims to mean something else.
  *
  * There is deliberately no `heapUsed + external` total. It looks like a
  * portable stand-in for RSS and is not one: on that same model it reads
@@ -136,10 +206,9 @@ const UNMEASURED = 'N/A'
  * @param parseTimeMs Parse stage duration in ms.
  * @param geometryTimeMs Geometry extraction duration in ms.
  * @param totalTimeMs Sum of parse + geometry in ms.
- * @param geometryMemoryBytes Geometry payload conway allocated, in bytes, or
- * undefined where no geometry was extracted (written as N/A).
- * @param wasmHeapBytes Wasm linear-memory high-water in bytes, or undefined
- * where the module was never brought up (written as N/A).
+ * @param memory The row's memory figures, captured at the points in the load
+ * each is defined at. Defaults to capturing the end-of-load instants here,
+ * which is what the FAIL paths want — they have nothing else to report.
  */
 async function writePerfCsvIfRequested(
     perfPath: string,
@@ -148,15 +217,14 @@ async function writePerfCsvIfRequested(
     parseTimeMs: number,
     geometryTimeMs: number,
     totalTimeMs: number,
-    geometryMemoryBytes?: number,
-    wasmHeapBytes?: number,
+    memory: PerfMemory = capturePerfMemory(),
 ): Promise<void> {
 
   if ( perfPath.length === 0 ) {
     return
   }
 
-  const mem = process.memoryUsage()
+  const mem = memory.instant
   const rssMb = ( mem.rss / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapUsedMb = ( mem.heapUsed / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapTotalMb = ( mem.heapTotal / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
@@ -165,24 +233,32 @@ async function writePerfCsvIfRequested(
     ( mem.arrayBuffers / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   // maxRSS is reported in kilobytes, unlike memoryUsage() which is in bytes.
   const peakRssMb =
-    ( process.resourceUsage().maxRSS / KB_PER_MB ).toFixed( PERF_MB_PRECISION )
-  const geometryMemoryMb = geometryMemoryBytes !== void 0 ?
-    ( geometryMemoryBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
+    ( memory.peakRssKb / KB_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const geometryMemoryMb = memory.geometryMemoryBytes !== void 0 ?
+    ( memory.geometryMemoryBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
     UNMEASURED
-  const peakWasmHeapMb = wasmHeapBytes !== void 0 ?
-    ( wasmHeapBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
+  const peakWasmHeapMb = memory.wasmHeapBytes !== void 0 ?
+    ( memory.wasmHeapBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
     UNMEASURED
+  const retained = memory.retained
+  const retainedRssMb = retained !== void 0 ?
+    retained.rssMb.toFixed( PERF_MB_PRECISION ) : UNMEASURED
+  const retainedHeapUsedMb = retained !== void 0 ?
+    retained.heapUsedMb.toFixed( PERF_MB_PRECISION ) : UNMEASURED
+  const retainedExternalMb = retained !== void 0 ?
+    retained.externalMb.toFixed( PERF_MB_PRECISION ) : UNMEASURED
 
   const fileName = csvSafeString( path.basename( ifcFile ) )
 
   const header =
     'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
     'peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,' +
-    'arrayBuffersMb\n'
+    'arrayBuffersMb,retainedRssMb,retainedHeapUsedMb,retainedExternalMb\n'
   const row =
     `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
     `${geometryMemoryMb},${peakWasmHeapMb},${rssMb},${peakRssMb},` +
-    `${heapUsedMb},${heapTotalMb},${externalMb},${arrayBuffersMb}\n`
+    `${heapUsedMb},${heapTotalMb},${externalMb},${arrayBuffersMb},` +
+    `${retainedRssMb},${retainedHeapUsedMb},${retainedExternalMb}\n`
 
   try {
     await fsPromises.writeFile( perfPath, header + row )
@@ -287,6 +363,15 @@ function doWork() {
               path.join( path.dirname( ifcFile ), path.parse( ifcFile ).name )
 
           let indexIfcBuffer: Buffer | undefined
+
+          // Settled pre-load baseline for the retention columns (conway#554).
+          // Here rather than at process start: `main()` has already brought
+          // conway-geom up, so the wasm module's fixed cost sits below the
+          // baseline instead of being charged to every model as the same
+          // constant. Before `readFileSync` because the source buffer is part
+          // of what a load must give back, and outside the timed region
+          // because `parseStartMs` has not been taken yet.
+          const memoryBaseline = await settleAndSampleMemory()
 
           const strict = (argv['strict'] as boolean | undefined) ?? false
           const digest = (argv['digest'] as boolean | undefined) ?? false
@@ -404,9 +489,32 @@ function doWork() {
           const wasmModule = result?.[ 1 ].wasmModule
           const wasmHeapBytes = wasmModule !== void 0 ?
             wasmHeapByteLength( wasmModule ) : void 0
+          // Instants captured here, where they have always been captured, so
+          // the teardown below cannot change what rssMb/heapUsedMb/externalMb
+          // mean.
+          const memory = capturePerfMemory( geometryMemoryBytes, wasmHeapBytes )
+
+          // Teardown, then the settled retained sample.
+          //
+          // FINDING (conway#554): this path had no explicit release at all.
+          // The CLIs both call `model.invalidate(true)` after extraction
+          // (ifc_command_line_main.ts, ap214_command_line_main.ts) and so does
+          // the loader, but the regression children just ran to process exit.
+          // Without a teardown boundary there is nothing to measure retention
+          // ACROSS — a sample taken here would be the live model, not what
+          // survives it — so the call is added rather than the sample being
+          // taken without one. It runs after the digest-independent work and
+          // before the digest itself; `invalidate` drops JS-side caches that
+          // rematerialise on demand, so the digest is unaffected (verified
+          // byte-identical on Schependomlaan and index.ifc).
+          model.invalidate( true )
+
+          memory.retained =
+            retainedMemoryMb( memoryBaseline, await settleAndSampleMemory() )
+
           await writePerfCsvIfRequested(
               perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,
-              geometryMemoryBytes, wasmHeapBytes)
+              memory)
 
           // AFTP sizing pass: no-op unless the wasm module was built with
           // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).
