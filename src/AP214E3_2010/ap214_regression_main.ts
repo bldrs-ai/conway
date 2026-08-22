@@ -10,6 +10,7 @@ import fsPromises from 'fs/promises'
 import path from 'path'
 import crypto from 'crypto'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
+import { wasmHeapByteLength } from '../core/wasm_heap'
 import Logger from '../logging/logger'
 import Environment from '../utilities/environment'
 import { ExtractResult } from '../core/shared_constants'
@@ -78,6 +79,8 @@ const UNMEASURED = 'N/A'
  * @param totalTimeMs Sum of parse + geometry in ms.
  * @param geometryMemoryBytes Geometry payload conway allocated, in bytes, or
  * undefined where no geometry was extracted (written as N/A).
+ * @param wasmHeapBytes Wasm linear-memory high-water in bytes, or undefined
+ * where the module was never brought up (written as N/A).
  */
 async function writePerfCsvIfRequested(
     perfPath: string,
@@ -87,6 +90,7 @@ async function writePerfCsvIfRequested(
     geometryTimeMs: number,
     totalTimeMs: number,
     geometryMemoryBytes?: number,
+    wasmHeapBytes?: number,
 ): Promise<void> {
 
   if ( perfPath.length === 0 ) {
@@ -106,16 +110,20 @@ async function writePerfCsvIfRequested(
   const geometryMemoryMb = geometryMemoryBytes !== void 0 ?
     ( geometryMemoryBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
     UNMEASURED
+  const peakWasmHeapMb = wasmHeapBytes !== void 0 ?
+    ( wasmHeapBytes / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION ) :
+    UNMEASURED
 
   const fileName = csvSafeString( path.basename( stepFile ) )
 
   const header =
     'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
-    'rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb\n'
+    'peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,' +
+    'arrayBuffersMb\n'
   const row =
     `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
-    `${geometryMemoryMb},${rssMb},${peakRssMb},${heapUsedMb},${heapTotalMb},` +
-    `${externalMb},${arrayBuffersMb}\n`
+    `${geometryMemoryMb},${peakWasmHeapMb},${rssMb},${peakRssMb},` +
+    `${heapUsedMb},${heapTotalMb},${externalMb},${arrayBuffersMb}\n`
 
   try {
     await fsPromises.writeFile( perfPath, header + row )
@@ -323,9 +331,15 @@ function doWork() {
         // is not this model's geometry footprint.
         const geometryMemoryBytes = extraction !== void 0 ?
           model.geometry.calculateGeometrySize() : void 0
+        // The heap is grow-only, so this is the run's high-water mark even
+        // though it is read once, after the fact. conwayGeom is the engine
+        // every extraction in this process runs against.
+        const wasmModule = conwayGeom.wasmModule
+        const wasmHeapBytes = wasmModule !== void 0 ?
+          wasmHeapByteLength( wasmModule ) : void 0
         await writePerfCsvIfRequested(
             perfPath, stepFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,
-            geometryMemoryBytes)
+            geometryMemoryBytes, wasmHeapBytes)
 
         // AFTP sizing pass: no-op unless the wasm module was built with
         // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).

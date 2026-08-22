@@ -12,6 +12,7 @@ export class Statistics {
   private geometryTime: number | undefined
   private totalTime: number | undefined
   private geometryMemory: number | undefined
+  private wasmHeapPeak: number | undefined
   private preprocessorVersion: string | undefined
   private originatingSystem: string | undefined
   private memoryStatistics: string | undefined
@@ -130,6 +131,29 @@ export class Statistics {
    */
   setGeometryMemory(value: number) {
     this.geometryMemory = value
+  }
+
+  /**
+   * Wasm linear-memory high-water mark in MB, from wasmHeapByteLength.
+   *
+   * @return {number | undefined} - wasm heap high-water, or undefined
+   */
+  getWasmHeapPeak(): number | undefined {
+    return this.wasmHeapPeak
+  }
+
+  /**
+   * The wasm heap only ever grows, so a single reading of it IS the peak —
+   * no sampling loop and no forced GC. It is a different quantity from
+   * geometryMemory, and by a wide margin: on MB-Khaya an 8 MB live geometry
+   * payload sits under an 85 MB wasm heap, the gap being allocator overhead,
+   * fragmentation and the intermediate buffers a boolean leaves behind (see
+   * src/ifc/geometry_residency.ts). Neither substitutes for the other.
+   *
+   * @param value - wasm heap high-water in MB
+   */
+  setWasmHeapPeak(value: number) {
+    this.wasmHeapPeak = value
   }
 
   /**
@@ -296,6 +320,7 @@ export class Statistics {
             `Parse Time: ${this.parseTime} ms, Geometry Time: ${this.geometryTime} ms, ` +
             `Total Time: ${this.totalTime} ms, ` +
             `Geometry Memory: ${this.geometryMemory?.toFixed(3)} MB, ` +
+            `WASM Heap High-Water: ${this.wasmHeapPeak?.toFixed(3)} MB, ` +
             products +
             `Memory Statistics: ${this.memoryStatistics}, ` +
             `Preprocessor Version: ${this.preprocessorVersion}, ` +

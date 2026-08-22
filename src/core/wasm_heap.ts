@@ -352,10 +352,11 @@ export function wasmHeapView< TArray >(
  * trade. Do not put it in a loop.
  *
  * That the refresh cannot throw (see refreshHeapViews) matters more here than
- * at the other call site: this figure's only consumer is the AP214 CLI's
- * high-water log line, so an embind failure escaping would abort an otherwise
- * complete extraction from a log statement. A lagging number is the right
- * answer there.
+ * at the other call site: every consumer of this figure is reporting — the
+ * loaders' and CLIs' high-water statistic, and the regression children's
+ * `peakWasmHeapMb` perf column (#552) — so an embind failure escaping would
+ * abort an otherwise complete extraction from a measurement. A lagging number
+ * is the right answer there.
  *
  * @param wasmModule The module to measure.
  * @return {number} The heap's size in bytes, or 0 if it has no heap yet.

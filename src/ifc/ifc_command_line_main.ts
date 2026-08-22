@@ -13,6 +13,7 @@ import { ConwayGeometry }
   from '../../dependencies/conway-geom'
 import { IfcSceneBuilder } from './ifc_scene_builder'
 import GeometryConvertor from '../core/geometry_convertor'
+import { wasmHeapByteLength } from '../core/wasm_heap'
 import GeometryAggregator from '../core/geometry_aggregator'
 import Logger, { LogLevel } from '../logging/logger'
 import { CountProgressCallback, ProgressTracker } from '../core/progress'
@@ -743,6 +744,19 @@ function geometryExtraction(
   const ONE_MB = ONE_KB * ONE_KB
    
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
+
+  // The wasm heap, which nothing else here can see: geometryMemory above is
+  // the vertex+index payload only, and the JS-side heap/external figures do
+  // not include emscripten's linear memory at all. Grow-only, so one reading
+  // is the high-water mark. Measured through wasmHeapByteLength rather than
+  // HEAPU8.length: the module's cached view can be a growth step behind the
+  // real heap (#485), and a high-water figure that under-reports is worse
+  // than none.
+  const wasmModule = conwaywasm.wasmModule
+
+  if (wasmModule !== void 0) {
+    statistics?.setWasmHeapPeak(wasmHeapByteLength(wasmModule) / ONE_MB)
+  }
 
   const ifcProjectName = conwayModel.getIfcProjectName()
 

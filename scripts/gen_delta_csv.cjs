@@ -67,6 +67,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
         'geometryMemoryMbDelta',
+        'peakWasmHeapMbDelta',
         'rssMbDelta',
         'peakRssMbDelta',
         'heapUsedMbDelta',
@@ -90,6 +91,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
         'geometryMemoryMbDelta',
+        'peakWasmHeapMbDelta',
         'rssMbDelta',
         'peakRssMbDelta',
         'heapUsedMbDelta',
@@ -242,6 +244,10 @@ function computeDeltas(data1, data2, isWebIfc = false) {
             entry2.totalTimeMs
           ),
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
+          // A different quantity from geometryMemoryMb, not a rescaling of it:
+          // the wasm heap holds allocator overhead and boolean intermediates
+          // the payload figure excludes. Also absent before #552.
+          peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
           // Absent from every snapshot committed before #552; computeDelta
           // reports that as N/A rather than differencing against zero.
@@ -267,6 +273,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
@@ -293,6 +300,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
@@ -331,6 +339,10 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: totalTimeDelta,
           totalTimeMsPercentageChange: totalTimePercentageChange,
           geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
+          // A different quantity from geometryMemoryMb, not a rescaling of it:
+          // the wasm heap holds allocator overhead and boolean intermediates
+          // the payload figure excludes. Also absent before #552.
+          peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
           rssMbDelta: computeDelta('rssMb', entry2, entry1),
           // Absent from every snapshot committed before #552; computeDelta
           // reports that as N/A rather than differencing against zero.
@@ -359,6 +371,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
@@ -388,6 +401,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           geometryMemoryMbDelta: 'N/A',
+          peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',

@@ -20,17 +20,18 @@
  *
  *   perf.csv (input, written by src/ifc/ifc_regression_main.ts)
  *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,
- *     rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb
+ *     peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,
+ *     arrayBuffersMb
  *
  *   performance-detail.csv (output, the committed convention)
  *     timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,
- *     geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,peakRssMb,heapUsedMb,
- *     heapTotalMb,externalMb,arrayBuffersMb,preprocessorVersion,
- *     originatingSystem
+ *     geometryTimeMs,totalTimeMs,geometryMemoryMb,peakWasmHeapMb,rssMb,
+ *     peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb,
+ *     preprocessorVersion,originatingSystem
  *
  * The three columns perf.csv does not carry (schemaVersion,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
- * omitted, so the file keeps the 18-column shape every existing consumer and
+ * omitted, so the file keeps the 19-column shape every existing consumer and
  * GitHub's CSV viewer expect. None of the three reaches the delta:
  * preprocessorVersion/originatingSystem are not in its column set, and
  * schemaVersion is carried through as a label.
@@ -39,11 +40,15 @@
  * high-water mark; `rssMb`/`heapUsedMb`/`heapTotalMb`/`externalMb`/
  * `arrayBuffersMb` are single samples taken at the end of the load with no GC
  * first. They are not interchangeable, `arrayBuffersMb` is a subset of
- * `externalMb`, and no JS-side sum of them sees the wasm heap — see the
- * column-by-column note on writePerfCsvIfRequested in
+ * `externalMb`, and no JS-side sum of them sees the wasm heap. `peakWasmHeapMb`
+ * is the column that does: emscripten's linear memory is grow-only, so a
+ * single reading of it is already the high-water mark. It is a THIRD quantity,
+ * distinct from `geometryMemoryMb` (the vertex+index payload) by an order of
+ * magnitude — see the column-by-column note on writePerfCsvIfRequested in
  * src/ifc/ifc_regression_main.ts.
  *
- * OLD SNAPSHOTS LACK `peakRssMb`/`externalMb`/`arrayBuffersMb`, and
+ * OLD SNAPSHOTS LACK `peakWasmHeapMb`/`peakRssMb`/`externalMb`/
+ * `arrayBuffersMb`, and
  * `geometryMemoryMb` was N/A on every
  * conway-native snapshot before #552. gen_delta_csv.cjs propagates an absent
  * measurement instead of coercing it to 0, so those deltas read N/A rather
@@ -74,8 +79,8 @@ const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
 const DETAIL_COLUMNS = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-  'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
-  'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
+  'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
+  'externalMb', 'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
 ];
 
 /** Columns perf.csv does not measure; written as N/A to keep the 15-column shape. */
@@ -154,6 +159,7 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
       // Absent from every perf.csv written before #552, and from FAIL rows,
       // which is why this reads the column instead of assuming it.
       row.geometryMemoryMb || UNMEASURED,
+      row.peakWasmHeapMb || UNMEASURED,
       row.rssMb || UNMEASURED,
       row.peakRssMb || UNMEASURED,
       row.heapUsedMb || UNMEASURED,
@@ -348,9 +354,16 @@ live, invisible to \`heapUsedMb\`. Neither sees the wasm heap, so
 \`heapUsedMb + externalMb\` is not a substitute for RSS: on a 31 MB model it
 reads 284 MB against an RSS of 510 MB.
 
-Snapshots blessed before conway#552 carry none of \`peakRssMb\`,
-\`externalMb\` or \`arrayBuffersMb\`, nor a measured \`geometryMemoryMb\`, so
-those columns come out \`N/A\` in a delta against them. That is a missing
+\`peakWasmHeapMb\` is the wasm linear memory conway's geometry engine runs in,
+which nothing else here can see. It is grow-only, so one reading is the
+high-water mark. Do not read it as \`geometryMemoryMb\`: that column is the
+vertex+index payload a consumer would copy out, and the heap around it also
+holds allocator overhead, fragmentation and boolean intermediates — 8 MB of
+payload under an 85 MB heap on one model in this corpus.
+
+Snapshots blessed before conway#552 carry none of \`peakWasmHeapMb\`,
+\`peakRssMb\`, \`externalMb\` or \`arrayBuffersMb\`, nor a measured
+\`geometryMemoryMb\`, so those columns come out \`N/A\` in a delta against them. That is a missing
 measurement, not a zero: do not read it as "no change".
 
 ## Regenerating

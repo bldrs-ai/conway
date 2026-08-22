@@ -327,8 +327,9 @@ async function main() {
   const DETAIL_COLUMNS = [
     'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
     'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-    'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
-    'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
+    'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
+    'externalMb', 'arrayBuffersMb', 'preprocessorVersion',
+    'originatingSystem',
   ];
 
   fs.writeFileSync(newResults, csvRow(DETAIL_COLUMNS) + "\n", 'utf8');
@@ -474,6 +475,7 @@ async function main() {
       let geometryTimeMs = 'N/A';
       let totalTimeMs = 'N/A';
       let geometryMemoryMb = 'N/A';
+      let peakWasmHeapMb = 'N/A';
       let rssMb = 'N/A';
       let peakRssMb = 'N/A';
       let heapUsedMb = 'N/A';
@@ -495,6 +497,9 @@ async function main() {
           if (totalTimeMatch) totalTimeMs = totalTimeMatch[1];
           const geomMemMatch = logContents.match(/Geometry Memory: ([\d.]+) MB/);
           if (geomMemMatch) geometryMemoryMb = geomMemMatch[1];
+          const wasmHeapMatch =
+            logContents.match(/WASM Heap High-Water: ([\d.]+) MB/);
+          if (wasmHeapMatch) peakWasmHeapMb = wasmHeapMatch[1];
           const rssMatch = logContents.match(/RSS ([\d.]+) MB/);
           if (rssMatch) rssMb = rssMatch[1];
           const peakRssMatch = logContents.match(/Peak RSS: ([\d.]+) MB/);
@@ -520,6 +525,9 @@ async function main() {
         if (totalTimeMatch) totalTimeMs = totalTimeMatch[1];
         const geomMemMatch = logContents.match(/Geometry Memory: ([\d.]+) MB/);
         if (geomMemMatch) geometryMemoryMb = geomMemMatch[1];
+        const wasmHeapMatch =
+          logContents.match(/WASM Heap High-Water: ([\d.]+) MB/);
+        if (wasmHeapMatch) peakWasmHeapMb = wasmHeapMatch[1];
         const rssMatch = logContents.match(/RSS ([\d.]+) MB/);
         if (rssMatch) rssMb = rssMatch[1];
         const peakRssMatch = logContents.match(/Peak RSS: ([\d.]+) MB/);
@@ -549,6 +557,7 @@ async function main() {
         geometryTimeMs,
         totalTimeMs,
         geometryMemoryMb,
+        peakWasmHeapMb,
         rssMb,
         peakRssMb,
         heapUsedMb,
@@ -601,7 +610,7 @@ async function main() {
       const failLine = csvRow([
         timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
         'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-        'N/A', 'N/A',
+        'N/A', 'N/A', 'N/A',
       ]);
       appendLineToFile(newResults, failLine);
 

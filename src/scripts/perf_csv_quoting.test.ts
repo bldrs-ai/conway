@@ -11,7 +11,7 @@ import { createRequire } from 'module'
  * `preprocessorVersion` and `originatingSystem` are free text lifted straight
  * out of an IFC/STEP FILE_NAME header. Emitted unquoted, a value like
  * `Trimble Nova (Build = 16.2.0.15, Compile = Sep 23 2021)` splits the record
- * into 19 columns against an 18-column header — which is exactly what five
+ * into 20 columns against a 19-column header — which is exactly what five
  * committed rows in test-models / test-models-private did, and why GitHub's
  * CSV viewer refused to render them.
  *
@@ -45,17 +45,18 @@ const NASTY_PREPROCESSOR =
   'Trimble Nova (Build = 16.2.0.15, Compile = "Sep 23 2021")'
 
 /** Columns in the delta CSV, per the committed `*_delta.csv` convention. */
-const DELTA_COLUMN_COUNT = 21
+const DELTA_COLUMN_COUNT = 22
 
 const DETAIL_HEADER = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-  'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
-  'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
+  'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
+  'externalMb', 'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
 ]
 
-/** The three memory columns #552 added, absent from every older snapshot. */
-const COLUMNS_ADDED_IN_552 = ['peakRssMb', 'externalMb', 'arrayBuffersMb']
+/** The four memory columns #552 added, absent from every older snapshot. */
+const COLUMNS_ADDED_IN_552 =
+  ['peakWasmHeapMb', 'peakRssMb', 'externalMb', 'arrayBuffersMb']
 
 /**
  * The header every snapshot committed before #552 carries. Those files are
@@ -76,8 +77,8 @@ const LEGACY_DETAIL_HEADER =
 function detailRow(filename: string, totalTimeMs: string): string {
   return csvRow([
     '20260811153721', 'OK', 'x64', 'conway1.451.1357', filename, 'IFC2X3',
-    '71', '245', totalTimeMs, '0.776', '300.859', '412.320', '137.000',
-    '157.582', '38.100', '36.400', NASTY_PREPROCESSOR, 'N/A',
+    '71', '245', totalTimeMs, '0.776', '46.500', '300.859', '412.320',
+    '137.000', '157.582', '38.100', '36.400', NASTY_PREPROCESSOR, 'N/A',
   ])
 }
 
@@ -125,7 +126,7 @@ describe('performance-detail.csv rows', () => {
     const records = parseCsv(text)
 
     expect(records).toHaveLength(2)
-    // The whole point: 18 columns, not 19.
+    // The whole point: 19 columns, not 20.
     expect(records[0]).toHaveLength(DETAIL_HEADER.length)
     expect(records[1]).toHaveLength(DETAIL_HEADER.length)
 
@@ -165,7 +166,7 @@ describe('gen_delta_csv.cjs', () => {
     return filePath
   }
 
-  test('joins on filename across quoted fields and emits 21 columns', () => {
+  test('joins on filename across quoted fields and emits 22 columns', () => {
     const older = writeDetail('older.csv', [
       detailRow('mep.ifc', '400'),
       detailRow('only-in-older.ifc', '100'),
@@ -229,8 +230,8 @@ describe('gen_delta_csv.cjs', () => {
   /** SKYLARK250 as a 1.451 headless-three snapshot row: every column measured. */
   const SKYLARK_1_451 = csvRow([
     '20260811154725', 'OK', 'x64', 'conway1.451.1357', 'skylark.ifc', 'IFC4',
-    '5729', '42572', '48303', '185.836', '5495.645', '5601.500', '3865.072',
-    '3952.602', '432.500', '430.250', NASTY_PREPROCESSOR, 'N/A',
+    '5729', '42572', '48303', '185.836', '1283.000', '5495.645', '5601.500',
+    '3865.072', '3952.602', '432.500', '430.250', NASTY_PREPROCESSOR, 'N/A',
   ])
 
   test('reports an absent measurement as N/A, not as a delta against zero', () => {
@@ -245,8 +246,8 @@ describe('gen_delta_csv.cjs', () => {
     // and those files stay in the corpus as baselines forever.
     const withoutMemory = csvRow([
       '20260821154725', 'OK', 'x64', 'conway1.543.1513-ci', 'skylark.ifc',
-      'N/A', '8035', '72371', '80406', 'N/A', '5379.12', '5488.40', '3793.69',
-      '3877.96', '428.30', '426.10', 'N/A', 'N/A',
+      'N/A', '8035', '72371', '80406', 'N/A', 'N/A', '5379.12', '5488.40',
+      '3793.69', '3877.96', '428.30', '426.10', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('mem-older.csv', [SKYLARK_1_451])
@@ -272,8 +273,8 @@ describe('gen_delta_csv.cjs', () => {
     // for "this harness cannot measure it".
     const newerMemory = csvRow([
       '20260821154725', 'OK', 'x64', 'conway1.550.1516-ci', 'skylark.ifc',
-      'N/A', '8035', '72371', '80406', '190.836', '5379.12', '5488.50',
-      '3793.69', '3877.96', '433.500', '431.250', 'N/A', 'N/A',
+      'N/A', '8035', '72371', '80406', '190.836', '1281.000', '5379.12',
+      '5488.50', '3793.69', '3877.96', '433.500', '431.250', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('gmem-older.csv', [SKYLARK_1_451])
@@ -288,6 +289,10 @@ describe('gen_delta_csv.cjs', () => {
 
     expect(row[header.indexOf('geometryMemoryMbDelta')]).toBe('5')
     expect(row[header.indexOf('peakRssMbDelta')]).toBe('-113')
+    // A separate quantity, moving separately: the payload grew by 5 MB while
+    // the heap around it shrank by 2. Reporting one for the other, or scaling
+    // one into the other, would invert the reading of this row.
+    expect(row[header.indexOf('peakWasmHeapMbDelta')]).toBe('-2')
   })
 
   test('differences the off-heap columns when both sides measured them', () => {
@@ -298,8 +303,8 @@ describe('gen_delta_csv.cjs', () => {
     // in these two columns and nowhere else in this file.
     const newerOffHeap = csvRow([
       '20260821154725', 'OK', 'x64', 'conway1.550.1516-ci', 'skylark.ifc',
-      'N/A', '8035', '72371', '80406', '185.836', '5495.645', '5601.500',
-      '3865.072', '3952.602', '433.500', '431.250', 'N/A', 'N/A',
+      'N/A', '8035', '72371', '80406', '185.836', '1283.000', '5495.645',
+      '5601.500', '3865.072', '3952.602', '433.500', '431.250', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('ext-older.csv', [SKYLARK_1_451])
@@ -320,8 +325,8 @@ describe('gen_delta_csv.cjs', () => {
 
   test('reports the #552 columns as N/A against a header that lacks them', () => {
     // Every snapshot committed before #552 has a 15-column header with no
-    // peakRssMb / externalMb / arrayBuffersMb at all — not N/A cells, no
-    // cells. That absence must read as "no measurement", exactly like #548's
+    // peakWasmHeapMb / peakRssMb / externalMb / arrayBuffersMb at all — not
+    // N/A cells, no cells. That absence must read as "no measurement", exactly like #548's
     // N/A: coercing it to 0 would report the new run's entire peak, and its
     // whole off-heap footprint, as regressions against nothing.
     const legacyRow = csvRow([
@@ -341,6 +346,7 @@ describe('gen_delta_csv.cjs', () => {
     const header = records[0]
     const row = records[1]
 
+    expect(row[header.indexOf('peakWasmHeapMbDelta')]).toBe('N/A')
     expect(row[header.indexOf('peakRssMbDelta')]).toBe('N/A')
     expect(row[header.indexOf('externalMbDelta')]).toBe('N/A')
     expect(row[header.indexOf('arrayBuffersMbDelta')]).toBe('N/A')
@@ -359,7 +365,7 @@ describe('gen_delta_csv.cjs', () => {
     const failRow = csvRow([
       '20260821153721', 'FAIL', 'x64', 'conway1.543.1513', 'flipper.ifc',
       'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-      'N/A', 'N/A', 'N/A',
+      'N/A', 'N/A', 'N/A', 'N/A',
     ])
 
     const older = writeDetail('fail-older.csv', [okRow])
@@ -385,8 +391,8 @@ describe('gen_delta_csv.cjs', () => {
     // distinguishable.
     const zeroed = (engine: string, total: string) => csvRow([
       '20260811154725', 'OK', 'x64', engine, 'z.ifc', 'IFC4',
-      '0', '0', total, '1.5', '100', '120', '50', '60', '12', '10', 'N/A',
-      'N/A',
+      '0', '0', total, '1.5', '80', '100', '120', '50', '60', '12', '10',
+      'N/A', 'N/A',
     ])
 
     const older = writeDetail('zero-older.csv', [zeroed('webifc0.0.67', '100')])
@@ -462,7 +468,7 @@ describe('gen_delta_csv.cjs', () => {
     const failRow = csvRow([
       '20260821153721', 'FAIL', 'x64', 'conway1.543.1513', 'flipper.ifc',
       'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-      'N/A', NASTY_PREPROCESSOR, 'N/A',
+      'N/A', 'N/A', NASTY_PREPROCESSOR, 'N/A',
     ])
 
     const older = writeDetail('status-older.csv', [okRow])

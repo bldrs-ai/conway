@@ -555,15 +555,16 @@ function geometryExtraction(
   const ONE_KB = 1024
   const ONE_MB = ONE_KB * ONE_KB
 
+  // Recorded on the statistics rather than logged on its own line, so the one
+  // spelling of this number reaches the benchmark's `peakWasmHeapMb` column
+  // through the same load-status line as every other measurement (#552).
   // Measured through wasmHeapByteLength rather than HEAPU8.length: the
   // module's cached view can be a growth step behind the real heap (#485), and
   // a high-water figure that under-reports is worse than none.
   const wasmModule = conwaywasm.wasmModule
 
   if (wasmModule !== void 0) {
-    Logger.info(
-        `WASM heap high-water: ${
-          (wasmHeapByteLength(wasmModule) / ONE_MB).toFixed(1)} MB`)
+    statistics?.setWasmHeapPeak(wasmHeapByteLength(wasmModule) / ONE_MB)
   }
 
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
