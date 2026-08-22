@@ -20,11 +20,19 @@ const require_ = createRequire(import.meta.url)
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
 const {
   DETAIL_COLUMNS, findPreviousSnapshot, isChronologicalDelta, removeStaleDeltas,
-  writeDetailCsv, versionCompare,
+  renderReadme, writeDetailCsv, versionCompare,
 } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     DETAIL_COLUMNS: string[],
     isChronologicalDelta: (name: string, version: string) => boolean,
+    renderReadme: (info: {
+      engine: string,
+      repoName: string,
+      modelCount: number,
+      retentionCount: number,
+      deltaName: string,
+      previousName: string,
+    }) => string,
     removeStaleDeltas: (outDir: string, version: string) => string[],
     findPreviousSnapshot: (dir: string, self: string, version: string) =>
       { name: string, version: string, engine: string } | null,
@@ -435,5 +443,71 @@ describe('isChronologicalDelta', () => {
       'README.md', 'index.html', '00-command.log.txt']) {
       expect(isChronologicalDelta(name, '0.23.940')).toBe(false)
     }
+  })
+})
+
+describe('renderReadme', () => {
+
+  const info = {
+    engine: 'conway1.560.1600-ci',
+    repoName: 'test-models',
+    modelCount: 97,
+    retentionCount: 97,
+    deltaName: 'conway1.451.1357-ci_1.560.1600_delta.csv',
+    previousName: 'conway1.451.1357-ci_test-models',
+  }
+
+  test('does not repeat the pre-#553 claim that geometryMemoryMb is N/A', () => {
+    // #553 restored geometryMemoryMb on the conway-native writer (SKYLARK250
+    // reads 185.22 against the 185.836 recorded at 1.451). The README shipped
+    // beside the 1.549 snapshot still says it is unmeasured, which is now the
+    // opposite of the truth for a column carrying real data; that text was
+    // removed from this template, and this keeps it out.
+    const text = renderReadme(info)
+
+    expect(text).not.toContain('`geometryMemoryMb` is absent here')
+    expect(text).toContain(
+      '`schemaVersion`,\n`preprocessorVersion` and `originatingSystem` are `N/A`')
+    // The N/A-is-not-a-zero framing is the point of #548 and must survive for
+    // the columns genuinely absent from an older snapshot.
+    expect(text).toContain('That is a missing\nmeasurement, not a zero')
+  })
+
+  test('says on its own face whether the settle ran', () => {
+    // A directory of N/A retention must explain itself without anyone having
+    // to find the workflow that produced it.
+    expect(renderReadme(info)).toContain('Retention is measured on 97 of 97')
+    expect(renderReadme({ ...info, retentionCount: 0 }))
+      .toContain('Retention is `N/A` on every row here')
+  })
+
+  test('names the blessed pass as the one this snapshot came from', () => {
+    const text = renderReadme(info)
+
+    expect(text).toContain('CONWAY_PERF_EXPOSE_GC=0')
+    expect(text).toContain('The control pass is never blessed')
+  })
+
+  test('warns off the misreadings the columns invite', () => {
+    const text = renderReadme(info)
+
+    // Retention is live model + leak, not leak.
+    expect(text).toContain('still-live model plus anything genuinely leaked')
+    // The two columns that are pipeline-scoped, with their issues.
+    expect(text).toContain('conway/issues/555')
+    expect(text).toContain('conway/issues/557')
+    // The third native quantity, and the arrayBuffers/external subset rule.
+    expect(text).toContain('getAllocationSize')
+    expect(text).toContain('ArrayBuffer subset')
+    // Cross-run timing carries the runner scale factor.
+    expect(text).toContain('median 1.55x')
+  })
+
+  test('names the delta and its predecessor, or says there is none', () => {
+    expect(renderReadme(info)).toContain(
+      '`conway1.451.1357-ci_1.560.1600_delta.csv` diffs this run against ' +
+      '`../conway1.451.1357-ci_test-models/`.')
+    expect(renderReadme({ ...info, deltaName: '', previousName: '' }))
+      .toContain('no delta was produced')
   })
 })
