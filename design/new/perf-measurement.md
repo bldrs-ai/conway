@@ -359,6 +359,31 @@ zero-geometry gate is repeated — a second identical digest run yields
 no extra signal — and the control pass reuses the same LFS checkout, so
 the perf compute roughly doubles and the bandwidth does not.
 
+**What the second pass costs, and the cap it broke.** The private
+corpus is the binding constraint: it runs about 4x the public one in
+wall time, and it is where a per-model increment shows up first. Step
+wall times, from the Actions step timestamps:
+
+| pass | public | private |
+|---|---|---|
+| blessed digest, no settle (rc-1.549.1515) | 4m48s | **19m55s** |
+| blessed digest, with the settle (rc-1.558.1533) | 5m15s | ~20m30s (est.) |
+| gc-off control, with the settle (rc-1.558.1533) | 5m06s | never yet run |
+
+Two facts are worth carrying forward. First, the settle's own cost
+measured *within one run* is public 5m15s against 5m06s — **+2.9%** over
+a full corpus, which is the corpus-scale version of the ~10 ms per load
+in the tables above. Second, and the useful one for whoever next adds
+per-model work: **the private digest step ran at 19m55s against a
+20-minute `timeout-minutes` — 5 seconds of headroom — before this
+change existed.** conway#556's settle added the ~35 s that tipped it,
+and the first two-pass rc (run 32601886424) died there, killed by its
+own cap. Both passes are now capped at 35 min and the job at 90; the
+arithmetic is in `.github/workflows/rc-regression.yml`. A rc `rebless`
+job on private is now a ~45-minute job, not a ~25-minute one, so treat
+per-model work in the regression child as spending a budget that has
+already been doubled once.
+
 **What the pass order can and cannot confound.** Pass 2 runs on a
 warmer machine than pass 1. Model file I/O is outside all three timing
 columns — `parseStartMs` is taken after `readFileSync` in

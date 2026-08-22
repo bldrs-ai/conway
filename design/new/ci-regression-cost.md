@@ -70,7 +70,18 @@ Findings that drove the design:
    concurrency group now cancels superseded runs (#399, see below).
 
 Net effect: a PR push dropped from ~13 → ~6 large-runner minutes, a merge from
-~48 → ~8; the full corpus + perf (~40+ min) is paid once per `rc-*` tag.
+~48 → ~8; the full corpus + perf is paid once per `rc-*` tag.
+
+That rc bill grew with #554's two-pass gc A/B, which runs the whole corpus
+**twice** in each `rebless` job — the blessed pass and a gc-off control. The
+private `rebless` job went from ~24 min to ~45 (its digest pass alone is
+~20 min per side; public is ~5); the two `perf-three-*` jobs are unchanged at
+~27 and ~11. LFS bandwidth did not move — the second pass reuses the first's
+checkout. Whether the control pass is worth that on every rc, or was a
+one-time validation, is open (#554). Sizing note for anyone adding per-model
+work: the private digest pass had 5 seconds of headroom under its 20-minute
+step cap before the settle in #556 pushed it over — see
+`design/new/perf-measurement.md` §"What the second pass costs".
 
 **Do not "just run everything on PRs again"** to catch breaks earlier — that
 reintroduces the spend this tiering removed. Some delay in finding a break on
