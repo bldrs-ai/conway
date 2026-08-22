@@ -189,31 +189,55 @@ single cycle rounds away; this does not close that off.
   module's fixed cost into every model's retention and make them all
   look leaky by the same constant.
 
-**Two places the baseline cannot be where that rule wants it**, both
-worth knowing before reading a number (the teardown caveat above is a
-third, and applies on every path):
+**One place the baseline cannot be where that rule wants it**, worth
+knowing before reading a number (the teardown caveat above is a second,
+and applies on every path): the **loader path** brings up its own
+`ConwayGeometry` per load, *inside* the region `allTimeStart` opens, so
+there is no point that is both after init and outside the timed region.
+The baseline is taken at function entry instead — which keeps the
+no-perturbation property, at the cost of counting that per-load module
+against the cycle. Nothing releases it, so that is a real retention on
+that path, but it is a large constant sitting on top of the
+model-specific figure.
 
-1. The **loader path** brings up its own `ConwayGeometry` per load,
-   *inside* the region `allTimeStart` opens, so there is no point that
-   is both after init and outside the timed region. The baseline is
-   taken at function entry instead — which keeps the no-perturbation
-   property, at the cost of counting that per-load module against the
-   cycle. Nothing releases it, so that is a real retention on that
-   path, but it is a large constant sitting on top of the model-specific
-   figure.
-2. The **IFC regression child** initialises one engine in `main()` and
-   then `geometryExtraction` constructs a *second* one, which is the
-   engine the extraction actually runs against. Measured on MB-Khaya:
-   engine A holds a 16 MB initial arena and does no work, engine B
-   holds 106.5 MB. So roughly 100 MB of that model's 388 MB
-   `retainedRssMb` is engine B's linear memory, created inside the
-   window and never freed. The AP214 child uses the single module-level
-   engine and has no such term.
+**The IFC regression child used to be a second such place, and conway#557
+fixed it.** It initialised one engine in `main()` and then
+`geometryExtraction` constructed a *second* one, which was the engine the
+extraction actually ran against — so the engine that was initialised
+before the baseline was not the engine that did the work, and the second
+engine's whole footprint landed inside the window. Measured on MB-Khaya
+before the fix: telemetry engine 16,777,216 bytes of untouched initial
+arena, extraction engine 106,496,000 bytes, `sameObject=false`. The
+extraction now runs against the module-level engine, the way the AP214
+child always has, and the constant comes off every IFC row: MB-Khaya
+`retainedRssMb` 379.58/385.60/388.59 over three runs before, against
+326.48/326.94/327.02/329.23/333.11/333.24 over six after; index.ifc
+58.96 -> 2.38, AC20-FZK-Haus 95.77 -> 36.35, duplex 97.73 -> 42.52,
+Schependomlaan 371.75 -> 308.89 — a ~55-60 MB fixed term regardless of
+model size, which
+is what a second engine looks like. Digests were byte-identical on all
+seven models checked. `peakRssMb` drops by the same term, and
+`geometryTimeMs` loses the second `initialize()` that sat inside the
+timed region (IfcOpenHouse_IFC4 156 -> 70 ms), so the **rc baselines for
+those columns move once** with that fix.
 
-So, exactly as with `geometryMemoryMb`, **do not difference a retention
-figure across pipelines.** Within one pipeline the figure is stable: five
-MB-Khaya runs through the IFC child gave `retainedRssMb` 382.86-390.98,
-`retainedHeapUsedMb` 10.76-10.80, `retainedExternalMb` 47.77 every time.
+So, as with `geometryMemoryMb`, **do not difference a retention figure
+between the loader path and a regression child** — the loader's per-load
+module is a constant one side carries and the other does not. The two
+regression children are now the same shape as each other: one engine,
+initialised before the baseline, growing inside the window as the model
+loads. Within one pipeline the figure is stable: six MB-Khaya runs
+through the IFC child after #557 gave `retainedRssMb` 326.48-333.24,
+`retainedHeapUsedMb` 9.72-9.78, `retainedExternalMb` 46.19 every time.
+(Before #557 the recorded five-run check read 382.86-390.98 /
+10.76-10.80 / 47.77 — stable then too, around a centre that included the
+second engine.)
+
+What remains inside the window on both children is the *growth* of the
+one engine's linear memory during the load — MB-Khaya's arena goes from
+16 MB at the baseline to the 101.56 MB `peakWasmHeapMb` reports, and
+emscripten never gives it back. That is a real cost of loading the model,
+not a measurement artefact, and it is symmetric across the two children.
 
 **No `retainedWasmHeapMb`.** conway#554 proposed one and it is
 deliberately excluded. `wasmHeapByteLength` is grow-only — it does not
@@ -483,7 +507,8 @@ against a regression-child figure. Tracked separately.
 | #548 | delta stops fabricating values for missing columns | `parseValue` returned `0.0`; see "The rule for changing fields" |
 | #552 (via #553) | add `peakRssMb`, `externalMb`, `arrayBuffersMb`, `peakWasmHeapMb`; restore `geometryMemoryMb` | memory was one un-GC'd instant, and the wasm heap was invisible |
 | #554 | add `retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb`; pass `--expose-gc` to the regression children and the render server; add the teardown the regression children never had | nothing measured what is held after teardown, and a peak cannot see it |
-| #554 (via the two-pass rc A/B) | `parseTimeMs` drops 13-16%, `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary |
+| #557 | IFC regression child extracts on the engine `main()` initialised, not a second one built in `geometryExtraction` | the alloc telemetry described an idle module, and the second engine put a ~55-60 MB constant in every IFC retention and RSS row plus its init in `geometryTimeMs`; those IFC baselines move once |
+| #554 (via the two-pass rc A/B) | `parseTimeMs` drops by about 10 ms per load (13-16% at a ~60 ms parse, unresolvable against a 578 ms one), `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB, against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary. Distinct from #557 above, which moves `geometryTimeMs` and the memory columns on IFC rows only |
 
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads
 **185.22** against the **185.836** recorded at 1.451.
