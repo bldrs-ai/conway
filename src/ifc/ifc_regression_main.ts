@@ -84,10 +84,25 @@ const UNMEASURED = 'N/A'
  *                    full GCs is 981 MB. A live-heap column would need forced
  *                    GC, which wrecks the timing columns, so it is not here.
  *   heapTotalMb      INSTANT. V8's reserved heap.
+ *   externalMb       INSTANT. Off-heap bytes V8 knows about, which heapUsed
+ *                    does not include and which are a real part of the
+ *                    footprint: on MB-Khaya (31 MB IFC) `readFileSync` alone
+ *                    moves this 1.7 -> 33.1 MB while heapUsed does not move.
+ *   arrayBuffersMb   INSTANT, and a SUBSET of externalMb — the ArrayBuffer
+ *                    share of it, which is where the source buffer and the
+ *                    parse structures land (31.5 of that 33.1 MB).
  *   geometryMemoryMb Not a process metric at all: the vertex+index payload
  *                    conway itself allocated for this model, summed by
  *                    `calculateGeometrySize()`. Unlike rss/heap it excludes
  *                    everything the harness happens to be holding.
+ *
+ * There is deliberately no `heapUsed + external` total. It looks like a
+ * portable stand-in for RSS and is not one: on that same model it reads
+ * 284 MB against an RSS of 510 MB after geometry, and wasm init alone adds
+ * ~65 MB of RSS while moving `external` by under 2 MB. Emscripten's heap is
+ * structurally invisible to JS-side accounting, so such a total would be
+ * blind to exactly the memory this bench exists to track. peakRssMb is the
+ * headline.
  *
  * `rssMb` and `peakRssMb` include the conway-geom WASM heap (mmap'd into the
  * process) and are the load-bearing memory metrics for geometry work.
@@ -128,6 +143,9 @@ async function writePerfCsvIfRequested(
   const rssMb = ( mem.rss / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapUsedMb = ( mem.heapUsed / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapTotalMb = ( mem.heapTotal / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const externalMb = ( mem.external / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const arrayBuffersMb =
+    ( mem.arrayBuffers / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   // maxRSS is reported in kilobytes, unlike memoryUsage() which is in bytes.
   const peakRssMb =
     ( process.resourceUsage().maxRSS / KB_PER_MB ).toFixed( PERF_MB_PRECISION )
@@ -139,10 +157,11 @@ async function writePerfCsvIfRequested(
 
   const header =
     'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
-    'rssMb,peakRssMb,heapUsedMb,heapTotalMb\n'
+    'rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb\n'
   const row =
     `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
-    `${geometryMemoryMb},${rssMb},${peakRssMb},${heapUsedMb},${heapTotalMb}\n`
+    `${geometryMemoryMb},${rssMb},${peakRssMb},${heapUsedMb},${heapTotalMb},` +
+    `${externalMb},${arrayBuffersMb}\n`
 
   try {
     await fsPromises.writeFile( perfPath, header + row )

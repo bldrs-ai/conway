@@ -71,6 +71,8 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'peakRssMbDelta',
         'heapUsedMbDelta',
         'heapTotalMbDelta',
+        'externalMbDelta',
+        'arrayBuffersMbDelta',
       ]
     : [
         'timestamp',
@@ -92,6 +94,8 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'peakRssMbDelta',
         'heapUsedMbDelta',
         'heapTotalMbDelta',
+        'externalMbDelta',
+        'arrayBuffersMbDelta',
       ];
 
   const lines = [];
@@ -244,6 +248,10 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
           heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
+          // Also absent before #552. arrayBuffersMb is a subset of externalMb,
+          // so the two deltas are not independent — read them together.
+          externalMbDelta: computeDelta('externalMb', entry2, entry1),
+          arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
         });
       } else {
         // Present in data1, missing in data2
@@ -263,6 +271,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
@@ -287,6 +297,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
@@ -325,6 +337,10 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
           heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
           heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
+          // Also absent before #552. arrayBuffersMb is a subset of externalMb,
+          // so the two deltas are not independent — read them together.
+          externalMbDelta: computeDelta('externalMb', entry2, entry1),
+          arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
         });
       } else {
         deltas.push({
@@ -347,6 +363,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }
@@ -374,6 +392,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           peakRssMbDelta: 'N/A',
           heapUsedMbDelta: 'N/A',
           heapTotalMbDelta: 'N/A',
+          externalMbDelta: 'N/A',
+          arrayBuffersMbDelta: 'N/A',
         });
       }
     }

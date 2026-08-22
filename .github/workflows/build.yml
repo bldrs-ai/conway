@@ -1248,8 +1248,10 @@ jobs:
           rows.sort(key=lambda r: abs(pct(r.get('totalTimeMsPercentageChange',''))), reverse=True)
           # Δ peak RSS is the process high-water mark, Δ RSS a single end-of-load
           # sample; both are N/A against a baseline blessed before conway#552.
-          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','rssMbDelta','peakRssMbDelta']
-          headers = ['file','prev ms','curr ms','Δ ms','Δ %','Δ geomMem MB','Δ RSS MB','Δ peak RSS MB']
+          # Δ external is off-heap bytes heapUsed cannot see. Its arrayBuffers
+          # subset is in the CSV rather than here, to keep this table readable.
+          cols = ['filename','engine1TotalTimeMs','engine2TotalTimeMs','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','rssMbDelta','peakRssMbDelta','externalMbDelta']
+          headers = ['file','prev ms','curr ms','Δ ms','Δ %','Δ geomMem MB','Δ RSS MB','Δ peak RSS MB','Δ external MB']
           print(f"### Δ vs previous run [#{prev_run_id}](https://github.com/bldrs-ai/conway/actions/runs/{prev_run_id})")
           print()
           print("| " + " | ".join(headers) + " |")
@@ -1596,6 +1598,7 @@ jobs:
           gmem_d   = col_stats('geometryMemoryMbDelta', [parse_num(r.get('geometryMemoryMbDelta','')) for r in common])
           rss_d    = col_stats('rssMbDelta',         [parse_num(r.get('rssMbDelta','')) for r in common])
           peak_d   = col_stats('peakRssMbDelta',    [parse_num(r.get('peakRssMbDelta','')) for r in common])
+          ext_d    = col_stats('externalMbDelta',   [parse_num(r.get('externalMbDelta','')) for r in common])
           # Track regressions/improvements at a glance.
           pct_vals = [parse_pct(r.get('totalTimeMsPercentageChange','')) for r in common]
           pct_vals = [v for v in pct_vals if v is not None]
@@ -1607,9 +1610,9 @@ jobs:
           print(f"**Models compared (OK on both sides)**: {len(common)} of {len(rows)} delta rows.")
           print(f"**Regressed / improved / flat (by totalTimeMs)**: {regr} / {impr} / {flat}.")
           print()
-          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','rssMbDelta','peakRssMbDelta']
-          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %','Δ geomMem MB','Δ RSS MB','Δ peak RSS MB']
-          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d, 'geometryMemoryMbDelta': gmem_d, 'rssMbDelta': rss_d, 'peakRssMbDelta': peak_d}
+          cols = ['parseTimeMsDelta','geometryTimeMsDelta','totalTimeMsDelta','totalTimeMsPercentageChange','geometryMemoryMbDelta','rssMbDelta','peakRssMbDelta','externalMbDelta']
+          headers = ['stat','Δ parse ms','Δ geom ms','Δ total ms','Δ total %','Δ geomMem MB','Δ RSS MB','Δ peak RSS MB','Δ external MB']
+          s = {'parseTimeMsDelta': parse_d, 'geometryTimeMsDelta': geom_d, 'totalTimeMsDelta': total_d, 'totalTimeMsPercentageChange': pct_d, 'geometryMemoryMbDelta': gmem_d, 'rssMbDelta': rss_d, 'peakRssMbDelta': peak_d, 'externalMbDelta': ext_d}
           print("| " + " | ".join(headers) + " |")
           print("|" + " --- |" * len(headers))
           for stat in ['count', 'min', 'median', 'mean', 'max', 'stddev']:

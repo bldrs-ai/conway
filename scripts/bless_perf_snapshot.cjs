@@ -20,27 +20,31 @@
  *
  *   perf.csv (input, written by src/ifc/ifc_regression_main.ts)
  *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,
- *     rssMb,peakRssMb,heapUsedMb,heapTotalMb
+ *     rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb
  *
  *   performance-detail.csv (output, the committed convention)
  *     timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,
  *     geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,peakRssMb,heapUsedMb,
- *     heapTotalMb,preprocessorVersion,originatingSystem
+ *     heapTotalMb,externalMb,arrayBuffersMb,preprocessorVersion,
+ *     originatingSystem
  *
  * The three columns perf.csv does not carry (schemaVersion,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
- * omitted, so the file keeps the 16-column shape every existing consumer and
+ * omitted, so the file keeps the 18-column shape every existing consumer and
  * GitHub's CSV viewer expect. None of the three reaches the delta:
  * preprocessorVersion/originatingSystem are not in its column set, and
  * schemaVersion is carried through as a label.
  *
  * PEAK vs INSTANT (conway#552). `peakRssMb` is the child process's kernel
- * high-water mark; `rssMb`/`heapUsedMb`/`heapTotalMb` are single samples taken
- * at the end of the load with no GC first. They are not interchangeable — see
- * the column-by-column note on writePerfCsvIfRequested in
+ * high-water mark; `rssMb`/`heapUsedMb`/`heapTotalMb`/`externalMb`/
+ * `arrayBuffersMb` are single samples taken at the end of the load with no GC
+ * first. They are not interchangeable, `arrayBuffersMb` is a subset of
+ * `externalMb`, and no JS-side sum of them sees the wasm heap — see the
+ * column-by-column note on writePerfCsvIfRequested in
  * src/ifc/ifc_regression_main.ts.
  *
- * OLD SNAPSHOTS LACK `peakRssMb`, and `geometryMemoryMb` was N/A on every
+ * OLD SNAPSHOTS LACK `peakRssMb`/`externalMb`/`arrayBuffersMb`, and
+ * `geometryMemoryMb` was N/A on every
  * conway-native snapshot before #552. gen_delta_csv.cjs propagates an absent
  * measurement instead of coercing it to 0, so those deltas read N/A rather
  * than a number. That guard is why baselines do not need re-blessing here.
@@ -70,8 +74,8 @@ const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
 const DETAIL_COLUMNS = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
   'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-  'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
-  'originatingSystem',
+  'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
+  'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
 ];
 
 /** Columns perf.csv does not measure; written as N/A to keep the 15-column shape. */
@@ -154,6 +158,8 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
       row.peakRssMb || UNMEASURED,
       row.heapUsedMb || UNMEASURED,
       row.heapTotalMb || UNMEASURED,
+      row.externalMb || UNMEASURED,
+      row.arrayBuffersMb || UNMEASURED,
       UNMEASURED,
       UNMEASURED,
     ]));
@@ -331,14 +337,21 @@ payload, without the host's copy of the same geometry. \`schemaVersion\`,
 perf writer does not capture them.
 
 \`peakRssMb\` is the load's high-water mark (the kernel's, via
-\`resourceUsage().maxRSS\`); \`rssMb\`, \`heapUsedMb\` and \`heapTotalMb\` are
-single samples taken at the end of the load with no GC first. Do not read the
-instants as peaks, or \`heapUsedMb\` as a live set — it includes garbage GC has
-not collected.
+\`resourceUsage().maxRSS\`); \`rssMb\`, \`heapUsedMb\`, \`heapTotalMb\`,
+\`externalMb\` and \`arrayBuffersMb\` are single samples taken at the end of the
+load with no GC first. Do not read the instants as peaks, or \`heapUsedMb\` as a
+live set — it includes garbage GC has not collected.
 
-Snapshots blessed before conway#552 carry neither \`peakRssMb\` nor a measured
-\`geometryMemoryMb\`, so those columns come out \`N/A\` in a delta against them.
-That is a missing measurement, not a zero: do not read it as "no change".
+\`externalMb\` is off-heap memory V8 knows about and \`arrayBuffersMb\` is its
+ArrayBuffer subset — that is where the source buffer and the parse structures
+live, invisible to \`heapUsedMb\`. Neither sees the wasm heap, so
+\`heapUsedMb + externalMb\` is not a substitute for RSS: on a 31 MB model it
+reads 284 MB against an RSS of 510 MB.
+
+Snapshots blessed before conway#552 carry none of \`peakRssMb\`,
+\`externalMb\` or \`arrayBuffersMb\`, nor a measured \`geometryMemoryMb\`, so
+those columns come out \`N/A\` in a delta against them. That is a missing
+measurement, not a zero: do not read it as "no change".
 
 ## Regenerating
 

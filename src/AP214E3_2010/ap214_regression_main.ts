@@ -61,12 +61,14 @@ const UNMEASURED = 'N/A'
  * column layout of the IFC regression child so the batch aggregator can
  * merge STEP and IFC rows into one perf CSV. No-op when perfPath is empty.
  *
- * `peakRssMb` is the process high-water mark; `rssMb`, `heapUsedMb` and
- * `heapTotalMb` are single instants sampled at write time, and
- * `geometryMemoryMb` is conway's own vertex+index payload rather than a
- * process metric. See the fuller column-by-column note on the IFC child's
- * copy of this function (`src/ifc/ifc_regression_main.ts`), which is the
- * writer these columns have to stay identical to.
+ * `peakRssMb` is the process high-water mark; `rssMb`, `heapUsedMb`,
+ * `heapTotalMb`, `externalMb` and `arrayBuffersMb` are single instants
+ * sampled at write time, and `geometryMemoryMb` is conway's own vertex+index
+ * payload rather than a process metric. `arrayBuffersMb` is a subset of
+ * `externalMb`, and neither sees the wasm heap. See the fuller
+ * column-by-column note on the IFC child's copy of this function
+ * (`src/ifc/ifc_regression_main.ts`), which is the writer these columns have
+ * to stay identical to.
  *
  * @param perfPath Path to write the CSV to. Empty string disables.
  * @param stepFile Source STEP file path (basename used as the row key).
@@ -95,6 +97,9 @@ async function writePerfCsvIfRequested(
   const rssMb = ( mem.rss / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapUsedMb = ( mem.heapUsed / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   const heapTotalMb = ( mem.heapTotal / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const externalMb = ( mem.external / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
+  const arrayBuffersMb =
+    ( mem.arrayBuffers / BYTES_PER_MB ).toFixed( PERF_MB_PRECISION )
   // maxRSS is reported in kilobytes, unlike memoryUsage() which is in bytes.
   const peakRssMb =
     ( process.resourceUsage().maxRSS / KB_PER_MB ).toFixed( PERF_MB_PRECISION )
@@ -106,10 +111,11 @@ async function writePerfCsvIfRequested(
 
   const header =
     'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
-    'rssMb,peakRssMb,heapUsedMb,heapTotalMb\n'
+    'rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb\n'
   const row =
     `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
-    `${geometryMemoryMb},${rssMb},${peakRssMb},${heapUsedMb},${heapTotalMb}\n`
+    `${geometryMemoryMb},${rssMb},${peakRssMb},${heapUsedMb},${heapTotalMb},` +
+    `${externalMb},${arrayBuffersMb}\n`
 
   try {
     await fsPromises.writeFile( perfPath, header + row )

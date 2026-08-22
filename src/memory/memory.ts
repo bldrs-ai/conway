@@ -87,18 +87,34 @@ export default class Memory {
     const rss = (memoryUsage.rss / 1024 / 1024).toFixed(3)
     const heapTotal = (memoryUsage.heapTotal / 1024 / 1024).toFixed(3)
     const heapUsed = (memoryUsage.heapUsed / 1024 / 1024).toFixed(3)
-    // The kernel's high-water mark for this process, which the three
-    // instants above cannot show: a load that transiently hit 5 GB and
-    // settled to 1 GB reports 1 GB in `RSS` and 5 GB here (conway#552).
+    // Off-heap bytes V8 knows about, and the ArrayBuffer subset of them.
+    // Neither is visible in heapUsed, and between them they hold the source
+    // Buffer and the parse structures: on MB-Khaya (31 MB IFC) readFileSync
+    // alone moves arrayBuffers 0.1 -> 31.5 MB while heapUsed does not budge,
+    // and by the geometry stage it is 56 MB the other columns cannot see
+    // (conway#552). They do NOT see the wasm heap — heapUsed + external
+    // reads 284 MB against an RSS of 510 MB on that model — which is why
+    // peakRss stays the headline rather than a JS-side total.
+    const external = (memoryUsage.external / 1024 / 1024).toFixed(3)
+    const arrayBuffers = (memoryUsage.arrayBuffers / 1024 / 1024).toFixed(3)
+    // The kernel's high-water mark for this process, which the instants
+    // above cannot show: a load that transiently hit 5 GB and settled to
+    // 1 GB reports 1 GB in `RSS` and 5 GB here (conway#552).
     // maxRSS is in kilobytes, unlike memoryUsage() which is in bytes.
     const peakRss = (process.resourceUsage().maxRSS / 1024).toFixed(3)
     /* eslint-enable no-magic-numbers */
 
-    // `Peak RSS:` keeps its colon so that scripts/benchmark.cjs's existing
-    // `/RSS ([\d.]+) MB/` scrape cannot bind to it instead of the instant.
+    // Every field scripts/benchmark.cjs scrapes out of this line is named
+    // with a colon before its number, EXCEPT the historical `RSS <n> MB`.
+    // That one is matched non-globally as `/RSS ([\d.]+) MB/`, so it takes
+    // the first hit in the whole server log: any new field spelled without
+    // the colon would bind there and overwrite the instant with a different
+    // measurement.
     return `Node Memory Usage: RSS ${rss} MB, ` +
            `Heap Total: ${heapTotal} MB, ` +
            `Heap Used: ${heapUsed} MB, ` +
-           `Peak RSS: ${peakRss} MB`
+           `Peak RSS: ${peakRss} MB, ` +
+           `External: ${external} MB, ` +
+           `ArrayBuffers: ${arrayBuffers} MB`
   }
 }

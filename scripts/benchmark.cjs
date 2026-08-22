@@ -305,23 +305,30 @@ async function main() {
   //
   // PEAK vs INSTANT (conway#552): `peakRssMb` is the render server process's
   // high-water mark, scraped from the `Peak RSS:` the engine's Memory class
-  // logs (`process.resourceUsage().maxRSS`). `rssMb`, `heapUsedMb` and
-  // `heapTotalMb` are single `process.memoryUsage()` samples taken at the end
-  // of the load with no GC first — so `heapUsedMb` is live data plus
-  // uncollected garbage, and moves with GC timing. `geometryMemoryMb` is not
-  // a process metric at all: it is the vertex+index payload conway allocated
-  // for this model. Only the last of those is independent of what else the
-  // three.js host happens to be holding.
+  // logs (`process.resourceUsage().maxRSS`). `rssMb`, `heapUsedMb`,
+  // `heapTotalMb`, `externalMb` and `arrayBuffersMb` are single
+  // `process.memoryUsage()` samples taken at the end of the load with no GC
+  // first — so `heapUsedMb` is live data plus uncollected garbage, and moves
+  // with GC timing. `arrayBuffersMb` is a subset of `externalMb`; together
+  // they hold the source buffer and the parse structures, which `heapUsedMb`
+  // cannot see at all. `geometryMemoryMb` is not a process metric: it is the
+  // vertex+index payload conway allocated for this model, the only column
+  // independent of what else the three.js host happens to be holding.
   //
-  // Snapshots committed before #552 have neither `peakRssMb` in this header
-  // nor a `Peak RSS:` line to scrape; gen_delta_csv.cjs propagates the
-  // absence as N/A rather than differencing against zero, so old baselines
-  // stay readable and do not need re-blessing.
+  // No `heapUsed + external` total, deliberately: it misses the wasm heap
+  // (284 MB against an RSS of 510 MB on MB-Khaya after geometry), which in a
+  // three.js host is on top of a GL context and a scene graph it also cannot
+  // see. peakRssMb is the headline.
+  //
+  // Snapshots committed before #552 have none of these three columns in this
+  // header, nor the log lines to scrape them from; gen_delta_csv.cjs
+  // propagates the absence as N/A rather than differencing against zero, so
+  // old baselines stay readable and do not need re-blessing.
   const DETAIL_COLUMNS = [
     'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
     'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
-    'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'preprocessorVersion',
-    'originatingSystem',
+    'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
+    'arrayBuffersMb', 'preprocessorVersion', 'originatingSystem',
   ];
 
   fs.writeFileSync(newResults, csvRow(DETAIL_COLUMNS) + "\n", 'utf8');
@@ -471,6 +478,8 @@ async function main() {
       let peakRssMb = 'N/A';
       let heapUsedMb = 'N/A';
       let heapTotalMb = 'N/A';
+      let externalMb = 'N/A';
+      let arrayBuffersMb = 'N/A';
       let preprocessorVersion = 'N/A';
       let originatingSystem = 'N/A';
 
@@ -494,6 +503,11 @@ async function main() {
           if (heapUsedMatch) heapUsedMb = heapUsedMatch[1];
           const heapTotalMatch = logContents.match(/Heap Total: ([\d.]+) MB/);
           if (heapTotalMatch) heapTotalMb = heapTotalMatch[1];
+          const externalMatch = logContents.match(/External: ([\d.]+) MB/);
+          if (externalMatch) externalMb = externalMatch[1];
+          const arrayBuffersMatch =
+            logContents.match(/ArrayBuffers: ([\d.]+) MB/);
+          if (arrayBuffersMatch) arrayBuffersMb = arrayBuffersMatch[1];
           const schemaVersionMatch = logContents.match(/Version: (IFC[^\s]+)/);
           if (schemaVersionMatch) schemaVersion = schemaVersionMatch[1].slice(0, -1);
           const ppVersionMatch = logContents.match(/Preprocessor Version: '([^']+)'/);
@@ -514,6 +528,10 @@ async function main() {
         if (heapUsedMatch) heapUsedMb = heapUsedMatch[1];
         const heapTotalMatch = logContents.match(/Heap Total: ([\d.]+) MB/);
         if (heapTotalMatch) heapTotalMb = heapTotalMatch[1];
+        const externalMatch = logContents.match(/External: ([\d.]+) MB/);
+        if (externalMatch) externalMb = externalMatch[1];
+        const arrayBuffersMatch = logContents.match(/ArrayBuffers: ([\d.]+) MB/);
+        if (arrayBuffersMatch) arrayBuffersMb = arrayBuffersMatch[1];
         parseTimeMs = 0;
         geometryTimeMs = 0;
         preprocessorVersion = 0;
@@ -535,6 +553,8 @@ async function main() {
         peakRssMb,
         heapUsedMb,
         heapTotalMb,
+        externalMb,
+        arrayBuffersMb,
         preprocessorVersion,
         originatingSystem
       ]);
@@ -581,6 +601,7 @@ async function main() {
       const failLine = csvRow([
         timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
         'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
+        'N/A', 'N/A',
       ]);
       appendLineToFile(newResults, failLine);
 
