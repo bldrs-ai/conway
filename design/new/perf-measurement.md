@@ -261,7 +261,8 @@ Both halves of the decision are implemented:
   regression child with it, and `scripts/benchmark.cjs` puts it in the
   render server's `NODE_OPTIONS`. `CONWAY_PERF_EXPOSE_GC=0` (also
   `false`, `off`) turns it off in both places — see the A/B below for
-  why that switch exists.
+  why that switch exists, and "The A/B runs as two passes inside one rc
+  job" for the one caller that sets it.
 - **`N/A` is emitted where it is absent.** `settleAndSampleMemory`
   returns `undefined` rather than falling back to an unsettled
   `process.memoryUsage()`, and every writer turns that into `N/A`.
@@ -292,9 +293,19 @@ with `--expose-gc` and a run without differ only in whether the settle
 executes.
 
 - **Timing columns hold** -> the property is confirmed.
-- **Timing columns move** -> the settle is leaking into the measured
-  window, which is a bug to fix before anything is blessed against
-  those numbers.
+- **Timing columns move, gc on SLOWER** -> the settle is leaking into
+  the measured window, which is a bug to fix before anything is blessed
+  against those numbers.
+- **Timing columns move, gc on FASTER** -> the opposite, and not a
+  defect in the shipped configuration: the *control* pass is carrying
+  pre-load garbage into the window the blessed pass entered clean. See
+  "The settle also cleans the window" below, which is what the first
+  measurement of this found.
+
+The middle case is the one #554 wrote the switch for. The third was not
+anticipated, and the rule above is stated with a sign because reading a
+movement without one would have called a 13% parse difference a leak in
+the measurement.
 
 Measured that way at implementation time, MB-Khaya through the IFC
 regression child, five runs per side interleaved:
@@ -313,6 +324,116 @@ it does exclude anything that would matter to a regression signal.
 `CONWAY_PERF_EXPOSE_GC` exists so this A/B can be run against a released
 build without editing code — otherwise "flag off" would mean "different
 code", and the comparison would prove nothing about either variable.
+
+### The A/B runs as two passes inside one rc job
+
+`.github/workflows/rc-regression.yml` runs the corpus **twice in one
+`rebless` job**: the blessed pass in the shipped configuration, then a
+control pass with `CONWAY_PERF_EXPOSE_GC=0`. `scripts/perf_ab_compare.cjs`
+differences them into the job summary and the run's `perf-serial-*`
+artifact.
+
+**Two separate rc runs cannot answer this, and that was the original
+plan.** Two `run-ifc-regression` jobs an hour apart, on near-identical
+code, came out with *every* model faster in the later run — median
+**1.55x**, MB-Khaya 8039 -> 4745 ms, AC20-FZK-Haus 1524 -> 978 ms. A
+third sample since read 7621 ms for MB-Khaya, so that one model's
+`totalTimeMs` spans **8039 / 4745 / 7621** across three runs of
+near-identical code, a 1.7x spread. The effect under test is about 1%.
+A between-run comparison measures which runner the job landed on and
+nothing else (#554, comment 5381287618).
+
+Two passes in one job share a runner, a machine and a moment, so the
+scale factor applies to both halves and cancels. The same confound is
+why a **cross-version `*_delta.csv` timing column is a lead, not a
+measurement**: a model that "got 30% faster between releases" may have
+changed by nothing at all.
+
+**The blessed pass is the default one, not the control.** The flag-on
+pass is what ships, and its `perf.csv` is the only file passed to
+`bless_perf_snapshot.cjs` or committed by the re-bless PR. The control
+pass writes `perf-nogc.csv` and sends its digests to a scratch folder
+outside the models checkout; blessing it would put a release's numbers
+under a configuration nobody runs. Neither the failure gate nor the
+zero-geometry gate is repeated — a second identical digest run yields
+no extra signal — and the control pass reuses the same LFS checkout, so
+the perf compute roughly doubles and the bandwidth does not.
+
+**What the pass order can and cannot confound.** Pass 2 runs on a
+warmer machine than pass 1. Model file I/O is outside all three timing
+columns — `parseStartMs` is taken after `readFileSync` in
+`ifc_regression_main.ts` — so a warmer page cache cannot reach them
+directly; what pass 2 does get is warmer node/wasm module loads and
+whatever drift there is in runner contention. Read a small
+control-is-faster result with that in mind, and reach for option 2 from
+#554 (interleave the two conditions per model) if it ever needs to be
+excluded properly.
+
+### The settle also cleans the window
+
+Measured while wiring the CI A/B up: 12 interleaved pairs on a dev
+machine, four models through the IFC regression child, one batch run
+per side per pair. Taken against pre-#557 code, so the absolute
+`geometryTimeMs` figures below no longer reproduce — #557 removed a
+second `initialize()` from inside that window (IfcOpenHouse_IFC4 156 ->
+70 ms). It cannot touch the parse column: the second engine was
+constructed in `geometryExtraction`, after `parseEndMs`.
+
+| model | parse, gc on | parse, gc off |
+|---|---|---|
+| AC20-FZK-Haus.ifc (2.5 MB) | 58.75 ms (57-63) | 67.42 ms (58-76) |
+| ISSUE_005_haus.ifc (2.5 MB) | 58.58 ms (57-62) | 70.08 ms (58-93) |
+| IfcOpenHouse_IFC4.ifc (113 kB) | 13.00 ms | 13.42 ms |
+| Sample_entities.ifc (29 kB) | 8.08 ms | 9.25 ms |
+
+`geometryTimeMs` showed no consistent direction over the same 12 pairs
+(398.5 vs 395.2, 390.8 vs 387.6, 158.6 vs 173.3, 102.4 vs 103.9), which
+is the property holding. `parseTimeMs` did: **13-16% lower with the
+flag on** on the two mid-size models, with the ranges barely
+overlapping.
+
+**It is an absolute cost, and it does not generalise up the corpus.**
+The gap is 8.7 and 11.5 ms on the two 2.5 MB models and 0.4 and 1.2 ms
+on the two small ones; the fraction reads 13-16% only because those two
+parses take about 60 ms. The MB-Khaya table further up is the same
+effect at the other end of the range and is *not* a contradiction of
+this one: 578.2 ms gc-off against 588.0 ms gc-on, n=5 — the opposite
+sign, and well inside a 25-55 ms within-group spread, which is what a
+~10 ms shift looks like when it is 1.7% of the figure it is shifting.
+So expect the corpus-wide median `parseTimeMs` ratio the rc job reports
+to sit far nearer 1.00 than 0.85, weighted as it is by models that
+parse in hundreds of ms, and read a per-model ratio against that
+model's own parse time rather than against the percentage.
+
+The mechanism is the pre-load settle, not the flag. `--expose-gc` alone
+measured neutral in two separate experiments (#554). What moves parse
+is that the settle's two collections run immediately before
+`parseStartMs`, so the blessed pass enters the timed region with
+engine-init garbage already collected while the control pass carries it
+in and pays for it inside the window. Same reason the instant memory
+columns move: `heapUsedMb` ran 5-11 MB *lower* with the flag on in
+every one of the 12 pairs, and `rssMb` 6-9 MB lower. Those columns are
+sampled at end of load, downstream of the baseline settle.
+
+Two consequences worth stating before anyone reads a trend:
+
+1. **`parseTimeMs` is not comparable across the #554 boundary** for
+   anything that parses quickly. Older blessed snapshots were taken
+   with no pre-load settle, so their parse figures carry a collection
+   this one does not. A delta across that boundary shows a parse
+   improvement that is a change of methodology, not of the parser —
+   about 10 ms of it, so material on a 60 ms parse and lost in the
+   noise on a 600 ms one. Same for `heapUsedMb` and `rssMb`, in the
+   other direction. Distinct from the #557 boundary, which moves
+   `geometryTimeMs` and the memory columns on IFC rows only.
+2. **The control pass's memory columns are not a defect report.** Only
+   the timing columns carry the question the A/B is asking; the memory
+   rows in the comparison output are there so their (expected)
+   movement is not read as one.
+
+This is n=12 on one machine over four models. The corpus-wide figures
+land in the first rc run that carries both passes, and that summary is
+what should settle it.
 
 ## Rejected: `total = heapUsed + external` as the headline
 
@@ -407,6 +528,7 @@ against a regression-child figure. Tracked separately.
 | #552 (via #553) | add `peakRssMb`, `externalMb`, `arrayBuffersMb`, `peakWasmHeapMb`; restore `geometryMemoryMb` | memory was one un-GC'd instant, and the wasm heap was invisible |
 | #554 | add `retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb`; pass `--expose-gc` to the regression children and the render server; add the teardown the regression children never had | nothing measured what is held after teardown, and a peak cannot see it |
 | #557 | IFC regression child extracts on the engine `main()` initialised, not a second one built in `geometryExtraction` | the alloc telemetry described an idle module, and the second engine put a ~55-60 MB constant in every IFC retention and RSS row plus its init in `geometryTimeMs`; those IFC baselines move once |
+| #554 (via the two-pass rc A/B) | `parseTimeMs` drops by about 10 ms per load (13-16% at a ~60 ms parse, unresolvable against a 578 ms one), `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB, against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary. Distinct from #557 above, which moves `geometryTimeMs` and the memory columns on IFC rows only |
 
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads
 **185.22** against the **185.836** recorded at 1.451.
@@ -417,3 +539,8 @@ Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads
   native allocation rather than heap high-water is the unit for a ceiling
 - `design/new/ci-regression-cost.md` — CI tiering, the rc / re-bless / LFS runbook
 - `regression/README.md` — corpus, digest CSVs, smoke subset vs rc pass
+- `.github/workflows/rc-regression.yml` — the `rebless` job that runs both
+  passes, and `scripts/perf_ab_compare.cjs`, which differences them
+- `scripts/bless_perf_snapshot.cjs` — writes the blessed snapshot and the
+  README that ships beside it; that README carries the reader-facing half
+  of the column definitions above

@@ -33,9 +33,18 @@ const CHILD_NODE_FLAGS = '--experimental-specifier-resolution=node'
  * both samples sit outside the timed region — baseline before the load,
  * retained sample after teardown — so a run with the flag and a run without
  * should produce the same timing columns from identical code. Set the
- * variable to `0`, `false` or `off` for the without side of that A/B. If the
- * timing columns move between the two, the settle is reaching the measured
- * window, and that is a bug rather than a tolerance.
+ * variable to `0`, `false` or `off` for the without side of that A/B; the
+ * `rebless` job of `.github/workflows/rc-regression.yml` does exactly that
+ * for its second, control pass, because the two conditions have to share a
+ * runner for the comparison to mean anything (between two CI runs the timing
+ * columns carry a ~1.5x runner scale factor against a ~1% effect).
+ *
+ * Read any movement with its sign. Gc-on SLOWER means the settle is reaching
+ * the measured window, which is a bug rather than a tolerance. Gc-on FASTER
+ * means the opposite — the pre-load settle collects engine-init garbage that
+ * the flag-off run collects inside the timed region instead. That is about
+ * 10 ms per load: 13-16% of `parseTimeMs` on a model that parses in ~60 ms,
+ * and lost in the noise on one that parses in 578 ms.
  *
  * @return {boolean} True unless CONWAY_PERF_EXPOSE_GC disables it.
  */
