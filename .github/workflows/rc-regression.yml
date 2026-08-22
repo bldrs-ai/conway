@@ -104,13 +104,16 @@ jobs:
     # engine over ~100 models with --parallel and reserves multi-GB shared.
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     # Outer backstop against a wedged run (down from an old 90). A healthy run
-    # is build-from-warm-cache + LFS checkout + the serial (--concurrency 1)
-    # regen, comfortably under ~30 min; the regen step has its own tighter
-    # 20-min cap, the batch self-exits, and per-model work is timeout-bounded,
-    # so this rarely fires. 45 leaves headroom for a cold WASM-cache rebuild
-    # while still cancelling a hang far sooner than the old ceiling. Bump it if
-    # a legitimate cold rebuild is ever cancelled here.
-    timeout-minutes: 45
+    # is build-from-warm-cache + LFS checkout + TWO serial (--concurrency 1)
+    # passes over the corpus — the blessed one and the gc-off control (see
+    # "Control perf pass" below) — each with its own tighter 20-min cap, the
+    # batch self-exits, and per-model work is timeout-bounded, so this rarely
+    # fires. Raised from 45 to 70 when the control pass was added: 45 had
+    # ~15 min of headroom over a single-pass run, which a second full pass
+    # would have eaten. 70 still leaves room for a cold WASM-cache rebuild
+    # while cancelling a hang far sooner than the old 90 ceiling. Bump it if a
+    # legitimate cold rebuild is ever cancelled here.
+    timeout-minutes: 70
     steps:
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway
@@ -250,8 +253,20 @@ jobs:
       # — actions/hashFiles only matches paths under GITHUB_WORKSPACE, so the
       # upload step below can gate on it. No separate perf pass needed. This is
       # conway-native load timing, distinct from the perf-three-* render jobs.
+      #
+      # THIS IS THE BLESSED PASS. It runs the shipped configuration and its
+      # perf.csv is the only one that reaches bless_perf_snapshot.cjs and the
+      # re-bless PR. `CONWAY_PERF_EXPOSE_GC: '1'` is that default written down
+      # rather than changed: `exposeGcRequested()` in
+      # ifc_regression_batch_main.ts returns true when the variable is unset,
+      # so this pins the condition being blessed against the control pass
+      # below, which sets it to '0'. Do NOT make the control pass the blessed
+      # one — that would put a release's numbers under a configuration nobody
+      # ships.
       - name: Regenerate baseline digests
         timeout-minutes: 20
+        env:
+          CONWAY_PERF_EXPOSE_GC: '1'
         run: |
           node --experimental-specifier-resolution=node \
             ./compiled/src/ifc/ifc_regression_batch_main.js \
@@ -370,6 +385,78 @@ jobs:
           print("\nNo new failures. Pre-existing known-failers do not block the rc.")
           EOF
 
+      # --- The gc-off control pass (conway#554) ---
+      #
+      # The second half of an A/B whose only variable is whether the retention
+      # settle runs. conway#554 defines the retention columns so that both of
+      # their samples sit outside the timed region — baseline before the load,
+      # retained sample after teardown — which makes "the settle costs no
+      # timing" a property that can be MEASURED rather than asserted: identical
+      # code, run once with `--expose-gc` reaching the children and once
+      # without, must produce the same parse/geometry/total columns.
+      #
+      # WHY IT IS HERE AND NOT A SECOND rc RUN. The original plan was to tag,
+      # run, flip the switch and run again. That does not work. Two
+      # `run-ifc-regression` jobs an hour apart on near-identical code came out
+      # with EVERY model faster in the later run, median 1.55x, and MB-Khaya's
+      # totalTimeMs across three such runs read 8039 / 4745 / 7621 ms
+      # (conway#554, comment 5381287618). The effect under test is ~1%, so a
+      # between-run comparison measures which runner the job landed on and
+      # nothing else. Both conditions therefore run in ONE job, sharing a
+      # runner, a machine and a moment, so that scale factor cancels.
+      #
+      # WHAT THIS PASS MUST NOT TOUCH:
+      #   - it writes its digests to `perf-control-out` in the workspace, NOT
+      #     to models/regression/test_models, so the blessed baseline the
+      #     previous steps produced is not overwritten by numbers taken under
+      #     a configuration we do not ship;
+      #   - its perf CSV is `perf-nogc.csv`, and only `perf.csv` is passed to
+      #     bless_perf_snapshot.cjs below;
+      #   - the failure gate and the zero-geometry gate above are NOT repeated
+      #     — a second identical digest run yields no extra signal, and the
+      #     re-bless PR carries the first pass's output only.
+      #
+      # THE OUTPUT PATH MUST STAY RELATIVE. The batch's runDiff ends every run
+      # with `git diff -- <output_folder>` from inside the model checkout, and
+      # nothing catches its rejection. A relative `perf-control-out` resolves
+      # (to a path that does not exist) inside that repo and diffs to nothing,
+      # exactly as the blessed pass's `models/regression/test_models` already
+      # does from that cwd. An ABSOLUTE path makes git exit 128 with "is
+      # outside repository", which fails this step. Verified both ways
+      # locally.
+      #
+      # No new checkout: the corpus is already materialized in `models`, so
+      # this doubles the perf compute and costs zero extra LFS bandwidth.
+      #
+      # Default step condition (success()) on purpose: when the failure gate
+      # above reddened the rc, the release is already bad and a methodology
+      # control is not worth another ~20 minutes of large-runner time. It gets
+      # its chance on the re-run.
+      #
+      # continue-on-error for the mirror-image reason. Every step after this
+      # one that carries no `if:` — dropping changes.csv, the churn summary,
+      # and the re-bless PR that IS the release's regression report — runs on
+      # the implicit success(), so without this a control pass that timed out
+      # or crashed would silently withhold the rc's entire deliverable. The
+      # control is the least important thing in this job and must never be
+      # able to block the most important.
+      - name: Control perf pass (CONWAY_PERF_EXPOSE_GC=0)
+        timeout-minutes: 20
+        continue-on-error: true
+        env:
+          CONWAY_PERF_EXPOSE_GC: '0'
+        run: |
+          node --experimental-specifier-resolution=node \
+            ./compiled/src/ifc/ifc_regression_batch_main.js \
+            -e "sp-.*\.ifc|cg4.*-cylinder\.stp" \
+            --concurrency 1 \
+            --timeout 300000 \
+            --perf "${GITHUB_WORKSPACE}/perf-nogc.csv" \
+            models \
+            perf-control-out \
+            --parallel --mem-utilization 90
+          rm -rf "${GITHUB_WORKSPACE}/perf-control-out"
+
       # Summarize + upload the steady per-model perf the regen captured (one
       # model at a time, full cores). Runs even when the gate failed — a new
       # failure elsewhere shouldn't cost us the timing data — hence
@@ -400,12 +487,49 @@ jobs:
                     f"{r.get('rssMb','')} |")
           EOF
 
-      - name: Upload steady perf CSV
+      # Difference the two passes and put the answer in the job summary, where
+      # "did the settle move the timing columns, and by how much against the
+      # scatter between models" is readable without downloading anything.
+      #
+      # continue-on-error, and the script itself never exits non-zero on a
+      # finding: this runs BEFORE the steps that bless the snapshot and open
+      # the re-bless PR, both of which are gated on the steps before them
+      # succeeding. A methodology check must not be able to withhold the
+      # release's regression report. An A/B that came out invalid (the control
+      # pass measured retention, i.e. the env switch never reached the
+      # children) is reported as a ::warning:: and said plainly in the table
+      # header instead.
+      - name: Compare the two perf passes
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          PERF="${GITHUB_WORKSPACE}/perf.csv"
+          CONTROL="${GITHUB_WORKSPACE}/perf-nogc.csv"
+          if [ ! -f "$PERF" ] || [ ! -f "$CONTROL" ]; then
+            echo "### GC-settle A/B (${{ matrix.target.repo }})" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Not run: the control pass produced no perf-nogc.csv (skipped, or the rc failed its gate)._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/perf_ab_compare.cjs \
+            "$PERF" "$CONTROL" \
+            "${GITHUB_WORKSPACE}/perf-gc-ab.md" \
+            "${GITHUB_WORKSPACE}/perf-gc-ab.csv" \
+            --label "${{ matrix.target.repo }}"
+          cat "${GITHUB_WORKSPACE}/perf-gc-ab.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # Both passes' CSVs plus the joined per-model comparison. Missing paths
+      # only warn in upload-artifact@v4 as long as one matches, so a skipped
+      # control pass still uploads the blessed perf.csv.
+      - name: Upload steady perf CSVs
         if: ${{ !cancelled() && hashFiles('perf.csv') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: perf-serial-${{ matrix.target.name }}-${{ github.run_id }}
-          path: perf.csv
+          path: |
+            perf.csv
+            perf-nogc.csv
+            perf-gc-ab.csv
+            perf-gc-ab.md
 
       # Bless the run's perf numbers alongside the digests, and diff them
       # against the previous blessed snapshot.
@@ -418,6 +542,12 @@ jobs:
       # and reuses scripts/gen_delta_csv.cjs for the delta; see the header of
       # bless_perf_snapshot.cjs for the column mapping and the
       # conway-native-vs-headless-three harness boundary.
+      #
+      # ONLY THE BLESSED PASS REACHES HERE. `$PERF` is the workspace's
+      # perf.csv, written by the digest regen under the shipped configuration.
+      # The control pass's numbers live in perf-nogc.csv and are never passed
+      # to this script, so a release's record cannot end up carrying timings
+      # taken with the settle disabled.
       #
       # rc-* tags only. The blessed benchmark directory is named for a release
       # and is part of a release's record; an ad-hoc workflow_dispatch re-run
