@@ -103,17 +103,35 @@ jobs:
     # Same heavy runner as run-ifc-regression: the batch drives the MT WASM
     # engine over ~100 models with --parallel and reserves multi-GB shared.
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
-    # Outer backstop against a wedged run (down from an old 90). A healthy run
-    # is build-from-warm-cache + LFS checkout + TWO serial (--concurrency 1)
+    # Outer backstop against a wedged run. A healthy run is
+    # build-from-warm-cache + LFS checkout + TWO serial (--concurrency 1)
     # passes over the corpus — the blessed one and the gc-off control (see
-    # "Control perf pass" below) — each with its own tighter 20-min cap, the
-    # batch self-exits, and per-model work is timeout-bounded, so this rarely
-    # fires. Raised from 45 to 70 when the control pass was added: 45 had
-    # ~15 min of headroom over a single-pass run, which a second full pass
-    # would have eaten. 70 still leaves room for a cold WASM-cache rebuild
-    # while cancelling a hang far sooner than the old 90 ceiling. Bump it if a
-    # legitimate cold rebuild is ever cancelled here.
-    timeout-minutes: 70
+    # "Control perf pass" below) — each with its own 35-min cap, the batch
+    # self-exits, and per-model work is timeout-bounded, so this rarely fires.
+    #
+    # The budget this 90 is built from, PRIVATE (the binding corpus — it is
+    # ~4x the public one in wall time), measured on run 32601886424 unless
+    # noted:
+    #
+    #   checkout + node + deps + tsc, warm WASM cache   1m57s  -> budget  5m
+    #   private corpus LFS checkout                     1m33s  -> budget  5m
+    #   blessed digest pass                            ~20m30s -> cap    35m
+    #   gc-off control pass                            ~20m    -> cap    35m
+    #   gates, summaries, artifact, bless, PR, post       ~15s  -> budget  3m
+    #                                                            --------
+    #                                                              83m
+    #
+    # 90 leaves ~7 min over that, and every heavy pass is separately capped,
+    # so a wedge is cancelled inside its own step long before this ceiling —
+    # this number only has to bound the untimed steps. It is back at the old
+    # 90 because the job now does twice the corpus work it did when 45 was
+    # written; that is the two-pass A/B, not drift.
+    #
+    # NOT sized for a cold WASM-cache rebuild on top of two long passes: that
+    # combination is already pathological and should be cancelled. A cold
+    # rebuild on a normal-speed run still fits. Bump it if a legitimate cold
+    # rebuild is ever cancelled here.
+    timeout-minutes: 90
     steps:
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway
@@ -263,8 +281,33 @@ jobs:
       # below, which sets it to '0'. Do NOT make the control pass the blessed
       # one — that would put a release's numbers under a configuration nobody
       # ships.
+      #
+      # THE 35 IS DERIVED, NOT ROUND. This step is the longest thing in the
+      # job and the private corpus is what sizes it. Measured wall times for
+      # this step (GitHub Actions step timestamps):
+      #
+      #   private, run 32550854090 (rc-1.549.1515, no settle)   19m55s  passed
+      #   private, run 32601766596 (same code, no settle)       19m12s  passed
+      #   private, run 32601886424 (with the #556 settle)       20m01s  KILLED
+      #   public,  run 32601886424 (with the settle)             5m15s  passed
+      #
+      # The private step had been running at 19m55s against a 20-min cap —
+      # 5 seconds of headroom — before this workflow gained a second pass.
+      # conway#556's retention settle (two forced GCs per model, 107 private
+      # models) is what pushed it over: the within-run A/B on public measures
+      # the settle at 5m15s vs the control's 5m06s, +2.9%, which puts private
+      # at ~20m30s, and a cross-run read of public (5m15s vs 4m48s) puts it
+      # nearer 21m45s. Either way it no longer fits under 20.
+      #
+      # 35 is ~1.6x the estimate. Whole-pass wall time is actually stable —
+      # the three private runs above span 3.7% — but PER-MODEL times across
+      # runs are not, and design/new/perf-measurement.md records a 1.55x
+      # median between-run scale factor on one model set. 35 covers even a
+      # whole pass landing at that factor (19m55s x 1.55 = 30m52s) with
+      # ~13% left. Do not trim this back toward the measured 20m: that is the
+      # 99.6%-of-budget state this cap was raised to get out of.
       - name: Regenerate baseline digests
-        timeout-minutes: 20
+        timeout-minutes: 35
         env:
           CONWAY_PERF_EXPOSE_GC: '1'
         run: |
@@ -440,8 +483,17 @@ jobs:
       # or crashed would silently withhold the rc's entire deliverable. The
       # control is the least important thing in this job and must never be
       # able to block the most important.
+      #
+      # SAME 35-MIN CAP AS THE BLESSED PASS, for the same reason: this pass
+      # IS a second full digest run over the same corpus, so it costs what
+      # that one costs. Public, run 32601886424, shows them near-equal —
+      # digest 5m15s, control 5m06s (the control is the cheaper half; it is
+      # the one without the settle). It has never actually run on private:
+      # the first two-pass rc died in the digest step above, so the control
+      # was skipped. Left at 20 it would have blown the same cap on the next
+      # rc, one step later and after another full LFS pass.
       - name: Control perf pass (CONWAY_PERF_EXPOSE_GC=0)
-        timeout-minutes: 20
+        timeout-minutes: 35
         continue-on-error: true
         env:
           CONWAY_PERF_EXPOSE_GC: '0'
