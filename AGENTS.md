@@ -6,8 +6,18 @@ consumed by [Share](https://github.com/bldrs-ai/Share).
 
 ## Build and test
 
-Do not try and run `yarn setup` again. It has already been run in the
-environment setup.
+Do not try and run `yarn setup` again **in the container's main clone** —
+it has already been run there by the environment setup. A **worktree you
+create yourself inherits none of that state**, so it needs setup run in
+it: `yarn submodule-update && yarn extract-wasm-dependencies` at minimum,
+or `yarn setup` if you want a full build. The symptom is
+`yarn build-codex-MT` failing on missing `glm` / `tinynurbs` (nested
+submodules under `dependencies/conway-geom/external/`, which is why the
+init is `--recursive`) or on the unextracted
+`dependencies/conway-geom/dependencies/wasm/dependencies.zip`. Two agents
+have read the "already been run" sentence in a worktree and hand-rolled
+those steps as if they were undocumented; they are not, they are `setup`'s
+own named pieces.
 
 To build, run `yarn build-codex-MT`. To test, run `yarn test`. If only
 making changes to the TypeScript code in conway, you can run `yarn
