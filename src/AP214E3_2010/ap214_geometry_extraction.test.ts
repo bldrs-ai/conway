@@ -163,7 +163,17 @@ describe('AP214 Geometry Extraction', () => {
     // flank splines are a few mm across, so the old absolute 1mm chord
     // tolerance sampled them with ~3 chords per flank; 0.1%-of-extent
     // tolerance resolves the involute curvature the profile actually has.
-    const testParameter:number = 154644
+    //
+    // Lowered from 154644 with conway-geom#178, which made the NURBS
+    // inverse solve's convergence target relative for the same reason the
+    // deflection thresholds above became relative. The solve's absolute
+    // 0.001-model-unit residual sat under TriangulateBspline's relative
+    // refinement target, so on millimetre-scale faces like these flanks the
+    // criterion was unsatisfiable and tesselate() spent its whole 32x
+    // amplification budget subdividing against that residual. The removed
+    // 3816 indices (1272 triangles) are that wasted subdivision, not lost
+    // curvature.
+    const testParameter:number = 150828
     expect(getGearMeshSize()).toBe(testParameter)
 
   })
