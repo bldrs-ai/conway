@@ -50,6 +50,17 @@ on:
         type: choice
         options: [both, public, private]
         default: both
+      # The gc-settle A/B (the control pass + its comparison), OFF by default.
+      # The question it was built to answer has been answered — see "The gc-off
+      # control pass" below — so a release does not pay for it any more, but
+      # the machinery is the only way to ask again and stays one checkbox away.
+      # Turn it on when the settle changes, or when a timing movement needs
+      # explaining. A tag push supplies no inputs, so the default applies and
+      # both steps skip.
+      perf_ab:
+        description: 'Also run the gc-off control pass and A/B comparison'
+        type: boolean
+        default: false
 
 env:
   EMSDK_VERSION: '6.0.2'
@@ -103,17 +114,38 @@ jobs:
     # Same heavy runner as run-ifc-regression: the batch drives the MT WASM
     # engine over ~100 models with --parallel and reserves multi-GB shared.
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
-    # Outer backstop against a wedged run (down from an old 90). A healthy run
-    # is build-from-warm-cache + LFS checkout + TWO serial (--concurrency 1)
-    # passes over the corpus — the blessed one and the gc-off control (see
-    # "Control perf pass" below) — each with its own tighter 20-min cap, the
-    # batch self-exits, and per-model work is timeout-bounded, so this rarely
-    # fires. Raised from 45 to 70 when the control pass was added: 45 had
-    # ~15 min of headroom over a single-pass run, which a second full pass
-    # would have eaten. 70 still leaves room for a cold WASM-cache rebuild
-    # while cancelling a hang far sooner than the old 90 ceiling. Bump it if a
-    # legitimate cold rebuild is ever cancelled here.
-    timeout-minutes: 70
+    # Outer backstop against a wedged run. A healthy run is
+    # build-from-warm-cache + LFS checkout + ONE serial (--concurrency 1) pass
+    # over the corpus, plus a SECOND identical pass only when the `perf_ab`
+    # input is set (see "The gc-off control pass" below) — each pass with its
+    # own 35-min cap, the batch self-exits, and per-model work is
+    # timeout-bounded, so this rarely fires.
+    #
+    # THIS 90 IS SIZED FOR THE perf_ab RUN, not for a release. The budget,
+    # PRIVATE (the binding corpus — it is ~4x the public one in wall time),
+    # measured on run 32601886424 unless noted:
+    #
+    #   checkout + node + deps + tsc, warm WASM cache   1m57s  -> budget  5m
+    #   private corpus LFS checkout                     1m33s  -> budget  5m
+    #   blessed digest pass                            ~20m30s -> cap    35m
+    #   gc-off control pass (perf_ab only)             ~20m    -> cap    35m
+    #   gates, summaries, artifact, bless, PR, post       ~15s  -> budget  3m
+    #                                                            --------
+    #                                       perf_ab run:           83m
+    #                                       plain rc  :            48m
+    #
+    # 90 leaves ~7 min over the perf_ab budget, and every heavy pass is
+    # separately capped, so a wedge is cancelled inside its own step long
+    # before this ceiling — this number only has to bound the untimed steps.
+    # A plain rc uses barely half of it, and that slack is not waste: a job
+    # cap costs nothing on a run that does not hit it, and sizing it to the
+    # 48m case would red every deliberate A/B run.
+    #
+    # NOT sized for a cold WASM-cache rebuild on top of two long passes: that
+    # combination is already pathological and should be cancelled. A cold
+    # rebuild on a normal-speed run still fits. Bump it if a legitimate cold
+    # rebuild is ever cancelled here.
+    timeout-minutes: 90
     steps:
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway
@@ -260,11 +292,38 @@ jobs:
       # rather than changed: `exposeGcRequested()` in
       # ifc_regression_batch_main.ts returns true when the variable is unset,
       # so this pins the condition being blessed against the control pass
-      # below, which sets it to '0'. Do NOT make the control pass the blessed
-      # one — that would put a release's numbers under a configuration nobody
-      # ships.
+      # below, which sets it to '0'. Keep it pinned even though that control
+      # pass is now opt-in — the point of writing the default down is that the
+      # blessed configuration does not move when the A/B is off. Do NOT make
+      # the control pass the blessed one — that would put a release's numbers
+      # under a configuration nobody ships.
+      #
+      # THE 35 IS DERIVED, NOT ROUND. This step is the longest thing in the
+      # job and the private corpus is what sizes it. Measured wall times for
+      # this step (GitHub Actions step timestamps):
+      #
+      #   private, run 32550854090 (@1e55a8e0, no settle)       19m55s  passed
+      #   private, run 32601766596 (@1e55a8e0, no settle)       19m12s  passed
+      #   private, run 32601886424 (@4c0d768b, #556 settle)     20m01s  KILLED
+      #   public,  run 32601886424 (@4c0d768b, #556 settle)      5m15s  passed
+      #
+      # The private step had been running at 19m55s against a 20-min cap —
+      # 5 seconds of headroom — before this workflow gained a second pass.
+      # conway#556's retention settle (two forced GCs per model, 107 private
+      # models) is what pushed it over: the within-run A/B on public measures
+      # the settle at 5m15s vs the control's 5m06s, +2.9%, which puts private
+      # at ~20m30s, and a cross-run read of public (5m15s vs 4m48s) puts it
+      # nearer 21m45s. Either way it no longer fits under 20.
+      #
+      # 35 is ~1.6x the estimate. Whole-pass wall time is actually stable —
+      # the three private runs above span 3.7% — but PER-MODEL times across
+      # runs are not, and design/new/perf-measurement.md records a 1.55x
+      # median between-run scale factor on one model set. 35 covers even a
+      # whole pass landing at that factor (19m55s x 1.55 = 30m52s) with
+      # ~13% left. Do not trim this back toward the measured 20m: that is the
+      # 99.6%-of-budget state this cap was raised to get out of.
       - name: Regenerate baseline digests
-        timeout-minutes: 20
+        timeout-minutes: 35
         env:
           CONWAY_PERF_EXPOSE_GC: '1'
         run: |
@@ -385,7 +444,21 @@ jobs:
           print("\nNo new failures. Pre-existing known-failers do not block the rc.")
           EOF
 
-      # --- The gc-off control pass (conway#554) ---
+      # --- The gc-off control pass (conway#554) — OPT-IN, DEFAULT OFF ---
+      #
+      # THE COMPARISON HAS BEEN MADE. Run 32601886424's public job executed
+      # both passes on one runner: blessed (settle on) 5m15s, control (settle
+      # off) 5m06s — the settle costs about +2.9% of pass wall-clock, on one
+      # corpus, and does not move the timing columns it was feared to move.
+      # The call off that measurement (Pablo, conway#554) is that the settle
+      # is ALWAYS ON going forwards, so the control condition is no longer
+      # something a release needs to re-measure every time. It now runs only
+      # when the `perf_ab` dispatch input is set — see the input's comment at
+      # the top of this file. That is why this step and the comparison below
+      # both carry an `if:`, and why an rc tag runs ONE pass, not two.
+      #
+      # Everything below this line is why the pass is built the way it is, and
+      # still applies on the runs where it is switched back on.
       #
       # The second half of an A/B whose only variable is whether the retention
       # settle runs. conway#554 defines the retention columns so that both of
@@ -428,20 +501,59 @@ jobs:
       # No new checkout: the corpus is already materialized in `models`, so
       # this doubles the perf compute and costs zero extra LFS bandwidth.
       #
-      # Default step condition (success()) on purpose: when the failure gate
-      # above reddened the rc, the release is already bad and a methodology
-      # control is not worth another ~20 minutes of large-runner time. It gets
-      # its chance on the re-run.
+      # THE `if:` SPELLS OUT `success()` DELIBERATELY. Actions inserts
+      # `success()` implicitly only when an `if:` contains NO status function,
+      # so the `perf_ab` test alone would still carry it —
+      # but that behaviour is exactly the load-bearing kind that should not be
+      # implicit here. The `success()` half is what makes a reddened rc skip
+      # this: when the failure gate above failed, the release is already bad
+      # and a methodology control is not worth another ~20 minutes of
+      # large-runner time. It gets its chance on the re-run.
       #
-      # continue-on-error for the mirror-image reason. Every step after this
-      # one that carries no `if:` — dropping changes.csv, the churn summary,
-      # and the re-bless PR that IS the release's regression report — runs on
-      # the implicit success(), so without this a control pass that timed out
-      # or crashed would silently withhold the rc's entire deliverable. The
-      # control is the least important thing in this job and must never be
-      # able to block the most important.
+      # WHY THE INPUT IS READ TWO WAYS. A `type: boolean` dispatch input
+      # arrives as a real boolean in the typed `inputs` context and as the
+      # string 'true'/'false' in the raw `github.event.inputs` payload, and
+      # Actions' comparison rules make each test fail against the OTHER
+      # representation (a boolean/string compare casts both to numbers, and
+      # 'true' is NaN). Guessing wrong here fails SILENTLY — the A/B would
+      # simply never run when someone ticked the box, and nothing would say
+      # so. Neither could be verified without dispatching this workflow, which
+      # needs REBLESS_TOKEN and both corpora, so both forms are tested. Either
+      # one alone would work if the representation is what it is assumed to
+      # be; together they do not depend on the assumption. On a tag push both
+      # contexts are empty, both halves are false, and the step skips — which
+      # is the path every release takes.
+      #
+      # continue-on-error for the mirror-image reason, and it still earns its
+      # place now that this step is usually skipped: a SKIPPED step cannot
+      # fail, so it changes nothing on the default path, but on a `perf_ab`
+      # run every step after this one that carries no `if:` — dropping
+      # changes.csv, the churn summary, and the re-bless PR that IS the
+      # release's regression report — runs on the implicit success(), so
+      # without this a control pass that timed out or crashed would silently
+      # withhold the rc's entire deliverable. The control is the least
+      # important thing in this job and must never be able to block the most
+      # important.
+      #
+      # SAME 35-MIN CAP AS THE BLESSED PASS, for the same reason: this pass
+      # IS a second full digest run over the same corpus, so it costs what
+      # that one costs. Public, run 32601886424, shows them near-equal —
+      # digest 5m15s, control 5m06s (the control is the cheaper half; it is
+      # the one without the settle). Left at 20 it would have blown the same
+      # cap the digest step blew, one step later and after another full LFS
+      # pass.
+      #
+      # The cap stays at 35 even though this step is now usually skipped, and
+      # it stays UNPROVEN on private: this pass has still never executed there
+      # (the first two-pass rc died in the digest step above), so the only
+      # private evidence is that a near-identical pass takes ~20 minutes. A
+      # `perf_ab` run is deliberate and infrequent; sizing its cap down to
+      # save minutes it does not spend would just re-run the failure this
+      # workflow was fixed for, on the run where someone is trying to measure
+      # something.
       - name: Control perf pass (CONWAY_PERF_EXPOSE_GC=0)
-        timeout-minutes: 20
+        if: ${{ success() && (inputs.perf_ab == true || github.event.inputs.perf_ab == 'true') }}
+        timeout-minutes: 35
         continue-on-error: true
         env:
           CONWAY_PERF_EXPOSE_GC: '0'
@@ -491,6 +603,17 @@ jobs:
       # "did the settle move the timing columns, and by how much against the
       # scatter between models" is readable without downloading anything.
       #
+      # Gated on the same `perf_ab` input as the control pass, so the two move
+      # together: with the A/B off there is no second pass and nothing to
+      # difference, and an ungated compare step would print a "not run" panel
+      # into every release's summary for a question that is settled. The
+      # missing-CSV branch below is kept anyway — on a `perf_ab` run the
+      # control pass is continue-on-error, so it can be enabled and still
+      # produce no perf-nogc.csv. `!cancelled()` rather than `success()` for
+      # the same reason as the summary step above: a reddened gate elsewhere
+      # should not cost the comparison, and when the gate is what reddened,
+      # the control pass skipped and this reports exactly that.
+      #
       # continue-on-error, and the script itself never exits non-zero on a
       # finding: this runs BEFORE the steps that bless the snapshot and open
       # the re-bless PR, both of which are gated on the steps before them
@@ -500,14 +623,14 @@ jobs:
       # children) is reported as a ::warning:: and said plainly in the table
       # header instead.
       - name: Compare the two perf passes
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.perf_ab == true || github.event.inputs.perf_ab == 'true') }}
         continue-on-error: true
         run: |
           PERF="${GITHUB_WORKSPACE}/perf.csv"
           CONTROL="${GITHUB_WORKSPACE}/perf-nogc.csv"
           if [ ! -f "$PERF" ] || [ ! -f "$CONTROL" ]; then
             echo "### GC-settle A/B (${{ matrix.target.repo }})" >> "$GITHUB_STEP_SUMMARY"
-            echo "_Not run: the control pass produced no perf-nogc.csv (skipped, or the rc failed its gate)._" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Not run: perf_ab was set, but the control pass produced no perf-nogc.csv — it failed, timed out, or the rc's failure gate skipped it._" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           node scripts/perf_ab_compare.cjs \
@@ -519,7 +642,11 @@ jobs:
 
       # Both passes' CSVs plus the joined per-model comparison. Missing paths
       # only warn in upload-artifact@v4 as long as one matches, so a skipped
-      # control pass still uploads the blessed perf.csv.
+      # control pass still uploads the blessed perf.csv — which since the A/B
+      # became opt-in is the NORMAL case, not the degraded one: on a release
+      # this uploads perf.csv and warns about the other three. The `if:` gates
+      # on perf.csv specifically for that reason; do not tighten it to require
+      # the A/B files, and do not set if-no-files-found: error here.
       - name: Upload steady perf CSVs
         if: ${{ !cancelled() && hashFiles('perf.csv') != '' }}
         uses: actions/upload-artifact@v4

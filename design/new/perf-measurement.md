@@ -325,13 +325,32 @@ it does exclude anything that would matter to a regression signal.
 build without editing code — otherwise "flag off" would mean "different
 code", and the comparison would prove nothing about either variable.
 
-### The A/B runs as two passes inside one rc job
+### The A/B runs as two passes inside one rc job — on demand
 
-`.github/workflows/rc-regression.yml` runs the corpus **twice in one
+`.github/workflows/rc-regression.yml` can run the corpus **twice in one
 `rebless` job**: the blessed pass in the shipped configuration, then a
 control pass with `CONWAY_PERF_EXPOSE_GC=0`. `scripts/perf_ab_compare.cjs`
 differences them into the job summary and the run's `perf-serial-*`
 artifact.
+
+**It is opt-in and off by default, because the comparison has been
+made.** Run [32601886424][ab-run]'s public job executed both passes on
+one runner: blessed 5m15s, control 5m06s. The settle costs about
+**+2.9% of pass wall-clock** — one corpus, one run, both halves on the
+same machine, which is the only comparison this question admits (see
+below) — and it does not move the timing columns it was feared to move.
+The decision off that measurement is that **the settle is always on
+going forwards**, so a release no longer re-measures the control
+condition. A tag push runs one pass; `workflow_dispatch` with
+`perf_ab: true` runs both. Turn it on when the settle itself changes,
+or when a timing movement needs explaining — the machinery is the only
+valid way to ask, and it stays runnable rather than deleted.
+
+One caveat on that +2.9%: it is the public corpus only. The control
+pass has still never executed on private, because the run that would
+have produced that figure died in the step before it.
+
+[ab-run]: https://github.com/bldrs-ai/conway/actions/runs/32601886424
 
 **Two separate rc runs cannot answer this, and that was the original
 plan.** Two `run-ifc-regression` jobs an hour apart, on near-identical
@@ -357,7 +376,34 @@ outside the models checkout; blessing it would put a release's numbers
 under a configuration nobody runs. Neither the failure gate nor the
 zero-geometry gate is repeated — a second identical digest run yields
 no extra signal — and the control pass reuses the same LFS checkout, so
-the perf compute roughly doubles and the bandwidth does not.
+the perf compute roughly doubles on the runs that ask for it, and the
+bandwidth does not.
+
+**What the second pass costs, and the cap it broke.** The private
+corpus is the binding constraint: it runs about 4x the public one in
+wall time, and it is where a per-model increment shows up first. Step
+wall times, from the Actions step timestamps:
+
+| pass | public | private |
+|---|---|---|
+| blessed digest, no settle (rc-1.549.1515) | 4m48s | **19m55s** |
+| blessed digest, with the settle (rc-1.558.1533) | 5m15s | ~20m30s (est.) |
+| gc-off control, with the settle (rc-1.558.1533) | 5m06s | never yet run |
+
+Two facts are worth carrying forward. First, the settle's own cost
+measured *within one run* is public 5m15s against 5m06s — **+2.9%** over
+a full corpus, which is the corpus-scale version of the ~10 ms per load
+in the tables above. Second, and the useful one for whoever next adds
+per-model work: **the private digest step ran at 19m55s against a
+20-minute `timeout-minutes` — 5 seconds of headroom — before this
+change existed.** conway#556's settle added the ~35 s that tipped it,
+and the first two-pass rc (run 32601886424) died there, killed by its
+own cap. Both passes are now capped at 35 min and the job at 90; the
+arithmetic is in `.github/workflows/rc-regression.yml`. With the A/B
+opt-in, a release's private `rebless` job is back to ~25 minutes and a
+`perf_ab` run is the ~45-minute one — but the 35-minute step cap is what
+a plain rc depends on, since the pass that broke its cap is the blessed
+one, which runs every time.
 
 **What the pass order can and cannot confound.** Pass 2 runs on a
 warmer machine than pass 1. Model file I/O is outside all three timing
@@ -528,6 +574,7 @@ against a regression-child figure. Tracked separately.
 | #552 (via #553) | add `peakRssMb`, `externalMb`, `arrayBuffersMb`, `peakWasmHeapMb`; restore `geometryMemoryMb` | memory was one un-GC'd instant, and the wasm heap was invisible |
 | #554 | add `retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb`; pass `--expose-gc` to the regression children and the render server; add the teardown the regression children never had | nothing measured what is held after teardown, and a peak cannot see it |
 | #557 | IFC regression child extracts on the engine `main()` initialised, not a second one built in `geometryExtraction` | the alloc telemetry described an idle module, and the second engine put a ~55-60 MB constant in every IFC retention and RSS row plus its init in `geometryTimeMs`; those IFC baselines move once |
+| #554 (decision, after the two-pass A/B ran) | the settle stays **always on**; the gc-off control pass and its comparison become opt-in (`perf_ab` dispatch input), off for a release | the question was answered: run 32601886424's public job priced the settle at +2.9% of pass wall-clock with the timing columns unmoved. Re-measuring a settled condition on every rc doubled the perf portion of the most expensive job in CI for no new signal. Not deleted — a between-run comparison cannot answer this, so the in-one-job machinery is the only way to ask again |
 | #554 (via the two-pass rc A/B) | `parseTimeMs` drops by about 10 ms per load (13-16% at a ~60 ms parse, unresolvable against a 578 ms one), `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB, against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary. Distinct from #557 above, which moves `geometryTimeMs` and the memory columns on IFC rows only |
 
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads
