@@ -274,6 +274,7 @@ async function doWork() {
         const dataParseTime = parseDataTimeEnd - parseDataTimeStart
 
         statistics.setLoadStatus('OK')
+        statistics.setWriter('ap214-cli')
         statistics.setParseTime(dataParseTime)
         statistics.setTotalTime(allTime)
 

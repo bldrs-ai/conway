@@ -362,6 +362,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const allTime = allTimeEnd - allTimeStart
 
     statistics?.setLoadStatus('OK')
+    statistics?.setWriter('ap214-web-ifc-proxy')
     statistics?.setTotalTime(allTime)
 
     if (ap214Version !== void 0) {

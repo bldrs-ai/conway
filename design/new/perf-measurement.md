@@ -553,16 +553,121 @@ four in one combined run, got numbers that disagreed with all of them, and
 filed a false contradiction. **Any quoted benchmark figure should say which
 run produced it.**
 
-## Known caveat: `geometryMemoryMb` differs by pipeline
+## Resolved: `geometryMemoryMb` differs by pipeline, so the row says which
 
 The IFC CLI and the IFC regression child report **different**
-`geometryMemoryMb` for the same model — 16.8 vs 22.3 MB on MB-Khaya. Same
-function, sampled at different points in two pipelines that run with
-different CSG options.
+`geometryMemoryMb` for the same model — 16.8 vs 22.3 MB on MB-Khaya. Filed as
+#555, predating #552 rather than introduced by it.
 
-This predates #552 and was not introduced by it, but it means the column is
-only comparable **within** a pipeline. Do not difference a CLI figure
-against a regression-child figure. Tracked separately.
+**The mechanism is the memoization capture mode, not CSG options** — the
+issue guessed the latter, and the correct diagnosis is what changes the
+resolution. `ifc_regression_main.ts` sets
+
+```ts
+RegressionCaptureState.memoization = MemoizationCapture.FULL
+```
+
+which is read in several places in `ifc_geometry_extraction.ts`. In the
+boolean path it is what stops `dropNonSceneGeometry` / `voidGeometry.delete`
+running on the two operands; at the end of the walk it is what stops
+`model.geometry.deleteTemporaries()` and
+`model.voidGeometry.deleteTemporaries()`. So the regression child's
+`model.geometry` still holds every CSG intermediate and boolean operand when
+`calculateGeometrySize()` sums it, and the CLI's does not. The ~30% is those
+temporaries.
+
+**So "make them agree" is off the table.** The digest below the perf capture
+iterates `model.geometry`, and `FULL` is what puts the intermediates in front
+of it — that is the regression's whole point. Dropping them to make one
+number comparable would move digests, which costs far more than an ambiguous
+column.
+
+**The resolution is #555's other option: name the divergence.** Every perf row
+carries a `writer` column — `ifc-regression`, `ap214-regression`, `ifc-cli`,
+`ap214-cli`, `loader` — and `gen_delta_csv.cjs` reports `N/A` rather than a
+number when it differences `geometryMemoryMb`, `retainedRssMb`,
+`retainedHeapUsedMb` or `retainedExternalMb` across two *stated* writers that
+disagree. Timing columns are deliberately not in that set: they are broadly
+comparable on the same runner class, and blanking them would cost the delta
+its most-read column for no measurement reason.
+
+An **unknown** writer counts as comparable, not as a mismatch. Every snapshot
+blessed before #555 has no such column, and treating absence as disagreement
+would blank the entire history the delta exists to produce.
+
+Three pairs are now distinguishable where the file previously implied one
+quantity:
+
+| pair | why they differ |
+|---|---|
+| IFC CLI vs IFC regression child | memoization capture: `OPTIMAL` vs `FULL` |
+| IFC regression child vs AP214 regression child | same cause. `memoization` is a **process-global** and the children are separate processes, so only the IFC one raises it. A mixed IFC/STEP `perf.csv` has therefore always aggregated two capture modes into one column |
+| loader vs either regression child | the retention caveat recorded above: the loader builds a `ConwayGeometry` per load, inside the window |
+
+The middle row is worth stating because it is easy to assume the split is only
+CLI-vs-regression. It has not been measured on a shared model — no corpus
+model loads through both children — so it is a structural claim from the code,
+not a number.
+
+## `totalTimeMs` is the load's wall clock, not the sum of the stage clocks
+
+#562 §1. On both regression children `totalTimeMs` was
+
+```ts
+const totalTimeMs = geomEndMs - parseStartMs
+```
+
+with `geomStartMs` taken on the statement *after* `parseEndMs`. So it was
+`parseTimeMs + geometryTimeMs` **by construction** — verified on the blessed
+`conway1.451.1357-ci` snapshot, where
+`totalTimeMs − (parseTimeMs + geometryTimeMs)` lands between 0 and 5 ms on all
+46 OK rows.
+
+The identity is not the defect. Calling the result **Total** is: it excluded
+the file read, the `ParsingBuffer` construction, the wasm init and the
+teardown, and a reader — human or re-bless diff — takes "Total 26,744 ms" for
+what loading that model costs. Worse,
+`ConwayModelLoader.loadModelWithScene` already wrote a genuine
+`allTimeStart` → `allTimeEnd` wall clock into a column of the same name, so
+the two pipelines put different quantities under one heading. Same disease as
+`geometryMemoryMb` above.
+
+**Option (b) was taken, and (a) came with it.** `totalTimeMs` is a real wall
+clock on every writer now — opened after the pre-load settle and before
+`readFileSync`, closed immediately after `model.invalidate(true)` — and the
+old sum survives as its own column, `parsePlusGeometryMs`, where the identity
+is visible in the name instead of being a coincidence a reader has to derive.
+The gap between the two columns is exactly what the stage clocks cannot see.
+
+Two boundary conditions are load-bearing rather than incidental:
+
+- **The clock opens after the settle, not before it.** Both retention samples
+  sit outside every timed region by design (see "The timing property, and how
+  to check it by measurement" above); folding two forced full collections into
+  the load's wall clock would undo that property and make `totalTimeMs` move
+  with `--expose-gc`.
+- **It closes on the teardown, before the retained settle.** Teardown is real
+  load cost and belongs inside; the settle after it is measurement apparatus
+  and does not.
+
+**Consequence: `totalTimeMs` steps up once on regression-produced rows**, by
+the file read plus the teardown. A delta across this boundary shows a
+slowdown that is a change of methodology, not of the engine — the same shape
+as the `parseTimeMs` hazard #554 introduced, in the other direction.
+`parsePlusGeometryMs` is the column to read for continuity with older
+snapshots, and `scripts/perf_ab_compare.cjs` summarises both for that reason.
+Baselines are not re-blessed for it: the next rc picks both columns up and
+older snapshots difference the new one as `N/A`.
+
+**What is still not measured, and it is the bigger half.** #562 §2 stands
+open. The bench runs a resident, fully-extracted open
+(`parseDataToModel` → `extractIFCGeometryData`); Share runs a windowed,
+deferred, pumped one (`OpenModelStream` + `DEFER_GEOMETRY` +
+`ExtractGeometryBatchAsync`). On SKYLARK250 the two parse and extract at
+comparable speed while the whole load differs 5.7×, and the entire difference
+sits in an interstage window **no column here covers**. Nothing added by this
+change approximates time-to-first-mesh, and a green bench still says nothing
+about the path every Share user takes.
 
 ## Changelog of methodology changes
 
@@ -575,6 +680,8 @@ against a regression-child figure. Tracked separately.
 | #554 | add `retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb`; pass `--expose-gc` to the regression children and the render server; add the teardown the regression children never had | nothing measured what is held after teardown, and a peak cannot see it |
 | #557 | IFC regression child extracts on the engine `main()` initialised, not a second one built in `geometryExtraction` | the alloc telemetry described an idle module, and the second engine put a ~55-60 MB constant in every IFC retention and RSS row plus its init in `geometryTimeMs`; those IFC baselines move once |
 | #554 (decision, after the two-pass A/B ran) | the settle stays **always on**; the gc-off control pass and its comparison become opt-in (`perf_ab` dispatch input), off for a release | the question was answered: run 32601886424's public job priced the settle at +2.9% of pass wall-clock with the timing columns unmoved. Re-measuring a settled condition on every rc doubled the perf portion of the most expensive job in CI for no new signal. Not deleted — a between-run comparison cannot answer this, so the in-one-job machinery is the only way to ask again |
+| #555 | add a `writer` column to every perf row; `gen_delta_csv.cjs` refuses to difference `geometryMemoryMb` and the three retention columns across two stated writers that disagree | one column meant two things. The IFC regression child runs at `MemoizationCapture.FULL`, so its `geometryMemoryMb` includes the CSG temporaries the CLI's excludes — 22.3 vs 16.8 MB on MB-Khaya, ~30% of pure methodology, in the column read for memory regressions. Making them agree would move digests, so the divergence is named instead. Additive, and an absent `writer` counts as comparable, so historical deltas survive |
+| #562 §1 | `totalTimeMs` on both regression children becomes the load's **wall clock** (before `readFileSync` → after `model.invalidate(true)`); the old sum becomes `parsePlusGeometryMs` | it was `parseTimeMs + geometryTimeMs` by construction — 0-5 ms of slack on all 46 OK rows of the 1.451 snapshot — while meaning a genuine wall clock on the loader path, so one column held two quantities and neither was the load. **`totalTimeMs` steps up once** on regression rows, by the file read plus the teardown; read `parsePlusGeometryMs` across that boundary. Does not touch #562 §2, the larger half: the bench still runs a load path Share never takes |
 | #554 (via the two-pass rc A/B) | `parseTimeMs` drops by about 10 ms per load (13-16% at a ~60 ms parse, unresolvable against a 578 ms one), `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB, against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary. Distinct from #557 above, which moves `geometryTimeMs` and the memory columns on IFC rows only |
 
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads

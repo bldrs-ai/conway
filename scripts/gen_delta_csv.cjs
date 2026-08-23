@@ -249,7 +249,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
             entry1.totalTimeMs,
             entry2.totalTimeMs
           ),
-          geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
+          geometryMemoryMbDelta: computePipelineDelta('geometryMemoryMb', entry2, entry1),
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
           // the payload figure excludes. Also absent before #552.
@@ -269,11 +269,11 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // from every snapshot before #554, and N/A in any run whose
           // children had no --expose-gc, both of which computeDelta reports
           // as N/A rather than differencing against zero.
-          retainedRssMbDelta: computeDelta('retainedRssMb', entry2, entry1),
+          retainedRssMbDelta: computePipelineDelta('retainedRssMb', entry2, entry1),
           retainedHeapUsedMbDelta:
-            computeDelta('retainedHeapUsedMb', entry2, entry1),
+            computePipelineDelta('retainedHeapUsedMb', entry2, entry1),
           retainedExternalMbDelta:
-            computeDelta('retainedExternalMb', entry2, entry1),
+            computePipelineDelta('retainedExternalMb', entry2, entry1),
         });
       } else {
         // Present in data1, missing in data2
@@ -360,7 +360,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           geometryTimeMsDelta: computeDelta('geometryTimeMs', entry2, entry1),
           totalTimeMsDelta: totalTimeDelta,
           totalTimeMsPercentageChange: totalTimePercentageChange,
-          geometryMemoryMbDelta: computeDelta('geometryMemoryMb', entry2, entry1),
+          geometryMemoryMbDelta: computePipelineDelta('geometryMemoryMb', entry2, entry1),
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
           // the payload figure excludes. Also absent before #552.
@@ -380,11 +380,11 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // from every snapshot before #554, and N/A in any run whose
           // children had no --expose-gc, both of which computeDelta reports
           // as N/A rather than differencing against zero.
-          retainedRssMbDelta: computeDelta('retainedRssMb', entry2, entry1),
+          retainedRssMbDelta: computePipelineDelta('retainedRssMb', entry2, entry1),
           retainedHeapUsedMbDelta:
-            computeDelta('retainedHeapUsedMb', entry2, entry1),
+            computePipelineDelta('retainedHeapUsedMb', entry2, entry1),
           retainedExternalMbDelta:
-            computeDelta('retainedExternalMb', entry2, entry1),
+            computePipelineDelta('retainedExternalMb', entry2, entry1),
         });
       } else {
         deltas.push({
@@ -483,6 +483,65 @@ function computeDelta(field, entry2, entry1) {
   }
 
   return newVal - oldVal;
+}
+
+/**
+ * Columns whose MEANING depends on which pipeline measured the row, so that
+ * differencing two writers reports methodology rather than change (#555).
+ *
+ * `geometryMemoryMb` is the case that named the issue: the IFC regression
+ * child runs at FULL memoization capture, which stops `deleteTemporaries()`
+ * and leaves every CSG intermediate in the map `calculateGeometrySize()`
+ * sums, so MB-Khaya reads 22.3 MB there against the CLI's 16.8 — a ~30% gap
+ * with no change behind it. The retention trio has the same disease from a
+ * different cause: the loader path brings up a `ConwayGeometry` per load and
+ * the regression children initialise once in `main()`, a ~55-60 MB constant
+ * one side carries and the other does not (see design/new/perf-measurement.md).
+ *
+ * The timing columns are deliberately NOT here. They are broadly comparable
+ * across pipelines on the same runner class, and a cross-version timing delta
+ * is already documented as a lead rather than a measurement.
+ */
+const PIPELINE_DEPENDENT_COLUMNS = new Set([
+  'geometryMemoryMb',
+  'retainedRssMb',
+  'retainedHeapUsedMb',
+  'retainedExternalMb',
+]);
+
+/**
+ * computeDelta, refusing the difference when the two rows came from
+ * different pipelines (#555).
+ *
+ * An unknown writer on either side is treated as comparable, NOT as a
+ * mismatch: every snapshot blessed before #555 has no `writer` column at all,
+ * and failing those deltas closed would delete the entire history this file
+ * exists to produce. The guard fires only where both sides state a writer and
+ * the two disagree — the case where we positively know the numbers are not
+ * the same quantity.
+ *
+ * @param {string} field
+ * @param {Object} entry2
+ * @param {Object} entry1
+ * @returns {number | string} The difference, or 'N/A'.
+ */
+function computePipelineDelta(field, entry2, entry1) {
+  const writer1 = entry1.writer;
+  const writer2 = entry2.writer;
+
+  const stated = (writer) =>
+    writer !== undefined && writer !== '' && writer !== 'N/A';
+
+  if (
+    PIPELINE_DEPENDENT_COLUMNS.has(field) &&
+    stated(writer1) &&
+    stated(writer2) &&
+    writer1 !== writer2
+  ) {
+    return 'N/A';
+  }
+
+  return computeDelta(field, entry2, entry1);
 }
 
 /**

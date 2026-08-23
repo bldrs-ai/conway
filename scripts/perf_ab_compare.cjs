@@ -70,8 +70,18 @@
 const fs = require('fs');
 const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 
-/** Timing columns the A/B is actually about. */
-const TIMING_COLUMNS = ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs'];
+/**
+ * Timing columns the A/B is actually about.
+ *
+ * `parsePlusGeometryMs` joined the list with conway#562, which redefined
+ * `totalTimeMs` as the load's wall clock — file read through teardown. That
+ * is the more honest number for a release record and the noisier one for
+ * this comparison, since it now carries I/O and teardown the settle has no
+ * bearing on. `parsePlusGeometryMs` is the old `totalTimeMs` quantity, so
+ * keeping both means the A/B's history stays readable across that boundary.
+ */
+const TIMING_COLUMNS =
+  ['parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'parsePlusGeometryMs'];
 
 /**
  * Memory columns reported alongside, purely so nobody reads their (expected)

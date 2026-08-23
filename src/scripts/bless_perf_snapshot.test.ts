@@ -510,7 +510,32 @@ describe('renderReadme', () => {
     const text = renderReadme(info)
 
     expect(text).toContain('The IFC **CLI** and the IFC\nregression child read 16.8 vs 22.3 MB')
-    expect(text).toContain('has not been measured to disagree')
+    expect(text).toContain('has not been measured on a shared model')
+
+    // The mechanism, not just the size of the gap: a reader who knows it is
+    // the memoization capture mode can tell which of their own two numbers
+    // is which, and knows the divergence is deliberate rather than a bug
+    // awaiting a fix.
+    expect(text).toContain('RegressionCaptureState.memoization')
+    expect(text).toContain('deleteTemporaries')
+
+    // And that the file now discloses it per row rather than in prose only.
+    expect(text).toContain('`writer` column')
+  })
+
+  test('says totalTimeMs is a wall clock, and that it moved once', () => {
+    // conway#562: the column was parse+geometry by construction on these
+    // children while meaning a real wall clock on the loader path. A README
+    // that did not flag the step change would have every reader of the next
+    // delta hunting a regression that is a redefinition.
+    const text = renderReadme(info)
+
+    expect(text).toContain('`totalTimeMs` is the load\'s wall clock')
+    expect(text).toContain('steps up once at this boundary')
+    expect(text).toContain('parsePlusGeometryMs')
+    expect(text).toContain('conway/issues/562')
+    // And that neither column is the number a user feels.
+    expect(text).toContain('Neither column is time-to-first-mesh')
   })
 
   test('describes the second-engine term as closed by #557, not as current', () => {

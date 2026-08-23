@@ -43,6 +43,7 @@ function formatRetained(value: number | undefined): string {
  */
 export class Statistics {
   private loadStatus: string | undefined
+  private writer: string | undefined
   private projectName: string | undefined
   private version: string | undefined
   private parseTime: number | undefined
@@ -139,6 +140,33 @@ export class Statistics {
    */
   setGeometryTime(value: number) {
     this.geometryTime = value
+  }
+
+  /**
+   * Which pipeline measured this row (conway#555).
+   *
+   * The perf columns are not all comparable across pipelines: the IFC
+   * regression child runs with `RegressionCaptureState.memoization = FULL`,
+   * which keeps CSG temporaries in the map `calculateGeometrySize()` sums,
+   * so its `Geometry Memory` reads ~30% above the CLI's for the same model
+   * (MB-Khaya, 22.3 vs 16.8 MB). Retention has a matching caveat — the
+   * loader brings up a `ConwayGeometry` per load and the regression children
+   * do not. Naming the writer is what lets a reader, and
+   * `scripts/gen_delta_csv.cjs`, tell those apart instead of differencing
+   * across them.
+   *
+   * @return {string | undefined} - the writer label, or undefined
+   */
+  getWriter(): string | undefined {
+    return this.writer
+  }
+
+  /**
+   *
+   * @param value - a stable pipeline identifier, e.g. `ifc-cli`
+   */
+  setWriter(value: string) {
+    this.writer = value
   }
 
   /**
@@ -422,6 +450,7 @@ export class Statistics {
     const geometryTypes = breakdown !== void 0 ? `, Geometry Types: ${breakdown}` : ''
 
     return `[${dateString}]: Load Status: ${this.loadStatus}, ` +
+            `Writer: ${this.writer ?? 'N/A'}, ` +
             `Project Name: ${this.projectName}, Version: ${versionStr}, ` +
             `Conway Version: ${conwayVersionNumber}-${wasmType}, ` +
             `Parse Time: ${this.parseTime} ms, Geometry Time: ${this.geometryTime} ms, ` +

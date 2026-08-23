@@ -422,6 +422,7 @@ function doWork() {
             const dataParseTime = parseDataTimeEnd - parseDataTimeStart
 
             statistics.setLoadStatus('OK')
+            statistics.setWriter('ifc-cli')
             statistics.setParseTime(dataParseTime)
             statistics.setTotalTime(allTime)
 

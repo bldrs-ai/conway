@@ -368,9 +368,29 @@ async function main() {
   // propagates the absence as N/A rather than differencing against zero, so
   // old baselines stay readable and do not need re-blessing. The same is true
   // of the #554 retention columns against everything blessed before them.
+  // WHICH PIPELINE (conway#555). `writer` is scraped from the `Writer:` the
+  // engine's Statistics logs, and names the pipeline that measured the row —
+  // `loader` here, against `ifc-regression` / `ap214-regression` for the rows
+  // bless_perf_snapshot.cjs writes from an rc run. It matters because
+  // `geometryMemoryMb` and the retention columns MEAN different things per
+  // pipeline: the IFC regression child runs at FULL memoization capture and
+  // so keeps CSG temporaries in the map `calculateGeometrySize()` sums
+  // (MB-Khaya 22.3 vs 16.8 MB), and this path builds a ConwayGeometry per
+  // load that the regression children do not. gen_delta_csv.cjs reads this
+  // column and refuses to difference those columns across two writers.
+  //
+  // TOTAL IS A WALL CLOCK (conway#562). `totalTimeMs` is scraped from the
+  // loader's `allTimeStart` -> `allTimeEnd` span, which has always been a
+  // real wall clock on this path. `parsePlusGeometryMs` is the sum of the two
+  // stage columns, which is what the regression children used to write into
+  // `totalTimeMs`; it is N/A here, because this path emits no such log line
+  // and a computed stand-in would not be the same quantity — the loader's
+  // stage clocks do not abut the way the children's do.
   const DETAIL_COLUMNS = [
-    'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
-    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
+    'timestamp', 'loadStatus', 'writer', 'uname', 'engine', 'filename',
+    'schemaVersion',
+    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'parsePlusGeometryMs',
+    'geometryMemoryMb',
     'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
     'externalMb', 'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb',
     'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
@@ -518,6 +538,7 @@ async function main() {
 
       let timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
       let loadStatus = 'OK';
+      let writer = 'N/A';
       const unameVal = os.arch();
       let schemaVersion = 'N/A';
       let parseTimeMs = 'N/A';
@@ -541,6 +562,8 @@ async function main() {
         if (!/Load Status: OK/.test(logContents)) {
           loadStatus = 'FAIL';
         } else {
+          const writerMatch = logContents.match(/Writer: ([\w-]+)/);
+          if (writerMatch) writer = writerMatch[1];
           const parseTimeMatch = logContents.match(/Parse Time: (\d+) ms/);
           if (parseTimeMatch) parseTimeMs = parseTimeMatch[1];
           const geometryTimeMatch = logContents.match(/Geometry Time: (\d+) ms/);
@@ -636,6 +659,7 @@ async function main() {
       const line = csvRow([
         timestamp,
         loadStatus,
+        writer,
         unameVal,
         engineStr,
         encodedFileName,
@@ -643,6 +667,8 @@ async function main() {
         parseTimeMs,
         geometryTimeMs,
         totalTimeMs,
+        // Not measured on this path — see the DETAIL_COLUMNS note.
+        'N/A',
         geometryMemoryMb,
         peakWasmHeapMb,
         rssMb,
