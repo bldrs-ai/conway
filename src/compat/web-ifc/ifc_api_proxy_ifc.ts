@@ -53,7 +53,7 @@ import { emitSpatialStructureImposters } from './spatial_imposter'
 import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { StepHeader } from '../../step/parsing/step_parser'
 import { ExtractResult } from '../../index'
-import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
+import { AggregateExtractPager, IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import { ParseResult } from '../../index'
 import { releaseScratchParsingBuffer } from '../../step/parsing/step_deserialization_functions'
 import Memory from '../../memory/memory'
@@ -298,18 +298,23 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandAggregateStepper_?: Generator< number, void, undefined >
 
   /**
-   * Source pins and leaf spans held for the relationship
-   * demandAggregateStepper_ is walking, released when it finishes. They
-   * have to outlive the batch that started it: the pins are what keep the
-   * relationship's products readable, and re-running the prefetch per batch
-   * would re-walk every related product's closure per batch. This holds the
-   * same pins for the same span of work as before — that span just no
-   * longer has to fit in one pump call.
+   * Source residency for the relationship demandAggregateStepper_ is
+   * walking, released when it finishes. It outlives the batch that started
+   * it — the relationship's products have to stay readable across as many
+   * pump calls as the stepper takes — but it no longer pages the whole
+   * relationship up front: the pager pages a bounded wave of related
+   * products as the stepper reaches them and drops the wave behind it
+   * (conway#561 §5). Undefined between relationships, and on a resident
+   * source, which has nothing to page.
    */
-  private demandAggregatePins_?: Set< number >
+  private demandAggregatePager_?: AggregateExtractPager
 
-  /** Leaf byte ranges pinned alongside demandAggregatePins_. */
-  private demandAggregateSpans_?: { address: number, length: number }[]
+  /**
+   * Yields taken from demandAggregateStepper_ so far, which is what
+   * demandAggregatePager_ pages against — the stepper yields once per
+   * related product it extracts.
+   */
+  private demandAggregateSteps_ = 0
 
   /**
    * Coordination matrix the deferred capture derived (or adopted from
@@ -2164,16 +2169,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         if (this.demandAggregateStepper_ === void 0) {
 
-          const leafSpans: { address: number, length: number }[] = []
-
-          this.demandAggregatePins_ =
-            await this.conwayGeometry_.ensureResidentForAggregateExtract(
-                relAggregate, leafSpans)
-          this.demandAggregateSpans_ = leafSpans
+          this.demandAggregatePager_ =
+            await this.conwayGeometry_.beginAggregateExtract(
+                relAggregate, budget)
+          this.demandAggregateSteps_ = 0
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
                 relAggregate)
         }
+
+        // Per step, not per relationship: this is the await that spends the
+        // pump's budget across the paging instead of paying for all of it
+        // before the first step, and the suspension point that lets the
+        // store's reads and the caller's progress reach the event loop
+        // during it (conway#561 §5).
+        await this.demandAggregatePager_?.ensureForStep(
+            this.demandAggregateSteps_)
 
         let done = false
 
@@ -2185,6 +2196,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
               `${error instanceof Error ? error.message : String(error)}`)
           done = true
         }
+
+        ++this.demandAggregateSteps_
 
         if (done) {
           this.releaseDemandAggregate_()
@@ -2850,20 +2863,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.demandAggregateStepper_?.return()
     this.demandAggregateStepper_ = void 0
+    this.demandAggregateSteps_ = 0
 
-    const pins = this.demandAggregatePins_
-
-    if (pins !== void 0) {
-      this.model[0].releaseSourceViews(pins)
-      this.model[0].unpinLocalIDs(pins)
-      this.demandAggregatePins_ = void 0
-    }
-
-    for (const span of this.demandAggregateSpans_ ?? []) {
-      this.model[0].unpinAddressRange(span.address, span.length)
-    }
-
-    this.demandAggregateSpans_ = void 0
+    this.demandAggregatePager_?.release()
+    this.demandAggregatePager_ = void 0
   }
 
 
