@@ -21,8 +21,12 @@ import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
+import { ConwayGeometry } from '../../../dependencies/conway-geom'
+import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import { IfcProduct } from '../../ifc/ifc4_gen'
 import IfcStepModel from '../../ifc/ifc_step_model'
+import IfcStepParser from '../../ifc/ifc_step_parser'
+import ParsingBuffer from '../../parsing/parsing_buffer'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import { IfcAPI } from './ifc_api'
@@ -191,5 +195,87 @@ describe( 'geometry progress counts products, not relationships (conway#565)', (
     expect( longestStall( geometry ) ).toBeLessThanOrEqual( 2 )
 
     api.CloseModel( deferredID )
+  }, 240000 )
+} )
+
+describe('the counts cost only the path that reads them (conway#569 review)', () => {
+
+  /**
+   * A fresh extraction over the fixture, plus the model it walks.
+   *
+   * @param source The IFC bytes.
+   * @param windowed Whether to open through a store, so the paged walk runs.
+   * @return {Promise<object>} The extraction and its model.
+   */
+  async function extractionFor( windowed: boolean ):
+      Promise< { extraction: IfcGeometryExtraction, model: IfcStepModel } > {
+
+    let model: IfcStepModel
+
+    if ( windowed ) {
+
+      const open = await openStreamedIfcModelFromStore(
+          new InMemoryStepByteStore( buffer ) )
+
+      expect( open.model ).toBeDefined()
+
+      model = open.model as IfcStepModel
+
+      expect( model.isSourceExternal ).toBe( true )
+
+    } else {
+
+      // A plain resident parse — the shape the whole-model extraction and a
+      // synchronous embedder both take, and the one where
+      // ensureAggregateTargetLocalIDs short-circuits to the sync walk.
+      const parser = IfcStepParser.Instance
+      const parsing = new ParsingBuffer( buffer )
+
+      parser.parseHeader( parsing )
+
+      model = parser.parseDataToModel( parsing )[ 1 ] as IfcStepModel
+
+      expect( model.isSourceExternal ).toBe( false )
+    }
+
+    const geometry = new ConwayGeometry()
+
+    expect( await geometry.initialize() ).toBe( true )
+
+    return { extraction: new IfcGeometryExtraction( geometry, model ), model }
+  }
+
+  test( 'the sync walk collects no counts at all', async () => {
+    // The walk the WHOLE-MODEL extraction shares. It used to fill a
+    // Map<relationship, count> and keep it for the model's life, for a
+    // reader that path does not have. Measured on an adverse model — 50,000
+    // relationships over 100,000 products — that was 1.75 MB retained at
+    // 36.7 bytes per relationship, beside the 16.4 MB the target Set from
+    // the same walk retains. Now nothing.
+    const { extraction } = await extractionFor( false )
+
+    const targets = extraction.aggregateTargetLocalIDs()
+
+    expect( targets.size ).toBe( RELATED_PRODUCTS )
+    expect( extraction.takeAggregateRelatedProductCounts() ).toBeUndefined()
+  }, 240000 )
+
+  test( 'the paged walk collects them, and hands them over exactly once', async () => {
+    // The windowed source is the one place the count is free, because that
+    // walk is already paging and scanning every relationship record.
+    const { extraction } = await extractionFor( true )
+
+    await extraction.ensureAggregateTargetLocalIDs()
+
+    const counts = extraction.takeAggregateRelatedProductCounts()
+
+    expect( counts ).toBeDefined()
+    expect( [ ...counts!.values() ] ).toEqual( [ RELATED_PRODUCTS ] )
+
+    // Handed over, not cached: the prefix the pump builds is the durable
+    // structure, and a second copy for the model's life has no reader.
+    // Safe because setGeometryShard refuses once a worklist exists, so the
+    // prefix is built exactly once.
+    expect( extraction.takeAggregateRelatedProductCounts() ).toBeUndefined()
   }, 240000 )
 } )

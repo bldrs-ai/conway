@@ -2906,15 +2906,33 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const aggregates = this.demandAggregates_ ?? []
     const prefix: number[] = new Array( aggregates.length + 1 )
 
+    // Taken, not read: the extraction hands the map over and drops its own
+    // reference, so nothing outlives this loop but the prefix — which is
+    // the structure the pump actually needs (conway#569 review). Undefined
+    // on a resident source, which never ran the paged walk.
+    const paged = this.conwayGeometry_.takeAggregateRelatedProductCounts()
+
     let running = 0
 
     prefix[0] = 0
 
     for ( let where = 0; where < aggregates.length; ++where ) {
 
+      const relAggregate = aggregates[where]
+
+      // A resident model reads the relationship's own record here for
+      // nothing — no paging, no wave — and gets a BETTER number than the
+      // walk's: relatedAggregateProductLocalIDs classifies through the same
+      // call the aggregates pass itself makes, so it sees a STEP complex
+      // instance that the walk's typeID-column test records as type 0 and
+      // misses. Only a windowed source needs the count captured during the
+      // walk, because only there is reading a record expensive.
+      const related = paged?.get(relAggregate.localID) ??
+        (this.conwayGeometry_.relatedAggregateProductLocalIDs(
+            relAggregate)?.length ?? 0)
+
       // +1 for the terminating next(): see demandAggregateStepPrefix_.
-      running +=
-        this.conwayGeometry_.aggregateRelatedProductCount(aggregates[where]) + 1
+      running += related + 1
       prefix[where + 1] = running
     }
 
