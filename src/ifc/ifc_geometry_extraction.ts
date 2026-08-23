@@ -7221,35 +7221,115 @@ export class IfcGeometryExtraction {
     // Only the former may be read synchronously afterwards (conway#526).
     const claimed = new Set< number >()
 
-    const visited =
-      await this.model.ensureResidentClosureByLocalID(
-          localID, extra, seen, descend, leafSpans, isFace, claimed )
+    let visited: Set< number >
+
+    try {
+
+      visited =
+        await this.model.ensureResidentClosureByLocalID(
+            localID, extra, seen, descend, leafSpans, isFace, claimed )
+
+    } catch ( error ) {
+
+      // The walk claims and pins each record into the SHARED `seen` BEFORE
+      // awaiting its residency — that is what makes overlapping walks pin
+      // once — and it has no internal catch, so a store rejection leaves
+      // those claims in `seen` and unwinds. The guard above then contains
+      // the failure to this product and does not retry (conway#526), so no
+      // sibling product will ever claim those records again: they fail
+      // `seen.has(...)` in every later walk. pageStyleSeeds_ is the only
+      // thing that pages their styled items and material definitions, so
+      // skipping it here would silently strip colours from every OTHER
+      // product sharing geometry with this one — no error, wrong render.
+      //
+      // Only when the set is shared. With no `seen` the claims are visible
+      // to nobody, a later walk over this product re-claims and re-scans
+      // them, and a recovery walk here would pin records through a set the
+      // caller has no handle on to unpin.
+      if ( seen !== void 0 ) {
+
+        try {
+          await this.pageStyleSeeds_(
+              localID, claimed, seen, descend, isFace, leafSpans )
+        } catch {
+          // Best effort: the store is already failing for this product, and
+          // the original rejection is the one worth surfacing.
+        }
+      }
+
+      throw error
+    }
+
+    await this.pageStyleSeeds_(
+        localID, claimed, visited, descend, isFace, leafSpans )
+
+    await this.ensureResidentVisitedFacesetPayloads_( claimed, visited, leafSpans )
+
+    return visited
+  }
+
+  /**
+   * Page the styled-item and material-definition records seeded by
+   * `claimed` — the records ONE closure walk actually paged — so the
+   * synchronous extract that follows can read them.
+   *
+   * `claimed`, not the walk's returned set: the walk returns the CALLER'S
+   * set, which the aggregate prefetch shares across every related product
+   * of one IfcRelAggregates (see ensureResidentForAggregateExtract).
+   * Scanning that per product is O(products x model), not O(product) — on
+   * SKYLARK250 (1,992 products under two relationships, ~3,000 records of
+   * closure each) it reaches ~6 M lookups on the last product and costs
+   * minutes before the first mesh, inside one un-yielding await chain
+   * (conway#561). Every record lands in exactly one walk's `claimed`, so
+   * the union of seeds collected across the walks sharing a set is
+   * unchanged; only the repetition goes. Same distinction conway#526 drew
+   * for {@link ensureResidentVisitedFacesetPayloads_}.
+   *
+   * That "exactly one walk" holds only for walks that COMPLETE, which is
+   * why the aborted path calls this too — see the catch in
+   * {@link ensureResidentForProductExtractUnguarded_}.
+   *
+   * @param localID The product whose walk claimed these records.
+   * @param claimed Records this walk paged.
+   * @param seen The set the walk pinned through, extended by this one.
+   * @param descend Closure-walk descent predicate.
+   * @param isFace Closure-walk packed-leaf predicate.
+   * @param leafSpans Optional out-array of coalesced pin ranges.
+   * @return {Promise<void>} Resolves when the seeds are resident.
+   */
+  private async pageStyleSeeds_(
+      localID: number,
+      claimed: Set< number >,
+      seen: Set< number >,
+      descend: ( localID: number ) => boolean,
+      isFace: ( localID: number ) => boolean,
+      leafSpans?: { address: number, length: number }[] ): Promise< void > {
+
     const styleExtra: number[] = []
 
-    for ( const visitedID of visited ) {
+    for ( const claimedID of claimed ) {
 
-      const styled = this.materials.styledItemMap.get( visitedID )
+      const styled = this.materials.styledItemMap.get( claimedID )
 
       if ( styled !== void 0 ) {
         styleExtra.push( styled )
       }
 
-      const definition = this.materials.materialDefinitionsMap.get( visitedID )
+      const definition = this.materials.materialDefinitionsMap.get( claimedID )
 
       if ( definition !== void 0 ) {
         styleExtra.push( definition )
       }
     }
 
-    if ( styleExtra.length > 0 ) {
-      await this.model.ensureResidentClosureByLocalID(
-          localID, styleExtra, visited, descend, leafSpans, isFace, claimed )
+    if ( styleExtra.length === 0 ) {
+      return
     }
 
-    await this.ensureResidentVisitedFacesetPayloads_( claimed, visited, leafSpans )
-
-    return visited
+    await this.model.ensureResidentClosureByLocalID(
+        localID, styleExtra, seen, descend, leafSpans, isFace, claimed )
   }
+
 
   /**
    * Page a faceset's Coordinates record and its Faces[] run as one

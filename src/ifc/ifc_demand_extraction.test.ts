@@ -363,4 +363,198 @@ describe( 'concurrent windowed product prefetch (conway#526)', () => {
     model.releaseSourceViews( pins )
     model.unpinLocalIDs( pins )
   }, 120000 )
+
+  test( 'the style-seed scan costs one pass over the model, not one per product',
+      async () => {
+
+        // conway#561: the closure walk RETURNS the caller's `seen` set, and
+        // ensureResidentForAggregateExtract shares one set across every
+        // related product of a relationship. Scanning that set for style
+        // seeds per product is therefore O(products x model): on SKYLARK250
+        // it was 5m16s of dead air between the end of parsing and the first
+        // mesh. Scanning `claimed` — what THIS call paged — makes the total
+        // work one pass over the shared set no matter how many products
+        // share it.
+        const model = await windowedModel(
+            new InMemoryStepByteStore(
+                new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ) ) )
+        const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+
+        extraction.quietRecoverableLogging = true
+        extraction.deferDanglingPlacements = true
+
+        const prepPins = await extraction.ensureResidentForDemandPrep()
+
+        try {
+          extraction.prepareDemandExtraction()
+        } finally {
+          model.releaseSourceViews( prepPins )
+          model.unpinLocalIDs( prepPins )
+        }
+
+        const products = [ ...model.types( IfcProduct ) ].map( ( p ) => p.localID )
+
+        expect( products.length ).toBeGreaterThan( 2 )
+
+        // Counted after prepare, so only the prefetch's own lookups land here.
+        const styledItemMap = ( extraction as any ).materials.styledItemMap
+        const realGet = styledItemMap.get.bind( styledItemMap )
+        let lookups = 0
+
+        styledItemMap.get = ( key: number ) => {
+          ++lookups
+          return realGet( key )
+        }
+
+        // The aggregate prefetch's shape: ONE set for every product.
+        const pins = new Set< number >()
+        const leafSpans: { address: number, length: number }[] = []
+
+        try {
+
+          for ( const localID of products ) {
+            await extraction.ensureResidentForProductExtract(
+                localID, pins, leafSpans )
+          }
+
+        } finally {
+          styledItemMap.get = realGet
+        }
+
+        expect( pins.size ).toBeGreaterThan( 0 )
+
+        // Each record is scanned by the one call that claimed it, so the
+        // lookups never exceed the shared set. Pre-fix this was
+        // products.length x |pins| and the assertion fails by ~an order of
+        // magnitude on this fixture alone.
+        expect( lookups ).toBeLessThanOrEqual( pins.size )
+
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
+      }, 120000 )
+
+  test( 'an aborted walk still pages the style seeds for what it claimed',
+      async () => {
+
+        // conway#561 review (codex P2): `claimed` partitions the shared set
+        // only across walks that COMPLETE. The closure walk claims and pins
+        // each record into `seen` BEFORE awaiting residency, and has no
+        // internal catch — so a store rejection leaves its claims in `seen`
+        // and unwinds, the guard contains the failure without retrying
+        // (conway#526), and no sibling can ever claim those records again.
+        // Scanning the cumulative set used to recover their style seeds by
+        // accident; scanning `claimed` does not, which would silently strip
+        // colours from every product sharing geometry with the failed one.
+        const model = await windowedModel(
+            new InMemoryStepByteStore(
+                new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ) ) )
+        const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+
+        extraction.quietRecoverableLogging = true
+        extraction.deferDanglingPlacements = true
+
+        const prepPins = await extraction.ensureResidentForDemandPrep()
+
+        try {
+          extraction.prepareDemandExtraction()
+        } finally {
+          model.releaseSourceViews( prepPins )
+          model.unpinLocalIDs( prepPins )
+        }
+
+        const products = [ ...model.types( IfcProduct ) ].map( ( p ) => p.localID )
+
+        expect( products.length ).toBeGreaterThan( 1 )
+
+        const failing = products[ 0 ]
+        const sibling = products[ 1 ]
+
+        // A seed owned by a record the aborted walk is GUARANTEED to claim:
+        // the product's own record is wave 1, added to `seen` before the
+        // first await. Planted rather than discovered so the test does not
+        // depend on where index.ifc happens to put a styled item.
+        const sentinel = products[ products.length - 1 ]
+
+        ;( extraction as any ).materials.styledItemMap.set( failing, sentinel )
+
+        // Reject partway through the BFS, after wave 1 has been claimed.
+        const realEnsureResident = model.ensureResidentByLocalID.bind( model )
+        let countdown = -1
+        let injected = false
+
+        ;( model as any ).ensureResidentByLocalID = ( id: number ) => {
+
+          if ( countdown > 0 && --countdown === 0 ) {
+            injected = true
+            return Promise.reject( new Error( 'simulated store read failure' ) )
+          }
+
+          return realEnsureResident( id )
+        }
+
+        // Every seed list handed to the closure walk, so "was the sentinel
+        // paged" is observable without reaching into the walk.
+        const realClosure = model.ensureResidentClosureByLocalID.bind( model )
+        const seedLists: number[][] = []
+
+        ;( model as any ).ensureResidentClosureByLocalID =
+          ( id: number, extraLocalIDs?: Iterable< number >, ...rest: unknown[] ) => {
+
+            if ( extraLocalIDs !== void 0 ) {
+              seedLists.push( [ ...extraLocalIDs ] )
+            }
+
+            return ( realClosure as any )( id, extraLocalIDs, ...rest )
+          }
+
+        const pins = new Set< number >()
+        const leafSpans: { address: number, length: number }[] = []
+
+        try {
+
+          countdown = 5
+
+          await extraction.ensureResidentForProductExtract(
+              failing, pins, leafSpans )
+
+          countdown = -1
+
+          // A probe that never fires looks exactly like a clean model: if
+          // the closure finished before the fifth read the scenario never
+          // happened and the assertions below prove nothing.
+          expect( injected ).toBe( true )
+          expect( pins.has( failing ) ).toBe( true )
+
+          const sentinelPagings =
+            seedLists.filter( ( seeds ) => seeds.includes( sentinel ) ).length
+
+          // Pre-fix this is 0: the aborted walk never reaches the style
+          // pass, and `failing` is in the shared set forever.
+          expect( sentinelPagings ).toBe( 1 )
+
+          // The sibling skips `failing` (it is already in `seen`), which is
+          // exactly why the aborted walk had to page the seed itself — and
+          // it must not re-page it either.
+          await extraction.ensureResidentForProductExtract(
+              sibling, pins, leafSpans )
+
+          expect( seedLists.filter(
+              ( seeds ) => seeds.includes( sentinel ) ).length ).toBe( 1 )
+
+        } finally {
+          ;( model as any ).ensureResidentByLocalID = realEnsureResident
+          ;( model as any ).ensureResidentClosureByLocalID = realClosure
+        }
+
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
+      }, 120000 )
 } )
