@@ -171,20 +171,32 @@ diff (not the description), against repo history, then against the
 actual failure path — and grade findings by evidence, not
 plausibility.
 
-### Two traps that make a check look green when it never ran
+### Traps that make a check look green when it never ran
 
-Same shape as the stale `compiled/` above, and worth naming together:
-none of the three announces itself, and each turns "I did not observe a
-problem" into "there is no problem".
+Same shape as the stale `compiled/` and the worktree `yarn setup` above,
+and worth naming together: none of them announces itself, and each turns
+"I did not observe a problem" into "there is no problem".
 
-- **Reverting for rubric 6: `git checkout <sha> -- <path>` STAGES the
-  file it restores.** The next commit then carries the revert silently —
-  this has already backed an entire feature out of
-  `ifc_geometry_extraction.ts`, and the pre-commit gate passed, because
-  `compiled/` had been built from the correct working tree. Use `git
-  restore --worktree --source=<sha> -- <path>`, which touches the
-  worktree only, or a `git stash` / scratch copy. Either way check `git
-  show --stat` before pushing.
+- **Reverting for rubric 6: commit or stash FIRST. That is what makes it
+  safe — not which command you revert with.** Both of the obvious ones
+  have bitten us in one day. `git checkout <sha> -- <path>` stages the
+  file it restores, so the next commit carries the revert silently; that
+  backed an entire feature out of `ifc_geometry_extraction.ts`, and the
+  pre-commit gate passed because `compiled/` had been built from the
+  correct working tree. `git restore --worktree --source=<sha> --
+  <path>` does not stage — but it overwrites the working tree
+  unconditionally, and run over files still holding uncommitted review
+  fixes it destroyed them. Note the second incident came from an agent
+  following this very note when it said only "prefer `restore`": advice
+  that looks like it makes you safe is the recurring shape here, not a
+  one-off. The sequence:
+
+  1. commit (or `git stash`) everything you are not reverting,
+  2. `git restore --worktree --source=<sha> -- <path>`,
+  3. `git diff --stat` — did you revert what you meant to, and nothing
+     else,
+  4. restore your working state, re-run the gate, and `git show --stat`
+     before pushing.
 - **Unauthenticated `curl` against `api.github.com` fails silently
   here.** The proxy answers `403 GitHub access is not enabled for this
   session`, and the usual `|| true` turns that into an empty result set
