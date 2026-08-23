@@ -287,6 +287,25 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private demandAggregatesCursor_ = 0
 
   /**
+   * Running total of stepper steps the aggregates pass will cost, indexed
+   * like demandAggregates_: entry i is the steps for relationships
+   * `[0, i)`, so the array is one longer than the worklist and its last
+   * entry is the pass's whole cost.
+   *
+   * **The unit is one pump budget unit, not one product** (conway#565).
+   * A relationship costs `products + 1`: the stepper yields once per
+   * related product it extracts, and the final `next()` that returns
+   * `done` also spends a unit of the pump's budget. Counting products
+   * alone would leave `extracted` and `remaining` disagreeing by one per
+   * relationship at every boundary, which is the wrinkle #565 flagged to
+   * decide rather than trip over. In this unit they are commensurate:
+   * `remaining` falls by exactly what `extracted` reports.
+   *
+   * Undefined until a worklist is adopted.
+   */
+  private demandAggregateStepPrefix_?: number[]
+
+  /**
    * The relationship at demandAggregatesCursor_, part-way through its
    * related products. A batch budget subdivides ONE relationship rather
    * than being spent whole on it: an aggregate-structured model puts all
@@ -2090,12 +2109,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
-    const totalWork = products.length + aggregates.length
     const budget = Math.max(batchSize, 1)
     let extracted = 0
 
     if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
-      this.progressTracker_.beginPhase('geometry', 'products', totalWork)
+      this.progressTracker_.beginPhase(
+          'geometry', 'products', this.demandProgress_().totalWork)
       this.geometryPhaseStarted_ = true
     }
 
@@ -2228,8 +2247,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // no-op unless a budget is configured.
     this.model[0].geometryResidency.evictToBudget()
 
-    const remaining = (products.length - this.demandCursor_) +
-        (aggregates.length - this.demandAggregatesCursor_)
+    const {totalWork, remaining} = this.demandProgress_()
 
     const windowMb = this.model[0].residentSourceBytes / BYTES_PER_MIB
 
@@ -2423,6 +2441,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.demandAggregates_ = aggregates
     this.demandCursor_ = 0
     this.demandAggregatesCursor_ = 0
+
+    this.adoptAggregateStepPrefix_()
   }
 
 
@@ -2493,6 +2513,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.demandCursor_ = 0
     this.demandAggregatesCursor_ = 0
+
+    this.adoptAggregateStepPrefix_()
   }
 
 
@@ -2870,16 +2892,102 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
 
+  /**
+   * Cost every relationship in the adopted worklist, in pump budget units,
+   * as the running prefix demandAggregateStepPrefix_ describes.
+   *
+   * Called from both worklist installers rather than lazily in the pump:
+   * the counts come from the aggregate-target walk, which has already run
+   * by the time a worklist exists (the async installer awaits its paged
+   * twin first), so there is no point later at which this gets cheaper.
+   */
+  private adoptAggregateStepPrefix_(): void {
+
+    const aggregates = this.demandAggregates_ ?? []
+    const prefix: number[] = new Array( aggregates.length + 1 )
+
+    let running = 0
+
+    prefix[0] = 0
+
+    for ( let where = 0; where < aggregates.length; ++where ) {
+
+      // +1 for the terminating next(): see demandAggregateStepPrefix_.
+      running +=
+        this.conwayGeometry_.aggregateRelatedProductCount(aggregates[where]) + 1
+      prefix[where + 1] = running
+    }
+
+    this.demandAggregateStepPrefix_ = prefix
+  }
+
+
+  /**
+   * The geometry phase's denominator and what is left of it, both in pump
+   * budget units — products for the per-product pass, stepper steps for the
+   * aggregates pass.
+   *
+   * Shared by the two pumps so the synchronous embedder and the async pump
+   * Share drives report the same numbers. conway#565 is what happens when
+   * they do not have one definition: `aggregates.length` counted a
+   * relationship as one unit however many products it carried, so
+   * SKYLARK250 — 0 per-product entries and 2 relationships, one holding
+   * ~1,960 products — reported `1/2` for 186 consecutive events across a
+   * minute and a half of extraction.
+   *
+   * **`remaining` is derived from the cursors, never from the estimate.**
+   * Callers pump until it reads 0, so the drain test has to be exact even
+   * where the counts are approximate (see
+   * {@link IfcGeometryExtraction.aggregateRelatedProductCount}). It reads 0
+   * exactly when the pass is drained, and is floored at 1 while any work is
+   * outstanding — an under-counted relationship makes the bar pause just
+   * short of full, not finish early.
+   *
+   * @return {object} `totalWork` for the phase and `remaining` of it.
+   */
+  private demandProgress_(): {totalWork: number, remaining: number} {
+
+    const products = this.demandProducts_ ?? []
+    const aggregates = this.demandAggregates_ ?? []
+    const prefix = this.demandAggregateStepPrefix_ ?? [0]
+    const aggregateSteps = prefix[prefix.length - 1]
+
+    const totalWork = products.length + aggregateSteps
+
+    const drained =
+      this.demandAggregateStepper_ === void 0 &&
+      this.demandAggregatesCursor_ >= aggregates.length
+
+    let aggregateRemaining = 0
+
+    if (!drained) {
+
+      const cursor = Math.min(this.demandAggregatesCursor_, aggregates.length)
+      const inFlight = Math.min(
+          this.demandAggregateSteps_,
+          (prefix[cursor + 1] ?? prefix[cursor]) - prefix[cursor])
+
+      aggregateRemaining =
+        Math.max(1, aggregateSteps - (prefix[cursor] + inFlight))
+    }
+
+    return {
+      totalWork,
+      remaining: (products.length - this.demandCursor_) + aggregateRemaining,
+    }
+  }
+
+
   private pumpGeometryBatch_(
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
-    const totalWork = products.length + aggregates.length
 
     if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
-      this.progressTracker_.beginPhase('geometry', 'products', totalWork)
+      this.progressTracker_.beginPhase(
+          'geometry', 'products', this.demandProgress_().totalWork)
       this.geometryPhaseStarted_ = true
     }
 
@@ -2918,6 +3026,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           this.demandAggregateStepper_ =
             this.conwayGeometry_.extractRelAggregateGeometryIncremental(
                 aggregates[this.demandAggregatesCursor_])
+          this.demandAggregateSteps_ = 0
         }
 
         let done: boolean
@@ -2929,13 +3038,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           // way out of the stepper by exception. Drop the half-consumed
           // stepper but leave the cursor, so a retry re-runs the
           // relationship from the top exactly as it did when this was one
-          // unyielding call.
+          // unyielding call — which is why the step count resets with it.
           this.demandAggregateStepper_ = void 0
+          this.demandAggregateSteps_ = 0
           throw error
         }
 
+        // Counted on this pump too, not just the async twin: it is what
+        // demandProgress_ reads to place the bar inside the relationship in
+        // flight, and a synchronous embedder reporting the old numbers is
+        // half of conway#565 left in place.
+        ++this.demandAggregateSteps_
+
         if (done) {
           this.demandAggregateStepper_ = void 0
+          this.demandAggregateSteps_ = 0
           ++this.demandAggregatesCursor_
         }
 
@@ -2966,15 +3083,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // one of them is a budget that silently does not apply.
     this.model[0].geometryResidency.evictToBudget()
 
-    const remaining = (products.length - this.demandCursor_) +
-        (aggregates.length - this.demandAggregatesCursor_)
+    const {totalWork, remaining} = this.demandProgress_()
 
     if (this.progressTracker_ !== void 0) {
-      const completed = totalWork - remaining
       if (remaining === 0) {
         this.progressTracker_.endPhase(totalWork)
       } else {
-        this.progressTracker_.update(completed)
+        this.progressTracker_.update(totalWork - remaining)
       }
     }
 

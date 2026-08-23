@@ -6707,6 +6707,12 @@ export class IfcGeometryExtraction {
   // Lazy cache for aggregateTargetLocalIDs().
   private aggregateTargetLocalIDs_?: Set<number>
 
+  /* Per-relationship product counts, filled by the same walk that fills
+   * aggregateTargetLocalIDs_ — see aggregateRelatedProductCount. Keyed by
+   * relationship localID rather than being an array, because the pump's
+   * worklist is filtered by shard and so is not this walk's ordering. */
+  private aggregateRelatedProductCounts_?: Map<number, number>
+
   /* Whether the cached set came from the PAGED walk. A windowed source can
    * cache an incomplete set from the sync walk (that is the defect
    * ensureAggregateTargetLocalIDs fixes), and the cache is for the model's
@@ -6744,14 +6750,47 @@ export class IfcGeometryExtraction {
 
     const targets = new Set<number>()
     const productTypes = new Set< number >( IfcProduct.query )
+    const counts = new Map< number, number >()
 
     for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
-      this.addAggregateTargets_( relAggregate, targets, productTypes )
+      this.addAggregateTargets_( relAggregate, targets, productTypes, counts )
     }
 
     this.aggregateTargetLocalIDs_ = targets
+    this.aggregateRelatedProductCounts_ = counts
 
     return targets
+  }
+
+
+  /**
+   * How many products the aggregates pass will extract for one relationship
+   * — the size of the unit of work
+   * {@link extractRelAggregateGeometryIncremental} steps through, recorded
+   * by the walk that builds {@link aggregateTargetLocalIDs} so the demand
+   * pump can report progress in products rather than in relationships
+   * (conway#565: SKYLARK250 puts ~1,960 products under one relationship, so
+   * a relationship-counted bar sat at 1/2 for the whole load).
+   *
+   * **Free.** The walk already reads every relationship's RelatedObjects to
+   * decide which products to defer; this is the count it was discarding.
+   *
+   * **Approximate in one direction, by the same blind spot
+   * {@link aggregateTargetLocalIDs} has.** Classification is the typeID
+   * column, and a STEP complex instance is recorded as type 0, so a complex
+   * product is missed here exactly as it is missed there — the count can
+   * under-report and the pump's own drain condition, not this number, is
+   * what decides when the pass is finished (see the clamp in
+   * `IfcApiProxyIfc`). A progress denominator is the right place for a free
+   * approximation; the termination test is not.
+   *
+   * @param relAggregate The relationship to look up.
+   * @return {number} Related products, or 0 when no walk has run or the
+   * relationship was not in it.
+   */
+  public aggregateRelatedProductCount( relAggregate: IfcRelAggregates ): number {
+
+    return this.aggregateRelatedProductCounts_?.get( relAggregate.localID ) ?? 0
   }
 
 
@@ -6796,6 +6835,7 @@ export class IfcGeometryExtraction {
 
     const targets = new Set<number>()
     const productTypes = new Set< number >( IfcProduct.query )
+    const counts = new Map< number, number >()
     const wave = Math.max( 1, Math.floor( waveSize ) )
 
     let pending: IfcRelAggregates[] = []
@@ -6815,7 +6855,8 @@ export class IfcGeometryExtraction {
             ( localID ) => this.model.ensureResidentByLocalID( localID ) ) )
 
         for ( const relAggregate of pending ) {
-          this.addAggregateTargets_( relAggregate, targets, productTypes, true )
+          this.addAggregateTargets_(
+              relAggregate, targets, productTypes, counts, true )
         }
 
       } finally {
@@ -6839,6 +6880,7 @@ export class IfcGeometryExtraction {
     }
 
     this.aggregateTargetLocalIDs_ = targets
+    this.aggregateRelatedProductCounts_ = counts
     this.aggregateTargetsPaged_ = true
 
     return targets
@@ -6857,6 +6899,12 @@ export class IfcGeometryExtraction {
    * @param relAggregate The relationship to scan.
    * @param targets Accumulator.
    * @param productTypes The IfcProduct type set.
+   * @param counts Per-relationship product counts, keyed by relationship
+   * localID — the progress denominator
+   * {@link aggregateRelatedProductCount} serves. Counted here rather than
+   * derived from `targets.size` afterwards because `targets` is a set over
+   * the whole model: a product reached through two relationships collapses
+   * into one entry there while costing the pass a step in each.
    * @param strictResidency When set, a non-resident read propagates instead
    * of being tolerated — for the paged walk, which has already made the
    * record resident and so can only reach that error through a defect.
@@ -6865,8 +6913,14 @@ export class IfcGeometryExtraction {
       relAggregate: IfcRelAggregates,
       targets: Set<number>,
       productTypes: Set<number>,
+      counts: Map<number, number>,
       strictResidency: boolean = false ): void {
 
+    let related = 0
+
+    // Recorded in the finally below, so a relationship whose scan throws
+    // part-way still contributes the prefix the pass will reach before it
+    // abandons the relationship at the same entry.
     try {
 
       relAggregate.forEachReferenceInField(
@@ -6889,6 +6943,7 @@ export class IfcGeometryExtraction {
 
             if ( typeID !== void 0 && productTypes.has( typeID ) ) {
               targets.add( relatedLocalID )
+              ++related
             }
 
             return true
@@ -6902,6 +6957,8 @@ export class IfcGeometryExtraction {
       // Malformed relationship rows are tolerated exactly like the
       // aggregates pass itself tolerates them (permissive catch) —
       // their targets simply stay in the first-pass walk.
+    } finally {
+      counts.set( relAggregate.localID, related )
     }
   }
 
