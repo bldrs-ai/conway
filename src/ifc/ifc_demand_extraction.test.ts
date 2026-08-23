@@ -363,4 +363,77 @@ describe( 'concurrent windowed product prefetch (conway#526)', () => {
     model.releaseSourceViews( pins )
     model.unpinLocalIDs( pins )
   }, 120000 )
+
+  test( 'the style-seed scan costs one pass over the model, not one per product',
+      async () => {
+
+        // conway#561: the closure walk RETURNS the caller's `seen` set, and
+        // ensureResidentForAggregateExtract shares one set across every
+        // related product of a relationship. Scanning that set for style
+        // seeds per product is therefore O(products x model): on SKYLARK250
+        // it was 5m16s of dead air between the end of parsing and the first
+        // mesh. Scanning `claimed` — what THIS call paged — makes the total
+        // work one pass over the shared set no matter how many products
+        // share it.
+        const model = await windowedModel(
+            new InMemoryStepByteStore(
+                new Uint8Array( fs.readFileSync( 'data/index.ifc' ) ) ) )
+        const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+
+        extraction.quietRecoverableLogging = true
+        extraction.deferDanglingPlacements = true
+
+        const prepPins = await extraction.ensureResidentForDemandPrep()
+
+        try {
+          extraction.prepareDemandExtraction()
+        } finally {
+          model.releaseSourceViews( prepPins )
+          model.unpinLocalIDs( prepPins )
+        }
+
+        const products = [ ...model.types( IfcProduct ) ].map( ( p ) => p.localID )
+
+        expect( products.length ).toBeGreaterThan( 2 )
+
+        // Counted after prepare, so only the prefetch's own lookups land here.
+        const styledItemMap = ( extraction as any ).materials.styledItemMap
+        const realGet = styledItemMap.get.bind( styledItemMap )
+        let lookups = 0
+
+        styledItemMap.get = ( key: number ) => {
+          ++lookups
+          return realGet( key )
+        }
+
+        // The aggregate prefetch's shape: ONE set for every product.
+        const pins = new Set< number >()
+        const leafSpans: { address: number, length: number }[] = []
+
+        try {
+
+          for ( const localID of products ) {
+            await extraction.ensureResidentForProductExtract(
+                localID, pins, leafSpans )
+          }
+
+        } finally {
+          styledItemMap.get = realGet
+        }
+
+        expect( pins.size ).toBeGreaterThan( 0 )
+
+        // Each record is scanned by the one call that claimed it, so the
+        // lookups never exceed the shared set. Pre-fix this was
+        // products.length x |pins| and the assertion fails by ~an order of
+        // magnitude on this fixture alone.
+        expect( lookups ).toBeLessThanOrEqual( pins.size )
+
+        model.releaseSourceViews( pins )
+        model.unpinLocalIDs( pins )
+
+        for ( const span of leafSpans ) {
+          model.unpinAddressRange( span.address, span.length )
+        }
+      }, 120000 )
 } )

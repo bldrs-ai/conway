@@ -7226,15 +7226,27 @@ export class IfcGeometryExtraction {
           localID, extra, seen, descend, leafSpans, isFace, claimed )
     const styleExtra: number[] = []
 
-    for ( const visitedID of visited ) {
+    // `claimed`, not `visited`: the closure walk returns the CALLER'S set,
+    // which the aggregate prefetch shares across every related product of one
+    // IfcRelAggregates (ensureResidentForAggregateExtract). Scanning it per
+    // product is therefore O(products x model), not O(product) — on SKYLARK250
+    // (1,992 products under two relationships, ~3,000 records of closure each)
+    // it reaches ~6 M lookups on the last product and costs minutes before the
+    // first mesh, all inside one un-yielding await chain (conway#561).
+    //
+    // Every record lands in exactly one call's `claimed`, so the union of the
+    // style seeds collected across the walks sharing a set is unchanged; only
+    // the repetition goes away. This is the same distinction conway#526 drew
+    // for the faceset payload pass below.
+    for ( const claimedID of claimed ) {
 
-      const styled = this.materials.styledItemMap.get( visitedID )
+      const styled = this.materials.styledItemMap.get( claimedID )
 
       if ( styled !== void 0 ) {
         styleExtra.push( styled )
       }
 
-      const definition = this.materials.materialDefinitionsMap.get( visitedID )
+      const definition = this.materials.materialDefinitionsMap.get( claimedID )
 
       if ( definition !== void 0 ) {
         styleExtra.push( definition )
