@@ -369,6 +369,11 @@ const REL_AGGREGATES_RELATED_OFFSET = 5
 const REL_AGGREGATES_RELATED_BASE = 4
 const REL_AGGREGATES_RELATED_DEPTH = 3
 
+/** IfcRelAggregates.RelatingObject — see IfcRelAggregates.gen.ts. */
+const REL_AGGREGATES_RELATING_OFFSET = 4
+const REL_AGGREGATES_RELATING_BASE = 4
+const REL_AGGREGATES_RELATING_DEPTH = 3
+
 /** IfcRelAssociates.RelatedObjects — see IfcRelAssociates.gen.ts. */
 const REL_ASSOCIATES_RELATED_OFFSET = 4
 const REL_ASSOCIATES_RELATED_BASE = 4
@@ -6692,6 +6697,13 @@ export class IfcGeometryExtraction {
   // eslint-disable-next-line no-magic-numbers
   private static readonly AGGREGATE_TARGET_WAVE_SIZE_ = 512
 
+  /* Related PRODUCTS paged and held at once by AggregateExtractPager.
+   * Sized to the demand pump's batch, so the aggregates pass pins about
+   * what the per-product pass pins for one batch rather than what a whole
+   * relationship needs — the pump passes its own budget and this is only
+   * the default. */
+  private static readonly AGGREGATE_PREFETCH_WAVE_SIZE_ = 8
+
   // Lazy cache for aggregateTargetLocalIDs().
   private aggregateTargetLocalIDs_?: Set<number>
 
@@ -7413,7 +7425,16 @@ export class IfcGeometryExtraction {
    * acquire: the relationship, the relating product (and its voids)
    * and every related product.
    *
+   * The whole relationship at once, which is what a caller that extracts
+   * it in one synchronous call needs. A caller that steps the
+   * relationship (the demand pump, through
+   * {@link extractRelAggregateGeometryIncremental}) wants
+   * {@link beginAggregateExtract} instead: this one pins every related
+   * product's closure simultaneously, which on an aggregate-structured
+   * model is the whole file (conway#561 §5).
+   *
    * @param relAggregate The relationship to prefetch.
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
    * @return {Promise<Set<number>>} Pinned local IDs — caller must unpin
    * after extract.
    */
@@ -7425,21 +7446,230 @@ export class IfcGeometryExtraction {
       return new Set< number >()
     }
 
-    // Pin the rel record, page its 1-hop so RelatingObject /
-    // RelatedObjects getters can hydrate, then walk each product
-    // through the bounded extract. The 1-hop IDs must NOT go into
-    // `pinned`/`seen` — that would skip their geometry closures.
-    // A full BFS of the rel used to follow every RelatedObject into
-    // Faces[] (the 78k-pin path) before descend could skip them.
     const pinned = new Set< number >()
-    const hop: number[] = []
+
+    await this.ensureResidentForAggregateBase( relAggregate, pinned, leafSpans )
+
+    const products = this.relatedAggregateProductLocalIDs( relAggregate )
+
+    if ( products === void 0 ) {
+
+      await this.ensureResidentForRelatedObjectsByGetter(
+          relAggregate, pinned, leafSpans )
+
+      return pinned
+    }
+
+    await this.ensureResidentForAggregateProducts(
+        products, 0, products.length, pinned, leafSpans )
+
+    return pinned
+  }
+
+  /**
+   * The part of an aggregate prefetch that has to be resident for the
+   * WHOLE relationship: the relationship record itself and the relating
+   * product's closure (its rel-voids become the master override every
+   * related product is cut with).
+   *
+   * Only the RELATING object's record is paged ahead of the getter that
+   * hydrates it, deliberately — not the relationship's whole 1-hop, which
+   * is what this used to do. On a model whose products are all aggregate
+   * targets the 1-hop is every related product's record, scattered the
+   * length of the file, so pinning it pins essentially every chunk before
+   * a single mesh exists: 384 MiB held against a 64 MiB window on
+   * SKYLARK250 (conway#561 §5). The related records are paged by the
+   * caller instead, per product or per wave.
+   *
+   * Seam for {@link AggregateExtractPager}, which lives in this module.
+   *
+   * @param relAggregate The relationship to prefetch.
+   * @param pinned Set to extend — caller unpins.
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
+   * @return {Promise<void>} Resolves when the base is resident.
+   */
+  public async ensureResidentForAggregateBase(
+      relAggregate: IfcRelAggregates,
+      pinned: Set< number >,
+      leafSpans?: { address: number, length: number }[] ): Promise< void > {
+
+    if ( !this.model.isSourceExternal ) {
+      return
+    }
 
     this.model.pinByLocalID( relAggregate.localID )
     pinned.add( relAggregate.localID )
 
+    await this.model.ensureResidentByLocalID( relAggregate.localID )
+
+    // Read straight off the relationship's record so the relating product
+    // can be paged BEFORE the generated getter materialises it. Optional
+    // reads null rather than throwing for a field that is neither a `#N`
+    // reference nor an inline entity — the getter is then the thing that
+    // decides such a field is malformed, exactly as it did before.
+    const relatingLocalID = relAggregate.extractReferenceLocalID(
+        REL_AGGREGATES_RELATING_OFFSET,
+        REL_AGGREGATES_RELATING_BASE,
+        REL_AGGREGATES_RELATING_DEPTH,
+        true )
+
+    // NOT into `pinned`: the closure walk skips what is already in the set
+    // it is given, so seeding the relating object there would stop it
+    // descending into that product's own geometry.
+    if ( relatingLocalID !== null ) {
+      this.model.pinByLocalID( relatingLocalID )
+      await this.model.ensureResidentByLocalID( relatingLocalID )
+    }
+
     try {
 
-      await this.model.ensureResidentByLocalID( relAggregate.localID )
+      const relating = relAggregate.RelatingObject
+
+      if ( relating !== null && relating !== void 0 ) {
+        await this.ensureResidentForProductExtract(
+            relating.localID, pinned, leafSpans )
+      }
+    } finally {
+
+      if ( relatingLocalID !== null ) {
+        this.model.unpinByLocalID( relatingLocalID )
+      }
+    }
+  }
+
+  /**
+   * The local IDs one relationship's aggregates pass will actually extract:
+   * its RelatedObjects that are `IfcProduct`s, in record order.
+   *
+   * The n-th entry is the product
+   * {@link extractRelAggregateGeometryIncremental} extracts for its n-th
+   * yield — that pass materialises every related object, extracts and
+   * yields for the ones that are products, and walks past the rest. So a
+   * prefetch keyed on this list is in exact lockstep with the stepper, and
+   * a run of non-products between two products costs it nothing.
+   *
+   * **Non-products are dropped, not skipped-but-paged.** Deciding an entry
+   * is not a product costs no source bytes: `getTypedElementByExpressID`
+   * builds its descriptor from the columns, and only
+   * {@link extractProductGeometry} — products only — reads a record. Swept
+   * that exact path (materialise as `IfcObjectDefinition`, test
+   * `instanceof IfcProduct`) over every record of SKYLARK250 (7,818,778),
+   * SEESTRASSE (294,704) and the whole in-repo corpus behind a deliberately
+   * exhausted 4 KiB x 4 window: 0 throws, 0 store bytes read. Paging a
+   * non-product's closure is therefore work that serves nothing — and it is
+   * unbounded work, because a wave that had to span a run of them would
+   * page the whole run at once, `waveSize` notwithstanding (conway#566
+   * review). An `IfcTypeObject` carrying `RepresentationMaps` measures
+   * 1,607 records of closure on its own.
+   *
+   * Classification goes through {@link relatedProductByExpressID_}, the same
+   * call the pass itself makes — one test rather than two that have to
+   * agree. A typeID-column test does NOT agree: a STEP complex instance is
+   * recorded as type 0 (`EXTERNALMAPPINGCONTAINER`) while the pass finds the
+   * `IfcProduct` among its `multiMapping` variants, and the product would
+   * then be extracted without ever being paged (conway#566 review).
+   *
+   * Note {@link aggregateTargetLocalIDs} still reads the column, and has the
+   * same blind spot — a complex product is not deferred, so it is extracted
+   * by both passes. That is pre-existing and independent of paging: it costs
+   * a duplicate extraction, not a non-resident read.
+   *
+   * Seam for {@link AggregateExtractPager}, which lives in this module.
+   *
+   * @param relAggregate The relationship to read.
+   * @return {number[] | undefined} The related products' local IDs, or
+   * undefined when the list holds something only the generated getter can
+   * resolve (see {@link relatedObjectExpressIDs_}).
+   */
+  public relatedAggregateProductLocalIDs( relAggregate: IfcRelAggregates ):
+      number[] | undefined {
+
+    const relatedExpressIDs = this.relatedObjectExpressIDs_( relAggregate )
+
+    if ( relatedExpressIDs === void 0 ) {
+      return void 0
+    }
+
+    const productLocalIDs: number[] = []
+
+    for ( const relatedExpressID of relatedExpressIDs ) {
+
+      let relatedProduct: IfcProduct | undefined
+
+      try {
+        relatedProduct = this.relatedProductByExpressID_( relatedExpressID )
+      } catch {
+
+        // The pass throws on this entry and abandons the relationship there
+        // (permissively, or out through the pump), so nothing past it is
+        // ever extracted and nothing past it needs paging. Stopping here
+        // rather than skipping keeps the list exactly the prefix the pass
+        // will reach.
+        break
+      }
+
+      if ( relatedProduct !== void 0 ) {
+        productLocalIDs.push( relatedProduct.localID )
+      }
+    }
+
+    return productLocalIDs
+  }
+
+  /**
+   * Page the closures of a contiguous run of
+   * {@link relatedAggregateProductLocalIDs} entries.
+   *
+   * Seam for {@link AggregateExtractPager}, which lives in this module.
+   *
+   * @param productLocalIDs The related products, in record order.
+   * @param from First index to page.
+   * @param to One past the last index to page.
+   * @param pinned Set to extend — caller unpins.
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
+   * @return {Promise<void>} Resolves when the run is resident.
+   */
+  public async ensureResidentForAggregateProducts(
+      productLocalIDs: number[],
+      from: number,
+      to: number,
+      pinned: Set< number >,
+      leafSpans?: { address: number, length: number }[] ): Promise< void > {
+
+    for ( let where = from; where < to; ++where ) {
+
+      await this.ensureResidentForProductExtract(
+          productLocalIDs[ where ], pinned, leafSpans )
+    }
+  }
+
+  /**
+   * Whole-relationship prefetch for a RelatedObjects list that
+   * {@link relatedAggregateProductLocalIDs} could not read as references — an
+   * inline entity, `$` or junk.
+   *
+   * Only the generated getter can resolve (or reject) such a list, and it
+   * materialises the whole array at once, so there is no per-entry cursor
+   * to page against: this path keeps the pre-#561 shape, whole 1-hop and
+   * all, because it is the one case that genuinely cannot be paged
+   * incrementally. It is also the path that needs the 1-hop pinned — the
+   * getter reads every related record while it materialises them.
+   *
+   * Seam for {@link AggregateExtractPager}, which lives in this module.
+   *
+   * @param relAggregate The relationship to prefetch.
+   * @param pinned Set to extend — caller unpins.
+   * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
+   * @return {Promise<void>} Resolves when the relationship is resident.
+   */
+  public async ensureResidentForRelatedObjectsByGetter(
+      relAggregate: IfcRelAggregates,
+      pinned: Set< number >,
+      leafSpans?: { address: number, length: number }[] ): Promise< void > {
+
+    const hop: number[] = []
+
+    try {
 
       for ( const expressID of this.model.referencedExpressIDs(
           relAggregate.localID ) ) {
@@ -7455,54 +7685,48 @@ export class IfcGeometryExtraction {
         await this.model.ensureResidentByLocalID( localID )
       }
 
-      const relating = relAggregate.RelatingObject
+      const related = relAggregate.RelatedObjects
 
-      if ( relating !== null && relating !== void 0 ) {
-        await this.ensureResidentForProductExtract(
-            relating.localID, pinned, leafSpans )
-      }
+      if ( related !== null && related !== void 0 ) {
 
-      // By express ID rather than through `relAggregate.RelatedObjects`, for
-      // the reason relatedObjectExpressIDs_ documents: the getter memoizes
-      // the whole related-product array onto the relationship, and this
-      // prefetch runs immediately before the extract that must not retain
-      // it (conway#549 §4). Falls back to the getter for a list holding a
-      // non-reference entry, so the two paths agree on what is in the list.
-      const relatedExpressIDs = this.relatedObjectExpressIDs_( relAggregate )
-
-      if ( relatedExpressIDs === void 0 ) {
-
-        const related = relAggregate.RelatedObjects
-
-        if ( related !== null && related !== void 0 ) {
-
-          for ( const product of related ) {
-            await this.ensureResidentForProductExtract(
-                product.localID, pinned, leafSpans )
-          }
-        }
-      } else {
-
-        for ( const relatedExpressID of relatedExpressIDs ) {
-
-          const relatedLocalID = this.model.resolveExpressID( relatedExpressID )
-
-          if ( relatedLocalID === void 0 ) {
-            continue
-          }
-
+        for ( const product of related ) {
           await this.ensureResidentForProductExtract(
-              relatedLocalID, pinned, leafSpans )
+              product.localID, pinned, leafSpans )
         }
       }
-
-      return pinned
     } finally {
 
       for ( const localID of hop ) {
         this.model.unpinByLocalID( localID )
       }
     }
+  }
+
+  /**
+   * Begin a WAVE-PAGED residency for one relationship, for a caller that
+   * steps it through {@link extractRelAggregateGeometryIncremental}.
+   *
+   * The windowed twin of {@link ensureResidentForAggregateExtract}: same
+   * records, paged a wave at a time as the stepper reaches them and
+   * released a wave at a time behind it, instead of all of them before the
+   * first step. See {@link AggregateExtractPager}.
+   *
+   * @param relAggregate The relationship to prefetch.
+   * @param waveSize Related products paged and held at once.
+   * @return {Promise<AggregateExtractPager>} The paging handle — caller
+   * must {@link AggregateExtractPager.release} it.
+   */
+  public async beginAggregateExtract(
+      relAggregate: IfcRelAggregates,
+      waveSize: number =
+      IfcGeometryExtraction.AGGREGATE_PREFETCH_WAVE_SIZE_ ):
+      Promise< AggregateExtractPager > {
+
+    const pager = new AggregateExtractPager( this, relAggregate, waveSize )
+
+    await pager.begin()
+
+    return pager
   }
 
   /**
@@ -7578,6 +7802,58 @@ export class IfcGeometryExtraction {
         } )
 
     return allReferences ? expressIDs : void 0
+  }
+
+  /**
+   * How the rel-aggregates pass classifies ONE `RelatedObjects` entry: the
+   * product it will extract, or undefined for an entry it walks past.
+   *
+   * **The single definition of "is this related object a product".** Both
+   * the pass itself ({@link extractRelAggregateGeometryIncremental}) and the
+   * prefetch that has to page ahead of it
+   * ({@link relatedAggregateProductLocalIDs}) go through here, so they
+   * cannot disagree — which they did, twice, when the prefetch derived its
+   * own answer from the typeID column. A STEP complex/external-mapping
+   * instance is the case that breaks a column test: the parser records the
+   * container as type 0 (`EXTERNALMAPPINGCONTAINER`, see step_parser.ts)
+   * while `getTypedElementByExpressID` searches the entry's `multiMapping`
+   * variants and hands back the `IfcProduct` among them. On a windowed
+   * source a prefetch that missed one would leave the pass reading a
+   * non-resident record, and its permissive catch abandons the REST of the
+   * relationship — geometry lost with a log line, not an error
+   * (conway#566 review).
+   *
+   * Materialising the entry is what makes the two agree, and it is cheap:
+   * `getTypedElementByExpressID` builds from the columns and reads no
+   * source bytes. Measured by sweeping this exact call over every record of
+   * SKYLARK250 (7,818,778), SEESTRASSE (294,704) and the in-repo corpus
+   * behind a deliberately exhausted 4 KiB x 4 window — 0 throws, 0 store
+   * bytes. The pass materialises every entry anyway; the prefetch just
+   * reaches them first.
+   *
+   * @param relatedExpressID The RelatedObjects entry to classify.
+   * @throws {Error} When the reference resolves to nothing, or to something
+   * that is not an `IfcObjectDefinition` — what the generated getter throws
+   * for the same entry, and what the pass has always thrown here.
+   * @return {IfcProduct | undefined} The product to extract, or undefined
+   * for a related object that is not one.
+   */
+  private relatedProductByExpressID_(
+      relatedExpressID: number ): IfcProduct | undefined {
+
+    const relatedObject =
+      this.model.getTypedElementByExpressID( relatedExpressID, IfcObjectDefinition )
+
+    if ( relatedObject === void 0 ) {
+
+      // What the getter does with the same entry: extractBufferElement
+      // returns undefined for a reference that resolves to nothing (or to
+      // something that is not an IfcObjectDefinition) and the getter throws
+      // this exact message.
+      throw new Error( 'Value in STEP was incorrectly typed' )
+    }
+
+    return relatedObject instanceof IfcProduct ? relatedObject : void 0
   }
 
   /**
@@ -7675,23 +7951,15 @@ export class IfcGeometryExtraction {
 
         for ( const relatedExpressID of relatedExpressIDs ) {
 
-          const relatedObject =
-            this.model.getTypedElementByExpressID(
-                relatedExpressID, IfcObjectDefinition )
+          // Shared with the prefetch, so the two cannot disagree about which
+          // entries this loop extracts — see relatedProductByExpressID_. It
+          // throws for an entry the getter would reject, and the catch below
+          // then skips the whole relationship, permissively, as it always has.
+          const relatedProduct = this.relatedProductByExpressID_( relatedExpressID )
 
-          if ( relatedObject === void 0 ) {
+          if ( relatedProduct !== void 0 ) {
 
-            // What the getter does with the same entry: extractBufferElement
-            // returns undefined for a reference that resolves to nothing (or
-            // to something that is not an IfcObjectDefinition) and the getter
-            // throws this exact message. The catch below then skips the whole
-            // relationship, permissively, as it always has.
-            throw new Error( 'Value in STEP was incorrectly typed' )
-          }
-
-          if ( relatedObject instanceof IfcProduct ) {
-
-            this.extractProductGeometry( relatedObject, masterRelVoids )
+            this.extractProductGeometry( relatedProduct, masterRelVoids )
 
             yield ++extractedCount
           }
@@ -8139,5 +8407,204 @@ export class IfcGeometryExtraction {
     } finally {
       this.model.elementMemoization = previousMemoizationState
     }
+  }
+}
+
+
+/**
+ * Windowed source residency for ONE `IfcRelAggregates`, paged in bounded
+ * waves that FOLLOW the stepper instead of running the whole relationship
+ * ahead of it.
+ *
+ * {@link IfcGeometryExtraction.ensureResidentForAggregateExtract} pages
+ * every related product's `#ref` closure before the first product is
+ * extracted, and holds all of it pinned until the last one is. That is the
+ * residency ceiling inverted for exactly the models it exists for: on
+ * SKYLARK250 (1,992 products, all of them under two relationships) it pins
+ * 384 MiB — the entire file — against a 64 MiB window, in one `await` chain
+ * with no suspension point and no progress event, before a single mesh
+ * exists. conway#561 §5; #549 §7 named the same call.
+ *
+ * The pass those pins serve is already incremental
+ * ({@link IfcGeometryExtraction.extractRelAggregateGeometryIncremental}
+ * suspends between related products, and the demand pump has stepped it
+ * per product since conway#550) — only the prefetch was still per
+ * relationship. This paging follows that stepper:
+ *
+ *   - `begin` pages the part that must outlive every step: the
+ *     relationship record and the relating product's closure, whose
+ *     rel-voids are the master override each related product is cut with.
+ *   - `ensureForStep( n )` guarantees the product the stepper extracts for
+ *     its n-th yield is resident, paging forward `waveSize` products at a
+ *     time and dropping the previous wave's pins as it rolls. It awaits, so
+ *     the driver gets a suspension point per wave and the store's own reads
+ *     reach the event loop.
+ *   - `release` drops everything, and is safe to call twice.
+ *
+ * A wave is `waveSize` RELATED PRODUCTS, never a range of related-object
+ * entries. Deciding that an entry is not a product costs no source bytes —
+ * `getTypedElementByExpressID` reads the columns, and only
+ * `extractProductGeometry` reads a record — so non-products are dropped
+ * from the list outright by
+ * {@link IfcGeometryExtraction.relatedAggregateProductLocalIDs}. That is
+ * also what makes `waveSize` a real bound: a wave that had to span a run of
+ * non-products to reach the next product would page the whole run at once,
+ * and an `IfcTypeObject` with `RepresentationMaps` is 1,607 records of
+ * closure by itself (conway#566 review).
+ */
+export class AggregateExtractPager {
+
+  /** Held for the relationship: its record and the relating closure. */
+  private readonly basePins_ = new Set< number >()
+
+  private readonly baseSpans_: { address: number, length: number }[] = []
+
+  /** Held for the current wave only. */
+  private wavePins_ = new Set< number >()
+
+  private waveSpans_: { address: number, length: number }[] = []
+
+  /** Product index the current wave starts at. */
+  private waveStart_ = 0
+
+  /** One past the last product the current wave paged. */
+  private pagedThrough_ = 0
+
+  /** Related products in record order; index n is the stepper's n-th yield. */
+  private products_?: number[]
+
+  private readonly waveSize_: number
+
+  private released_ = false
+
+  /**
+   * Construct paging for one relationship.
+   *
+   * @param extraction_ The extraction whose model is being paged.
+   * @param relAggregate_ The relationship this pages for.
+   * @param waveSize Related products paged and held at once.
+   */
+  constructor(
+    private readonly extraction_: IfcGeometryExtraction,
+    private readonly relAggregate_: IfcRelAggregates,
+    waveSize: number ) {
+
+    this.waveSize_ = Math.max( 1, Math.floor( waveSize ) )
+  }
+
+  /**
+   * Page what has to be resident for every step of this relationship.
+   *
+   * @return {Promise<void>} Resolves when the base is resident.
+   */
+  public async begin(): Promise< void > {
+
+    if ( !this.extraction_.model.isSourceExternal ) {
+      return
+    }
+
+    await this.extraction_.ensureResidentForAggregateBase(
+        this.relAggregate_, this.basePins_, this.baseSpans_ )
+
+    this.products_ =
+      this.extraction_.relatedAggregateProductLocalIDs( this.relAggregate_ )
+
+    if ( this.products_ !== void 0 ) {
+      return
+    }
+
+    // A RelatedObjects list only the generated getter can resolve. It
+    // materialises the whole array, so there is no per-entry cursor to
+    // page against and this relationship goes back to being paged whole —
+    // into the BASE pins, which live as long as the relationship does.
+    await this.extraction_.ensureResidentForRelatedObjectsByGetter(
+        this.relAggregate_, this.basePins_, this.baseSpans_ )
+  }
+
+  /**
+   * Make the product the stepper extracts for yield `step` resident,
+   * rolling the wave forward if it does not already cover it.
+   *
+   * At most `waveSize` product closures are pinned at any moment, whatever
+   * the related-object list holds between them.
+   *
+   * @param step Zero-based index of the stepper's next yield.
+   * @return {Promise<void>} Resolves when that product is resident.
+   */
+  public async ensureForStep( step: number ): Promise< void > {
+
+    const products = this.products_
+
+    // Undefined only for the getter fallback, which `begin` already paged
+    // whole into the base pins. Past the last product the stepper has only
+    // non-products left to walk over, and those need nothing.
+    if ( products === void 0 || step >= products.length ) {
+      return
+    }
+
+    if ( step < this.pagedThrough_ ) {
+      return
+    }
+
+    this.releaseWave_()
+
+    // From the step asked for rather than from where the last wave ended,
+    // so the bound holds even for a caller that skips steps.
+    this.waveStart_ = step
+    this.pagedThrough_ = Math.min( products.length, step + this.waveSize_ )
+
+    await this.extraction_.ensureResidentForAggregateProducts(
+        products,
+        this.waveStart_,
+        this.pagedThrough_,
+        this.wavePins_,
+        this.waveSpans_ )
+  }
+
+  /**
+   * Drop every pin this holds. Idempotent.
+   */
+  public release(): void {
+
+    if ( this.released_ ) {
+      return
+    }
+
+    this.released_ = true
+
+    this.releaseWave_()
+
+    const model = this.extraction_.model
+
+    model.releaseSourceViews( this.basePins_ )
+    model.unpinLocalIDs( this.basePins_ )
+    this.basePins_.clear()
+
+    for ( const span of this.baseSpans_ ) {
+      model.unpinAddressRange( span.address, span.length )
+    }
+
+    this.baseSpans_.length = 0
+  }
+
+  /**
+   * Drop the current wave's pins and views.
+   */
+  private releaseWave_(): void {
+
+    const model = this.extraction_.model
+
+    model.releaseSourceViews( this.wavePins_ )
+    model.unpinLocalIDs( this.wavePins_ )
+
+    for ( const span of this.waveSpans_ ) {
+      model.unpinAddressRange( span.address, span.length )
+    }
+
+    // Fresh containers rather than cleared ones: `ensureResidentForProductExtract`
+    // treats the set it is given as "already claimed and pinned", so a wave
+    // must start from a set that claims nothing the previous one did.
+    this.wavePins_ = new Set< number >()
+    this.waveSpans_ = []
   }
 }
