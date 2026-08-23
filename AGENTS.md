@@ -17,6 +17,16 @@ full `yarn build-codex-MT`.
 Run `chmod +x` on `scripts/build-codex.sh` before trying to call `yarn
 build-codex-MT`.
 
+`yarn precommit` — what the husky hook runs — rebuilds before it lints and
+tests, and that ordering is load-bearing rather than tidy. Jest runs over
+`compiled/`, so on a tree whose build is older than its sources the run
+does not fail, it silently omits whatever was never compiled: merging #566
+(which adds a 443-line test file) reported an unchanged
+*102 suites / 698 tests* until `yarn build-incremental` produced the true
+*103 / 701*. `yarn check-compiled-fresh` is the second opinion — it names
+any source with no output under `compiled/` and exits non-zero, so the
+failure is loud even if the rebuild is skipped or its buildinfo lies.
+
 `yarn build-codex-MT` takes roughly 90 seconds. When iterating on
 conway-geom, stage a set of edits and evaluate them in one build rather
 than rebuilding per edit.
@@ -150,6 +160,28 @@ Reviewers hold the same bar, in this order: verify claims against the
 diff (not the description), against repo history, then against the
 actual failure path — and grade findings by evidence, not
 plausibility.
+
+### Two traps that make a check look green when it never ran
+
+Same shape as the stale `compiled/` above, and worth naming together:
+none of the three announces itself, and each turns "I did not observe a
+problem" into "there is no problem".
+
+- **Reverting for rubric 6: `git checkout <sha> -- <path>` STAGES the
+  file it restores.** The next commit then carries the revert silently —
+  this has already backed an entire feature out of
+  `ifc_geometry_extraction.ts`, and the pre-commit gate passed, because
+  `compiled/` had been built from the correct working tree. Use `git
+  restore --worktree --source=<sha> -- <path>`, which touches the
+  worktree only, or a `git stash` / scratch copy. Either way check `git
+  show --stat` before pushing.
+- **Unauthenticated `curl` against `api.github.com` fails silently
+  here.** The proxy answers `403 GitHub access is not enabled for this
+  session`, and the usual `|| true` turns that into an empty result set
+  — so "no events" reads exactly like "still running" and a polling loop
+  runs to its timeout while CI has been green for twenty minutes. Poll
+  through the authenticated MCP tools (`pull_request_read` with
+  `get_check_runs`, `actions_get`), never `curl`.
 
 ## Debugging a bad model
 
