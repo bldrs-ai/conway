@@ -715,23 +715,76 @@ function totalTimeBasis(entry) {
  * The pair of total-time values that are actually comparable between two
  * rows, and which quantity they are.
  *
- * Where the two rows disagree on basis, this falls back to the STAGE SUM,
- * because that is the quantity both sides can express: a post-#562 row
- * carries it in `parsePlusGeometryMs` and a pre-#562 regression row carries
- * it in `totalTimeMs`. Preferred over blanking the column, which would cost
- * the release table its headline number for exactly one release — the one
- * spanning the change, where a reader most wants to see that nothing moved.
+ * **No total is comparable across two harnesses** (#570 review, round 2).
+ * Making `totalTimeMs` a wall clock everywhere did not finish the job #562
+ * started, because "wall clock" is itself two quantities: the harnesses
+ * bound the interval differently, and `writer` says which pipeline produced
+ * a row but not what its clock enclosed.
  *
- * A wall clock cannot be recovered from a pre-#562 regression row at all,
- * so a three.js-harness row against such a row has no common quantity.
+ * Specifically, `ConwayModelLoader` opens `allTimeStart` and THEN builds and
+ * initialises a per-load `ConwayGeometry` (conway_model_loader.ts:158 then
+ * :194/:406), while the regression child initialises its engine in `main()`
+ * and starts `loadStartMs` immediately before the file read
+ * (ifc_regression_main.ts:361 then :454). Engine init is inside one window
+ * and outside the other.
+ *
+ * Measured, because "structurally different" does not say whether it
+ * matters: a fresh `new ConwayGeometry()` + `initialize()` runs about
+ * **195 ms** (six runs: 178/182/189/195/232/655, the outlier being the
+ * first wasm compile). Against the regression child's own totals that is
+ * **120% of index.ifc's 162 ms, 24% of haus.ifc's 796 ms and 4.3% of
+ * MB-Khaya's 4528 ms**. Differencing across the harnesses reports the
+ * removal of engine initialisation as an engine speedup, at a scale far
+ * above anything the release table exists to flag.
+ *
+ * **And `parsePlusGeometryMs` is not the escape hatch**, which was the
+ * other candidate. The loader path does not emit it at all (benchmark.cjs
+ * writes N/A — it has no such log line), so it would have to be
+ * manufactured from a sum; and the stage clocks it would sum are not the
+ * same intervals either. The child's parse clock opens before `parseHeader`
+ * where the loader times the header separately, and the child's geometry
+ * clock wraps `new IfcGeometryExtraction(...)` where the loader constructs
+ * it outside. Substituting it would put a smaller version of the same
+ * defect back under a new name, which is the thing this file exists to
+ * prevent.
+ *
+ * So the cross-harness cell is blank and says why. The cost is one
+ * historical comparison — the transition from `benchmark.cjs`-produced
+ * snapshots to bless-produced ones — and that is exactly the comparison
+ * that has no answer. Every release from here is regression-against-
+ * regression and differences normally.
+ *
+ * WITHIN one harness the #562 seam still needs bridging, and there the
+ * stage sum IS a common quantity: a post-#562 row carries it in
+ * `parsePlusGeometryMs` and a pre-#562 regression row carries it in
+ * `totalTimeMs`. Preferred over blanking, because the release spanning that
+ * change is where a reader most wants to see that nothing moved.
+ *
+ * `parseTimeMs` and `geometryTimeMs` are deliberately left alone. They
+ * carry the smaller boundary differences noted above, but that residual has
+ * not been measured and the snapshot README's standing claim is that the
+ * stage clocks are broadly comparable — so this withholds what there is
+ * evidence for and records the rest as a caveat rather than acting on it.
  *
  * @param {Object} entry1 Older row.
  * @param {Object} entry2 Newer row.
  * @returns {{older: string, newer: string, basis: string}} The values to
- * difference and what they are; `basis` is 'N/A' when there is no common
- * quantity.
+ * difference and what they are. `basis` is 'crossHarness' when the two
+ * harnesses bound their clocks differently, and 'N/A' when there is no
+ * common quantity for some other reason.
  */
 function comparableTotals(entry1, entry2) {
+  const traits1 = traitsOf(entry1);
+  const traits2 = traitsOf(entry2);
+
+  // Both sides must resolve before this can fire, on the same rule the
+  // column guard uses: withhold only where we positively know, so an
+  // unrecognised writer is "cannot tell" rather than "not comparable".
+  if (traits1 !== undefined && traits2 !== undefined &&
+      traits1.harness !== traits2.harness) {
+    return { older: 'N/A', newer: 'N/A', basis: 'crossHarness' };
+  }
+
   const basis1 = totalTimeBasis(entry1);
   const basis2 = totalTimeBasis(entry2);
 
@@ -770,7 +823,7 @@ function comparableTotals(entry1, entry2) {
  * @returns {number | string} The difference, or 'N/A'.
  */
 function totalsDelta(totals) {
-  return totals.basis === 'N/A' ?
+  return totals.basis === 'N/A' || totals.basis === 'crossHarness' ?
     'N/A' :
     computeDelta('value', { value: totals.newer }, { value: totals.older });
 }
@@ -783,7 +836,7 @@ function totalsDelta(totals) {
  * @returns {string} The percentage, or 'N/A'.
  */
 function totalsPercentage(totals) {
-  return totals.basis === 'N/A' ?
+  return totals.basis === 'N/A' || totals.basis === 'crossHarness' ?
     'N/A' : computePercentageChange(totals.older, totals.newer);
 }
 

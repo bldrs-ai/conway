@@ -242,10 +242,20 @@ describe('the delta refuses to cross pipelines (conway#555)', () => {
     expect(cell('geometryMemoryMbDelta')).toBe('N/A')
     expect(cell('retainedRssMbDelta')).toBe('N/A')
 
-    // The timing columns are NOT withheld: they are broadly comparable
-    // across pipelines on the same runner class, and blanking them would
-    // cost the delta its most-read column for no measurement reason.
-    expect(cell('totalTimeMsDelta')).toBe('0')
+    // The TOTAL is withheld too, and for a third reason again: `ifc-cli`
+    // and `ifc-regression` are different harnesses, and the harnesses bound
+    // their clocks differently (see comparableTotals — ~195 ms of engine
+    // init inside one window and outside the other). Equal values on both
+    // sides, and still 'not comparable' rather than 0.
+    expect(cell('totalTimeMsDelta')).toBe('N/A')
+    expect(cell('totalTimeMsBasis')).toBe('crossHarness')
+
+    // The stage columns ARE still differenced: their own boundary
+    // differences are real but unmeasured, so they stay comparable on the
+    // snapshot README's standing claim rather than being blanked on a
+    // plausible-sounding one.
+    expect(cell('parseTimeMsDelta')).toBe('0')
+    expect(cell('geometryTimeMsDelta')).toBe('0')
   })
 
   test('the same writer on both sides differences normally', () => {
@@ -408,11 +418,8 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
     expect(cell('totalTimeMsBasis')).toBe('wallClock')
   })
 
-  test('a legacy three.js-harness snapshot keeps its wall-clock comparison', () => {
-    // The loader path always wrote a real wall clock into totalTimeMs, so
-    // this pair needs NO substitution — and would be actively wrong with
-    // one. It only comes out right because the legacy row's provenance is
-    // recovered from its populated scraped columns.
+  test('two three.js-harness rows still difference their wall clocks', () => {
+    // Within ONE harness the window is the same, so the comparison stands.
     const cell = delta(
         writeRow('old.csv', LEGACY_THREE,
             ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
@@ -425,10 +432,51 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
     expect(cell('totalTimeMsBasis')).toBe('wallClock')
   })
 
-  test('a three.js wall clock against a pre-#562 stage sum has no answer', () => {
-    // No common quantity exists: a wall clock cannot be recovered from a
-    // pre-#562 regression row, and that row's stage sum has no counterpart
-    // on a three.js row. N/A is the correct output, not a number.
+  test('no total is differenced across two harnesses', () => {
+    // Both rows say `wallClock`, and they still are not the same quantity:
+    // ConwayModelLoader opens allTimeStart and THEN builds and initialises a
+    // per-load ConwayGeometry, while the regression child initialises in
+    // main() and starts its clock immediately before the file read. Engine
+    // init is inside one window and outside the other.
+    //
+    // Measured at ~195 ms for a fresh engine, which against the regression
+    // child's own totals is 120% of index.ifc (162 ms), 24% of haus.ifc
+    // (796 ms) and 4.3% of MB-Khaya (4528 ms) — so differencing the two
+    // publishes the removal of engine initialisation as an engine speedup,
+    // at a scale far above anything the release table exists to flag.
+    //
+    // The values below are equal on purpose: even with identical totals the
+    // honest answer is "not comparable", not 0.
+    const cell = delta(
+        writeRow('old.csv', LEGACY_THREE,
+            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
+              '1000', '4000', '5400', 'Revit', 'Autodesk']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
+              '1000', '4000', '5400', '5010', 'N/A', 'N/A']))
+
+    expect(cell('totalTimeMsDelta')).toBe('N/A')
+    expect(cell('totalTimeMsPercentageChange')).toBe('N/A')
+
+    // The blank cell says WHY it is blank. A reader who cannot tell an
+    // unmeasured column from an incomparable one learns nothing from N/A.
+    expect(cell('totalTimeMsBasis')).toBe('crossHarness')
+
+    // And the raw values are withheld too, so nobody differences them by
+    // eye out of the two columns printed beside the delta.
+    expect(cell('engine1TotalTimeMs')).toBe('N/A')
+    expect(cell('engine2TotalTimeMs')).toBe('N/A')
+  })
+
+  test('parsePlusGeometryMs is not substituted across harnesses either', () => {
+    // The other candidate fix, rejected. The loader path emits no
+    // parsePlusGeometryMs at all (benchmark.cjs writes N/A — there is no
+    // such log line to scrape), so it would have to be manufactured from a
+    // sum; and the stage clocks it would sum are not the same intervals
+    // either — the child's parse clock opens before parseHeader where the
+    // loader times the header separately, and the child's geometry clock
+    // wraps `new IfcGeometryExtraction(...)` where the loader constructs it
+    // outside. A smaller version of the same defect under a new name.
     const cell = delta(
         writeRow('old.csv', LEGACY_REGRESSION,
             ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'N/A',
@@ -438,8 +486,25 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
               '1000', '4000', '5400', 'N/A', 'Revit', 'Autodesk']))
 
     expect(cell('totalTimeMsDelta')).toBe('N/A')
-    expect(cell('totalTimeMsPercentageChange')).toBe('N/A')
-    expect(cell('totalTimeMsBasis')).toBe('N/A')
+    expect(cell('totalTimeMsBasis')).toBe('crossHarness')
+  })
+
+  test('the stage columns are left alone, and say so by still computing', () => {
+    // Scoped deliberately: the ~195 ms engine-init term is MEASURED for the
+    // total, and the stage clocks' own boundary differences are not. This
+    // withholds what there is evidence for and leaves the rest as a
+    // recorded caveat rather than acting on a plausible-sounding one — the
+    // same discipline that kept peakWasmHeapMb comparable.
+    const cell = delta(
+        writeRow('old.csv', LEGACY_THREE,
+            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
+              '1000', '4000', '5400', 'Revit', 'Autodesk']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
+              '1100', '4200', '5400', '5300', 'N/A', 'N/A']))
+
+    expect(cell('parseTimeMsDelta')).toBe('100')
+    expect(cell('geometryTimeMsDelta')).toBe('200')
   })
 })
 
