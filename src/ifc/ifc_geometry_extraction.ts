@@ -6697,11 +6697,11 @@ export class IfcGeometryExtraction {
   // eslint-disable-next-line no-magic-numbers
   private static readonly AGGREGATE_TARGET_WAVE_SIZE_ = 512
 
-  /* Related-object entries paged and held at once by
-   * AggregateExtractPager. Sized to the demand pump's batch, so the
-   * aggregates pass pins about what the per-product pass pins for one
-   * batch rather than what a whole relationship needs — the pump passes
-   * its own budget and this is only the default. */
+  /* Related PRODUCTS paged and held at once by AggregateExtractPager.
+   * Sized to the demand pump's batch, so the aggregates pass pins about
+   * what the per-product pass pins for one batch rather than what a whole
+   * relationship needs — the pump passes its own budget and this is only
+   * the default. */
   private static readonly AGGREGATE_PREFETCH_WAVE_SIZE_ = 8
 
   // Lazy cache for aggregateTargetLocalIDs().
@@ -7450,9 +7450,9 @@ export class IfcGeometryExtraction {
 
     await this.ensureResidentForAggregateBase( relAggregate, pinned, leafSpans )
 
-    const entries = this.relatedAggregateEntries( relAggregate )
+    const products = this.relatedAggregateProductLocalIDs( relAggregate )
 
-    if ( entries === void 0 ) {
+    if ( products === void 0 ) {
 
       await this.ensureResidentForRelatedObjectsByGetter(
           relAggregate, pinned, leafSpans )
@@ -7460,8 +7460,8 @@ export class IfcGeometryExtraction {
       return pinned
     }
 
-    await this.ensureResidentForAggregateEntries(
-        entries.localIDs, 0, entries.localIDs.length, pinned, leafSpans )
+    await this.ensureResidentForAggregateProducts(
+        products, 0, products.length, pinned, leafSpans )
 
     return pinned
   }
@@ -7538,34 +7538,46 @@ export class IfcGeometryExtraction {
   }
 
   /**
-   * One relationship's RelatedObjects resolved to local IDs in record
-   * order, with the positions of the entries the extraction will actually
-   * step through.
+   * The local IDs one relationship's aggregates pass will actually extract:
+   * its RelatedObjects that are `IfcProduct`s, in record order.
    *
-   * `productSteps[ n ]` is the index in `localIDs` of the entry that
-   * produces {@link extractRelAggregateGeometryIncremental}'s n-th yield —
-   * that pass extracts (and yields for) related objects that are
-   * `IfcProduct`s and silently walks past the rest. That mapping is what
-   * lets a wave-paged prefetch stay exactly one step ahead of the stepper
-   * rather than a whole relationship ahead of it.
+   * The n-th entry is the product
+   * {@link extractRelAggregateGeometryIncremental} extracts for its n-th
+   * yield — that pass materialises every related object, extracts and
+   * yields for the ones that are products, and walks past the rest. So a
+   * prefetch keyed on this list is in exact lockstep with the stepper, and
+   * a run of non-products between two products costs it nothing.
+   *
+   * **Non-products are dropped, not skipped-but-paged.** Deciding an entry
+   * is not a product costs no source bytes: `getTypedElementByExpressID`
+   * builds its descriptor from the columns, and only
+   * {@link extractProductGeometry} — products only — reads a record. Swept
+   * that exact path (materialise as `IfcObjectDefinition`, test
+   * `instanceof IfcProduct`) over every record of SKYLARK250 (7,818,778),
+   * SEESTRASSE (294,704) and the whole in-repo corpus behind a deliberately
+   * exhausted 4 KiB x 4 window: 0 throws, 0 store bytes read. Paging a
+   * non-product's closure is therefore work that serves nothing — and it is
+   * unbounded work, because a wave that had to span a run of them would
+   * page the whole run at once, `waveSize` notwithstanding (conway#566
+   * review). An `IfcTypeObject` carrying `RepresentationMaps` measures
+   * 1,607 records of closure on its own.
    *
    * Products are identified from the typeID column, never by materialising
    * the entry — the same test, on the same column,
    * {@link aggregateTargetLocalIDs} already uses to decide which products
-   * the first pass defers. An entry that resolves to nothing is recorded as
-   * -1 and counted as a non-product, which is what the whole-relationship
-   * prefetch does with it too (it skips it, and the stepper then throws on
-   * reaching it).
+   * the first pass defers. An entry that resolves to nothing is dropped,
+   * which is what the pre-#561 prefetch did with it too (the stepper then
+   * throws on reaching it, permissively).
    *
    * Seam for {@link AggregateExtractPager}, which lives in this module.
    *
    * @param relAggregate The relationship to read.
-   * @return {object | undefined} The entries, or undefined when the list
-   * holds something only the generated getter can resolve (see
-   * {@link relatedObjectExpressIDs_}).
+   * @return {number[] | undefined} The related products' local IDs, or
+   * undefined when the list holds something only the generated getter can
+   * resolve (see {@link relatedObjectExpressIDs_}).
    */
-  public relatedAggregateEntries( relAggregate: IfcRelAggregates ):
-      { localIDs: number[], productSteps: number[] } | undefined {
+  public relatedAggregateProductLocalIDs( relAggregate: IfcRelAggregates ):
+      number[] | undefined {
 
     const relatedExpressIDs = this.relatedObjectExpressIDs_( relAggregate )
 
@@ -7574,45 +7586,41 @@ export class IfcGeometryExtraction {
     }
 
     const productTypes = new Set< number >( IfcProduct.query )
-    const localIDs: number[] = []
-    const productSteps: number[] = []
+    const productLocalIDs: number[] = []
 
     for ( const relatedExpressID of relatedExpressIDs ) {
 
       const relatedLocalID = this.model.resolveExpressID( relatedExpressID )
 
       if ( relatedLocalID === void 0 ) {
-        localIDs.push( -1 )
         continue
       }
 
       const typeID = this.model.typeIDOf( relatedLocalID )
 
       if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-        productSteps.push( localIDs.length )
+        productLocalIDs.push( relatedLocalID )
       }
-
-      localIDs.push( relatedLocalID )
     }
 
-    return { localIDs, productSteps }
+    return productLocalIDs
   }
 
   /**
-   * Page the closures of a contiguous run of {@link relatedAggregateEntries}
-   * entries.
+   * Page the closures of a contiguous run of
+   * {@link relatedAggregateProductLocalIDs} entries.
    *
    * Seam for {@link AggregateExtractPager}, which lives in this module.
    *
-   * @param localIDs The entries, in record order.
+   * @param productLocalIDs The related products, in record order.
    * @param from First index to page.
    * @param to One past the last index to page.
    * @param pinned Set to extend — caller unpins.
    * @param leafSpans Coalesced Faces[] pin ranges — caller unpins.
    * @return {Promise<void>} Resolves when the run is resident.
    */
-  public async ensureResidentForAggregateEntries(
-      localIDs: number[],
+  public async ensureResidentForAggregateProducts(
+      productLocalIDs: number[],
       from: number,
       to: number,
       pinned: Set< number >,
@@ -7620,20 +7628,14 @@ export class IfcGeometryExtraction {
 
     for ( let where = from; where < to; ++where ) {
 
-      const relatedLocalID = localIDs[ where ]
-
-      if ( relatedLocalID < 0 ) {
-        continue
-      }
-
       await this.ensureResidentForProductExtract(
-          relatedLocalID, pinned, leafSpans )
+          productLocalIDs[ where ], pinned, leafSpans )
     }
   }
 
   /**
    * Whole-relationship prefetch for a RelatedObjects list that
-   * {@link relatedAggregateEntries} could not read as references — an
+   * {@link relatedAggregateProductLocalIDs} could not read as references — an
    * inline entity, `$` or junk.
    *
    * Only the generated getter can resolve (or reject) such a list, and it
@@ -7700,7 +7702,7 @@ export class IfcGeometryExtraction {
    * first step. See {@link AggregateExtractPager}.
    *
    * @param relAggregate The relationship to prefetch.
-   * @param waveSize Related-object entries paged and held at once.
+   * @param waveSize Related products paged and held at once.
    * @return {Promise<AggregateExtractPager>} The paging handle — caller
    * must {@link AggregateExtractPager.release} it.
    */
@@ -8378,18 +8380,23 @@ export class IfcGeometryExtraction {
  *   - `begin` pages the part that must outlive every step: the
  *     relationship record and the relating product's closure, whose
  *     rel-voids are the master override each related product is cut with.
- *   - `ensureForStep( n )` guarantees the entries the stepper will read to
- *     reach its n-th yield are resident, paging forward in `waveSize`
- *     entries when it has to and dropping the previous wave's pins as it
- *     rolls. It awaits, so the driver gets a suspension point per wave and
- *     the store's own reads reach the event loop.
+ *   - `ensureForStep( n )` guarantees the product the stepper extracts for
+ *     its n-th yield is resident, paging forward `waveSize` products at a
+ *     time and dropping the previous wave's pins as it rolls. It awaits, so
+ *     the driver gets a suspension point per wave and the store's own reads
+ *     reach the event loop.
  *   - `release` drops everything, and is safe to call twice.
  *
- * Waves are contiguous entry ranges covering the whole list, never a jump
- * to the wanted entry: they partition the related-object list, so the set
- * of records paged for a relationship is exactly the set the
- * whole-relationship prefetch pages — same reads, same closures, held for a
- * wave instead of for the relationship.
+ * A wave is `waveSize` RELATED PRODUCTS, never a range of related-object
+ * entries. Deciding that an entry is not a product costs no source bytes —
+ * `getTypedElementByExpressID` reads the columns, and only
+ * `extractProductGeometry` reads a record — so non-products are dropped
+ * from the list outright by
+ * {@link IfcGeometryExtraction.relatedAggregateProductLocalIDs}. That is
+ * also what makes `waveSize` a real bound: a wave that had to span a run of
+ * non-products to reach the next product would page the whole run at once,
+ * and an `IfcTypeObject` with `RepresentationMaps` is 1,607 records of
+ * closure by itself (conway#566 review).
  */
 export class AggregateExtractPager {
 
@@ -8403,13 +8410,14 @@ export class AggregateExtractPager {
 
   private waveSpans_: { address: number, length: number }[] = []
 
-  /** Entry index the current wave starts at. */
+  /** Product index the current wave starts at. */
   private waveStart_ = 0
 
-  /** One past the last entry any wave has paged. */
+  /** One past the last product the current wave paged. */
   private pagedThrough_ = 0
 
-  private entries_?: { localIDs: number[], productSteps: number[] }
+  /** Related products in record order; index n is the stepper's n-th yield. */
+  private products_?: number[]
 
   private readonly waveSize_: number
 
@@ -8420,7 +8428,7 @@ export class AggregateExtractPager {
    *
    * @param extraction_ The extraction whose model is being paged.
    * @param relAggregate_ The relationship this pages for.
-   * @param waveSize Related-object entries paged and held at once.
+   * @param waveSize Related products paged and held at once.
    */
   constructor(
     private readonly extraction_: IfcGeometryExtraction,
@@ -8444,9 +8452,10 @@ export class AggregateExtractPager {
     await this.extraction_.ensureResidentForAggregateBase(
         this.relAggregate_, this.basePins_, this.baseSpans_ )
 
-    this.entries_ = this.extraction_.relatedAggregateEntries( this.relAggregate_ )
+    this.products_ =
+      this.extraction_.relatedAggregateProductLocalIDs( this.relAggregate_ )
 
-    if ( this.entries_ !== void 0 ) {
+    if ( this.products_ !== void 0 ) {
       return
     }
 
@@ -8459,54 +8468,43 @@ export class AggregateExtractPager {
   }
 
   /**
-   * Make the entries the stepper reads on its way to yield `step`
-   * resident, rolling the wave forward if it does not already cover them.
+   * Make the product the stepper extracts for yield `step` resident,
+   * rolling the wave forward if it does not already cover it.
+   *
+   * At most `waveSize` product closures are pinned at any moment, whatever
+   * the related-object list holds between them.
    *
    * @param step Zero-based index of the stepper's next yield.
-   * @return {Promise<void>} Resolves when that entry is resident.
+   * @return {Promise<void>} Resolves when that product is resident.
    */
   public async ensureForStep( step: number ): Promise< void > {
 
-    const entries = this.entries_
+    const products = this.products_
 
-    if ( entries === void 0 ) {
+    // Undefined only for the getter fallback, which `begin` already paged
+    // whole into the base pins. Past the last product the stepper has only
+    // non-products left to walk over, and those need nothing.
+    if ( products === void 0 || step >= products.length ) {
       return
     }
 
-    const lastEntry = entries.localIDs.length - 1
-    const finalProduct = step + 1 >= entries.productSteps.length
-
-    // Entries past the last product still get paged (see `end` below), so
-    // a caller that has run out of steps is asking for the tail.
-    const wanted = step < entries.productSteps.length ?
-      entries.productSteps[ step ] : lastEntry
-
-    if ( wanted < this.pagedThrough_ ) {
+    if ( step < this.pagedThrough_ ) {
       return
     }
 
     this.releaseWave_()
 
-    this.waveStart_ = this.pagedThrough_
+    // From the step asked for rather than from where the last wave ended,
+    // so the bound holds even for a caller that skips steps.
+    this.waveStart_ = step
+    this.pagedThrough_ = Math.min( products.length, step + this.waveSize_ )
 
-    // At least through the wanted entry, because a wave-sized window can
-    // fall entirely inside a run of non-product entries; and to the end of
-    // the list once the last product is in, because no later step exists to
-    // carry the tail. Together those make the waves a PARTITION of the
-    // related-object list: every entry the whole-relationship prefetch
-    // pages is paged here too, exactly once. Which records get paged is not
-    // what this change alters — only when, and for how long they are
-    // pinned.
-    const end = finalProduct ?
-      lastEntry + 1 :
-      Math.min(
-          lastEntry + 1,
-          Math.max( wanted + 1, this.waveStart_ + this.waveSize_ ) )
-
-    await this.extraction_.ensureResidentForAggregateEntries(
-        entries.localIDs, this.waveStart_, end, this.wavePins_, this.waveSpans_ )
-
-    this.pagedThrough_ = end
+    await this.extraction_.ensureResidentForAggregateProducts(
+        products,
+        this.waveStart_,
+        this.pagedThrough_,
+        this.wavePins_,
+        this.waveSpans_ )
   }
 
   /**

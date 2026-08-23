@@ -36,6 +36,13 @@ const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 /** Related products in data/aggregate_paged_prefetch.ifc's one relationship. */
 const RELATED_PRODUCTS = 12
 
+/**
+ * The fixture's non-product related objects: one mid-list, a run of three
+ * (the last of which is an IfcFurnitureType whose RepresentationMaps reach
+ * 1,602 records), and one after the last product.
+ */
+const NON_PRODUCT_EXPRESS_IDS = [ 150, 160, 161, 170, 151 ]
+
 let api: IfcAPI
 let buffer: Uint8Array
 
@@ -87,14 +94,15 @@ function classicMeshes(): object[] {
 }
 
 /**
- * Source pins the WHOLE-relationship prefetch takes on this fixture — the
- * calibration both bounds below are stated against, so they describe the
- * change rather than a hard-coded record count that would drift with the
- * fixture.
+ * Two calibrations read off the fixture itself rather than hard-coded, so
+ * the bounds below describe the change instead of drifting with the file:
+ * the pins the WHOLE-relationship prefetch takes, and the local IDs of the
+ * related objects that are not products.
  *
- * @return {Promise<number>} Pinned local IDs for the one relationship.
+ * @return {Promise<object>} `{ pins, nonProducts }`.
  */
-async function wholeRelationshipPins(): Promise< number > {
+async function relationshipCalibration():
+    Promise< { pins: number, nonProducts: number[] } > {
 
   const store = new InMemoryStepByteStore( buffer )
   const open = await openStreamedIfcModelFromStore( store )
@@ -131,7 +139,20 @@ async function wholeRelationshipPins(): Promise< number > {
     model.unpinAddressRange( span.address, span.length )
   }
 
-  return pins.size
+  // The fixture's four non-product related objects, resolved the same way
+  // the extraction resolves them. Local IDs are the parse's dense record
+  // index, so they are the same in the pump's own model instance.
+  const nonProducts: number[] = []
+
+  for ( const expressID of NON_PRODUCT_EXPRESS_IDS ) {
+
+    const localID = model.resolveExpressID( expressID )
+
+    expect( localID ).toBeDefined()
+    nonProducts.push( localID! )
+  }
+
+  return { pins: pins.size, nonProducts }
 }
 
 /** Window a cramped pump runs behind: 512-byte chunks, 2 resident. */
@@ -212,7 +233,10 @@ beforeAll( async () => {
 
 describe( 'wave-paged aggregate prefetch (conway#561 §5)', () => {
 
-  test( 'no single pump call pages the whole relationship', async () => {
+  test( 'no single pump call pages the whole relationship, and no call ' +
+    'pages a non-product at all', async () => {
+
+    const { nonProducts } = await relationshipCalibration()
 
     const extractionPrototype = IfcGeometryExtraction.prototype as any
     const realEnsure = extractionPrototype.ensureResidentForProductExtract
@@ -243,7 +267,7 @@ describe( 'wave-paged aggregate prefetch (conway#561 §5)', () => {
     }
 
     // A probe that never fires looks exactly like a clean model: the pump
-    // has to have paged the whole relationship over the run for the bound
+    // has to have paged the whole relationship over the run for the bounds
     // below to mean anything.
     expect( pagedOverall.size ).toBeGreaterThanOrEqual( RELATED_PRODUCTS )
 
@@ -252,12 +276,25 @@ describe( 'wave-paged aggregate prefetch (conway#561 §5)', () => {
     // related product plus the relating one, so this is RELATED_PRODUCTS + 1
     // and the assertion fails by 3x on this fixture alone.
     expect( mostPagedInOneCall ).toBeLessThanOrEqual( 5 )
+
+    // And what makes that budget a BOUND rather than a target: a wave is
+    // waveSize related PRODUCTS, so a run of non-products between two of
+    // them costs nothing. Deciding an entry is not a product reads no
+    // source bytes — only extractProductGeometry reads a record — so paging
+    // one is pure waste, and unbounded waste: #170's RepresentationMaps
+    // alone reach 1,602 records, which one wave would have had to span to
+    // reach the next part (conway#566 review).
+    expect( nonProducts.length ).toBe( NON_PRODUCT_EXPRESS_IDS.length )
+
+    for ( const localID of nonProducts ) {
+      expect( pagedOverall.has( localID ) ).toBe( false )
+    }
   }, 240000 )
 
   test( 'peak simultaneous pins stay under the whole-relationship prefetch, ' +
     'with identical meshes', async () => {
 
-    const wholePins = await wholeRelationshipPins()
+    const { pins: wholePins } = await relationshipCalibration()
 
     expect( wholePins ).toBeGreaterThan( RELATED_PRODUCTS )
 
