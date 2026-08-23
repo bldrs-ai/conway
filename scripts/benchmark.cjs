@@ -396,6 +396,28 @@ async function main() {
     'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
   ];
 
+  /**
+   * One performance-detail.csv record, built BY NAME.
+   *
+   * Both row writers below go through this, and that is the point rather
+   * than tidiness. The failure row used to be a positional literal of the
+   * same length as the header, so widening the header (conway#555/#562)
+   * silently shifted it: `uname` landed in `writer`, the encoded model name
+   * in `engine`, and `filename` — the key gen_delta_csv.cjs joins two runs
+   * on — became `N/A`, which loses exactly the OK->FAIL transition a
+   * release comparison exists to show. That is the SECOND time this row has
+   * broken that join; see the encoding note on failLine below. Building by
+   * name makes the class impossible rather than fixing the instance.
+   *
+   * Anything not supplied is `N/A`: a column this harness does not measure
+   * must read as absent, never as zero (conway#548).
+   *
+   * @param {Object} fields Values keyed by column name.
+   * @returns {string} The encoded record, without a trailing newline.
+   */
+  const detailRow = (fields) => csvRow(DETAIL_COLUMNS.map(
+    (column) => (fields[column] !== undefined ? fields[column] : 'N/A')));
+
   fs.writeFileSync(newResults, csvRow(DETAIL_COLUMNS) + "\n", 'utf8');
 
   [basicStatsFilename, errorLogFile].forEach((f) => {
@@ -656,19 +678,21 @@ async function main() {
         originatingSystem = 0;
       }
 
-      const line = csvRow([
+      // parsePlusGeometryMs is deliberately absent (-> N/A): this path emits
+      // no such log line, and a stand-in computed from the two stage columns
+      // would not be the same quantity — the loader's stage clocks do not
+      // abut the way the regression children's do.
+      const line = detailRow({
         timestamp,
         loadStatus,
         writer,
-        unameVal,
-        engineStr,
-        encodedFileName,
+        uname: unameVal,
+        engine: engineStr,
+        filename: encodedFileName,
         schemaVersion,
         parseTimeMs,
         geometryTimeMs,
         totalTimeMs,
-        // Not measured on this path — see the DETAIL_COLUMNS note.
-        'N/A',
         geometryMemoryMb,
         peakWasmHeapMb,
         rssMb,
@@ -681,8 +705,8 @@ async function main() {
         retainedHeapUsedMb,
         retainedExternalMb,
         preprocessorVersion,
-        originatingSystem
-      ]);
+        originatingSystem,
+      });
       appendLineToFile(newResults, line);
 
       if (loadStatus === 'OK') {
@@ -723,11 +747,12 @@ async function main() {
       // `S_Office_Integrated%20Design%20Archi.ifc`, so the delta would emit
       // two one-sided rows instead of the status transition — losing exactly
       // the row a release comparison is for. One writer, one convention.
-      const failLine = csvRow([
-        timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-      ]);
+      const failLine = detailRow({
+        timestamp,
+        loadStatus: 'FAIL',
+        uname: unameVal,
+        filename: encodeFileName(displayName),
+      });
       appendLineToFile(newResults, failLine);
 
       failCount++;

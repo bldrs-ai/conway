@@ -314,3 +314,353 @@ describe('totalTimeMs is the load\'s wall clock (conway#562 §1)', () => {
     }
   })
 })
+
+describe('the delta knows about the #562 seam (conway#570 review)', () => {
+
+  /**
+   * A performance-detail.csv with an explicit column list, so a test can
+   * write the exact legacy shapes the delta has to keep reading.
+   *
+   * @param name File name within the work directory.
+   * @param columns Header.
+   * @param values The single row.
+   * @return {string} The path written.
+   */
+  function writeRow(
+      name: string, columns: string[], values: string[] ): string {
+
+    const file = path.join(workDir, name)
+
+    fs.writeFileSync(file, `${columns.join(',')}\n${values.join(',')}\n`, 'utf8')
+
+    return file
+  }
+
+  /**
+   * Difference two detail CSVs and return the single row as a lookup.
+   *
+   * @param older Older snapshot path.
+   * @param newer Newer snapshot path.
+   * @return {(column: string) => string} Cell accessor.
+   */
+  function delta(older: string, newer: string): (column: string) => string {
+    const out = path.join(workDir, 'seam-delta.csv')
+
+    generateDeltaCSV(older, newer, out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+
+    expect(records).toHaveLength(2)
+
+    return (column: string) => records[1][records[0].indexOf(column)]
+  }
+
+  /** A pre-#555/#562 snapshot from a regression child: no writer, no split. */
+  const LEGACY_REGRESSION = [
+    'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
+    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs',
+    'preprocessorVersion', 'originatingSystem',
+  ]
+
+  /** The same vintage from benchmark.cjs: the scraped columns are populated. */
+  const LEGACY_THREE = LEGACY_REGRESSION
+
+  /** A current snapshot. */
+  const CURRENT = [
+    'loadStatus', 'writer', 'uname', 'engine', 'filename', 'schemaVersion',
+    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'parsePlusGeometryMs',
+    'preprocessorVersion', 'originatingSystem',
+  ]
+
+  test('a stage sum is not differenced against a wall clock', () => {
+    // The case that fires on the FIRST bless after #562, on every model.
+    // Old totalTimeMs 5000 is parse+geometry; new totalTimeMs 5400 is the
+    // wall clock, of which 5010 is the same parse+geometry. Subtracting the
+    // raw cells reports +400 and build.yml sorts its regression table by
+    // exactly that number. The honest answer is +10.
+    const cell = delta(
+        writeRow('old.csv', LEGACY_REGRESSION,
+            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'N/A',
+              '1000', '4000', '5000', 'N/A', 'N/A']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
+              '1005', '4005', '5400', '5010', 'N/A', 'N/A']))
+
+    expect(cell('totalTimeMsDelta')).toBe('10')
+    expect(cell('totalTimeMsBasis')).toBe('stageSum')
+
+    // The printed raw values must be the ones actually differenced, or the
+    // row contradicts itself in the release table.
+    expect(cell('engine1TotalTimeMs')).toBe('5000')
+    expect(cell('engine2TotalTimeMs')).toBe('5010')
+  })
+
+  test('two current snapshots difference their wall clocks directly', () => {
+    const cell = delta(
+        writeRow('old.csv', CURRENT,
+            ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
+              '1000', '4000', '5400', '5000', 'N/A', 'N/A']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'ifc-regression', 'x64', 'conway1.2.0-ci', 'mep.ifc', 'N/A',
+              '1000', '4000', '5300', '4900', 'N/A', 'N/A']))
+
+    expect(cell('totalTimeMsDelta')).toBe('-100')
+    expect(cell('totalTimeMsBasis')).toBe('wallClock')
+  })
+
+  test('a legacy three.js-harness snapshot keeps its wall-clock comparison', () => {
+    // The loader path always wrote a real wall clock into totalTimeMs, so
+    // this pair needs NO substitution — and would be actively wrong with
+    // one. It only comes out right because the legacy row's provenance is
+    // recovered from its populated scraped columns.
+    const cell = delta(
+        writeRow('old.csv', LEGACY_THREE,
+            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
+              '1000', '4000', '5400', 'Revit', 'Autodesk']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'loader', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'IFC2X3',
+              '1000', '4000', '5300', 'N/A', 'Revit', 'Autodesk']))
+
+    expect(cell('totalTimeMsDelta')).toBe('-100')
+    expect(cell('totalTimeMsBasis')).toBe('wallClock')
+  })
+
+  test('a three.js wall clock against a pre-#562 stage sum has no answer', () => {
+    // No common quantity exists: a wall clock cannot be recovered from a
+    // pre-#562 regression row, and that row's stage sum has no counterpart
+    // on a three.js row. N/A is the correct output, not a number.
+    const cell = delta(
+        writeRow('old.csv', LEGACY_REGRESSION,
+            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'N/A',
+              '1000', '4000', '5000', 'N/A', 'N/A']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'loader', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'IFC2X3',
+              '1000', '4000', '5400', 'N/A', 'Revit', 'Autodesk']))
+
+    expect(cell('totalTimeMsDelta')).toBe('N/A')
+    expect(cell('totalTimeMsPercentageChange')).toBe('N/A')
+    expect(cell('totalTimeMsBasis')).toBe('N/A')
+  })
+})
+
+describe('legacy provenance is inferred, not assumed comparable', () => {
+
+  /**
+   * Write a legacy (pre-#555) detail CSV whose scraped columns decide which
+   * harness wrote it.
+   *
+   * @param name File name.
+   * @param scraped Values for schemaVersion / preprocessor / originating.
+   * @param geometryMemoryMb The column under test.
+   * @return {string} The path written.
+   */
+  function writeLegacy(
+      name: string, scraped: string, geometryMemoryMb: string ): string {
+
+    const file = path.join(workDir, name)
+
+    fs.writeFileSync(file,
+        'loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,' +
+        'geometryTimeMs,totalTimeMs,geometryMemoryMb,rssMb,' +
+        'preprocessorVersion,originatingSystem\n' +
+        `OK,x64,conway1.0.0-ci,mep.ifc,${scraped},10,20,30,` +
+        `${geometryMemoryMb},400.00,${scraped},${scraped}\n`, 'utf8')
+
+    return file
+  }
+
+  /**
+   * Difference and return a cell accessor.
+   *
+   * @param older Older path.
+   * @param newer Newer path.
+   * @return {(column: string) => string} Cell accessor.
+   */
+  function delta(older: string, newer: string): (column: string) => string {
+    const out = path.join(workDir, 'legacy-delta.csv')
+
+    generateDeltaCSV(older, newer, out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+
+    return (column: string) => records[1][records[0].indexOf(column)]
+  }
+
+  /** A current regression row, for the newer side. */
+  function writeCurrent(name: string, geometryMemoryMb: string): string {
+    const file = path.join(workDir, name)
+
+    fs.writeFileSync(file,
+        'loadStatus,writer,uname,engine,filename,schemaVersion,parseTimeMs,' +
+        'geometryTimeMs,totalTimeMs,parsePlusGeometryMs,geometryMemoryMb,' +
+        'rssMb,preprocessorVersion,originatingSystem\n' +
+        'OK,ifc-regression,x64,conway1.1.0-ci,mep.ifc,N/A,10,20,35,30,' +
+        `${geometryMemoryMb},400.00,N/A,N/A\n`, 'utf8')
+
+    return file
+  }
+
+  test('a populated preprocessorVersion marks a three.js-harness snapshot', () => {
+    // The concrete consequence of getting this wrong: the historical
+    // headless-three snapshots ran at OPTIMAL capture and the regression
+    // child runs at FULL, so 16.80 -> 22.30 would be published as a +5.5 MB
+    // geometry-memory regression when it is the 16.8-vs-22.3 methodology
+    // gap #555 is about.
+    const cell = delta(
+        writeLegacy('three.csv', 'Revit', '16.80'),
+        writeCurrent('current.csv', '22.30'))
+
+    expect(cell('geometryMemoryMbDelta')).toBe('N/A')
+
+    // Harness-dependent too: a GL context and a scene graph on one side.
+    expect(cell('rssMbDelta')).toBe('N/A')
+  })
+
+  test('an all-N/A scraped set marks a regression-child snapshot', () => {
+    // Same capture on both sides, so the geometry payload IS comparable and
+    // withholding it would lose a real signal.
+    const cell = delta(
+        writeLegacy('regression.csv', 'N/A', '20.00'),
+        writeCurrent('current.csv', '22.30'))
+
+    expect(Number(cell('geometryMemoryMbDelta'))).toBeCloseTo(2.3, 5)
+    expect(Number(cell('rssMbDelta'))).toBeCloseTo(0, 5)
+  })
+})
+
+describe('the comparability guard covers the harness columns', () => {
+
+  /**
+   * Difference two single-row snapshots that differ only in writer.
+   *
+   * @param writer1 Older row's writer.
+   * @param writer2 Newer row's writer.
+   * @return {(column: string) => string} Cell accessor.
+   */
+  function acrossWriters(
+      writer1: string, writer2: string ): (column: string) => string {
+
+    const columns = 'loadStatus,writer,uname,engine,filename,schemaVersion,' +
+      'parseTimeMs,geometryTimeMs,totalTimeMs,parsePlusGeometryMs,' +
+      'geometryMemoryMb,peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,' +
+      'heapTotalMb,externalMb,arrayBuffersMb,retainedRssMb,' +
+      'retainedHeapUsedMb,retainedExternalMb,preprocessorVersion,' +
+      'originatingSystem'
+
+    /**
+     * One row with the given writer.
+     *
+     * @param name File name.
+     * @param writer The writer cell.
+     * @param bump Added to every numeric column.
+     * @return {string} Path.
+     */
+    const write = (name: string, writer: string, bump: number) => {
+      const file = path.join(workDir, name)
+      const n = (base: number) => (base + bump).toFixed(2)
+
+      fs.writeFileSync(file,
+          `${columns}\n` +
+          `OK,${writer},x64,conway1.0.0-ci,mep.ifc,N/A,10,20,35,30,` +
+          `${n(20)},${n(100)},${n(400)},${n(410)},${n(200)},${n(220)},` +
+          `${n(50)},${n(48)},${n(300)},${n(9)},${n(46)},N/A,N/A\n`, 'utf8')
+
+      return file
+    }
+
+    const out = path.join(workDir, 'guard-delta.csv')
+
+    generateDeltaCSV(
+        write('g-older.csv', writer1, 0), write('g-newer.csv', writer2, 1), out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+
+    return (column: string) => records[1][records[0].indexOf(column)]
+  }
+
+  const HARNESS_COLUMNS = [
+    'rssMbDelta', 'peakRssMbDelta', 'heapUsedMbDelta', 'heapTotalMbDelta',
+    'externalMbDelta', 'arrayBuffersMbDelta', 'retainedRssMbDelta',
+    'retainedHeapUsedMbDelta', 'retainedExternalMbDelta',
+  ]
+
+  test('every process memory column is withheld across two harnesses', () => {
+    // The snapshot README states the case: a regression child's rssMb
+    // "excludes a GL context and a three.js scene graph". Withholding only
+    // geometryMemoryMb and retention left the rest publishing a harness
+    // difference as a change.
+    const cell = acrossWriters('loader', 'ifc-regression')
+
+    for (const column of HARNESS_COLUMNS) {
+      expect(cell(column)).toBe('N/A')
+    }
+  })
+
+  test('the same harness at a different capture withholds only the payload', () => {
+    // ifc-regression vs ap214-regression: one process shape, two capture
+    // modes. Only the column the capture mode reaches is withheld.
+    const cell = acrossWriters('ap214-regression', 'ifc-regression')
+
+    expect(cell('geometryMemoryMbDelta')).toBe('N/A')
+
+    for (const column of HARNESS_COLUMNS) {
+      expect(Number(cell(column))).toBeCloseTo(1, 5)
+    }
+  })
+
+  test('peakWasmHeapMb survives a capture change, because it is measured to', () => {
+    // Measured, not assumed: MB-Khaya reads peakWasmHeapMb 101.56 MB under
+    // BOTH capture modes, against a geometryMemoryMb of 16.82 vs 22.26. The
+    // linear memory is a grow-only high-water and the temporaries are
+    // allocated either way; FULL only keeps the JS-side handles. Withholding
+    // it would cost a real signal for a difference that does not exist.
+    const cell = acrossWriters('ap214-regression', 'ifc-regression')
+
+    expect(Number(cell('peakWasmHeapMbDelta'))).toBeCloseTo(1, 5)
+  })
+
+  test('one harness and one capture differences everything', () => {
+    const cell = acrossWriters('ifc-regression', 'ifc-regression')
+
+    expect(Number(cell('geometryMemoryMbDelta'))).toBeCloseTo(1, 5)
+
+    for (const column of HARNESS_COLUMNS) {
+      expect(Number(cell(column))).toBeCloseTo(1, 5)
+    }
+  })
+})
+
+describe('benchmark.cjs builds its rows by name (conway#570 review)', () => {
+
+  const benchmarkSource = fs.readFileSync(
+      path.resolve(process.cwd(), 'scripts/benchmark.cjs'), 'utf8')
+
+  test('no row is a positional literal any more', () => {
+    // The failure row was a positional csvRow([...]) of 22 cells. Widening
+    // the header to 24 shifted it silently: uname landed in `writer`, the
+    // encoded model name in `engine`, and `filename` — the delta's join key
+    // — became N/A, so a FAIL row could no longer be matched to the same
+    // model's OK row in another run. That is the second time this exact row
+    // has broken that join.
+    expect(benchmarkSource).not.toMatch(/const failLine = csvRow\(\[/)
+    expect(benchmarkSource).not.toMatch(/const line = csvRow\(\[/)
+  })
+
+  test('both writers go through the named builder', () => {
+    expect(benchmarkSource).toContain('const failLine = detailRow({')
+    expect(benchmarkSource).toContain('const line = detailRow({')
+
+    // And the builder fills anything unsupplied with N/A rather than ''.
+    expect(benchmarkSource)
+        .toMatch(/fields\[column\] !== undefined \? fields\[column\] : 'N\/A'/)
+  })
+
+  test('the failure row still carries the join key', () => {
+    const failRow = /const failLine = detailRow\(\{([^}]*)\}\)/.exec(
+        benchmarkSource)
+
+    expect(failRow).not.toBeNull()
+    expect(failRow![1]).toContain('filename: encodeFileName(displayName)')
+    expect(failRow![1]).toContain("loadStatus: 'FAIL'")
+  })
+})

@@ -18,6 +18,134 @@ function generateDeltaCSV(csvPath1, csvPath2, outputCsvPath, isWebIfc = false) {
 }
 
 /**
+ * What each writer's columns mean, as two independent traits (#555, #570
+ * review).
+ *
+ *   harness — which process the row was measured in, and therefore what
+ *             else was resident. The three.js harness holds a GL context
+ *             and a scene graph the regression children do not, and the
+ *             loader builds a `ConwayGeometry` per load where the children
+ *             initialise once in `main()` (a ~55-60 MB constant, see
+ *             design/new/perf-measurement.md). Every process-level memory
+ *             column is scoped to this.
+ *   capture — `RegressionCaptureState.memoization`, which decides whether
+ *             CSG temporaries are still in `model.geometry` when
+ *             `calculateGeometrySize()` sizes it. Only `geometryMemoryMb`
+ *             is scoped to this.
+ *
+ * Two traits rather than one writer-pair list because that is the shape of
+ * the underlying causes: `ifc-regression` differs from `ap214-regression`
+ * in capture but not harness, and from `loader` in harness but not capture.
+ * A flat list of incomparable pairs would have to restate that product.
+ */
+const WRITER_TRAITS = {
+  'ifc-regression': { harness: 'regression', capture: 'full' },
+  'ap214-regression': { harness: 'regression', capture: 'optimal' },
+  'ifc-cli': { harness: 'cli', capture: 'optimal' },
+  'ap214-cli': { harness: 'cli', capture: 'optimal' },
+  'loader': { harness: 'three', capture: 'optimal' },
+  'ifc-web-ifc-proxy': { harness: 'proxy', capture: 'optimal' },
+  'ap214-web-ifc-proxy': { harness: 'proxy', capture: 'optimal' },
+};
+
+/**
+ * Columns that only mean the same thing within ONE harness.
+ *
+ * The README `bless_perf_snapshot.cjs` ships beside each snapshot states the
+ * case itself: `rssMb` from a regression child "excludes a GL context and a
+ * three.js scene graph". The retention trio carries the loader's per-load
+ * engine on one side and not the other.
+ */
+const HARNESS_DEPENDENT_COLUMNS = new Set([
+  'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
+  'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb', 'retainedExternalMb',
+]);
+
+/**
+ * Columns that only mean the same thing within one memoization capture mode.
+ *
+ * Just the one, and measured rather than assumed: MB-Khaya through a single
+ * extraction reads `geometryMemoryMb` 16.82 MB at OPTIMAL against 22.26 MB
+ * at FULL.
+ *
+ * `peakWasmHeapMb` is deliberately NOT here. The same measurement reads it
+ * at **101.56 MB under both modes** — it is a grow-only high-water of the
+ * linear memory, and the temporaries are allocated either way; FULL only
+ * keeps the JS-side handles. RSS moved 1 MB in 516, which is noise. So the
+ * wasm column is scoped to neither trait, and the capture mode reaches
+ * exactly one column.
+ */
+const CAPTURE_DEPENDENT_COLUMNS = new Set(['geometryMemoryMb']);
+
+/**
+ * Which writer produced a legacy row — one with no `writer` column at all,
+ * i.e. every snapshot blessed before #555.
+ *
+ * Provenance IS recoverable, from the column set rather than from prose:
+ * `bless_perf_snapshot.cjs` hardcodes `N/A` into `schemaVersion`,
+ * `preprocessorVersion` and `originatingSystem` on every row it writes,
+ * because perf.csv does not carry them. `benchmark.cjs` scrapes all three
+ * out of the IFC header. So a file with ANY populated value in those
+ * columns was written by the three.js harness, and one with none was
+ * written by a regression child.
+ *
+ * Decided at FILE level, not per row: a FAIL row from either writer has
+ * them all `N/A`, so a per-row test would classify a failed
+ * three.js-harness row as a regression row. A file with no populated value
+ * anywhere — every model failed — falls through to `regression`, which
+ * costs nothing, since such a file has no timing or memory values to
+ * difference either.
+ *
+ * This is inference, so it is confined to one function, applied only where
+ * the explicit column is absent, and pinned by tests. It never overrides a
+ * stated writer.
+ *
+ * @param {Array<Object>} rows Every row of one file.
+ * @returns {string} A key of WRITER_TRAITS.
+ */
+function inferLegacyWriter(rows) {
+  const scraped = ['schemaVersion', 'preprocessorVersion', 'originatingSystem'];
+
+  for (const row of rows) {
+    for (const column of scraped) {
+      const value = row[column];
+      if (value !== undefined && value !== '' && value !== 'N/A') {
+        return 'loader';
+      }
+    }
+  }
+
+  return 'ifc-regression';
+}
+
+/**
+ * The `writer` a row states, or undefined where it states none.
+ *
+ * @param {Object} entry A row object.
+ * @returns {string | undefined} The writer.
+ */
+function statedWriter(entry) {
+  const writer = entry.writer;
+
+  return writer !== undefined && writer !== '' && writer !== 'N/A' ?
+    writer : undefined;
+}
+
+/**
+ * The traits of the writer behind a row, stated or inferred.
+ *
+ * @param {Object} entry A row object.
+ * @returns {{harness: string, capture: string} | undefined} Traits, or
+ * undefined for a writer this script has never heard of — which is treated
+ * as "cannot tell", not as "comparable".
+ */
+function traitsOf(entry) {
+  const writer = statedWriter(entry) ?? entry.inferredWriter;
+
+  return writer !== undefined ? WRITER_TRAITS[writer] : undefined;
+}
+
+/**
  * Reads a CSV file and returns an array of row-objects keyed by header columns.
  * @param {string} filepath
  * @returns {Array<Object>}
@@ -37,7 +165,7 @@ function readDataFromCsv(filepath) {
 
   const headers = records[0].map((h) => h.trim());
 
-  return records.slice(1).map((row) => {
+  const rows = records.slice(1).map((row) => {
     const rowObj = {};
     headers.forEach((header, index) => {
       // Trim whitespace for each cell
@@ -45,6 +173,19 @@ function readDataFromCsv(filepath) {
     });
     return rowObj;
   });
+
+  // Stamped as a SEPARATE field, never into `writer`: a guess and a
+  // statement should not be indistinguishable downstream, and a future
+  // reader of a delta should be able to tell which one a decision rested on.
+  if (!headers.includes('writer')) {
+    const inferred = inferLegacyWriter(rows);
+
+    for (const row of rows) {
+      row.inferredWriter = inferred;
+    }
+  }
+
+  return rows;
 }
 
 /**
@@ -66,6 +207,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'engine2TotalTimeMs',
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
+        'totalTimeMsBasis',
         'geometryMemoryMbDelta',
         'peakWasmHeapMbDelta',
         'rssMbDelta',
@@ -93,6 +235,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'geometryTimeMsDelta',
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
+        'totalTimeMsBasis',
         'geometryMemoryMbDelta',
         'peakWasmHeapMbDelta',
         'rssMbDelta',
@@ -235,6 +378,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
       const entry2 = lookupByFilename(index2, filename);
 
       if (entry2) {
+        const totals = comparableTotals(entry1, entry2);
+
         deltas.push({
           loadStatus1: entry1.loadStatus,
           loadStatus2: entry2.loadStatus,
@@ -242,28 +387,30 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           engine1: entry1.engine,
           engine2: entry2.engine,
           filename,
-          engine1TotalTimeMs: entry1.totalTimeMs,
-          engine2TotalTimeMs: entry2.totalTimeMs,
-          totalTimeMsDelta: computeDelta('totalTimeMs', entry2, entry1),
-          totalTimeMsPercentageChange: computePercentageChange(
-            entry1.totalTimeMs,
-            entry2.totalTimeMs
-          ),
+          // The values actually differenced, which are not always the raw
+          // `totalTimeMs` cells — see comparableTotals. Reported rather than
+          // the raw pair so the printed row is self-consistent: build.yml
+          // prints these three columns side by side.
+          engine1TotalTimeMs: totals.older,
+          engine2TotalTimeMs: totals.newer,
+          totalTimeMsDelta: totalsDelta(totals),
+          totalTimeMsPercentageChange: totalsPercentage(totals),
+          totalTimeMsBasis: totals.basis,
           geometryMemoryMbDelta: computePipelineDelta('geometryMemoryMb', entry2, entry1),
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
           // the payload figure excludes. Also absent before #552.
           peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
-          rssMbDelta: computeDelta('rssMb', entry2, entry1),
+          rssMbDelta: computePipelineDelta('rssMb', entry2, entry1),
           // Absent from every snapshot committed before #552; computeDelta
           // reports that as N/A rather than differencing against zero.
-          peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
-          heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
-          heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
+          peakRssMbDelta: computePipelineDelta('peakRssMb', entry2, entry1),
+          heapUsedMbDelta: computePipelineDelta('heapUsedMb', entry2, entry1),
+          heapTotalMbDelta: computePipelineDelta('heapTotalMb', entry2, entry1),
           // Also absent before #552. arrayBuffersMb is a subset of externalMb,
           // so the two deltas are not independent — read them together.
-          externalMbDelta: computeDelta('externalMb', entry2, entry1),
-          arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
+          externalMbDelta: computePipelineDelta('externalMb', entry2, entry1),
+          arrayBuffersMbDelta: computePipelineDelta('arrayBuffersMb', entry2, entry1),
           // A delta OF a delta: each side is already retained-minus-baseline
           // for its own run, so this is "did the cycle get leakier". Absent
           // from every snapshot before #554, and N/A in any run whose
@@ -288,6 +435,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           engine2TotalTimeMs: 'N/A',
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
+          totalTimeMsBasis: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -318,6 +466,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           engine2TotalTimeMs: entry2.totalTimeMs,
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
+          totalTimeMsBasis: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -339,11 +488,9 @@ function computeDeltas(data1, data2, isWebIfc = false) {
       const entry2 = lookupByFilename(index2, filename);
 
       if (entry2) {
-        const totalTimeDelta = computeDelta('totalTimeMs', entry2, entry1);
-        const totalTimePercentageChange = computePercentageChange(
-          entry1.totalTimeMs,
-          entry2.totalTimeMs
-        );
+        const totals = comparableTotals(entry1, entry2);
+        const totalTimeDelta = totalsDelta(totals);
+        const totalTimePercentageChange = totalsPercentage(totals);
 
         deltas.push({
           timestamp: entry1.timestamp,
@@ -354,27 +501,29 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           engine2: entry2.engine,
           filename,
           schemaVersion: entry1.schemaVersion,
-          engine1TotalTimeMs: entry1.totalTimeMs,
-          engine2TotalTimeMs: entry2.totalTimeMs,
+          // See comparableTotals: not always the raw `totalTimeMs` cells.
+          engine1TotalTimeMs: totals.older,
+          engine2TotalTimeMs: totals.newer,
           parseTimeMsDelta: computeDelta('parseTimeMs', entry2, entry1),
           geometryTimeMsDelta: computeDelta('geometryTimeMs', entry2, entry1),
           totalTimeMsDelta: totalTimeDelta,
           totalTimeMsPercentageChange: totalTimePercentageChange,
+          totalTimeMsBasis: totals.basis,
           geometryMemoryMbDelta: computePipelineDelta('geometryMemoryMb', entry2, entry1),
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
           // the payload figure excludes. Also absent before #552.
           peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
-          rssMbDelta: computeDelta('rssMb', entry2, entry1),
+          rssMbDelta: computePipelineDelta('rssMb', entry2, entry1),
           // Absent from every snapshot committed before #552; computeDelta
           // reports that as N/A rather than differencing against zero.
-          peakRssMbDelta: computeDelta('peakRssMb', entry2, entry1),
-          heapUsedMbDelta: computeDelta('heapUsedMb', entry2, entry1),
-          heapTotalMbDelta: computeDelta('heapTotalMb', entry2, entry1),
+          peakRssMbDelta: computePipelineDelta('peakRssMb', entry2, entry1),
+          heapUsedMbDelta: computePipelineDelta('heapUsedMb', entry2, entry1),
+          heapTotalMbDelta: computePipelineDelta('heapTotalMb', entry2, entry1),
           // Also absent before #552. arrayBuffersMb is a subset of externalMb,
           // so the two deltas are not independent — read them together.
-          externalMbDelta: computeDelta('externalMb', entry2, entry1),
-          arrayBuffersMbDelta: computeDelta('arrayBuffersMb', entry2, entry1),
+          externalMbDelta: computePipelineDelta('externalMb', entry2, entry1),
+          arrayBuffersMbDelta: computePipelineDelta('arrayBuffersMb', entry2, entry1),
           // A delta OF a delta: each side is already retained-minus-baseline
           // for its own run, so this is "did the cycle get leakier". Absent
           // from every snapshot before #554, and N/A in any run whose
@@ -402,6 +551,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           geometryTimeMsDelta: 'N/A',
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
+          totalTimeMsBasis: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -435,6 +585,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           geometryTimeMsDelta: 'N/A',
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
+          totalTimeMsBasis: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -486,39 +637,19 @@ function computeDelta(field, entry2, entry1) {
 }
 
 /**
- * Columns whose MEANING depends on which pipeline measured the row, so that
- * differencing two writers reports methodology rather than change (#555).
+ * computeDelta, refusing the difference when the two rows were measured
+ * somewhere the column does not mean the same thing (#555, #570 review).
  *
- * `geometryMemoryMb` is the case that named the issue: the IFC regression
- * child runs at FULL memoization capture, which stops `deleteTemporaries()`
- * and leaves every CSG intermediate in the map `calculateGeometrySize()`
- * sums, so MB-Khaya reads 22.3 MB there against the CLI's 16.8 — a ~30% gap
- * with no change behind it. The retention trio has the same disease from a
- * different cause: the loader path brings up a `ConwayGeometry` per load and
- * the regression children initialise once in `main()`, a ~55-60 MB constant
- * one side carries and the other does not (see design/new/perf-measurement.md).
+ * The trait tables above carry the reasoning; this is only the lookup. A
+ * column is withheld when it is scoped to a trait, both sides resolve to a
+ * writer, and the two disagree on that trait.
  *
- * The timing columns are deliberately NOT here. They are broadly comparable
- * across pipelines on the same runner class, and a cross-version timing delta
- * is already documented as a lead rather than a measurement.
- */
-const PIPELINE_DEPENDENT_COLUMNS = new Set([
-  'geometryMemoryMb',
-  'retainedRssMb',
-  'retainedHeapUsedMb',
-  'retainedExternalMb',
-]);
-
-/**
- * computeDelta, refusing the difference when the two rows came from
- * different pipelines (#555).
- *
- * An unknown writer on either side is treated as comparable, NOT as a
- * mismatch: every snapshot blessed before #555 has no `writer` column at all,
- * and failing those deltas closed would delete the entire history this file
- * exists to produce. The guard fires only where both sides state a writer and
- * the two disagree — the case where we positively know the numbers are not
- * the same quantity.
+ * **An unresolvable writer withholds nothing.** Legacy rows are inferred
+ * (see inferLegacyWriter) so this is rarer than it was, but a writer this
+ * script has never heard of — a newer conway writing into an older delta
+ * script — leaves the traits undefined, and blanking on that would turn
+ * every column of every such delta into N/A. The guard fires only where we
+ * positively know two numbers are not the same quantity.
  *
  * @param {string} field
  * @param {Object} entry2
@@ -526,22 +657,134 @@ const PIPELINE_DEPENDENT_COLUMNS = new Set([
  * @returns {number | string} The difference, or 'N/A'.
  */
 function computePipelineDelta(field, entry2, entry1) {
-  const writer1 = entry1.writer;
-  const writer2 = entry2.writer;
+  const traits1 = traitsOf(entry1);
+  const traits2 = traitsOf(entry2);
 
-  const stated = (writer) =>
-    writer !== undefined && writer !== '' && writer !== 'N/A';
+  if (traits1 !== undefined && traits2 !== undefined) {
+    if (HARNESS_DEPENDENT_COLUMNS.has(field) &&
+        traits1.harness !== traits2.harness) {
+      return 'N/A';
+    }
 
-  if (
-    PIPELINE_DEPENDENT_COLUMNS.has(field) &&
-    stated(writer1) &&
-    stated(writer2) &&
-    writer1 !== writer2
-  ) {
-    return 'N/A';
+    if (CAPTURE_DEPENDENT_COLUMNS.has(field) &&
+        traits1.capture !== traits2.capture) {
+      return 'N/A';
+    }
   }
 
   return computeDelta(field, entry2, entry1);
+}
+
+/**
+ * What a row's `totalTimeMs` actually measures (#562 §1, #570 review).
+ *
+ * Before #562 the regression children wrote `parseTimeMs + geometryTimeMs`
+ * into that column — an identity by construction — while the loader path
+ * wrote a real file-read-through-teardown wall clock into the same name.
+ * From #562 both write the wall clock and the sum moves to
+ * `parsePlusGeometryMs`.
+ *
+ * So a delta spanning that boundary subtracts two different quantities and
+ * reports the difference in methodology as a slowdown. It is not a corner
+ * case: it fires on the FIRST bless after #562, on every model, and
+ * `.github/workflows/build.yml` sorts its regression table by exactly that
+ * column.
+ *
+ * @param {Object} entry A row object.
+ * @returns {string} 'wallClock' or 'stageSum'.
+ */
+function totalTimeBasis(entry) {
+  // The column only exists on a writer that has already split the two, so
+  // its presence is direct evidence. Checked before the traits, so a row
+  // states its own basis wherever it can.
+  if (parseValue(entry.parsePlusGeometryMs) !== null) {
+    return 'wallClock';
+  }
+
+  // No split column: the three.js harness was always a wall clock (the
+  // loader's allTimeStart -> allTimeEnd), a regression child was always the
+  // stage sum. An unknown writer is treated as a regression child, which is
+  // what every pre-#555 blessed snapshot lacking the scraped columns is.
+  const traits = traitsOf(entry);
+
+  return traits !== undefined && traits.harness === 'three' ?
+    'wallClock' : 'stageSum';
+}
+
+/**
+ * The pair of total-time values that are actually comparable between two
+ * rows, and which quantity they are.
+ *
+ * Where the two rows disagree on basis, this falls back to the STAGE SUM,
+ * because that is the quantity both sides can express: a post-#562 row
+ * carries it in `parsePlusGeometryMs` and a pre-#562 regression row carries
+ * it in `totalTimeMs`. Preferred over blanking the column, which would cost
+ * the release table its headline number for exactly one release — the one
+ * spanning the change, where a reader most wants to see that nothing moved.
+ *
+ * A wall clock cannot be recovered from a pre-#562 regression row at all,
+ * so a three.js-harness row against such a row has no common quantity.
+ *
+ * @param {Object} entry1 Older row.
+ * @param {Object} entry2 Newer row.
+ * @returns {{older: string, newer: string, basis: string}} The values to
+ * difference and what they are; `basis` is 'N/A' when there is no common
+ * quantity.
+ */
+function comparableTotals(entry1, entry2) {
+  const basis1 = totalTimeBasis(entry1);
+  const basis2 = totalTimeBasis(entry2);
+
+  if (basis1 === basis2) {
+    return {
+      older: entry1.totalTimeMs,
+      newer: entry2.totalTimeMs,
+      basis: basis1,
+    };
+  }
+
+  /**
+   * A row's stage sum, wherever it holds one.
+   *
+   * @param {Object} entry The row.
+   * @returns {string | undefined} The value, or undefined.
+   */
+  const stageSum = (entry) => (totalTimeBasis(entry) === 'stageSum' ?
+    entry.totalTimeMs : entry.parsePlusGeometryMs);
+
+  const older = stageSum(entry1);
+  const newer = stageSum(entry2);
+
+  if (parseValue(older) !== null && parseValue(newer) !== null) {
+    return { older, newer, basis: 'stageSum' };
+  }
+
+  return { older: 'N/A', newer: 'N/A', basis: 'N/A' };
+}
+
+/**
+ * The delta of a comparable-total pair.
+ *
+ * @param {{older: string, newer: string, basis: string}} totals From
+ * comparableTotals.
+ * @returns {number | string} The difference, or 'N/A'.
+ */
+function totalsDelta(totals) {
+  return totals.basis === 'N/A' ?
+    'N/A' :
+    computeDelta('value', { value: totals.newer }, { value: totals.older });
+}
+
+/**
+ * The percentage change of a comparable-total pair.
+ *
+ * @param {{older: string, newer: string, basis: string}} totals From
+ * comparableTotals.
+ * @returns {string} The percentage, or 'N/A'.
+ */
+function totalsPercentage(totals) {
+  return totals.basis === 'N/A' ?
+    'N/A' : computePercentageChange(totals.older, totals.newer);
 }
 
 /**
