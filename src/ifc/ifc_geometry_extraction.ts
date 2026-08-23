@@ -7562,12 +7562,17 @@ export class IfcGeometryExtraction {
    * review). An `IfcTypeObject` carrying `RepresentationMaps` measures
    * 1,607 records of closure on its own.
    *
-   * Products are identified from the typeID column, never by materialising
-   * the entry — the same test, on the same column,
-   * {@link aggregateTargetLocalIDs} already uses to decide which products
-   * the first pass defers. An entry that resolves to nothing is dropped,
-   * which is what the pre-#561 prefetch did with it too (the stepper then
-   * throws on reaching it, permissively).
+   * Classification goes through {@link relatedProductByExpressID_}, the same
+   * call the pass itself makes — one test rather than two that have to
+   * agree. A typeID-column test does NOT agree: a STEP complex instance is
+   * recorded as type 0 (`EXTERNALMAPPINGCONTAINER`) while the pass finds the
+   * `IfcProduct` among its `multiMapping` variants, and the product would
+   * then be extracted without ever being paged (conway#566 review).
+   *
+   * Note {@link aggregateTargetLocalIDs} still reads the column, and has the
+   * same blind spot — a complex product is not deferred, so it is extracted
+   * by both passes. That is pre-existing and independent of paging: it costs
+   * a duplicate extraction, not a non-resident read.
    *
    * Seam for {@link AggregateExtractPager}, which lives in this module.
    *
@@ -7585,21 +7590,26 @@ export class IfcGeometryExtraction {
       return void 0
     }
 
-    const productTypes = new Set< number >( IfcProduct.query )
     const productLocalIDs: number[] = []
 
     for ( const relatedExpressID of relatedExpressIDs ) {
 
-      const relatedLocalID = this.model.resolveExpressID( relatedExpressID )
+      let relatedProduct: IfcProduct | undefined
 
-      if ( relatedLocalID === void 0 ) {
-        continue
+      try {
+        relatedProduct = this.relatedProductByExpressID_( relatedExpressID )
+      } catch {
+
+        // The pass throws on this entry and abandons the relationship there
+        // (permissively, or out through the pump), so nothing past it is
+        // ever extracted and nothing past it needs paging. Stopping here
+        // rather than skipping keeps the list exactly the prefix the pass
+        // will reach.
+        break
       }
 
-      const typeID = this.model.typeIDOf( relatedLocalID )
-
-      if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-        productLocalIDs.push( relatedLocalID )
+      if ( relatedProduct !== void 0 ) {
+        productLocalIDs.push( relatedProduct.localID )
       }
     }
 
@@ -7795,6 +7805,58 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * How the rel-aggregates pass classifies ONE `RelatedObjects` entry: the
+   * product it will extract, or undefined for an entry it walks past.
+   *
+   * **The single definition of "is this related object a product".** Both
+   * the pass itself ({@link extractRelAggregateGeometryIncremental}) and the
+   * prefetch that has to page ahead of it
+   * ({@link relatedAggregateProductLocalIDs}) go through here, so they
+   * cannot disagree — which they did, twice, when the prefetch derived its
+   * own answer from the typeID column. A STEP complex/external-mapping
+   * instance is the case that breaks a column test: the parser records the
+   * container as type 0 (`EXTERNALMAPPINGCONTAINER`, see step_parser.ts)
+   * while `getTypedElementByExpressID` searches the entry's `multiMapping`
+   * variants and hands back the `IfcProduct` among them. On a windowed
+   * source a prefetch that missed one would leave the pass reading a
+   * non-resident record, and its permissive catch abandons the REST of the
+   * relationship — geometry lost with a log line, not an error
+   * (conway#566 review).
+   *
+   * Materialising the entry is what makes the two agree, and it is cheap:
+   * `getTypedElementByExpressID` builds from the columns and reads no
+   * source bytes. Measured by sweeping this exact call over every record of
+   * SKYLARK250 (7,818,778), SEESTRASSE (294,704) and the in-repo corpus
+   * behind a deliberately exhausted 4 KiB x 4 window — 0 throws, 0 store
+   * bytes. The pass materialises every entry anyway; the prefetch just
+   * reaches them first.
+   *
+   * @param relatedExpressID The RelatedObjects entry to classify.
+   * @throws {Error} When the reference resolves to nothing, or to something
+   * that is not an `IfcObjectDefinition` — what the generated getter throws
+   * for the same entry, and what the pass has always thrown here.
+   * @return {IfcProduct | undefined} The product to extract, or undefined
+   * for a related object that is not one.
+   */
+  private relatedProductByExpressID_(
+      relatedExpressID: number ): IfcProduct | undefined {
+
+    const relatedObject =
+      this.model.getTypedElementByExpressID( relatedExpressID, IfcObjectDefinition )
+
+    if ( relatedObject === void 0 ) {
+
+      // What the getter does with the same entry: extractBufferElement
+      // returns undefined for a reference that resolves to nothing (or to
+      // something that is not an IfcObjectDefinition) and the getter throws
+      // this exact message.
+      throw new Error( 'Value in STEP was incorrectly typed' )
+    }
+
+    return relatedObject instanceof IfcProduct ? relatedObject : void 0
+  }
+
+  /**
    * Extract one IfcRelAggregates' related products with the relating
    * object's ("master") rel-voids — the shared per-item body of the
    * whole-model walk's rel-aggregates loop and
@@ -7889,23 +7951,15 @@ export class IfcGeometryExtraction {
 
         for ( const relatedExpressID of relatedExpressIDs ) {
 
-          const relatedObject =
-            this.model.getTypedElementByExpressID(
-                relatedExpressID, IfcObjectDefinition )
+          // Shared with the prefetch, so the two cannot disagree about which
+          // entries this loop extracts — see relatedProductByExpressID_. It
+          // throws for an entry the getter would reject, and the catch below
+          // then skips the whole relationship, permissively, as it always has.
+          const relatedProduct = this.relatedProductByExpressID_( relatedExpressID )
 
-          if ( relatedObject === void 0 ) {
+          if ( relatedProduct !== void 0 ) {
 
-            // What the getter does with the same entry: extractBufferElement
-            // returns undefined for a reference that resolves to nothing (or
-            // to something that is not an IfcObjectDefinition) and the getter
-            // throws this exact message. The catch below then skips the whole
-            // relationship, permissively, as it always has.
-            throw new Error( 'Value in STEP was incorrectly typed' )
-          }
-
-          if ( relatedObject instanceof IfcProduct ) {
-
-            this.extractProductGeometry( relatedObject, masterRelVoids )
+            this.extractProductGeometry( relatedProduct, masterRelVoids )
 
             yield ++extractedCount
           }

@@ -27,7 +27,7 @@ import StepModelBase from '../../step/step_model_base'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import Logger from '../../logging/logger'
-import { IfcRelAggregates } from '../../ifc/ifc4_gen'
+import { IfcObjectDefinition, IfcProduct, IfcRelAggregates } from '../../ifc/ifc4_gen'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 
@@ -43,6 +43,15 @@ const RELATED_PRODUCTS = 12
  * after the last product.
  */
 const NON_PRODUCT_EXPRESS_IDS = [ 150, 160, 161, 170, 151 ]
+
+/** The complex instance in data/aggregate_complex_related.ifc. */
+const COMPLEX_PRODUCT_EXPRESS_ID = 300
+
+/** The plain IfcGroup in the same fixture. */
+const NON_PRODUCT_EXPRESS_ID = 400
+
+/** conway's type ID for a STEP complex/external-mapping container. */
+const EXTERNAL_MAPPING_CONTAINER_TYPE = 0
 
 let api: IfcAPI
 let buffer: Uint8Array
@@ -357,4 +366,78 @@ describe( 'wave-paged aggregate prefetch (conway#561 §5)', () => {
     expect( classic.length ).toBe( RELATED_PRODUCTS )
     expect( byExpressID( pumped ) ).toEqual( byExpressID( classic ) )
   }, 240000 )
+  test( 'a complex related object is classified as the pass classifies it',
+      async () => {
+
+        // conway#566 review, round 3. The prefetch used to answer "is this
+        // related object a product" from the typeID column, independently of
+        // the answer the aggregates pass reaches. A STEP complex
+        // (external-mapping) instance is where the two part company: the
+        // parser records the container as type 0
+        // (EXTERNALMAPPINGCONTAINER) and keeps the variants in
+        // `multiMapping`, so the column says "not a product" while
+        // getTypedElementByExpressID hands back the IfcProduct among them.
+        //
+        // The consequence was not a slow load but a silent one: on a
+        // windowed source the pass would read that product without it ever
+        // having been paged, StepBufferNotResidentError would land in the
+        // pass's own permissive catch, and the REST of the relationship
+        // would be abandoned with a log line. Measured on this shape before
+        // the fix — the windowed run failed with "STEP source range ... is
+        // not resident" where a classic open did not.
+        //
+        // Asserted on the classification rather than on meshes because
+        // conway cannot currently extract a complex product's geometry on
+        // EITHER path (both fail identically, which is the point: the
+        // paging no longer diverges from classic). Local IDs, not meshes,
+        // are what the prefetch is answerable for.
+        const bytes = new Uint8Array(
+            fs.readFileSync( 'data/aggregate_complex_related.ifc' ) )
+        const store = new InMemoryStepByteStore( bytes )
+        const open = await openStreamedIfcModelFromStore( store )
+
+        expect( open.model ).toBeDefined()
+
+        const model = open.model as IfcStepModel
+        const geometry = new ConwayGeometry()
+
+        expect( await geometry.initialize() ).toBe( true )
+
+        const extraction = new IfcGeometryExtraction( geometry, model )
+        const relAggregates = [ ...model.types( IfcRelAggregates ) ]
+
+        expect( relAggregates.length ).toBe( 1 )
+
+        // The relationship's own record, which the list is read off — the
+        // base prefetch's job in production. Nothing else is paged here, so
+        // classifying the related objects has to work with only this
+        // resident, which is the property being asserted.
+        await model.ensureResidentByLocalID( relAggregates[ 0 ].localID )
+
+        const complexLocalID = model.resolveExpressID( COMPLEX_PRODUCT_EXPRESS_ID )
+
+        expect( complexLocalID ).toBeDefined()
+
+        // A probe that never fires looks exactly like a clean model: the
+        // fixture only means anything while the parser still records the
+        // container under type 0 and the pass still sees a product.
+        expect( model.typeIDOf( complexLocalID! ) )
+            .toBe( EXTERNAL_MAPPING_CONTAINER_TYPE )
+        expect( model.getTypedElementByLocalID( complexLocalID!, IfcObjectDefinition ) )
+            .toBeInstanceOf( IfcProduct )
+
+        const products =
+          extraction.relatedAggregateProductLocalIDs( relAggregates[ 0 ] )
+
+        expect( products ).toBeDefined()
+
+        // Pre-fix the column test omits it and this list is [ #200 ] alone.
+        expect( products ).toContain( complexLocalID )
+
+        // And the IfcGroup is still out, so this is not "page everything".
+        const groupLocalID = model.resolveExpressID( NON_PRODUCT_EXPRESS_ID )
+
+        expect( groupLocalID ).toBeDefined()
+        expect( products ).not.toContain( groupLocalID )
+      }, 240000 )
 } )
