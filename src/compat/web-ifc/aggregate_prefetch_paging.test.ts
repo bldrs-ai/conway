@@ -39,7 +39,8 @@ const RELATED_PRODUCTS = 12
 /**
  * The fixture's non-product related objects: one mid-list, a run of three
  * (the last of which is an IfcFurnitureType whose RepresentationMaps reach
- * 1,602 records), and one after the last product.
+ * 394 records — an order of magnitude more than a wave of parts), and one
+ * after the last product.
  */
 const NON_PRODUCT_EXPRESS_IDS = [ 150, 160, 161, 170, 151 ]
 
@@ -282,7 +283,7 @@ describe( 'wave-paged aggregate prefetch (conway#561 §5)', () => {
     // them costs nothing. Deciding an entry is not a product reads no
     // source bytes — only extractProductGeometry reads a record — so paging
     // one is pure waste, and unbounded waste: #170's RepresentationMaps
-    // alone reach 1,602 records, which one wave would have had to span to
+    // alone reach 394 records, which one wave would have had to span to
     // reach the next part (conway#566 review).
     expect( nonProducts.length ).toBe( NON_PRODUCT_EXPRESS_IDS.length )
 
