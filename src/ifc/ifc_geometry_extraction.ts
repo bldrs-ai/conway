@@ -7819,7 +7819,29 @@ export class IfcGeometryExtraction {
         await this.model.ensureResidentByLocalID( localID )
       }
 
-      const related = relAggregate.RelatedObjects
+      let related: typeof relAggregate.RelatedObjects
+
+      try {
+        related = relAggregate.RelatedObjects
+      } catch ( error ) {
+
+        if ( error instanceof StepBufferNotResidentError ) {
+          throw error
+        }
+
+        // The getter fallback's half of the same split the raw scan makes
+        // (see relatedObjectExpressIDs_), and reachable only through it:
+        // this path exists BECAUSE the scan returned undefined, and a
+        // malformed field is now one of the ways it does. There is nothing
+        // to pin — the pass reads the same field, gets the same throw, and
+        // abandons the relationship inside its permissive catch, extracting
+        // nothing that would need to be resident.
+        //
+        // Letting it escape failed the whole load: this runs on the
+        // deferred pump's paging path, so the first ExtractGeometryBatch-
+        // Async rejected (conway#569 review).
+        return
+      }
 
       if ( related !== null && related !== void 0 ) {
 
@@ -7908,9 +7930,10 @@ export class IfcGeometryExtraction {
    * @param relAggregate The relationship to read.
    * @return {number[] | undefined} The related objects' express IDs in
    * record order, or undefined when the list holds an entry that is not a
-   * `#N` reference — an inline entity, `$`, or junk. Only the generated
-   * getter can resolve (or reject) those, so the caller falls back to it
-   * rather than guessing.
+   * `#N` reference — an inline entity, `$`, junk, or a field that is not a
+   * list at all. Only the generated getter can resolve (or reject) those,
+   * so the caller falls back to it rather than guessing. A non-residency
+   * failure propagates instead: see the catch.
    */
   private relatedObjectExpressIDs_(
       relAggregate: IfcRelAggregates ): number[] | undefined {
@@ -7919,21 +7942,47 @@ export class IfcGeometryExtraction {
 
     let allReferences = true
 
-    relAggregate.forEachReferenceInField(
-        REL_AGGREGATES_RELATED_OFFSET,
-        REL_AGGREGATES_RELATED_BASE,
-        REL_AGGREGATES_RELATED_DEPTH,
-        ( expressID ) => {
+    try {
 
-          if ( expressID === void 0 ) {
-            allReferences = false
-            return false
-          }
+      relAggregate.forEachReferenceInField(
+          REL_AGGREGATES_RELATED_OFFSET,
+          REL_AGGREGATES_RELATED_BASE,
+          REL_AGGREGATES_RELATED_DEPTH,
+          ( expressID ) => {
 
-          expressIDs.push( expressID )
+            if ( expressID === void 0 ) {
+              allReferences = false
+              return false
+            }
 
-          return true
-        } )
+            expressIDs.push( expressID )
+
+            return true
+          } )
+
+    } catch ( error ) {
+
+      // A non-residency failure is a DEFECT, never data: every caller has
+      // either pinned this record or is reading a resident model, so
+      // swallowing it would turn a paging bug into silently missing
+      // geometry. Same split addAggregateTargets_ makes.
+      if ( error instanceof StepBufferNotResidentError ) {
+        throw error
+      }
+
+      // Everything else is a malformed field — a scalar where the aggregate
+      // list belongs, a truncated record — and undefined is already exactly
+      // what this returns for it (conway#569 review): the entry is one only
+      // the generated getter can adjudicate. Every caller already has that
+      // branch, and each does the right thing with it: the pass falls back
+      // to RelatedObjects and rejects it inside its own permissive catch,
+      // AggregateExtractPager.begin pages the relationship whole, and the
+      // progress count reads 0 — which is what the pass will extract.
+      //
+      // Letting it escape instead FAILED THE WHOLE LOAD, because two of
+      // those three callers are on the deferred-worklist build path.
+      return void 0
+    }
 
     return allReferences ? expressIDs : void 0
   }

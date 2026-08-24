@@ -23,11 +23,15 @@ import { beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
-import { IfcProduct } from '../../ifc/ifc4_gen'
+import { IfcProduct, IfcRelAggregates } from '../../ifc/ifc4_gen'
 import IfcStepModel from '../../ifc/ifc_step_model'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
-import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
+import {
+  InMemoryStepByteStore,
+  StepBufferNotResidentError,
+  WindowedStepBufferProvider,
+} from '../../step/step_buffer_provider'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import { IfcAPI } from './ifc_api'
 import Logger from '../../logging/logger'
@@ -40,6 +44,12 @@ const RELATED_PRODUCTS = 12
 /** Relationships in the same fixture. */
 const RELATIONSHIPS = 1
 
+/** Window for the non-residency case: small enough to evict. */
+const CRAMPED_CHUNK = 4 * 1024
+
+/** Chunks the cramped window keeps. */
+const CRAMPED_RESIDENT_CHUNKS = 2
+
 /**
  * Batch size for the progress pumps: one budget unit per call, so every
  * call is one reported progress event and the run-length assertions below
@@ -49,8 +59,16 @@ const ONE_PER_CALL = 1
 
 type ProgressEvent = { phase: string, completed: number, total?: number }
 
-/** One drained pump run: its geometry events and its `remaining` series. */
-type PumpRun = { geometry: ProgressEvent[], remaining: number[] }
+/**
+ * One drained pump run: its geometry events, its `remaining` series, and
+ * how many meshes the model held at the end.
+ *
+ * The mesh count is what separates "the load survived" from "the load
+ * survived by extracting nothing" — the failure mode a blanket catch over
+ * a paging error would produce.
+ */
+type PumpRun =
+  { geometry: ProgressEvent[], remaining: number[], meshes: number }
 
 let api: IfcAPI
 let buffer: Uint8Array
@@ -132,6 +150,8 @@ async function pumpResident( source: Uint8Array ): Promise< PumpRun > {
   const events: ProgressEvent[] = []
   const remainingSeries: number[] = []
 
+  let meshes = 0
+
   const deferredID = await api.OpenModelStreamed( source, {
     ...SETTINGS,
     DEFER_GEOMETRY: true,
@@ -157,6 +177,8 @@ async function pumpResident( source: Uint8Array ): Promise< PumpRun > {
       remainingSeries.push( remaining )
     }
 
+    meshes = api.LoadAllGeometry( deferredID ).size()
+
   } finally {
     api.CloseModel( deferredID )
   }
@@ -165,7 +187,7 @@ async function pumpResident( source: Uint8Array ): Promise< PumpRun > {
 
   expect( geometry.length ).toBeGreaterThan( 0 )
 
-  return { geometry, remaining: remainingSeries }
+  return { geometry, remaining: remainingSeries, meshes }
 }
 
 /**
@@ -180,6 +202,8 @@ async function pumpWindowed( source: Uint8Array ): Promise< PumpRun > {
 
   const events: ProgressEvent[] = []
   const remainingSeries: number[] = []
+
+  let meshes = 0
 
   const deferredID = await api.OpenModelStream(
       new InMemoryStepByteStore( source ), {
@@ -213,6 +237,8 @@ async function pumpWindowed( source: Uint8Array ): Promise< PumpRun > {
       remainingSeries.push( remaining )
     }
 
+    meshes = api.LoadAllGeometry( deferredID ).size()
+
   } finally {
     api.CloseModel( deferredID )
   }
@@ -221,7 +247,7 @@ async function pumpWindowed( source: Uint8Array ): Promise< PumpRun > {
 
   expect( geometry.length ).toBeGreaterThan( 0 )
 
-  return { geometry, remaining: remainingSeries }
+  return { geometry, remaining: remainingSeries, meshes }
 }
 
 beforeAll( async () => {
@@ -485,5 +511,131 @@ describe( 'the denominator stops where the pass stops (conway#569 review)', () =
         .toBe( expectedTruncatedTotal() )
     expect( resident.geometry[ resident.geometry.length - 1 ].completed )
         .toBe( expectedTruncatedTotal() )
+  }, 240000 )
+} )
+
+describe( 'a malformed relationship does not fail the load (conway#569 review)', () => {
+
+  /**
+   * The fixture's one relationship with `RelatedObjects` replaced by a bare
+   * reference where the STEP aggregate belongs — `#100,#1000)` for
+   * `#100,(#1000,...))`.
+   *
+   * Round 2's `#9999` splice exercises a bad ENTRY inside a well-formed
+   * list. This is the other failure: the FIELD is not a list, so
+   * `stepExtractArrayBegin` throws before any entry is seen and every read
+   * of that field fails, `forEachReferenceInField` and the generated
+   * `RelatedObjects` getter alike.
+   *
+   * @return {Uint8Array} The spliced source.
+   */
+  function scalarRelatedObjects(): Uint8Array {
+
+    const source = new TextDecoder().decode( buffer )
+
+    expect( source.includes( HEALTHY_FIELD ) ).toBe( true )
+
+    return new TextEncoder().encode(
+        source.replace( HEALTHY_FIELD, SCALAR_FIELD ) )
+  }
+
+  /** The relationship's RelatingObject and RelatedObjects, as authored. */
+  const HEALTHY_FIELD =
+    '#100,(#1000,#1020,#1040,#1060,#1080,#1100,#150,#1120,#1140,#160,#161,' +
+    '#170,#1160,#1180,#1200,#1220,#151))'
+
+  /** The same two fields with a scalar where the aggregate belongs. */
+  const SCALAR_FIELD = '#100,#1000)'
+
+  test( 'both pumps drain, and the products fall back to the first pass',
+      async () => {
+
+        const source = scalarRelatedObjects()
+
+        const errors = jest.spyOn( Logger, 'error' ).mockImplementation( () => {} )
+
+        let resident: PumpRun
+        let windowed: PumpRun
+        let logged: number
+
+        try {
+
+          // The P1 itself: before the fix these rejected — the resident pump
+          // out of adoptAggregateStepPrefix_ while building worklists, the
+          // windowed one out of the paged walk, and (pre-existing) out of
+          // AggregateExtractPager.begin. A progress counter failed the load.
+          resident = await pumpResident( source )
+          windowed = await pumpWindowed( source )
+          logged = errors.mock.calls.length
+
+        } finally {
+          errors.mockRestore()
+        }
+
+        // Once per open: the aggregates pass reading the same field, getting
+        // the same throw, and abandoning the relationship in its permissive
+        // catch. Tolerated identically everywhere is the property.
+        expect( logged ).toBe( 2 )
+
+        // Nothing was quietly dropped. The target scan tolerates the field
+        // the same way, so it defers none of the twelve and they are
+        // extracted by the per-product pass instead — which is why the
+        // denominator is the healthy one rather than a truncated one, and
+        // why the mesh count matches a healthy load.
+        expect( windowed.geometry[ 0 ].total ).toBe( productCount + RELATIONSHIPS )
+        expect( resident.geometry[ 0 ].total ).toBe( productCount + RELATIONSHIPS )
+
+        expect( windowed.geometry[ windowed.geometry.length - 1 ].completed )
+            .toBe( productCount + RELATIONSHIPS )
+        expect( resident.geometry[ resident.geometry.length - 1 ].completed )
+            .toBe( productCount + RELATIONSHIPS )
+
+        const healthy = await pumpResident( buffer )
+
+        expect( healthy.meshes ).toBeGreaterThan( 0 )
+        expect( resident.meshes ).toBe( healthy.meshes )
+        expect( windowed.meshes ).toBe( healthy.meshes )
+      }, 240000 )
+
+  test( 'a non-resident read still propagates', async () => {
+
+    // The other half of the split, and the reason the catch tests the error
+    // type instead of swallowing everything: a blanket catch would report
+    // this as a malformed field, the pager would page nothing, and the
+    // products would go missing silently — a worse defect than the one the
+    // catch fixes. Regressing that turns this test red.
+    const store = new InMemoryStepByteStore( buffer )
+
+    const open = await openStreamedIfcModelFromStore( store, { pool: CRAMPED_CHUNK } )
+
+    expect( open.model ).toBeDefined()
+
+    // Deliberately NOT the opened model: a store-backed open takes the
+    // provider's defaults and this fixture fits inside one chunk, so
+    // nothing can ever be non-resident and the assertion would be vacuous.
+    // Two 4 KiB chunks is a window narrow enough to mean it.
+    const cramped = new IfcStepModel(
+        void 0,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        open.columns as any,
+        new WindowedStepBufferProvider( store, CRAMPED_CHUNK, CRAMPED_RESIDENT_CHUNKS ) )
+
+    const geometry = new ConwayGeometry()
+
+    expect( await geometry.initialize() ).toBe( true )
+
+    const extraction = new IfcGeometryExtraction( geometry, cramped )
+
+    let relAggregate: IfcRelAggregates | undefined
+
+    for ( const candidate of cramped.types( IfcRelAggregates ) ) {
+      relAggregate = candidate
+      break
+    }
+
+    expect( relAggregate ).toBeDefined()
+
+    expect( () => extraction.relatedAggregateProductLocalIDs( relAggregate! ) )
+        .toThrow( StepBufferNotResidentError )
   }, 240000 )
 } )
