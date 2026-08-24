@@ -17,6 +17,7 @@ performance investigation needs already exists here.
 | `setup-emsdk.sh`, `build-codex.sh`, `build-gha.sh` | Toolchain and build drivers |
 | `code-gen.cjs`, `gen-web-ifc-types.cjs` | Schema code generation |
 | `extract-wasm-dependencies.cjs`, `fetch-prebuilt-wasm.cjs`, `fd-patch.cjs` | Build plumbing |
+| `check-compiled-fresh.cjs` | Commit-gate guard: names any TypeScript source with no output under `compiled/`. Jest runs over `compiled/`, so an uncompiled test is absent from the run rather than failing it |
 | `firestore_*.py`, `upload_to_firestore.py`, `updateVersion.mjs` | Release and corpus-data plumbing |
 
 Scripts here are not covered by `yarn lint`, which runs over `src` only.

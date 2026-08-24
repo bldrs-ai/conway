@@ -6743,10 +6743,9 @@ export class IfcGeometryExtraction {
     }
 
     const targets = new Set<number>()
-    const productTypes = new Set< number >( IfcProduct.query )
 
     for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
-      this.addAggregateTargets_( relAggregate, targets, productTypes )
+      this.addAggregateTargets_( relAggregate, targets )
     }
 
     this.aggregateTargetLocalIDs_ = targets
@@ -6795,7 +6794,6 @@ export class IfcGeometryExtraction {
     }
 
     const targets = new Set<number>()
-    const productTypes = new Set< number >( IfcProduct.query )
     const wave = Math.max( 1, Math.floor( waveSize ) )
 
     let pending: IfcRelAggregates[] = []
@@ -6815,7 +6813,7 @@ export class IfcGeometryExtraction {
             ( localID ) => this.model.ensureResidentByLocalID( localID ) ) )
 
         for ( const relAggregate of pending ) {
-          this.addAggregateTargets_( relAggregate, targets, productTypes, true )
+          this.addAggregateTargets_( relAggregate, targets, true )
         }
 
       } finally {
@@ -6850,13 +6848,42 @@ export class IfcGeometryExtraction {
    *
    * Shared by the sync and paged walks so there is a single definition of
    * what an aggregate target is. Reads only this relationship's own record:
-   * children resolve through the express map and the typeID column, so the
-   * scan never hydrates a child product (doing so paged most of the file
-   * during demand prep).
+   * the entries are scanned as `#N` references off the record's own bytes,
+   * never through `relAggregate.RelatedObjects` — that generated getter
+   * memoizes the materialised array onto the relationship, which is the
+   * 2.7 GB retention of conway#549 §4.1 and, on a windowed source, pages
+   * most of the file during demand prep.
+   *
+   * Classification goes through {@link relatedProductByExpressID_}, the
+   * same call the aggregates pass makes, so deferral and extraction cannot
+   * disagree about which entries are products. The typeID column cannot
+   * answer this: a STEP complex instance is recorded under type 0
+   * (`EXTERNALMAPPINGCONTAINER`) while `getTypedElementByExpressID` finds
+   * the `IfcProduct` among its `multiMapping` variants, so a column test
+   * left a complex product out of the target set and both passes then
+   * extracted it — one product, two scene instances (conway#566 left this
+   * one in place deliberately; it is milder than the paging divergence
+   * that PR fixed, because it costs a duplicate extraction rather than a
+   * non-resident read).
+   *
+   * Materialising to classify costs no source bytes and no residency:
+   * `getTypedElementByExpressID` builds its descriptor from the columns
+   * (`makeDescriptor`) and the entity constructor has an empty body, so
+   * nothing here can throw `StepBufferNotResidentError` on a windowed
+   * source. What it does add is one cached descriptor per related object
+   * — ~117 B (conway#549 §4.3) against a set the aggregates pass
+   * materialises in full anyway, so ~233 KB on SKYLARK250's 1,992
+   * children. It does NOT touch a child's closure: the B-rep subtree is
+   * only reachable through the generated getters, which this never calls.
+   *
+   * A throw from the classification abandons the rest of the
+   * relationship, which is what the pass does with the same entry — its
+   * permissive catch drops the remaining products too. Recording targets
+   * past that point would defer products the pass will never reach, i.e.
+   * extract them in neither pass.
    *
    * @param relAggregate The relationship to scan.
    * @param targets Accumulator.
-   * @param productTypes The IfcProduct type set.
    * @param strictResidency When set, a non-resident read propagates instead
    * of being tolerated — for the paged walk, which has already made the
    * record resident and so can only reach that error through a defect.
@@ -6864,7 +6891,6 @@ export class IfcGeometryExtraction {
   private addAggregateTargets_(
       relAggregate: IfcRelAggregates,
       targets: Set<number>,
-      productTypes: Set<number>,
       strictResidency: boolean = false ): void {
 
     try {
@@ -6879,16 +6905,10 @@ export class IfcGeometryExtraction {
               return true
             }
 
-            const relatedLocalID = this.model.resolveExpressID( expressID )
+            const relatedProduct = this.relatedProductByExpressID_( expressID )
 
-            if ( relatedLocalID === void 0 ) {
-              return true
-            }
-
-            const typeID = this.model.typeIDOf( relatedLocalID )
-
-            if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-              targets.add( relatedLocalID )
+            if ( relatedProduct !== void 0 ) {
+              targets.add( relatedProduct.localID )
             }
 
             return true
@@ -7569,10 +7589,10 @@ export class IfcGeometryExtraction {
    * `IfcProduct` among its `multiMapping` variants, and the product would
    * then be extracted without ever being paged (conway#566 review).
    *
-   * Note {@link aggregateTargetLocalIDs} still reads the column, and has the
-   * same blind spot — a complex product is not deferred, so it is extracted
-   * by both passes. That is pre-existing and independent of paging: it costs
-   * a duplicate extraction, not a non-resident read.
+   * {@link aggregateTargetLocalIDs} classifies through the same call for
+   * the same reason — a column test there left a complex product out of
+   * the deferral set, so both passes extracted it. See
+   * {@link addAggregateTargets_}.
    *
    * Seam for {@link AggregateExtractPager}, which lives in this module.
    *

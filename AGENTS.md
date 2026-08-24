@@ -6,8 +6,18 @@ consumed by [Share](https://github.com/bldrs-ai/Share).
 
 ## Build and test
 
-Do not try and run `yarn setup` again. It has already been run in the
-environment setup.
+Do not try and run `yarn setup` again **in the container's main clone** —
+it has already been run there by the environment setup. A **worktree you
+create yourself inherits none of that state**, so it needs setup run in
+it: `yarn submodule-update && yarn extract-wasm-dependencies` at minimum,
+or `yarn setup` if you want a full build. The symptom is
+`yarn build-codex-MT` failing on missing `glm` / `tinynurbs` (nested
+submodules under `dependencies/conway-geom/external/`, which is why the
+init is `--recursive`) or on the unextracted
+`dependencies/conway-geom/dependencies/wasm/dependencies.zip`. Two agents
+have read the "already been run" sentence in a worktree and hand-rolled
+those steps as if they were undocumented; they are not, they are `setup`'s
+own named pieces.
 
 To build, run `yarn build-codex-MT`. To test, run `yarn test`. If only
 making changes to the TypeScript code in conway, you can run `yarn
@@ -16,6 +26,16 @@ full `yarn build-codex-MT`.
 
 Run `chmod +x` on `scripts/build-codex.sh` before trying to call `yarn
 build-codex-MT`.
+
+`yarn precommit` — what the husky hook runs — rebuilds before it lints and
+tests, and that ordering is load-bearing rather than tidy. Jest runs over
+`compiled/`, so on a tree whose build is older than its sources the run
+does not fail, it silently omits whatever was never compiled: merging #566
+(which adds a 443-line test file) reported an unchanged
+*102 suites / 698 tests* until `yarn build-incremental` produced the true
+*103 / 701*. `yarn check-compiled-fresh` is the second opinion — it names
+any source with no output under `compiled/` and exits non-zero, so the
+failure is loud even if the rebuild is skipped or its buildinfo lies.
 
 `yarn build-codex-MT` takes roughly 90 seconds. When iterating on
 conway-geom, stage a set of edits and evaluate them in one build rather
@@ -150,6 +170,49 @@ Reviewers hold the same bar, in this order: verify claims against the
 diff (not the description), against repo history, then against the
 actual failure path — and grade findings by evidence, not
 plausibility.
+
+### Traps that make a check look green when it never ran
+
+Same shape as the stale `compiled/` and the worktree `yarn setup` above,
+and worth naming together: none of them announces itself, and each turns
+"I did not observe a problem" into "there is no problem".
+
+- **Reverting for rubric 6: commit or stash FIRST. That is what makes it
+  safe — not which command you revert with.** Both of the obvious ones
+  have bitten us in one day. `git checkout <sha> -- <path>` stages the
+  file it restores, so the next commit carries the revert silently; that
+  backed an entire feature out of `ifc_geometry_extraction.ts`, and the
+  pre-commit gate passed because `compiled/` had been built from the
+  correct working tree. `git restore --worktree --source=<sha> --
+  <path>` does not stage — but it overwrites the working tree
+  unconditionally, and run over files still holding uncommitted review
+  fixes it destroyed them. Note the second incident came from an agent
+  following this very note when it said only "prefer `restore`": advice
+  that looks like it makes you safe is the recurring shape here, not a
+  one-off. The sequence:
+
+  1. commit (or `git stash`) everything you are not reverting,
+  2. `git restore --worktree --source=<sha> -- <path>`,
+  3. `git diff --stat` — did you revert what you meant to, and nothing
+     else,
+  4. **undo the revert first: `git restore --worktree --source=HEAD --
+     <path>`.** Step 2 left that path modified against `HEAD`, so `git
+     stash pop` — the obvious way to resume — refuses outright with
+     *"Your local changes to the following files would be overwritten by
+     merge"*, keeps the stash, and leaves the reverted content sitting in
+     your tree, one `git commit -a` away from the first trap above. Ran
+     end to end: without this line the pop aborts; with it the pop
+     applies and `git stash list` comes back empty. The same command is
+     what restores the tree if you committed at step 1 instead.
+  5. `git stash pop` (or carry on from the commit), re-run the gate,
+     and `git show --stat` before pushing.
+- **Unauthenticated `curl` against `api.github.com` fails silently
+  here.** The proxy answers `403 GitHub access is not enabled for this
+  session`, and the usual `|| true` turns that into an empty result set
+  — so "no events" reads exactly like "still running" and a polling loop
+  runs to its timeout while CI has been green for twenty minutes. Poll
+  through the authenticated MCP tools (`pull_request_read` with
+  `get_check_runs`, `actions_get`), never `curl`.
 
 ## Debugging a bad model
 
