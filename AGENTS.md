@@ -195,8 +195,17 @@ and worth naming together: none of them announces itself, and each turns
   2. `git restore --worktree --source=<sha> -- <path>`,
   3. `git diff --stat` — did you revert what you meant to, and nothing
      else,
-  4. restore your working state, re-run the gate, and `git show --stat`
-     before pushing.
+  4. **undo the revert first: `git restore --worktree --source=HEAD --
+     <path>`.** Step 2 left that path modified against `HEAD`, so `git
+     stash pop` — the obvious way to resume — refuses outright with
+     *"Your local changes to the following files would be overwritten by
+     merge"*, keeps the stash, and leaves the reverted content sitting in
+     your tree, one `git commit -a` away from the first trap above. Ran
+     end to end: without this line the pop aborts; with it the pop
+     applies and `git stash list` comes back empty. The same command is
+     what restores the tree if you committed at step 1 instead.
+  5. `git stash pop` (or carry on from the commit), re-run the gate,
+     and `git show --stat` before pushing.
 - **Unauthenticated `curl` against `api.github.com` fails silently
   here.** The proxy answers `403 GitHub access is not enabled for this
   session`, and the usual `|| true` turns that into an empty result set
