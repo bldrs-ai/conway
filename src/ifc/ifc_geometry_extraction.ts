@@ -6750,7 +6750,6 @@ export class IfcGeometryExtraction {
     }
 
     const targets = new Set<number>()
-    const productTypes = new Set< number >( IfcProduct.query )
 
     // No counts collected here, deliberately (conway#569 review). This walk
     // also serves the WHOLE-MODEL extraction, which never consumes them, and
@@ -6761,7 +6760,7 @@ export class IfcGeometryExtraction {
     // aggregateRelatedProductCount, never from this scan's typeID test,
     // which classifies differently from the pass in both directions.
     for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
-      this.addAggregateTargets_( relAggregate, targets, productTypes )
+      this.addAggregateTargets_( relAggregate, targets )
     }
 
     this.aggregateTargetLocalIDs_ = targets
@@ -6801,12 +6800,10 @@ export class IfcGeometryExtraction {
    * is built exactly once and there is nothing to hand it to twice.
    *
    * **The same number the resident pump derives for itself**, from the same
-   * call: {@link aggregateRelatedProductCount}, which classifies through
-   * the aggregates pass's own path rather than the typeID column this
-   * walk's target scan reads. Approximate in one direction only — a
-   * `RelatedObjects` list that needs the generated getter counts 0 — and
-   * the pump's own drain condition, not this number, decides when the pass
-   * is finished.
+   * call: {@link aggregateRelatedProductCount}. Approximate in one
+   * direction only — a `RelatedObjects` list that needs the generated
+   * getter counts 0 — and the pump's own drain condition, not this number,
+   * decides when the pass is finished.
    *
    * @return {Map<number, number> | undefined} Counts keyed by relationship
    * localID, or undefined where no paged walk ran. The caller owns it.
@@ -6861,7 +6858,6 @@ export class IfcGeometryExtraction {
     }
 
     const targets = new Set<number>()
-    const productTypes = new Set< number >( IfcProduct.query )
     const counts = new Map< number, number >()
     const wave = Math.max( 1, Math.floor( waveSize ) )
 
@@ -6883,14 +6879,15 @@ export class IfcGeometryExtraction {
 
         for ( const relAggregate of pending ) {
 
-          this.addAggregateTargets_( relAggregate, targets, productTypes, true )
+          this.addAggregateTargets_( relAggregate, targets, true )
 
-          // The count comes from the PASS's classification, not from the
-          // scan above — see aggregateRelatedProductCount. Free here for
-          // the same reason the scan is: this relationship's record is
-          // resident and pinned for this wave, and classifying its entries
-          // reads columns rather than source bytes. The one place a
-          // windowed model can afford to ask (conway#569 review).
+          // Counted separately from the scan above even though #568 has
+          // since put both on relatedProductByExpressID_: `targets` is a
+          // Set over the whole model, so a product under two relationships
+          // collapses there while costing the pass a step in each. Free
+          // here — this record is resident and pinned for the wave, and
+          // classifying its entries reads columns rather than source bytes
+          // (conway#569 review).
           counts.set(
               relAggregate.localID,
               this.aggregateRelatedProductCount( relAggregate ) )
@@ -6929,18 +6926,49 @@ export class IfcGeometryExtraction {
    *
    * Shared by the sync and paged walks so there is a single definition of
    * what an aggregate target is. Reads only this relationship's own record:
-   * children resolve through the express map and the typeID column, so the
-   * scan never hydrates a child product (doing so paged most of the file
-   * during demand prep).
+   * the entries are scanned as `#N` references off the record's own bytes,
+   * never through `relAggregate.RelatedObjects` — that generated getter
+   * memoizes the materialised array onto the relationship, which is the
+   * 2.7 GB retention of conway#549 §4.1 and, on a windowed source, pages
+   * most of the file during demand prep.
+   *
+   * Classification goes through {@link relatedProductByExpressID_}, the
+   * same call the aggregates pass makes, so deferral and extraction cannot
+   * disagree about which entries are products. The typeID column cannot
+   * answer this: a STEP complex instance is recorded under type 0
+   * (`EXTERNALMAPPINGCONTAINER`) while `getTypedElementByExpressID` finds
+   * the `IfcProduct` among its `multiMapping` variants, so a column test
+   * left a complex product out of the target set and both passes then
+   * extracted it — one product, two scene instances (conway#566 left this
+   * one in place deliberately; it is milder than the paging divergence
+   * that PR fixed, because it costs a duplicate extraction rather than a
+   * non-resident read).
+   *
+   * Materialising to classify costs no source bytes and no residency:
+   * `getTypedElementByExpressID` builds its descriptor from the columns
+   * (`makeDescriptor`) and the entity constructor has an empty body, so
+   * nothing here can throw `StepBufferNotResidentError` on a windowed
+   * source. What it does add is one cached descriptor per related object
+   * — ~117 B (conway#549 §4.3) against a set the aggregates pass
+   * materialises in full anyway, so ~233 KB on SKYLARK250's 1,992
+   * children. It does NOT touch a child's closure: the B-rep subtree is
+   * only reachable through the generated getters, which this never calls.
+   *
+   * A throw from the classification abandons the rest of the
+   * relationship, which is what the pass does with the same entry — its
+   * permissive catch drops the remaining products too. Recording targets
+   * past that point would defer products the pass will never reach, i.e.
+   * extract them in neither pass.
    *
    * Deliberately NOT the place the progress denominator is counted, even
-   * though the entries pass through here for free: this scan classifies by
-   * the typeID column, and the aggregates pass does not (see
-   * {@link aggregateRelatedProductCount}).
+   * though the entries pass through here for free and, since conway#568,
+   * through the same classification: `targets` is a Set over the WHOLE
+   * model, so a product reached through two relationships collapses into
+   * one entry here while costing the pass a step in each. See
+   * {@link aggregateRelatedProductCount}.
    *
    * @param relAggregate The relationship to scan.
    * @param targets Accumulator.
-   * @param productTypes The IfcProduct type set.
    * @param strictResidency When set, a non-resident read propagates instead
    * of being tolerated — for the paged walk, which has already made the
    * record resident and so can only reach that error through a defect.
@@ -6948,7 +6976,6 @@ export class IfcGeometryExtraction {
   private addAggregateTargets_(
       relAggregate: IfcRelAggregates,
       targets: Set<number>,
-      productTypes: Set<number>,
       strictResidency: boolean = false ): void {
 
     try {
@@ -6963,16 +6990,10 @@ export class IfcGeometryExtraction {
               return true
             }
 
-            const relatedLocalID = this.model.resolveExpressID( expressID )
+            const relatedProduct = this.relatedProductByExpressID_( expressID )
 
-            if ( relatedLocalID === void 0 ) {
-              return true
-            }
-
-            const typeID = this.model.typeIDOf( relatedLocalID )
-
-            if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-              targets.add( relatedLocalID )
+            if ( relatedProduct !== void 0 ) {
+              targets.add( relatedProduct.localID )
             }
 
             return true
@@ -7653,10 +7674,10 @@ export class IfcGeometryExtraction {
    * `IfcProduct` among its `multiMapping` variants, and the product would
    * then be extracted without ever being paged (conway#566 review).
    *
-   * Note {@link aggregateTargetLocalIDs} still reads the column, and has the
-   * same blind spot — a complex product is not deferred, so it is extracted
-   * by both passes. That is pre-existing and independent of paging: it costs
-   * a duplicate extraction, not a non-resident read.
+   * {@link aggregateTargetLocalIDs} classifies through the same call for
+   * the same reason — a column test there left a complex product out of
+   * the deferral set, so both passes extracted it. See
+   * {@link addAggregateTargets_}.
    *
    * Seam for {@link AggregateExtractPager}, which lives in this module.
    *
@@ -7708,24 +7729,25 @@ export class IfcGeometryExtraction {
    * per-relationship term of the demand pumps' progress denominator
    * (conway#565).
    *
-   * **Classified through the pass's own path** —
+   * **Derived through the pass's own path** —
    * {@link relatedAggregateProductLocalIDs} and so
-   * {@link relatedProductByExpressID_} — and deliberately not through the
-   * typeID column {@link addAggregateTargets_} reads, even where that scan
-   * has the entries in hand for free. The two disagree in both directions,
-   * and a denominator built on the column was wrong on each:
+   * {@link relatedProductByExpressID_} — rather than counted off the
+   * target scan, which has the same entries in hand for free.
    *
-   * - An entry the classification throws on — a reference that resolves to
-   *   nothing, or to something that is not an `IfcObjectDefinition` — ENDS
-   *   the relationship. The pass's permissive catch abandons every product
-   *   after it, so a column scan that skipped the bad entry and kept
-   *   counting put work in the denominator that would never run, and the
-   *   bar then jumped forward by the whole abandoned tail when the
-   *   relationship terminated (conway#569 review). On SKYLARK's shape —
-   *   one relationship over ~1,960 products — that jump is the entire bar.
-   * - A STEP complex instance is recorded under type 0
-   *   (`EXTERNALMAPPINGCONTAINER`) while the pass finds the `IfcProduct`
-   *   among its `multiMapping` variants, so the column under-counts it.
+   * The boundary is why. An entry the classification throws on — a
+   * reference that resolves to nothing, or to something that is not an
+   * `IfcObjectDefinition` — ENDS the relationship: the pass's permissive
+   * catch abandons every product after it. A count that skipped the bad
+   * entry and kept going put work in the denominator that would never run,
+   * and the bar then jumped the whole abandoned tail when the relationship
+   * terminated (conway#569 review). On SKYLARK's shape — one relationship
+   * over ~1,960 products — that jump is the entire bar.
+   * {@link relatedAggregateProductLocalIDs} stops where the pass stops;
+   * {@link addAggregateTargets_}, whose Set collapses a product shared by
+   * two relationships, could not carry the number anyway.
+   *
+   * It is still only a PREDICTION of where the pass stops — see the
+   * `TODO(conway#574)` in `IfcApiProxyIfc.demandProgress_`.
    *
    * Costs no source bytes beyond the relationship's own record:
    * `getTypedElementByExpressID` builds its descriptor from the columns

@@ -250,6 +250,33 @@ async function pumpWindowed( source: Uint8Array ): Promise< PumpRun > {
   return { geometry, remaining: remainingSeries, meshes }
 }
 
+/**
+ * Products the target walk defers to the aggregates pass for `source`.
+ *
+ * A plain resident parse, which is the walk both pumps' worklists are
+ * partitioned by. Measured rather than assumed because how a MALFORMED
+ * relationship splits is precisely what conway#568 changed.
+ *
+ * @param source The IFC bytes.
+ * @return {Promise<number>} Size of the deferral set.
+ */
+async function deferredTargetCount( source: Uint8Array ): Promise< number > {
+
+  const parser = IfcStepParser.Instance
+  const parsing = new ParsingBuffer( source )
+
+  parser.parseHeader( parsing )
+
+  const model = parser.parseDataToModel( parsing )[ 1 ] as IfcStepModel
+
+  const geometry = new ConwayGeometry()
+
+  expect( await geometry.initialize() ).toBe( true )
+
+  return new IfcGeometryExtraction( geometry, model )
+      .aggregateTargetLocalIDs().size
+}
+
 beforeAll( async () => {
   api = new IfcAPI()
   await api.Init()
@@ -405,10 +432,14 @@ describe( 'the denominator stops where the pass stops (conway#569 review)', () =
    * `relatedProductByExpressID_` throws the same
    * "Value in STEP was incorrectly typed" the generated getter would. The
    * permissive catch in the aggregates pass then abandons the REST of the
-   * relationship, so the nine products after the bad entry are extracted by
-   * neither pass: they are still deferred (the target walk classifies by
-   * the typeID column, which skips a dangling reference and keeps going),
-   * and the aggregates pass never reaches them.
+   * relationship, so it extracts three products and stops.
+   *
+   * The nine behind the bad entry are not lost: since conway#568 the
+   * target walk classifies through the same call and stops at the same
+   * entry, so it defers only the three and the per-product pass takes the
+   * rest. Which is why the denominator below is derived from the deferral
+   * set rather than assuming all twelve are deferred — the two passes
+   * partition the products differently here than on a healthy model.
    *
    * The mutation is done here rather than committed as a second `data/`
    * fixture so the diff against the healthy run is one visible line.
@@ -439,23 +470,28 @@ describe( 'the denominator stops where the pass stops (conway#569 review)', () =
   const REACHABLE_PRODUCTS = 3
 
   /**
-   * What the aggregates pass will actually cost on the spliced fixture:
-   * three related products it extracts, then the `next()` that returns
-   * `done` after the catch has abandoned the relationship.
+   * What the two passes will actually cost on the spliced fixture: the
+   * products the aggregates pass does not take, plus the three related
+   * products it reaches, plus the `next()` that returns `done` after the
+   * catch has abandoned the relationship.
    *
-   * The other nine related products are still deferred out of the
-   * per-product worklist, so they are subtracted from it exactly as in the
-   * healthy run — the pass simply never reaches them. The denominator's job
-   * is to describe the work that runs, not the work that should have.
+   * `deferred` is MEASURED rather than assumed. How the target walk splits
+   * this fixture is exactly what conway#568 changed, and the assertion here
+   * is about the aggregates term — that it counts the three products the
+   * pass reaches and not the twelve the list names. Hard-coding the split
+   * would make this test fail on a change that does not touch what it is
+   * testing.
    *
+   * @param deferred Products the target walk keeps for the aggregates pass.
    * @return {number} The expected geometry-phase denominator.
    */
-  const expectedTruncatedTotal = () =>
-    ( productCount - RELATED_PRODUCTS ) + REACHABLE_PRODUCTS + RELATIONSHIPS
+  const expectedTruncatedTotal = ( deferred: number ) =>
+    ( productCount - deferred ) + REACHABLE_PRODUCTS + RELATIONSHIPS
 
   test( 'a bad reference truncates the count on both pumps', async () => {
 
     const source = malformedSource()
+    const deferred = await deferredTargetCount( source )
 
     // The pass logs the abandoned relationship once per open. Diverted
     // rather than left on the console, and asserted: it is the evidence
@@ -489,12 +525,13 @@ describe( 'the denominator stops where the pass stops (conway#569 review)', () =
     // which classifies through the pass's own call and stops where the pass
     // stops. The two agreeing is the assertion, and they agree because they
     // are now the same call.
-    expect( windowed.geometry[ 0 ].total ).toBe( expectedTruncatedTotal() )
-    expect( resident.geometry[ 0 ].total ).toBe( expectedTruncatedTotal() )
+    expect( windowed.geometry[ 0 ].total ).toBe( expectedTruncatedTotal( deferred ) )
+    expect( resident.geometry[ 0 ].total ).toBe( expectedTruncatedTotal( deferred ) )
 
-    // A real truncation, not the healthy denominator by coincidence.
-    expect( expectedTruncatedTotal() )
-        .toBeLessThan( productCount + RELATIONSHIPS )
+    // A real truncation: the aggregates term costs the three products the
+    // pass reaches, not the twelve the list names.
+    expect( expectedTruncatedTotal( deferred ) ).toBeLessThan(
+        ( productCount - deferred ) + RELATED_PRODUCTS + RELATIONSHIPS )
 
     // What the over-count looked like from outside: `remaining` walks down
     // through the three reachable products one unit per call and then drops
@@ -508,9 +545,9 @@ describe( 'the denominator stops where the pass stops (conway#569 review)', () =
     // healthy cases pin, restated here because a truncated denominator is
     // only right if the pass fills it.
     expect( windowed.geometry[ windowed.geometry.length - 1 ].completed )
-        .toBe( expectedTruncatedTotal() )
+        .toBe( expectedTruncatedTotal( deferred ) )
     expect( resident.geometry[ resident.geometry.length - 1 ].completed )
-        .toBe( expectedTruncatedTotal() )
+        .toBe( expectedTruncatedTotal( deferred ) )
   }, 240000 )
 } )
 

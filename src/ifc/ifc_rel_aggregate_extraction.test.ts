@@ -1,11 +1,12 @@
 import fs from 'fs'
-import { beforeAll, describe, expect, test } from '@jest/globals'
+import { beforeAll, describe, expect, jest, test } from '@jest/globals'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { IfcGeometryExtraction } from './ifc_geometry_extraction'
 import IfcStepModel from './ifc_step_model'
 import IfcStepParser from './ifc_step_parser'
-import { IfcProduct, IfcRelAggregates } from './ifc4_gen'
+import Logger from '../logging/logger'
+import { IfcObjectDefinition, IfcProduct, IfcRelAggregates } from './ifc4_gen'
 
 
 const conwayGeometry = new ConwayGeometry()
@@ -19,6 +20,19 @@ const AGGREGATE_FIXTURES = [
   'data/index.ifc',
   'data/aggregate_master_voids.ifc',
 ]
+
+/** The STEP complex instance in data/aggregate_complex_related.ifc. */
+const COMPLEX_PRODUCT_EXPRESS_ID = 300
+
+/** The plain IfcBuildingElementPart in the same relationship. */
+const PLAIN_PRODUCT_EXPRESS_ID = 200
+
+/** The IfcGroup in the same relationship — a related object, not a product. */
+const NON_PRODUCT_EXPRESS_ID = 400
+
+/** conway's type ID for a STEP complex/external-mapping container. */
+// eslint-disable-next-line no-magic-numbers
+const EXTERNAL_MAPPING_CONTAINER_TYPE = 0
 
 /**
  * Parse a fixture into a fresh model.
@@ -157,5 +171,115 @@ describe( 'rel-aggregates extraction (conway#549)', () => {
 
           expect( checked ).toBeGreaterThan( 0 )
         }
+      }, TEST_TIMEOUT_MS )
+
+  test( 'extracts a complex related product exactly once, from the aggregates pass',
+      () => {
+
+        // conway#566 unified the pager's product classification onto
+        // relatedProductByExpressID_ but left aggregateTargetLocalIDs
+        // reading the raw typeID column. A STEP complex
+        // (external-mapping) instance is where the column and the pass
+        // part company: the parser records the CONTAINER under type 0
+        // (EXTERNALMAPPINGCONTAINER) and keeps the entity variants in
+        // `multiMapping`, so the column says "not a product" while
+        // getTypedElementByExpressID hands back the IfcProduct among
+        // them.
+        //
+        // The consequence is milder than the paging divergence #566
+        // fixed, and it is the reason this was left out of that scope: a
+        // complex product is simply not deferred, so the product pass
+        // extracts it AND the aggregates pass re-extracts it — one
+        // product, two scene instances, the duplicate-draw class
+        // aggregateTargetLocalIDs exists to prevent.
+        //
+        // Counted per product rather than asserted on meshes because
+        // conway cannot currently build a complex product's geometry on
+        // either path (both fail identically); which pass reaches it, and
+        // how many times, is what the deferral set is answerable for.
+        const model = parseFixtureModel( 'data/aggregate_complex_related.ifc' )
+
+        const complexLocalID = model.resolveExpressID( COMPLEX_PRODUCT_EXPRESS_ID )
+        const plainLocalID = model.resolveExpressID( PLAIN_PRODUCT_EXPRESS_ID )
+        const groupLocalID = model.resolveExpressID( NON_PRODUCT_EXPRESS_ID )
+
+        expect( complexLocalID ).toBeDefined()
+        expect( plainLocalID ).toBeDefined()
+        expect( groupLocalID ).toBeDefined()
+
+        // A probe that never fires looks exactly like a clean model: the
+        // fixture only means anything while the parser still records the
+        // container under type 0 and the typed lookup still finds a
+        // product among its variants.
+        expect( model.typeIDOf( complexLocalID! ) )
+            .toBe( EXTERNAL_MAPPING_CONTAINER_TYPE )
+        expect( model.getTypedElementByLocalID( complexLocalID!, IfcObjectDefinition ) )
+            .toBeInstanceOf( IfcProduct )
+
+        const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+
+        // Pre-fix this set is [ #200 ] alone — the complex product is not
+        // deferred, so the product loop does not skip it.
+        const targets = extraction.aggregateTargetLocalIDs()
+
+        expect( [ ...targets ].sort() )
+            .toEqual( [ plainLocalID, complexLocalID ].sort() )
+        expect( targets ).not.toContain( groupLocalID )
+
+        // Count every product the walk extracts, both passes. Wrapping the
+        // shared per-product body is the only seam that sees both.
+        const extracted: number[] = []
+        const extractProductGeometry =
+          extraction.extractProductGeometry.bind( extraction )
+
+        extraction.extractProductGeometry = (
+            product: IfcProduct,
+            precomputedRelVoids?: Parameters<
+              IfcGeometryExtraction[ 'extractProductGeometry' ] >[ 1 ] ) => {
+
+          extracted.push( product.localID )
+
+          extractProductGeometry( product, precomputedRelVoids )
+        }
+
+        // Diverted and asserted rather than silenced: conway cannot build
+        // a complex product's geometry, so the aggregates pass throws into
+        // its own permissive catch on #300 and logs once. That is the
+        // pre-existing limitation this test deliberately does not depend
+        // on — but an unexpected SECOND relationship failure would
+        // otherwise hide here, and the log is the only place it surfaces.
+        const errors = jest.spyOn( Logger, 'error' ).mockImplementation( () => {} )
+
+        let logged: unknown[][]
+
+        try {
+          extraction.extractIFCGeometryData()
+        } finally {
+          // Snapshot before restoring: mockRestore() resets the recorded
+          // calls, so asserting on `errors` afterwards passes vacuously.
+          logged = errors.mock.calls.map( ( call ) => [ ...call ] )
+
+          errors.mockRestore()
+        }
+
+        expect( logged.length ).toBe( 1 )
+        expect( logged[ 0 ][ 0 ] ).toContain( 'Error processing relAggregate' )
+
+        // Pre-fix: [ assembly, complex, plain, complex ] — the complex
+        // product appears twice, from both passes.
+        const complexExtractions =
+          extracted.filter( ( localID ) => localID === complexLocalID ).length
+
+        expect( complexExtractions ).toBe( 1 )
+
+        // The deferred pair are extracted after the product loop has
+        // finished, i.e. by the aggregates pass and not by the product
+        // pass. The IfcElementAssembly (#100, the relating object) is the
+        // only product the first loop is left with.
+        expect( extracted.indexOf( complexLocalID! ) )
+            .toBeGreaterThan( extracted.indexOf( plainLocalID! ) )
+        expect( extracted.filter(
+            ( localID ) => localID === plainLocalID ).length ).toBe( 1 )
+        expect( extracted ).not.toContain( groupLocalID )
       }, TEST_TIMEOUT_MS )
 } )
