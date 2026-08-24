@@ -2581,7 +2581,14 @@ export class AP214GeometryExtraction {
 
     let dimension: number | undefined = void 0
 
-    // use Cartesian if unspecified
+    // UNSPECIFIED reads BOTH representations — see the matching comment in
+    // src/ifc/ifc_geometry_extraction.ts's extractIfcTrimmedCurve, which this
+    // block mirrors line for line. In short: UNSPECIFIED means "either
+    // representation may be used", the choice is made downstream in
+    // conway-geom's getIfcLine (Cartesian pair when its endpoints are
+    // distinct, parameters otherwise), and leaving the parameters at zero here
+    // collapsed a parameter-only UNSPECIFIED trim to a single point
+    // (conway#578). The two scans are independent, not exclusive.
     if (
       from.master_representation === trimming_preference.CARTESIAN ||
       from.master_representation === trimming_preference.UNSPECIFIED) {
@@ -2635,7 +2642,11 @@ export class AP214GeometryExtraction {
           break
         }
       }
-    } else {
+    }
+
+    if (
+      from.master_representation === trimming_preference.PARAMETER ||
+      from.master_representation === trimming_preference.UNSPECIFIED) {
       // use parameter value
       for (let trimIndex = 0; trimIndex < from.trim_1.length; trimIndex++) {
         const trim1 = from.trim_1[trimIndex]
