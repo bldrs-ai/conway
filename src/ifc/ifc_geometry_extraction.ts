@@ -3632,7 +3632,24 @@ export class IfcGeometryExtraction {
     let trim2Cartesian3D: Vector3 = { x: 0, y: 0, z: 0 }
     let trim2Double: number = 0
 
-    // use Cartesian if unspecified
+    // UNSPECIFIED reads BOTH representations, because IFC defines it as
+    // "either may be used" rather than as a third one: the reader chooses.
+    // The choice is made downstream, in conway-geom's getIfcLine, which takes
+    // the Cartesian pair when its two endpoints are distinct and falls back to
+    // the parameters otherwise (conway-geom#170/#179).
+    //
+    // Reading only the Cartesian side here left that fallback with nothing to
+    // fall back TO. Both parameters stayed at their zero initialisers, so an
+    // UNSPECIFIED trim carrying only IFCPARAMETERVALUEs collapsed to
+    // placement + vector * 0 twice, and IfcCurve::Add3d's duplicate test
+    // reduced the curve to a single point (conway#578). The two scans below
+    // are independent, not exclusive, for that reason — do not fold them back
+    // into an if/else.
+    //
+    // CARTESIAN and PARAMETER each still run exactly one scan, so neither
+    // moves. A trim that supplies both is Cartesian-wins, which is
+    // conway-geom#170's own wording: "use the Cartesian trim points when both
+    // are present, else the parameter values".
     if (
       from.MasterRepresentation === IfcTrimmingPreference.CARTESIAN ||
       from.MasterRepresentation === IfcTrimmingPreference.UNSPECIFIED) {
@@ -3680,7 +3697,11 @@ export class IfcGeometryExtraction {
           break
         }
       }
-    } else {
+    }
+
+    if (
+      from.MasterRepresentation === IfcTrimmingPreference.PARAMETER ||
+      from.MasterRepresentation === IfcTrimmingPreference.UNSPECIFIED) {
       // use parameter value
       for (let trimIndex = 0; trimIndex < from.Trim1.length; trimIndex++) {
         const trim1 = from.Trim1[trimIndex]
