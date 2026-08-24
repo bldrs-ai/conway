@@ -19,7 +19,7 @@
 // twin leaves the other half reporting the old numbers.
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, test } from '@jest/globals'
+import { beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
@@ -30,6 +30,7 @@ import ParsingBuffer from '../../parsing/parsing_buffer'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import { IfcAPI } from './ifc_api'
+import Logger from '../../logging/logger'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
@@ -47,6 +48,9 @@ const RELATIONSHIPS = 1
 const ONE_PER_CALL = 1
 
 type ProgressEvent = { phase: string, completed: number, total?: number }
+
+/** One drained pump run: its geometry events and its `remaining` series. */
+type PumpRun = { geometry: ProgressEvent[], remaining: number[] }
 
 let api: IfcAPI
 let buffer: Uint8Array
@@ -79,6 +83,145 @@ function longestStall( events: ProgressEvent[] ): number {
   }
 
   return longest
+}
+
+/**
+ * The largest single fall in `remaining` between consecutive pump calls.
+ *
+ * Read off the pump's own return value rather than off the progress
+ * events, deliberately: the tracker coalesces updates, so this fixture's
+ * fifteen pump calls surface as two `geometry` events and a jump between
+ * them is invisible there. `remaining` is reported by every call.
+ *
+ * With one budget unit per call an honest denominator falls by exactly
+ * one. A denominator that counted work the pass will not run cannot fall
+ * that way: it walks down through the counted prefix one unit at a time
+ * and then drops the whole uncounted-for tail at once, the moment the
+ * cursors say the pass is drained. That single drop is the "jumps forward
+ * by thousands of products" of the conway#569 review.
+ *
+ * @param remaining The `remaining` each pump call returned, in order.
+ * @return {number} Largest fall; 0 for fewer than two calls.
+ */
+function largestDrop( remaining: number[] ): number {
+
+  let largest = 0
+
+  for ( let where = 1; where < remaining.length; ++where ) {
+
+    const fall = remaining[ where - 1 ] - remaining[ where ]
+
+    if ( fall > largest ) {
+      largest = fall
+    }
+  }
+
+  return largest
+}
+
+/**
+ * Drive the RESIDENT pump — what a synchronous embedder and most of the
+ * suite run — over `source` to exhaustion, one budget unit per call.
+ *
+ * @param source The IFC bytes to open.
+ * @return {Promise<PumpRun>} The geometry-phase events and the `remaining`
+ * series, both in order.
+ */
+async function pumpResident( source: Uint8Array ): Promise< PumpRun > {
+
+  const events: ProgressEvent[] = []
+  const remainingSeries: number[] = []
+
+  const deferredID = await api.OpenModelStreamed( source, {
+    ...SETTINGS,
+    DEFER_GEOMETRY: true,
+    ON_PROGRESS: ( event: ProgressEvent ) => events.push( {
+      phase: event.phase,
+      completed: event.completed,
+      total: event.total,
+    } ),
+  } )
+
+  expect( deferredID ).toBeGreaterThanOrEqual( 0 )
+
+  try {
+
+    for ( ; ; ) {
+      const { extracted, remaining } =
+        api.ExtractGeometryBatch( deferredID, ONE_PER_CALL )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+
+      remainingSeries.push( remaining )
+    }
+
+  } finally {
+    api.CloseModel( deferredID )
+  }
+
+  const geometry = events.filter( ( event ) => event.phase === 'geometry' )
+
+  expect( geometry.length ).toBeGreaterThan( 0 )
+
+  return { geometry, remaining: remainingSeries }
+}
+
+/**
+ * Drive the WINDOWED async pump — what Share drives — over `source` to
+ * exhaustion, one budget unit per call.
+ *
+ * @param source The IFC bytes to serve through a store.
+ * @return {Promise<PumpRun>} The geometry-phase events and the `remaining`
+ * series, both in order.
+ */
+async function pumpWindowed( source: Uint8Array ): Promise< PumpRun > {
+
+  const events: ProgressEvent[] = []
+  const remainingSeries: number[] = []
+
+  const deferredID = await api.OpenModelStream(
+      new InMemoryStepByteStore( source ), {
+        ...SETTINGS,
+        DEFER_GEOMETRY: true,
+        ON_PROGRESS: ( event: ProgressEvent ) => events.push( {
+          phase: event.phase,
+          completed: event.completed,
+          total: event.total,
+        } ),
+      } )
+
+  expect( deferredID ).toBeGreaterThanOrEqual( 0 )
+
+  // The branch under test only exists on an external source: a store-backed
+  // open is what runs the paged aggregate-target walk that captures the
+  // counts.
+  expect( api.getPassthrough( deferredID )!.sourceIsExternal ).toBe( true )
+
+  try {
+
+    for ( ; ; ) {
+      // eslint-disable-next-line new-cap
+      const { extracted, remaining } =
+        await api.ExtractGeometryBatchAsync( deferredID, ONE_PER_CALL )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+
+      remainingSeries.push( remaining )
+    }
+
+  } finally {
+    api.CloseModel( deferredID )
+  }
+
+  const geometry = events.filter( ( event ) => event.phase === 'geometry' )
+
+  expect( geometry.length ).toBeGreaterThan( 0 )
+
+  return { geometry, remaining: remainingSeries }
 }
 
 beforeAll( async () => {
@@ -118,32 +261,7 @@ describe( 'geometry progress counts products, not relationships (conway#565)', (
 
   test( 'the resident pump reports a denominator in products', async () => {
 
-    const events: ProgressEvent[] = []
-
-    const deferredID = await api.OpenModelStreamed( buffer, {
-      ...SETTINGS,
-      DEFER_GEOMETRY: true,
-      ON_PROGRESS: ( event: ProgressEvent ) => events.push( {
-        phase: event.phase,
-        completed: event.completed,
-        total: event.total,
-      } ),
-    } )
-
-    expect( deferredID ).toBeGreaterThanOrEqual( 0 )
-
-    for ( ; ; ) {
-      const { extracted, remaining } =
-        api.ExtractGeometryBatch( deferredID, ONE_PER_CALL )
-
-      if ( remaining === 0 && extracted === 0 ) {
-        break
-      }
-    }
-
-    const geometry = events.filter( ( event ) => event.phase === 'geometry' )
-
-    expect( geometry.length ).toBeGreaterThan( 0 )
+    const { geometry } = await pumpResident( buffer )
 
     // The assertion #565 turns on. Before the fix this read
     // `productCount - RELATED_PRODUCTS + RELATIONSHIPS` — eleven short.
@@ -155,46 +273,15 @@ describe( 'geometry progress counts products, not relationships (conway#565)', (
     // One budget unit per call, so the bar advances on every call but the
     // repeated end-of-phase one. The pre-fix pump stalled for twelve.
     expect( longestStall( geometry ) ).toBeLessThanOrEqual( 2 )
-
-    api.CloseModel( deferredID )
   }, 240000 )
 
   test( 'the windowed async pump reports the same denominator', async () => {
 
-    const events: ProgressEvent[] = []
+    const { geometry } = await pumpWindowed( buffer )
 
-    const deferredID = await api.OpenModelStream(
-        new InMemoryStepByteStore( buffer ), {
-          ...SETTINGS,
-          DEFER_GEOMETRY: true,
-          ON_PROGRESS: ( event: ProgressEvent ) => events.push( {
-            phase: event.phase,
-            completed: event.completed,
-            total: event.total,
-          } ),
-        } )
-
-    expect( deferredID ).toBeGreaterThanOrEqual( 0 )
-    expect( api.getPassthrough( deferredID )!.sourceIsExternal ).toBe( true )
-
-    for ( ; ; ) {
-      // eslint-disable-next-line new-cap
-      const { extracted, remaining } =
-        await api.ExtractGeometryBatchAsync( deferredID, ONE_PER_CALL )
-
-      if ( remaining === 0 && extracted === 0 ) {
-        break
-      }
-    }
-
-    const geometry = events.filter( ( event ) => event.phase === 'geometry' )
-
-    expect( geometry.length ).toBeGreaterThan( 0 )
     expect( geometry[ 0 ].total ).toBe( expectedTotal() )
     expect( geometry[ geometry.length - 1 ].completed ).toBe( expectedTotal() )
     expect( longestStall( geometry ) ).toBeLessThanOrEqual( 2 )
-
-    api.CloseModel( deferredID )
   }, 240000 )
 } )
 
@@ -277,5 +364,126 @@ describe('the counts cost only the path that reads them (conway#569 review)', ()
     // Safe because setGeometryShard refuses once a worklist exists, so the
     // prefix is built exactly once.
     expect( extraction.takeAggregateRelatedProductCounts() ).toBeUndefined()
+  }, 240000 )
+} )
+
+describe( 'the denominator stops where the pass stops (conway#569 review)', () => {
+
+  /**
+   * The fixture's one relationship with an unresolvable reference spliced
+   * in after its third related product.
+   *
+   * `#9999` is not in the file (its express IDs stop at #7097), so the
+   * pass's classification — `getTypedElementByExpressID` as an
+   * `IfcObjectDefinition` — finds nothing and
+   * `relatedProductByExpressID_` throws the same
+   * "Value in STEP was incorrectly typed" the generated getter would. The
+   * permissive catch in the aggregates pass then abandons the REST of the
+   * relationship, so the nine products after the bad entry are extracted by
+   * neither pass: they are still deferred (the target walk classifies by
+   * the typeID column, which skips a dangling reference and keeps going),
+   * and the aggregates pass never reaches them.
+   *
+   * The mutation is done here rather than committed as a second `data/`
+   * fixture so the diff against the healthy run is one visible line.
+   *
+   * @return {Uint8Array} The spliced source.
+   */
+  function malformedSource(): Uint8Array {
+
+    const source = new TextDecoder().decode( buffer )
+
+    // Asserted rather than assumed: a fixture edit that renumbered these
+    // would otherwise leave the splice silently not happening, and the
+    // test would then pass by testing the healthy model twice.
+    expect( source.includes( HEALTHY_LIST_PREFIX ) ).toBe( true )
+    expect( source.includes( '#9999' ) ).toBe( false )
+
+    return new TextEncoder().encode(
+        source.replace( HEALTHY_LIST_PREFIX, SPLICED_LIST_PREFIX ) )
+  }
+
+  /** Start of the relationship's RelatedObjects list in the fixture. */
+  const HEALTHY_LIST_PREFIX = '(#1000,#1020,#1040,#1060,'
+
+  /** The same list with an unresolvable reference as its fourth entry. */
+  const SPLICED_LIST_PREFIX = '(#1000,#1020,#1040,#9999,#1060,'
+
+  /** Related products the pass reaches before the bad entry stops it. */
+  const REACHABLE_PRODUCTS = 3
+
+  /**
+   * What the aggregates pass will actually cost on the spliced fixture:
+   * three related products it extracts, then the `next()` that returns
+   * `done` after the catch has abandoned the relationship.
+   *
+   * The other nine related products are still deferred out of the
+   * per-product worklist, so they are subtracted from it exactly as in the
+   * healthy run — the pass simply never reaches them. The denominator's job
+   * is to describe the work that runs, not the work that should have.
+   *
+   * @return {number} The expected geometry-phase denominator.
+   */
+  const expectedTruncatedTotal = () =>
+    ( productCount - RELATED_PRODUCTS ) + REACHABLE_PRODUCTS + RELATIONSHIPS
+
+  test( 'a bad reference truncates the count on both pumps', async () => {
+
+    const source = malformedSource()
+
+    // The pass logs the abandoned relationship once per open. Diverted
+    // rather than left on the console, and asserted: it is the evidence
+    // that the pass really did abandon the relationship, which is the whole
+    // premise of the expected denominator below.
+    const errors = jest.spyOn( Logger, 'error' ).mockImplementation( () => {} )
+
+    let resident: PumpRun
+    let windowed: PumpRun
+    let logged: number
+
+    try {
+
+      resident = await pumpResident( source )
+      windowed = await pumpWindowed( source )
+      logged = errors.mock.calls.length
+
+    } finally {
+      errors.mockRestore()
+    }
+
+    // One per open: the aggregates pass reaching the bad entry, throwing
+    // out of relatedProductByExpressID_ and abandoning the relationship.
+    expect( logged ).toBe( 2 )
+
+    // The finding (conway#569 review round 2). The windowed pump captured
+    // its counts during the aggregate-target walk, which skips a dangling
+    // reference and keeps scanning — so it costed all twelve related
+    // products while the pass runs three. The resident pump never had the
+    // defect: it derives its counts from relatedAggregateProductLocalIDs,
+    // which classifies through the pass's own call and stops where the pass
+    // stops. The two agreeing is the assertion, and they agree because they
+    // are now the same call.
+    expect( windowed.geometry[ 0 ].total ).toBe( expectedTruncatedTotal() )
+    expect( resident.geometry[ 0 ].total ).toBe( expectedTruncatedTotal() )
+
+    // A real truncation, not the healthy denominator by coincidence.
+    expect( expectedTruncatedTotal() )
+        .toBeLessThan( productCount + RELATIONSHIPS )
+
+    // What the over-count looked like from outside: `remaining` walks down
+    // through the three reachable products one unit per call and then drops
+    // the nine it costed but never ran, in one step, the moment the cursors
+    // say the pass is drained. One budget unit per call, so an honest
+    // denominator never falls by more than one.
+    expect( largestDrop( windowed.remaining ) ).toBe( 1 )
+    expect( largestDrop( resident.remaining ) ).toBe( 1 )
+
+    // The numerator still reaches the denominator — the property the
+    // healthy cases pin, restated here because a truncated denominator is
+    // only right if the pass fills it.
+    expect( windowed.geometry[ windowed.geometry.length - 1 ].completed )
+        .toBe( expectedTruncatedTotal() )
+    expect( resident.geometry[ resident.geometry.length - 1 ].completed )
+        .toBe( expectedTruncatedTotal() )
   }, 240000 )
 } )

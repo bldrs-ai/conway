@@ -2897,9 +2897,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * as the running prefix demandAggregateStepPrefix_ describes.
    *
    * Called from both worklist installers rather than lazily in the pump:
-   * the counts come from the aggregate-target walk, which has already run
-   * by the time a worklist exists (the async installer awaits its paged
-   * twin first), so there is no point later at which this gets cheaper.
+   * the windowed half of the counts comes from the aggregate-target walk,
+   * which has already run by the time a worklist exists (the async
+   * installer awaits its paged twin first), so there is no point later at
+   * which this gets cheaper.
    */
   private adoptAggregateStepPrefix_(): void {
 
@@ -2920,16 +2921,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const relAggregate = aggregates[where]
 
-      // A resident model reads the relationship's own record here for
-      // nothing — no paging, no wave — and gets a BETTER number than the
-      // walk's: relatedAggregateProductLocalIDs classifies through the same
-      // call the aggregates pass itself makes, so it sees a STEP complex
-      // instance that the walk's typeID-column test records as type 0 and
-      // misses. Only a windowed source needs the count captured during the
-      // walk, because only there is reading a record expensive.
+      // One definition of the count, whichever source it comes from: the
+      // windowed walk fills `paged` by calling aggregateRelatedProductCount
+      // while the record is resident, and a resident model calls it right
+      // here for nothing — no paging, no wave. The map is a cache of that
+      // call, not a second way of computing it (conway#569 review), which
+      // is what keeps a windowed load and a resident load of the same model
+      // reporting the same denominator.
       const related = paged?.get(relAggregate.localID) ??
-        (this.conwayGeometry_.relatedAggregateProductLocalIDs(
-            relAggregate)?.length ?? 0)
+        this.conwayGeometry_.aggregateRelatedProductCount(relAggregate)
 
       // +1 for the terminating next(): see demandAggregateStepPrefix_.
       running += related + 1
