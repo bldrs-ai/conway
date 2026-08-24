@@ -368,13 +368,55 @@ async function main() {
   // propagates the absence as N/A rather than differencing against zero, so
   // old baselines stay readable and do not need re-blessing. The same is true
   // of the #554 retention columns against everything blessed before them.
+  // WHICH PIPELINE (conway#555). `writer` is scraped from the `Writer:` the
+  // engine's Statistics logs, and names the pipeline that measured the row —
+  // `loader` here, against `ifc-regression` / `ap214-regression` for the rows
+  // bless_perf_snapshot.cjs writes from an rc run. It matters because
+  // `geometryMemoryMb` and the retention columns MEAN different things per
+  // pipeline: the IFC regression child runs at FULL memoization capture and
+  // so keeps CSG temporaries in the map `calculateGeometrySize()` sums
+  // (MB-Khaya 22.3 vs 16.8 MB), and this path builds a ConwayGeometry per
+  // load that the regression children do not. gen_delta_csv.cjs reads this
+  // column and refuses to difference those columns across two writers.
+  //
+  // TOTAL IS A WALL CLOCK (conway#562). `totalTimeMs` is scraped from the
+  // loader's `allTimeStart` -> `allTimeEnd` span, which has always been a
+  // real wall clock on this path. `parsePlusGeometryMs` is the sum of the two
+  // stage columns, which is what the regression children used to write into
+  // `totalTimeMs`; it is N/A here, because this path emits no such log line
+  // and a computed stand-in would not be the same quantity — the loader's
+  // stage clocks do not abut the way the children's do.
   const DETAIL_COLUMNS = [
-    'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
-    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
+    'timestamp', 'loadStatus', 'writer', 'uname', 'engine', 'filename',
+    'schemaVersion',
+    'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'parsePlusGeometryMs',
+    'geometryMemoryMb',
     'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
     'externalMb', 'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb',
     'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
   ];
+
+  /**
+   * One performance-detail.csv record, built BY NAME.
+   *
+   * Both row writers below go through this, and that is the point rather
+   * than tidiness. The failure row used to be a positional literal of the
+   * same length as the header, so widening the header (conway#555/#562)
+   * silently shifted it: `uname` landed in `writer`, the encoded model name
+   * in `engine`, and `filename` — the key gen_delta_csv.cjs joins two runs
+   * on — became `N/A`, which loses exactly the OK->FAIL transition a
+   * release comparison exists to show. That is the SECOND time this row has
+   * broken that join; see the encoding note on failLine below. Building by
+   * name makes the class impossible rather than fixing the instance.
+   *
+   * Anything not supplied is `N/A`: a column this harness does not measure
+   * must read as absent, never as zero (conway#548).
+   *
+   * @param {Object} fields Values keyed by column name.
+   * @returns {string} The encoded record, without a trailing newline.
+   */
+  const detailRow = (fields) => csvRow(DETAIL_COLUMNS.map(
+    (column) => (fields[column] !== undefined ? fields[column] : 'N/A')));
 
   fs.writeFileSync(newResults, csvRow(DETAIL_COLUMNS) + "\n", 'utf8');
 
@@ -518,6 +560,7 @@ async function main() {
 
       let timestamp = new Date().toISOString().replace(/[-:T]/g, '').split('.')[0];
       let loadStatus = 'OK';
+      let writer = 'N/A';
       const unameVal = os.arch();
       let schemaVersion = 'N/A';
       let parseTimeMs = 'N/A';
@@ -541,6 +584,8 @@ async function main() {
         if (!/Load Status: OK/.test(logContents)) {
           loadStatus = 'FAIL';
         } else {
+          const writerMatch = logContents.match(/Writer: ([\w-]+)/);
+          if (writerMatch) writer = writerMatch[1];
           const parseTimeMatch = logContents.match(/Parse Time: (\d+) ms/);
           if (parseTimeMatch) parseTimeMs = parseTimeMatch[1];
           const geometryTimeMatch = logContents.match(/Geometry Time: (\d+) ms/);
@@ -633,12 +678,17 @@ async function main() {
         originatingSystem = 0;
       }
 
-      const line = csvRow([
+      // parsePlusGeometryMs is deliberately absent (-> N/A): this path emits
+      // no such log line, and a stand-in computed from the two stage columns
+      // would not be the same quantity — the loader's stage clocks do not
+      // abut the way the regression children's do.
+      const line = detailRow({
         timestamp,
         loadStatus,
-        unameVal,
-        engineStr,
-        encodedFileName,
+        writer,
+        uname: unameVal,
+        engine: engineStr,
+        filename: encodedFileName,
         schemaVersion,
         parseTimeMs,
         geometryTimeMs,
@@ -655,8 +705,8 @@ async function main() {
         retainedHeapUsedMb,
         retainedExternalMb,
         preprocessorVersion,
-        originatingSystem
-      ]);
+        originatingSystem,
+      });
       appendLineToFile(newResults, line);
 
       if (loadStatus === 'OK') {
@@ -697,11 +747,12 @@ async function main() {
       // `S_Office_Integrated%20Design%20Archi.ifc`, so the delta would emit
       // two one-sided rows instead of the status transition — losing exactly
       // the row a release comparison is for. One writer, one convention.
-      const failLine = csvRow([
-        timestamp, 'FAIL', unameVal, 'N/A', encodeFileName(displayName), 'N/A',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-        'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 'N/A',
-      ]);
+      const failLine = detailRow({
+        timestamp,
+        loadStatus: 'FAIL',
+        uname: unameVal,
+        filename: encodeFileName(displayName),
+      });
       appendLineToFile(newResults, failLine);
 
       failCount++;

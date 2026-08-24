@@ -540,6 +540,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const allTime = allTimeEnd - allTimeStart
 
     statistics?.setLoadStatus('OK')
+    statistics?.setWriter('ifc-web-ifc-proxy')
     statistics?.setTotalTime(allTime)
 
     if (ifcVersion !== void 0) {

@@ -120,23 +120,32 @@ describe('readPerfCsv', () => {
     fs.rmSync(workDir, { recursive: true, force: true })
   })
 
-  test('reads the 16-column perf.csv both passes write', () => {
+  test('reads the full perf.csv both passes write', () => {
     // The exact header ifc_regression_main.ts emits, with a control-pass row:
     // the file this comparator is pointed at in CI, not a reduced stand-in.
+    // 18 columns since conway#555/#562 added `writer` and
+    // `parsePlusGeometryMs`; the comparator reads by header name, so the
+    // point of pinning the real shape is that a drift shows up here rather
+    // than as an all-N/A summary in an rc job.
     const file = path.join(workDir, 'perf-nogc.csv')
 
     fs.writeFileSync(file,
-      'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
+      'file,status,writer,parseTimeMs,geometryTimeMs,totalTimeMs,' +
+      'parsePlusGeometryMs,geometryMemoryMb,' +
       'peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,' +
       'arrayBuffersMb,retainedRssMb,retainedHeapUsedMb,retainedExternalMb\n' +
-      'AC20-FZK-Haus.ifc,OK,76,436,512,1.69,35.13,289.39,289.52,54.40,84.34,' +
-      '9.98,7.93,N/A,N/A,N/A\n')
+      'AC20-FZK-Haus.ifc,OK,ifc-regression,76,436,530,512,1.69,35.13,289.39,' +
+      '289.52,54.40,84.34,9.98,7.93,N/A,N/A,N/A\n')
 
     const rows = readPerfCsv(file)
 
     expect(rows).toHaveLength(1)
     expect(rows[0].file).toBe('AC20-FZK-Haus.ifc')
-    expect(rows[0].totalTimeMs).toBe('512')
+    expect(rows[0].writer).toBe('ifc-regression')
+    // The wall clock, and the stage sum beside it — 530 against 512, the
+    // 18 ms of file read and teardown the stage clocks never saw.
+    expect(rows[0].totalTimeMs).toBe('530')
+    expect(rows[0].parsePlusGeometryMs).toBe('512')
     expect(rows[0].retainedRssMb).toBe('N/A')
   })
 
@@ -297,12 +306,18 @@ describe('compareRuns', () => {
     expect(comparison.pairs).toHaveLength(0)
   })
 
-  test('summarises the three timing columns and the memory columns', () => {
+  test('summarises the four timing columns and the memory columns', () => {
     const comparison =
       compareRuns([blessedRow({ file: 'a.ifc' })], [row({ file: 'a.ifc' })])
 
+    // parsePlusGeometryMs joined the list with conway#562, which made
+    // `totalTimeMs` the load's wall clock: the A/B wants both, since the wall
+    // clock now carries file I/O and teardown the settle has no bearing on,
+    // while parsePlusGeometryMs is the quantity this comparison's own history
+    // was measured on.
     expect(comparison.timing.map((stat) => stat.column))
-      .toEqual(['parseTimeMs', 'geometryTimeMs', 'totalTimeMs'])
+      .toEqual(['parseTimeMs', 'geometryTimeMs', 'totalTimeMs',
+        'parsePlusGeometryMs'])
     expect(comparison.memory.map((stat) => stat.column))
       .toEqual(['heapUsedMb', 'rssMb', 'peakRssMb'])
   })

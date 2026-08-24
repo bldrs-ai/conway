@@ -337,6 +337,10 @@ export class ConwayModelLoader {
             const dataParseTime = parseDataTimeEnd - parseDataTimeStart
 
             statistics.setLoadStatus('OK')
+            // conway#555: this path brings up a ConwayGeometry per load and
+            // runs at the default OPTIMAL memoization capture, so its
+            // memory columns are not comparable with a regression child's.
+            statistics.setWriter('loader')
             statistics.setParseTime(dataParseTime)
             statistics.setTotalTime(allTime)
 
@@ -560,6 +564,10 @@ export class ConwayModelLoader {
             const dataParseTime = parseDataTimeEnd - parseDataTimeStart
 
             statistics.setLoadStatus('OK')
+            // conway#555: this path brings up a ConwayGeometry per load and
+            // runs at the default OPTIMAL memoization capture, so its
+            // memory columns are not comparable with a regression child's.
+            statistics.setWriter('loader')
             statistics.setParseTime(dataParseTime)
             statistics.setTotalTime(allTime)
 

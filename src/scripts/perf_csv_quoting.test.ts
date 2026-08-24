@@ -44,8 +44,23 @@ const { generateDeltaCSV } =
 const NASTY_PREPROCESSOR =
   'Trimble Nova (Build = 16.2.0.15, Compile = "Sep 23 2021")'
 
-/** Columns in the delta CSV, per the committed `*_delta.csv` convention. */
-const DELTA_COLUMN_COUNT = 25
+/**
+ * Columns in the delta CSV, per the committed `*_delta.csv` convention.
+ *
+ * 26 since conway#570 added `totalTimeMsBasis`, which says WHICH quantity
+ * the total columns beside it differenced — a wall clock on both sides, the
+ * parse+geometry stage sum on both sides, or nothing comparable. Needed
+ * because conway#562 redefined `totalTimeMs` on the regression children, so
+ * a delta spanning that boundary has to state which it did rather than
+ * leave a reader to guess from the magnitude.
+ *
+ * 27 since conway#570 review round 3 added `comparability`, which says
+ * whether the two rows came from the same harness at all. Every measurement
+ * column blanks together when it reads `crossHarness`, so one cell explains
+ * a whole row of `N/A` — otherwise "not measured", "absent from this old
+ * snapshot" and "not comparable" would all read the same.
+ */
+const DELTA_COLUMN_COUNT = 27
 
 const DETAIL_HEADER = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
@@ -250,11 +265,28 @@ describe('gen_delta_csv.cjs', () => {
   })
 
   /** SKYLARK250 as a 1.451 headless-three snapshot row: every column measured. */
+  /**
+   * Both sides of every delta in this block are conway-native regression
+   * rows — the scraped columns (`schemaVersion`, `preprocessorVersion`,
+   * `originatingSystem`) read `N/A`, which is what `bless_perf_snapshot.cjs`
+   * hardcodes and what `gen_delta_csv.cjs` reads as provenance for a row
+   * with no `writer` column (conway#555).
+   *
+   * That homogeneity is deliberate. These tests are about the #548
+   * column-presence asymmetry — an absent measurement must read `N/A` and
+   * never 0 — and pairing two DIFFERENT harnesses would make every guarded
+   * column read `N/A` for a second reason, so the test would pass without
+   * proving anything about #548. Cross-harness comparability has its own
+   * coverage in `perf_writer_and_wallclock.test.ts`.
+   *
+   * RFC 4180 quoting of the free-text columns is unaffected: that is what
+   * `detailRow` above, with its `NASTY_PREPROCESSOR`, is for.
+   */
   const SKYLARK_1_451 = csvRow([
-    '20260811154725', 'OK', 'x64', 'conway1.451.1357', 'skylark.ifc', 'IFC4',
+    '20260811154725', 'OK', 'x64', 'conway1.451.1357', 'skylark.ifc', 'N/A',
     '5729', '42572', '48303', '185.836', '1283.000', '5495.645', '5601.500',
     '3865.072', '3952.602', '432.500', '430.250', '120.500', '48.250',
-    '2.125', NASTY_PREPROCESSOR, 'N/A',
+    '2.125', 'N/A', 'N/A',
   ])
 
   test('reports an absent measurement as N/A, not as a delta against zero', () => {
@@ -390,11 +422,14 @@ describe('gen_delta_csv.cjs', () => {
     // that never measured retention — a clean bill of health manufactured
     // out of a missing measurement, which is the #548 failure with a
     // different column name.
+    // Scraped columns `N/A` on both sides, so both rows read as
+    // conway-native regression output and the only variable is the missing
+    // #554 columns — see the note on SKYLARK_1_451.
     const pre554Row = csvRow([
       '20260811153651', 'OK', 'x64', 'conway1.543.1513-ci', 'skylark.ifc',
-      'IFC4', '5729', '42572', '48303', '185.836', '1283.000', '5495.645',
+      'N/A', '5729', '42572', '48303', '185.836', '1283.000', '5495.645',
       '5601.500', '3865.072', '3952.602', '432.500', '430.250',
-      NASTY_PREPROCESSOR, 'N/A',
+      'N/A', 'N/A',
     ])
 
     const older =
@@ -452,10 +487,13 @@ describe('gen_delta_csv.cjs', () => {
     // N/A cells, no cells. That absence must read as "no measurement", exactly like #548's
     // N/A: coercing it to 0 would report the new run's entire peak, and its
     // whole off-heap footprint, as regressions against nothing.
+    // Scraped columns `N/A` on both sides for the reason recorded on
+    // SKYLARK_1_451: the variable under test is the absent columns, not the
+    // harness.
     const legacyRow = csvRow([
-      '20260811153651', 'OK', 'x64', 'conway1.451.1357', 'skylark.ifc', 'IFC4',
+      '20260811153651', 'OK', 'x64', 'conway1.451.1357', 'skylark.ifc', 'N/A',
       '5729', '42572', '48303', '185.836', '5495.645', '3865.072', '3952.602',
-      NASTY_PREPROCESSOR, 'N/A',
+      'N/A', 'N/A',
     ])
 
     const older =

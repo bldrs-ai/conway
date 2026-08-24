@@ -553,16 +553,308 @@ four in one combined run, got numbers that disagreed with all of them, and
 filed a false contradiction. **Any quoted benchmark figure should say which
 run produced it.**
 
-## Known caveat: `geometryMemoryMb` differs by pipeline
+## Resolved: `geometryMemoryMb` differs by pipeline, so the row says which
 
 The IFC CLI and the IFC regression child report **different**
-`geometryMemoryMb` for the same model — 16.8 vs 22.3 MB on MB-Khaya. Same
-function, sampled at different points in two pipelines that run with
-different CSG options.
+`geometryMemoryMb` for the same model — 16.8 vs 22.3 MB on MB-Khaya. Filed as
+#555, predating #552 rather than introduced by it.
 
-This predates #552 and was not introduced by it, but it means the column is
-only comparable **within** a pipeline. Do not difference a CLI figure
-against a regression-child figure. Tracked separately.
+**The mechanism is the memoization capture mode, not CSG options** — the
+issue guessed the latter, and the correct diagnosis is what changes the
+resolution. `ifc_regression_main.ts` sets
+
+```ts
+RegressionCaptureState.memoization = MemoizationCapture.FULL
+```
+
+which is read in several places in `ifc_geometry_extraction.ts`. In the
+boolean path it is what stops `dropNonSceneGeometry` / `voidGeometry.delete`
+running on the two operands; at the end of the walk it is what stops
+`model.geometry.deleteTemporaries()` and
+`model.voidGeometry.deleteTemporaries()`. So the regression child's
+`model.geometry` still holds every CSG intermediate and boolean operand when
+`calculateGeometrySize()` sums it, and the CLI's does not. The ~30% is those
+temporaries.
+
+**So "make them agree" is off the table.** The digest below the perf capture
+iterates `model.geometry`, and `FULL` is what puts the intermediates in front
+of it — that is the regression's whole point. Dropping them to make one
+number comparable would move digests, which costs far more than an ambiguous
+column.
+
+**The resolution is #555's other option: name the divergence.** Every perf row
+carries a `writer` column — `ifc-regression`, `ap214-regression`, `ifc-cli`,
+`ap214-cli`, `loader`.
+
+`gen_delta_csv.cjs` then withholds a column when the two rows disagree on the
+trait that column depends on. **Two traits, not a list of incomparable writer
+pairs**, because that is the shape of the causes — `ifc-regression` differs
+from `ap214-regression` in capture but not harness, and from `loader` in
+harness but not capture, so a flat pair list would have to restate the
+product:
+
+| trait | what it is | columns scoped to it |
+|---|---|---|
+| `harness` | which process measured the row, and so what else was resident | `rssMb`, `peakRssMb`, `heapUsedMb`, `heapTotalMb`, `externalMb`, `arrayBuffersMb`, and the three retention columns |
+| `capture` | `RegressionCaptureState.memoization` | `geometryMemoryMb` |
+
+The harness scope is the snapshot README's own statement made operative: a
+regression child's `rssMb` "excludes a GL context and a three.js scene graph",
+and the loader carries a per-load `ConwayGeometry` the children do not.
+
+**`peakWasmHeapMb` is deliberately in neither set**, and that is a
+measurement rather than an omission. MB-Khaya through one extraction reads it
+at **101.56 MB under both capture modes**, against a `geometryMemoryMb` of
+16.82 vs 22.26 — the linear memory is a grow-only high-water and the
+temporaries are allocated either way, so `FULL` only keeps the JS-side
+handles. RSS moved 1 MB in 516 over the same pair, which is noise. Withholding
+it would cost a real signal for a difference that does not exist.
+
+Timing columns are likewise not scoped to harness: they are conway's own
+stage clocks and broadly comparable on the same runner class. `totalTimeMs`
+is the exception, for an unrelated reason — see the `#562` section below.
+
+An **unknown** writer counts as comparable, not as a mismatch. Every snapshot
+blessed before #555 has no such column, and treating absence as disagreement
+would blank the entire history the delta exists to produce.
+
+Three pairs are now distinguishable where the file previously implied one
+quantity:
+
+| pair | why they differ |
+|---|---|
+| IFC CLI vs IFC regression child | memoization capture: `OPTIMAL` vs `FULL` |
+| IFC regression child vs AP214 regression child | same cause. `memoization` is a **process-global** and the children are separate processes, so only the IFC one raises it. A mixed IFC/STEP `perf.csv` has therefore always aggregated two capture modes into one column |
+| loader vs either regression child | the retention caveat recorded above: the loader builds a `ConwayGeometry` per load, inside the window |
+
+The middle row is worth stating because it is easy to assume the split is only
+CLI-vs-regression. It has not been measured on a shared model — no corpus
+model loads through both children — so it is a structural claim from the code,
+not a number.
+
+### What the delta had to be taught
+
+Redefining a column is only half the job: the differ has to know where the
+seam is, or it publishes the redefinition as a regression. `gen_delta_csv.cjs`
+now decides per pair which quantity is actually comparable
+(`comparableTotals`), and states the answer in a new `totalTimeMsBasis`
+column:
+
+| older row | newer row | differenced |
+|---|---|---|
+| pre-#562 regression (`stageSum`) | post-#562 regression (`wallClock`) | both sides' **stage sum** — older `totalTimeMs` against newer `parsePlusGeometryMs` |
+| two post-#562 regression rows | | `totalTimeMs`, unchanged |
+| two three.js-harness rows | | `totalTimeMs`, unchanged |
+| **any row** | **a row from a different harness** | nothing — basis `crossHarness`. See below |
+
+The stage-sum fallback is preferred over blanking because the first rc after
+this change is precisely where a reader most wants to see that nothing moved,
+and `.github/workflows/build.yml` sorts its regression table on
+`totalTimeMsPercentageChange`. `engine1TotalTimeMs` / `engine2TotalTimeMs`
+report the values actually differenced rather than the raw cells, so the row
+the workflow prints is self-consistent.
+
+### No total is comparable across two harnesses
+
+Making `totalTimeMs` a wall clock everywhere did **not** finish the job #562
+started, and this is worth stating plainly because it is the same defect one
+level down: *"wall clock" is itself two quantities.* The harnesses bound the
+interval differently, and `writer` says which pipeline produced a row but not
+what its clock enclosed.
+
+`ConwayModelLoader` opens `allTimeStart` and **then** builds and initialises a
+per-load `ConwayGeometry` (`conway_model_loader.ts:158`, then `:194` / `:406`).
+The regression child initialises its engine in `main()` and starts
+`loadStartMs` immediately before the file read (`ifc_regression_main.ts:361`,
+then `:454`). Engine init is inside one window and outside the other.
+
+Measured, because "structurally different" does not say whether it matters. A
+fresh `new ConwayGeometry()` + `initialize()` runs about **195 ms** (six runs:
+178 / 182 / 189 / 195 / 232 / 655 ms, the outlier being the first wasm
+compile). Against the regression child's own totals:
+
+| model | child `totalTimeMs` | engine init as a share of it |
+|---|---|---|
+| `index.ifc` (18 kB) | 162 ms | **120%** |
+| `haus.ifc` (2.5 MB) | 796 ms | **24%** |
+| `MB-Khaya.ifc` (33 MB) | 4528 ms | **4.3%** |
+
+So differencing across the harnesses reports the removal of engine
+initialisation as an engine speedup, at a scale far above anything the release
+table exists to flag, and worst on the small models where a real regression is
+hardest to see anyway.
+
+**`parsePlusGeometryMs` is not the escape hatch**, which was the obvious
+candidate. Two reasons, both checked rather than assumed:
+
+1. The loader path does not emit it at all — `benchmark.cjs` writes `N/A`
+   because there is no such log line to scrape — so it would have to be
+   manufactured from a sum.
+2. The stage clocks it would sum are not the same intervals either. The
+   child's parse clock opens before `parseHeader` where the loader times the
+   header separately (`headerDataTimeStart`), and the child's geometry clock
+   wraps `new IfcGeometryExtraction(...)` where the loader constructs it
+   outside the timed region.
+
+Substituting it would put a smaller version of the same defect back under a
+new name, which is the thing this file exists to prevent. **A blank cell that
+means "not comparable" is worth more than a number that means two different
+things**, so the cell is blank and `totalTimeMsBasis` reads `crossHarness` to
+say why.
+
+The cost is one historical comparison — the transition from
+`benchmark.cjs`-produced snapshots to bless-produced ones — and that is
+precisely the comparison with no answer. Every release from here is
+regression-against-regression and differences normally.
+
+**The stage columns go too, and with them the whole matrix.** `parseTimeMs`
+and `geometryTimeMs` were left comparable for one round on the grounds that
+their boundary differences were unmeasured. That was the wrong test.
+**Unmeasured is not zero, and comparability is categorical rather than a
+matter of degree** — magnitude decides how badly a number misleads, not
+whether it is the same quantity. It is the same standard that rejected
+`parsePlusGeometryMs` as a substitute above, applied consistently.
+
+The intervals genuinely differ:
+
+- The child's parse clock opens **before `parseHeader`**
+  (`ifc_regression_main.ts:475`); the loader times the header separately
+  (`headerDataTimeStart`, `conway_model_loader.ts:418`) and opens its parse
+  clock at `parseDataToModel` (`:468`).
+- The child's geometry clock wraps **`new IfcGeometryExtraction(...)`**
+  (`:549` around `:758`); the loader constructs it before its clock (`:510`
+  against `:525`). That constructor allocates two native identity matrices
+  (`getIdentity2DMatrix` / `getIdentity3DMatrix`) and initialises four memory
+  pools — not free, and not in both windows.
+
+### The matrix has converged: two harnesses cannot be compared at all
+
+With the stage columns added, **every measurement column is withheld across
+two harnesses.** That is worth stating outright rather than leaving a reader
+to infer it from a table of exceptions. What survives a cross-harness join is:
+
+| survives | withheld |
+|---|---|
+| `filename`, `loadStatus1/2`, `uname`, `schemaVersion`, `engine1/2` | every timing column, every memory column, `geometryMemoryMb`, `peakWasmHeapMb`, and the raw `engine1/2TotalTimeMs` operands |
+
+Identity, not data. Three review rounds each found another column family
+carrying the same root cause — the harnesses bound their intervals and hold
+their processes differently, and `writer` names the pipeline without saying
+what its clocks and samples enclosed — and the answer converged on "no" for
+all of them.
+
+`geometryMemoryMb` and `peakWasmHeapMb` are included even though each is
+arguably a property of the model rather than of the process, because a
+two-item exception list means a reader has to know which two, and the loader
+reaches its geometry through a different call (`extractIFCGeometryDataAsync`
+when cooperative) with its own allocation pattern. One rule that is true beats
+a shorter one with a footnote.
+
+A row-level **`comparability`** column now says `sameHarness`,
+`crossHarness` or `unknown`, so one cell explains a whole row of `N/A`.
+
+**A rule is only as good as its wiring.** The first cut of this stated the
+rule correctly and left `peakWasmHeapMb` calling the unguarded differ, so a
+row could print `comparability=crossHarness` *and* a numeric wasm-heap
+delta — self-contradictory output, which is the defect class this file
+exists to prevent. The test that should have caught it asserted `N/A`
+against a fixture whose header did not carry the column, so it passed
+because the value was **absent** rather than withheld, and could never have
+failed. `MEASUREMENT_COLUMNS` is therefore exported and the test iterates
+it, populating every column on both sides: a column added to the rule is
+covered the moment it is added, and a column the rule names but the code
+does not route now fails.
+Without it, "not measured", "absent from this older snapshot" and "not
+comparable" would all read the same — three different facts sharing one
+spelling, which is the obligation #548 established for a missing value.
+
+**The open design question this raises is tracked as conway#572** — whether
+one perf CSV should mix harnesses at all, rather than carrying a
+comparability matrix whose complete answer is always "no". Nothing here
+presumes an answer to it, and the guard above is the honest behaviour either
+way: while the two harnesses do share a file, a reader must not be handed a
+number that means two things.
+
+### Provenance of a row that predates the `writer` column
+
+The table above needs to know which harness wrote a legacy row, and it can:
+`bless_perf_snapshot.cjs` hardcodes `N/A` into `schemaVersion`,
+`preprocessorVersion` and `originatingSystem` on every row it writes, because
+`perf.csv` does not carry them, while `benchmark.cjs` scrapes all three out of
+the IFC header. So a file with **any** populated value in those columns came
+from the three.js harness and one with none came from a regression child
+(`inferLegacyWriter`).
+
+Decided per **file**, not per row: a FAIL row from either writer has all three
+`N/A`. Stamped into a separate `inferredWriter` field rather than into
+`writer`, so a guess and a statement stay distinguishable, and it never
+overrides a stated writer.
+
+This is inference, so it is confined to one function and pinned by tests. The
+alternative — treating an unknown writer as comparable — is what the first
+draft of #555 did, and it publishes the 16.8-vs-22.3 MB capture-mode gap as a
+real change the moment a historical headless-three snapshot is differenced
+against a regression-produced one.
+
+## `totalTimeMs` is the load's wall clock, not the sum of the stage clocks
+
+#562 §1. On both regression children `totalTimeMs` was
+
+```ts
+const totalTimeMs = geomEndMs - parseStartMs
+```
+
+with `geomStartMs` taken on the statement *after* `parseEndMs`. So it was
+`parseTimeMs + geometryTimeMs` **by construction** — verified on the blessed
+`conway1.451.1357-ci` snapshot, where
+`totalTimeMs − (parseTimeMs + geometryTimeMs)` lands between 0 and 5 ms on all
+46 OK rows.
+
+The identity is not the defect. Calling the result **Total** is: it excluded
+the file read, the `ParsingBuffer` construction, the wasm init and the
+teardown, and a reader — human or re-bless diff — takes "Total 26,744 ms" for
+what loading that model costs. Worse,
+`ConwayModelLoader.loadModelWithScene` already wrote a genuine
+`allTimeStart` → `allTimeEnd` wall clock into a column of the same name, so
+the two pipelines put different quantities under one heading. Same disease as
+`geometryMemoryMb` above.
+
+**Option (b) was taken, and (a) came with it.** `totalTimeMs` is a real wall
+clock on every writer now — opened after the pre-load settle and before
+`readFileSync`, closed immediately after `model.invalidate(true)` — and the
+old sum survives as its own column, `parsePlusGeometryMs`, where the identity
+is visible in the name instead of being a coincidence a reader has to derive.
+The gap between the two columns is exactly what the stage clocks cannot see.
+
+Two boundary conditions are load-bearing rather than incidental:
+
+- **The clock opens after the settle, not before it.** Both retention samples
+  sit outside every timed region by design (see "The timing property, and how
+  to check it by measurement" above); folding two forced full collections into
+  the load's wall clock would undo that property and make `totalTimeMs` move
+  with `--expose-gc`.
+- **It closes on the teardown, before the retained settle.** Teardown is real
+  load cost and belongs inside; the settle after it is measurement apparatus
+  and does not.
+
+**Consequence: `totalTimeMs` steps up once on regression-produced rows**, by
+the file read plus the teardown. A delta across this boundary shows a
+slowdown that is a change of methodology, not of the engine — the same shape
+as the `parseTimeMs` hazard #554 introduced, in the other direction.
+`parsePlusGeometryMs` is the column to read for continuity with older
+snapshots, and `scripts/perf_ab_compare.cjs` summarises both for that reason.
+Baselines are not re-blessed for it: the next rc picks both columns up and
+older snapshots difference the new one as `N/A`.
+
+**What is still not measured, and it is the bigger half.** #562 §2 stands
+open. The bench runs a resident, fully-extracted open
+(`parseDataToModel` → `extractIFCGeometryData`); Share runs a windowed,
+deferred, pumped one (`OpenModelStream` + `DEFER_GEOMETRY` +
+`ExtractGeometryBatchAsync`). On SKYLARK250 the two parse and extract at
+comparable speed while the whole load differs 5.7×, and the entire difference
+sits in an interstage window **no column here covers**. Nothing added by this
+change approximates time-to-first-mesh, and a green bench still says nothing
+about the path every Share user takes.
 
 ## Changelog of methodology changes
 
@@ -575,6 +867,12 @@ against a regression-child figure. Tracked separately.
 | #554 | add `retainedRssMb`, `retainedHeapUsedMb`, `retainedExternalMb`; pass `--expose-gc` to the regression children and the render server; add the teardown the regression children never had | nothing measured what is held after teardown, and a peak cannot see it |
 | #557 | IFC regression child extracts on the engine `main()` initialised, not a second one built in `geometryExtraction` | the alloc telemetry described an idle module, and the second engine put a ~55-60 MB constant in every IFC retention and RSS row plus its init in `geometryTimeMs`; those IFC baselines move once |
 | #554 (decision, after the two-pass A/B ran) | the settle stays **always on**; the gc-off control pass and its comparison become opt-in (`perf_ab` dispatch input), off for a release | the question was answered: run 32601886424's public job priced the settle at +2.9% of pass wall-clock with the timing columns unmoved. Re-measuring a settled condition on every rc doubled the perf portion of the most expensive job in CI for no new signal. Not deleted — a between-run comparison cannot answer this, so the in-one-job machinery is the only way to ask again |
+| #555 | add a `writer` column to every perf row; `gen_delta_csv.cjs` refuses to difference `geometryMemoryMb` and the three retention columns across two stated writers that disagree | one column meant two things. The IFC regression child runs at `MemoizationCapture.FULL`, so its `geometryMemoryMb` includes the CSG temporaries the CLI's excludes — 22.3 vs 16.8 MB on MB-Khaya, ~30% of pure methodology, in the column read for memory regressions. Making them agree would move digests, so the divergence is named instead. Additive, and an absent `writer` counts as comparable, so historical deltas survive |
+| #555 (via #570 review) | the cross-writer guard becomes a two-trait matrix (`harness`, `capture`) and covers every process memory column, not just `geometryMemoryMb` and retention; legacy rows get their writer inferred from the scraped columns | withholding only two column families left `rssMb`/`peakRssMb`/heap/external publishing a harness difference as a change, against the snapshot README's own statement that a regression child excludes a GL context and a scene graph. `peakWasmHeapMb` stays comparable: measured at 101.56 MB under **both** capture modes. Treating an unknown writer as comparable was a choice, not a necessity — provenance is recoverable from the scraped columns, and without it a historical headless-three snapshot differences against a regression one and publishes the 16.8-vs-22.3 MB gap as real |
+| #555/#562 (via #570 review, round 3) | `parseTimeMs` and `geometryTimeMs` join the cross-harness guard, which now withholds **every** measurement column, leaving only `filename` / `loadStatus` / `uname` / `schemaVersion` / `engine` and the columns that say why; a `comparability` column states `sameHarness` / `crossHarness` / `unknown` per row. Structural follow-up in conway#572 | the stage clocks subtract non-equivalent intervals too — the child's parse clock includes `parseHeader` and its geometry clock includes constructing `IfcGeometryExtraction` (two native identity matrices, four memory pools), where the loader excludes both. Left comparable for one round because the magnitude was unmeasured, which is the wrong test: unmeasured is not zero and comparability is categorical. With these added the matrix converges — two harnesses share identity columns and nothing else |
+| #562 §1 (via #570 review, round 2) | no `totalTimeMs` delta is emitted across two harnesses; `totalTimeMsBasis` reads `crossHarness` | a wall clock is two quantities, because the harnesses bound the interval differently: the loader initialises a per-load engine INSIDE its window and the regression child initialises before its window opens. Measured at ~195 ms, which is 120% / 24% / 4.3% of the child's own total on index.ifc / haus.ifc / MB-Khaya — so the delta would publish removing engine init as an engine speedup. `parsePlusGeometryMs` was checked as a substitute and rejected: the loader does not emit it, and the stage clocks it sums are not the same intervals either |
+| #562 §1 (via #570 review) | `gen_delta_csv.cjs` learns the seam: `comparableTotals` picks the quantity both rows can express and states it in a new `totalTimeMsBasis` column | redefining a column without teaching the differ means the first rc after the change reports the redefinition as a regression on every model, and build.yml sorts its table by exactly that number. Falls back to the stage sum rather than blanking, so the release spanning the change still shows whether anything moved |
+| #562 §1 | `totalTimeMs` on both regression children becomes the load's **wall clock** (before `readFileSync` → after `model.invalidate(true)`); the old sum becomes `parsePlusGeometryMs` | it was `parseTimeMs + geometryTimeMs` by construction — 0-5 ms of slack on all 46 OK rows of the 1.451 snapshot — while meaning a genuine wall clock on the loader path, so one column held two quantities and neither was the load. **`totalTimeMs` steps up once** on regression rows, by the file read plus the teardown; read `parsePlusGeometryMs` across that boundary. Does not touch #562 §2, the larger half: the bench still runs a load path Share never takes |
 | #554 (via the two-pass rc A/B) | `parseTimeMs` drops by about 10 ms per load (13-16% at a ~60 ms parse, unresolvable against a 578 ms one), `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB, against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary. Distinct from #557 above, which moves `geometryTimeMs` and the memory columns on IFC rows only |
 
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads

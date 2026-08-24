@@ -69,6 +69,16 @@ const PERF_MB_PRECISION = 2
 const UNMEASURED = 'N/A'
 
 /**
+ * This child's value for the `writer` column (conway#555).
+ *
+ * A row is only comparable to another row from the same writer for the
+ * pipeline-dependent columns — see the note on `writePerfCsvIfRequested`.
+ * The string is the join key `gen_delta_csv.cjs` compares, so it is a
+ * stable identifier rather than prose.
+ */
+const PERF_WRITER = 'ifc-regression'
+
+/**
  * The memory figures one perf row carries, each captured at the point in the
  * load where it means what its column name says — not at write time.
  *
@@ -122,6 +132,44 @@ function capturePerfMemory(
  * Write a single-row per-file perf CSV at the given path. Memory snapshot is
  * taken at call time; for the OK path this is right after geometry extraction
  * — close to peak. No-op when perfPath is empty.
+ *
+ * WHICH PIPELINE PRODUCED THE ROW (conway#555):
+ *
+ *   writer           The pipeline that measured this row. It is here because
+ *                    `geometryMemoryMb` MEANS SOMETHING DIFFERENT depending
+ *                    on the answer, and nothing in the file used to say so:
+ *                    this child sets
+ *                    `RegressionCaptureState.memoization = FULL`, which is
+ *                    what stops `deleteTemporaries()` running and keeps every
+ *                    CSG intermediate and boolean operand in
+ *                    `model.geometry` — the map `calculateGeometrySize()`
+ *                    sums. The digest below needs those temporaries, so this
+ *                    is not a defect to fix by making the numbers agree; it
+ *                    is a divergence to name. MB-Khaya reads 22.3 MB here
+ *                    against the CLI's 16.8 MB, a ~30% gap that is pure
+ *                    methodology. `gen_delta_csv.cjs` refuses to difference
+ *                    the pipeline-dependent columns across two writers.
+ *
+ * WHICH COLUMNS ARE TIME, AND OVER WHAT (conway#562):
+ *
+ *   totalTimeMs      The load's WALL CLOCK: file read through teardown,
+ *                    which is what `ConwayModelLoader.loadModelWithScene`
+ *                    has always written into this column name. It used to be
+ *                    `geomEndMs - parseStartMs` here, which is
+ *                    `parseTimeMs + geometryTimeMs` BY CONSTRUCTION —
+ *                    `geomStartMs` was taken on the line after `parseEndMs`,
+ *                    and the blessed 1.451 snapshot bears it out at 0-5 ms
+ *                    of slack on all 46 OK rows. Calling that "Total" hid
+ *                    the file read, the wasm init and the teardown, and put
+ *                    two different quantities in one column across the two
+ *                    pipelines.
+ *   parsePlusGeometryMs  That sum, kept as its own column so the identity is
+ *                    visible rather than coincidental. The gap between the
+ *                    two is everything the stage clocks cannot see.
+ *
+ * Neither is time-to-first-mesh, and no column here is: this child runs a
+ * resident, fully-extracted open, which is not the windowed deferred pump
+ * Share drives. See conway#562 §2.
  *
  * WHICH COLUMNS ARE PEAK AND WHICH ARE INSTANTS — they are not comparable and
  * the difference is large (conway#552):
@@ -205,7 +253,11 @@ function capturePerfMemory(
  * @param status OK or FAIL.
  * @param parseTimeMs Parse stage duration in ms.
  * @param geometryTimeMs Geometry extraction duration in ms.
- * @param totalTimeMs Sum of parse + geometry in ms.
+ * @param totalTimeMs The load's WALL CLOCK — file read through teardown. See
+ * the column note above for why this stopped being the sum of the two stages
+ * above it (conway#562).
+ * @param parsePlusGeometryMs That sum, which is what `totalTimeMs` used to
+ * hold.
  * @param memory The row's memory figures, captured at the points in the load
  * each is defined at. Defaults to capturing the end-of-load instants here,
  * which is what the FAIL paths want — they have nothing else to report.
@@ -217,6 +269,7 @@ async function writePerfCsvIfRequested(
     parseTimeMs: number,
     geometryTimeMs: number,
     totalTimeMs: number,
+    parsePlusGeometryMs: number,
     memory: PerfMemory = capturePerfMemory(),
 ): Promise<void> {
 
@@ -251,11 +304,13 @@ async function writePerfCsvIfRequested(
   const fileName = csvSafeString( path.basename( ifcFile ) )
 
   const header =
-    'file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,' +
+    'file,status,writer,parseTimeMs,geometryTimeMs,totalTimeMs,' +
+    'parsePlusGeometryMs,geometryMemoryMb,' +
     'peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,' +
     'arrayBuffersMb,retainedRssMb,retainedHeapUsedMb,retainedExternalMb\n'
   const row =
-    `${fileName},${status},${parseTimeMs},${geometryTimeMs},${totalTimeMs},` +
+    `${fileName},${status},${PERF_WRITER},${parseTimeMs},${geometryTimeMs},` +
+    `${totalTimeMs},${parsePlusGeometryMs},` +
     `${geometryMemoryMb},${peakWasmHeapMb},${rssMb},${peakRssMb},` +
     `${heapUsedMb},${heapTotalMb},${externalMb},${arrayBuffersMb},` +
     `${retainedRssMb},${retainedHeapUsedMb},${retainedExternalMb}\n`
@@ -388,6 +443,16 @@ function doWork() {
           // above had to move ahead of this line.
           const memoryBaseline = await settleAndSampleMemoryForPerf( perfPath )
 
+          // `totalTimeMs` starts HERE, not at parseStartMs (conway#562).
+          // What sat between the two is a file read, a ParsingBuffer and a
+          // header parse — real cost of loading the model that the stage
+          // clocks could not see, and that a reader takes "Total" to
+          // include. Deliberately after the settle: the retention samples
+          // are outside the timed region by design (see
+          // design/new/perf-measurement.md), and folding two forced
+          // collections into the load's wall clock would undo that.
+          const loadStartMs = Date.now()
+
           try {
             indexIfcBuffer = fs.readFileSync(ifcFile)
           } catch (ex) {
@@ -474,7 +539,8 @@ function doWork() {
 
           if (model === void 0) {
             await writePerfCsvIfRequested(
-                perfPath, ifcFile, 'FAIL', parseTimeMs, 0, parseTimeMs)
+                perfPath, ifcFile, 'FAIL', parseTimeMs, 0,
+                Date.now() - loadStartMs, parseTimeMs)
             return
           }
 
@@ -484,7 +550,12 @@ function doWork() {
           const scene = geometryExtraction(model)
           const geomEndMs = Date.now()
           const geometryTimeMs = geomEndMs - geomStartMs
-          const totalTimeMs = geomEndMs - parseStartMs
+
+          // The sum the `totalTimeMs` column used to hold. `geomStartMs` is
+          // taken on the line after `parseEndMs`, so this IS
+          // parseTimeMs + geometryTimeMs — the identity is now visible in
+          // the name instead of being a coincidence a reader has to derive.
+          const parsePlusGeometryMs = geomEndMs - parseStartMs
 
           const perfStatus = scene === void 0 ? 'FAIL' : 'OK'
           // Sized before anything downstream can release meshes, and only on
@@ -527,6 +598,11 @@ function doWork() {
           // byte-identical, is worth more than the work it costs.
           model.invalidate( true )
 
+          // The load's wall clock closes on the teardown, not on the last
+          // stage clock, and before the retained settle so those two forced
+          // collections stay outside every timed column.
+          const totalTimeMs = Date.now() - loadStartMs
+
           // Both sides come back undefined on a run with no `--perf`, so
           // `retained` stays unset and the row would read N/A — except no row
           // is written at all in that case.
@@ -534,8 +610,8 @@ function doWork() {
               memoryBaseline, await settleAndSampleMemoryForPerf( perfPath ) )
 
           await writePerfCsvIfRequested(
-              perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs, totalTimeMs,
-              memory)
+              perfPath, ifcFile, perfStatus, parseTimeMs, geometryTimeMs,
+              totalTimeMs, parsePlusGeometryMs, memory)
 
           // AFTP sizing pass: no-op unless the wasm module was built with
           // CONWAY_ALLOC_TELEMETRY (see conway-geom structures/alloc_telemetry.h).

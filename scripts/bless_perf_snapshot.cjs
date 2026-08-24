@@ -19,23 +19,45 @@
  * TWO COLUMN SETS ARE IN PLAY, and they are not the same file:
  *
  *   perf.csv (input, written by src/ifc/ifc_regression_main.ts)
- *     file,status,parseTimeMs,geometryTimeMs,totalTimeMs,geometryMemoryMb,
+ *     file,status,writer,parseTimeMs,geometryTimeMs,totalTimeMs,
+ *     parsePlusGeometryMs,geometryMemoryMb,
  *     peakWasmHeapMb,rssMb,peakRssMb,heapUsedMb,heapTotalMb,externalMb,
  *     arrayBuffersMb,retainedRssMb,retainedHeapUsedMb,retainedExternalMb
  *
  *   performance-detail.csv (output, the committed convention)
- *     timestamp,loadStatus,uname,engine,filename,schemaVersion,parseTimeMs,
- *     geometryTimeMs,totalTimeMs,geometryMemoryMb,peakWasmHeapMb,rssMb,
+ *     timestamp,loadStatus,writer,uname,engine,filename,schemaVersion,
+ *     parseTimeMs,geometryTimeMs,totalTimeMs,parsePlusGeometryMs,
+ *     geometryMemoryMb,peakWasmHeapMb,rssMb,
  *     peakRssMb,heapUsedMb,heapTotalMb,externalMb,arrayBuffersMb,
  *     retainedRssMb,retainedHeapUsedMb,retainedExternalMb,
  *     preprocessorVersion,originatingSystem
  *
  * The three columns perf.csv does not carry (schemaVersion,
  * preprocessorVersion, originatingSystem) are written as N/A rather than
- * omitted, so the file keeps the 22-column shape every existing consumer and
+ * omitted, so the file keeps a fixed column shape every existing consumer and
  * GitHub's CSV viewer expect. None of the three reaches the delta:
  * preprocessorVersion/originatingSystem are not in its column set, and
  * schemaVersion is carried through as a label.
+ *
+ * WHICH PIPELINE PRODUCED THE ROW (conway#555). `writer` names it, and it is
+ * not decoration: `geometryMemoryMb` and the three retention columns mean
+ * different things per pipeline, so a delta that joins a CLI-produced
+ * snapshot against a regression-produced one reports a ~30% geometry-memory
+ * change that is pure methodology (MB-Khaya 16.8 vs 22.3 MB — the IFC
+ * regression child runs at FULL memoization capture and keeps CSG
+ * temporaries in the map `calculateGeometrySize()` sums). Rows written here
+ * carry whatever the child reported; rows from an older snapshot have no
+ * `writer` at all, and gen_delta_csv.cjs treats an unknown writer as
+ * comparable rather than refusing every historical delta.
+ *
+ * TOTAL IS A WALL CLOCK (conway#562). `totalTimeMs` used to be
+ * `parseTimeMs + geometryTimeMs` by construction on the regression children
+ * — verified at 0-5 ms of slack across all 46 OK rows of the blessed 1.451
+ * snapshot — while meaning a real file-read-through-teardown wall clock on
+ * the loader path. It is the wall clock on both now, and `parsePlusGeometryMs`
+ * carries the sum. The `totalTimeMs` column therefore MOVES ONCE, upward, on
+ * regression-produced rows; older snapshots difference against it as a
+ * change of methodology, not of the engine.
  *
  * PEAK vs INSTANT (conway#552). `peakRssMb` is the child process's kernel
  * high-water mark; `rssMb`/`heapUsedMb`/`heapTotalMb`/`externalMb`/
@@ -87,8 +109,10 @@ const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
 
 const DETAIL_COLUMNS = [
-  'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
-  'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'geometryMemoryMb',
+  'timestamp', 'loadStatus', 'writer', 'uname', 'engine', 'filename',
+  'schemaVersion',
+  'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'parsePlusGeometryMs',
+  'geometryMemoryMb',
   'peakWasmHeapMb', 'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb',
   'externalMb', 'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb',
   'retainedExternalMb', 'preprocessorVersion', 'originatingSystem',
@@ -158,6 +182,10 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
     lines.push(csvRow([
       timestamp,
       row.status || UNMEASURED,
+      // Absent from every perf.csv written before #555. Read from the row
+      // rather than hard-coded here: this script blesses whatever the batch
+      // aggregated, and a mixed IFC/STEP corpus carries two writers.
+      row.writer || UNMEASURED,
       os.arch(),
       engine,
       // The committed snapshots URL-encode the filename, and the delta joins
@@ -167,6 +195,8 @@ function writeDetailCsv(rows, outPath, engine, timestamp) {
       row.parseTimeMs || UNMEASURED,
       row.geometryTimeMs || UNMEASURED,
       row.totalTimeMs || UNMEASURED,
+      // Absent before #562, where totalTimeMs stopped being this sum.
+      row.parsePlusGeometryMs || UNMEASURED,
       // Absent from every perf.csv written before #552, and from FAIL rows,
       // which is why this reads the column instead of assuming it.
       row.geometryMemoryMb || UNMEASURED,
@@ -450,16 +480,61 @@ allocation (\`getAllocationSize\`), which is what a residency budget governs.
 The three differ by an order of magnitude and none of them converts into
 another.
 
-**\`geometryMemoryMb\` is comparable only within one writer, and the writers
-that disagree are not the two in this file.** The IFC **CLI** and the IFC
-regression child read 16.8 vs 22.3 MB for the same model: the same
-\`calculateGeometrySize()\`, sampled at different points in two pipelines
-running different CSG options
-([conway#555](https://github.com/bldrs-ai/conway/issues/555)). Every row here
-comes from a regression child, so the hazard is differencing one of these
-figures against a CLI-produced one — which a delta will do without saying so.
-IFC rows against STEP rows within this file is a different pair, and that pair
-has not been measured to disagree.
+**\`geometryMemoryMb\` is comparable only within one writer, which is why
+every row now carries a \`writer\` column.** The IFC **CLI** and the IFC
+regression child read 16.8 vs 22.3 MB for the same model — the same
+\`calculateGeometrySize()\`, sampled in two pipelines that capture different
+things ([conway#555](https://github.com/bldrs-ai/conway/issues/555)). The
+mechanism is \`RegressionCaptureState.memoization\`: the IFC regression child
+raises it to \`FULL\`, which stops \`deleteTemporaries()\` and leaves every CSG
+intermediate and boolean operand in the map \`calculateGeometrySize()\` sums.
+The digest walks those temporaries, so the two are not going to be made to
+agree; the divergence is named instead. \`gen_delta_csv.cjs\` reads \`writer\`
+and reports \`N/A\` rather than a number when it differences
+\`geometryMemoryMb\` or a retention column across two of them.
+
+IFC rows against STEP rows within this file are a **third** pair, and they do
+disagree in principle for the same reason: \`memoization\` is a process-global
+and the two regression children are separate processes, so only the IFC one
+runs at \`FULL\`. That was true before the column existed too; the column is
+what makes it visible. It has not been measured on a shared model, because
+none of the corpus loads through both children.
+
+**\`totalTimeMs\` is the load's wall clock — and it was not always**
+([conway#562](https://github.com/bldrs-ai/conway/issues/562)). On the
+regression children it used to be \`geomEndMs - parseStartMs\`, with
+\`geomStartMs\` taken on the line after \`parseEndMs\`, so it was
+\`parseTimeMs + geometryTimeMs\` by construction and excluded the file read,
+the wasm init and the teardown. It now runs from before the file read to
+after \`model.invalidate(true)\`, and \`parsePlusGeometryMs\` carries the old
+sum. So **\`totalTimeMs\` steps up once at this boundary** and a delta across
+it is a change of methodology, not of the engine — read
+\`parsePlusGeometryMs\` for continuity, which works between two
+regression-produced snapshots. Neither column is time-to-first-mesh: these
+rows come from a resident, fully-extracted open, not the windowed deferred
+pump Share drives (conway#562 §2).
+
+**Do not read that as "the loader writes the same thing".** It does not, and
+this is the one caveat most likely to be acted on by mistake, because both
+now answer to the word "total". \`ConwayModelLoader\` opens its clock and
+THEN builds and initialises a per-load \`ConwayGeometry\`; a regression child
+initialises before its clock starts. Engine init — about 195 ms — is inside
+one window and outside the other, which is 120% of \`index.ifc\`'s own total,
+24% of \`haus.ifc\`'s and 4.3% of \`MB-Khaya\`'s. \`parsePlusGeometryMs\` is
+not a way round it either: the loader emits no such column at all, and the
+stage clocks it would sum are not the same intervals (the child's parse
+clock includes \`parseHeader\` and its geometry clock includes constructing
+\`IfcGeometryExtraction\`, where the loader excludes both).
+
+So **\`gen_delta_csv.cjs\` withholds EVERY measurement column when the two
+rows come from different harnesses** — every timing column, every memory
+column, \`geometryMemoryMb\` and \`peakWasmHeapMb\` included. What survives
+such a join is \`filename\`, \`loadStatus\`, \`uname\`, \`schemaVersion\` and
+\`engine\`: identity, not data. The row says so on its face — a
+**\`comparability\`** column reading \`crossHarness\`, so a page of \`N/A\` is
+distinguishable from "not measured" and from "absent from that older
+snapshot". Whether a single file should mix harnesses at all is
+[conway#572](https://github.com/bldrs-ai/conway/issues/572).
 
 **The retention columns carried a second, unrelated split until conway#557
 ([conway#557](https://github.com/bldrs-ai/conway/issues/557)).** The IFC
