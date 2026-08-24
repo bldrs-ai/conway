@@ -250,12 +250,13 @@ describe('the delta refuses to cross pipelines (conway#555)', () => {
     expect(cell('totalTimeMsDelta')).toBe('N/A')
     expect(cell('totalTimeMsBasis')).toBe('crossHarness')
 
-    // The stage columns ARE still differenced: their own boundary
-    // differences are real but unmeasured, so they stay comparable on the
-    // snapshot README's standing claim rather than being blanked on a
-    // plausible-sounding one.
-    expect(cell('parseTimeMsDelta')).toBe('0')
-    expect(cell('geometryTimeMsDelta')).toBe('0')
+    // And so are the stage columns, as of review round 3: they subtract
+    // non-equivalent intervals too (see the crossHarness cases below).
+    expect(cell('parseTimeMsDelta')).toBe('N/A')
+    expect(cell('geometryTimeMsDelta')).toBe('N/A')
+
+    // One cell explains the whole row of N/A.
+    expect(cell('comparability')).toBe('crossHarness')
   })
 
   test('the same writer on both sides differences normally', () => {
@@ -489,12 +490,20 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
     expect(cell('totalTimeMsBasis')).toBe('crossHarness')
   })
 
-  test('the stage columns are left alone, and say so by still computing', () => {
-    // Scoped deliberately: the ~195 ms engine-init term is MEASURED for the
-    // total, and the stage clocks' own boundary differences are not. This
-    // withholds what there is evidence for and leaves the rest as a
-    // recorded caveat rather than acting on a plausible-sounding one — the
-    // same discipline that kept peakWasmHeapMb comparable.
+  test('the stage columns are withheld across harnesses too', () => {
+    // Review round 3. These subtract non-equivalent intervals as surely as
+    // the total does: the child's parse clock opens before `parseHeader`
+    // (ifc_regression_main.ts:475) where the loader times the header
+    // separately and starts its parse clock at `parseDataToModel`
+    // (conway_model_loader.ts:418, :468); and the child's geometry clock
+    // wraps `new IfcGeometryExtraction(...)` (:549 around :758) where the
+    // loader constructs it beforehand (:510 against :525) — a constructor
+    // that allocates two native identity matrices and four memory pools.
+    //
+    // Held comparable for one round because the magnitude was unmeasured.
+    // Wrong test: unmeasured is not zero, and comparability is categorical.
+    // Magnitude decides severity, not whether two numbers are the same
+    // quantity.
     const cell = delta(
         writeRow('old.csv', LEGACY_THREE,
             ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
@@ -503,8 +512,41 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
             ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
               '1100', '4200', '5400', '5300', 'N/A', 'N/A']))
 
-    expect(cell('parseTimeMsDelta')).toBe('100')
-    expect(cell('geometryTimeMsDelta')).toBe('200')
+    expect(cell('parseTimeMsDelta')).toBe('N/A')
+    expect(cell('geometryTimeMsDelta')).toBe('N/A')
+    expect(cell('comparability')).toBe('crossHarness')
+  })
+
+  test('nothing measured survives a cross-harness join — only identity', () => {
+    // The matrix has converged, and this pins the whole of it rather than
+    // one column at a time: after three rounds the complete answer for two
+    // harnesses is "not comparable". What comes through is which row is
+    // which, not what it measured.
+    const cell = delta(
+        writeRow('old.csv', LEGACY_THREE,
+            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
+              '1000', '4000', '5400', 'Revit', 'Autodesk']),
+        writeRow('new.csv', CURRENT,
+            ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
+              '1100', '4200', '5400', '5300', 'N/A', 'N/A']))
+
+    for (const column of [
+      'parseTimeMsDelta', 'geometryTimeMsDelta', 'totalTimeMsDelta',
+      'totalTimeMsPercentageChange', 'geometryMemoryMbDelta',
+      'peakWasmHeapMbDelta', 'rssMbDelta', 'peakRssMbDelta', 'heapUsedMbDelta',
+      'heapTotalMbDelta', 'externalMbDelta', 'arrayBuffersMbDelta',
+      'retainedRssMbDelta', 'retainedHeapUsedMbDelta',
+      'retainedExternalMbDelta', 'engine1TotalTimeMs', 'engine2TotalTimeMs',
+    ]) {
+      expect(cell(column)).toBe('N/A')
+    }
+
+    // Identity survives, and says why the rest did not.
+    expect(cell('filename')).toBe('mep.ifc')
+    expect(cell('loadStatus1')).toBe('OK')
+    expect(cell('loadStatus2')).toBe('OK')
+    expect(cell('uname')).toBe('x64')
+    expect(cell('comparability')).toBe('crossHarness')
   })
 })
 

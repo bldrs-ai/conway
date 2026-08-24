@@ -49,31 +49,76 @@ const WRITER_TRAITS = {
 };
 
 /**
- * Columns that only mean the same thing within ONE harness.
+ * Every column that carries a MEASUREMENT rather than an identity.
  *
- * The README `bless_perf_snapshot.cjs` ships beside each snapshot states the
- * case itself: `rssMb` from a regression child "excludes a GL context and a
- * three.js scene graph". The retention trio carries the loader's per-load
- * engine on one side and not the other.
+ * None of them is comparable across two harnesses, and after three review
+ * rounds on this seam that is the whole of the answer rather than a list
+ * with exceptions (#570 review, rounds 2 and 3). The matrix converged: **two
+ * harnesses cannot be compared at all.** What survives a cross-harness join
+ * is `filename`, `loadStatus`, `uname` and `schemaVersion` — which row is
+ * which, not what it measured.
+ *
+ * The three findings that got here, each a different column family and the
+ * same root cause — the harnesses bound their intervals and hold their
+ * processes differently, and `writer` names the pipeline without saying
+ * what its clocks and samples enclosed:
+ *
+ *   PROCESS MEMORY. A regression child's `rssMb` "excludes a GL context and
+ *   a three.js scene graph" (the snapshot README's own words), and the
+ *   loader carries a per-load `ConwayGeometry` the children do not.
+ *
+ *   TOTAL TIME. `ConwayModelLoader` opens `allTimeStart` and THEN builds and
+ *   initialises that engine; the regression child initialises in `main()`
+ *   and starts its clock immediately before the file read. Engine init is
+ *   inside one window and outside the other — measured at ~195 ms, which is
+ *   120% of index.ifc's own total, 24% of haus.ifc's and 4.3% of
+ *   MB-Khaya's.
+ *
+ *   STAGE TIME. The child's parse clock opens before `parseHeader`
+ *   (ifc_regression_main.ts:475) where the loader times the header
+ *   separately and starts its parse clock at `parseDataToModel`
+ *   (conway_model_loader.ts:418, :468). The child's geometry clock wraps
+ *   `new IfcGeometryExtraction(...)` (:549 around :758) where the loader
+ *   constructs it before its clock (:510 against :525) — and that
+ *   constructor is not free: two native identity matrices
+ *   (`getIdentity2DMatrix` / `getIdentity3DMatrix`) and four memory pools.
+ *
+ * That last one was left comparable for one round on the grounds that its
+ * magnitude was unmeasured. That was the wrong test. **Unmeasured is not
+ * zero, and comparability is categorical, not a matter of degree** — the
+ * same standard that rejected `parsePlusGeometryMs` as a substitute for
+ * `totalTimeMs`. Magnitude decides severity; it does not decide whether two
+ * numbers are the same quantity.
+ *
+ * `geometryMemoryMb` and `peakWasmHeapMb` are in here too, though each is
+ * arguably a property of the model rather than of the process. Keeping a
+ * two-item exception list would mean a reader has to know which two, and
+ * the loader reaches its geometry through a different call
+ * (`extractIFCGeometryDataAsync` when cooperative) with its own allocation
+ * pattern. One rule that is true beats a shorter one with a footnote.
  */
-const HARNESS_DEPENDENT_COLUMNS = new Set([
+const MEASUREMENT_COLUMNS = new Set([
+  'parseTimeMs', 'geometryTimeMs', 'totalTimeMs', 'parsePlusGeometryMs',
+  'geometryMemoryMb', 'peakWasmHeapMb',
   'rssMb', 'peakRssMb', 'heapUsedMb', 'heapTotalMb', 'externalMb',
   'arrayBuffersMb', 'retainedRssMb', 'retainedHeapUsedMb', 'retainedExternalMb',
 ]);
 
 /**
- * Columns that only mean the same thing within one memoization capture mode.
+ * Columns that only mean the same thing within one memoization capture mode,
+ * which bites WITHIN a harness — the two regression children are separate
+ * processes and only the IFC one raises `RegressionCaptureState.memoization`
+ * to FULL.
  *
  * Just the one, and measured rather than assumed: MB-Khaya through a single
  * extraction reads `geometryMemoryMb` 16.82 MB at OPTIMAL against 22.26 MB
  * at FULL.
  *
  * `peakWasmHeapMb` is deliberately NOT here. The same measurement reads it
- * at **101.56 MB under both modes** — it is a grow-only high-water of the
- * linear memory, and the temporaries are allocated either way; FULL only
- * keeps the JS-side handles. RSS moved 1 MB in 516, which is noise. So the
- * wasm column is scoped to neither trait, and the capture mode reaches
- * exactly one column.
+ * at **101.56 MB under both modes** — the linear memory is a grow-only
+ * high-water and the temporaries are allocated either way; FULL only keeps
+ * the JS-side handles. RSS moved 1 MB in 516, which is noise. So within a
+ * harness it stays comparable.
  */
 const CAPTURE_DEPENDENT_COLUMNS = new Set(['geometryMemoryMb']);
 
@@ -208,6 +253,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
         'totalTimeMsBasis',
+        'comparability',
         'geometryMemoryMbDelta',
         'peakWasmHeapMbDelta',
         'rssMbDelta',
@@ -236,6 +282,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'totalTimeMsDelta',
         'totalTimeMsPercentageChange',
         'totalTimeMsBasis',
+        'comparability',
         'geometryMemoryMbDelta',
         'peakWasmHeapMbDelta',
         'rssMbDelta',
@@ -396,6 +443,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: totalsDelta(totals),
           totalTimeMsPercentageChange: totalsPercentage(totals),
           totalTimeMsBasis: totals.basis,
+          comparability: comparability(entry1, entry2),
           geometryMemoryMbDelta: computePipelineDelta('geometryMemoryMb', entry2, entry1),
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
@@ -436,6 +484,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           totalTimeMsBasis: 'N/A',
+          comparability: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -467,6 +516,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           totalTimeMsBasis: 'N/A',
+          comparability: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -504,11 +554,12 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // See comparableTotals: not always the raw `totalTimeMs` cells.
           engine1TotalTimeMs: totals.older,
           engine2TotalTimeMs: totals.newer,
-          parseTimeMsDelta: computeDelta('parseTimeMs', entry2, entry1),
-          geometryTimeMsDelta: computeDelta('geometryTimeMs', entry2, entry1),
+          parseTimeMsDelta: computePipelineDelta('parseTimeMs', entry2, entry1),
+          geometryTimeMsDelta: computePipelineDelta('geometryTimeMs', entry2, entry1),
           totalTimeMsDelta: totalTimeDelta,
           totalTimeMsPercentageChange: totalTimePercentageChange,
           totalTimeMsBasis: totals.basis,
+          comparability: comparability(entry1, entry2),
           geometryMemoryMbDelta: computePipelineDelta('geometryMemoryMb', entry2, entry1),
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
@@ -552,6 +603,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           totalTimeMsBasis: 'N/A',
+          comparability: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -586,6 +638,7 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           totalTimeMsDelta: 'N/A',
           totalTimeMsPercentageChange: 'N/A',
           totalTimeMsBasis: 'N/A',
+          comparability: 'N/A',
           geometryMemoryMbDelta: 'N/A',
           peakWasmHeapMbDelta: 'N/A',
           rssMbDelta: 'N/A',
@@ -661,8 +714,9 @@ function computePipelineDelta(field, entry2, entry1) {
   const traits2 = traitsOf(entry2);
 
   if (traits1 !== undefined && traits2 !== undefined) {
-    if (HARNESS_DEPENDENT_COLUMNS.has(field) &&
-        traits1.harness !== traits2.harness) {
+
+    // Cross-harness withholds every measurement, not a subset of them.
+    if (MEASUREMENT_COLUMNS.has(field) && traits1.harness !== traits2.harness) {
       return 'N/A';
     }
 
@@ -813,6 +867,30 @@ function comparableTotals(entry1, entry2) {
   }
 
   return { older: 'N/A', newer: 'N/A', basis: 'N/A' };
+}
+
+/**
+ * Whether two rows are comparable at all, as a cell the reader can see.
+ *
+ * Every measurement column blanks at once when this reads `crossHarness`,
+ * so one cell explains a whole row of `N/A` rather than leaving a reader to
+ * guess whether a column was unmeasured, absent from an old snapshot, or
+ * incomparable. Those are three different facts and they must not share a
+ * spelling — the same obligation #548 established for a missing value.
+ *
+ * @param {Object} entry1 Older row.
+ * @param {Object} entry2 Newer row.
+ * @returns {string} 'sameHarness', 'crossHarness' or 'unknown'.
+ */
+function comparability(entry1, entry2) {
+  const traits1 = traitsOf(entry1);
+  const traits2 = traitsOf(entry2);
+
+  if (traits1 === undefined || traits2 === undefined) {
+    return 'unknown';
+  }
+
+  return traits1.harness === traits2.harness ? 'sameHarness' : 'crossHarness';
 }
 
 /**

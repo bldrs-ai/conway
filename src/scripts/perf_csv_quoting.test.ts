@@ -53,8 +53,14 @@ const NASTY_PREPROCESSOR =
  * because conway#562 redefined `totalTimeMs` on the regression children, so
  * a delta spanning that boundary has to state which it did rather than
  * leave a reader to guess from the magnitude.
+ *
+ * 27 since conway#570 review round 3 added `comparability`, which says
+ * whether the two rows came from the same harness at all. Every measurement
+ * column blanks together when it reads `crossHarness`, so one cell explains
+ * a whole row of `N/A` — otherwise "not measured", "absent from this old
+ * snapshot" and "not comparable" would all read the same.
  */
-const DELTA_COLUMN_COUNT = 26
+const DELTA_COLUMN_COUNT = 27
 
 const DETAIL_HEADER = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
