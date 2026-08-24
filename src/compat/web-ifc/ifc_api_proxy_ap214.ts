@@ -58,10 +58,28 @@ const STREAMED_PARSE_POOL_BYTES = 1024 * 1024
 // finishes a deferred model synchronously.
 const DEFERRED_DRAIN_BATCH_AP214 = 256
 
-// Divisor mapping consumer batch sizes (tuned for IFC's per-product
-// granularity) onto AP214's chunkier per-part units — see
-// extractGeometryBatch.
-const AP214_UNITS_PER_PRODUCT_BATCH = 16
+// How many AP214 demand units one unit of a consumer's batch size is
+// worth. Consumers size batchSize for IFC's per-product granularity
+// (Share's ASYNC_DEMAND_EXTRACT_BATCH_SIZE is 8); an AP214 unit used to
+// be a whole part, so this was a DIVISOR of 16 — and at that size
+// floor(8 / 16) already clamped to the Math.max(1, …) floor, which is
+// why the pump could not get any finer than one whole silkscreen.
+// Since conway#579 a unit is a slice of a representation's items, finer
+// than an IFC product rather than coarser, so the mapping inverts. This
+// is only the ceiling on one call; AP214_PUMP_BATCH_BUDGET_MS is what
+// actually ends one. See extractGeometryBatch.
+const AP214_UNITS_PER_PRODUCT_BATCH = 8
+
+// Wall-clock one streaming pump call spends extracting before handing
+// the thread back. Retuned in conway#579 against measured per-unit cost:
+// simulating this pump over Arty_Z7 puts the median call at ~100 ms and
+// the whole load at ~300 calls, against one 17.7 s call before; on DSA2
+// it is ~130 calls with a ~60 ms median. Both numbers move roughly
+// linearly with this constant, and 50 ms is where the caller's own
+// per-batch work still fits underneath a ~200 ms responsiveness budget —
+// Share's appendBatch of the resulting delta costs on the same order as
+// the extraction that produced it.
+const AP214_PUMP_BATCH_BUDGET_MS = 50
 
 /**
  * Everything parse/extraction produces that the proxy constructor's tail
@@ -1325,12 +1343,17 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const extraction = this.conwayGeometry_
 
-    // Consumers tune batchSize for IFC's fine-grained products (Share
-    // pumps 64); AP214 units are whole parts/subassemblies — orders of
-    // magnitude chunkier (Arty: ~57 units for ~12s of geometry). Scale
-    // the requested batch down so STEP loads stay progressive without
-    // any consumer knowing the schema.
-    const units = Math.max(1, Math.floor(batchSize / AP214_UNITS_PER_PRODUCT_BATCH))
+    // Scale the consumer's IFC-shaped batch size onto AP214 units, which
+    // are finer than a product since conway#579, and cap the call by
+    // wall clock rather than by unit count — a demand unit's cost varies
+    // by three orders of magnitude across the corpus, so a count alone
+    // cannot keep a call inside a frame budget. A caller that supplied
+    // no meshCallback is draining to completion rather than streaming
+    // (see streamAllMeshes), and gets no budget: yielding is pure
+    // overhead when nothing is watching the deltas.
+    const units = Math.max(1, batchSize * AP214_UNITS_PER_PRODUCT_BATCH)
+    const budgetMs =
+      meshCallback !== void 0 ? AP214_PUMP_BATCH_BUDGET_MS : void 0
 
     if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
       this.progressTracker_.beginPhase(
@@ -1338,7 +1361,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       this.geometryPhaseStarted_ = true
     }
 
-    const extracted = extraction.extractDemandUnitBatch(units)
+    const extracted = extraction.extractDemandUnitBatch(units, budgetMs)
     const remaining = extraction.demandUnitCount - extraction.demandUnitCursor
 
     if (this.progressTracker_ !== void 0) {
