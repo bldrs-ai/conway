@@ -2967,6 +2967,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
+
+    // TODO(conway#574): the prefix is a PREDICTION, and the pass has more
+    // early-abandon points than it enumerates — a product whose extraction
+    // throws abandons the relationship too, and the unrun tail drops in one
+    // step when the cursor advances. The fix is to adjust the prefix from
+    // the stepper's actual termination rather than to add a reason at a
+    // time; three review rounds found three boundaries.
     const prefix = this.demandAggregateStepPrefix_ ?? [0]
     const aggregateSteps = prefix[prefix.length - 1]
 
