@@ -21,15 +21,67 @@
  * a comment about a cached buildinfo that declared the tree up to date
  * while `compiled/dependencies/conway-geom/index.js` was missing. This
  * compares inputs to outputs directly and never consults the buildinfo,
- * so it still fires when the rebuild is skipped or lied to.
+ * so it still fires when the rebuild is skipped, and when the buildinfo
+ * lies about an output that is MISSING.
  *
- * **Existence only, deliberately — mtimes cannot answer this.** `tsc
- * --build` does not rewrite an output (or `tsconfig.tsbuildinfo`) whose
- * input's content hash is unchanged, so a source merely touched by a
- * checkout stays permanently "older than its output" under an mtime
- * comparison: measured here, `yarn build-incremental` did not clear it,
- * which would leave the gate failing with no way to satisfy it. An
- * absent output has no such ambiguity.
+ * **What it does not catch — source-driven staleness only.** It answers
+ * "does every source tsc compiles have an output", so it covers the
+ * class the defect above came from: sources arriving or changing with no
+ * output, and outputs that were deleted. It does not cover an output
+ * whose CONTENT was changed out of band while its source is unchanged —
+ * hand-edited while debugging, copied in from another tree, left
+ * truncated by a killed build. `tsc --build` has nothing to rebuild in
+ * that case (the buildinfo's per-file hash is over the SOURCE text; it
+ * records no hash of the emitted `.js`), so the modified file survives
+ * `yarn build-incremental` and an existence check passes over it.
+ * Reproduced rather than reasoned about: a line appended to
+ * `compiled/src/scripts/check_compiled_fresh.test.js` came back
+ * byte-identical from a rebuild, and this check exited 0.
+ *
+ * That gap is left open deliberately, because both ways of closing it
+ * cost more than it does:
+ *
+ * - **Hash-validate the outputs** — against what? The buildinfo stores
+ *   source hashes, not output hashes, and it is the thing that lies. A
+ *   manifest written by our own build gets refreshed from the modified
+ *   file by the `yarn build-incremental` that `precommit` runs
+ *   immediately before this check, so it would be validating against
+ *   itself. Re-emitting and comparing is the next option, not a cheaper
+ *   one.
+ * - **Force a clean emit** — measured: `tsc --build --force` is 37.7s
+ *   against 0.5s for the incremental `tsc --build` on an up-to-date
+ *   tree, so ~+37s on every commit against a ~85s gate, to close a hole
+ *   that needs someone to have modified a gitignored build output by
+ *   hand. `compiled/` being untracked also keeps the two revert commands
+ *   AGENTS.md warns about from producing this shape — neither has a
+ *   `compiled/` blob to restore.
+ *
+ * So this stays a fast existence check, and a forced re-emit is the
+ * manual reset for when you do suspect a modified tree:
+ * `npx tsc --build --force && yarn build-incremental` (the second pass
+ * re-runs `ts-add-js-extension` over the fresh emit).
+ *
+ * Do NOT reset by deleting the directory. `compiled/` also holds
+ * artifacts tsc does not emit — `compiled/dependencies/conway-geom/Dist`
+ * is the wasm glue, put there by `yarn wasm-prebuilt` or by a real
+ * conway-geom build, and `yarn clean` is `rm -rf compiled` plus more.
+ * Learned by doing it here: after `rm -rf compiled && yarn
+ * build-incremental` this check passed, every source had an output, and
+ * 37 suites still failed on `Cannot find module
+ * '../Dist/ConwayGeomWasmNodeMT.js'`. Which is the same lesson from the
+ * other side — a green existence check is a claim about tsc's outputs,
+ * not about the tree jest runs against.
+ *
+ * **Existence rather than mtimes, for a separate reason.** `tsc --build`
+ * does not rewrite an output (or `tsconfig.tsbuildinfo`) whose input's
+ * content hash is unchanged, so a source merely touched by a checkout
+ * stays permanently "older than its output" under an mtime comparison:
+ * measured here, `yarn build-incremental` did not clear it, which would
+ * leave the gate failing with no way to satisfy it. The reverse
+ * direction does not work as a tamper signal either — the build's last
+ * step (`ts-add-js-extension`) rewrites outputs after tsc writes the
+ * buildinfo, leaving 2,314 of 2,635 emitted `.js` files legitimately
+ * newer than it. An absent output has no such ambiguity.
  *
  * Usage:
  *   node scripts/check-compiled-fresh.cjs [--root <dir>]

@@ -19,6 +19,10 @@ import { createRequire } from 'module'
  * Driven over a synthetic tree rather than the repo: asserting against the
  * real `compiled/` would only ever say "the tree I was just built from is
  * fresh", which is the tautology the defect hid behind.
+ *
+ * It is an existence check, deliberately — the last case pins what that
+ * leaves out, and scripts/check-compiled-fresh.cjs prices the two ways of
+ * closing it.
  */
 const require_ = createRequire(import.meta.url)
 
@@ -138,6 +142,26 @@ describe( 'compiled-output freshness check', () => {
     // src/external is NOT excluded — tsconfig excludes top-level
     // `external/**/*` only — so it is the one that must still be reported.
     expect( sourcesWithoutOutput( root ) ).toEqual( [ 'src/external/vendored.ts' ] )
+  } )
+
+  test( 'an output modified out of band is outside this check, by design', () => {
+
+    // The boundary, pinned so it stays a decision rather than an accident.
+    // The check asks whether an output EXISTS, so an output whose content
+    // changed while its source did not reads as fresh — and `tsc --build`
+    // agrees with it, because the buildinfo hashes source text and records
+    // no hash of the emitted `.js`. Reproduced against the real tree:
+    // a line appended to compiled/src/scripts/check_compiled_fresh.test.js
+    // came back byte-identical from `yarn build-incremental`, and the gate
+    // exited 0. Closing it means a forced clean emit on every commit
+    // (37.7s against 0.5s, priced in the script header) — so if you are
+    // here to add content validation, that is the trade-off you are
+    // overturning, and this expectation is the one to invert.
+    writeBuilt( 'src/ifc/ifc_step_model.ts' )
+    write( outputPathFor( 'src/ifc/ifc_step_model.ts' ), '// output\nMODIFIED OUT OF BAND\n' )
+
+    expect( sourcesWithoutOutput( root ) ).toEqual( [] )
+    expect( describeMissing( sourcesWithoutOutput( root ) ) ).toBe( '' )
   } )
 
   test( 'a missing input root is not a staleness signal', () => {
