@@ -6707,6 +6707,13 @@ export class IfcGeometryExtraction {
   // Lazy cache for aggregateTargetLocalIDs().
   private aggregateTargetLocalIDs_?: Set<number>
 
+  /* Per-relationship product counts, filled ONLY by the paged walk and
+   * handed to the demand pump once — see takeAggregateRelatedProductCounts.
+   * Keyed by relationship localID rather than being an array, because the
+   * pump's worklist is filtered by shard and so is not this walk's
+   * ordering. */
+  private pagedAggregateProductCounts_?: Map<number, number>
+
   /* Whether the cached set came from the PAGED walk. A windowed source can
    * cache an incomplete set from the sync walk (that is the defect
    * ensureAggregateTargetLocalIDs fixes), and the cache is for the model's
@@ -6744,6 +6751,14 @@ export class IfcGeometryExtraction {
 
     const targets = new Set<number>()
 
+    // No counts collected here, deliberately (conway#569 review). This walk
+    // also serves the WHOLE-MODEL extraction, which never consumes them, and
+    // a cache kept for the model's life is retention that path would pay for
+    // nothing. A resident demand pump derives its counts at worklist-adopt
+    // time instead — see IfcApiProxyIfc.adoptAggregateStepPrefix_ — where
+    // reading a record costs no paging. Both pumps get them from
+    // aggregateRelatedProductCount, never from this scan's typeID test,
+    // which classifies differently from the pass in both directions.
     for ( const relAggregate of this.model.types( IfcRelAggregates ) ) {
       this.addAggregateTargets_( relAggregate, targets )
     }
@@ -6751,6 +6766,55 @@ export class IfcGeometryExtraction {
     this.aggregateTargetLocalIDs_ = targets
 
     return targets
+  }
+
+
+  /**
+   * The per-relationship product counts the PAGED walk collected, handed
+   * over and dropped in one call.
+   *
+   * Counts are how many products the aggregates pass will extract for a
+   * relationship — the size of the unit of work
+   * {@link extractRelAggregateGeometryIncremental} steps through — which the
+   * demand pump needs to report progress in products rather than in
+   * relationships (conway#565: SKYLARK250 puts ~1,960 products under one
+   * relationship, so a relationship-counted bar sat at 1/2 for the whole
+   * load).
+   *
+   * **Collected only on the windowed walk, and only because that is the one
+   * place it is free.** {@link ensureAggregateTargetLocalIDs} already pages
+   * and scans every `IfcRelAggregates` record, so the count is the number it
+   * was discarding. A resident model has no such moment worth capturing —
+   * it can read the same records at adopt time for nothing — so the sync
+   * walk collects nothing at all and the whole-model extraction, which
+   * shares that walk, retains nothing.
+   *
+   * **Handed over rather than cached** (conway#569 review). The prefix the
+   * pump builds from these is itself the durable structure; keeping a second
+   * copy for the model's life is retention with no reader. Measured on an
+   * adverse model — 50,000 relationships over 100,000 products, the shape
+   * where relationship count approaches product count — the map holds
+   * 1.75 MB at 36.7 bytes per relationship. Not fatal beside the 16.4 MB
+   * the target Set from the same walk retains, but it is avoidable, and
+   * `setGeometryShard` refuses to run once a worklist exists so the prefix
+   * is built exactly once and there is nothing to hand it to twice.
+   *
+   * **The same number the resident pump derives for itself**, from the same
+   * call: {@link aggregateRelatedProductCount}. Approximate in one
+   * direction only — a `RelatedObjects` list that needs the generated
+   * getter counts 0 — and the pump's own drain condition, not this number,
+   * decides when the pass is finished.
+   *
+   * @return {Map<number, number> | undefined} Counts keyed by relationship
+   * localID, or undefined where no paged walk ran. The caller owns it.
+   */
+  public takeAggregateRelatedProductCounts(): Map<number, number> | undefined {
+
+    const counts = this.pagedAggregateProductCounts_
+
+    this.pagedAggregateProductCounts_ = undefined
+
+    return counts
   }
 
 
@@ -6794,6 +6858,7 @@ export class IfcGeometryExtraction {
     }
 
     const targets = new Set<number>()
+    const counts = new Map< number, number >()
     const wave = Math.max( 1, Math.floor( waveSize ) )
 
     let pending: IfcRelAggregates[] = []
@@ -6813,7 +6878,19 @@ export class IfcGeometryExtraction {
             ( localID ) => this.model.ensureResidentByLocalID( localID ) ) )
 
         for ( const relAggregate of pending ) {
+
           this.addAggregateTargets_( relAggregate, targets, true )
+
+          // Counted separately from the scan above even though #568 has
+          // since put both on relatedProductByExpressID_: `targets` is a
+          // Set over the whole model, so a product under two relationships
+          // collapses there while costing the pass a step in each. Free
+          // here — this record is resident and pinned for the wave, and
+          // classifying its entries reads columns rather than source bytes
+          // (conway#569 review).
+          counts.set(
+              relAggregate.localID,
+              this.aggregateRelatedProductCount( relAggregate ) )
         }
 
       } finally {
@@ -6837,6 +6914,7 @@ export class IfcGeometryExtraction {
     }
 
     this.aggregateTargetLocalIDs_ = targets
+    this.pagedAggregateProductCounts_ = counts
     this.aggregateTargetsPaged_ = true
 
     return targets
@@ -6881,6 +6959,13 @@ export class IfcGeometryExtraction {
    * permissive catch drops the remaining products too. Recording targets
    * past that point would defer products the pass will never reach, i.e.
    * extract them in neither pass.
+   *
+   * Deliberately NOT the place the progress denominator is counted, even
+   * though the entries pass through here for free and, since conway#568,
+   * through the same classification: `targets` is a Set over the WHOLE
+   * model, so a product reached through two relationships collapses into
+   * one entry here while costing the pass a step in each. See
+   * {@link aggregateRelatedProductCount}.
    *
    * @param relAggregate The relationship to scan.
    * @param targets Accumulator.
@@ -7636,6 +7721,57 @@ export class IfcGeometryExtraction {
     return productLocalIDs
   }
 
+
+  /**
+   * How many products the aggregates pass will actually extract from one
+   * relationship — the size of the unit of work
+   * {@link extractRelAggregateGeometryIncremental} steps through, and the
+   * per-relationship term of the demand pumps' progress denominator
+   * (conway#565).
+   *
+   * **Derived through the pass's own path** —
+   * {@link relatedAggregateProductLocalIDs} and so
+   * {@link relatedProductByExpressID_} — rather than counted off the
+   * target scan, which has the same entries in hand for free.
+   *
+   * The boundary is why. An entry the classification throws on — a
+   * reference that resolves to nothing, or to something that is not an
+   * `IfcObjectDefinition` — ENDS the relationship: the pass's permissive
+   * catch abandons every product after it. A count that skipped the bad
+   * entry and kept going put work in the denominator that would never run,
+   * and the bar then jumped the whole abandoned tail when the relationship
+   * terminated (conway#569 review). On SKYLARK's shape — one relationship
+   * over ~1,960 products — that jump is the entire bar.
+   * {@link relatedAggregateProductLocalIDs} stops where the pass stops;
+   * {@link addAggregateTargets_}, whose Set collapses a product shared by
+   * two relationships, could not carry the number anyway.
+   *
+   * It is still only a PREDICTION of where the pass stops — see the
+   * `TODO(conway#574)` in `IfcApiProxyIfc.demandProgress_`.
+   *
+   * Costs no source bytes beyond the relationship's own record:
+   * `getTypedElementByExpressID` builds its descriptor from the columns
+   * (conway#566 swept exactly this call over SKYLARK250's 7,818,778
+   * records behind an exhausted window — 0 throws, 0 store bytes). That is
+   * what lets the paged walk call it inside a wave, where only the
+   * relationship record is resident, as well as the resident pump calling
+   * it at worklist-adopt time.
+   *
+   * **0 for a `RelatedObjects` list only the generated getter can
+   * resolve** — an inline entity, `$` or junk. Counting those exactly means
+   * materialising the array both callers exist to avoid, and an under-count
+   * only pauses the bar short of full: `remaining` is derived from the
+   * cursors, never from this.
+   *
+   * @param relAggregate The relationship to cost.
+   * @return {number} Related products the aggregates pass will extract.
+   */
+  public aggregateRelatedProductCount( relAggregate: IfcRelAggregates ): number {
+
+    return this.relatedAggregateProductLocalIDs( relAggregate )?.length ?? 0
+  }
+
+
   /**
    * Page the closures of a contiguous run of
    * {@link relatedAggregateProductLocalIDs} entries.
@@ -7705,7 +7841,29 @@ export class IfcGeometryExtraction {
         await this.model.ensureResidentByLocalID( localID )
       }
 
-      const related = relAggregate.RelatedObjects
+      let related: typeof relAggregate.RelatedObjects
+
+      try {
+        related = relAggregate.RelatedObjects
+      } catch ( error ) {
+
+        if ( error instanceof StepBufferNotResidentError ) {
+          throw error
+        }
+
+        // The getter fallback's half of the same split the raw scan makes
+        // (see relatedObjectExpressIDs_), and reachable only through it:
+        // this path exists BECAUSE the scan returned undefined, and a
+        // malformed field is now one of the ways it does. There is nothing
+        // to pin — the pass reads the same field, gets the same throw, and
+        // abandons the relationship inside its permissive catch, extracting
+        // nothing that would need to be resident.
+        //
+        // Letting it escape failed the whole load: this runs on the
+        // deferred pump's paging path, so the first ExtractGeometryBatch-
+        // Async rejected (conway#569 review).
+        return
+      }
 
       if ( related !== null && related !== void 0 ) {
 
@@ -7794,9 +7952,10 @@ export class IfcGeometryExtraction {
    * @param relAggregate The relationship to read.
    * @return {number[] | undefined} The related objects' express IDs in
    * record order, or undefined when the list holds an entry that is not a
-   * `#N` reference — an inline entity, `$`, or junk. Only the generated
-   * getter can resolve (or reject) those, so the caller falls back to it
-   * rather than guessing.
+   * `#N` reference — an inline entity, `$`, junk, or a field that is not a
+   * list at all. Only the generated getter can resolve (or reject) those,
+   * so the caller falls back to it rather than guessing. A non-residency
+   * failure propagates instead: see the catch.
    */
   private relatedObjectExpressIDs_(
       relAggregate: IfcRelAggregates ): number[] | undefined {
@@ -7805,21 +7964,47 @@ export class IfcGeometryExtraction {
 
     let allReferences = true
 
-    relAggregate.forEachReferenceInField(
-        REL_AGGREGATES_RELATED_OFFSET,
-        REL_AGGREGATES_RELATED_BASE,
-        REL_AGGREGATES_RELATED_DEPTH,
-        ( expressID ) => {
+    try {
 
-          if ( expressID === void 0 ) {
-            allReferences = false
-            return false
-          }
+      relAggregate.forEachReferenceInField(
+          REL_AGGREGATES_RELATED_OFFSET,
+          REL_AGGREGATES_RELATED_BASE,
+          REL_AGGREGATES_RELATED_DEPTH,
+          ( expressID ) => {
 
-          expressIDs.push( expressID )
+            if ( expressID === void 0 ) {
+              allReferences = false
+              return false
+            }
 
-          return true
-        } )
+            expressIDs.push( expressID )
+
+            return true
+          } )
+
+    } catch ( error ) {
+
+      // A non-residency failure is a DEFECT, never data: every caller has
+      // either pinned this record or is reading a resident model, so
+      // swallowing it would turn a paging bug into silently missing
+      // geometry. Same split addAggregateTargets_ makes.
+      if ( error instanceof StepBufferNotResidentError ) {
+        throw error
+      }
+
+      // Everything else is a malformed field — a scalar where the aggregate
+      // list belongs, a truncated record — and undefined is already exactly
+      // what this returns for it (conway#569 review): the entry is one only
+      // the generated getter can adjudicate. Every caller already has that
+      // branch, and each does the right thing with it: the pass falls back
+      // to RelatedObjects and rejects it inside its own permissive catch,
+      // AggregateExtractPager.begin pages the relationship whole, and the
+      // progress count reads 0 — which is what the pass will extract.
+      //
+      // Letting it escape instead FAILED THE WHOLE LOAD, because two of
+      // those three callers are on the deferred-worklist build path.
+      return void 0
+    }
 
     return allReferences ? expressIDs : void 0
   }
