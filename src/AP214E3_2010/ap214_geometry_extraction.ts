@@ -607,6 +607,130 @@ export class AP214GeometryExtraction {
 
 
   /**
+   * Memoized value behind `modelExtent`. `undefined` means "not computed
+   * yet"; the scan below always resolves it to a finite number, so this is
+   * computed at most once per extraction.
+   */
+  private modelExtent_: number | undefined = undefined
+
+  /**
+   * The diagonal of this model's own extent, in file units — the scale the
+   * per-face deflection floor is taken against (conway#564 §5).
+   *
+   * ## Why the topological vertices, and not the cartesian points
+   *
+   * Every `vertex_point` sits ON the solid by construction, so their bounding
+   * box is the model. The full `cartesian_point` population is not: it also
+   * carries b-spline control points, unbounded-surface support points and
+   * parameter-space (2D) points, any one of which can sit far outside the
+   * part. Measured on the local corpus, the difference is not marginal —
+   * `Right_Hand.step` is a 0.233 m hand whose cartesian-point box spans
+   * 1134 m (control points at +/-500), and `Arty_Z7.stp` is a 0.419 m board
+   * whose cartesian-point box spans 375 km. Those would floor the target
+   * three to six decades too coarse, i.e. facet the model. The vertex box
+   * reads 0.233 and 0.419 respectively. It is also ~10x cheaper: 56,394
+   * vertices against 316,342 points on Arty_Z7, ~90ms of a ~34s load.
+   *
+   * ## Why this cannot make geometry depend on pump scheduling
+   *
+   * The value is a property of the PARSED INDEX, never of the geometry built
+   * so far, and it is pinned on first use and memoized. Two consequences,
+   * both needed for deterministic digests under the AP214 demand pump and
+   * the streamed preview channel's snapshots:
+   *
+   * - it cannot grow as more geometry is extracted, so two faces tessellated
+   *   at different points in the same load see the same floor;
+   * - min/max over a set is order-invariant in IEEE arithmetic (unlike a
+   *   sum), so the value does not depend on the order `types()` yields
+   *   vertices in either. Only membership matters, and membership is the
+   *   whole index.
+   *
+   * A PREFIX parse (the preview channel's throwaway generations) indexes
+   * less of the file and so can pin a smaller extent — deliberately: a
+   * smaller extent is a finer floor, i.e. strictly closer to the unfloored
+   * behaviour, and that geometry is discarded when the durable load lands.
+   * The durable load's extent is a pure function of the file.
+   *
+   * @return {number} The extent diagonal, or 0 when the model has no
+   * topological vertices (a wireframe or tessellated file), which the native
+   * side reads as "no floor".
+   */
+  public get modelExtent(): number {
+
+    if ( this.modelExtent_ !== undefined ) {
+      return this.modelExtent_
+    }
+
+    let minX = Infinity
+    let minY = Infinity
+    let minZ = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let maxZ = -Infinity
+
+    for ( const vertex of this.model.types( vertex_point ) ) {
+
+      let coordinates
+
+      try {
+        const geometry = vertex.vertex_geometry
+
+        // vertex_geometry is a `point`, of which cartesian_point is one
+        // subtype - point_on_curve/point_on_surface/degenerate_pcurve carry
+        // no coordinates of their own and are skipped rather than resolved,
+        // since resolving them would mean evaluating their basis geometry.
+        if ( !( geometry instanceof cartesian_point ) ) {
+          continue
+        }
+
+        coordinates = geometry.coordinates
+      } catch {
+        // Malformed or truncated vertex record (prefix parse) - skip it.
+        continue
+      }
+
+      if ( coordinates === null || coordinates.length < 3 ) {
+        continue
+      }
+
+      const x = coordinates[ 0 ]
+      const y = coordinates[ 1 ]
+      const z = coordinates[ 2 ]
+
+      if ( !Number.isFinite( x ) || !Number.isFinite( y ) || !Number.isFinite( z ) ) {
+        continue
+      }
+
+      if ( x < minX ) {
+        minX = x
+      }
+      if ( y < minY ) {
+        minY = y
+      }
+      if ( z < minZ ) {
+        minZ = z
+      }
+      if ( x > maxX ) {
+        maxX = x
+      }
+      if ( y > maxY ) {
+        maxY = y
+      }
+      if ( z > maxZ ) {
+        maxZ = z
+      }
+    }
+
+    this.modelExtent_ =
+      Number.isFinite( minX ) ?
+        Math.hypot( maxX - minX, maxY - minY, maxZ - minZ ) :
+        0
+
+    return this.modelExtent_
+  }
+
+
+  /**
    *
    * @return {number} linear matrix scaling factor for geometry
    */
@@ -3868,6 +3992,7 @@ export class AP214GeometryExtraction {
       advancedBrep: true,
       surface: nativeSurface,
       scaling: this.getLinearScalingFactor(),
+      modelExtent: this.modelExtent,
     }
 
     const styledItemLocalID = this.materials.styledItemMap.get(from.localID)
@@ -4264,6 +4389,7 @@ export class AP214GeometryExtraction {
       const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
         scaling: this.getLinearScalingFactor(),
+        modelExtent: this.modelExtent,
       }
 
       this.addOrStageFaceSimple(parameters, geometry)

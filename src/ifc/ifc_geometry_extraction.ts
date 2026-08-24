@@ -5060,11 +5060,20 @@ export class IfcGeometryExtraction {
 
     this.extractSurface(surface, nativeSurface)
 
+      // No model extent is pinned on the IFC front end, so the per-face
+    // deflection target keeps its pre-#564 form here. IFC has no
+    // `vertex_point` population to take a trustworthy extent from — its
+    // solids are mostly swept profiles, and its `IfcCartesianPoint`
+    // population mixes placement origins and profile points — and a
+    // building is navigated from inside rather than framed whole, which
+    // is the premise the floor's display argument rests on. See
+    // bldrs-ai/conway#564.
     const parameters: ParamsAddFaceToGeometry = {
       boundsArray: bound3DVector,
       advancedBrep: true,
       surface: nativeSurface,
       scaling: this.getLinearScalingFactor(),
+      modelExtent: 0,
     }
 
     this.conwayModel.addFaceToGeometry(parameters, geometry)
@@ -5275,6 +5284,8 @@ export class IfcGeometryExtraction {
       const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
         scaling: this.getLinearScalingFactor(),
+        // See the note on the advanced-face path above.
+        modelExtent: 0,
       }
 
       this.conwayModel.addFaceToGeometrySimple(parameters, geometry)
