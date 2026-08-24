@@ -50,9 +50,10 @@ const { DETAIL_COLUMNS, writeDetailCsv } =
       timestamp: string) => number,
   }
 
-const { generateDeltaCSV } =
+const { generateDeltaCSV, MEASUREMENT_COLUMNS } =
   require_(path.resolve(process.cwd(), 'scripts/gen_delta_csv.cjs')) as {
     generateDeltaCSV: (a: string, b: string, out: string) => void,
+    MEASUREMENT_COLUMNS: Set<string>,
   }
 
 const { parseCsv } =
@@ -518,27 +519,90 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
   })
 
   test('nothing measured survives a cross-harness join — only identity', () => {
-    // The matrix has converged, and this pins the whole of it rather than
-    // one column at a time: after three rounds the complete answer for two
-    // harnesses is "not comparable". What comes through is which row is
-    // which, not what it measured.
-    const cell = delta(
-        writeRow('old.csv', LEGACY_THREE,
-            ['OK', 'x64', 'conway1.0.0-ci', 'mep.ifc', 'IFC2X3',
-              '1000', '4000', '5400', 'Revit', 'Autodesk']),
-        writeRow('new.csv', CURRENT,
-            ['OK', 'ifc-regression', 'x64', 'conway1.1.0-ci', 'mep.ifc', 'N/A',
-              '1100', '4200', '5400', '5300', 'N/A', 'N/A']))
+    // The whole converged matrix in one case, driven by the set the CODE
+    // enforces rather than a hand-listed copy of it.
+    //
+    // The hand-listed version of this test shipped in round 3 and did not
+    // work: it asserted `peakWasmHeapMbDelta` is N/A against a fixture whose
+    // header never carried `peakWasmHeapMb`, so it passed because the value
+    // was ABSENT rather than withheld — and could not have failed. The
+    // column was meanwhile still calling computeDelta directly, publishing a
+    // numeric wasm-heap delta on a row that also said
+    // `comparability=crossHarness`. A test that cannot fail is worth less
+    // than no test, because it is counted as coverage.
+    //
+    // So: every column in MEASUREMENT_COLUMNS is POPULATED on both sides
+    // with values that differ, and then required to blank. Iterating the
+    // exported set means a column added to the rule is covered here the
+    // moment it is added.
+    const measured = [ ...MEASUREMENT_COLUMNS ].sort()
 
-    for (const column of [
-      'parseTimeMsDelta', 'geometryTimeMsDelta', 'totalTimeMsDelta',
-      'totalTimeMsPercentageChange', 'geometryMemoryMbDelta',
-      'peakWasmHeapMbDelta', 'rssMbDelta', 'peakRssMbDelta', 'heapUsedMbDelta',
-      'heapTotalMbDelta', 'externalMbDelta', 'arrayBuffersMbDelta',
-      'retainedRssMbDelta', 'retainedHeapUsedMbDelta',
-      'retainedExternalMbDelta', 'engine1TotalTimeMs', 'engine2TotalTimeMs',
-    ]) {
-      expect(cell(column)).toBe('N/A')
+    expect(measured.length).toBeGreaterThan(10)
+    expect(measured).toContain('peakWasmHeapMb')
+
+    const identity = ['loadStatus', 'writer', 'uname', 'engine', 'filename',
+      'schemaVersion', 'preprocessorVersion', 'originatingSystem']
+
+    /**
+     * One row carrying a real value in every measurement column, so an
+     * assertion that it is withheld can actually fail.
+     *
+     * @param name File name within the work directory.
+     * @param writer The row's writer.
+     * @param bump Added to every measurement, so the two sides differ.
+     * @return {string} The path written.
+     */
+    const write = (name: string, writer: string, bump: number) => {
+      const file = path.join(workDir, name)
+      const values = [...identity, ...measured].map((column) => {
+        switch (column) {
+          case 'loadStatus': return 'OK'
+          case 'writer': return writer
+          case 'uname': return 'x64'
+          case 'engine': return 'conway1.0.0-ci'
+          case 'filename': return 'mep.ifc'
+          default: return identity.includes(column) ?
+            'N/A' : String(100 + bump)
+        }
+      })
+
+      fs.writeFileSync(file,
+          `${[...identity, ...measured].join(',')}\n${values.join(',')}\n`,
+          'utf8')
+
+      return file
+    }
+
+    const out = path.join(workDir, 'converged-delta.csv')
+
+    generateDeltaCSV(
+        write('conv-older.csv', 'loader', 0),
+        write('conv-newer.csv', 'ifc-regression', 1), out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+    const cell = (column: string) => records[1][records[0].indexOf(column)]
+
+    // Every measurement column that reaches the delta blanks. Some
+    // MEASUREMENT_COLUMNS entries are inputs rather than output columns
+    // (parsePlusGeometryMs feeds the total), so only those with a delta
+    // column of their own are checked by name.
+    for (const column of measured) {
+      const delta = `${column}Delta`
+
+      if (records[0].includes(delta)) {
+        expect([delta, cell(delta)]).toEqual([delta, 'N/A'])
+      }
+    }
+
+    // Including the two the round-3 rule named explicitly, which are the
+    // ones a future reader is most likely to think should have survived.
+    expect(cell('peakWasmHeapMbDelta')).toBe('N/A')
+    expect(cell('geometryMemoryMbDelta')).toBe('N/A')
+
+    // And the total's own columns, which do not follow the *Delta naming.
+    for (const column of ['totalTimeMsDelta', 'totalTimeMsPercentageChange',
+      'engine1TotalTimeMs', 'engine2TotalTimeMs']) {
+      expect([column, cell(column)]).toEqual([column, 'N/A'])
     }
 
     // Identity survives, and says why the rest did not.
@@ -547,6 +611,57 @@ describe('the delta knows about the #562 seam (conway#570 review)', () => {
     expect(cell('loadStatus2')).toBe('OK')
     expect(cell('uname')).toBe('x64')
     expect(cell('comparability')).toBe('crossHarness')
+  })
+
+  test('the same harness still publishes every measurement', () => {
+    // The other half, so the case above cannot pass by blanking everything
+    // unconditionally — which is the failure mode a guard like this invites.
+    const measured = [ ...MEASUREMENT_COLUMNS ].sort()
+    const identity = ['loadStatus', 'writer', 'uname', 'engine', 'filename',
+      'schemaVersion', 'preprocessorVersion', 'originatingSystem']
+
+    /**
+     * One row from a fixed writer, with every measurement populated.
+     *
+     * @param name File name.
+     * @param bump Added to every measurement.
+     * @return {string} Path written.
+     */
+    const write = (name: string, bump: number) => {
+      const file = path.join(workDir, name)
+      const values = [...identity, ...measured].map((column) => {
+        switch (column) {
+          case 'loadStatus': return 'OK'
+          case 'writer': return 'ifc-regression'
+          case 'uname': return 'x64'
+          case 'engine': return 'conway1.0.0-ci'
+          case 'filename': return 'mep.ifc'
+          default: return identity.includes(column) ?
+            'N/A' : String(100 + bump)
+        }
+      })
+
+      fs.writeFileSync(file,
+          `${[...identity, ...measured].join(',')}\n${values.join(',')}\n`,
+          'utf8')
+
+      return file
+    }
+
+    const out = path.join(workDir, 'same-harness-delta.csv')
+
+    generateDeltaCSV(
+        write('same-older.csv', 0), write('same-newer.csv', 1), out)
+
+    const records = parseCsv(fs.readFileSync(out, 'utf8'))
+    const cell = (column: string) => records[1][records[0].indexOf(column)]
+
+    expect(cell('comparability')).toBe('sameHarness')
+    expect(cell('peakWasmHeapMbDelta')).toBe('1')
+    expect(cell('geometryMemoryMbDelta')).toBe('1')
+    expect(cell('parseTimeMsDelta')).toBe('1')
+    expect(cell('geometryTimeMsDelta')).toBe('1')
+    expect(cell('rssMbDelta')).toBe('1')
   })
 })
 

@@ -752,6 +752,18 @@ a shorter one with a footnote.
 
 A row-level **`comparability`** column now says `sameHarness`,
 `crossHarness` or `unknown`, so one cell explains a whole row of `N/A`.
+
+**A rule is only as good as its wiring.** The first cut of this stated the
+rule correctly and left `peakWasmHeapMb` calling the unguarded differ, so a
+row could print `comparability=crossHarness` *and* a numeric wasm-heap
+delta — self-contradictory output, which is the defect class this file
+exists to prevent. The test that should have caught it asserted `N/A`
+against a fixture whose header did not carry the column, so it passed
+because the value was **absent** rather than withheld, and could never have
+failed. `MEASUREMENT_COLUMNS` is therefore exported and the test iterates
+it, populating every column on both sides: a column added to the rule is
+covered the moment it is added, and a column the rule names but the code
+does not route now fails.
 Without it, "not measured", "absent from this older snapshot" and "not
 comparable" would all read the same — three different facts sharing one
 spelling, which is the obligation #548 established for a missing value.

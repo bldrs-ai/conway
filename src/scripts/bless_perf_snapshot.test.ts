@@ -538,6 +538,33 @@ describe('renderReadme', () => {
     expect(text).toContain('Neither column is time-to-first-mesh')
   })
 
+  test('does not tell a reader the loader writes the same total', () => {
+    // The README shipped one revision claiming loader and regression totals
+    // mean the same thing and pointing at `parsePlusGeometryMs` for
+    // continuity with older snapshots. Both halves became false: the two
+    // harnesses bound their windows differently (engine init inside one and
+    // outside the other), and historical loader snapshots carry no
+    // `parsePlusGeometryMs` column to read. Guidance that is impossible to
+    // follow is worse than none, because a reader assumes the fault is
+    // theirs.
+    const text = renderReadme(info)
+
+    expect(text).toContain('Do not read that as "the loader writes the same thing"')
+    expect(text).toContain('the loader emits no such column at all')
+
+    // The rule the code actually enforces, stated as a rule.
+    expect(text).toContain('withholds EVERY measurement column when the two')
+    expect(text).toContain('identity, not data')
+
+    // And the marker that distinguishes the three kinds of blank cell.
+    expect(text).toContain('`comparability`')
+    expect(text).toContain('crossHarness')
+
+    // The structural follow-up, so a reader who thinks "why is this one
+    // file mixing harnesses at all" finds it already asked.
+    expect(text).toContain('conway/issues/572')
+  })
+
   test('describes the second-engine term as closed by #557, not as current', () => {
     // conway#557 landed: both regression children now extract on the engine
     // main() initialised. A README still saying an IFC row carries ~100 MB of

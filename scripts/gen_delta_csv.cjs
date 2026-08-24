@@ -448,7 +448,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
           // the payload figure excludes. Also absent before #552.
-          peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
+          peakWasmHeapMbDelta:
+            computePipelineDelta('peakWasmHeapMb', entry2, entry1),
           rssMbDelta: computePipelineDelta('rssMb', entry2, entry1),
           // Absent from every snapshot committed before #552; computeDelta
           // reports that as N/A rather than differencing against zero.
@@ -564,7 +565,8 @@ function computeDeltas(data1, data2, isWebIfc = false) {
           // A different quantity from geometryMemoryMb, not a rescaling of it:
           // the wasm heap holds allocator overhead and boolean intermediates
           // the payload figure excludes. Also absent before #552.
-          peakWasmHeapMbDelta: computeDelta('peakWasmHeapMb', entry2, entry1),
+          peakWasmHeapMbDelta:
+            computePipelineDelta('peakWasmHeapMb', entry2, entry1),
           rssMbDelta: computePipelineDelta('rssMb', entry2, entry1),
           // Absent from every snapshot committed before #552; computeDelta
           // reports that as N/A rather than differencing against zero.
@@ -987,4 +989,12 @@ if (require.main === module) {
 }
 
 // Export so we can use from benchmark.js or other modules
-module.exports = { generateDeltaCSV };
+// MEASUREMENT_COLUMNS is exported so a test can drive itself from the set
+// rather than from a hand-listed copy of it. That is not tidiness: the
+// round-3 rule said every measurement blanks across two harnesses, but
+// `peakWasmHeapMb` still called computeDelta directly, and the test that
+// should have caught it asserted N/A against a fixture whose header did not
+// carry the column at all — so it passed because the value was ABSENT, not
+// because it was withheld, and could never have failed. A set the test
+// iterates cannot drift from the set the code enforces.
+module.exports = { generateDeltaCSV, MEASUREMENT_COLUMNS };

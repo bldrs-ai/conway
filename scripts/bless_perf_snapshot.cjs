@@ -506,13 +506,35 @@ regression children it used to be \`geomEndMs - parseStartMs\`, with
 \`geomStartMs\` taken on the line after \`parseEndMs\`, so it was
 \`parseTimeMs + geometryTimeMs\` by construction and excluded the file read,
 the wasm init and the teardown. It now runs from before the file read to
-after \`model.invalidate(true)\`, which is what the loader path has always
-written into that name, and \`parsePlusGeometryMs\` carries the old sum. So
-**\`totalTimeMs\` steps up once at this boundary** and a delta across it is a
-change of methodology, not of the engine — read \`parsePlusGeometryMs\` for
-continuity with older snapshots. Neither column is time-to-first-mesh: these
+after \`model.invalidate(true)\`, and \`parsePlusGeometryMs\` carries the old
+sum. So **\`totalTimeMs\` steps up once at this boundary** and a delta across
+it is a change of methodology, not of the engine — read
+\`parsePlusGeometryMs\` for continuity, which works between two
+regression-produced snapshots. Neither column is time-to-first-mesh: these
 rows come from a resident, fully-extracted open, not the windowed deferred
 pump Share drives (conway#562 §2).
+
+**Do not read that as "the loader writes the same thing".** It does not, and
+this is the one caveat most likely to be acted on by mistake, because both
+now answer to the word "total". \`ConwayModelLoader\` opens its clock and
+THEN builds and initialises a per-load \`ConwayGeometry\`; a regression child
+initialises before its clock starts. Engine init — about 195 ms — is inside
+one window and outside the other, which is 120% of \`index.ifc\`'s own total,
+24% of \`haus.ifc\`'s and 4.3% of \`MB-Khaya\`'s. \`parsePlusGeometryMs\` is
+not a way round it either: the loader emits no such column at all, and the
+stage clocks it would sum are not the same intervals (the child's parse
+clock includes \`parseHeader\` and its geometry clock includes constructing
+\`IfcGeometryExtraction\`, where the loader excludes both).
+
+So **\`gen_delta_csv.cjs\` withholds EVERY measurement column when the two
+rows come from different harnesses** — every timing column, every memory
+column, \`geometryMemoryMb\` and \`peakWasmHeapMb\` included. What survives
+such a join is \`filename\`, \`loadStatus\`, \`uname\`, \`schemaVersion\` and
+\`engine\`: identity, not data. The row says so on its face — a
+**\`comparability\`** column reading \`crossHarness\`, so a page of \`N/A\` is
+distinguishable from "not measured" and from "absent from that older
+snapshot". Whether a single file should mix harnesses at all is
+[conway#572](https://github.com/bldrs-ai/conway/issues/572).
 
 **The retention columns carried a second, unrelated split until conway#557
 ([conway#557](https://github.com/bldrs-ai/conway/issues/557)).** The IFC
