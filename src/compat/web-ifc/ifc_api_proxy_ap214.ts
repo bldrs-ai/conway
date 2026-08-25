@@ -60,25 +60,30 @@ const DEFERRED_DRAIN_BATCH_AP214 = 256
 
 // How many AP214 demand units one unit of a consumer's batch size is
 // worth. Consumers size batchSize for IFC's per-product granularity
-// (Share's ASYNC_DEMAND_EXTRACT_BATCH_SIZE is 8); an AP214 unit used to
-// be a whole part, so this was a DIVISOR of 16 — and at that size
-// floor(8 / 16) already clamped to the Math.max(1, …) floor, which is
-// why the pump could not get any finer than one whole silkscreen.
-// Since conway#579 a unit is a slice of a representation's items, finer
-// than an IFC product rather than coarser, so the mapping inverts. This
-// is only the ceiling on one call; AP214_PUMP_BATCH_BUDGET_MS is what
-// actually ends one. See extractGeometryBatch.
+// (Share pumps DEMAND_EXTRACT_BATCH_SIZE = 64, verified in
+// conwayDirectIfcLoader.js rather than assumed — conway#579 states 8,
+// which is not a constant that exists there). An AP214 unit used to be
+// a whole part, so this was a DIVISOR of 16, giving four units a call;
+// since conway#579 a unit is a slice of a representation's items, finer
+// than an IFC product rather than coarser, so the mapping inverts.
+//
+// Note what this constant could NOT have fixed: batching cannot help
+// when a single unit is 17.7 s, which is why the fix had to be
+// granularity. It is only the ceiling on one call, and at Share's batch
+// size the ceiling is 512 units — measured to be irrelevant, because
+// AP214_PUMP_BATCH_BUDGET_MS ends the call first on every corpus model.
+// See extractGeometryBatch.
 const AP214_UNITS_PER_PRODUCT_BATCH = 8
 
-// Wall-clock one streaming pump call spends extracting before handing
-// the thread back. Retuned in conway#579 against measured per-unit cost:
-// simulating this pump over Arty_Z7 puts the median call at ~100 ms and
-// the whole load at ~300 calls, against one 17.7 s call before; on DSA2
-// it is ~130 calls with a ~60 ms median. Both numbers move roughly
-// linearly with this constant, and 50 ms is where the caller's own
-// per-batch work still fits underneath a ~200 ms responsiveness budget —
-// Share's appendBatch of the resulting delta costs on the same order as
-// the extraction that produced it.
+// Wall-clock one pump call spends extracting before handing the thread
+// back. Retuned in conway#579 against measured per-unit cost: simulating
+// this pump over Arty_Z7 puts the median call at ~105 ms and the whole
+// load at ~310 calls, against one 17.7 s call before; on DSA2 it is
+// ~120 calls with a ~57 ms median. Both move roughly linearly with this
+// constant, and 50 ms is where the caller's own per-batch work still
+// fits underneath a ~200 ms responsiveness budget — Share's appendBatch
+// of the resulting delta costs on the same order as the extraction that
+// produced it.
 const AP214_PUMP_BATCH_BUDGET_MS = 50
 
 /**
@@ -1328,6 +1333,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * pump, same delta contract. On a fully-extracted model this is a
    * no-op returning remaining 0.
    *
+   * The call is bounded by {@link AP214_PUMP_BATCH_BUDGET_MS} of wall
+   * clock as well as by `batchSize`, so a consumer that pumps on the
+   * returned `remaining` without supplying a callback is just as
+   * protected from a multi-second block as one that streams deltas.
+   *
    * @param batchSize Max units to execute this call (min 1).
    * @param meshCallback Receives each newly-captured delta mesh.
    * @return {object} `{extracted, remaining}` — units executed this
@@ -1337,6 +1347,34 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
+    // Every caller of the public entry point gets the frame budget. Whether
+    // a caller passed a meshCallback says nothing about whether it can
+    // afford a multi-second block — ExtractGeometryBatch's contract lets a
+    // consumer omit the callback and pump on the returned `remaining`
+    // instead — so intent is stated by which method the caller reaches for,
+    // not inferred from an unrelated parameter being absent.
+    return this.pumpDemandUnits_(
+        batchSize, meshCallback, AP214_PUMP_BATCH_BUDGET_MS)
+  }
+
+  /**
+   * The pump behind {@link extractGeometryBatch}, with the wall-clock
+   * budget as an explicit argument.
+   *
+   * @param batchSize Max units to execute this call (min 1), before the
+   * AP214 unit scaling below.
+   * @param meshCallback Receives each newly-captured delta mesh.
+   * @param budgetMs Wall-clock this call may spend extracting;
+   * `undefined` runs to `batchSize` however long that takes, which only
+   * {@link streamAllMeshes}' internal drain asks for.
+   * @return {object} `{extracted, remaining}` — units executed this
+   * call and units still pending.
+   */
+  private pumpDemandUnits_(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void,
+      budgetMs?: number ): {extracted: number, remaining: number} {
+
     if (!this.deferredMode_) {
       return {extracted: 0, remaining: 0}
     }
@@ -1344,16 +1382,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const extraction = this.conwayGeometry_
 
     // Scale the consumer's IFC-shaped batch size onto AP214 units, which
-    // are finer than a product since conway#579, and cap the call by
-    // wall clock rather than by unit count — a demand unit's cost varies
-    // by three orders of magnitude across the corpus, so a count alone
-    // cannot keep a call inside a frame budget. A caller that supplied
-    // no meshCallback is draining to completion rather than streaming
-    // (see streamAllMeshes), and gets no budget: yielding is pure
-    // overhead when nothing is watching the deltas.
+    // are finer than a product since conway#579. The count is only a
+    // ceiling: a demand unit's cost is uneven both across models and
+    // inside one, so a count alone cannot keep a call inside a frame
+    // budget — budgetMs is what ends the call.
     const units = Math.max(1, batchSize * AP214_UNITS_PER_PRODUCT_BATCH)
-    const budgetMs =
-      meshCallback !== void 0 ? AP214_PUMP_BATCH_BUDGET_MS : void 0
 
     if (this.progressTracker_ !== void 0 && !this.geometryPhaseStarted_) {
       this.progressTracker_.beginPhase(
@@ -1595,9 +1628,14 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     if (this.deferredMode_) {
 
       const noCallback = void 0
+      const unbudgeted = void 0
 
-      while (this.extractGeometryBatch(
-          DEFERRED_DRAIN_BATCH_AP214, noCallback).remaining > 0) {
+      // Explicitly unbudgeted: this loop runs to completion before
+      // streamAllMeshes can return anything, so yielding mid-drain would
+      // be pure overhead. This is the ONLY caller entitled to that — the
+      // public extractGeometryBatch always carries the frame budget.
+      while (this.pumpDemandUnits_(
+          DEFERRED_DRAIN_BATCH_AP214, noCallback, unbudgeted).remaining > 0) {
         // draining
       }
       this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
