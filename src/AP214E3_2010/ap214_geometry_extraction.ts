@@ -185,6 +185,13 @@ const MAXIMUM_PCURVE_SPAN_SAMPLES = 256
 const EXTENT_SAMPLE_FACES = 1024
 
 /**
+ * How far the extent walk chases `styled_item.item`. A styled_item is itself
+ * a representation_item, so the schema permits a chain; nothing sane writes
+ * one, and a cycle would otherwise not terminate.
+ */
+const MAXIMUM_STYLED_ITEM_DEPTH = 4
+
+/**
  * How a basis surface turns a point in its own parameter space into a point
  * in its placement's local frame, plus which of (u, v) are angles - the
  * latter is what decides how finely a mapped span has to be sampled, since a
@@ -627,6 +634,43 @@ export class AP214GeometryExtraction {
   private faceExtent_: Map< number, number > | undefined = undefined
 
   /**
+   * How many advanced faces this extraction tessellated, and how many of
+   * those the representation walk did not reach — i.e. how many silently ran
+   * with no deflection floor.
+   *
+   * These exist because the table is a MIRROR of extraction's own
+   * reachability, and a mirror can only be kept honest by checking that the
+   * two agree. Three review findings on conway#564 were the same defect in
+   * different arms — `face_based_surface_model` missing from the item
+   * dispatch, `types()` not matching `shape_representation` subtypes, a
+   * `styled_item` wrapping a BREP — and every one of them showed up here as
+   * a face that extraction tessellated and the table had no extent for. None
+   * of them raised an error, and two of the three bit no corpus model at all.
+   * A counter turns that class of silence into a number.
+   *
+   * Read them TOGETHER. `extentMissingFaceCount` alone cannot distinguish
+   * "every face got a floor" from "nothing was measured", which is exactly
+   * how a vacuous assertion passes; `extentMeasuredFaceCount` is the
+   * denominator that makes the zero mean something.
+   *
+   * `extentDegenerateFaceCount` is deliberately NOT folded into
+   * `extentMissingFaceCount`, because the two mean opposite things about
+   * this code. Missing is a mirror bug: the walk never reached the face's
+   * representation, and someone has to fix an arm. Degenerate is not a bug
+   * at all: the walk reached the representation and its topological vertices
+   * genuinely carry no extent. `data/sphere-vertex-loop.step` is the case —
+   * a whole sphere is ONE advanced face whose only bound is a `vertex_loop`
+   * at the pole, so the body's entire vertex set is a single point and its
+   * box has zero diagonal even though the sphere is 15 units across. Such a
+   * face gets no floor, which is the pre-#564 target and therefore safe, but
+   * counting it as missing would make the mirror-agreement invariant
+   * permanently false and the number useless.
+   */
+  public extentMeasuredFaceCount   = 0
+  public extentMissingFaceCount    = 0
+  public extentDegenerateFaceCount = 0
+
+  /**
    * The scale a face's deflection target may not be refined below: the
    * extent of the representation that defines it (conway#564 §5).
    *
@@ -712,9 +756,29 @@ export class AP214GeometryExtraction {
    */
   public representationExtentForFace( faceLocalID: number ): number {
 
+    return this.representationExtentEntry( faceLocalID ) ?? 0
+  }
+
+  /**
+   * The table entry for a face, distinguishing the two ways a face ends up
+   * with no floor.
+   *
+   * `undefined` means the representation walk never reached this face — a
+   * disagreement between this table and extraction's own reachability, i.e.
+   * a defect. `0` means it was reached and its representation's topological
+   * vertices carry no extent, which is a real shape (a whole sphere is one
+   * face bounded by a single `vertex_loop`) and not a defect. Only the
+   * counters care about the difference; every caller that just wants a floor
+   * uses `representationExtentForFace`, where both read as "no floor".
+   *
+   * @param faceLocalID The localID of the face.
+   * @return {number | undefined} The extent, or undefined if unreached.
+   */
+  private representationExtentEntry( faceLocalID: number ): number | undefined {
+
     this.faceExtent_ ??= this.resolveRepresentationExtents()
 
-    return this.faceExtent_.get( faceLocalID ) ?? 0
+    return this.faceExtent_.get( faceLocalID )
   }
 
   /**
@@ -919,12 +983,60 @@ export class AP214GeometryExtraction {
   /**
    * Append every face one representation item defines.
    *
+   * ## Why this is not shared with extraction's own dispatch
+   *
+   * The obvious tidy-up — one `facesOfItem` consumed by both this and
+   * `extractRepresentationItem` — was considered and rejected, so that it is
+   * not re-attempted. Extraction's per-kind functions do not merely list
+   * faces, they decide which geometry object the faces land in:
+   * `extractAP214ShellBasedSurfaceModel` accumulates ONE geometry across
+   * shells and `extractConnectedFaceSets` does the same per face set, so
+   * neither can consume a flat list without changing that grouping. And
+   * extraction walks only `manifold_solid_brep.outer`, never
+   * `brep_with_voids.voids`, which this must — so a shared helper would
+   * change what extraction extracts. Sharing only the two arms that do line
+   * up would be worse than not sharing: it would look shared while the arms
+   * that actually diverge stayed duplicated.
+   *
+   * What keeps this in sync is `ap214_extent_coverage.test.ts`, which
+   * asserts the two traversals AGREE rather than that they share code —
+   * see `extentMissingFaceCount`.
+   *
    * @param item The representation item to walk.
    * @param faces The list being built.
+   * @param depth Current styled_item recursion depth.
    */
-  private collectItemFaces( item: representation_item, faces: face[] ): void {
+  private collectItemFaces(
+      item: representation_item,
+      faces: face[],
+      depth: number = 0 ): void {
 
     try {
+
+      // A styled_item listed among a representation's items carries its
+      // geometry on `.item`, and extraction tessellates that target through
+      // extractStyledItemWithProcessing -> extractRepresentationItem. Without
+      // this arm every face of a styled BREP would fall out of the table and
+      // silently lose its floor. The target belongs to the representation
+      // that lists the styled_item, so attributing its faces here is exactly
+      // right. A `mapped_item` target is left alone for the same reason the
+      // top-level walk leaves them alone: the mapped representation is
+      // visited in its own right, and following it from a referencing
+      // representation is the reference-dependence this primitive removes.
+      if ( item instanceof styled_item ) {
+
+        const target = item.item
+
+        if ( depth < MAXIMUM_STYLED_ITEM_DEPTH &&
+             target !== null &&
+             target instanceof representation_item &&
+             !( target instanceof mapped_item ) ) {
+
+          this.collectItemFaces( target, faces, depth + 1 )
+        }
+
+        return
+      }
 
       if ( item instanceof manifold_solid_brep ) {
 
@@ -4348,12 +4460,34 @@ export class AP214GeometryExtraction {
     // See https://github.com/bldrs-ai/conway/issues/459.
     nativeSurface.sameSenseKnown = true
 
+    // Counted here rather than in a pass of its own: the lookup happens
+    // anyway to build the parameters, so the coverage figure is one
+    // comparison per face.
+    const representationExtent = this.representationExtentForFace( from.localID )
+
+    ++this.extentMeasuredFaceCount
+
+    // Only a face that got NO floor needs classifying, and only then is the
+    // second lookup paid. Going through the public method for the value
+    // keeps one seam for "the floor for this face" — the extent's own tests
+    // stub that method, and a counter that read the table directly would
+    // quietly stop agreeing with what was actually passed to the native
+    // side.
+    if ( !( representationExtent > 0 ) ) {
+
+      if ( this.representationExtentEntry( from.localID ) === void 0 ) {
+        ++this.extentMissingFaceCount
+      } else {
+        ++this.extentDegenerateFaceCount
+      }
+    }
+
     const parameters: ParamsAddFaceToGeometry = {
       boundsArray: bound3DVector,
       advancedBrep: true,
       surface: nativeSurface,
       scaling: this.getLinearScalingFactor(),
-      representationExtent: this.representationExtentForFace( from.localID ),
+      representationExtent,
     }
 
     const styledItemLocalID = this.materials.styledItemMap.get(from.localID)
