@@ -5752,15 +5752,23 @@ export class AP214GeometryExtraction {
               }
             }
           } catch ( ex ) {
-            if (ex instanceof Error) {
-              // Stack included for the same reason extractFaces includes it:
-              // this family's message is the same string for every occurrence
-              // ("Value in select must be populated" accounts for all 274 in
-              // the NIST AP242 set), so without a stack there is nothing to
-              // tell one occurrence from another or say WHICH select failed.
-              Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
-            } else {
-              Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+            // Recoverable: the item is skipped and the walk continues, so this
+            // is quiet for the same reason the stack-mismatch guard below is.
+            // A prefix extraction (parse-time preview channel) hits dangling
+            // records BY CONSTRUCTION, and an ungated stack per item turned an
+            // otherwise-healthy Arty load into four red console errors
+            // (conway#580).
+            if ( !this.quietRecoverableLogging ) {
+              if (ex instanceof Error) {
+                // Stack included for the same reason extractFaces includes it:
+                // this family's message is the same string for every occurrence
+                // ("Value in select must be populated" accounts for all 274 in
+                // the NIST AP242 set), so without a stack there is nothing to
+                // tell one occurrence from another or say WHICH select failed.
+                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
+              } else {
+                Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+              }
             }
           } finally {
 

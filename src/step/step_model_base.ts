@@ -63,6 +63,23 @@ implements Iterable<BaseEntity>, Model {
   private readonly count_: number
   private readonly firstInlineElement_: number
 
+  /**
+   * Is this model's index a mid-parse PREFIX? True only for a model built
+   * over `ColumnarIndexSink.snapshot()` columns — the parse-time preview
+   * channel's generations. It changes no behaviour, only what an
+   * unresolved reference is allowed to CLAIM: on a prefix the record may
+   * still be ahead of the parse (conway#580).
+   */
+  public readonly indexIsPrefix: boolean
+
+  // Highest express ID in the index, computed on first read. The index is
+  // fixed for a model's lifetime (a growing prefix is a NEW model per
+  // generation, not a mutated one), so one scan is enough — and only the
+  // dangling-reference throw path reads it, so a healthy load never pays
+  // for it at all. A full scan rather than a read of the last row: express
+  // IDs are not required to be sorted (`expressIdsSorted`).
+  private maxIndexedExpressID_?: number
+
   // Lazily-materialised descriptors for touched entities, indexed by local ID;
   // dropped wholesale by invalidate(). A sparse array, not a Map: at PSB/SKYLARK
   // scale most entities are touched during extraction, where a Map's ~45 B/entry
@@ -160,6 +177,7 @@ implements Iterable<BaseEntity>, Model {
       this.expressID_          = columns.expressID
       this.count_              = columns.count
       this.firstInlineElement_ = firstInline
+      this.indexIsPrefix       = columns.indexIsPrefix ?? false
       this.complexEntries_     = columns.complexEntries as unknown as
         Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined
       return
@@ -270,6 +288,47 @@ implements Iterable<BaseEntity>, Model {
     this.count_              = count
     this.firstInlineElement_ = firstInlineElement
     this.complexEntries_     = complexEntries
+
+    // The object index is only ever produced by a completed parse.
+    this.indexIsPrefix       = false
+  }
+
+
+  /**
+   * The highest express ID this model's index holds.
+   *
+   * A maximum, and nothing more: because express IDs need not arrive in
+   * order, this does NOT bound what has been scanned, and an absent ID
+   * below it was not necessarily looked for and missed. Callers must not
+   * present it as a scanned range — see {@link
+   * import('./dangling_reference_error').DanglingReferenceError}, whose
+   * prefix message reports it as a separate fact for exactly this reason.
+   *
+   * @return {number} The highest indexed express ID, or 0 for an empty index.
+   */
+  public get maxIndexedExpressID(): number {
+
+    if ( this.maxIndexedExpressID_ !== void 0 ) {
+      return this.maxIndexedExpressID_
+    }
+
+    const expressIDs = this.expressID_
+    const end        = this.firstInlineElement_
+
+    let maximum = 0
+
+    for ( let localID = 0; localID < end; ++localID ) {
+
+      const expressID = expressIDs[ localID ]
+
+      if ( expressID > maximum ) {
+        maximum = expressID
+      }
+    }
+
+    this.maxIndexedExpressID_ = maximum
+
+    return maximum
   }
 
   /**
