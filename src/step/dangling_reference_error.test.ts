@@ -26,6 +26,16 @@ import {
  * that the complete-model text is the strong wording it has always been. A
  * refactor that dropped the prefix flag would still resolve, still throw,
  * and still say something plausible — nothing but this test notices.
+ *
+ * It also pins what the prefix message must NOT say. The first fix for
+ * #580 replaced the original overclaim ("not in the index", against a
+ * prefix) with a second one ("prefix index covers #1-#N"), which presents
+ * a maximum as a contiguous scan boundary. Express IDs need not arrive in
+ * order, so a genuinely dangling reference below the maximum would then
+ * read as "not scanned yet" forever — false reassurance in place of a
+ * false alarm. `expectNoContiguityClaim` is what stops the next person
+ * making the wording friendlier from reintroducing it (codex round 1 on
+ * #586).
  */
 
 const HEADER =
@@ -49,20 +59,39 @@ const FORWARD_REFERENCE = new TextEncoder().encode(
 const NO_TARGET = new TextEncoder().encode(
     `${HEADER}#1=IFCAXIS2PLACEMENT3D(#2,$,$);\n` + FOOTER )
 
+/**
+ * Express IDs OUT OF ORDER, and #2 absent from the whole file. A two-record
+ * prefix of this indexes #5 and #9, so the maximum (9) sits above the
+ * missing #2 while saying nothing whatever about whether #2 was scanned —
+ * it was not, and it never will be, because it does not exist.
+ *
+ * This is the case a "covers #1-#9" message gets actively wrong, and the
+ * reason the wording reports a maximum rather than a range. Unsorted IDs
+ * are supported by construction, not a curiosity: `expressIdsSorted` is a
+ * per-file observation the columnar sink records, and the preview tests
+ * move a record to the tail specifically to exercise it.
+ */
+const UNSORTED_MISSING_TARGET = new TextEncoder().encode(
+    `${HEADER}#5=IFCAXIS2PLACEMENT3D(#2,$,$);\n` +
+    '#9=IFCCARTESIANPOINT((0.,0.,0.));\n' +
+    '#1=IFCCARTESIANPOINT((1.,1.,1.));\n' + FOOTER )
+
 /** Window size; every fixture here is a few hundred bytes. */
 const POOL_BYTES = 4096
 
 
 /**
- * Resolve #1's Location and return the error that comes back.
+ * Resolve a placement's Location and return the error that comes back.
  *
- * @param model The model to read #1 out of.
+ * @param model The model to read the placement out of.
+ * @param expressID The placement's express ID.
  * @return {DanglingReferenceError} The thrown error.
  */
-function throwOnLocation( model: IfcStepModel ): DanglingReferenceError {
+function throwOnLocation(
+    model: IfcStepModel, expressID: number = 1 ): DanglingReferenceError {
 
   const placement =
-    model.getElementByExpressID( 1 ) as IfcAxis2Placement3D | undefined
+    model.getElementByExpressID( expressID ) as IfcAxis2Placement3D | undefined
 
   expect( placement ).not.toBe( void 0 )
 
@@ -81,15 +110,17 @@ function throwOnLocation( model: IfcStepModel ): DanglingReferenceError {
 
 
 /**
- * Stream `bytes` into a sink and snapshot it the moment the first record
- * has been indexed — the parse-time preview channel's move, at the one
- * prefix length that leaves #2 ahead of the scan.
+ * Stream `bytes` into a sink and snapshot it the moment `records` records
+ * have been indexed — the parse-time preview channel's move, stopped at a
+ * length that leaves the reference under test unresolved.
  *
  * @param bytes The file to stream.
- * @return {StepIndexColumns} A prefix index holding record #1 only.
+ * @param records How many top-level records the prefix should hold.
+ * @return {StepIndexColumns} A prefix index over exactly that many records.
  */
-function prefixColumnsAfterFirstRecord(
-    bytes: Uint8Array ): StepIndexColumns<EntityTypesIfc> {
+function prefixColumns(
+    bytes: Uint8Array,
+    records: number = 1 ): StepIndexColumns<EntityTypesIfc> {
 
   const sink = new ColumnarIndexSink<EntityTypesIfc>()
 
@@ -100,7 +131,7 @@ function prefixColumnsAfterFirstRecord(
       IfcStepParser.Instance,
       POOL_BYTES,
       ( localID ) => {
-        if ( localID === 0 ) {
+        if ( localID === records - 1 ) {
           prefix = sink.snapshot()
         }
       },
@@ -109,18 +140,36 @@ function prefixColumnsAfterFirstRecord(
   expect( result ).toBe( ParseResult.COMPLETE )
   expect( prefix ).not.toBe( void 0 )
 
-  // The prefix has to stop before #2 or it is not testing anything.
-  expect( prefix!.firstInlineElement ).toBe( 1 )
+  // A prefix that ran past the record under test is not testing anything.
+  expect( prefix!.firstInlineElement ).toBe( records )
 
   return prefix!
 }
 
 
+/**
+ * Assert a message reports absence without implying the index was scanned
+ * densely up to some bound.
+ *
+ * Both spellings are checked because both are easy to reach for: an
+ * explicit `#a-#b` range, and the vocabulary of coverage ("covers",
+ * "scanned yet", "up to") that reads as one even without the punctuation.
+ *
+ * @param message The thrown message.
+ */
+function expectNoContiguityClaim( message: string ): void {
+
+  expect( message ).not.toMatch( /#\d+\s*[-–—]\s*#?\d+/ )
+  expect( message ).not.toMatch( /\b(covers?|covering|through|up to|between)\b/i )
+  expect( message ).not.toMatch( /\bscanned yet\b/i )
+}
+
+
 describe( 'DanglingReferenceError wording', () => {
 
-  test( 'a prefix throw says the record has not been scanned yet', () => {
+  test( 'a prefix throw reports absence and the highest indexed ID', () => {
 
-    const columns = prefixColumnsAfterFirstRecord( FORWARD_REFERENCE )
+    const columns = prefixColumns( FORWARD_REFERENCE )
     const model = new IfcStepModel( FORWARD_REFERENCE, columns )
 
     expect( model.indexIsPrefix ).toBe( true )
@@ -128,9 +177,34 @@ describe( 'DanglingReferenceError wording', () => {
 
     const error = throwOnLocation( model )
 
-    expect( error.message )
-        .toBe( 'Reference to #2 has not been scanned yet (prefix index covers #1-#1)' )
-    expect( error.indexHighWaterMark ).toBe( 1 )
+    expect( error.message ).toBe(
+        'Reference to #2 is not present in this prefix index ' +
+        '(highest indexed so far: #1)' )
+    expect( error.highestIndexedExpressID ).toBe( 1 )
+
+    expectNoContiguityClaim( error.message )
+  } )
+
+  test( 'an unsorted prefix does not imply the missing ID was scanned', () => {
+
+    // #2 is absent from the FILE, not merely from the prefix, and the
+    // prefix's maximum (#9) is above it. A message that composed the two
+    // facts into "covers #1-#9" would report a real dangling reference as
+    // "not scanned yet" — and would keep doing so no matter how long the
+    // parse ran, since #2 never arrives.
+    const model = new IfcStepModel(
+        UNSORTED_MISSING_TARGET, prefixColumns( UNSORTED_MISSING_TARGET, 2 ) )
+
+    expect( model.indexIsPrefix ).toBe( true )
+    expect( model.maxIndexedExpressID ).toBe( 9 )
+
+    const error = throwOnLocation( model, 5 )
+
+    expect( error.message ).toBe(
+        'Reference to #2 is not present in this prefix index ' +
+        '(highest indexed so far: #9)' )
+
+    expectNoContiguityClaim( error.message )
   } )
 
   test( 'the same reference resolves once the parse reaches it', () => {
@@ -188,7 +262,7 @@ describe( 'DanglingReferenceError wording', () => {
   test( 'prefix and complete throws for one reference differ', () => {
 
     const prefixModel = new IfcStepModel(
-        FORWARD_REFERENCE, prefixColumnsAfterFirstRecord( FORWARD_REFERENCE ) )
+        FORWARD_REFERENCE, prefixColumns( FORWARD_REFERENCE ) )
 
     const completeModel = new IfcStepModel(
         NO_TARGET,
@@ -197,16 +271,24 @@ describe( 'DanglingReferenceError wording', () => {
             IfcStepParser.Instance,
             POOL_BYTES ).columns )
 
-    expect( throwOnLocation( prefixModel ).message )
-        .not.toBe( throwOnLocation( completeModel ).message )
+    const prefixMessage = throwOnLocation( prefixModel ).message
+    const completeMessage = throwOnLocation( completeModel ).message
+
+    expect( prefixMessage ).not.toBe( completeMessage )
+
+    // Differing is not enough on its own: the prefix half has to differ by
+    // claiming LESS, not by claiming something else that is also untrue.
+    expectNoContiguityClaim( prefixMessage )
+    expect( completeMessage ).toBe( 'Reference to #2 is not in the index' )
   } )
 
-  test( 'an empty prefix still reports its high-water mark', () => {
+  test( 'an empty prefix still reports its highest indexed ID', () => {
 
-    // Zero is a legitimate mark (nothing scanned), so the prefix form is
-    // selected by the argument's PRESENCE — `if ( mark )` would silently
-    // hand an empty prefix the complete-model wording.
-    expect( new DanglingReferenceError( 7, 0 ).message )
-        .toBe( 'Reference to #7 has not been scanned yet (prefix index covers #1-#0)' )
+    // Zero is a legitimate value (nothing indexed yet), so the prefix form
+    // is selected by the argument's PRESENCE — `if ( highest )` would
+    // silently hand an empty prefix the complete-model wording.
+    expect( new DanglingReferenceError( 7, 0 ).message ).toBe(
+        'Reference to #7 is not present in this prefix index ' +
+        '(highest indexed so far: #0)' )
   } )
 } )

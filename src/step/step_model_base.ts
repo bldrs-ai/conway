@@ -76,7 +76,8 @@ implements Iterable<BaseEntity>, Model {
   // fixed for a model's lifetime (a growing prefix is a NEW model per
   // generation, not a mutated one), so one scan is enough — and only the
   // dangling-reference throw path reads it, so a healthy load never pays
-  // for it at all.
+  // for it at all. A full scan rather than a read of the last row: express
+  // IDs are not required to be sorted (`expressIdsSorted`).
   private maxIndexedExpressID_?: number
 
   // Lazily-materialised descriptors for touched entities, indexed by local ID;
@@ -294,9 +295,14 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
-   * The highest express ID this model's index holds — on a prefix
-   * (`indexIsPrefix`) that is the parse's high-water mark, which is what
-   * an unresolved reference needs in order to say how far the scan got.
+   * The highest express ID this model's index holds.
+   *
+   * A maximum, and nothing more: because express IDs need not arrive in
+   * order, this does NOT bound what has been scanned, and an absent ID
+   * below it was not necessarily looked for and missed. Callers must not
+   * present it as a scanned range — see {@link
+   * import('./dangling_reference_error').DanglingReferenceError}, whose
+   * prefix message reports it as a separate fact for exactly this reason.
    *
    * @return {number} The highest indexed express ID, or 0 for an empty index.
    */
