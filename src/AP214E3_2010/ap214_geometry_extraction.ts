@@ -185,50 +185,6 @@ const MAXIMUM_PCURVE_SPAN_SAMPLES = 256
 const EXTENT_SAMPLE_FACES = 1024
 
 /**
- * How far the extent walk chases `styled_item.item`. A styled_item is itself
- * a representation_item, so the schema permits a chain; nothing sane writes
- * one, and a cycle would otherwise not terminate.
- */
-const MAXIMUM_STYLED_ITEM_DEPTH = 4
-
-
-/**
- * Whether a styled item carries a surface style, and so whether extraction
- * will tessellate its target at all.
- *
- * `extractStyledItemWithProcessing` returns early when it finds no
- * `surface_style_usage`, so a styled item without one contributes no
- * geometry. The extent collector has to apply the same test before following
- * `.item`: a target that is never tessellated must not contribute vertices
- * to the representation's extent, or the floor comes out coarser than the
- * geometry warrants.
- *
- * @param from The styled item to test.
- * @return {boolean} True when a surface_style_usage is present.
- */
-function hasSurfaceStyleUsage( from: styled_item ): boolean {
-
-  try {
-
-    for ( const style of from.styles ) {
-
-      for ( const innerStyle of style.styles ) {
-
-        if ( innerStyle instanceof surface_style_usage ) {
-          return true
-        }
-      }
-    }
-
-  } catch {
-    // Malformed or truncated style chain — extraction's own loop would throw
-    // here too and the item would tessellate nothing, so treat it as unstyled.
-  }
-
-  return false
-}
-
-/**
  * How a basis surface turns a point in its own parameter space into a point
  * in its placement's local frame, plus which of (u, v) are angles - the
  * latter is what decides how finely a mapped span has to be sampled, since a
@@ -1020,6 +976,47 @@ export class AP214GeometryExtraction {
   /**
    * Append every face one representation item defines.
    *
+   * ## Why `styled_item` is deliberately NOT followed
+   *
+   * A styled_item listed among a representation's items carries geometry on
+   * `.item`, and extraction does tessellate that target
+   * (extractStyledItemWithProcessing -> extractRepresentationItem). Mirroring
+   * that here was tried and then removed on purpose, so it is not
+   * reintroduced as an obvious omission.
+   *
+   * Following it is the only place in this collector where the error
+   * direction is UNSAFE. Everywhere else a miss means a face gets no floor —
+   * pre-#564 behaviour, finer, a lost saving. Here, following a target
+   * extraction will not tessellate folds its vertices into the
+   * representation's extent and makes the floor COARSER for every face that
+   * does tessellate, which is a fidelity loss. And extraction's decision is
+   * not a simple reachability question that a mirror can answer once: it
+   * turns on the styled item carrying a `surface_style_usage`, on that usage
+   * being well formed enough for `extractSurfaceStyle` not to throw, and on
+   * `extractRepresentationItem` having no `styled_item` arm of its own so a
+   * nested styled item stops as unsupported. Three review rounds produced
+   * three separate findings on those three conditions.
+   *
+   * Not following it inverts the whole class: such a face is simply never
+   * attributed, so it gets no floor — the safe direction — and it lands in
+   * `extentMissingFaceCount`, which the load report prints and
+   * ap214_extent_coverage.test.ts asserts on. That trades a capability no
+   * corpus model exercises (no model in the public corpus or in data/ lists
+   * a styled_item among a representation's items at all; Arty_Z7's 3,919
+   * styled items attach per face through styledItemMap) for the removal of
+   * an entire error direction.
+   *
+   * What it costs is narrower than "styled geometry loses its floor":
+   *
+   * - per-face styling is untouched, because those faces are reached through
+   *   their own solid, which this walk handles normally;
+   * - a target that is ALSO listed directly in `representation.items` keeps
+   *   its floor from the direct listing;
+   * - a mixed representation takes its extent from the directly-listed items
+   *   and applies it only to faces from those items, so the extent stays a
+   *   subset of the representation's own coordinates and no new unsafe case
+   *   appears.
+   *
    * ## Why this is not shared with extraction's own dispatch
    *
    * The obvious tidy-up — one `facesOfItem` consumed by both this and
@@ -1041,51 +1038,10 @@ export class AP214GeometryExtraction {
    *
    * @param item The representation item to walk.
    * @param faces The list being built.
-   * @param depth Current styled_item recursion depth.
    */
-  private collectItemFaces(
-      item: representation_item,
-      faces: face[],
-      depth: number = 0 ): void {
+  private collectItemFaces( item: representation_item, faces: face[] ): void {
 
     try {
-
-      // A styled_item listed among a representation's items carries its
-      // geometry on `.item`, and extraction tessellates that target through
-      // extractStyledItemWithProcessing -> extractRepresentationItem. Without
-      // this arm every face of a styled BREP would fall out of the table and
-      // silently lose its floor. The target belongs to the representation
-      // that lists the styled_item, so attributing its faces here is exactly
-      // right. A `mapped_item` target is left alone for the same reason the
-      // top-level walk leaves them alone: the mapped representation is
-      // visited in its own right, and following it from a referencing
-      // representation is the reference-dependence this primitive removes.
-      //
-      // The surface_style_usage precondition mirrors
-      // extractStyledItemWithProcessing's early return, and it is the one
-      // place in this collector where being too GENEROUS is the dangerous
-      // direction. Everywhere else a miss means a face gets no floor —
-      // pre-#564 behaviour, finer, safe. Here, following a target extraction
-      // will never tessellate would fold its vertices into the
-      // representation's extent and make the floor COARSER for every face
-      // that does tessellate, which is a fidelity loss rather than a lost
-      // saving. So the two walks have to agree on the gate, not just on the
-      // reachability.
-      if ( item instanceof styled_item ) {
-
-        const target = item.item
-
-        if ( depth < MAXIMUM_STYLED_ITEM_DEPTH &&
-             target !== null &&
-             target instanceof representation_item &&
-             !( target instanceof mapped_item ) &&
-             hasSurfaceStyleUsage( item ) ) {
-
-          this.collectItemFaces( target, faces, depth + 1 )
-        }
-
-        return
-      }
 
       if ( item instanceof manifold_solid_brep ) {
 

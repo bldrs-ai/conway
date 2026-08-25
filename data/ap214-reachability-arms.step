@@ -1,6 +1,6 @@
 ISO-10303-21;
 HEADER;
-FILE_DESCRIPTION ('AP214 reachability-arms fixture (bldrs-ai/conway#564 5). Three representations, each reaching its geometry by a path the extent collector has to mirror and could plausibly miss: a MANIFOLD_SURFACE_SHAPE_REPRESENTATION (a shape_representation SUBTYPE, invisible to an exact-type types() scan), a MANIFOLD_SOLID_BREP reachable only through a STYLED_ITEM, and a FACE_BASED_SURFACE_MODEL. The styled representation also lists a second STYLED_ITEM carrying only a POINT_STYLE - no SURFACE_STYLE_USAGE - wrapping a far larger BREP: extraction refuses to tessellate that target, so the collector must refuse to take its extent from it. Every face here is a planar triangle: the point is which faces the walk REACHES, not what they tessellate to.','2;1');
+FILE_DESCRIPTION ('AP214 reachability-arms fixture (bldrs-ai/conway#564 5). Three representations, each reaching its geometry by a path the extent collector has to mirror and could plausibly miss: a MANIFOLD_SURFACE_SHAPE_REPRESENTATION (a shape_representation SUBTYPE, invisible to an exact-type types() scan), a MANIFOLD_SOLID_BREP reachable only through a STYLED_ITEM, and a FACE_BASED_SURFACE_MODEL. The middle representation reaches its BREP ONLY through a STYLED_ITEM, which the extent collector deliberately does not follow: its face is expected to come out UNREACHED, i.e. with no deflection floor, which is the safe direction and is what the coverage test asserts. It also lists a second STYLED_ITEM carrying only a POINT_STYLE and wrapping a far larger BREP, which extraction refuses to tessellate at all - the case that showed following styled items was the one unsafe direction in that walk. Every face here is a planar triangle: the point is which faces the walk REACHES, not what they tessellate to.','2;1');
 FILE_NAME('ap214-reachability-arms','2026-01-01T00:00:00',('test'),('bldrs'),'','','');
 FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
 ENDSEC;
@@ -73,7 +73,7 @@ DATA;
 #2025=DIRECTION('',(1.000000000,0.000000000,0.000000000));
 #2026=AXIS2_PLACEMENT_3D('',#2023,#2024,#2025);
 #2027=PLANE('',#2026);
-#2028=ADVANCED_FACE('styled brep face',(#2022),#2027,.T.);
+#2028=ADVANCED_FACE('unfloored styled face',(#2022),#2027,.T.);
 #2029=CLOSED_SHELL('',(#2028));
 #2030=MANIFOLD_SOLID_BREP('styled brep',#2029);
 #2031=COLOUR_RGB('',0.800000,0.200000,0.200000);

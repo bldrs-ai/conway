@@ -14,9 +14,10 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 const FIXTURE_DIRECTORY = 'data'
 
 /**
- * Three representations, each reaching its geometry by a path the extent
- * collector has to mirror: a `shape_representation` SUBTYPE, a BREP reachable
- * only through a `styled_item`, and a `face_based_surface_model`.
+ * Three representations, each reaching its geometry by a different path: a
+ * `shape_representation` SUBTYPE, a BREP reachable only through a
+ * `styled_item`, and a `face_based_surface_model`. The collector mirrors the
+ * first and third and deliberately does not follow the second.
  */
 const ARMS_FIXTURE = 'ap214-reachability-arms.step'
 
@@ -24,12 +25,12 @@ const ARMS_FIXTURE = 'ap214-reachability-arms.step'
 const ARMS_FACE_COUNT = 3
 
 /**
- * The styled representation's own triangle spans 20 units in x and y, so its
- * extent is `hypot(20, 20)`. The unstyled BREP the same representation lists
- * spans 2000 — a hundred times larger — so an extent that folded it in would
- * be unmistakable.
+ * Of those, the one the collector deliberately does not reach: the BREP whose
+ * only path is a `styled_item`. Asserted as an exact count rather than
+ * tolerated, so that a change which started reaching it again fails here too
+ * — the decision is pinned in both directions.
  */
-const STYLED_TRIANGLE_SPAN = 20
+const ARMS_UNREACHED_FACE_COUNT = 1
 
 /**
  * A whole sphere: one advanced face bounded by a single `vertex_loop`, so
@@ -152,18 +153,23 @@ describe('AP214 deflection-floor coverage (bldrs-ai/conway#564 §5)', () => {
     expect(await conwayGeometry.initialize()).toBe(true)
   })
 
-  test('every face the reachability fixture tessellates has an extent', () => {
+  test('the reachability fixture reaches every arm but the styled one', () => {
 
     const coverage = coverageOf( ARMS_FIXTURE )
 
     expect(coverage).toBeDefined()
 
-    // The denominator FIRST, and exactly — one face per arm. Asserting
-    // `missing === 0` on its own passes just as happily when nothing was
+    // The denominator FIRST, and exactly — one face per arm. Asserting the
+    // unreached count on its own passes just as happily when nothing was
     // tessellated at all, which is how a guard ends up asserting nothing
     // (see the peakWasmHeapMb note in scripts/benchmark.cjs).
     expect(coverage!.measured).toBe(ARMS_FACE_COUNT)
-    expect(coverage!.missing).toBe(0)
+
+    // Exactly one, not "at most one": the subtype and face-based arms must
+    // still be reached, and the styled arm must still NOT be. Following
+    // styled items is the one unsafe direction in this walk, so it is pinned
+    // rather than merely permitted — see collectItemFaces.
+    expect(coverage!.missing).toBe(ARMS_UNREACHED_FACE_COUNT)
   })
 
   // The distinction this test exists to keep honest. The whole-sphere
@@ -183,23 +189,22 @@ describe('AP214 deflection-floor coverage (bldrs-ai/conway#564 §5)', () => {
     expect(coverage!.degenerate).toBe(1)
   })
 
-  // The one direction in which being too generous is the DANGEROUS error.
-  // A styled_item with no `surface_style_usage` tessellates nothing —
-  // extractStyledItemWithProcessing returns early — so following it would
-  // fold a body that never renders into the representation's extent and make
-  // the floor COARSER for every face that does render. Every other gap in
-  // this collector loses savings; this one would lose fidelity.
-  test('an unstyled styled_item does not inflate the representation extent', () => {
+  // Following styled items is the one direction in which being too generous
+  // is the DANGEROUS error: a target extraction will not tessellate would
+  // fold its vertices into the representation's extent and make the floor
+  // COARSER for every face that does render. Every other gap in this
+  // collector merely loses savings. So the arm is not followed at all, and
+  // the consequence — no floor for a face reachable only that way — is
+  // asserted here rather than left implicit.
+  test('a face reachable only through a styled_item gets no floor', () => {
 
     const [model, extraction] = load( ARMS_FIXTURE )
 
-    const expected = Math.hypot( STYLED_TRIANGLE_SPAN, STYLED_TRIANGLE_SPAN )
-
-    expect(extraction.representationExtentForFace( faceNamed( model, 'styled brep face' ) ))
-        .toBeCloseTo(expected, 6)
+    expect(extraction.representationExtentForFace(
+        faceNamed( model, 'unfloored styled face' ) )).toBe(0)
   })
 
-  test('no fixture in data/ tessellates a face without an extent', () => {
+  test('no fixture in data/ tessellates an unexpectedly unreached face', () => {
 
     const fixtures =
       fs.readdirSync( FIXTURE_DIRECTORY )
@@ -226,8 +231,15 @@ describe('AP214 deflection-floor coverage (bldrs-ai/conway#564 §5)', () => {
       // Only `missing` — a face the walk never reached. A degenerate extent
       // is a property of the model, not a disagreement between the two
       // traversals, and this test is about the disagreement.
-      if ( coverage.missing > 0 ) {
-        offenders.push( `${fixture}: ${coverage.missing} of ${coverage.measured}` )
+      //
+      // The arms fixture is the one place unreached faces are EXPECTED, and
+      // its exact count is pinned by the case above; every other fixture must
+      // be clean.
+      const allowed = fixture === ARMS_FIXTURE ? ARMS_UNREACHED_FACE_COUNT : 0
+
+      if ( coverage.missing !== allowed ) {
+        offenders.push(
+            `${fixture}: ${coverage.missing} of ${coverage.measured}, expected ${allowed}` )
       }
     }
 
