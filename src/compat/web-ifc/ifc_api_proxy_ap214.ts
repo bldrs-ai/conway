@@ -635,6 +635,10 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     }
 
     statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+    statistics?.setRepresentationExtentCoverage(
+        conwayGeometry.extentMeasuredFaceCount,
+        conwayGeometry.extentMissingFaceCount,
+        conwayGeometry.extentDegenerateFaceCount)
 
     return {
       conwaywasm,
@@ -789,6 +793,10 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     }
 
     statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+    statistics?.setRepresentationExtentCoverage(
+        conwayGeometry.extentMeasuredFaceCount,
+        conwayGeometry.extentMissingFaceCount,
+        conwayGeometry.extentDegenerateFaceCount)
 
     return {
       conwaywasm,
@@ -880,6 +888,10 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     }
 
     statistics?.setGeometryTypeCounts(conwayGeometry.geometryTypeCounts)
+    statistics?.setRepresentationExtentCoverage(
+        conwayGeometry.extentMeasuredFaceCount,
+        conwayGeometry.extentMissingFaceCount,
+        conwayGeometry.extentDegenerateFaceCount)
 
     return {
       conwaywasm,

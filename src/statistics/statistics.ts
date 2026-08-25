@@ -60,6 +60,18 @@ export class Statistics {
   private productCount: number | undefined
   private geometryTypeCounts: Map<string, number> | undefined
 
+  /**
+   * Deflection-floor coverage: faces tessellated, and how many of those had
+   * no representation extent. Both undefined on a load that never measured
+   * it (IFC, or a model with no b-rep faces), which is what keeps the zero
+   * case legible — see formatRepresentationExtentCoverage.
+   */
+  private extentMeasuredFaceCount: number | undefined
+
+  private extentMissingFaceCount: number | undefined
+
+  private extentDegenerateFaceCount: number | undefined
+
   // Getters and setters
 
   /**
@@ -369,6 +381,56 @@ export class Statistics {
   }
 
   /**
+   * Record deflection-floor coverage for this load (bldrs-ai/conway#564 §5).
+   *
+   * @param measured - advanced faces tessellated
+   * @param missing - of those, how many the representation walk never
+   * reached (a defect)
+   * @param degenerate - of those, how many belong to a representation whose
+   * topological vertices carry no extent (a whole sphere; not a defect)
+   */
+  setRepresentationExtentCoverage(
+      measured: number, missing: number, degenerate: number) {
+    this.extentMeasuredFaceCount = measured
+    this.extentMissingFaceCount = missing
+    this.extentDegenerateFaceCount = degenerate
+  }
+
+  /**
+   * Format the deflection-floor coverage, e.g.
+   * "31681 faces, 0 unreached, 0 degenerate".
+   *
+   * The denominator is the point, and it is why this is one field rather
+   * than two. `missing = 0` on its own cannot be told apart from a counter
+   * that was never wired up, and this release train has already been bitten
+   * by exactly that shape: the benchmark's `peakWasmHeapMb` assertion passed
+   * for weeks while asserting nothing (#552). Printing "N faces, 0 without"
+   * says both that the floor covered everything AND that N faces were
+   * actually looked at; a load that measured nothing prints no field at all
+   * rather than a zero that reads as a clean bill of health.
+   *
+   * `unreached` and `degenerate` are separate because they mean opposite
+   * things: the first is a table that disagrees with extraction and wants
+   * fixing, the second is a body whose topology genuinely carries no extent
+   * (a whole sphere) and wants nothing.
+   *
+   * @return {string | undefined} the formatted coverage, if anything was
+   * measured
+   */
+  formatRepresentationExtentCoverage(): string | undefined {
+    if (this.extentMeasuredFaceCount === void 0 ||
+        this.extentMissingFaceCount === void 0 ||
+        this.extentDegenerateFaceCount === void 0 ||
+        this.extentMeasuredFaceCount === 0) {
+      return void 0
+    }
+
+    return `${this.extentMeasuredFaceCount} faces, ` +
+      `${this.extentMissingFaceCount} unreached, ` +
+      `${this.extentDegenerateFaceCount} degenerate`
+  }
+
+  /**
    * Format the geometry-type breakdown as a compact sorted list, e.g.
    * "IFCEXTRUDEDAREASOLID×3421 IFCFACETEDBREP×212 (+3 more)".
    *
@@ -448,6 +510,9 @@ export class Statistics {
       `Retained External Delta: ${formatRetained(this.retainedExternal)}, `
     const breakdown = this.formatGeometryTypeCounts()
     const geometryTypes = breakdown !== void 0 ? `, Geometry Types: ${breakdown}` : ''
+    const coverage = this.formatRepresentationExtentCoverage()
+    const extentCoverage =
+      coverage !== void 0 ? `, Representation Extent: ${coverage}` : ''
 
     return `[${dateString}]: Load Status: ${this.loadStatus}, ` +
             `Writer: ${this.writer ?? 'N/A'}, ` +
@@ -462,6 +527,7 @@ export class Statistics {
             `Memory Statistics: ${this.memoryStatistics}, ` +
             `Preprocessor Version: ${this.preprocessorVersion}, ` +
             `Originating System: ${this.originatingSystem}` +
-            geometryTypes
+            geometryTypes +
+            extentCoverage
   }
 }
