@@ -124,7 +124,9 @@ import {
   ratio_measure,
   rational_b_spline_curve,
   rational_b_spline_surface,
+  representation,
   representation_item,
+  representation_map,
   representation_relationship_with_transformation,
   shape_definition_representation,
   shape_representation,
@@ -172,6 +174,15 @@ const MINIMUM_BOUND_POINTS = 3
 // single span - well past the point where the polyline is the limiting
 // factor on any face it bounds.
 const MAXIMUM_PCURVE_SPAN_SAMPLES = 256
+
+/**
+ * How many of a representation's faces the extent walk descends into, at
+ * most. See AP214GeometryExtraction.extentSample for the measurement behind
+ * the number: at 1,024 the worst extent across the local corpus is 0.9996 of
+ * the full-descent value, and the walk stops being a multi-hundred-
+ * millisecond block in every preview generation.
+ */
+const EXTENT_SAMPLE_FACES = 1024
 
 /**
  * How a basis surface turns a point in its own parameter space into a point
@@ -707,6 +718,135 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Every representation whose items geometry extraction can reach.
+   *
+   * `types()` matches EXACT entity types — `shape_representation.query` is
+   * the single `SHAPE_REPRESENTATION` id — so scanning it alone silently
+   * misses the twenty-odd subtypes AP214 defines
+   * (`manifold_surface_shape_representation`,
+   * `faceted_brep_shape_representation`, `csg_shape_representation`, …).
+   * Extraction itself reaches those through `instanceof` checks on
+   * `shape_definition_representation.used_representation` and on the
+   * relationship endpoints, so a `types()`-only scan here would hand every
+   * face in such a representation an extent of zero — no floor, silently,
+   * with no error and with the corpus coverage numbers still reading 100%
+   * because the local corpus happens to be plain `SHAPE_REPRESENTATION`
+   * throughout.
+   *
+   * So the set is gathered from the entry points extraction uses rather
+   * than from a hand-maintained subtype list, which would rot the next time
+   * the schema gains one. `representation` rather than
+   * `shape_representation` is the filter because a `representation_map` may
+   * point at a base `representation` that still carries items with faces;
+   * all this walk needs from it is `.items`.
+   *
+   * @return {Iterable<representation>} Distinct representations, in
+   * localID order — though nothing downstream depends on the order, since
+   * each extent is a min/max reduction.
+   */
+  private geometryRepresentations(): Iterable< representation > {
+
+    const found = new Map< number, representation >()
+
+    /**
+     * @param candidate A possible representation reference.
+     */
+    const add = ( candidate: unknown ): void => {
+
+      if ( candidate instanceof representation ) {
+        found.set( candidate.localID, candidate )
+      }
+    }
+
+    for ( const definition of this.model.types( shape_definition_representation ) ) {
+      try {
+        add( definition.used_representation )
+      } catch {
+        // Malformed SDR (prefix truncation) — skip it, as extraction does.
+      }
+    }
+
+    for ( const relationship of this.model.types( shape_representation_relationship ) ) {
+      try {
+        add( relationship.rep_1 )
+        add( relationship.rep_2 )
+      } catch {
+        // Malformed relationship — skip it.
+      }
+    }
+
+    for ( const map of this.model.types( representation_map ) ) {
+      try {
+        add( map.mapped_representation )
+      } catch {
+        // Malformed representation_map — skip it.
+      }
+    }
+
+    // Free-floating representations, which no relationship or definition
+    // names. These are the concrete kinds extraction's own root scan uses.
+    for ( const free of this.model.types(
+        shape_representation,
+        advanced_brep_shape_representation,
+        geometrically_bounded_wireframe_shape_representation ) ) {
+
+      add( free )
+    }
+
+    return found.values()
+  }
+
+  /**
+   * At most `EXTENT_SAMPLE_FACES` of a representation's faces, spread evenly
+   * across the list.
+   *
+   * The extent walk is the one real cost in this design, and it is paid
+   * again for every throwaway generation the parse-time preview channel
+   * builds — each of which constructs its own `AP214GeometryExtraction` over
+   * a longer prefix — where it cannot be preempted by the tick budget.
+   * Measured full-descent worst-case single representation: 416 ms
+   * (`Arty_Z7_Top_Silk`, 14,376 faces) and 1,091 ms (DSA2's single
+   * representation, 28,674 faces).
+   *
+   * A bounding box converges long before the last face, so the sample is
+   * not an approximation in any way that matters, and it is measured rather
+   * than asserted. At 1,024 faces the worst extent across the local corpus
+   * is **0.9996** of the full-descent value (`Arty_Z7_Bottom_Silk`;
+   * `Arty_Z7_Top_Silk` 1.0000, DSA2 1.0000, `driver board` 1.0000,
+   * `Right_Hand` 1.0000), while the worst per-representation descent falls
+   * to 5-12 ms. Whole-table build: 875 ms -> ~80 ms on Arty_Z7, 1,443 ms ->
+   * ~245 ms on DSA2 (the remainder there is collecting 28,674 faces, which
+   * the localID table needs regardless).
+   *
+   * The error can only ever be an UNDER-estimate — a subset's bounding box
+   * is contained in the full one — and a smaller extent is a finer floor,
+   * i.e. less of the saving and never a fidelity loss. That is the same
+   * direction as every other bound here.
+   *
+   * A stride rather than a prefix: the first 1,024 faces of a mosaic are its
+   * first few dozen glyphs, which span a corner of the board rather than the
+   * board. `Math.ceil` keeps the stride at least 1.
+   *
+   * @param faces The representation's faces, in walk order.
+   * @return {face[]} The faces to descend.
+   */
+  private extentSample( faces: face[] ): face[] {
+
+    if ( faces.length <= EXTENT_SAMPLE_FACES ) {
+      return faces
+    }
+
+    const stride = Math.ceil( faces.length / EXTENT_SAMPLE_FACES )
+    const sampled: face[] = []
+
+    for ( let where = 0; where < faces.length; where += stride ) {
+      sampled.push( faces[ where ] )
+    }
+
+    return sampled
+  }
+
+  /**
    * Build the face localID to defining-representation-extent table.
    *
    * `mapped_item` is deliberately NOT followed. A mapped representation is
@@ -722,18 +862,12 @@ export class AP214GeometryExtraction {
 
     const faceExtent = new Map< number, number >()
 
-    const representations =
-      this.model.types(
-          shape_representation,
-          advanced_brep_shape_representation,
-          geometrically_bounded_wireframe_shape_representation )
-
-    for ( const representation of representations ) {
+    for ( const representation_ of this.geometryRepresentations() ) {
 
       const faces: face[] = []
 
       try {
-        for ( const item of representation.items ) {
+        for ( const item of representation_.items ) {
           this.collectItemFaces( item, faces )
         }
       } catch {
@@ -751,7 +885,7 @@ export class AP214GeometryExtraction {
         maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
       }
 
-      for ( const face_ of faces ) {
+      for ( const face_ of this.extentSample( faces ) ) {
         this.growBoxByFace( face_, box )
       }
 
