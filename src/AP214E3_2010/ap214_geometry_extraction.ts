@@ -224,6 +224,34 @@ const AP214_MAX_REPLAYED_PLACEMENTS = 8
  */
 const EXTENT_SAMPLE_FACES = 1024
 
+
+/**
+ * Append one shell's faces to the list being built, one at a time.
+ *
+ * Iteratively, NOT `target.push( ...source )`. A spread passes every element
+ * as a separate argument, and a `connected_face_set` large enough to exceed
+ * the engine's argument limit throws `RangeError: Maximum call stack size
+ * exceeded` — measured at 125,000 elements on the Node runtime this was
+ * reviewed against.
+ *
+ * The failure would have been silent and precisely inverted. `collectItemFaces`
+ * swallows exceptions so that one bad reference cannot lose the whole table,
+ * so the throw would have left every face of that BREP unattributed and the
+ * deflection floor disabled — on the biggest models in the corpus, which are
+ * the ones this whole change exists for. Normal extraction is unaffected:
+ * `extractManifoldSolidBrep` hands `cfs_faces` to `extractFaces`, which
+ * iterates.
+ *
+ * @param target The list being built.
+ * @param source One shell's faces.
+ */
+function appendFaces( target: face[], source: face[] ): void {
+
+  for ( const face_ of source ) {
+    target.push( face_ )
+  }
+}
+
 /**
  * How a basis surface turns a point in its own parameter space into a point
  * in its placement's local frame, plus which of (u, v) are angles - the
@@ -1085,14 +1113,14 @@ export class AP214GeometryExtraction {
 
       if ( item instanceof manifold_solid_brep ) {
 
-        faces.push( ...item.outer.cfs_faces )
+        appendFaces( faces, item.outer.cfs_faces )
 
         // faceted_brep and brep_with_voids are both manifold_solid_brep
         // subtypes; only the latter carries anything beyond `outer`.
         if ( item instanceof brep_with_voids ) {
 
           for ( const void_ of item.voids ) {
-            faces.push( ...void_.cfs_faces )
+            appendFaces( faces, void_.cfs_faces )
           }
         }
 
@@ -1102,7 +1130,7 @@ export class AP214GeometryExtraction {
       if ( item instanceof shell_based_surface_model ) {
 
         for ( const shell of item.sbsm_boundary ) {
-          faces.push( ...shell.cfs_faces )
+          appendFaces( faces, shell.cfs_faces )
         }
 
         return
@@ -1111,7 +1139,7 @@ export class AP214GeometryExtraction {
       if ( item instanceof face_based_surface_model ) {
 
         for ( const faceSet of item.fbsm_faces ) {
-          faces.push( ...faceSet.cfs_faces )
+          appendFaces( faces, faceSet.cfs_faces )
         }
       }
 
