@@ -22,6 +22,8 @@ const realParser    = RealParser.Instance
 const hexParser     = HexParser.Instance
 
 const RADIX_LUT_SIZE = 64
+// Largest index the LUT actually holds; see readReal's scaling loops.
+const RADIX_LUT_MAX_INDEX = RADIX_LUT_SIZE - 1
 
 const radixLUT  = new Float64Array( RADIX_LUT_SIZE )
 
@@ -691,7 +693,16 @@ export default class ParsingBuffer {
 
     while ( decimals < 0 ) {
 
-      const radixLutEntry = Math.min( -decimals, RADIX_LUT_SIZE )
+      // RADIX_LUT_MAX_INDEX, not RADIX_LUT_SIZE: radixLUT is a Float64Array of
+      // exactly RADIX_LUT_SIZE entries, so index RADIX_LUT_SIZE is out of
+      // bounds and a typed-array read there yields `undefined`, not a throw —
+      // `primary /= undefined` is NaN. Any real whose total decimal shift
+      // reached 64 (1.0E-63 with one fractional digit, 1.5E308, and 306
+      // direction/coordinate literals in Orbiter_v1.1_Gear_7.5.step) parsed
+      // as NaN and carried that silently into placements and geometry.
+      // Clamping to the last valid entry only changes inputs that used to be
+      // NaN: for a shift below 64 both clamps return the shift itself.
+      const radixLutEntry = Math.min( -decimals, RADIX_LUT_MAX_INDEX )
 
       decimals += radixLutEntry
       // Note, we need to use division here not a multiply
@@ -701,7 +712,8 @@ export default class ParsingBuffer {
 
     while ( decimals > 0 ) {
 
-      const radixLutEntry = Math.min( decimals, RADIX_LUT_SIZE )
+      // See the note on the negative-exponent loop above.
+      const radixLutEntry = Math.min( decimals, RADIX_LUT_MAX_INDEX )
 
       decimals -= radixLutEntry
       primary  *= radixLUT[ radixLutEntry ]
