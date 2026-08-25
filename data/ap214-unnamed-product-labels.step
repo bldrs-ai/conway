@@ -1,0 +1,43 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION (('AP214 fixture for NavTree labels on products with no PRODUCT.name. Modelled on the NIST PMI files, which leave PRODUCT.name empty and carry the part identity in PRODUCT.id instead - reading the DERIVED product_definition.name there threw out of resolveLabel and took the whole spatial structure with it. Three roots, none with a NAUO occurrence to borrow a name from: #710 has the identity on PRODUCT.id (nist_ctc_04_asme1_rd / nist_stc_08 shape), #720 has it only on PRODUCT_DEFINITION.id, and #730 has nothing anywhere but whitespace (nist_stc_09 / nist_ftc_09 shape).'),'2;1');
+FILE_NAME('ap214-unnamed-product-labels','2026-01-01T00:00:00',('test'),('bldrs'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2010,#2);
+#2 = APPLICATION_CONTEXT('mechanical design');
+#10 = CARTESIAN_POINT('',(0.,0.,0.));
+#20 = DIRECTION('',(0.,0.,1.));
+#21 = DIRECTION('',(1.,0.,0.));
+#30 = AXIS2_PLACEMENT_3D('',#10,#20,#21);
+#100 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#104)) GLOBAL_UNIT_ASSIGNED_CONTEXT((#101,#102,#103)) REPRESENTATION_CONTEXT('Context','3D') );
+#101 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );
+#102 = ( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) );
+#103 = ( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() );
+#104 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#101,'','');
+#600 = PRODUCT_CONTEXT('',#2,'mechanical');
+#601 = PRODUCT_DEFINITION_CONTEXT('part definition',#2,'design');
+/* Identity on PRODUCT.id only - the NIST PMI shape. */
+#700 = SHAPE_REPRESENTATION('',(#30),#100);
+#710 = PRODUCT('NIST PMI CTC 04 ASME1','','NIST PMI test model downloaded from http://go.usa.gov/mGVm',(#600));
+#711 = PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('D',' ',#710,.NOT_KNOWN.);
+#712 = PRODUCT_DEFINITION('',' ',#711,#601);
+#713 = PRODUCT_DEFINITION_SHAPE('',' ',#712);
+#714 = SHAPE_DEFINITION_REPRESENTATION(#713,#700);
+/* Identity on PRODUCT_DEFINITION.id only. */
+#720 = SHAPE_REPRESENTATION('',(#30),#100);
+#721 = PRODUCT('','','',(#600));
+#722 = PRODUCT_DEFINITION_FORMATION('','',#721);
+#723 = PRODUCT_DEFINITION('BRACKET-REV-C','',#722,#601);
+#724 = PRODUCT_DEFINITION_SHAPE('','',#723);
+#725 = SHAPE_DEFINITION_REPRESENTATION(#724,#720);
+/* No identity anywhere: every candidate is empty or whitespace. */
+#730 = SHAPE_REPRESENTATION('',(#30),#100);
+#731 = PRODUCT('','','',(#600));
+#732 = PRODUCT_DEFINITION_FORMATION('','',#731);
+#733 = PRODUCT_DEFINITION('   ','   ',#732,#601);
+#734 = PRODUCT_DEFINITION_SHAPE('','',#733);
+#735 = SHAPE_DEFINITION_REPRESENTATION(#734,#730);
+ENDSEC;
+END-ISO-10303-21;
