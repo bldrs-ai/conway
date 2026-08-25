@@ -2,8 +2,10 @@ import fs from 'fs'
 import path from 'path'
 import { describe, expect, test, beforeAll } from '@jest/globals'
 import { AP214GeometryExtraction } from './ap214_geometry_extraction'
+import { advanced_face } from './AP214E3_2010_gen'
 import { ParseResult } from '../step/parsing/step_parser'
 import AP214StepParser from './ap214_step_parser'
+import AP214StepModel from './ap214_step_model'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 
@@ -22,6 +24,14 @@ const ARMS_FIXTURE = 'ap214-reachability-arms.step'
 const ARMS_FACE_COUNT = 3
 
 /**
+ * The styled representation's own triangle spans 20 units in x and y, so its
+ * extent is `hypot(20, 20)`. The unstyled BREP the same representation lists
+ * spans 2000 — a hundred times larger — so an extent that folded it in would
+ * be unmistakable.
+ */
+const STYLED_TRIANGLE_SPAN = 20
+
+/**
  * A whole sphere: one advanced face bounded by a single `vertex_loop`, so
  * its representation's topological vertices are one point and its extent is
  * legitimately zero.
@@ -29,6 +39,55 @@ const ARMS_FACE_COUNT = 3
 const DEGENERATE_FIXTURE = 'sphere-vertex-loop.step'
 
 let conwayGeometry: ConwayGeometry
+
+
+/**
+ * Parse one fixture and build an extraction over it, without extracting.
+ *
+ * `representationExtentForFace` builds its table on first use, so a case
+ * that only asks about extents does not need geometry.
+ *
+ * @param fixture File name within `data/`.
+ * @return {[AP214StepModel, AP214GeometryExtraction]} The model and an
+ * extraction over it.
+ */
+function load( fixture: string ): [AP214StepModel, AP214GeometryExtraction] {
+
+  const parser = AP214StepParser.Instance
+  const bufferInput =
+    new ParsingBuffer( fs.readFileSync( path.join( FIXTURE_DIRECTORY, fixture ) ) )
+
+  expect(parser.parseHeader( bufferInput )[ 1 ]).toBe(ParseResult.COMPLETE)
+
+  const [, model] = parser.parseDataToModel( bufferInput )
+
+  expect(model).toBeDefined()
+
+  model!.nullOnErrors = true
+
+  const extraction = new AP214GeometryExtraction( conwayGeometry, model! )
+
+  expect(extraction.isInitialized()).toBe(true)
+
+  return [model!, extraction]
+}
+
+
+/**
+ * The localID of the uniquely-named advanced face in a fixture.
+ *
+ * @param model The parsed model.
+ * @param name The face's STEP name.
+ * @return {number} That face's localID.
+ */
+function faceNamed( model: AP214StepModel, name: string ): number {
+
+  const matches = Array.from( model.types( advanced_face ) ).filter( ( f ) => f.name === name )
+
+  expect(matches.length).toBe(1)
+
+  return matches[ 0 ].localID
+}
 
 
 /**
@@ -122,6 +181,22 @@ describe('AP214 deflection-floor coverage (bldrs-ai/conway#564 §5)', () => {
     expect(coverage!.measured).toBe(1)
     expect(coverage!.missing).toBe(0)
     expect(coverage!.degenerate).toBe(1)
+  })
+
+  // The one direction in which being too generous is the DANGEROUS error.
+  // A styled_item with no `surface_style_usage` tessellates nothing —
+  // extractStyledItemWithProcessing returns early — so following it would
+  // fold a body that never renders into the representation's extent and make
+  // the floor COARSER for every face that does render. Every other gap in
+  // this collector loses savings; this one would lose fidelity.
+  test('an unstyled styled_item does not inflate the representation extent', () => {
+
+    const [model, extraction] = load( ARMS_FIXTURE )
+
+    const expected = Math.hypot( STYLED_TRIANGLE_SPAN, STYLED_TRIANGLE_SPAN )
+
+    expect(extraction.representationExtentForFace( faceNamed( model, 'styled brep face' ) ))
+        .toBeCloseTo(expected, 6)
   })
 
   test('no fixture in data/ tessellates a face without an extent', () => {

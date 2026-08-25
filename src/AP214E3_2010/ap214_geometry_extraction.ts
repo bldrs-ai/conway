@@ -191,6 +191,43 @@ const EXTENT_SAMPLE_FACES = 1024
  */
 const MAXIMUM_STYLED_ITEM_DEPTH = 4
 
+
+/**
+ * Whether a styled item carries a surface style, and so whether extraction
+ * will tessellate its target at all.
+ *
+ * `extractStyledItemWithProcessing` returns early when it finds no
+ * `surface_style_usage`, so a styled item without one contributes no
+ * geometry. The extent collector has to apply the same test before following
+ * `.item`: a target that is never tessellated must not contribute vertices
+ * to the representation's extent, or the floor comes out coarser than the
+ * geometry warrants.
+ *
+ * @param from The styled item to test.
+ * @return {boolean} True when a surface_style_usage is present.
+ */
+function hasSurfaceStyleUsage( from: styled_item ): boolean {
+
+  try {
+
+    for ( const style of from.styles ) {
+
+      for ( const innerStyle of style.styles ) {
+
+        if ( innerStyle instanceof surface_style_usage ) {
+          return true
+        }
+      }
+    }
+
+  } catch {
+    // Malformed or truncated style chain — extraction's own loop would throw
+    // here too and the item would tessellate nothing, so treat it as unstyled.
+  }
+
+  return false
+}
+
 /**
  * How a basis surface turns a point in its own parameter space into a point
  * in its placement's local frame, plus which of (u, v) are angles - the
@@ -1023,6 +1060,17 @@ export class AP214GeometryExtraction {
       // top-level walk leaves them alone: the mapped representation is
       // visited in its own right, and following it from a referencing
       // representation is the reference-dependence this primitive removes.
+      //
+      // The surface_style_usage precondition mirrors
+      // extractStyledItemWithProcessing's early return, and it is the one
+      // place in this collector where being too GENEROUS is the dangerous
+      // direction. Everywhere else a miss means a face gets no floor —
+      // pre-#564 behaviour, finer, safe. Here, following a target extraction
+      // will never tessellate would fold its vertices into the
+      // representation's extent and make the floor COARSER for every face
+      // that does tessellate, which is a fidelity loss rather than a lost
+      // saving. So the two walks have to agree on the gate, not just on the
+      // reachability.
       if ( item instanceof styled_item ) {
 
         const target = item.item
@@ -1030,7 +1078,8 @@ export class AP214GeometryExtraction {
         if ( depth < MAXIMUM_STYLED_ITEM_DEPTH &&
              target !== null &&
              target instanceof representation_item &&
-             !( target instanceof mapped_item ) ) {
+             !( target instanceof mapped_item ) &&
+             hasSurfaceStyleUsage( item ) ) {
 
           this.collectItemFaces( target, faces, depth + 1 )
         }
