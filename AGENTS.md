@@ -55,19 +55,67 @@ order:
    `create_pull_request` takes `draft: true`. Heavy CI is gated on
    draft state (see below), so a draft costs a build, not a full
    regression pass.
-2. **Leave it in draft until `/review` has run and every finding is
+2. **Leave it in draft until review has run and every finding is
    handled.** Handled means fixed, or answered in the PR thread with
    why it is not a defect. Do not flip to ready with open findings.
+   Review means codex — see the next section for how that works.
 3. **Flip it out of draft** (`update_pull_request` with
    `draft: false`). That fires `ready_for_review`, which is what
    triggers the gated jobs — this is the point where CI actually runs.
 4. **Drive CI to green.** If fixing CI changed the diff in any way
-   beyond a trivial revert, `/review` again — the reviewed diff is not
-   the merged diff otherwise.
+   beyond a trivial revert, request review again — the reviewed diff is
+   not the merged diff otherwise.
 5. **Then land it:** bring the PR description up to date with what the
    change actually became, merge, and close or narrow the issues it
    resolves. An issue that is only partly addressed gets a comment
    saying what is left, not a close.
+
+### Review: codex first, sub-agent on timeout
+
+Sub-agents do not review their own code, and the coordinator does not
+review theirs. Review comes from **codex** — usually automatic on
+`ready_for_review`; otherwise request it with an `@codex review`
+comment on the PR.
+
+**Docs-only changes skip review by default.** There is no code to
+attack, and a review round on a paragraph costs more than it finds.
+The exception is a doc that *is* the policy — a change to how we
+review, dispatch or release is worth having codex read, precisely
+because it is the thing codex will be held to. (This section is one:
+it was reviewed.)
+
+Three rules keep review from becoming either a bottleneck or a rubber
+stamp.
+
+**Timeout.** If codex has not responded ~10 minutes after the request,
+dispatch a **sub-agent review** and treat that as the round rather
+than waiting. A late codex finding still counts — fold it in when it
+arrives, even if a sub-agent round has already run.
+
+**A substituting reviewer needs to be pointed at the hazards.** A
+generic "review this diff" comes back clean on exactly the changes
+that most need scrutiny, because the risky part of a good fix is
+usually an invariant the diff does not mention. Hand the reviewer the
+issue as well as the diff, and name the specific claims to attack —
+the order-preservation argument behind a zero-digest-churn claim, the
+state that has to stay stable across a demand pump, whatever the
+change is actually betting on. A clean review that never engaged with
+the load-bearing claim has not reviewed it.
+
+**Cap the rounds.** A few rounds, not an open-ended dialogue. If
+findings are still arriving after ~3, or the review turns into a long
+back-and-forth, pause it and escalate to the coordinator — that
+pattern usually means the change needs a design decision, not more
+review turns.
+
+One caution from experience: codex has reversed itself on an identical
+commit more than once, clean on one pass and not on the next. A single
+clean pass is not by itself a merge signal. Read what it said.
+
+This mirrors Share's
+[`design/new/agent-workflow.md`](https://github.com/bldrs-ai/Share/blob/main/design/new/agent-workflow.md)
+§"Review", which is the fuller version and the source of record; keep
+the two in step when either changes.
 
 ### What the draft gate covers
 
