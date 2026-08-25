@@ -48,7 +48,11 @@ export interface ProductStructureNode {
    */
   type: string
 
-  /** Display label: `product.name`, falling back to the NAUO name / reference designator. */
+  /**
+   * Display label: `product.name`, falling back to the NAUO name / reference
+   * designator, then to the part number (`product.id` / `product_definition.id`).
+   * `''` when the file names the node nowhere.
+   */
   name: string
 
   /** Express id of the underlying `product_definition` (the part *type*). */
@@ -601,37 +605,99 @@ export class AP214ProductStructureExtraction {
   }
 
   /**
+   * Read one label candidate, treating anything unusable as absent.
+   *
+   * Every candidate below is a STEP string attribute, and the mandatory ones
+   * (`product.name`, `product.id`, `next_assembly_usage_occurrence.name`,
+   * `product_definition.id`) are extracted with `optional: false`, which
+   * throws `'Value in STEP was incorrectly typed'` when the slot actually
+   * holds `$` or a non-string — a shape exporters do emit. `formation` is an
+   * `extractElement` and can throw on a dangling reference the same way. A
+   * node label is cosmetic; a malformed one must never unwind
+   * {@link extractProductStructure} and cost the caller the entire tree, which
+   * is exactly what the derived-attribute read this replaced used to do.
+   *
+   * Whitespace-only counts as absent: the AP203 NIST files carry `' '` in
+   * `product_definition.description`, and a label of one space is not a label.
+   *
+   * @param read Thunk reading the candidate attribute.
+   * @return {string} The trimmed candidate, or `''` if it is absent, blank or
+   * unreadable.
+   */
+  private static labelCandidate( read: () => string | null | undefined ): string {
+
+    try {
+      return read()?.trim() ?? ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
    * Resolve a node label, preferring the product name, then the occurrence's
-   * own name / reference designator.
+   * own name / reference designator, then the part number (`product.id`).
+   *
+   * Deliberately never reads `product_definition.name`: that attribute is
+   * DERIVED in AP214, and its generated getter calls `get_name_value()` in
+   * `ap214_functions.ts`, an unimplemented stub that throws. It is not a real
+   * attribute of the entity at all — `product_definition` carries only `id`
+   * and `description` as strings — so that read could only ever throw, and did:
+   * it killed the whole NavTree for any file that got this far.
    *
    * @param productDef The product definition for the node.
    * @param occurrence The NAUO edge, when this is an occurrence node.
-   * @return {string} The best available human-readable label.
+   * @return {string} The best available human-readable label, or `''` when the
+   * file carries no usable identifier for the node.
    */
   private resolveLabel(
       productDef: product_definition,
       occurrence: next_assembly_usage_occurrence | undefined ): string {
 
-    const productName = productDef.formation?.of_product?.name
+    const productName =
+      AP214ProductStructureExtraction.labelCandidate(
+          () => productDef.formation?.of_product?.name )
 
-    if ( productName !== void 0 && productName.length > 0 ) {
+    if ( productName.length > 0 ) {
       return productName
     }
 
     if ( occurrence !== void 0 ) {
 
-      if ( occurrence.name.length > 0 ) {
-        return occurrence.name
+      const occurrenceName =
+        AP214ProductStructureExtraction.labelCandidate( () => occurrence.name )
+
+      if ( occurrenceName.length > 0 ) {
+        return occurrenceName
       }
 
-      const referenceDesignator = occurrence.reference_designator
+      const referenceDesignator =
+        AP214ProductStructureExtraction.labelCandidate( () => occurrence.reference_designator )
 
-      if ( referenceDesignator !== null && referenceDesignator.length > 0 ) {
+      if ( referenceDesignator.length > 0 ) {
         return referenceDesignator
       }
     }
 
-    return productDef.name ?? ''
+    // `product.id` is the part number, and it is where the NIST PMI files that
+    // leave `product.name` blank actually put the part identity
+    // ('NIST PMI CTC 04 ASME1'). It is tried ahead of `product_definition.id`
+    // because that one is the definition *discriminator*, not a part name —
+    // literally 'design' in nist_stc_06_asme1_ap242-e3 — and is empty in four
+    // of the six corpus models that reach this line.
+    const productId =
+      AP214ProductStructureExtraction.labelCandidate(
+          () => productDef.formation?.of_product?.id )
+
+    if ( productId.length > 0 ) {
+      return productId
+    }
+
+    // Neither entity's `description` is in the chain: it is prose, not an
+    // identifier. In the same corpus it is empty, whitespace, or the sentence
+    // 'NIST PMI test model downloaded from http://go.usa.gov/mGVm' — worse as a
+    // tree label than the empty string a consumer can substitute a type name
+    // for.
+    return AP214ProductStructureExtraction.labelCandidate( () => productDef.id )
   }
 
   /**
