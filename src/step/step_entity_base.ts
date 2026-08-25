@@ -396,8 +396,8 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * reader must tell them apart — the first may resolve once more of the
    * file is scanned, the second never will — so the absent case gets its
    * own error type (see {@link DanglingReferenceError}). Called only on a
-   * throwing path, so the extra index lookup costs nothing in the common
-   * case.
+   * throwing path, so neither the extra index lookup nor the prefix
+   * high-water-mark scan behind it costs anything in the common case.
    *
    * @param expressID The reference's target, or undefined when the field
    * did not hold a reference at all (an unresolved inline element).
@@ -408,7 +408,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     if ( expressID !== void 0 &&
       this.model.resolveExpressID( expressID ) === void 0 ) {
 
-      return new DanglingReferenceError( expressID )
+      // Hand the high-water mark over ONLY for a prefix index, so the
+      // message can say "not scanned yet" instead of claiming the record
+      // is missing from the file (conway#580). A complete model keeps the
+      // absolute wording, because there the claim is true.
+      return new DanglingReferenceError(
+          expressID,
+          this.model.indexIsPrefix ? this.model.maxIndexedExpressID : void 0 )
     }
 
     return new Error( 'Value in STEP was incorrectly typed' )

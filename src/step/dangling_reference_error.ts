@@ -23,14 +23,36 @@
  * Deliberately thrown only from the reference-resolution failure paths in
  * `StepEntityBase`; it carries no fallback meaning, so a caller that does
  * not care can keep treating it as the `Error` it extends.
+ *
+ * The two causes above also want two different MESSAGES, which is what
+ * `indexHighWaterMark` selects (conway#580). Against a complete index,
+ * "not in the index" is the truth and reads like the data defect it is.
+ * Against a prefix it is a lie a human then spends time chasing: the
+ * record is not missing, the parse simply has not reached it, and a
+ * truncated tail is the expected steady state of the parse-time preview
+ * channel. The Arty smoke reported four of these (#724209, #724211,
+ * #724213, #724215) as data corruption; they were four ordinary prefix
+ * throws.
  */
 export class DanglingReferenceError extends Error {
   /**
-   * @param expressID The referenced record that is not in the index.
+   * @param expressID The referenced record that did not resolve.
+   * @param indexHighWaterMark Highest express ID the index holds, when the
+   * index is known to be an incomplete PREFIX (see
+   * `StepModelBase.indexIsPrefix`). Omit it for a complete index — the
+   * absent case is then a genuine dangling reference and gets the strong
+   * wording. Zero is a meaningful value (an empty prefix), so the prefix
+   * form is selected by presence, not truthiness.
    */
-  constructor( public readonly expressID: number ) {
+  constructor(
+      public readonly expressID: number,
+      public readonly indexHighWaterMark?: number ) {
 
-    super( `Reference to #${expressID} is not in the index` )
+    super(
+        indexHighWaterMark === void 0 ?
+          `Reference to #${expressID} is not in the index` :
+          `Reference to #${expressID} has not been scanned yet ` +
+          `(prefix index covers #1-#${indexHighWaterMark})` )
 
     this.name = 'DanglingReferenceError'
   }

@@ -41,6 +41,17 @@ export interface StepIndexColumns<TypeIDType> {
 
   /** True if top-level express IDs arrived in non-decreasing order. */
   expressIdsSorted: boolean
+
+  /**
+   * True when these columns are a mid-parse PREFIX ({@link
+   * ColumnarIndexSink.snapshot}) rather than a finished index. A model
+   * built over them answers "not in the index" for records the parse has
+   * simply not reached yet, so the step layer softens the wording it
+   * throws (see {@link import('../dangling_reference_error')
+   * .DanglingReferenceError}). Absent means complete — a sidecar or a
+   * finalized build carries no flag and keeps the strong wording.
+   */
+  indexIsPrefix?: boolean
 }
 
 
@@ -164,7 +175,15 @@ implements StepIndexSink<TypeIDType> {
    * pushed so far.
    */
   public snapshot(): StepIndexColumns<TypeIDType> {
-    return this.assemble_()
+
+    const columns = this.assemble_()
+
+    // The one thing that separates a snapshot from a finalize, and the only
+    // signal downstream has that an unresolved reference may still be
+    // ahead of the parse rather than absent from the file (conway#580).
+    columns.indexIsPrefix = true
+
+    return columns
   }
 
   /**
