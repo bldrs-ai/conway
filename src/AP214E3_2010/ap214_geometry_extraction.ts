@@ -70,6 +70,7 @@ import {
   b_spline_surface,
   b_spline_surface_with_knots,
   boolean_result,
+  brep_with_voids,
   cartesian_point,
   cartesian_transformation_operator_2d,
   cartesian_transformation_operator_3d,
@@ -607,59 +608,128 @@ export class AP214GeometryExtraction {
 
 
   /**
-   * Memoized value behind `modelExtent`. `undefined` means "not computed
-   * yet"; the scan below always resolves it to a finite number, so this is
-   * computed at most once per extraction.
+   * Metres per file unit for every face this model's representations reach,
+   * keyed by face localID, and the smallest/largest unit any of them
+   * declares. `undefined` until `resolveModelScale` has run.
    */
-  private modelExtent_: number | undefined = undefined
+  private faceUnitInMetres_: Map< number, number > | undefined = undefined
+  private smallestUnitInMetres_ = 1
+  private largestUnitInMetres_ = 1
 
   /**
-   * The diagonal of this model's own extent, in file units — the scale the
-   * per-face deflection floor is taken against (conway#564 §5).
+   * The model's extent in METRES: the diagonal of the bounding box of its
+   * topological vertices, read in the smallest unit the file declares.
+   * `undefined` until `resolveModelScale` has run.
+   */
+  private modelExtentMetres_: number | undefined = undefined
+
+  /**
+   * The scale a face's deflection target may not be refined below, expressed
+   * in the units that face's own coordinates are written in (conway#564 §5).
    *
-   * ## Why the topological vertices, and not the cartesian points
+   * ## Why a model needs more than one number here
    *
-   * Every `vertex_point` sits ON the solid by construction, so their bounding
-   * box is the model. The full `cartesian_point` population is not: it also
-   * carries b-spline control points, unbounded-surface support points and
-   * parameter-space (2D) points, any one of which can sit far outside the
-   * part. Measured on the local corpus, the difference is not marginal —
-   * `Right_Hand.step` is a 0.233 m hand whose cartesian-point box spans
-   * 1134 m (control points at +/-500), and `Arty_Z7.stp` is a 0.419 m board
-   * whose cartesian-point box spans 375 km. Those would floor the target
-   * three to six decades too coarse, i.e. facet the model. The vertex box
-   * reads 0.233 and 0.419 respectively. It is also ~10x cheaper: 56,394
-   * vertices against 316,342 points on Arty_Z7, ~90ms of a ~34s load.
+   * AP214 takes the length unit from each `shape_representation`'s own
+   * `global_unit_assigned_context` — which is why `rootUnitScaleTransform`
+   * is applied per root rather than once per model — and mixed-unit
+   * assemblies are not exotic. `Arty_Z7.stp`, the model #564 is about,
+   * writes `Arty_Z7_PCB` and its connectors in CENTIMETRES and
+   * `Arty_Z7_Top_Silk` and the rest of its components in MILLIMETRES. A
+   * single scalar taken over raw vertex coordinates therefore spans two
+   * numeric scales at once, and handing it to every face would be right for
+   * the representations in one unit and wrong by the unit ratio — a factor
+   * of ten here — for the others. The native side compares this against the
+   * face's own bounding box, so "wrong by ten" means the floor lands a
+   * decade coarse and that face under-tessellates.
+   *
+   * So the extent is pinned once in metres and converted into each face's
+   * own unit on the way out.
+   *
+   * ## Why the pinned metre value is a lower bound
+   *
+   * Attributing each VERTEX to a unit would need the whole topological walk
+   * (representation to solid to shell to face to loop to edge to vertex),
+   * which is the extraction itself. Faces are one level shallower and cheap
+   * to attribute; vertices are not. So the metre extent reads the raw box in
+   * the SMALLEST unit the file declares, which cannot overstate the model:
+   * whichever representation achieves the box, its own unit is at least the
+   * smallest. Understating it only makes the floor finer — less of the
+   * saving, never a fidelity loss.
+   *
+   * A face the representation walk does not reach (an item kind
+   * `collectFaceUnits` does not know, or a face reached only through
+   * geometry this model does not use) falls back to the LARGEST declared
+   * unit, which is the same conservative direction.
+   *
+   * On a single-unit file — every other model in the corpus — smallest,
+   * largest and the face's own unit are all equal and this is exactly the
+   * raw vertex-box diagonal.
+   *
+   * @param faceLocalID The localID of the face about to be tessellated.
+   * @return {number} The model extent in that face's units, or 0 when the
+   * model has no topological vertices (a wireframe or tessellated file),
+   * which the native side reads as "no floor".
+   */
+  public modelExtentForFace( faceLocalID: number ): number {
+
+    this.resolveModelScale()
+
+    const extentMetres = this.modelExtentMetres_!
+
+    if ( extentMetres === 0 ) {
+      return 0
+    }
+
+    const unitInMetres =
+      this.faceUnitInMetres_!.get( faceLocalID ) ?? this.largestUnitInMetres_
+
+    return extentMetres / unitInMetres
+  }
+
+  /**
+   * Pin the model's extent and its per-face unit table, once.
    *
    * ## Why this cannot make geometry depend on pump scheduling
    *
-   * The value is a property of the PARSED INDEX, never of the geometry built
-   * so far, and it is pinned on first use and memoized. Two consequences,
+   * Everything here is a property of the PARSED INDEX, never of the geometry
+   * built so far, and it is computed once and memoized. Two consequences,
    * both needed for deterministic digests under the AP214 demand pump and
    * the streamed preview channel's snapshots:
    *
-   * - it cannot grow as more geometry is extracted, so two faces tessellated
-   *   at different points in the same load see the same floor;
-   * - min/max over a set is order-invariant in IEEE arithmetic (unlike a
-   *   sum), so the value does not depend on the order `types()` yields
-   *   vertices in either. Only membership matters, and membership is the
-   *   whole index.
+   * - nothing can grow as more geometry is extracted, so two faces
+   *   tessellated at different points in the same load see the same floor;
+   * - the extent is a min/max reduction over a set, which is order-invariant
+   *   in IEEE arithmetic (unlike a sum), so it does not depend on the order
+   *   `types()` yields vertices in either. Only membership matters, and
+   *   membership is the whole index.
    *
    * A PREFIX parse (the preview channel's throwaway generations) indexes
    * less of the file and so can pin a smaller extent — deliberately: a
    * smaller extent is a finer floor, i.e. strictly closer to the unfloored
    * behaviour, and that geometry is discarded when the durable load lands.
-   * The durable load's extent is a pure function of the file.
+   * The durable load's values are a pure function of the file.
    *
-   * @return {number} The extent diagonal, or 0 when the model has no
-   * topological vertices (a wireframe or tessellated file), which the native
-   * side reads as "no floor".
+   * ## Why the topological vertices, and not the cartesian points
+   *
+   * Every `vertex_point` sits ON the solid by construction, so their
+   * bounding box is the model. The full `cartesian_point` population is not:
+   * it also carries b-spline control points, unbounded-surface support
+   * points and parameter-space (2D) points, any one of which can sit far
+   * outside the part. Measured on the local corpus the difference is not
+   * marginal — `Right_Hand.step` is a 0.233 m hand whose cartesian-point box
+   * spans 1134 m (control points at +/-500), and `Arty_Z7.stp` is a 0.419 m
+   * board whose cartesian-point box spans 375 km. Those would floor the
+   * target three to six decades too coarse, i.e. facet the model. The vertex
+   * box reads 0.233 and 0.419. It is also ~10x cheaper: 56,394 vertices
+   * against 316,342 points on Arty_Z7.
    */
-  public get modelExtent(): number {
+  private resolveModelScale(): void {
 
-    if ( this.modelExtent_ !== undefined ) {
-      return this.modelExtent_
+    if ( this.modelExtentMetres_ !== undefined ) {
+      return
     }
+
+    this.faceUnitInMetres_ = this.collectFaceUnits()
 
     let minX = Infinity
     let minY = Infinity
@@ -721,12 +791,142 @@ export class AP214GeometryExtraction {
       }
     }
 
-    this.modelExtent_ =
+    this.modelExtentMetres_ =
       Number.isFinite( minX ) ?
-        Math.hypot( maxX - minX, maxY - minY, maxZ - minZ ) :
+        Math.hypot( maxX - minX, maxY - minY, maxZ - minZ ) * this.smallestUnitInMetres_ :
         0
+  }
 
-    return this.modelExtent_
+  /**
+   * Build the face localID to metres-per-file-unit table, and record the
+   * smallest and largest length unit the model declares while doing it.
+   *
+   * Faces are attributed by walking each representation's items one level
+   * into their shells. A `mapped_item` is followed with the REFERENCING
+   * representation's unit rather than the mapped one's, because that is what
+   * the rest of the pipeline does: `rootUnitScaleTransform` is applied per
+   * root and children inherit it, so a mapped child's coordinates are
+   * consumed in the root's unit whatever its own context says.
+   *
+   * Comparing converted metres-per-unit values rather than the unit records
+   * themselves is deliberate: a file may declare `.MILLI.` in many distinct
+   * entities and those are all the same unit (Arty_Z7 declares 33).
+   *
+   * @return {Map<number, number>} Metres per file unit, keyed by face
+   * localID. Faces this walk does not reach are absent, and
+   * `modelExtentForFace` falls back to the largest declared unit for them.
+   */
+  private collectFaceUnits(): Map< number, number > {
+
+    const faceUnits = new Map< number, number >()
+
+    let smallest = Infinity
+    let largest = 0
+
+    const representations =
+      this.model.types(
+          shape_representation,
+          advanced_brep_shape_representation,
+          geometrically_bounded_wireframe_shape_representation )
+
+    for ( const representation of representations ) {
+
+      let unitInMetres
+
+      try {
+        unitInMetres = this.representationUnitInMetres( representation )
+      } catch {
+        // Malformed or truncated unit context (prefix parse) - skip it, the
+        // same way rootUnitScaleTransform's caller does.
+        continue
+      }
+
+      if ( unitInMetres === void 0 || !( unitInMetres > 0 ) ) {
+        continue
+      }
+
+      smallest = Math.min( smallest, unitInMetres )
+      largest = Math.max( largest, unitInMetres )
+
+      try {
+        for ( const item of representation.items ) {
+          this.collectItemFaceUnits( item, unitInMetres, faceUnits, 0 )
+        }
+      } catch {
+        // A malformed item list leaves the faces it would have contributed
+        // absent, which the fallback covers.
+        continue
+      }
+    }
+
+    if ( largest > 0 ) {
+      this.smallestUnitInMetres_ = smallest
+      this.largestUnitInMetres_  = largest
+    }
+
+    return faceUnits
+  }
+
+  /**
+   * Record the unit of every face one representation item reaches.
+   *
+   * @param item The representation item to walk.
+   * @param unitInMetres Metres per file unit for the owning representation.
+   * @param faceUnits The table being built.
+   * @param depth Current mapped-item recursion depth.
+   */
+  private collectItemFaceUnits(
+      item: representation_item,
+      unitInMetres: number,
+      faceUnits: Map< number, number >,
+      depth: number ): void {
+
+    // A representation_map cycle is malformed but cheap to survive; the
+    // faces below the cut fall back to the largest declared unit.
+    const MAXIMUM_MAPPED_DEPTH = 8
+
+    try {
+
+      if ( item instanceof manifold_solid_brep ) {
+
+        for ( const face_ of item.outer.cfs_faces ) {
+          faceUnits.set( face_.localID, unitInMetres )
+        }
+
+        if ( item instanceof brep_with_voids ) {
+
+          for ( const void_ of item.voids ) {
+            for ( const face_ of void_.cfs_faces ) {
+              faceUnits.set( face_.localID, unitInMetres )
+            }
+          }
+        }
+
+        return
+      }
+
+      if ( item instanceof shell_based_surface_model ) {
+
+        for ( const shell of item.sbsm_boundary ) {
+          for ( const face_ of shell.cfs_faces ) {
+            faceUnits.set( face_.localID, unitInMetres )
+          }
+        }
+
+        return
+      }
+
+      if ( item instanceof mapped_item && depth < MAXIMUM_MAPPED_DEPTH ) {
+
+        for ( const mapped of item.mapping_source.mapped_representation.items ) {
+          this.collectItemFaceUnits( mapped, unitInMetres, faceUnits, depth + 1 )
+        }
+      }
+
+    } catch {
+      // Dangling or mistyped reference — leave the faces below it unmapped
+      // rather than losing the whole table.
+    }
   }
 
 
@@ -3992,7 +4192,7 @@ export class AP214GeometryExtraction {
       advancedBrep: true,
       surface: nativeSurface,
       scaling: this.getLinearScalingFactor(),
-      modelExtent: this.modelExtent,
+      modelExtent: this.modelExtentForFace( from.localID ),
     }
 
     const styledItemLocalID = this.materials.styledItemMap.get(from.localID)
@@ -4389,7 +4589,7 @@ export class AP214GeometryExtraction {
       const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
         scaling: this.getLinearScalingFactor(),
-        modelExtent: this.modelExtent,
+        modelExtent: this.modelExtentForFace( from.localID ),
       }
 
       this.addOrStageFaceSimple(parameters, geometry)
@@ -4787,6 +4987,30 @@ export class AP214GeometryExtraction {
   private rootUnitScaleTransform(
       shapeRepresentation: shape_representation ): NativeTransform4x4 | undefined {
 
+    const sourceUnitInM = this.representationUnitInMetres( shapeRepresentation )
+
+    if ( sourceUnitInM === void 0 ) {
+
+      return void 0
+    }
+
+    return this.uniformScaleAffine( this.identity3DNativeMatrix, sourceUnitInM )
+  }
+
+  /**
+   * Metres per file unit for one representation, from its own unit context.
+   *
+   * Factored out of `rootUnitScaleTransform` so `modelExtent` can ask the
+   * same question of the same field: the two have to agree about which unit
+   * a representation's raw coordinates are in, or the deflection floor and
+   * the world transform disagree about what the model measures.
+   *
+   * @param shapeRepresentation The representation whose unit context to read.
+   * @return Metres per file unit, or undefined if no length unit is declared.
+   */
+  private representationUnitInMetres(
+      shapeRepresentation: shape_representation ): number | undefined {
+
     const sourceShapeContext =
       shapeRepresentation.context_of_items.findVariant( global_unit_assigned_context )?.units?.
         find( ( unit ) => unit.findVariant( length_unit ) )?.findVariant( length_unit ) as
@@ -4797,9 +5021,7 @@ export class AP214GeometryExtraction {
       return void 0
     }
 
-    const sourceUnitInM = this.convertToMetres( sourceShapeContext ) ?? 1.0
-
-    return this.uniformScaleAffine( this.identity3DNativeMatrix, sourceUnitInM )
+    return this.convertToMetres( sourceShapeContext ) ?? 1.0
   }
 
   /**
