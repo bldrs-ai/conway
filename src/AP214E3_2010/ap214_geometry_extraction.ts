@@ -175,6 +175,46 @@ const MINIMUM_BOUND_POINTS = 3
 // factor on any face it bounds.
 const MAXIMUM_PCURVE_SPAN_SAMPLES = 256
 
+// How many of a representation's items one demand unit carries
+// (conway#579). A unit used to be a whole product, so `Arty_Z7_Top_Silk`
+// - 654 MANIFOLD_SOLID_BREPs, one extruded solid per silkscreen glyph,
+// in a single ADVANCED_BREP_SHAPE_REPRESENTATION - executed as one
+// 22.5 s uninterruptible task in the browser. Those glyphs cost ~32 ms
+// apiece, so four of them is ~130 ms of work, inside the ~200 ms a
+// responsive main thread allows. Finer settings were measured and are
+// not worth their unit count: on Arty, 4 / 2 / 1 items per unit put
+// 27 / 22 / 22 of ~300 pump calls over 200 ms, because what is left over
+// 200 ms is single solids whose own tessellation costs that much - a
+// geometry cost (conway#564), not a granularity one. See
+// prepareDemandExtraction / itemUnitRanges for which cuts are legal, and
+// AP214_UNITS_PER_PRODUCT_BATCH in compat/web-ifc/ifc_api_proxy_ap214.ts
+// for how many units a pump call takes.
+const AP214_ITEMS_PER_DEMAND_UNIT = 4
+
+// Ceiling on how many units one representation's items are cut into.
+// Splitting is not free — each unit re-enters through its ancestors,
+// pushing (and allocating) a scene transform per level plus one per
+// replayed placement — so a representation with tens of thousands of
+// items needs a coarser cut than the nominal one. Measured on DSA2.step,
+// whose single root holds 28,675 shell_based_surface_models: four items
+// per unit is 7,169 units, and interleaved runs put whole-model geometry
+// at 8.6/9.7/9.4 s uncapped against 9.3/8.1/7.8 s capped here (~7-9%,
+// the same direction every round on a runner too contended to call it
+// closer than that). Capped, DSA2 cuts into 254 units of 113 items,
+// ~32 ms of work apiece — the 10-50 ms per-unit band this is aiming
+// for — and lands inside the noise band of the unsliced baseline.
+const AP214_MAX_ITEM_UNITS_PER_REPRESENTATION = 256
+
+// Ceiling on how many `placement` items a sliced item range will replay
+// to rebuild the transform state its first item inherits (see
+// itemUnitRanges). A placement places every item after it in the array,
+// so a range that starts past one has to re-extract it; that costs a
+// transform push per placement per range, which is only worth paying
+// while the count stays small. Past this many placements the rest of the
+// representation runs as one range instead — cutting is an optimization,
+// and the whole-walk behaviour is always the safe fallback.
+const AP214_MAX_REPLAYED_PLACEMENTS = 8
+
 /**
  * How many of a representation's faces the extent walk descends into, at
  * most. See AP214GeometryExtraction.extentSample for the measurement behind
@@ -3452,47 +3492,31 @@ export class AP214GeometryExtraction {
       ++pushedTransforms
     }
 
-    if ( mappingTarget instanceof cartesian_transformation_operator_3d ) {
+    // The pushes below have to be undone even when the walk between them
+    // throws — `mapped_representation` and every item under it dereference
+    // lazily, so a malformed mapping fails AFTER the transform is on the
+    // stack. Leaving it there used to mean the rest of the enclosing
+    // representation's items were placed by a transform that belongs to a
+    // failed mapped item, and — since conway#579 cut that item loop into
+    // units — how far the leak reached depended on where the cut fell.
+    // Popping in a finally is what makes this function stack-neutral
+    // unconditionally, which is the invariant the slicing rests on.
+    try {
+      if ( mappingTarget instanceof cartesian_transformation_operator_3d ) {
 
-      const nativeCartesianTransform =
-        this.extractCartesianTransformOperator3D(mappingTarget)
-      const originTransform =
-        mappingOrigin instanceof placement ?
-          this.extractRawPlacement( mappingOrigin ) : void 0
+        const nativeCartesianTransform =
+          this.extractCartesianTransformOperator3D(mappingTarget)
+        const originTransform =
+          mappingOrigin instanceof placement ?
+            this.extractRawPlacement( mappingOrigin ) : void 0
 
-          let combinedTransform: NativeTransform4x4
+            let combinedTransform: NativeTransform4x4
 
-      if (originTransform !== void 0) {
-        // Use the same semantics as doTransforms: from = origin^-1, to = target
-        const from = originTransform.invert()
-        const to   = nativeCartesianTransform
-
-        const params: ParamsLocalPlacement = {
-          useRelPlacement: true,
-          axis2Placement: from,
-          relPlacement: to,
-        }
-        combinedTransform = this.conwayModel.getLocalPlacement(params)
-      } else {
-        combinedTransform = nativeCartesianTransform
-      }
-
-      pushTransform(combinedTransform)
-
-    } else if ( mappingTarget instanceof placement ) {
-
-      const targetTransform = this.extractRawPlacement( mappingTarget )
-      const originTransform =
-        mappingOrigin instanceof placement ?
-          this.extractRawPlacement( mappingOrigin ) : void 0
-
-      if ( targetTransform !== void 0 ) {
-        let combinedTransform: NativeTransform4x4
         if (originTransform !== void 0) {
-          // Again, same semantics as doTransforms
+          // Use the same semantics as doTransforms: from = origin^-1, to = target
           const from = originTransform.invert()
-          const to   = targetTransform
-    
+          const to   = nativeCartesianTransform
+
           const params: ParamsLocalPlacement = {
             useRelPlacement: true,
             axis2Placement: from,
@@ -3500,74 +3524,103 @@ export class AP214GeometryExtraction {
           }
           combinedTransform = this.conwayModel.getLocalPlacement(params)
         } else {
-          combinedTransform = targetTransform
+          combinedTransform = nativeCartesianTransform
         }
-    
+
         pushTransform(combinedTransform)
+
+      } else if ( mappingTarget instanceof placement ) {
+
+        const targetTransform = this.extractRawPlacement( mappingTarget )
+        const originTransform =
+          mappingOrigin instanceof placement ?
+            this.extractRawPlacement( mappingOrigin ) : void 0
+
+        if ( targetTransform !== void 0 ) {
+          let combinedTransform: NativeTransform4x4
+          if (originTransform !== void 0) {
+            // Again, same semantics as doTransforms
+            const from = originTransform.invert()
+            const to   = targetTransform
+    
+            const params: ParamsLocalPlacement = {
+              useRelPlacement: true,
+              axis2Placement: from,
+              relPlacement: to,
+            }
+            combinedTransform = this.conwayModel.getLocalPlacement(params)
+          } else {
+            combinedTransform = targetTransform
+          }
+    
+          pushTransform(combinedTransform)
+        }
       }
-    }
 
-    for ( const representationItem of representationMap.mapped_representation.items ) {
+      for ( const representationItem of representationMap.mapped_representation.items ) {
 
-      if ( representationItem instanceof mapped_item ) {
+        if ( representationItem instanceof mapped_item ) {
 
-        // if this is a mapped item, we need to extract it recursively
-        // and add the transform to the scene
-        this.extractMappedItem(
-          representationItem,
-          owningElementLocalID,
-          parents !== void 0 ? [from, ...parents] : [ from ] )
-
-      } else {
-
-        this.extractRepresentationItem( representationItem, owningElementLocalID )
-
-        const styledItemLocalID_ = this.materials.styledItemMap.get( representationItem.localID )
-
-        let materialOverrideID: number | undefined = void 0
-
-        if ( styledItemLocalID_ !== void 0 ) {
-
-          const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as styled_item
-          this.extractStyledItem(styledItem_)
+          // if this is a mapped item, we need to extract it recursively
+          // and add the transform to the scene
+          this.extractMappedItem(
+            representationItem,
+            owningElementLocalID,
+            parents !== void 0 ? [from, ...parents] : [ from ] )
 
         } else {
 
-          // get material from parent
-          let styledItemParentLocalID = this.materials.styledItemMap.get( from.localID )
-          let styleParent = from
+          this.extractRepresentationItem( representationItem, owningElementLocalID )
 
-          if ( parents !== void 0 ) {
-            for ( const parent of parents ) {
-              if ( styledItemParentLocalID !== void 0 ) {
-                break
+          const styledItemLocalID_ = this.materials.styledItemMap.get( representationItem.localID )
+
+          let materialOverrideID: number | undefined = void 0
+
+          if ( styledItemLocalID_ !== void 0 ) {
+
+            const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as styled_item
+            this.extractStyledItem(styledItem_)
+
+          } else {
+
+            // get material from parent
+            let styledItemParentLocalID = this.materials.styledItemMap.get( from.localID )
+            let styleParent = from
+
+            if ( parents !== void 0 ) {
+              for ( const parent of parents ) {
+                if ( styledItemParentLocalID !== void 0 ) {
+                  break
+                }
+
+                styledItemParentLocalID = this.materials.styledItemMap.get( parent.localID )
+                styleParent = parent
               }
+            }
 
-              styledItemParentLocalID = this.materials.styledItemMap.get( parent.localID )
-              styleParent = parent
+            if ( styledItemParentLocalID !== void 0 ) {
+
+              const styledItemParent =
+                this.model.getElementByLocalID(styledItemParentLocalID) as styled_item
+
+              this.extractStyledItem( styledItemParent, representationItem )
+              materialOverrideID = styleParent.localID
             }
           }
 
-          if ( styledItemParentLocalID !== void 0 ) {
-
-            const styledItemParent =
-              this.model.getElementByLocalID(styledItemParentLocalID) as styled_item
-
-            this.extractStyledItem( styledItemParent, representationItem )
-            materialOverrideID = styleParent.localID
-          }
+          this.scene.addGeometry(
+            representationItem.localID,
+            owningElementLocalID,
+            materialOverrideID )
         }
-
-        this.scene.addGeometry(
-          representationItem.localID,
-          owningElementLocalID,
-          materialOverrideID )
       }
-    }
 
-    for ( ; pushedTransforms > 0; --pushedTransforms ) {
+    } finally {
 
-      this.scene.popTransform()
+      for ( ; pushedTransforms > 0; --pushedTransforms ) {
+
+        this.scene.popTransform()
+      }
     }
   }
 
@@ -5457,14 +5510,18 @@ export class AP214GeometryExtraction {
    * Prepare per-unit demand extraction (STEP demand parity phase 2)
    * without executing any geometry work: builds the assembly tree and
    * thunks exactly like the whole-model walk, but the root executions
-   * are captured as an ordered list of UNITS — a childless root is one
-   * unit; a root with children is flattened one level (one unit per
-   * immediate child, in order, then one for the root's own items), so
-   * single-root assemblies still pump progressively per part. Executing
-   * every unit in order then calling {@link finishDemandExtraction}
-   * reproduces the whole-model walk exactly — the classic
-   * {@link extractAP214GeometryData} runs through this same path.
-   * Idempotent.
+   * are captured as an ordered list of UNITS. The tree is flattened
+   * DEPTH FIRST — one unit per child (descending into any child whose
+   * subtree carries more than {@link AP214_ITEMS_PER_DEMAND_UNIT}
+   * items), then one unit per range of a node's own representation
+   * items — so a single-root assembly pumps progressively all the way
+   * down to individual solids rather than per top-level part
+   * (conway#579: Arty's silkscreen is 654 solids sitting two levels
+   * under the only root, which used to make it one 22 s task).
+   * Executing every unit in order then calling
+   * {@link finishDemandExtraction} reproduces the whole-model walk
+   * exactly — the classic {@link extractAP214GeometryData} runs through
+   * this same path. Idempotent.
    */
   // eslint-disable-next-line max-lines-per-function
   public prepareDemandExtraction(): void {
@@ -5489,6 +5546,25 @@ export class AP214GeometryExtraction {
       childStart: number;
       childEnd: number;
       includeItems: boolean;
+      /**
+       * Half-open range into `representation.items`; whole array when
+       * absent. Only meaningful with `includeItems`.
+       */
+      itemStart?: number;
+      itemEnd?: number;
+      /**
+       * Indices of the `placement` items before `itemStart` that this
+       * range re-extracts first, rebuilding the transform state the
+       * unsliced walk had reached by then.
+       */
+      replayPlacements?: readonly number[];
+      /**
+       * Runs in place of the selected child's own thunk, so a unit can
+       * address a slice of a node DEEPER than one level down. Built by
+       * expandUnits from the child's own rep/owningLocalID, which is
+       * what makes it a drop-in for `mappedChild.thunk`.
+       */
+      childThunk?: ( owningLocalID?: number, transform?: NativeTransform4x4 ) => void;
     }
 
     const treeMap = new Map<number, MappedSceneNode>()
@@ -5554,7 +5630,12 @@ export class AP214GeometryExtraction {
             this.scene.pushOccurrence( occurrenceExpressID ?? childOwningLocalID )
 
             try {
-              mappedChild.thunk!( childOwningLocalID, childTransform )
+              // A sliced unit that reaches deeper than this level supplies
+              // the child's thunk itself (carrying the sub-slice); every
+              // other unit runs the child's own whole-subtree thunk.
+              const runChild = slice?.childThunk ?? mappedChild.thunk!
+
+              runChild( childOwningLocalID, childTransform )
             } catch ( ex ) {
               if ( this.quietRecoverableLogging ) {
                 // Preview prefix: dangling children are expected — skip quietly.
@@ -5580,7 +5661,45 @@ export class AP214GeometryExtraction {
                 
         const includeItems = slice?.includeItems ?? true
 
-        for ( const item of includeItems ? representation.items : [] ) {
+        // `representation.items` is a dereferencing getter, so keep it
+        // untouched when this slice carries no items at all — the
+        // pre-slicing code never read it in that case either.
+        const items = includeItems ? representation.items : []
+        const itemStart = slice?.itemStart ?? 0
+        const itemEnd = Math.min( slice?.itemEnd ?? items.length, items.length )
+
+        // Rebuild the transform state the unsliced walk had reached by
+        // `itemStart`: a `placement` item pushes onto the scene stack and
+        // nothing pops it before the end of the loop, so every placement
+        // ahead of this range places the items in it. Re-extracting them
+        // is exactly the work the whole walk did, in the same order.
+        // Failures stay silent here — every placement also falls inside
+        // the one range that owns it, which reports it there rather than
+        // once per range that replays it.
+        for ( const replayIndex of slice?.replayPlacements ?? [] ) {
+
+          const replayItem = items[ replayIndex ]
+
+          if ( replayItem instanceof placement ) {
+            try {
+              this.extractPlacement( replayItem, mappedItem )
+            } catch {
+              // Reported by the range that extracts this placement itself.
+            }
+          }
+        }
+
+        // Slicing this loop into units rests on exactly one invariant:
+        // only a `placement` leaves transform state behind for the items
+        // after it. Check it per item on sliced units, so an item kind
+        // that ever starts pushing without popping surfaces as an error
+        // instead of as silently misplaced geometry two ranges later.
+        const verifySliceNeutrality = slice?.itemStart !== void 0
+
+        for ( let itemIndex = itemStart; itemIndex < itemEnd; ++itemIndex ) {
+
+          const item = items[ itemIndex ]
+          const depthBeforeItem = verifySliceNeutrality ? this.scene.stackLength : 0
 
           try {
             if ( item instanceof placement ) {
@@ -5615,6 +5734,13 @@ export class AP214GeometryExtraction {
             } else {
               Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
             }
+          } finally {
+
+            if ( verifySliceNeutrality && !( item instanceof placement ) &&
+                this.scene.stackLength !== depthBeforeItem &&
+                !this.quietRecoverableLogging ) {
+              Logger.error( `Representation item left transform state inside a sliced range expressID: #${item.expressID}` )
+            }
           }
         }
 
@@ -5627,6 +5753,115 @@ export class AP214GeometryExtraction {
           Logger.error( `Stack length mismatch after processing shape_representation  ${this.scene.currentParent} ${currentParent} expressID: #${representation.expressID}` )
         }
       }
+    }
+
+    /** One demand unit's worth of a representation's items. */
+    type ItemUnitRange = {
+      itemStart: number;
+      itemEnd: number;
+      replayPlacements?: readonly number[];
+    }
+
+    /**
+     * Split a node's `representation.items` into the contiguous ranges
+     * that become one demand unit each — or undefined to keep the single
+     * whole-items unit (conway#579).
+     *
+     * Slicing an ordered `for` loop into contiguous index ranges visits
+     * the same items in the same order, so the geometry is unchanged
+     * PROVIDED the state the loop carries is reproduced at each cut.
+     * Exactly one item kind carries state: a `placement` runs
+     * extractPlacement, which pushes onto the scene transform stack, and
+     * nothing pops it before the loop ends — so it places every item
+     * after it in the array. Each range therefore replays the placements
+     * that precede it (`replayPlacements`), and cutting stops once that
+     * replay list would exceed {@link AP214_MAX_REPLAYED_PLACEMENTS}.
+     * Every other item kind is stack-neutral: extractMappedItem pops
+     * exactly what it pushed, and extractStyledItemWithProcessing and
+     * extractRepresentationItem never touch the stack (both discard
+     * placements) — an invariant the thunk re-checks per item on every
+     * sliced unit.
+     *
+     * @param representation The node's representation.
+     * @return {ItemUnitRange[] | undefined} Two or more ranges, or
+     * undefined for a single unsliced items unit.
+     */
+    const itemUnitRanges = ( representation: shape_representation ):
+        ItemUnitRange[] | undefined => {
+
+      let items: readonly representation_item[]
+
+      try {
+        items = representation.items
+      } catch {
+        // Malformed items reference — leave it to the thunk, which
+        // already reports the throw the way the unsliced walk did.
+        return void 0
+      }
+
+      const itemCount = items.length
+
+      if ( itemCount <= this.demandItemsPerUnit ) {
+        return void 0
+      }
+
+      // Grow the range past the nominal size on very long item lists, so
+      // the unit count stays bounded per representation.
+      const itemsPerUnit = Math.max(
+          this.demandItemsPerUnit,
+          Math.ceil( itemCount / AP214_MAX_ITEM_UNITS_PER_REPRESENTATION ) )
+
+      const ranges: ItemUnitRange[] = []
+
+      // Placements before `start` (replayed by every later range) and
+      // those found in the range being built (replayed by the ranges
+      // after it).
+      const replayed: number[] = []
+      const pending: number[] = []
+
+      let start = 0
+
+      for ( let cursor = 0; cursor < itemCount; ++cursor ) {
+
+        if ( items[ cursor ] instanceof placement ) {
+          pending.push( cursor )
+        }
+
+        // Cut only on a full range, and never on the last item — the
+        // remainder is pushed as the tail range below.
+        if ( cursor + 1 - start < itemsPerUnit ||
+            cursor + 1 >= itemCount ) {
+          continue
+        }
+
+        // Past the replay ceiling, stop cutting: the tail runs whole,
+        // exactly as the unsliced walk would have run all of it.
+        if ( replayed.length + pending.length > AP214_MAX_REPLAYED_PLACEMENTS ) {
+          break
+        }
+
+        ranges.push( {
+          itemStart: start,
+          itemEnd: cursor + 1,
+          replayPlacements: replayed.length > 0 ? replayed.slice() : void 0,
+        } )
+
+        replayed.push( ...pending )
+        pending.length = 0
+        start = cursor + 1
+      }
+
+      if ( ranges.length === 0 ) {
+        return void 0
+      }
+
+      ranges.push( {
+        itemStart: start,
+        itemEnd: itemCount,
+        replayPlacements: replayed.length > 0 ? replayed.slice() : void 0,
+      } )
+
+      return ranges
     }
 
     // Roots the whole-model walk would execute, in execution order —
@@ -5956,38 +6191,184 @@ export class AP214GeometryExtraction {
         }
       }
 
-      // Expand pending roots into ordered execution units: childless
-      // roots run their original thunk whole; roots with children are
-      // flattened one level — one unit per immediate child (in order),
-      // then one for the root's own representation items, matching the
-      // thunk body's children-then-items order exactly.
+      // Expand pending roots into ordered execution units, depth first:
+      // each node contributes one unit per child (recursing into a child
+      // whose subtree is big enough to be worth splitting) and then one
+      // unit per range of its own representation items — the same
+      // children-then-items order the thunk body itself walks, so the
+      // concatenated units reproduce the whole-model walk exactly.
       const units: ( () => void )[] = []
+
+      // Recursive item count per tree node — the cost proxy that decides
+      // whether descending into a child buys any granularity at all.
+      // Cheap: `.items` is one dereference per representation, and each
+      // node is counted once.
+      const subtreeItemCounts = new Map<MappedSceneNode, number>()
+
+      const ownItemCount = ( node: MappedSceneNode ): number => {
+
+        if ( node.rep === void 0 ) {
+          return 0
+        }
+
+        try {
+          return node.rep.items.length
+        } catch {
+          // Malformed items reference — the thunk reports it at run time.
+          return 0
+        }
+      }
+
+      const subtreeItemCount = (
+          node: MappedSceneNode,
+          path: Set<MappedSceneNode> ): number => {
+
+        const memoized = subtreeItemCounts.get( node )
+
+        if ( memoized !== void 0 ) {
+          return memoized
+        }
+
+        // A malformed assembly can close a cycle; count it as spent
+        // rather than recursing forever, and do not memoize a count
+        // that a truncation made wrong for other paths.
+        if ( path.has( node ) ) {
+          return 0
+        }
+
+        path.add( node )
+
+        let count = ownItemCount( node )
+
+        for ( const [ childLocalID ] of node.children ?? [] ) {
+
+          const child = treeMap.get( childLocalID )
+
+          if ( child !== void 0 ) {
+            count += subtreeItemCount( child, path )
+          }
+        }
+
+        path.delete( node )
+        subtreeItemCounts.set( node, count )
+
+        return count
+      }
+
+      /**
+       * Emit the units for one tree node, in the exact order the node's
+       * own thunk would have executed: each child in turn, then the
+       * node's own items.
+       *
+       * `wrap` turns a slice OF THIS NODE into a queued unit — for a
+       * root that is "run this slice under the root scale transform",
+       * and for a descendant it is the parent's own wrap closed over a
+       * `childThunk` carrying this node's slice. That composition is
+       * what lets a unit address a node arbitrarily deep in the
+       * assembly while still entering through the root, which is what
+       * keeps the transform and occurrence context identical to the
+       * unsliced walk.
+       *
+       * @param node The tree node to emit units for.
+       * @param path Nodes already on this descent, so a malformed
+       * assembly that closes a cycle stops rather than recursing.
+       * @param wrap Queues one unit for a slice of `node`.
+       */
+      const expandUnits = (
+          node: MappedSceneNode,
+          path: Set<MappedSceneNode>,
+          wrap: ( slice: ThunkSlice ) => void ): void => {
+
+        const childCount = node.children?.length ?? 0
+
+        for ( let child = 0; child < childCount; ++child ) {
+
+          const childNode = treeMap.get( node.children![ child ][ 0 ] )
+
+          // Descend only into children that are (a) well-formed enough
+          // to slice, (b) not already on this path (a malformed assembly
+          // can close a cycle), and (c) big enough that splitting them
+          // buys anything. Everything else runs whole, as one unit
+          // covering its entire subtree.
+          const descend =
+            childNode !== void 0 &&
+            childNode.rep !== void 0 &&
+            childNode.thunk !== void 0 &&
+            !path.has( childNode ) &&
+            subtreeItemCount( childNode, new Set<MappedSceneNode>() ) >
+              this.demandItemsPerUnit
+
+          if ( !descend ) {
+            wrap( { childStart: child, childEnd: child + 1, includeItems: false } )
+            continue
+          }
+
+          const descendant = childNode!
+
+          path.add( descendant )
+
+          expandUnits( descendant, path, ( childSlice ) => {
+
+            const childThunk = makeThunk(
+                descendant.rep!, descendant.owningLocalID, descendant, childSlice )
+
+            wrap( {
+              childStart: child,
+              childEnd: child + 1,
+              includeItems: false,
+              childThunk,
+            } )
+          } )
+
+          path.delete( descendant )
+        }
+
+        const itemRanges = node.rep !== void 0 ? itemUnitRanges( node.rep ) : void 0
+
+        if ( itemRanges === void 0 ) {
+          wrap( { childStart: 0, childEnd: 0, includeItems: true } )
+          return
+        }
+
+        for ( const range of itemRanges ) {
+          wrap( { childStart: 0, childEnd: 0, includeItems: true, ...range } )
+        }
+      }
 
       for ( const root of pendingRoots ) {
 
         const node = root.node
         const scaleTransform = root.scaleTransform
-        const childCount = node.children?.length ?? 0
+        const rep = node.rep
 
-        if ( childCount === 0 || node.rep === void 0 ) {
+        if ( rep === void 0 ) {
           units.push( () => node.thunk!( void 0, scaleTransform ) )
           continue
         }
 
-        for ( let child = 0; child < childCount; ++child ) {
-          const sliced = makeThunk( node.rep, node.owningLocalID, node,
-              { childStart: child, childEnd: child + 1, includeItems: false } )
-          units.push( () => sliced( void 0, scaleTransform ) )
-        }
+        expandUnits( node, new Set<MappedSceneNode>( [ node ] ), ( slice ) => {
 
-        const itemsOnly = makeThunk( node.rep, node.owningLocalID, node,
-            { childStart: 0, childEnd: 0, includeItems: true } )
-        units.push( () => itemsOnly( void 0, scaleTransform ) )
+          const sliced = makeThunk( rep, node.owningLocalID, node, slice )
+
+          units.push( () => sliced( void 0, scaleTransform ) )
+        } )
       }
 
       this.demandUnits_ = units
     }
   }
+
+  /**
+   * Items one demand unit carries, and equivalently the subtree size a
+   * child has to exceed before {@link prepareDemandExtraction} descends
+   * into it — {@link AP214_ITEMS_PER_DEMAND_UNIT} by default.
+   *
+   * Set before preparation. `Infinity` collapses the flattening back to
+   * one unit per immediate child of a root plus one for the root's own
+   * items, which is what makes "same model, two granularities, identical
+   * geometry" a testable claim (conway#579) rather than an argument.
+   */
+  public demandItemsPerUnit: number = AP214_ITEMS_PER_DEMAND_UNIT
 
   // Ordered pending execution units built by prepareDemandExtraction;
   // demandCursor_ tracks how many have run (the pump's progress).
@@ -6037,10 +6418,26 @@ export class AP214GeometryExtraction {
    * AP214 models. Staged face tessellation is finalized after every
    * batch so captured geometry is complete and readable.
    *
+   * `budgetMs` is what keeps an interactive caller's thread responsive
+   * now that a unit is a slice rather than a product. Unit cost is wildly
+   * uneven both across models and inside one: Arty_Z7's 603 units average
+   * 58 ms but run from under a millisecond to 600 ms (a single silkscreen
+   * solid), while DSA2's average 32 ms. No fixed unit-count-per-call
+   * serves that — it either overshoots the frame budget on the expensive
+   * units or burns hundreds of calls on the cheap ones — so a caller with
+   * a frame to hit passes a wall-clock budget and gets as many units as
+   * fit. One unit always runs: a single unit that overruns the budget is
+   * the floor this layer can offer, and shrinking it further is geometry
+   * cost, not granularity (conway#564). Callers that want completion
+   * rather than responsiveness (the whole-model walk, the deferred drain)
+   * pass no budget and keep the pre-conway#579 behaviour exactly.
+   *
    * @param count Max units to execute this call (min 1).
+   * @param budgetMs Wall-clock this call may spend before returning
+   * early; unbounded when absent.
    * @return {number} Units actually executed.
    */
-  public extractDemandUnitBatch( count: number ): number {
+  public extractDemandUnitBatch( count: number, budgetMs?: number ): number {
 
     const units = this.demandUnits_
 
@@ -6049,6 +6446,7 @@ export class AP214GeometryExtraction {
     }
 
     const end = Math.min( this.demandCursor_ + Math.max( count, 1 ), units.length )
+    const deadline = budgetMs !== void 0 ? Date.now() + budgetMs : void 0
     let executed = 0
 
     for ( ; this.demandCursor_ < end; ++this.demandCursor_ ) {
@@ -6063,6 +6461,27 @@ export class AP214GeometryExtraction {
           Logger.error( `Error processing demand unit: \n\t${ex.name}\n\t${ex.message}` )
         } else {
           Logger.error( `Unknown exception processing demand unit (${ex})` )
+        }
+      }
+
+      if ( deadline !== void 0 ) {
+
+        // Under staged tessellation a unit mostly ENQUEUES face jobs, so
+        // the loop's own elapsed time under-reports what the call has
+        // committed to — the flush after the loop would then run all of
+        // it outside the deadline, and a nominal 50 ms batch measured
+        // 996 ms on Arty. Flush per unit so the budget bounds the
+        // tessellation and not just the enqueueing. Unbudgeted callers
+        // (the whole-model walk, the deferred drain) skip this and keep
+        // one big staged batch, which is where staging's throughput
+        // actually matters.
+        if ( this.useStagedFaces ) {
+          this.finalizeStagedFaces()
+        }
+
+        if ( Date.now() >= deadline ) {
+          ++this.demandCursor_
+          break
         }
       }
     }
