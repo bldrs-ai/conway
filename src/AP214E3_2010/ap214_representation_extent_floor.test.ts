@@ -12,18 +12,23 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 const FIXTURE = 'data/create-a-tube.step'
 
 /**
- * Two shape representations whose unit contexts declare different length
- * units — millimetres spanning 1000 units and metres spanning 1, i.e. the
- * same physical size written two ways.
+ * Two advanced-brep representations of very different size — one spanning
+ * 1000 units, one spanning 1 — whose unit contexts also differ (millimetre
+ * and metre). A model-wide extent has no single value that is right for
+ * both; the defining representation's extent does.
  */
-const MIXED_UNIT_FIXTURE = 'data/ap214-mixed-units.step'
+const TWO_REPRESENTATION_FIXTURE = 'data/ap214-two-representations.step'
 
 /**
- * The control: identical to MIXED_UNIT_FIXTURE, including both bodies'
- * coordinates, except that the second context also declares millimetres.
- * Pairing them is what makes the unit declaration the only variable.
+ * The control: identical in every respect except that both contexts declare
+ * millimetres. Pairing them is what makes the unit declaration the only
+ * variable.
  */
-const SINGLE_UNIT_TWIN_FIXTURE = 'data/ap214-single-unit-twin.step'
+const TWO_REPRESENTATION_ONE_UNIT_FIXTURE =
+  'data/ap214-two-representations-one-unit.step'
+
+/** The large body's span in the two-representation fixtures, in file units. */
+const LARGE_BODY_SPAN = 1000
 
 /**
  * Extent stood in for the fixture in the floored case. Far larger than the
@@ -31,10 +36,7 @@ const SINGLE_UNIT_TWIN_FIXTURE = 'data/ap214-single-unit-twin.step'
  * target — the Arty_Z7 silkscreen's situation, where each face is a tile of
  * a far larger object.
  */
-const MOSAIC_MODEL_EXTENT = 1e6
-
-/** The millimetre body's span in the mixed-unit fixtures, in file units. */
-const MM_BODY_SPAN = 1000
+const MOSAIC_EXTENT = 1e6
 
 let conwayGeometry: ConwayGeometry
 
@@ -110,7 +112,7 @@ function faceNamed( model: AP214StepModel, name: string ): number {
 
 
 /**
- * Any face's localID, for the single-unit cases where every face shares one.
+ * Any face's localID, for the single-representation cases.
  *
  * @param model The parsed model.
  * @return {number} The first advanced face's localID.
@@ -125,7 +127,7 @@ function anyFace( model: AP214StepModel ): number {
 }
 
 
-describe('AP214 model-extent deflection floor (bldrs-ai/conway#564 §5)', () => {
+describe('AP214 representation-extent deflection floor (bldrs-ai/conway#564 §5)', () => {
 
   beforeAll(async () => {
     conwayGeometry = new ConwayGeometry()
@@ -133,7 +135,7 @@ describe('AP214 model-extent deflection floor (bldrs-ai/conway#564 §5)', () => 
     expect(await conwayGeometry.initialize()).toBe(true)
   })
 
-  test('modelExtent is the bounding diagonal of the topological vertices', () => {
+  test('the extent is the bounding diagonal of the representation\'s vertices', () => {
 
     const [model, extraction] = load()
 
@@ -165,37 +167,39 @@ describe('AP214 model-extent deflection floor (bldrs-ai/conway#564 §5)', () => 
     }
 
     // A zero here would make the assertion below vacuously true against a
-    // getter that always returned 0 — the "probe that never fired" failure.
+    // method that always returned 0 — the "probe that never fired" failure.
     expect(vertices).toBeGreaterThan(0)
 
-    const extent = extraction.modelExtentForFace( anyFace( model ) )
+    // The fixture is a single representation, so its extent and the model's
+    // vertex box are the same thing.
+    const extent = extraction.representationExtentForFace( anyFace( model ) )
 
     expect(extent).toBeCloseTo(Math.hypot(maxX - minX, maxY - minY, maxZ - minZ), 9)
     expect(extent).toBeGreaterThan(0)
   })
 
-  test('modelExtent is pinned: extracting geometry does not move it', () => {
+  test('the extent is pinned: extracting geometry does not move it', () => {
 
     const [model, extraction] = load()
 
-    // Read it FIRST, so the memo is populated before any geometry exists,
+    // Read it FIRST, so the table is populated before any geometry exists,
     // then again after the whole model has been tessellated. Under the
     // demand pump and the preview channel's prefix snapshots a value that
     // tracked geometry as it accumulated would make the deflection target
     // depend on scheduling, which surfaces as nondeterministic digests.
     const face = anyFace( model )
-    const before = extraction.modelExtentForFace( face )
+    const before = extraction.representationExtentForFace( face )
 
     expect(before).toBeGreaterThan(0)
     expect(tessellateAll( model, extraction )).toBeGreaterThan(0)
 
-    expect(extraction.modelExtentForFace( face )).toBe(before)
+    expect(extraction.representationExtentForFace( face )).toBe(before)
   })
 
-  test('modelExtent does not depend on when it is first read', () => {
+  test('the extent does not depend on when it is first read', () => {
 
     const [modelEager, extractionEager] = load()
-    const eager = extractionEager.modelExtentForFace( anyFace( modelEager ) )
+    const eager = extractionEager.representationExtentForFace( anyFace( modelEager ) )
 
     expect(eager).toBeGreaterThan(0)
     expect(tessellateAll( modelEager, extractionEager )).toBeGreaterThan(0)
@@ -204,58 +208,51 @@ describe('AP214 model-extent deflection floor (bldrs-ai/conway#564 §5)', () => 
 
     expect(tessellateAll( modelLate, extractionLate )).toBeGreaterThan(0)
 
-    expect(extractionLate.modelExtentForFace( anyFace( modelLate ) )).toBe(eager)
+    expect(extractionLate.representationExtentForFace( anyFace( modelLate ) )).toBe(eager)
   })
 
-  // A single scalar extent only means anything if every coordinate it spans
-  // is in one unit, and AP214 takes the length unit from each
-  // shape_representation's own context — which is why rootUnitScaleTransform
-  // is applied per root. These two fixtures differ ONLY in the second
-  // context's length unit, so they isolate that.
-  test('a single-unit model gives every face the same raw vertex box', () => {
+  // The scope test. A model-wide extent would hand both of these faces the
+  // same number; the defining representation's extent hands each its own.
+  test('each face gets its own defining representation\'s extent', () => {
 
-    const [model, extraction] = load( SINGLE_UNIT_TWIN_FIXTURE )
+    const [model, extraction] = load( TWO_REPRESENTATION_FIXTURE )
 
-    // Both bodies are millimetre-declared and span (0,0,0)..(1000,1000,1000)
-    // and (0,0,0)..(1,1,1), so the box is sqrt(3) * 1000 for both faces.
-    const expected = Math.sqrt(3) * MM_BODY_SPAN
-
-    expect(extraction.modelExtentForFace( faceNamed( model, 'mm face' ) ))
-        .toBeCloseTo(expected, 6)
-    expect(extraction.modelExtentForFace( faceNamed( model, 'second face' ) ))
-        .toBeCloseTo(expected, 6)
-  })
-
-  test('a mixed-unit model gives each face the extent in its own unit', () => {
-
-    const [model, extraction] = load( MIXED_UNIT_FIXTURE )
-
-    // Identical to the twin except that the second representation's context
-    // declares metres rather than millimetres. The model is sqrt(3) metres
-    // across either way — the two bodies are the same physical size written
-    // two ways — so the millimetre face must see sqrt(3) * 1000 and the
-    // metre face sqrt(3). Handing both the same number would put one of
-    // them's floor three decades out.
-    expect(extraction.modelExtentForFace( faceNamed( model, 'mm face' ) ))
-        .toBeCloseTo(Math.sqrt(3) * MM_BODY_SPAN, 6)
-    expect(extraction.modelExtentForFace( faceNamed( model, 'm face' ) ))
+    expect(extraction.representationExtentForFace( faceNamed( model, 'large face' ) ))
+        .toBeCloseTo(Math.sqrt(3) * LARGE_BODY_SPAN, 6)
+    expect(extraction.representationExtentForFace( faceNamed( model, 'small face' ) ))
         .toBeCloseTo(Math.sqrt(3), 9)
   })
 
-  test('an unmapped face falls back to the coarsest declared unit', () => {
+  // The unit context reaches the scene transform, not the tessellation: both
+  // sides of the comparison the native floor makes are raw coordinates from
+  // one representation. So declaring the small body in metres rather than
+  // millimetres must change nothing here. If it ever does, a unit conversion
+  // has crept back into this path.
+  test('the extents do not depend on the declared length units', () => {
 
-    const [model, extraction] = load( MIXED_UNIT_FIXTURE )
+    const [mixed, mixedExtraction] = load( TWO_REPRESENTATION_FIXTURE )
+    const [oneUnit, oneUnitExtraction] = load( TWO_REPRESENTATION_ONE_UNIT_FIXTURE )
 
-    // A localID no face owns stands in for a face the representation walk
-    // does not reach. The fallback has to be the LARGEST unit — metres here
-    // — because that is the smallest extent number and so the finest floor.
-    const unmapped = -1
+    for ( const name of ['large face', 'small face'] ) {
 
-    expect(extraction.modelExtentForFace( unmapped ))
-        .toBeCloseTo(extraction.modelExtentForFace( faceNamed( model, 'm face' ) ), 9)
+      expect(oneUnitExtraction.representationExtentForFace( faceNamed( oneUnit, name ) ))
+          .toBe(mixedExtraction.representationExtentForFace( faceNamed( mixed, name ) ))
+    }
   })
 
-  test('a larger model extent floors the target and costs fewer triangles', () => {
+  test('a face no representation reaches gets no floor', () => {
+
+    const [, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+
+    // A localID no face owns stands in for a face the representation walk
+    // does not reach. Zero is what the native side reads as "no floor",
+    // i.e. the pre-#564 per-face target.
+    const unreached = -1
+
+    expect(extraction.representationExtentForFace( unreached )).toBe(0)
+  })
+
+  test('a larger representation extent floors the target and costs fewer triangles', () => {
 
     const [model, extraction] = load()
     const unfloored = tessellateAll( model, extraction )
@@ -267,16 +264,16 @@ describe('AP214 model-extent deflection floor (bldrs-ai/conway#564 §5)', () => 
     // target, which is exactly the Arty_Z7 silkscreen's situation. Reverting
     // the native change makes this equal `unfloored` instead.
     const [flooredModel, flooredExtraction] = load()
-    const original = AP214GeometryExtraction.prototype.modelExtentForFace
+    const original = AP214GeometryExtraction.prototype.representationExtentForFace
 
-    AP214GeometryExtraction.prototype.modelExtentForFace = () => MOSAIC_MODEL_EXTENT
+    AP214GeometryExtraction.prototype.representationExtentForFace = () => MOSAIC_EXTENT
 
     let floored: number
 
     try {
       floored = tessellateAll( flooredModel, flooredExtraction )
     } finally {
-      AP214GeometryExtraction.prototype.modelExtentForFace = original
+      AP214GeometryExtraction.prototype.representationExtentForFace = original
     }
 
     expect(floored).toBeGreaterThan(0)
