@@ -46,6 +46,23 @@ const MULTI_ITEM_FIXTURE = 'data/nema-23-76mm.step'
  */
 const LEADING_PLACEMENT_FIXTURE = 'data/ap214-sliced-item-ranges.step'
 
+/**
+ * Six items, the first of which is a MAPPED_ITEM that pushes its mapping
+ * transform and then throws (its REPRESENTATION_MAP's
+ * `mapped_representation` points at a CARTESIAN_POINT, so the dereference
+ * fails after the push).
+ *
+ * That failure path is the one way a NON-placement item can leave
+ * transform state behind: extractMappedItem's pop loop is unreachable once
+ * the walk between the pushes throws. Unsliced, the leak displaces every
+ * later item in the representation; sliced, only the ones sharing its
+ * range — so the geometry depended on where the cut fell until
+ * extractMappedItem was made to pop in a `finally`. No model in the
+ * regression corpus contains a MAPPED_ITEM at all, so this fixture is the
+ * only thing standing between that fix and a silent regression.
+ */
+const MAPPED_ITEM_FAILURE_FIXTURE = 'data/ap214-mapped-item-failure.step'
+
 /* Wasm init, and the per-test budgets: these extractions run real BREPs. */
 const WASM_INIT_TIMEOUT_MS = 60_000
 const EXTRACT_TIMEOUT_MS = 120_000
@@ -211,5 +228,22 @@ describe( 'AP214 demand unit granularity (conway#579)', () => {
         .not.toStrictEqual( [ '0', '0', '0' ] )
 
     expect( sliced ).toStrictEqual( unsliced )
+  }, EXTRACT_TIMEOUT_MS )
+
+  test( 'a mapped item that throws after pushing does not shift later items', () => {
+
+    const [ unsliced, unslicedUnits ] = extractAt( MAPPED_ITEM_FAILURE_FIXTURE, Infinity )
+    const [ atDefault, defaultUnits ] = extractAt( MAPPED_ITEM_FAILURE_FIXTURE, 4 )
+    const [ perItem, perItemUnits ] = extractAt( MAPPED_ITEM_FAILURE_FIXTURE, 1 )
+
+    expect( defaultUnits ).toBeGreaterThan( unslicedUnits )
+    expect( perItemUnits ).toBeGreaterThan( defaultUnits )
+
+    // Five solids follow the failing mapped item; if the fixture ever stops
+    // producing them the equalities below stop meaning anything.
+    expect( unsliced.length ).toBe( 5 )
+
+    expect( atDefault ).toStrictEqual( unsliced )
+    expect( perItem ).toStrictEqual( unsliced )
   }, EXTRACT_TIMEOUT_MS )
 } )

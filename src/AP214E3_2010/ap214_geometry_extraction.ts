@@ -2890,47 +2890,31 @@ export class AP214GeometryExtraction {
       ++pushedTransforms
     }
 
-    if ( mappingTarget instanceof cartesian_transformation_operator_3d ) {
+    // The pushes below have to be undone even when the walk between them
+    // throws — `mapped_representation` and every item under it dereference
+    // lazily, so a malformed mapping fails AFTER the transform is on the
+    // stack. Leaving it there used to mean the rest of the enclosing
+    // representation's items were placed by a transform that belongs to a
+    // failed mapped item, and — since conway#579 cut that item loop into
+    // units — how far the leak reached depended on where the cut fell.
+    // Popping in a finally is what makes this function stack-neutral
+    // unconditionally, which is the invariant the slicing rests on.
+    try {
+      if ( mappingTarget instanceof cartesian_transformation_operator_3d ) {
 
-      const nativeCartesianTransform =
-        this.extractCartesianTransformOperator3D(mappingTarget)
-      const originTransform =
-        mappingOrigin instanceof placement ?
-          this.extractRawPlacement( mappingOrigin ) : void 0
+        const nativeCartesianTransform =
+          this.extractCartesianTransformOperator3D(mappingTarget)
+        const originTransform =
+          mappingOrigin instanceof placement ?
+            this.extractRawPlacement( mappingOrigin ) : void 0
 
-          let combinedTransform: NativeTransform4x4
+            let combinedTransform: NativeTransform4x4
 
-      if (originTransform !== void 0) {
-        // Use the same semantics as doTransforms: from = origin^-1, to = target
-        const from = originTransform.invert()
-        const to   = nativeCartesianTransform
-
-        const params: ParamsLocalPlacement = {
-          useRelPlacement: true,
-          axis2Placement: from,
-          relPlacement: to,
-        }
-        combinedTransform = this.conwayModel.getLocalPlacement(params)
-      } else {
-        combinedTransform = nativeCartesianTransform
-      }
-
-      pushTransform(combinedTransform)
-
-    } else if ( mappingTarget instanceof placement ) {
-
-      const targetTransform = this.extractRawPlacement( mappingTarget )
-      const originTransform =
-        mappingOrigin instanceof placement ?
-          this.extractRawPlacement( mappingOrigin ) : void 0
-
-      if ( targetTransform !== void 0 ) {
-        let combinedTransform: NativeTransform4x4
         if (originTransform !== void 0) {
-          // Again, same semantics as doTransforms
+          // Use the same semantics as doTransforms: from = origin^-1, to = target
           const from = originTransform.invert()
-          const to   = targetTransform
-    
+          const to   = nativeCartesianTransform
+
           const params: ParamsLocalPlacement = {
             useRelPlacement: true,
             axis2Placement: from,
@@ -2938,74 +2922,103 @@ export class AP214GeometryExtraction {
           }
           combinedTransform = this.conwayModel.getLocalPlacement(params)
         } else {
-          combinedTransform = targetTransform
+          combinedTransform = nativeCartesianTransform
         }
-    
+
         pushTransform(combinedTransform)
+
+      } else if ( mappingTarget instanceof placement ) {
+
+        const targetTransform = this.extractRawPlacement( mappingTarget )
+        const originTransform =
+          mappingOrigin instanceof placement ?
+            this.extractRawPlacement( mappingOrigin ) : void 0
+
+        if ( targetTransform !== void 0 ) {
+          let combinedTransform: NativeTransform4x4
+          if (originTransform !== void 0) {
+            // Again, same semantics as doTransforms
+            const from = originTransform.invert()
+            const to   = targetTransform
+    
+            const params: ParamsLocalPlacement = {
+              useRelPlacement: true,
+              axis2Placement: from,
+              relPlacement: to,
+            }
+            combinedTransform = this.conwayModel.getLocalPlacement(params)
+          } else {
+            combinedTransform = targetTransform
+          }
+    
+          pushTransform(combinedTransform)
+        }
       }
-    }
 
-    for ( const representationItem of representationMap.mapped_representation.items ) {
+      for ( const representationItem of representationMap.mapped_representation.items ) {
 
-      if ( representationItem instanceof mapped_item ) {
+        if ( representationItem instanceof mapped_item ) {
 
-        // if this is a mapped item, we need to extract it recursively
-        // and add the transform to the scene
-        this.extractMappedItem(
-          representationItem,
-          owningElementLocalID,
-          parents !== void 0 ? [from, ...parents] : [ from ] )
-
-      } else {
-
-        this.extractRepresentationItem( representationItem, owningElementLocalID )
-
-        const styledItemLocalID_ = this.materials.styledItemMap.get( representationItem.localID )
-
-        let materialOverrideID: number | undefined = void 0
-
-        if ( styledItemLocalID_ !== void 0 ) {
-
-          const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as styled_item
-          this.extractStyledItem(styledItem_)
+          // if this is a mapped item, we need to extract it recursively
+          // and add the transform to the scene
+          this.extractMappedItem(
+            representationItem,
+            owningElementLocalID,
+            parents !== void 0 ? [from, ...parents] : [ from ] )
 
         } else {
 
-          // get material from parent
-          let styledItemParentLocalID = this.materials.styledItemMap.get( from.localID )
-          let styleParent = from
+          this.extractRepresentationItem( representationItem, owningElementLocalID )
 
-          if ( parents !== void 0 ) {
-            for ( const parent of parents ) {
-              if ( styledItemParentLocalID !== void 0 ) {
-                break
+          const styledItemLocalID_ = this.materials.styledItemMap.get( representationItem.localID )
+
+          let materialOverrideID: number | undefined = void 0
+
+          if ( styledItemLocalID_ !== void 0 ) {
+
+            const styledItem_ = this.model.getElementByLocalID(styledItemLocalID_) as styled_item
+            this.extractStyledItem(styledItem_)
+
+          } else {
+
+            // get material from parent
+            let styledItemParentLocalID = this.materials.styledItemMap.get( from.localID )
+            let styleParent = from
+
+            if ( parents !== void 0 ) {
+              for ( const parent of parents ) {
+                if ( styledItemParentLocalID !== void 0 ) {
+                  break
+                }
+
+                styledItemParentLocalID = this.materials.styledItemMap.get( parent.localID )
+                styleParent = parent
               }
+            }
 
-              styledItemParentLocalID = this.materials.styledItemMap.get( parent.localID )
-              styleParent = parent
+            if ( styledItemParentLocalID !== void 0 ) {
+
+              const styledItemParent =
+                this.model.getElementByLocalID(styledItemParentLocalID) as styled_item
+
+              this.extractStyledItem( styledItemParent, representationItem )
+              materialOverrideID = styleParent.localID
             }
           }
 
-          if ( styledItemParentLocalID !== void 0 ) {
-
-            const styledItemParent =
-              this.model.getElementByLocalID(styledItemParentLocalID) as styled_item
-
-            this.extractStyledItem( styledItemParent, representationItem )
-            materialOverrideID = styleParent.localID
-          }
+          this.scene.addGeometry(
+            representationItem.localID,
+            owningElementLocalID,
+            materialOverrideID )
         }
-
-        this.scene.addGeometry(
-          representationItem.localID,
-          owningElementLocalID,
-          materialOverrideID )
       }
-    }
 
-    for ( ; pushedTransforms > 0; --pushedTransforms ) {
+    } finally {
 
-      this.scene.popTransform()
+      for ( ; pushedTransforms > 0; --pushedTransforms ) {
+
+        this.scene.popTransform()
+      }
     }
   }
 
@@ -5825,9 +5838,25 @@ export class AP214GeometryExtraction {
         }
       }
 
-      if ( deadline !== void 0 && Date.now() >= deadline ) {
-        ++this.demandCursor_
-        break
+      if ( deadline !== void 0 ) {
+
+        // Under staged tessellation a unit mostly ENQUEUES face jobs, so
+        // the loop's own elapsed time under-reports what the call has
+        // committed to — the flush after the loop would then run all of
+        // it outside the deadline, and a nominal 50 ms batch measured
+        // 996 ms on Arty. Flush per unit so the budget bounds the
+        // tessellation and not just the enqueueing. Unbudgeted callers
+        // (the whole-model walk, the deferred drain) skip this and keep
+        // one big staged batch, which is where staging's throughput
+        // actually matters.
+        if ( this.useStagedFaces ) {
+          this.finalizeStagedFaces()
+        }
+
+        if ( Date.now() >= deadline ) {
+          ++this.demandCursor_
+          break
+        }
       }
     }
 
