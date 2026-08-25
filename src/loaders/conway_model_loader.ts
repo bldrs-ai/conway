@@ -322,6 +322,13 @@ export class ConwayModelLoader {
 
           statistics.setGeometryTypeCounts(conwayModel.geometryTypeCounts)
 
+          // Deflection-floor coverage (conway#564 §5) — AP214 only; the IFC
+          // front end pins no representation extent and records none.
+          statistics.setRepresentationExtentCoverage(
+              conwayModel.extentMeasuredFaceCount,
+              conwayModel.extentMissingFaceCount,
+              conwayModel.extentDegenerateFaceCount)
+
           model.invalidate(true)
 
           if (extractionResult !== ExtractResult.COMPLETE) {

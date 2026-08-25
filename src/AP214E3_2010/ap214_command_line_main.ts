@@ -570,6 +570,14 @@ function geometryExtraction(
 
   statistics?.setGeometryMemory(conwayModel.model.geometry.calculateGeometrySize() / (ONE_MB))
 
+  // Deflection-floor coverage (conway#564 §5). Recorded on the statistics for
+  // the same reason the wasm heap peak is: one spelling of the number, on the
+  // load-status line, rather than a log line of its own.
+  statistics?.setRepresentationExtentCoverage(
+      conwayModel.extentMeasuredFaceCount,
+      conwayModel.extentMissingFaceCount,
+      conwayModel.extentDegenerateFaceCount)
+
   model.invalidate( true )
 
   if (extractionResult !== ExtractResult.COMPLETE) {

@@ -70,6 +70,7 @@ import {
   b_spline_surface,
   b_spline_surface_with_knots,
   boolean_result,
+  brep_with_voids,
   cartesian_point,
   cartesian_transformation_operator_2d,
   cartesian_transformation_operator_3d,
@@ -123,7 +124,9 @@ import {
   ratio_measure,
   rational_b_spline_curve,
   rational_b_spline_surface,
+  representation,
   representation_item,
+  representation_map,
   representation_relationship_with_transformation,
   shape_definition_representation,
   shape_representation,
@@ -145,6 +148,7 @@ import {
   trimmed_curve,
   trimming_preference,
   vertex_loop,
+  vertex,
   vertex_point,
   view_volume,
 } from './AP214E3_2010_gen'
@@ -210,6 +214,43 @@ const AP214_MAX_ITEM_UNITS_PER_REPRESENTATION = 256
 // representation runs as one range instead — cutting is an optimization,
 // and the whole-walk behaviour is always the safe fallback.
 const AP214_MAX_REPLAYED_PLACEMENTS = 8
+
+/**
+ * How many of a representation's faces the extent walk descends into, at
+ * most. See AP214GeometryExtraction.extentSample for the measurement behind
+ * the number: at 1,024 the worst extent across the local corpus is 0.9996 of
+ * the full-descent value, and the walk stops being a multi-hundred-
+ * millisecond block in every preview generation.
+ */
+const EXTENT_SAMPLE_FACES = 1024
+
+
+/**
+ * Append one shell's faces to the list being built, one at a time.
+ *
+ * Iteratively, NOT `target.push( ...source )`. A spread passes every element
+ * as a separate argument, and a `connected_face_set` large enough to exceed
+ * the engine's argument limit throws `RangeError: Maximum call stack size
+ * exceeded` — measured at 125,000 elements on the Node runtime this was
+ * reviewed against.
+ *
+ * The failure would have been silent and precisely inverted. `collectItemFaces`
+ * swallows exceptions so that one bad reference cannot lose the whole table,
+ * so the throw would have left every face of that BREP unattributed and the
+ * deflection floor disabled — on the biggest models in the corpus, which are
+ * the ones this whole change exists for. Normal extraction is unaffected:
+ * `extractManifoldSolidBrep` hands `cfs_faces` to `extractFaces`, which
+ * iterates.
+ *
+ * @param target The list being built.
+ * @param source One shell's faces.
+ */
+function appendFaces( target: face[], source: face[] ): void {
+
+  for ( const face_ of source ) {
+    target.push( face_ )
+  }
+}
 
 /**
  * How a basis surface turns a point in its own parameter space into a point
@@ -642,6 +683,595 @@ export class AP214GeometryExtraction {
           () => new (this.wasmModule.ParamsGetBooleanResult)() as ParamsGetBooleanResult,
           (obj) => obj.delete(),
       )
+    }
+  }
+
+
+  /**
+   * Face localID to the extent of the representation that DEFINES it, in
+   * that representation's own raw file coordinates. `undefined` until
+   * `resolveRepresentationExtents` has run.
+   */
+  private faceExtent_: Map< number, number > | undefined = undefined
+
+  /**
+   * How many advanced faces this extraction tessellated, and how many of
+   * those the representation walk did not reach — i.e. how many silently ran
+   * with no deflection floor.
+   *
+   * These exist because the table is a MIRROR of extraction's own
+   * reachability, and a mirror can only be kept honest by checking that the
+   * two agree. Three review findings on conway#564 were the same defect in
+   * different arms — `face_based_surface_model` missing from the item
+   * dispatch, `types()` not matching `shape_representation` subtypes, a
+   * `styled_item` wrapping a BREP — and every one of them showed up here as
+   * a face that extraction tessellated and the table had no extent for. None
+   * of them raised an error, and two of the three bit no corpus model at all.
+   * A counter turns that class of silence into a number.
+   *
+   * Read them TOGETHER. `extentMissingFaceCount` alone cannot distinguish
+   * "every face got a floor" from "nothing was measured", which is exactly
+   * how a vacuous assertion passes; `extentMeasuredFaceCount` is the
+   * denominator that makes the zero mean something.
+   *
+   * `extentDegenerateFaceCount` is deliberately NOT folded into
+   * `extentMissingFaceCount`, because the two mean opposite things about
+   * this code. Missing is a mirror bug: the walk never reached the face's
+   * representation, and someone has to fix an arm. Degenerate is not a bug
+   * at all: the walk reached the representation and its topological vertices
+   * genuinely carry no extent. `data/sphere-vertex-loop.step` is the case —
+   * a whole sphere is ONE advanced face whose only bound is a `vertex_loop`
+   * at the pole, so the body's entire vertex set is a single point and its
+   * box has zero diagonal even though the sphere is 15 units across. Such a
+   * face gets no floor, which is the pre-#564 target and therefore safe, but
+   * counting it as missing would make the mirror-agreement invariant
+   * permanently false and the number useless.
+   */
+  public extentMeasuredFaceCount   = 0
+  public extentMissingFaceCount    = 0
+  public extentDegenerateFaceCount = 0
+
+  /**
+   * The scale a face's deflection target may not be refined below: the
+   * extent of the representation that defines it (conway#564 §5).
+   *
+   * ## Why the DEFINING REPRESENTATION is the right scope
+   *
+   * The relative-to-its-own-extent deflection target is right for a part and
+   * wrong for a mosaic. `Arty_Z7.stp`'s silkscreen is 10,224 b-spline faces
+   * with a median diagonal of 0.126mm; 0.1% of such a face is 0.126um, about
+   * a thousandth of a pixel at any zoom a user reaches, and refining toward
+   * it costs 96% of that model's geometry payload. Those ten thousand tiles
+   * are one visual object — the printed legend — and the object, not the
+   * tile, is what sets how finely it is worth resolving.
+   *
+   * The object is the representation. `Arty_Z7_Top_Silk` is ONE
+   * `advanced_brep_shape_representation` holding all 654 glyph solids, and
+   * its extent is 139.03mm against a 1.20mm median glyph — the mosaic,
+   * measured.
+   *
+   * Scoping it to the representation rather than to the whole model is not a
+   * convenience, it is what makes the quantity well defined at all.
+   * Tessellation is memoized per representation ITEM, so one tessellation
+   * serves every reference to it; anything that tessellation depends on must
+   * therefore be a function of the representation too. A model-wide extent
+   * is a function of the whole FILE, and the moment one memoized
+   * tessellation is reached from two references it has no single correct
+   * value — most sharply when those references sit in different unit
+   * contexts, which AP214 permits per `shape_representation` and `Arty_Z7`
+   * itself does (centimetre board and connectors, millimetre silkscreen).
+   * Reference-independence is exactly what the memoization requires, and the
+   * defining representation has it by construction.
+   *
+   * Two consequences worth keeping:
+   *
+   * - **No unit conversion appears anywhere in this file's tessellation
+   *   path.** A representation has exactly one
+   *   `global_unit_assigned_context`, so this extent and the face bounding
+   *   box the native side compares it against are raw numbers from the same
+   *   representation. Nothing is combined across units, so nothing can be
+   *   combined wrongly.
+   * - **The floor is never coarser than a model-wide one would have been.**
+   *   A representation's box is over a SUBSET of the same coordinates, so its
+   *   extent is always <= the model's extent expressed in that
+   *   representation's unit.
+   *
+   * ## Why the topological vertices
+   *
+   * Walking down from the representation reaches exactly the points that are
+   * ON the solid — every `vertex_point` of every face it defines. That is
+   * the model, and it is what makes the number trustworthy: the file's full
+   * `cartesian_point` population also carries b-spline control points,
+   * unbounded-surface support points and parameter-space points, any of which
+   * can sit far outside the part. Measured on the local corpus the
+   * difference is not marginal — `Right_Hand.step` is a 0.233m hand whose
+   * cartesian-point box spans 1134m (control points at +/-500), and
+   * `Arty_Z7.stp` is a 0.419m board whose cartesian-point box spans 375km.
+   * A box over those would floor the target three to six decades too coarse,
+   * i.e. facet the model. The topological walk cannot reach them.
+   *
+   * ## Why this cannot make geometry depend on pump scheduling
+   *
+   * Everything here is a property of the PARSED INDEX, never of the geometry
+   * built so far, and the table is computed once and memoized. Two
+   * consequences, both needed for deterministic digests under the AP214
+   * demand pump and the streamed preview channel's snapshots:
+   *
+   * - nothing can grow as more geometry is extracted, so two faces
+   *   tessellated at different points in the same load see the same floor;
+   * - each extent is a min/max reduction over a set, which is order-invariant
+   *   in IEEE arithmetic (unlike a sum), so it does not depend on the order
+   *   `types()` yields representations or faces in either. Only membership
+   *   matters, and membership is the whole index.
+   *
+   * A PREFIX parse (the preview channel's throwaway generations) indexes less
+   * of the file and so can pin a smaller extent — deliberately: a smaller
+   * extent is a finer floor, i.e. strictly closer to the unfloored behaviour,
+   * and that geometry is discarded when the durable load lands. The durable
+   * load's values are a pure function of the file.
+   *
+   * @param faceLocalID The localID of the face about to be tessellated.
+   * @return {number} The defining representation's extent diagonal in raw
+   * file coordinates, or 0 for a face no representation walk reaches, which
+   * the native side reads as "no floor" — i.e. today's behaviour.
+   */
+  public representationExtentForFace( faceLocalID: number ): number {
+
+    return this.representationExtentEntry( faceLocalID ) ?? 0
+  }
+
+  /**
+   * The table entry for a face, distinguishing the two ways a face ends up
+   * with no floor.
+   *
+   * `undefined` means the representation walk never reached this face — a
+   * disagreement between this table and extraction's own reachability, i.e.
+   * a defect. `0` means it was reached and its representation's topological
+   * vertices carry no extent, which is a real shape (a whole sphere is one
+   * face bounded by a single `vertex_loop`) and not a defect. Only the
+   * counters care about the difference; every caller that just wants a floor
+   * uses `representationExtentForFace`, where both read as "no floor".
+   *
+   * @param faceLocalID The localID of the face.
+   * @return {number | undefined} The extent, or undefined if unreached.
+   */
+  private representationExtentEntry( faceLocalID: number ): number | undefined {
+
+    this.faceExtent_ ??= this.resolveRepresentationExtents()
+
+    return this.faceExtent_.get( faceLocalID )
+  }
+
+  /**
+   * Every representation whose items geometry extraction can reach.
+   *
+   * `types()` matches EXACT entity types — `shape_representation.query` is
+   * the single `SHAPE_REPRESENTATION` id — so scanning it alone silently
+   * misses the twenty-odd subtypes AP214 defines
+   * (`manifold_surface_shape_representation`,
+   * `faceted_brep_shape_representation`, `csg_shape_representation`, …).
+   * Extraction itself reaches those through `instanceof` checks on
+   * `shape_definition_representation.used_representation` and on the
+   * relationship endpoints, so a `types()`-only scan here would hand every
+   * face in such a representation an extent of zero — no floor, silently,
+   * with no error and with the corpus coverage numbers still reading 100%
+   * because the local corpus happens to be plain `SHAPE_REPRESENTATION`
+   * throughout.
+   *
+   * So the set is gathered from the entry points extraction uses rather
+   * than from a hand-maintained subtype list, which would rot the next time
+   * the schema gains one. `representation` rather than
+   * `shape_representation` is the filter because a `representation_map` may
+   * point at a base `representation` that still carries items with faces;
+   * all this walk needs from it is `.items`.
+   *
+   * @return {Iterable<representation>} Distinct representations, in
+   * localID order — though nothing downstream depends on the order, since
+   * each extent is a min/max reduction.
+   */
+  private geometryRepresentations(): Iterable< representation > {
+
+    const found = new Map< number, representation >()
+
+    /**
+     * @param candidate A possible representation reference.
+     */
+    const add = ( candidate: unknown ): void => {
+
+      if ( candidate instanceof representation ) {
+        found.set( candidate.localID, candidate )
+      }
+    }
+
+    for ( const definition of this.model.types( shape_definition_representation ) ) {
+      try {
+        add( definition.used_representation )
+      } catch {
+        // Malformed SDR (prefix truncation) — skip it, as extraction does.
+      }
+    }
+
+    for ( const relationship of this.model.types( shape_representation_relationship ) ) {
+      try {
+        add( relationship.rep_1 )
+        add( relationship.rep_2 )
+      } catch {
+        // Malformed relationship — skip it.
+      }
+    }
+
+    for ( const map of this.model.types( representation_map ) ) {
+      try {
+        add( map.mapped_representation )
+      } catch {
+        // Malformed representation_map — skip it.
+      }
+    }
+
+    // Free-floating representations, which no relationship or definition
+    // names. These are the concrete kinds extraction's own root scan uses.
+    for ( const free of this.model.types(
+        shape_representation,
+        advanced_brep_shape_representation,
+        geometrically_bounded_wireframe_shape_representation ) ) {
+
+      add( free )
+    }
+
+    return found.values()
+  }
+
+  /**
+   * At most `EXTENT_SAMPLE_FACES` of a representation's faces, spread evenly
+   * across the list.
+   *
+   * The extent walk is the one real cost in this design, and it is paid
+   * again for every throwaway generation the parse-time preview channel
+   * builds — each of which constructs its own `AP214GeometryExtraction` over
+   * a longer prefix — where it cannot be preempted by the tick budget.
+   * Measured full-descent worst-case single representation: 416 ms
+   * (`Arty_Z7_Top_Silk`, 14,376 faces) and 1,091 ms (DSA2's single
+   * representation, 28,674 faces).
+   *
+   * A bounding box converges long before the last face, so the sample is
+   * not an approximation in any way that matters, and it is measured rather
+   * than asserted. At 1,024 faces the worst extent across the local corpus
+   * is **0.9996** of the full-descent value (`Arty_Z7_Bottom_Silk`;
+   * `Arty_Z7_Top_Silk` 1.0000, DSA2 1.0000, `driver board` 1.0000,
+   * `Right_Hand` 1.0000), while the worst per-representation descent falls
+   * to 5-12 ms. Whole-table build: 875 ms -> ~80 ms on Arty_Z7, 1,443 ms ->
+   * ~245 ms on DSA2 (the remainder there is collecting 28,674 faces, which
+   * the localID table needs regardless).
+   *
+   * The error can only ever be an UNDER-estimate — a subset's bounding box
+   * is contained in the full one — and a smaller extent is a finer floor,
+   * i.e. less of the saving and never a fidelity loss. That is the same
+   * direction as every other bound here.
+   *
+   * A stride rather than a prefix: the first 1,024 faces of a mosaic are its
+   * first few dozen glyphs, which span a corner of the board rather than the
+   * board. `Math.ceil` keeps the stride at least 1.
+   *
+   * @param faces The representation's faces, in walk order.
+   * @return {face[]} The faces to descend.
+   */
+  private extentSample( faces: face[] ): face[] {
+
+    if ( faces.length <= EXTENT_SAMPLE_FACES ) {
+      return faces
+    }
+
+    const stride = Math.ceil( faces.length / EXTENT_SAMPLE_FACES )
+    const sampled: face[] = []
+
+    for ( let where = 0; where < faces.length; where += stride ) {
+      sampled.push( faces[ where ] )
+    }
+
+    return sampled
+  }
+
+  /**
+   * Build the face localID to defining-representation-extent table.
+   *
+   * `mapped_item` is deliberately NOT followed. A mapped representation is
+   * visited in its own right by the loop below, and following it from here
+   * would attribute a definition's faces to a CONSUMER of that definition —
+   * which is precisely the reference-dependence that scoping to the
+   * definition exists to remove.
+   *
+   * @return {Map<number, number>} Extent diagonal keyed by face localID.
+   * Faces no representation reaches are absent.
+   */
+  private resolveRepresentationExtents(): Map< number, number > {
+
+    const faceExtent = new Map< number, number >()
+
+    for ( const representation_ of this.geometryRepresentations() ) {
+
+      const faces: face[] = []
+
+      try {
+        for ( const item of representation_.items ) {
+          this.collectItemFaces( item, faces )
+        }
+      } catch {
+        // Malformed or truncated item list (prefix parse) — the faces it
+        // would have contributed stay absent, which reads as "no floor".
+        continue
+      }
+
+      if ( faces.length === 0 ) {
+        continue
+      }
+
+      const box = {
+        minX: Infinity, minY: Infinity, minZ: Infinity,
+        maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
+      }
+
+      for ( const face_ of this.extentSample( faces ) ) {
+        this.growBoxByFace( face_, box )
+      }
+
+      if ( !Number.isFinite( box.minX ) ) {
+        continue
+      }
+
+      const extent =
+        Math.hypot( box.maxX - box.minX, box.maxY - box.minY, box.maxZ - box.minZ )
+
+      for ( const face_ of faces ) {
+
+        const existing = faceExtent.get( face_.localID )
+
+        // A face reached from two representations is malformed — the same
+        // solid listed twice — and there is then no single right answer.
+        // Take the SMALLER extent, matching every other bound in this
+        // design: it errs toward a finer floor, i.e. less of the saving and
+        // never a fidelity loss. (The larger one is arguable too, on the
+        // grounds that the bigger representation is the visual object; it is
+        // rejected only because it errs the other way.)
+        faceExtent.set(
+            face_.localID,
+            existing === undefined ? extent : Math.min( existing, extent ) )
+      }
+    }
+
+    return faceExtent
+  }
+
+  /**
+   * Append every face one representation item defines.
+   *
+   * ## Why `styled_item` is deliberately NOT followed
+   *
+   * A styled_item listed among a representation's items carries geometry on
+   * `.item`, and extraction does tessellate that target
+   * (extractStyledItemWithProcessing -> extractRepresentationItem). Mirroring
+   * that here was tried and then removed on purpose, so it is not
+   * reintroduced as an obvious omission.
+   *
+   * Following it is the only place in this collector where the error
+   * direction is UNSAFE. Everywhere else a miss means a face gets no floor —
+   * pre-#564 behaviour, finer, a lost saving. Here, following a target
+   * extraction will not tessellate folds its vertices into the
+   * representation's extent and makes the floor COARSER for every face that
+   * does tessellate, which is a fidelity loss. And extraction's decision is
+   * not a simple reachability question that a mirror can answer once: it
+   * turns on the styled item carrying a `surface_style_usage`, on that usage
+   * being well formed enough for `extractSurfaceStyle` not to throw, and on
+   * `extractRepresentationItem` having no `styled_item` arm of its own so a
+   * nested styled item stops as unsupported. Three review rounds produced
+   * three separate findings on those three conditions.
+   *
+   * Not following it inverts the whole class: such a face is simply never
+   * attributed, so it gets no floor — the safe direction — and it lands in
+   * `extentMissingFaceCount`, which the load report prints and
+   * ap214_extent_coverage.test.ts asserts on. That trades a capability no
+   * corpus model exercises (no model in the public corpus or in data/ lists
+   * a styled_item among a representation's items at all; Arty_Z7's 3,919
+   * styled items attach per face through styledItemMap) for the removal of
+   * an entire error direction.
+   *
+   * What it costs is narrower than "styled geometry loses its floor":
+   *
+   * - per-face styling is untouched, because those faces are reached through
+   *   their own solid, which this walk handles normally;
+   * - a target that is ALSO listed directly in `representation.items` keeps
+   *   its floor from the direct listing;
+   * - a mixed representation takes its extent from the directly-listed items
+   *   and applies it only to faces from those items, so the extent stays a
+   *   subset of the representation's own coordinates and no new unsafe case
+   *   appears.
+   *
+   * ## Why this is not shared with extraction's own dispatch
+   *
+   * The obvious tidy-up — one `facesOfItem` consumed by both this and
+   * `extractRepresentationItem` — was considered and rejected, so that it is
+   * not re-attempted. Extraction's per-kind functions do not merely list
+   * faces, they decide which geometry object the faces land in:
+   * `extractAP214ShellBasedSurfaceModel` accumulates ONE geometry across
+   * shells and `extractConnectedFaceSets` does the same per face set, so
+   * neither can consume a flat list without changing that grouping. And
+   * extraction walks only `manifold_solid_brep.outer`, never
+   * `brep_with_voids.voids`, which this must — so a shared helper would
+   * change what extraction extracts. Sharing only the two arms that do line
+   * up would be worse than not sharing: it would look shared while the arms
+   * that actually diverge stayed duplicated.
+   *
+   * What keeps this in sync is `ap214_extent_coverage.test.ts`, which
+   * asserts the two traversals AGREE rather than that they share code —
+   * see `extentMissingFaceCount`.
+   *
+   * @param item The representation item to walk.
+   * @param faces The list being built.
+   */
+  private collectItemFaces( item: representation_item, faces: face[] ): void {
+
+    try {
+
+      if ( item instanceof manifold_solid_brep ) {
+
+        appendFaces( faces, item.outer.cfs_faces )
+
+        // faceted_brep and brep_with_voids are both manifold_solid_brep
+        // subtypes; only the latter carries anything beyond `outer`.
+        if ( item instanceof brep_with_voids ) {
+
+          for ( const void_ of item.voids ) {
+            appendFaces( faces, void_.cfs_faces )
+          }
+        }
+
+        return
+      }
+
+      if ( item instanceof shell_based_surface_model ) {
+
+        for ( const shell of item.sbsm_boundary ) {
+          appendFaces( faces, shell.cfs_faces )
+        }
+
+        return
+      }
+
+      if ( item instanceof face_based_surface_model ) {
+
+        for ( const faceSet of item.fbsm_faces ) {
+          appendFaces( faces, faceSet.cfs_faces )
+        }
+      }
+
+    } catch {
+      // Dangling or mistyped reference — the faces below it stay absent,
+      // which reads as "no floor", rather than losing the whole table.
+    }
+  }
+
+  /**
+   * Grow a bounding box by every topological vertex one face carries.
+   *
+   * @param face_ The face to walk.
+   * @param box The box to grow, mutated in place.
+   */
+  private growBoxByFace(
+      face_: face,
+      box: { minX: number, minY: number, minZ: number,
+             maxX: number, maxY: number, maxZ: number } ): void {
+
+    try {
+
+      for ( const bound of face_.bounds ) {
+
+        const loop = bound.bound
+
+        if ( loop instanceof edge_loop ) {
+
+          for ( const orientedEdge of loop.edge_list ) {
+
+            // The underlying edge, not the oriented wrapper: `edge_element`
+            // is the edge_curve whose endpoints are the vertex records, and
+            // it is the same field extractAdvancedFace's loop walk reads.
+            // Each edge_curve is shared by the two faces meeting along it,
+            // so every vertex is read twice. Deduping by edge localID was
+            // measured and does not pay: the cost is the traversal itself
+            // (bounds, edge_list, edge_element), not the two coordinate
+            // reads, and a Set of ~150k entries cancels the saving on
+            // Arty_Z7 (882ms naive, 875ms deduped). Left simple.
+            const edgeElement = orientedEdge.edge_element
+
+            this.growBoxByVertex( edgeElement.edge_start, box )
+            this.growBoxByVertex( edgeElement.edge_end, box )
+          }
+
+        } else if ( loop instanceof vertex_loop ) {
+
+          this.growBoxByVertex( loop.loop_vertex, box )
+
+        } else if ( loop instanceof poly_loop ) {
+
+          for ( const point of loop.polygon ) {
+            this.growBoxByPoint( point, box )
+          }
+        }
+      }
+
+    } catch {
+      // A malformed bound leaves this face out of the box rather than
+      // discarding the representation's extent entirely. Under-counting is
+      // the safe direction: it can only make the floor finer.
+    }
+  }
+
+  /**
+   * Grow a bounding box by one topological vertex.
+   *
+   * @param vertex The vertex to read.
+   * @param box The box to grow, mutated in place.
+   */
+  private growBoxByVertex(
+      vertex: vertex,
+      box: { minX: number, minY: number, minZ: number,
+             maxX: number, maxY: number, maxZ: number } ): void {
+
+    if ( !( vertex instanceof vertex_point ) ) {
+      return
+    }
+
+    const geometry = vertex.vertex_geometry
+
+    // vertex_geometry is a `point`, of which cartesian_point is one subtype —
+    // point_on_curve/point_on_surface/degenerate_pcurve carry no coordinates
+    // of their own and are skipped rather than resolved, since resolving them
+    // would mean evaluating their basis geometry.
+    if ( geometry instanceof cartesian_point ) {
+      this.growBoxByPoint( geometry, box )
+    }
+  }
+
+  /**
+   * Grow a bounding box by one cartesian point.
+   *
+   * @param point The point to read.
+   * @param box The box to grow, mutated in place.
+   */
+  private growBoxByPoint(
+      point: cartesian_point,
+      box: { minX: number, minY: number, minZ: number,
+             maxX: number, maxY: number, maxZ: number } ): void {
+
+    const coordinates = point.coordinates
+
+    if ( coordinates === null || coordinates.length < 3 ) {
+      return
+    }
+
+    const x = coordinates[ 0 ]
+    const y = coordinates[ 1 ]
+    const z = coordinates[ 2 ]
+
+    if ( !Number.isFinite( x ) || !Number.isFinite( y ) || !Number.isFinite( z ) ) {
+      return
+    }
+
+    if ( x < box.minX ) {
+      box.minX = x
+    }
+    if ( y < box.minY ) {
+      box.minY = y
+    }
+    if ( z < box.minZ ) {
+      box.minZ = z
+    }
+    if ( x > box.maxX ) {
+      box.maxX = x
+    }
+    if ( y > box.maxY ) {
+      box.maxY = y
+    }
+    if ( z > box.maxZ ) {
+      box.maxZ = z
     }
   }
 
@@ -3916,11 +4546,34 @@ export class AP214GeometryExtraction {
     // See https://github.com/bldrs-ai/conway/issues/459.
     nativeSurface.sameSenseKnown = true
 
+    // Counted here rather than in a pass of its own: the lookup happens
+    // anyway to build the parameters, so the coverage figure is one
+    // comparison per face.
+    const representationExtent = this.representationExtentForFace( from.localID )
+
+    ++this.extentMeasuredFaceCount
+
+    // Only a face that got NO floor needs classifying, and only then is the
+    // second lookup paid. Going through the public method for the value
+    // keeps one seam for "the floor for this face" — the extent's own tests
+    // stub that method, and a counter that read the table directly would
+    // quietly stop agreeing with what was actually passed to the native
+    // side.
+    if ( !( representationExtent > 0 ) ) {
+
+      if ( this.representationExtentEntry( from.localID ) === void 0 ) {
+        ++this.extentMissingFaceCount
+      } else {
+        ++this.extentDegenerateFaceCount
+      }
+    }
+
     const parameters: ParamsAddFaceToGeometry = {
       boundsArray: bound3DVector,
       advancedBrep: true,
       surface: nativeSurface,
       scaling: this.getLinearScalingFactor(),
+      representationExtent,
     }
 
     const styledItemLocalID = this.materials.styledItemMap.get(from.localID)
@@ -4317,6 +4970,7 @@ export class AP214GeometryExtraction {
       const parameters: ParamsAddFaceToGeometrySimple = {
         boundsArray: bound3DVector,
         scaling: this.getLinearScalingFactor(),
+        representationExtent: this.representationExtentForFace( from.localID ),
       }
 
       this.addOrStageFaceSimple(parameters, geometry)
