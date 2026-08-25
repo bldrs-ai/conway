@@ -30,6 +30,42 @@ The digest (-d) or verbose OBJ modes (-v) can be run separately or together. The
 
 Digests for IFC files are stably sorted (by Express ID) and have SHA1 hashes for the individual pieces of geometry produced by Conway, including curves, meshes, profiles and materials, as well as the type and references for the operands for boolean operators, and if the particular element is a void. For an example, check out the manifest of the index.ifc file from the [test models repository](https://github.com/bldrs-ai/test-models) [here](test_models/index.csv).
 
+### Digest columns
+
+IFC digests are `ID,Hash,Type,Operand 1,Operand2,Void`. STEP (AP214)
+digests carry those six unchanged and add a seventh, `Placement`:
+
+| column | meaning |
+|---|---|
+| `ID` | expressID of the element the row is for, or the geometry's local id where it has none. Rows are stably sorted by it. |
+| `Hash` | SHA1 of the OBJ serialisation of that geometry **definition** — its tessellation, in its own local frame. |
+| `Type` | Entity type name. |
+| `Operand 1` / `Operand2` | Boolean-operator operands (IFC only; AP214 leaves them empty). |
+| `Void` | Whether the element is a void (IFC CSG; `FALSE` on every AP214 mesh row, empty on curve rows). |
+| `Placement` | **AP214 only.** SHA1 over the sorted set of places that definition was put: for each placed instance, its full absolute 4x4 transform and the occurrence path (NAUO express ids) that placed it. Empty for a definition the scene never placed, and for curve rows, which are memoized per definition and never enter the scene graph. |
+
+`Hash` and `Placement` are the two independent axes of a STEP regression.
+`Hash` moves when tessellation changes; `Placement` moves when geometry
+lands somewhere else, or under a different assembly occurrence, while
+tessellating identically. Before `Placement` existed the digest could not
+see the second axis at all — `data/ap214-mapped-item-failure.step`
+relocates five solids by 500 mm with a byte-identical digest (conway#583).
+Keeping them in separate columns is deliberate: a row that moves only in
+`Placement` is geometry that was placed differently, and a row that moves
+only in `Hash` is geometry that was tessellated differently, and the diff
+says which.
+
+`Placement` is order-invariant by construction — the per-definition
+records are sorted before hashing — so it does not depend on the walk
+order, on `demandItemsPerUnit`, or on where the pump's wall-clock budget
+happened to end a batch. That property is the point of the column, and
+`src/AP214E3_2010/ap214_placement_digest.test.ts` pins it.
+
+The IFC digest has the same structural blindness and no equivalent column
+yet; see [design/new/step-regression.md](../design/new/step-regression.md)
+§"The placement column" for why that was left alone.
+
+
 ### Batch Mode
 
 There is a batch mode console application that is used for batch mode testing that is expected to be run on repositories of test models and have its results put into the regression baselines folder (the regression folder in the repository), with a sub-folder per set of baselines. The regression baseline application is designed to be run from the Conway repository root.

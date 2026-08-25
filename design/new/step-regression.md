@@ -161,6 +161,88 @@ corpus, same shape):
       the #334 basis-only fix (else the golden bakes in the cluster bug).
 
 
+## The placement column (conway#583)
+
+What actually shipped is **not** the post-transform digest §"The digest"
+above specifies. `ap214_regression_main.ts` hashes the OBJ serialisation of
+each geometry **definition**, in its own local frame — the IFC approach
+ported verbatim, which is exactly the thing this doc warned would "pass
+while every part is collapsed onto the origin". conway#583 is that warning
+coming true: `data/ap214-mapped-item-failure.step` relocates five solids by
+500 mm and the digest is byte-identical across the fix.
+
+The correction is a seventh column, `Placement`, rather than a rewrite of
+the six. Three reasons, in the order they mattered:
+
+1. **Comparables.** The existing six do not move, so the diff stays legible
+   across the change: after the re-bless, a row that moves only in
+   `Placement` is geometry that landed somewhere else, and one that moves
+   only in `Hash` is geometry that tessellated differently. A single
+   post-transform hash conflates them, which is a worse instrument than the
+   two-axis one even though it is the one this doc originally specified.
+2. **Keys.** §"Determinism" above worried that assembled geometry has no
+   stable row key and recommended emitting a sorted, unkeyed hash set. Per
+   definition, there is a key — the same expressID the row already carries —
+   so the sort happens *inside* one cell instead of across the file, and
+   localisation survives.
+3. **Cost of the alternative.** Aggregating world-space vertex buffers for
+   every instance is a second full pass over the geometry; hashing 16
+   doubles and an occurrence path per instance is not.
+
+### What is in the value
+
+Per geometry definition: the set of `(occurrence path, absolute 4x4)` pairs
+of every instance of it in the scene, each matrix element rounded to 12
+significant digits, sorted lexicographically, SHA1'd. Details and the
+reasoning for each choice are on `ap214_placement_digest.ts`; the ones worth
+repeating here:
+
+- **Sorted, so the column is order-invariant.** Demand extraction cuts a
+  model into units whose count and boundaries move with `demandItemsPerUnit`
+  and with the pump's wall-clock budget. A column that changed when the
+  scheduler changed would be worse than no column — the digest's whole job
+  is to be stable under things that should not matter. Duplicates are kept,
+  so an instance-count change is still a change.
+- **Occurrence path included.** The same world transform reached through a
+  different NAUO chain is a different assembly, and assembly traversal is
+  inside the class of change this column exists to catch.
+- **No vertex buffers.** conway#582's PR-local parity hash included them;
+  this does not, because `Hash` already carries tessellation and reading
+  buffers back out of the wasm heap is unreliable in the pthreads build
+  (conway#584).
+- **A root-parented instance reads as identity**, not as a distinct "absent"
+  marker, so moving geometry between the scene root and an identity
+  transform — which changes nothing about where it is drawn — does not churn.
+
+### Cost
+
+Measured as the column's own time inside a digest run, and as end-to-end CLI
+wall clock with the column stubbed out:
+
+| model | placed instances | column | digest run |
+|---|---:|---:|---|
+| `DSA2.step` | 57,348 | 406-510 ms | 16.2 s vs 15.5 s without |
+| `Arty_Z7.stp` | 6,816 | 52-87 ms | 60.6 s vs 60.4 s without (in the noise) |
+| `driver board.step` | 279 | 3-5 ms | |
+| everything else in the corpus | <300 | <12 ms | |
+
+DSA2 is the corpus worst case and the only model where the column is
+visible at all: one representation of 28,674 solids, every one of them a
+separate placed instance. ~3% of that model's digest run, and under a second
+of a full pass.
+
+### IFC
+
+**Not applied.** `ifc_regression_main.ts` has the same structural blindness
+— it hashes `model.geometry` / `voidGeometry` / `curves` / `profiles` /
+`materials` per definition, with no transform in any row — so an IFC
+placement regression is invisible to it in exactly the same way. It was left
+alone deliberately: the gap was found on STEP, an IFC column would move every
+IFC baseline as well as every STEP one, and IFC's scene builder has no
+occurrence-path equivalent, so the value would have to be defined
+differently rather than reused. Worth its own issue, not this one's diff.
+
+
 ## Status / cross-refs
 
 - #308 root cause + fix: `ap214_geometry_extraction.ts` `doTransforms` /
@@ -169,3 +251,6 @@ corpus, same shape):
   design. Update that checklist as items land.
 - glb-snapshot-goldens.md is the complementary (GLB-byte) golden effort;
   shares determinism concerns, different artifact.
+- #583 is the placement column above; #582 is where the blindness was
+  found, and is the source of the two placement-sensitive fixtures in
+  `data/`.
