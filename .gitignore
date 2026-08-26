@@ -50,3 +50,6 @@ benchmarks/*private
 
 # SessionStart hook per-step completion stamps (runtime state)
 .claude/.bootstrap/
+
+# Subagent git worktrees (transient scaffolding created per agent run)
+.claude/worktrees/

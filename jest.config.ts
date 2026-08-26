@@ -161,8 +161,22 @@ const config: Config = {
   ],
 
   // An array of regexp pattern strings that are matched against all test paths, matched tests are skipped
+  //
+  // Both entries are load-bearing, and the first one was not doing anything
+  // before: it was written Windows-style (backslash-delimited), so it never
+  // matched a POSIX path and node_modules was never actually excluded.
+  //
+  // The second matters because `testMatch` globs `**/compiled/**` from the
+  // repo root, and every per-agent git worktree under `.claude/worktrees/`
+  // carries its own `compiled/` tree. Without this, `yarn test` runs the
+  // whole suite once per worktree present -- with several checked out that is
+  // enough to wedge the husky pre-commit hook for over an hour, or OOM it.
+  // `.claude/` is gitignored (see "Ignore the per-agent worktree scaffolding
+  // under .claude/"); those copies are stale by construction and are never
+  // the code under test.
   testPathIgnorePatterns: [
-     "\\\\node_modules\\\\"
+     "/node_modules/",
+     "/\\.claude/"
   ],
 
   // The regexp pattern or array of patterns that Jest uses to detect test files
