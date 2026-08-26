@@ -723,6 +723,24 @@ jobs:
           echo "Changed baseline files: ${CHANGED}" >> "$GITHUB_STEP_SUMMARY"
           git -c color.ui=never diff --stat -- regression/test_models benchmarks | tail -40 >> "$GITHUB_STEP_SUMMARY" || true
 
+      # The bless PR names the release it blesses, not just the ref that
+      # triggered it: on an `rc-*` tag the version is what the tag carries
+      # (`rc-1.564.1548` -> `1.564.1548`), and the short SHA disambiguates a
+      # version that gets re-cut after a bad rc. `workflow_dispatch` has no rc
+      # version at all — `ref_name` is a branch there ('main'), so it stands in
+      # for the version rather than leaving the title half-empty.
+      - name: Compose the re-bless label
+        id: rebless_label
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          case "$REF_NAME" in
+            rc-*) VERSION="${REF_NAME#rc-}" ;;
+            *)    VERSION="$REF_NAME" ;;
+          esac
+          echo "label=${VERSION} (${SHA:0:8})" >> "$GITHUB_OUTPUT"
+
       # Open (or update) a PR in the target repo with only the baseline diff.
       # add-paths scopes the commit to regression/test_models so nothing else
       # in the checkout (e.g. LFS smudge artifacts) can leak in.
@@ -739,8 +757,13 @@ jobs:
             benchmarks
           branch: rebless/${{ github.run_id }}
           base: main
-          commit-message: "Bless regression baselines (conway ${{ github.ref_name }} @ ${{ github.sha }})"
-          title: "Bless regression baselines: conway ${{ github.ref_name }}"
+          # Subject matches the PR title; the full ref and SHA stay in the body
+          # so nothing the old one-line message carried is lost.
+          commit-message: |
+            Bless regression baselines: ${{ steps.rebless_label.outputs.label }}
+
+            conway ${{ github.ref_name }} @ ${{ github.sha }}
+          title: "Bless regression baselines: ${{ steps.rebless_label.outputs.label }}"
           body: |
             Full-corpus digest regression for conway **`${{ github.ref_name }}`**
             ([`${{ github.repository }}@${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}),
