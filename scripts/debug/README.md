@@ -184,8 +184,62 @@ outliers" readings from probes attached to a seam the model did not take.
   combined with sub-micron gaps it identifies triangulation-failure
   candidates.
 - **A `## conway diagnostics` section** appears when the load logged
-  warnings or errors, counted by message. Error churn between two runs of
-  the same model is itself a regression signal.
+  warnings or errors, counted by message. **The counts are currently
+  always `1x` and the churn signal does not work** — `Logger.log()` calls
+  the sink only on a message's first occurrence while proxying every
+  occurrence, and this report builds its diagnostics from `setSink`, so
+  fifty identical errors and one identical error are indistinguishable
+  here (conway#590). Until that is fixed, treat the section as "which
+  messages appeared", never "how many times".
+
+
+## Judging whether geometry is healthy
+
+There is no single number for this, and the one that looks like it is one
+is a trap.
+
+**Triangles-per-vertex is not a health signal on its own.** A closed
+manifold mesh sits near `t/v = 2` by Euler, so it is tempting to read
+2.00 as "closed shell" and anything lower as "open". That reading is
+valid **only when the emitting-face count and the refinement depth are
+held constant**, because a face contributes its own unwelded vertices at
+a patch-like `t/v ≈ 1` — so *adding* faces pulls a solid's ratio down
+whether or not the shell closed.
+
+Measured on `Orbiter_v1.1_Gear_7.5.step` (conway#599): solid 964 sat at
+`t/v 1.76` with **798 boundary edges** — it was never a closed shell at
+any point. Meanwhile solid 975 held `t/v 2.00` with **0** boundary edges
+across two builds. The ratio was tracking how many faces emit and how
+finely each is refined, not closedness. It is a fine signal for a change
+that moves vertices without changing face counts (conway#593, a parser
+fix), and invalid for one that makes previously-empty faces start
+emitting — which is most geometry work.
+
+Boundary-edge count is not a clean substitute either: refinement adds
+per-face vertices that fail to pair, so it moves for reasons unrelated to
+closedness.
+
+What does hold up, and what a before/after should report:
+
+| Signal | Reads |
+|---|---|
+| **Bounding box per solid** | Whether anything was *displaced*. Identical bounds mean any area change is interior — overlapping or coincident triangles, not geometry escaping the part. |
+| **Degenerate-triangle count** | Zero-area triangles collapsing is unambiguous progress. conway#599 took solid 971 from **33,596 → 32**, 954 from 7,740 → 4, 975 from 620 → 0. |
+| **Surface area on known-healthy solids** | Should hold. 954 moved 4143.4 → 4142.3 (0.03%) across a change that rewrote every trimmed curve in the model. |
+| **Chord count** — trimmed extractions returning ≤2 points | A straight line where an arc belongs. Orbiter 1158 → 51, `nema-23-76mm.step` 24 → 0. |
+
+None of those proves the shells closed. Say so rather than implying it:
+a list of four improving signals is not a closedness claim, and a reader
+will infer one if you let them.
+
+**And look at it.** `render_glb.cjs --pair` shares one camera across both
+builds, so a percentage plus two images settles in seconds what a table
+argues about for an hour. On `Right_Hand.step` the same change read as
+18.71% of pixels — and the images showed a faceted low-poly shell
+becoming a smooth one, which no digest row conveys. On Orbiter it read as
+1.8% with **bounding boxes identical to the last decimal**, which is how
+we knew a solid whose area went 367 → 65,786 had not moved anything: the
+excess was coincident duplicate triangles, invisible to a viewer.
 
 
 ## Rules this tooling encodes
@@ -199,6 +253,36 @@ they apply to any new instrumentation you write, not just to this script.
    you named on `--stage` produced nothing. Before believing a null
    result from *any* new probe, run it against a case you know is
    non-zero.
+
+   This is a whole family, and it cost four separate detours in a single
+   day of conway#599 / #594 work. Each time, a signal that looked like
+   coverage was not, and each time the broken version was **silent**
+   rather than loud:
+
+   - **A stale prebuilt wasm.** `yarn wasm-prebuilt` checks whether the
+     Dist files are *present*, not whether they match the current
+     `conway-geom` pin, and reports `already present — skipping`. Three
+     geometry suites failed against binaries several commits old. Use
+     `FORCE=1 yarn wasm-prebuilt` after any submodule change.
+   - **A format string.** `printf`-ing a `double` through `%zu` printed
+     `cap=0` for every face, which made "169 of 169 faces hit the
+     amplification cap" look true when it was comparing against zero.
+   - **A stale check-run.** A PR's checks read green while belonging to a
+     commit two behind the head; `get_check_runs` on the head returned
+     `total_count: 0` at the same moment. **Verify a check-run's
+     `head_sha`, not the colour of the tick.**
+   - **A watcher that could never fire.** Poll loops built on
+     `curl api.github.com` were parsing
+     `{"message": "GitHub access is not enabled for this session."}` and
+     reporting nothing — indistinguishable from "still running". In this
+     environment the GitHub REST API is reachable *only* through the
+     authorized MCP tools; `curl` against it always fails that way.
+
+   Note that the rule above does not quite cover the last one: a watcher
+   has no natural non-zero case to validate against, because its normal
+   output *is* nothing. The check there is different in kind — **assert
+   the transport works at all before trusting its silence.** One
+   authenticated call that must return data.
 2. **Never hold a `HEAPF32` view across extraction.** Wasm memory growth
    detaches the buffer and a held view silently reads zeroes — one of the
    two false negatives above. Read vertices through `getPoint()` and
