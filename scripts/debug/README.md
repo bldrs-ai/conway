@@ -223,7 +223,7 @@ What does hold up, and what a before/after should report:
 
 | Signal | Reads |
 |---|---|
-| **Bounding box per solid** | Whether anything was *displaced*. Identical bounds mean any area change is interior — overlapping or coincident triangles, not geometry escaping the part. |
+| **Bounding box per solid** | Only whether the six axis-aligned *extrema* moved. Identical bounds do not mean geometry held still: anything can be displaced, deformed or self-intersecting inside an unchanged box. They rule out geometry escaping the part, and nothing more — pair them with a render or per-vertex/topology evidence before concluding *what* changed. |
 | **Degenerate-triangle count** | Zero-area triangles collapsing is unambiguous progress. conway#599 took solid 971 from **33,596 → 32**, 954 from 7,740 → 4, 975 from 620 → 0. |
 | **Surface area on known-healthy solids** | Should hold. 954 moved 4143.4 → 4142.3 (0.03%) across a change that rewrote every trimmed curve in the model. |
 | **Chord count** — trimmed extractions returning ≤2 points | A straight line where an arc belongs. Orbiter 1158 → 51, `nema-23-76mm.step` 24 → 0. |
@@ -237,9 +237,12 @@ builds, so a percentage plus two images settles in seconds what a table
 argues about for an hour. On `Right_Hand.step` the same change read as
 18.71% of pixels — and the images showed a faceted low-poly shell
 becoming a smooth one, which no digest row conveys. On Orbiter it read as
-1.8% with **bounding boxes identical to the last decimal**, which is how
-we knew a solid whose area went 367 → 65,786 had not moved anything: the
-excess was coincident duplicate triangles, invisible to a viewer.
+1.8% with **bounding boxes identical to the last decimal**. Neither
+signal alone identified a solid whose area went 367 → 65,786; the two
+together did. The bounds said nothing had escaped the part, and the
+paired images said the visible surface was unchanged — leaving
+coincident duplicate triangles as what the extra area had to be. Bounds
+on their own would have been consistent with a badly deformed solid.
 
 
 ## Rules this tooling encodes
@@ -277,17 +280,26 @@ they apply to any new instrumentation you write, not just to this script.
      reporting nothing — indistinguishable from "still running". In this
      environment the GitHub REST API is reachable *only* through the
      authorized MCP tools; `curl` against it always fails that way.
-   - **A green run whose job never ran.** GitHub aggregates `skipped`
-     into a run's success, so a workflow can conclude green having
-     silently omitted the thing you launched it for. `rc-regression.yml`
-     gates its perf snapshot on the ref being an `rc-*` tag, so a
-     `workflow_dispatch` run of it goes green with no benchmark output
-     at all — which is exactly how a dispatch run got read as "the
-     baselines are captured". The colour of a *run* is not a statement
-     about any particular job: read the job's own conclusion, and treat
-     `skipped` as the absence of evidence it is. The converse also
-     holds — a run can read red because a job that gates nothing failed
-     (`perf-three-*`, conway#602), which says nothing about the code.
+   - **A green run that quietly did not do the thing.** This is the
+     nastiest of the five, because reading conclusions does not catch
+     it. `rc-regression.yml`'s `Bless perf snapshot and delta` step runs
+     on *every* rc-regression run — it is gated only on `!cancelled()` —
+     and on a non-`rc-*` ref it takes an early branch inside its own
+     shell: `::notice::` and `exit 0`. So the step succeeds, the job
+     succeeds, the run is green, and no blessed snapshot directory is
+     committed. `perf.csv` is still produced and uploaded as an
+     artifact, so even "was there benchmark output at all?" answers yes.
+     That is how a `workflow_dispatch` run got read as "the baselines
+     are captured" when nothing had been blessed. **Check that the
+     artifact you wanted exists, not that the job meant to produce it
+     went green.**
+
+     The easier cousin is a job that never ran: GitHub folds `skipped`
+     into a run's success, and the converse holds too — a run reads red
+     when a job that gates nothing fails (`perf-three-*`, conway#602).
+     So a *run's* colour is never a statement about a particular job.
+     Read the job's own conclusion, and treat `skipped` as the absence
+     of evidence it is.
 
    Note that the rule above does not quite cover the watcher: it
    has no natural non-zero case to validate against, because its normal
