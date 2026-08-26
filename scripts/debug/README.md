@@ -254,10 +254,10 @@ they apply to any new instrumentation you write, not just to this script.
    result from *any* new probe, run it against a case you know is
    non-zero.
 
-   This is a whole family, and it cost four separate detours in a single
-   day of conway#599 / #594 work. Each time, a signal that looked like
-   coverage was not, and each time the broken version was **silent**
-   rather than loud:
+   This is a whole family, and it cost five separate detours across the
+   conway#599 / #594 work and the rc that carried it. Each time, a
+   signal that looked like coverage was not, and each time the broken
+   version was **silent** rather than loud:
 
    - **A stale prebuilt wasm.** `yarn wasm-prebuilt` checks whether the
      Dist files are *present*, not whether they match the current
@@ -277,8 +277,19 @@ they apply to any new instrumentation you write, not just to this script.
      reporting nothing — indistinguishable from "still running". In this
      environment the GitHub REST API is reachable *only* through the
      authorized MCP tools; `curl` against it always fails that way.
+   - **A green run whose job never ran.** GitHub aggregates `skipped`
+     into a run's success, so a workflow can conclude green having
+     silently omitted the thing you launched it for. `rc-regression.yml`
+     gates its perf snapshot on the ref being an `rc-*` tag, so a
+     `workflow_dispatch` run of it goes green with no benchmark output
+     at all — which is exactly how a dispatch run got read as "the
+     baselines are captured". The colour of a *run* is not a statement
+     about any particular job: read the job's own conclusion, and treat
+     `skipped` as the absence of evidence it is. The converse also
+     holds — a run can read red because a job that gates nothing failed
+     (`perf-three-*`, conway#602), which says nothing about the code.
 
-   Note that the rule above does not quite cover the last one: a watcher
+   Note that the rule above does not quite cover the watcher: it
    has no natural non-zero case to validate against, because its normal
    output *is* nothing. The check there is different in kind — **assert
    the transport works at all before trusting its silence.** One

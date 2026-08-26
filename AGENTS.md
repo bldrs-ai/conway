@@ -37,6 +37,15 @@ does not fail, it silently omits whatever was never compiled: merging #566
 any source with no output under `compiled/` and exits non-zero, so the
 failure is loud even if the rebuild is skipped or its buildinfo lies.
 
+The hook fires on `git commit`, not on `git merge`. A merge that creates
+a commit fires `pre-merge-commit`, which this repo does not define, so a
+merge commit lands ungated — including the routine "merge `main` into my
+branch" before pushing a rework (bldrs-ai/Share#1769). Nothing local has
+checked it, so the first real signal is CI, and because the regression
+and visual-diff jobs are draft-gated here, on a draft PR that means the
+flip to ready. To force the gate on a merge commit, `git commit --amend
+--no-edit` — that is a `git commit`, so `pre-commit` fires.
+
 `yarn build-codex-MT` takes roughly 90 seconds. When iterating on
 conway-geom, stage a set of edits and evaluate them in one build rather
 than rebuilding per edit.
