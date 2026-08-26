@@ -23,7 +23,7 @@ import { stepBufferBase } from './step_buffer_provider'
 import { StepEntityConstructorAbstract } from './step_entity_constructor'
 import StepEntityInternalReference,
 { StepEntityInternalReferencePrivate } from './step_entity_internal_reference'
-import { DanglingReferenceError } from './dangling_reference_error'
+import { unresolvedReferenceError } from './dangling_reference_error'
 import StepModelBase from './step_model_base'
 
  
@@ -388,16 +388,9 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
 
   /**
-   * Classify a reference field that failed to resolve.
-   *
-   * `getElementByExpressID` / `getTypedElementByExpressID` answer
-   * `undefined` for two opposite causes: the record is not in the index at
-   * all, or it is indexed but is the wrong entity type. A mid-parse prefix
-   * reader must tell them apart — the first may resolve once more of the
-   * file is scanned, the second never will — so the absent case gets its
-   * own error type (see {@link DanglingReferenceError}). Called only on a
-   * throwing path, so neither the extra index lookup nor the maximum-ID
-   * scan behind it costs anything in the common case.
+   * Classify a reference field that failed to resolve, against this
+   * entity's model. See {@link unresolvedReferenceError} for what the two
+   * answers mean and why they must not be conflated.
    *
    * @param expressID The reference's target, or undefined when the field
    * did not hold a reference at all (an unresolved inline element).
@@ -405,19 +398,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    */
   private unresolvedReferenceError_( expressID: number | undefined ): Error {
 
-    if ( expressID !== void 0 &&
-      this.model.resolveExpressID( expressID ) === void 0 ) {
-
-      // Hand the highest indexed ID over ONLY for a prefix index, so the
-      // message can report absence-so-far instead of claiming the record
-      // is missing from the file (conway#580). A complete model keeps the
-      // absolute wording, because there the claim is true.
-      return new DanglingReferenceError(
-          expressID,
-          this.model.indexIsPrefix ? this.model.maxIndexedExpressID : void 0 )
-    }
-
-    return new Error( 'Value in STEP was incorrectly typed' )
+    return unresolvedReferenceError( this.model, expressID )
   }
 
   /**
@@ -592,6 +573,33 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
   /**
    * Extract a reference from a buffer, without type check.
    *
+   * One entry of a SELECT array, and — unlike its typed sibling
+   * {@link extractBufferElement} — it deliberately still answers
+   * `undefined` rather than classifying (conway#546).
+   *
+   * `undefined` here is **load-bearing signal, not a failure**. A select
+   * whose members include a typed ENUM is generated as a nullish fallback
+   * on this exact call:
+   *
+   * ```ts
+   * this.extractBufferReference( buffer, cursor, endCursor ) ??
+   *   IfcNullStyleDeserializeStep( buffer, stepEnterTypedValue( … ), … )
+   * ```
+   *
+   * so `IFCNULLSTYLE(.NULL.)` reaches its deserialiser only because this
+   * returns `undefined` for an entry that is not a reference at all. Two
+   * such sites exist (`IfcPresentationStyleAssignment.Styles` and the
+   * AP214 `presentation_style_assignment.styles`), both covered by
+   * `ifc_typed_select_enum.test.ts` / `ap214_typed_select_enum.test.ts` —
+   * throwing here breaks all four of those tests.
+   *
+   * Not classifying costs nothing for the defect this was written for: no
+   * hop of any placement chain is a select array. `IfcGridPlacement` →
+   * `IfcVirtualGridIntersection.IntersectingAxes` → `IfcGridAxis` →
+   * `AxisCurve` → `IfcPolyline.Points` are typed reference fields
+   * throughout, so they route through `extractElement` and
+   * `extractBufferElement` and never through here.
+   *
    * @param buffer The buffer to extract from.
    * @param cursor The position in the buffer to extract from.
    * @param endCursor The ending cursor.
@@ -613,6 +621,13 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
 
   /**
    * Extract a flat array of references
+   *
+   * Tolerant by construction: an entry that does not resolve is pushed as
+   * `undefined`, which is why the element type says so. Unchanged by
+   * conway#546, and the second reason that change left
+   * {@link extractBufferReference} alone — this is its one caller outside
+   * the generated code, and making it throw would have altered what every
+   * consumer of a reference array gets back.
    *
    * @param offset The offset in the vtable to extract from
    * @param baseOffset The base offset in the vtable to extract from
@@ -827,12 +842,33 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
    * Used by other extraction methods with wrappers to perform
    * semantically correct extraction.
    *
+   * One entry of a typed reference array. Unresolved entries throw,
+   * classified: `DanglingReferenceError` when the record is simply absent
+   * from the index, an untagged `Error` when it is indexed but is the
+   * wrong entity type (conway#546).
+   *
+   * It used to return `undefined` for both, and each of the 153 generated
+   * call sites answered that with an identical bare
+   * `Error( MISTYPED_VALUE_MESSAGE )` — so a reference-array hop of a
+   * placement chain that had merely not been scanned yet was
+   * indistinguishable from a malformed one. `extractPlacementStrict_` can
+   * only re-tag a `DanglingReferenceError`, so the preview channels
+   * counted such a product as deferred and never queued it for retry, and
+   * their forward-only unit cursor meant it could not preview at all
+   * (conway#543's classification narrowing, found by codex round 3).
+   *
+   * There is no `optional` arm and so no `nullOnErrors` interaction to
+   * preserve: unlike {@link extractElement}, an array entry is never
+   * absent-by-design. The generated `=== void 0` guards are unreachable
+   * now rather than wrong, and the return type keeps its `| undefined` so
+   * they stay valid TypeScript.
+   *
    * @param buffer The buffer to extract from
    * @param cursor The cursor to extract from.
    * @param endCursor The end of the memory space to extract from.
    * @param entityConstructor The entity constructor to use for type checks.
-   * @return {StepEntityBase | undefined } The extracted element, or null if optional
-   * and this value isn't specified.
+   * @return {StepEntityBase | undefined } The extracted element. Never
+   * undefined — see above.
    */
   protected extractBufferElement< T extends StepEntityConstructorAbstract< EntityTypeIDs > >(
       buffer: Uint8Array,
@@ -849,7 +885,7 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
           extractInlineElementAddress( buffer, cursor, endCursor ), entityConstructor )
 
     if ( value === void 0 ) {
-      return
+      throw this.unresolvedReferenceError_( expressID )
     }
 
     return value as InstanceType< T >

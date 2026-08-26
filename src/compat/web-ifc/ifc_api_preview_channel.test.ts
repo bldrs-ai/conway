@@ -157,6 +157,25 @@ describe( 'ColumnarIndexSink.snapshot', () => {
   } )
 } )
 
+/* data/grid_placement_tail_axes.ifc, by construction — see that file's
+ * header comment. Exact rather than "greater than": the fixture is
+ * synthetic and committed alongside this test, and the counts are what pin
+ * that the MISTYPED product did not get retried with the three that should
+ * have. */
+const GRID_TAIL_GRIDS = 3
+const GRID_TAIL_DEFERRING = 4
+
+/* The deferrals a longer prefix can fix: #200 on IfcPolyline.Points, #500
+ * on IfcVirtualGridIntersection.IntersectingAxes, and #1000 on the
+ * IfcGrid.UAxes read inside gridByAxis. All three are reference arrays.
+ * #800 is mistyped and must stay out of this count. */
+const GRID_TAIL_RETRYABLE = 3
+
+/* One unit per tick (tickMaxAttempts_ = 1), so a generation of seven needs
+ * at least seven; a few spare so the assertions are about the channel. */
+const GRID_TAIL_TICKS_TO_EXHAUST = 16
+
+
 describe( 'StreamedPreviewChannel', () => {
 
   test( 'a full drain reproduces the classic instance set exactly', async () => {
@@ -655,6 +674,101 @@ describe( 'StreamedPreviewChannel', () => {
 
     expect( payloads.length ).toBeGreaterThan( 0 )
     expect( channel.previewYield.firstMeshMs ).toBeGreaterThanOrEqual( 0 )
+
+    channel.stop()
+  }, 240000 )
+
+
+  test( 'a grid-placed product blocked on a reference array is retried', () => {
+
+    // The resident twin of the store channel's conway#546 test — the two
+    // channels carry independent copies of the deferral catch
+    // (streamed_preview_channel.ts:322 against store_preview_channel.ts:498),
+    // so a classification fix has to be demonstrated on both or half of it
+    // is untested.
+    //
+    // data/grid_placement_tail_axes.ifc writes the reference-array hops of
+    // a grid placement chain after the products that need them:
+    // IfcPolyline.Points (#200), IfcVirtualGridIntersection.IntersectingAxes
+    // (#500), and IfcGrid.UAxes as read by gridByAxis's inverse scan
+    // (#1000). Product #800 is the counterweight — its intersection names
+    // an IFCDIRECTION where an IFCGRIDAXIS belongs, which no amount of
+    // extra parse can fix.
+    const text =
+      fs.readFileSync( 'data/grid_placement_tail_axes.ifc', 'utf8' )
+    const lines = text.split( '\n' )
+    const tailAt = lines.findIndex( ( line ) => line.startsWith( '/* ---- TAIL' ) )
+
+    expect( tailAt ).toBeGreaterThan( 0 )
+
+    const prefixText =
+      `${lines.slice( 0, tailAt ).join( '\n' )}\nENDSEC;\nEND-ISO-10303-21;\n`
+    const prefixBytes = new Uint8Array( Buffer.from( prefixText, 'latin1' ) )
+    const fullBytes = new Uint8Array( Buffer.from( text, 'latin1' ) )
+
+    const sink = new ColumnarIndexSink<EntityTypesIfc>()
+    const payloads: PreviewMeshPayload[] = []
+
+    // The source buffer is the WHOLE file throughout, as it is on a
+    // resident open — only the index grows.
+    const channel = new StreamedPreviewChannel(
+        fullBytes, conwayGeometry, sink, ifcPreviewAdapter(), true,
+        ( mesh ) => payloads.push( mesh ), void 0, void 0, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( prefixBytes ),
+        IfcStepParser.Instance,
+        POOL,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    for ( let tick = 0; tick < GRID_TAIL_TICKS_TO_EXHAUST; ++tick ) {
+      internals.lastInlineTick_ = 0
+      channel.maybeTickInline()
+    }
+
+    const afterPrefix = channel.previewYield
+
+    expect( afterPrefix.emitted ).toBe( GRID_TAIL_GRIDS )
+    expect( afterPrefix.deferred ).toBe( GRID_TAIL_DEFERRING )
+
+    // THE assertion, and it reads 0 without the fix: all three array hops
+    // are records that had simply not been scanned yet, and the fourth
+    // deferral — the mistyped one — must stay out of the retry queue.
+    expect( afterPrefix.deferredOnPlacement ).toBe( GRID_TAIL_RETRYABLE )
+    expect( afterPrefix.retried ).toBe( 0 )
+    expect( payloads ).toHaveLength( 0 )
+
+    sink.reset()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( fullBytes ),
+        IfcStepParser.Instance,
+        POOL,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    for ( let tick = 0; tick < GRID_TAIL_TICKS_TO_EXHAUST; ++tick ) {
+      internals.lastInlineTick_ = 0
+      channel.maybeTickInline()
+    }
+
+    const afterFull = channel.previewYield
+
+    expect( afterFull.retried ).toBe( GRID_TAIL_RETRYABLE )
+    expect( afterFull.emitted ).toBe( GRID_TAIL_GRIDS + GRID_TAIL_RETRYABLE )
+    expect( payloads ).toHaveLength( GRID_TAIL_RETRYABLE )
+    expect( payloads.every( ( p ) => p.vertexData !== void 0 ) ).toBe( true )
+
+    // And the mistyped product never joined them.
+    expect( afterFull.deferredOnPlacement ).toBe( GRID_TAIL_RETRYABLE )
+    expect( afterFull.deferred ).toBe( GRID_TAIL_DEFERRING )
 
     channel.stop()
   }, 240000 )

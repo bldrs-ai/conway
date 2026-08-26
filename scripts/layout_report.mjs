@@ -64,11 +64,45 @@ const OPEN = 0x28
 const ZERO = 0x30
 const NINE = 0x39
 
-/* The placement CHAIN: what a placement resolves through, transitively. */
+/* The placement CHAIN: what a placement resolves through, transitively,
+ * AND what gates a product that references one directly. */
 const PLACEMENT_NAMES = new Set([
   'IFCLOCALPLACEMENT', 'IFCAXIS2PLACEMENT3D', 'IFCAXIS2PLACEMENT2D',
   'IFCCARTESIANPOINT', 'IFCDIRECTION', 'IFCGRIDPLACEMENT',
   'AXIS2_PLACEMENT_3D', 'AXIS2_PLACEMENT_2D', 'CARTESIAN_POINT', 'DIRECTION',
+])
+
+/* Types the closure expands THROUGH but which do not, by themselves, gate a
+ * product that merely references one. The grid chain below the placement,
+ * missing entirely until conway#546.
+ *
+ * IFCGRIDPLACEMENT was in the set above but nothing it references was, so
+ * the walk expanded exactly one hop and stopped at
+ * IFCVIRTUALGRIDINTERSECTION — never reaching the axes, their axis curves,
+ * or the points those bottom out in. The direction of that error is why it
+ * is worth naming: a closure that stops early makes a grid-placed product
+ * look usable SOONER than it is, so every curve below came out optimistic.
+ * The engine reads the whole chain — resolveVirtualGridIntersection walks
+ * IntersectingAxes, gridAxisLine reduces IfcGridAxis.AxisCurve to a segment
+ * of an IfcPolyline or an IfcLine.
+ *
+ * IFCVECTOR is here for the IfcLine arm alone: IfcLine.Dir is an IfcVector,
+ * which carries the IfcDirection. Curve types gridAxisLine does not reduce
+ * (IFCCIRCLE, IFCTRIMMEDCURVE, ...) are deliberately absent — the engine
+ * warns and drops the placement rather than resolving through them, so
+ * expanding them here would model a chain that is never walked.
+ *
+ * Separate from the set above because an IFCGRID references its own axes,
+ * and an IfcGrid is itself a placed product. Folding these in there made
+ * every grid look as if it could not be emitted until its axis points were
+ * scanned — which the engine does not require, since a grid places off its
+ * own IfcLocalPlacement and carries no representation. Measured on a
+ * grid-plus-swept-polyline control: with them folded in, the grid product's
+ * usable-at moved a whole decile later and the blocker attribution changed;
+ * split like this the same file reports byte-identically to before. */
+const PLACEMENT_CHAIN_ONLY_NAMES = new Set([
+  'IFCVIRTUALGRIDINTERSECTION', 'IFCGRIDAXIS', 'IFCPOLYLINE', 'IFCLINE',
+  'IFCVECTOR',
 ])
 
 /* What makes a record a PRODUCT for this purpose, as opposed to a geometry
@@ -311,6 +345,9 @@ function report(path) {
   })
   const offsetOf = new Uint32Array(maxId + 1)
   const isPlacement = new Uint8Array(maxId + 1)
+  /* The subset of isPlacement that gates a product REFERENCING it. See
+   * PLACEMENT_CHAIN_ONLY_NAMES for why the two differ. */
+  const gatesProduct = new Uint8Array(maxId + 1)
   const isProductPlacement = new Uint8Array(maxId + 1)
   const isLeaf = new Uint8Array(maxId + 1)
   let leafBytes = 0
@@ -334,8 +371,11 @@ function report(path) {
       typeIndex.set(name, slot)
     }
     typeOf[id] = slot
-    if (PLACEMENT_NAMES.has(name)) {
+    if (PLACEMENT_NAMES.has(name) || PLACEMENT_CHAIN_ONLY_NAMES.has(name)) {
       isPlacement[id] = 1
+    }
+    if (PLACEMENT_NAMES.has(name)) {
+      gatesProduct[id] = 1
     }
     if (PRODUCT_PLACEMENT_NAMES.has(name)) {
       isProductPlacement[id] = 1
@@ -483,7 +523,7 @@ function report(path) {
       if (isProductPlacement[ref] === 1) {
         hasPlacement = true
       }
-      if (isPlacement[ref] === 1) {
+      if (gatesProduct[ref] === 1) {
         const chainAt = placementResolveAt[ref]
         if (chainAt > placementAt) {
           placementAt = chainAt
@@ -497,7 +537,7 @@ function report(path) {
       for (let s = 0; s < SHARD_COUNTS.length; ++s) {
         const p = Math.max(
             bandProgress(at, SHARD_COUNTS[s]),
-            isPlacement[ref] === 1 ? shardChainProgress[s][ref] : 0)
+            gatesProduct[ref] === 1 ? shardChainProgress[s][ref] : 0)
         if (p > shardReady[s]) {
           shardReady[s] = p
         }
