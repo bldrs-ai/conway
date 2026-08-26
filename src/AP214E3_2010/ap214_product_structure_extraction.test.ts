@@ -297,3 +297,45 @@ describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
     expect( solids.map( ( solid ) => solid.name ) ).toEqual( [ 'Body1', 'Body2' ] )
   } )
 } )
+
+const UNNAMED_FIXTURE = 'data/ap214-unnamed-product-labels.step'
+const UNNAMED_ROOT_COUNT = 3
+
+describe( 'AP214ProductStructureExtraction labels for products with no name', () => {
+
+  // The regression itself. `product_definition.name` is a DERIVED attribute
+  // whose generated getter calls `get_name_value()`, an unimplemented stub that
+  // throws; resolveLabel used to end on it, so the first product that reached
+  // that line unwound extractProductStructure and Share got no NavTree at all
+  // for the model (red 'Error: Function not implemented.', tree collapsed to
+  // 'AuxScene > Object'). Every root in this fixture reaches that line.
+  test( 'yields a tree rather than throwing', () => {
+
+    expect( () => extractStructure( UNNAMED_FIXTURE ) ).not.toThrow()
+
+    expect( extractStructure( UNNAMED_FIXTURE ).length ).toBe( UNNAMED_ROOT_COUNT )
+  } )
+
+  test( 'falls back to the part number on PRODUCT.id', () => {
+
+    const [ root ] = extractStructure( UNNAMED_FIXTURE )
+
+    expect( root.name ).toBe( 'NIST PMI CTC 04 ASME1' )
+  } )
+
+  test( 'falls back to PRODUCT_DEFINITION.id when the product carries no id', () => {
+
+    const root = extractStructure( UNNAMED_FIXTURE )[1]
+
+    expect( root.name ).toBe( 'BRACKET-REV-C' )
+  } )
+
+  test( 'is empty, not whitespace, when the file names the product nowhere', () => {
+
+    const root = extractStructure( UNNAMED_FIXTURE )[2]
+
+    // '' lets a consumer substitute a type label; '   ' would render as a blank
+    // NavTree row. nist_stc_09_asme1_ap242-e3 is this case for real.
+    expect( root.name ).toBe( '' )
+  } )
+} )
