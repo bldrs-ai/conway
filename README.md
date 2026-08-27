@@ -240,24 +240,84 @@ composite action) and upload the detail CSV as a workflow artifact.
 # Releases
 
 **Releases are continuous.** Every green merge to `main` auto-tags and
-publishes to npm at the default `latest` dist-tag. The version is
-`<major>.<PR>.<commit>` where:
+publishes to npm at the `latest` dist-tag. The version is
+`<major>.<commit>.<issue>-g<shorthash>` where:
 
 - `major` comes from `package.json` on `main` (only the first segment;
-  the other two are recomputed on every release)
-- `PR` is the GitHub PR number that produced the merge commit
+  everything after it is recomputed on every release)
 - `commit` is `git rev-list HEAD --count` at the merge commit (the
   global commit position)
+- `issue` is the **first `#N` in the merge commit message**. Under this
+  repo's `#<issue>: description (#<pr>)` title convention that is the
+  issue number the merge closes — not the PR number, which the
+  squash-merge appends second. A title with no issue ref yields that
+  appended PR number instead, and a message with neither (a direct push
+  to `main`) falls back to `0`
+- `shorthash` is the first 8 characters of `git rev-parse HEAD`, so a
+  published version names the exact commit it was built from. It is a
+  **truncation**, not `git rev-parse --short` — see below
 
-So a merge of PR #321 at the 985th commit on main publishes as
-`1.321.985`. Each release is uniquely traceable to a PR and a commit.
+So a merge closing issue #321 at the 985th commit on `main` publishes
+as `1.985.321-g1a2b3c4d`. No PR number is encoded, and none is needed:
+the hash names the commit, and the commit names its PR.
+
+**Why the commit count is the minor segment.** npm refuses to publish a
+version below the highest one ever published for the package unless the
+dist-tag is named explicitly, and issue/PR numbers are *not* monotonic —
+they land out of order, so the old `<major>.<issue>.<commit>` scheme
+could compute a version below the all-time maximum and hard-fail the
+release (conway#533). The commit count is strictly monotonic on `main`,
+so with it in the minor slot every release is strictly greater than the
+last. The issue number keeps its traceability value in the patch slot,
+where it cannot invert the ordering.
+
+**Why the hash is truncated, not abbreviated.** Every git abbreviation
+— auto-abbrev *and* `--short=N` — is a **minimum** width that git grows
+to keep the result unique against the current object database. On git
+2.43, `git rev-parse --short=1 HEAD` returns four characters, not one;
+by the same rule `--short=8` starts returning nine as soon as two
+objects share an eight-character prefix. Either would compute a
+*different* version string for the same commit as the repo grows, which
+is exactly the reproducibility the hash is there to provide. Truncating
+the full hash depends only on the commit.
+
+The tradeoff: a fixed truncation *can* collide, where a git
+abbreviation cannot. That is acceptable here — the commit count in the
+minor segment is already unique per commit on `main`, so the hash is a
+convenience ref for a human, not the identifying key. A collision would
+make two versions share a suffix; it would not make them equal or
+misorder them.
+
+**Why `-g` and not a bare hash.** SemVer forbids a leading zero in an
+all-numeric prerelease identifier, so a short hash like `0512345` would
+make the version invalid and fail the publish (~0.4% of commits). The
+`g` prefix is the `git describe` convention and makes the identifier
+alphanumeric. And the hash cannot be a fourth dotted segment
+(`1.985.321.1a2b3c4d`): SemVer is exactly three numeric components and
+npm rejects anything else.
+
+**Consumers must pin exactly.** The `-g<hash>` suffix makes every
+published version a SemVer *prerelease*, and `^`/`~` ranges never match
+a prerelease. Share already pins conway exactly
+(`"@bldrs-ai/conway": "1.594.1554"`); any other consumer must do the
+same or install via the `latest` dist-tag (`yarn add
+@bldrs-ai/conway@latest`).
 
 The auto-publish job lives in `.github/workflows/build.yml` and runs as
 `needs: [build, run-ifc-regression]` on `push: branches: [main]`. It
-parses the PR number from the merge commit message, stamps the
+parses the issue number from the merge commit message, stamps the
 computed version into `package.json` + `src/version/version.ts` in
-CI's working tree (not committed back), rebuilds, publishes to npm,
-and then tags the merge commit.
+CI's working tree (not committed back), rebuilds, publishes to npm
+with an explicit `--tag latest`, and then tags the merge commit.
+
+The `--tag latest` is unconditional and has to be: npm never applies
+`latest` *implicitly* to a prerelease, and every version is one now.
+(The step used to probe `npm view @bldrs-ai/conway@latest version` and
+only pass `--tag latest` when the new version lost the comparison. That
+guard was wrong twice over — npm compares against the highest version
+ever published, not against the `latest` dist-tag, and the probe failed
+*open*, falling back to `0.0.0` on any error and taking the implicit
+path.)
 
 **Auth:** npm Trusted Publishing via GitHub OIDC. A Trusted Publisher
 configured at npmjs.com on `@bldrs-ai/conway` is bound to this repo +
@@ -275,14 +335,14 @@ gets a short-lived publish token per run via OIDC.
 ### Bumping major
 
 Edit the `version` field in `package.json` on a PR — only the first
-segment matters (the `PR` and `commit` parts are recomputed). For
-example, change `"version": "1.0.0"` to `"version": "2.0.0"` to start
-the `2.x.x` line. The first auto-publish after that lands ships
-`2.<PR>.<commit>`.
+segment matters (everything after it is recomputed). For example,
+change `"version": "1.0.0"` to `"version": "2.0.0"` to start the
+`2.x.x` line. The first auto-publish after that lands ships
+`2.<commit>.<issue>-g<hash>`.
 
-There is no minor bump — `PR` lives in that slot — so increasing
-sequential versions across the `1.x` line look like `1.300.x`,
-`1.301.x`, etc., as PRs land.
+There is no hand-rolled minor bump — the commit count lives in that
+slot — so sequential versions across the `1.x` line look like
+`1.1556.546-g3eae7637`, `1.1557.610-g9f81cd0a`, etc., one per merge.
 
 ### Rolling into headless-three and Share
 The same flow applies to both — do **H3 first, then Share**:

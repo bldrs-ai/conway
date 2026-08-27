@@ -9,6 +9,7 @@ performance investigation needs already exists here.
 | `render_glb.cjs` | GLB → PNG with a pure-JS software rasterizer. No browser, no native deps, bit-deterministic across machines. `--pair` renders before/after with one shared camera |
 | `visual_diff_report.cjs` | Per-model before/after image comparison for a PR's regression run |
 | `gen_delta_csv.cjs`, `run_gen_deltas.cjs` | Digest CSV deltas between two conway versions |
+| `version_order.cjs` | Ordering for engine version strings and the `conway<version>_<repo>` benchmark directory names. Shared by `run_gen_deltas.cjs` and `bless_perf_snapshot.cjs` so they cannot disagree about which snapshot is newer; handles the `-g<shorthash>` prerelease suffix and the two-component `webifc1.4` shape |
 | `benchmark.cjs` | Timing sweep over a model corpus |
 | `generate_flame_graph.cjs` | Flame graph from a `yarn cli-profile` run |
 | `stream_corpus_sweep.mjs` | Streaming-loader sweep across the corpus |
@@ -18,7 +19,7 @@ performance investigation needs already exists here.
 | `code-gen.cjs`, `gen-web-ifc-types.cjs` | Schema code generation |
 | `extract-wasm-dependencies.cjs`, `fetch-prebuilt-wasm.cjs`, `fd-patch.cjs` | Build plumbing |
 | `check-compiled-fresh.cjs` | Commit-gate guard: names any TypeScript source with no output under `compiled/`. Jest runs over `compiled/`, so an uncompiled test is absent from the run rather than failing it |
-| `firestore_*.py`, `upload_to_firestore.py`, `updateVersion.mjs` | Release and corpus-data plumbing |
+| `firestore_*.py`, `upload_to_firestore.py` | Corpus-data plumbing |
 
 Scripts here are not covered by `yarn lint`, which runs over `src` only.
 
