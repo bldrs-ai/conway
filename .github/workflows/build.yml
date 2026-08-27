@@ -52,8 +52,9 @@ on:
     # run) — but per-commit perf is redundant while perf is actively reviewed
     # per-model at PR time. Now a full perf sweep runs only when a human
     # blesses a prod-worthy point by pushing an `rc-*` tag. auto-publish's
-    # own `<version>` tags are numeric (e.g. 1.399.1234) and do NOT match
-    # `rc-*`, so continuous-release tagging never triggers this path.
+    # own `<version>` tags start with the major segment (e.g.
+    # 1.1556.546-g3eae763) and do NOT match `rc-*`, so continuous-release
+    # tagging never triggers this path.
     tags:
       - 'rc-*'
   # Manual runs from any branch (Actions > CI > Run workflow) so the
@@ -77,18 +78,18 @@ on:
 # when a newer one joins, so merging three commits inside one pipeline window
 # drops the middle one's run and skips that commit's release.
 #
-# That is the lesser problem. The serialization is what keeps auto-publish's
-# versions monotonic: two main runs publishing concurrently can land out of
-# order, and the out-of-order path below (`npm publish --tag latest`, ~line
-# 1696) then deliberately drags npm's `latest` BACK onto the older commit,
-# shipping it to every consumer.
+# That is the lesser problem. The serialization is what keeps npm's `latest`
+# pointing at the newest commit: auto-publish publishes with an unconditional
+# `--tag latest` (see the publish step), so two main runs racing can land out
+# of order and leave `latest` on the OLDER commit, shipping it to every
+# consumer. Since conway#533 the version's minor segment is the commit count,
+# so an out-of-order publish no longer *fails* — it just mis-points the tag.
 #
-# Note the dropped commit's release is NOT simply re-runnable — re-running it
-# later computes a version below the one already published, which lands on
-# that same `--tag latest` branch and causes the exact regression the
-# serialization is here to prevent. Skip the release, or fix the publish step
-# to be ordering-safe (which is what making these parallel needs anyway).
-# Both tracked in conway#468.
+# Same caveat for a dropped commit's release: re-running it later publishes a
+# version below the one already on `latest` and, with `--tag latest`
+# unconditional, drags the tag backwards. Skip the release, or make the
+# publish step ordering-safe (which is what making these parallel needs
+# anyway). Both tracked in conway#468.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -1674,14 +1675,33 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Continuous release: on every successful push to main, publish to npm and
-  # tag the commit. Version is <major>.<PR>.<commit>:
+  # tag the commit. Version is <major>.<commit>.<PR>-g<shorthash>:
   #   major  - first segment of package.json's version (manual bump). The
   #            minor/patch in package.json/version.ts are an unstamped 1.0.0
   #            placeholder on main and are ignored here - both are recomputed
   #            below, so only edit the major segment to roll a major version.
-  #   PR     - PR number parsed from the merge commit message (#N)
-  #   commit - 'git rev-list HEAD --count' at the merge commit
-  # So every green merge ships a uniquely-traceable patch to @latest.
+  #   commit - 'git rev-list HEAD --count' at the merge commit. In the MINOR
+  #            slot because it is the only strictly monotonic segment we have,
+  #            and npm compares a new version against the HIGHEST-EVER
+  #            published one. It used to sit in the patch slot behind the
+  #            non-monotonic PR number, which let an out-of-order merge compute
+  #            a version below the all-time max and hard-fail the publish
+  #            (conway#533).
+  #   PR     - PR number parsed from the merge commit message (#N). Non-
+  #            monotonic (PRs merge out of order), so it is informational only
+  #            and lives in the patch slot where it can't invert the ordering.
+  #   hash   - 'git rev-parse --short HEAD', prefixed with a literal 'g' as
+  #            `git describe` does. The prefix is load-bearing, not cosmetic:
+  #            semver forbids leading zeros in a purely numeric prerelease
+  #            identifier, so a hash like 0512345 would be an INVALID version
+  #            and hard-fail the publish (~0.4% of commits). It gives a
+  #            published version a portable ref back to the exact commit.
+  # So every green merge ships a uniquely-traceable, strictly increasing
+  # version to @latest.
+  #
+  # Consequence: the '-g...' suffix makes every published version a semver
+  # PRERELEASE, which '^'/'~' ranges never match. Consumers must pin exactly
+  # (Share does) or install via the 'latest' dist-tag.
   #
   # Auth: npm Trusted Publishing via GitHub OIDC. The trusted publisher must
   # be configured on npmjs.com (Package → Settings → Trusted Publisher) and
@@ -1731,16 +1751,23 @@ jobs:
             PR_NUM=0
           fi
           COMMIT=$(git rev-list HEAD --count)
-          NEW_VERSION="${MAJOR}.${PR_NUM}.${COMMIT}"
+          # 'g' prefix per git-describe convention. Required: semver rejects a
+          # leading zero in an all-numeric prerelease identifier, and ~0.4% of
+          # short hashes are all digits with a leading zero.
+          HASH="g$(git rev-parse --short HEAD)"
+          NEW_VERSION="${MAJOR}.${COMMIT}.${PR_NUM}-${HASH}"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, PR=${PR_NUM}, commit=${COMMIT})"
+          echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, commit=${COMMIT}, PR=${PR_NUM}, hash=${HASH})"
 
       - name: Stamp version into package.json + version.ts
         env:
           NEW_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           perl -i -pe "s/(\"version\":\s*)\"[^\"]+\"/\$1\"$NEW_VERSION\"/" package.json
-          perl -i -pe "s/Conway( Web-Ifc Shim)? v[0-9]+\.[0-9]+\.[0-9]+/Conway v$NEW_VERSION/" src/version/version.ts
+          # Version shape is <major>.<commit>.<PR>-g<shorthash>; the optional
+          # trailing group must accept the prerelease suffix or the stamp
+          # silently leaves the 1.0.0 placeholder in place.
+          perl -i -pe "s/Conway( Web-Ifc Shim)? v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?/Conway v$NEW_VERSION/" src/version/version.ts
 
       - name: Compute conway-geom submodule SHA
         id: subsha
@@ -1779,25 +1806,13 @@ jobs:
           NEW_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # The version scheme is <major>.<PR#>.<commit-count>. The PR-number
-          # segment is non-monotonic: when PRs merge out of order, a later main
-          # commit can carry a *lower* PR number than the package currently
-          # tagged `latest` (e.g. #345 merging right after #346). npm then
-          # refuses to *implicitly* move `latest` onto the lower SemVer and
-          # aborts the publish ("Cannot implicitly apply the latest tag ...").
-          # The commit-count segment is strictly monotonic on main, so this
-          # build genuinely supersedes `latest` even when its middle segment is
-          # lower — pass `--tag latest` explicitly to override npm's guard and
-          # keep `latest` pointing at the newest code. The in-order case (new
-          # version is the higher SemVer) still takes the plain implicit path.
-          CURRENT_LATEST=$(npm view @bldrs-ai/conway@latest version 2>/dev/null || echo '0.0.0')
-          HIGHEST=$(printf '%s\n%s\n' "$CURRENT_LATEST" "$NEW_VERSION" | sort -V | tail -1)
-          if [ "$NEW_VERSION" != "$CURRENT_LATEST" ] && [ "$HIGHEST" = "$NEW_VERSION" ]; then
-            npm publish --access public
-          else
-            echo "::warning::Computed version ${NEW_VERSION} is not greater than current latest ${CURRENT_LATEST} (out-of-order PR merge); publishing with explicit --tag latest."
-            npm publish --access public --tag latest
-          fi
+          # --tag latest is unconditional. npm only applies `latest`
+          # implicitly when the new version beats the HIGHEST-EVER published
+          # one (not the current `latest` dist-tag), and it never applies it
+          # implicitly to a prerelease — which every version is now, thanks to
+          # the -g<hash> suffix. So the implicit path can only ever abort the
+          # publish; naming the tag is the whole contract.
+          npm publish --access public --tag latest
 
       # Idempotent tag: skip if already on origin (e.g. on a re-run).
       - name: Create and push tag

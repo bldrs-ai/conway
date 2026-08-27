@@ -481,7 +481,9 @@ export class Statistics {
     }
 
     const dateString = date.toLocaleDateString('en-US', options).replace(/,/g, '')
-    const versionMatch = versionString.match(/v(\d+\.\d+\.\d+)/)
+    // Stamped versions carry a `-g<shorthash>` semver prerelease suffix
+    // (see src/version/version.ts); keep it, it identifies the exact commit.
+    const versionMatch = versionString.match(/v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)
     let conwayVersionNumber: string
 
     if (versionMatch !== null) {
