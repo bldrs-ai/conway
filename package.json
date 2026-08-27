@@ -191,6 +191,7 @@
     "process": "^0.11.10",
     "rimraf": "3.0.2",
     "run-script-os": "1.1.6",
+    "semver": "^7.7.1",
     "shx": "^0.3.4",
     "ts-add-js-extension": "^1.6.5",
     "ts-jest": "29.0.3",

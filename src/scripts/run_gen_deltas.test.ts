@@ -8,14 +8,17 @@ import { createRequire } from 'module'
  * bless_perf_snapshot.cjs).
  *
  * This is the cross-version delta tool the bless analysis depends on, and both
- * of its failure modes are SILENT — a directory that does not match is skipped
- * with no warning, and a version that does not parse compares equal to
- * everything rather than throwing. conway#533 introduced a `-g<shorthash>`
- * prerelease suffix on every published version, and benchmark.cjs names the
- * output directory from the installed package version verbatim, so both modes
- * were live. These cases pin the shapes that must keep working: the historical
- * two- and three-component names already on disk, the blessed `-ci` snapshots,
- * and the current suffixed scheme.
+ * of its failure modes are SILENT: a directory that does not match is skipped
+ * with no warning, and a version whose last component does not parse is
+ * ordered as if that component were 0 (the old comparator guarded each
+ * component with `|| 0`, and NaN is falsy — so it produced a WRONG order, not
+ * a NaN blowup and not an "equal to everything"). conway#533 introduced a
+ * `-g<shorthash>` prerelease suffix on every published version, and
+ * benchmark.cjs names the output directory from the installed package version
+ * verbatim, so both modes were live. These cases pin the shapes that must keep
+ * working: the historical two- and three-component names already on disk, the
+ * blessed `-ci` snapshots, and the current suffixed scheme. The ordering rules
+ * themselves are pinned in version_order.test.ts.
  */
 const require_ = createRequire(import.meta.url)
 
@@ -70,9 +73,13 @@ describe('versionCompare', () => {
     expect(versionCompare('1.0.0', '1.0.0')).toBe(0)
   })
 
-  test('a suffixed version orders by its numbers, not as NaN', () => {
-    // The regression: split('.').map(Number) made the third component NaN, so
-    // both `<` and `>` were false and this returned 0 — "equal to everything".
+  test('a suffixed version orders by all of its numbers', () => {
+    // The regression: `Number('546-g3eae7637')` is NaN, and the old `|| 0`
+    // guard read that as 0 — so this sorted as 1.1556.0. The discriminating
+    // pair is one that differs ONLY in that component; the three below differ
+    // earlier and pass either way, so they are shape coverage, not the test.
+    expect(versionCompare('1.1556.100', '1.1556.546-g3eae7637')).toBeLessThan(0)
+
     expect(versionCompare('1.594.1554', '1.1556.546-g3eae7637')).toBeLessThan(0)
     expect(versionCompare('1.1556.546-g3eae7637', '1.594.1554'))
         .toBeGreaterThan(0)
@@ -136,6 +143,22 @@ describe('discoverEngineDirs', () => {
     expect(newest.version).toBe('1.1556.546-g3eae7637')
     expect(secondNewest.version).toBe('1.594.1554')
   })
+
+  test('selection survives a sibling that only the ordering fix separates',
+      () => {
+        // Discovery alone cannot get this right: both parse, and they differ
+        // only in the component the old comparator read as 0, which would have
+        // ranked 1.1556.900 above the real newest.
+        const { conwayDirs } = discoverEngineDirs([
+          'conway1.1556.900_test-models',
+          'conway1.1556.546-g3eae7637_test-models',
+          'conway1.1557.610-g9f81cd0a_test-models',
+        ])
+
+        expect(conwayDirs.map((d) => d.version)).toEqual([
+          '1.1556.546-g3eae7637', '1.1556.900', '1.1557.610-g9f81cd0a',
+        ])
+      })
 
   /**
    * Blessed rc snapshots stay OUT of newest-pair selection.

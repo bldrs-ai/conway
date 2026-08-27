@@ -4,10 +4,18 @@
  * Ordering for the engine version strings that name benchmark directories.
  *
  * Shared by run_gen_deltas.cjs and bless_perf_snapshot.cjs so the two agree on
- * which snapshot is newer. They diverged before conway#533: both hand-rolled
- * `split('.').map(Number)`, which yields NaN on any version carrying a
- * prerelease suffix, and NaN makes every `<` and `>` false — so a mis-parsed
- * version compared EQUAL to everything and sorted arbitrarily, silently.
+ * which snapshot is newer. Both previously hand-rolled
+ * `split('.').map(Number)` and guarded each component with `|| 0`. Since
+ * conway#533 every published version carries a `-g<shorthash>` prerelease, and
+ * `Number('546-g3eae7637')` is NaN — which `|| 0` then coerced to 0, because
+ * NaN is falsy. So the suffix did not make the comparison throw or return
+ * "equal"; it made the LAST NUMERIC COMPONENT READ AS ZERO:
+ *
+ *   '1.1556.546-g3eae7637'  sorted as  1.1556.0
+ *
+ * which loses to any release with a higher patch. `1.1556.100` therefore
+ * compared NEWER than `1.1556.546-g3eae7637`. A wrong ordering, silently, not
+ * a degenerate one — every comparison still returned a definite -1/0/+1.
  *
  * Two version shapes reach this module, and only one of them is semver:
  *
@@ -18,7 +26,14 @@
  *
  * So semver.compare is used where it applies and a numeric-component compare
  * backs it up where it does not. Both paths order by the numeric components
- * first, so the two never disagree about which release is newer.
+ * first, and on the shapes these tools produce they agree — but only on those
+ * shapes, not in general. The fallback compares a prerelease as one opaque
+ * string where semver compares it identifier by identifier, numerically where
+ * an identifier is numeric, so the two disagree on e.g.
+ * '1.0.0-a.9' vs '1.0.0-a.10' (semver -1, fallback +1). That is unreachable
+ * here: a conway suffix is `g` + 8 hex digits, a single dot-free identifier,
+ * and web-ifc versions carry no suffix at all. Widen the accepted shapes and
+ * this stops being true.
  */
 
 const semver = require('semver');

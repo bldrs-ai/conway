@@ -24,6 +24,9 @@ const { versionCompare } = require("./version_order.cjs");
 // RECOGNISED here rather than mis-parsed, but discoverEngineDirs() below still
 // excludes them from selection -- see the comment there.
 //
+// The ordering half of the same bug is in version_order.cjs: a suffixed
+// version's last numeric component read as 0, not as NaN. See that header.
+//
 // The FULL version including the suffix is returned, because it names the
 // delta CSVs written below and those must match the directory they describe.
 // Ordering is versionCompare's problem, not this function's.
@@ -62,6 +65,10 @@ function isBlessedSnapshot(version) {
 // provisionally, preserving the pre-conway#533 behaviour while the question of
 // whether they should participate is settled: https://github.com/bldrs-ai/conway/issues/614
 // (remove this filter to change it, not the regex, which is already correct).
+// Note before lifting it: `-ci` is appended AFTER `-g<hash>`, so semver reads
+// `g3eae7637-ci` as one identifier sorting ABOVE `g3eae7637` -- a post-#533
+// blessed snapshot sorts NEWER than the release it blesses, and the tool would
+// diff a release against its own blessed copy. Detail in conway#615.
 //
 function discoverEngineDirs(names) {
   const conwayDirs = [];
