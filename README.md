@@ -253,11 +253,9 @@ publishes to npm at the `latest` dist-tag. The version is
   squash-merge appends second. A title with no issue ref yields that
   appended PR number instead, and a message with neither (a direct push
   to `main`) falls back to `0`
-- `shorthash` is `git rev-parse --short=8 HEAD`, so a published version
-  names the exact commit it was built from. The width is pinned rather
-  than left to git's auto-abbrev, which widens as the repo's object
-  count grows — pinning keeps the version reproducible from the commit
-  alone
+- `shorthash` is the first 8 characters of `git rev-parse HEAD`, so a
+  published version names the exact commit it was built from. It is a
+  **truncation**, not `git rev-parse --short` — see below
 
 So a merge closing issue #321 at the 985th commit on `main` publishes
 as `1.985.321-g1a2b3c4d`. No PR number is encoded, and none is needed:
@@ -272,6 +270,23 @@ release (conway#533). The commit count is strictly monotonic on `main`,
 so with it in the minor slot every release is strictly greater than the
 last. The issue number keeps its traceability value in the patch slot,
 where it cannot invert the ordering.
+
+**Why the hash is truncated, not abbreviated.** Every git abbreviation
+— auto-abbrev *and* `--short=N` — is a **minimum** width that git grows
+to keep the result unique against the current object database. On git
+2.43, `git rev-parse --short=1 HEAD` returns four characters, not one;
+by the same rule `--short=8` starts returning nine as soon as two
+objects share an eight-character prefix. Either would compute a
+*different* version string for the same commit as the repo grows, which
+is exactly the reproducibility the hash is there to provide. Truncating
+the full hash depends only on the commit.
+
+The tradeoff: a fixed truncation *can* collide, where a git
+abbreviation cannot. That is acceptable here — the commit count in the
+minor segment is already unique per commit on `main`, so the hash is a
+convenience ref for a human, not the identifying key. A collision would
+make two versions share a suffix; it would not make them equal or
+misorder them.
 
 **Why `-g` and not a bare hash.** SemVer forbids a leading zero in an
 all-numeric prerelease identifier, so a short hash like `0512345` would

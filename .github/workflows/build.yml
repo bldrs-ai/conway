@@ -1696,16 +1696,24 @@ jobs:
   #            lives in the patch slot where it can't invert the ordering.
   #            No PR number is encoded, and none is needed: the hash below
   #            resolves to the commit, which resolves to its PR.
-  #   hash   - 'git rev-parse --short=8 HEAD', prefixed with a literal 'g' as
-  #            `git describe` does. The prefix is load-bearing, not cosmetic:
-  #            semver forbids leading zeros in a purely numeric prerelease
-  #            identifier, so a hash like 0512345 would be an INVALID version
-  #            and hard-fail the publish (~0.4% of commits). The width is
-  #            pinned rather than left to git's auto-abbrev, which widens as
-  #            the object count grows: auto would compute a DIFFERENT version
-  #            string for the same commit at different points in the repo's
-  #            life, defeating the point of putting the hash there. It gives a
-  #            published version a portable ref back to the exact commit.
+  #   hash   - the first 8 characters of 'git rev-parse HEAD', prefixed with a
+  #            literal 'g' as `git describe` does. The prefix is load-bearing,
+  #            not cosmetic: semver forbids leading zeros in a purely numeric
+  #            prerelease identifier, so a hash like 0512345 would be an
+  #            INVALID version and hard-fail the publish (~0.4% of commits).
+  #            Truncated rather than abbreviated by git, because EVERY git
+  #            abbreviation - auto-abbrev and '--short=N' alike - is a
+  #            MINIMUM width that grows to stay unique against the current
+  #            object database ('git rev-parse --short=1 HEAD' returns 4
+  #            characters here, not 1). Either would compute a DIFFERENT
+  #            version string for the same commit as the repo grows; a
+  #            version must be recomputable from the commit alone.
+  #            The tradeoff: a fixed truncation can collide, which a git
+  #            abbreviation cannot. Acceptable here - the commit count in the
+  #            minor segment is already unique per commit on main, so the hash
+  #            is a convenience ref for a human, not the identifying key. A
+  #            collision would make two versions share a suffix; it would not
+  #            make them equal or misorder them.
   # So every green merge ships a uniquely-traceable, strictly increasing
   # version to @latest.
   #
@@ -1769,12 +1777,23 @@ jobs:
           COMMIT=$(git rev-list HEAD --count)
           # 'g' prefix per git-describe convention. Required: semver rejects a
           # leading zero in an all-numeric prerelease identifier, and ~0.4% of
-          # short hashes are all digits with a leading zero. Width is pinned at
-          # 8 (git's current auto-abbrev for this repo) so the same commit
-          # always computes the same version string - auto-abbrev widens with
-          # the object count, which would make the version irreproducible from
-          # the commit alone.
-          HASH="g$(git rev-parse --short=8 HEAD)"
+          # short hashes are all digits with a leading zero.
+          #
+          # Truncate the full hash; do NOT use 'git rev-parse --short[=N]'.
+          # Every git abbreviation is a MINIMUM width that git widens to keep
+          # the result unique against the current object database - on git
+          # 2.43 '--short=1 HEAD' returns 4 characters, not 1 - so '--short=8'
+          # starts returning 9 as soon as two objects share an 8-character
+          # prefix. Truncation depends only on the commit, so the same commit
+          # always computes the same version string, which is the whole point
+          # of putting a hash in the version.
+          #
+          # The tradeoff is that a fixed truncation CAN collide where a git
+          # abbreviation cannot. That is fine here: COMMIT above is already
+          # unique per commit on main, so this hash is a convenience ref for a
+          # human, not the identifying key. Colliding versions would share a
+          # suffix - they would not be equal, and would not misorder.
+          HASH="g$(git rev-parse HEAD | cut -c1-8)"
           NEW_VERSION="${MAJOR}.${COMMIT}.${ISSUE_NUM}-${HASH}"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, commit=${COMMIT}, issue=${ISSUE_NUM}, hash=${HASH})"
