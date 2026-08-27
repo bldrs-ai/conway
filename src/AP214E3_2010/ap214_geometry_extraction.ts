@@ -4531,10 +4531,34 @@ export class AP214GeometryExtraction {
       loopCurves.push( curve )
       loopIsOuter.push( bound.type === EntityTypesAP214.FACE_OUTER_BOUND )
       loopOrientations.push( bound.orientation )
+      // Seam-ness is read off `edge_list` - what the FILE says - while the
+      // boundary handed to the triangulator is built from `nativeEdgeCurves`
+      // - what extraction actually PRODUCED. Requiring the two to agree is
+      // what makes the first a sound statement about the second.
+      //
+      // They diverge when an edge fails to extract: the `curve === undefined`
+      // path above logs and omits that edge, leaving a partial boundary while
+      // `edge_list` still reads as a perfect retrace. The flag would then tell
+      // TriangulateSphericalSurface to replace that partial boundary with an
+      // entire sphere - spurious volume and bounds, silently, because
+      // emitting triangles suppresses the contributed-no-geometry warning.
+      // That is strictly worse than the extraction failure it would mask,
+      // which at least leaves a partial face and an error in the log
+      // (codex P1, bldrs-ai/conway#609).
+      //
+      // Compared as a COUNT rather than a flag set at the one known failure
+      // site: each of the three push sites contributes exactly one curve per
+      // edge, so `size() === edge_list.length` is precisely "every edge
+      // reached the boundary" - and it stays precise if another skip path is
+      // added later, which a hand-maintained boolean would not.
+      const everyEdgeExtracted =
+        innerBound instanceof edge_loop &&
+        nativeEdgeCurves.size() === innerBound.edge_list.length
+
       loopSeams.push(
-        innerBound instanceof edge_loop ?
-          isRetracingSeamLoop( innerBound.edge_list ) :
-          false )
+        everyEdgeExtracted &&
+        innerBound instanceof edge_loop &&
+        isRetracingSeamLoop( innerBound.edge_list ) )
 
       vec3Array.delete()
       nativeEdgeCurves.delete()
