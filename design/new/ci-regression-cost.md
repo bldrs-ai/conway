@@ -179,7 +179,7 @@ point. The serial conway-native load timings from `rc-regression.yml`
 ## Release-candidate runbook
 
 Continuous release is unchanged: **every green merge to `main` auto-publishes
-to npm** (`auto-publish`, version `<major>.<commit>.<PR>-g<shorthash>` — see
+to npm** (`auto-publish`, version `<major>.<commit>.<issue>-g<shorthash>` — see
 the README).
 The rc flow is the *separate*, deliberate "this is prod-worthy" gate.
 

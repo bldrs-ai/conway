@@ -53,7 +53,7 @@ on:
     # per-model at PR time. Now a full perf sweep runs only when a human
     # blesses a prod-worthy point by pushing an `rc-*` tag. auto-publish's
     # own `<version>` tags start with the major segment (e.g.
-    # 1.1556.546-g3eae763) and do NOT match `rc-*`, so continuous-release
+    # 1.1556.546-g3eae7637) and do NOT match `rc-*`, so continuous-release
     # tagging never triggers this path.
     tags:
       - 'rc-*'
@@ -1675,7 +1675,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Continuous release: on every successful push to main, publish to npm and
-  # tag the commit. Version is <major>.<commit>.<PR>-g<shorthash>:
+  # tag the commit. Version is <major>.<commit>.<issue>-g<shorthash>:
   #   major  - first segment of package.json's version (manual bump). The
   #            minor/patch in package.json/version.ts are an unstamped 1.0.0
   #            placeholder on main and are ignored here - both are recomputed
@@ -1684,17 +1684,27 @@ jobs:
   #            slot because it is the only strictly monotonic segment we have,
   #            and npm compares a new version against the HIGHEST-EVER
   #            published one. It used to sit in the patch slot behind the
-  #            non-monotonic PR number, which let an out-of-order merge compute
-  #            a version below the all-time max and hard-fail the publish
-  #            (conway#533).
-  #   PR     - PR number parsed from the merge commit message (#N). Non-
-  #            monotonic (PRs merge out of order), so it is informational only
-  #            and lives in the patch slot where it can't invert the ordering.
-  #   hash   - 'git rev-parse --short HEAD', prefixed with a literal 'g' as
+  #            non-monotonic issue/PR number, which let an out-of-order merge
+  #            compute a version below the all-time max and hard-fail the
+  #            publish (conway#533).
+  #   issue  - the FIRST '#N' in the merge commit message. Under this repo's
+  #            title convention, '#<issue>: description (#<pr>)', that is the
+  #            ISSUE number, not the PR number; a title with no issue ref
+  #            yields the PR number the squash-merge appended, and one with
+  #            neither falls back to 0. Non-monotonic either way (issues and
+  #            PRs both land out of order), so it is informational only and
+  #            lives in the patch slot where it can't invert the ordering.
+  #            No PR number is encoded, and none is needed: the hash below
+  #            resolves to the commit, which resolves to its PR.
+  #   hash   - 'git rev-parse --short=8 HEAD', prefixed with a literal 'g' as
   #            `git describe` does. The prefix is load-bearing, not cosmetic:
   #            semver forbids leading zeros in a purely numeric prerelease
   #            identifier, so a hash like 0512345 would be an INVALID version
-  #            and hard-fail the publish (~0.4% of commits). It gives a
+  #            and hard-fail the publish (~0.4% of commits). The width is
+  #            pinned rather than left to git's auto-abbrev, which widens as
+  #            the object count grows: auto would compute a DIFFERENT version
+  #            string for the same commit at different points in the repo's
+  #            life, defeating the point of putting the hash there. It gives a
   #            published version a portable ref back to the exact commit.
   # So every green merge ships a uniquely-traceable, strictly increasing
   # version to @latest.
@@ -1739,32 +1749,42 @@ jobs:
         id: ver
         run: |
           MAJOR=$(node -p "require('./package.json').version.split('.')[0]")
-          # PR number is parsed out of the merge commit message. Both
-          # 'Merge pull request #N from ...' (merge commit) and
-          # '... (#N)' (squash-merge) embed it. If the push wasn't via
-          # PR merge, fall back to 0 - the version still publishes but
-          # signals 'manual push, not PR-attached'.
+          # Takes the FIRST '#N' in the merge commit message. Under this
+          # repo's title convention, '#<issue>: description (#<pr>)', that is
+          # the ISSUE number the merge closes - NOT the PR number, which the
+          # squash-merge appends second. A title carrying no issue ref leaves
+          # the appended '(#N)' first, so the PR number is what lands; a
+          # message with neither (a direct push to main, say) falls back to 0
+          # and warns.
+          #
+          # Deliberately unchanged since conway#533 renamed this variable: the
+          # published numbers must not move. Only the name and the docs were
+          # wrong, claiming a PR number this never held.
           MSG=$(git log -1 --format=%B HEAD)
-          PR_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
-          if [ -z "$PR_NUM" ]; then
-            echo "::warning::Could not parse PR number from commit message; using 0."
-            PR_NUM=0
+          ISSUE_NUM=$(echo "$MSG" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
+          if [ -z "$ISSUE_NUM" ]; then
+            echo "::warning::Could not parse an issue or PR number from the commit message; using 0."
+            ISSUE_NUM=0
           fi
           COMMIT=$(git rev-list HEAD --count)
           # 'g' prefix per git-describe convention. Required: semver rejects a
           # leading zero in an all-numeric prerelease identifier, and ~0.4% of
-          # short hashes are all digits with a leading zero.
-          HASH="g$(git rev-parse --short HEAD)"
-          NEW_VERSION="${MAJOR}.${COMMIT}.${PR_NUM}-${HASH}"
+          # short hashes are all digits with a leading zero. Width is pinned at
+          # 8 (git's current auto-abbrev for this repo) so the same commit
+          # always computes the same version string - auto-abbrev widens with
+          # the object count, which would make the version irreproducible from
+          # the commit alone.
+          HASH="g$(git rev-parse --short=8 HEAD)"
+          NEW_VERSION="${MAJOR}.${COMMIT}.${ISSUE_NUM}-${HASH}"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, commit=${COMMIT}, PR=${PR_NUM}, hash=${HASH})"
+          echo "Auto-release version: ${NEW_VERSION}  (major=${MAJOR}, commit=${COMMIT}, issue=${ISSUE_NUM}, hash=${HASH})"
 
       - name: Stamp version into package.json + version.ts
         env:
           NEW_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           perl -i -pe "s/(\"version\":\s*)\"[^\"]+\"/\$1\"$NEW_VERSION\"/" package.json
-          # Version shape is <major>.<commit>.<PR>-g<shorthash>; the optional
+          # Version shape is <major>.<commit>.<issue>-g<shorthash>; the optional
           # trailing group must accept the prerelease suffix or the stamp
           # silently leaves the 1.0.0 placeholder in place.
           perl -i -pe "s/Conway( Web-Ifc Shim)? v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?/Conway v$NEW_VERSION/" src/version/version.ts
