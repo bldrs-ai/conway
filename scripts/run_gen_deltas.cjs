@@ -5,41 +5,40 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
+const { versionCompare } = require("./version_order.cjs");
 
 //
-// Helper: parse out the numeric version from "conway0.9.789_test-models"
-// or "webifc1.4_test-models-private", returning "0.9.789" or "1.4".
+// Helper: parse out the version from "conway0.9.789_test-models",
+// "conway1.1556.546-g3eae7637_test-models" or "webifc1.4_test-models-private",
+// returning "0.9.789", "1.1556.546-g3eae7637" or "1.4".
 // Returns null if no match.
 //
+// The optional `-<suffix>` group is load-bearing, not defensive. Since
+// conway#533 every published version carries a `-g<shorthash>` prerelease, and
+// benchmark.cjs names the output directory from the installed package version
+// VERBATIM. Without the group, `conway1.1556.546-g3eae7637_test-models` failed
+// to match and the directory was dropped from discovery entirely -- silently,
+// leaving this tool to compare two stale pre-change directories or to bail
+// with "Need at least two". Blessed rc snapshots (`conway<version>-ci_<repo>`,
+// written by bless_perf_snapshot.cjs) carry a suffix too and were dropped the
+// same way; they are conway snapshots and now take part.
+//
+// The FULL version including the suffix is returned, because it names the
+// delta CSVs written below and those must match the directory they describe.
+// Ordering is versionCompare's problem, not this function's.
+//
 function parseVersion(dirName) {
+  const version = /(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)(?:_test-models.*)?$/;
+
   // 1) Try conway
-  let match = dirName.match(/^conway(\d+(?:\.\d+)*)(?:_test-models.*)?$/);
+  let match = dirName.match(new RegExp(`^conway${version.source}`));
   if (match) return match[1];
 
   // 2) Try webifc
-  match = dirName.match(/^webifc(\d+(?:\.\d+)*)(?:_test-models.*)?$/);
+  match = dirName.match(new RegExp(`^webifc${version.source}`));
   if (match) return match[1];
 
   return null;
-}
-
-//
-// Helper: compare two version strings "0.7.727" < "0.10.100" numerically.
-//
-function versionCompare(a, b) {
-  // Split on '.' and compare numeric parts
-  const aParts = a.split(".").map(Number);
-  const bParts = b.split(".").map(Number);
-  const len = Math.max(aParts.length, bParts.length);
-
-  for (let i = 0; i < len; i++) {
-    const aVal = aParts[i] || 0;
-    const bVal = bParts[i] || 0;
-    if (aVal < bVal) return -1;
-    if (aVal > bVal) return 1;
-  }
-
-  return 0;
 }
 
 //
@@ -164,4 +163,10 @@ function main() {
   console.log("\nAll delta CSVs generated in:", path.join(baseDir, newestConway.name));
 }
 
-main();
+// Guarded so the unit test can require this module for parseVersion /
+// versionCompare without the CLI running against process.argv.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { parseVersion, versionCompare };

@@ -21,7 +21,12 @@
 //     line below and therefore has to match the placeholder AND a
 //     previously-stamped value;
 //   - src/statistics/statistics.ts, which extracts the number for the CSV
-//     header line.
+//     header line;
+//   - scripts/version_order.cjs, which orders the published version strings
+//     embedded in `conway<version>_<repo>` benchmark directory names. Shared
+//     by scripts/run_gen_deltas.cjs and scripts/bless_perf_snapshot.cjs — the
+//     version reaches those from npm and from the rc-* tag, not from this
+//     file, but it is the same string shape and the same 4th component.
 // (src/compat/web-ifc/ifc_api.ts only logs and re-exports the string whole.)
 const versionString: string = 'Conway v1.0.0'
 

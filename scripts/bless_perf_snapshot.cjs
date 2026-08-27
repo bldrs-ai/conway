@@ -108,6 +108,15 @@ const os = require('os');
 const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
 
+// Ordering lives in version_order.cjs, shared with run_gen_deltas.cjs so the
+// two tools cannot disagree about which snapshot is newer. This used to be a
+// local `split('.').map(Number)`, which returns NaN for any version carrying a
+// prerelease suffix — and `version` here comes straight off the rc-* tag, so
+// since conway#533 it can be `1.1556.546-g3eae7637`. NaN made every comparison
+// in findPreviousSnapshot() false, including the `>= 0` guard that is the only
+// thing stopping a NEWER snapshot from being chosen as the predecessor.
+const { versionCompare } = require('./version_order.cjs');
+
 const DETAIL_COLUMNS = [
   'timestamp', 'loadStatus', 'writer', 'uname', 'engine', 'filename',
   'schemaVersion',
@@ -120,27 +129,6 @@ const DETAIL_COLUMNS = [
 
 /** Columns perf.csv does not measure; written as N/A to keep the 22-column shape. */
 const UNMEASURED = 'N/A';
-
-/**
- * Compare two dotted numeric version strings.
- *
- * @param {string} a Left version, e.g. '0.23.940'.
- * @param {string} b Right version.
- * @return {number} Negative if a < b, positive if a > b, 0 if equal.
- */
-function versionCompare(a, b) {
-  const aParts = a.split('.').map(Number);
-  const bParts = b.split('.').map(Number);
-  const len = Math.max(aParts.length, bParts.length);
-
-  for (let i = 0; i < len; i++) {
-    const diff = (aParts[i] || 0) - (bParts[i] || 0);
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return 0;
-}
 
 /**
  * Read perf.csv into row objects keyed by its own header.
