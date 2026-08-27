@@ -23,7 +23,14 @@ const { versionCompare } =
     versionCompare: (a: string, b: string) => number,
   }
 
-/** The pre-conway#533 comparator, kept verbatim as the mutation baseline. */
+/**
+ * The pre-conway#533 comparator, kept verbatim as the mutation baseline.
+ *
+ * @param a Left version.
+ * @param b Right version.
+ * @return Negative if a < b, positive if a > b, 0 if equal — as the old code
+ *   computed it, `|| 0` coercion and all.
+ */
 function legacyCompare(a: string, b: string): number {
   const aParts = a.split('.').map(Number)
   const bParts = b.split('.').map(Number)
