@@ -5044,6 +5044,10 @@ export class IfcGeometryExtraction {
         curve: curve,
         orientation: bound.Orientation,
         type: (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1,
+        // The IFC front end does not yet decide seam-ness; false is exactly
+        // today's behaviour. IFC's degenerate-loop spelling is the VERTEX_LOOP,
+        // which TriangulateSphericalSurface already handles by point count.
+        seam: false,
       }
 
       const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
