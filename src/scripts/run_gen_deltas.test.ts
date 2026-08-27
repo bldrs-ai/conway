@@ -21,10 +21,15 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { parseVersion, versionCompare } =
+const { parseVersion, versionCompare, isBlessedSnapshot, discoverEngineDirs } =
   require_(path.resolve(process.cwd(), 'scripts/run_gen_deltas.cjs')) as {
     parseVersion: (dirName: string) => string | null,
     versionCompare: (a: string, b: string) => number,
+    isBlessedSnapshot: (version: string) => boolean,
+    discoverEngineDirs: (names: string[]) => {
+      conwayDirs: { name: string, version: string }[],
+      webifcDirs: { name: string, version: string }[],
+    },
   }
 
 describe('parseVersion', () => {
@@ -93,5 +98,72 @@ describe('versionCompare', () => {
     expect([...versions].sort(versionCompare)).toEqual([
       '0.7.727', '0.23.940', '1.543.1513-ci', '1.1556.546-g3eae7637',
     ])
+  })
+})
+
+describe('discoverEngineDirs', () => {
+
+  /** One of every shape the benchmarks directory actually holds. */
+  const LISTING = [
+    'README.md',
+    'conway0.7.727_test-models',
+    'conway1.1556.546-g3eae7637_test-models',
+    'conway1.543.1513-ci_test-models',
+    'conway1.594.1554_test-models',
+    'conway_test-models',
+    'webifc1.4_test-models',
+  ]
+
+  test('finds every engine directory and orders them oldest first', () => {
+    const { conwayDirs, webifcDirs } = discoverEngineDirs(LISTING)
+
+    expect(conwayDirs.map((d) => d.name)).toEqual([
+      'conway0.7.727_test-models',
+      'conway1.594.1554_test-models',
+      'conway1.1556.546-g3eae7637_test-models',
+    ])
+    expect(webifcDirs.map((d) => d.name)).toEqual(['webifc1.4_test-models'])
+  })
+
+  test('picks the suffixed release as newest, not the highest legacy minor', () => {
+    const { conwayDirs } = discoverEngineDirs(LISTING)
+    const newest = conwayDirs[conwayDirs.length - 1]
+    const secondNewest = conwayDirs[conwayDirs.length - 2]
+
+    // The regression this file exists for: pre-fix, the -g directory did not
+    // parse at all and 1.594.1554 was reported as newest, so the tool wrote a
+    // delta between two stale directories with no error and no warning.
+    expect(newest.version).toBe('1.1556.546-g3eae7637')
+    expect(secondNewest.version).toBe('1.594.1554')
+  })
+
+  /**
+   * Blessed rc snapshots stay OUT of newest-pair selection.
+   *
+   * Provisional, and deliberate — do not "fix" this by widening the regex,
+   * which already recognises the suffix. See conway#614.
+   */
+  test('excludes blessed -ci snapshots from selection', () => {
+    const { conwayDirs } = discoverEngineDirs(LISTING)
+
+    expect(conwayDirs.map((d) => d.name))
+        .not.toContain('conway1.543.1513-ci_test-models')
+  })
+
+  test('excludes a -ci snapshot that also carries a commit hash', () => {
+    // bless_perf_snapshot.cjs appends `-ci` to the version it is given, so a
+    // post-#533 blessed snapshot carries both suffixes.
+    const { conwayDirs } =
+      discoverEngineDirs(['conway1.1600.9-g0000abcd-ci_test-models'])
+
+    expect(conwayDirs).toEqual([])
+    expect(isBlessedSnapshot('1.1600.9-g0000abcd-ci')).toBe(true)
+    expect(isBlessedSnapshot('1.1556.546-g3eae7637')).toBe(false)
+  })
+
+  test('a -ci snapshot is recognised by parseVersion, only filtered later', () => {
+    // The exclusion must be the filter's doing, not a parse failure — that is
+    // the difference between this and the bug it replaced.
+    expect(parseVersion('conway1.543.1513-ci_test-models')).toBe('1.543.1513-ci')
   })
 })

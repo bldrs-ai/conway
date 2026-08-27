@@ -818,21 +818,9 @@ async function main() {
         `npm show @bldrs-ai/conway version`,
         { stdio: ['pipe','pipe','ignore'] }
       ).toString().trim();
-      // Guess the PREVIOUS release's directory name by decrementing the
-      // minor component. This is a heuristic and it has never been a good
-      // one: under the old <major>.<PR>.<commit> scheme it asked for the
-      // previous PR number paired with THIS commit count, a combination that
-      // essentially never exists on disk. Since conway#533 the version also
-      // carries a -g<shorthash> that belongs to this commit alone, so the
-      // constructed name cannot match any real directory and the delta below
-      // is always skipped with the "not found" warning.
-      //
-      // The correct fix is to DISCOVER the newest directory below this one,
-      // the way run_gen_deltas.cjs does with scripts/version_order.cjs,
-      // rather than constructing a name. Left alone here deliberately: it
-      // fails visibly (a warning, no delta), not silently, and changing what
-      // the perf jobs diff against is a separate change from the version
-      // scheme. Tracked separately.
+      // Guessing the predecessor's directory name by decrementing the minor
+      // cannot match a real directory, so the delta below is always skipped
+      // with the "not found" warning: https://github.com/bldrs-ai/conway/issues/613
       const parts = oldVersion.split('.');
       if (parts.length === 3) {
         const minor = parseInt(parts[1], 10);
