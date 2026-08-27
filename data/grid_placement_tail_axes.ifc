@@ -1,0 +1,189 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('grid_placement_tail_axes.ifc','2026-08-26T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* Grid placement with the AXIS half of the placement chain written at the
+   TAIL of the DATA section (conway#546).
+
+   data/grid_placement.ifc covers what a grid placement RESOLVES TO. This
+   one covers what happens when it cannot resolve yet: it is laid out so a
+   mid-parse prefix that stops before the tail block reaches every product
+   and every grid placement, but none of the records the placement chain
+   bottoms out in. That is the layout conway#542 measured on real Archicad
+   and ST-DEVELOPER exports, narrowed to the hops of the grid chain that are
+   read through a REFERENCE ARRAY rather than a scalar field:
+
+     hop 2   IfcVirtualGridIntersection.IntersectingAxes    product #500
+     hop 4a  IfcPolyline.Points                             product #200
+     inverse IfcGrid.UAxes/VAxes/WAxes, via gridByAxis      product #1000
+
+   The third is not a forward hop of the closure at all. IfcGridAxis's route
+   back to its grid is the PartOfU/PartOfV/PartOfW INVERSE attributes, which
+   the generated layer does not carry, so extractGridPlacement finds the grid
+   by scanning every IfcGrid's axis lists (gridByAxis). Those lists are
+   reference arrays too, so a grid whose axes are still ahead of the parse
+   throws there — and the scan visits every grid, not just the one that owns
+   the axis, so ANY grid with an unscanned axis list blocks EVERY grid
+   placement in the file. Product #1000's own axes are fully in the head
+   precisely so it gets past hop 2 and hop 4a and reaches that scan.
+
+   Product #800 is the counterweight: its intersection names a record that
+   IS in the index and is NOT an IfcGridAxis, which is a property of the file
+   rather than of how much of it has been scanned. It must keep throwing
+   UNTAGGED however long the prefix grows, or the permanent-retry and
+   endless-preemption bug conway#543 fixed comes back.
+
+   Record counts are load-bearing, not incidental: the preview channel only
+   rebuilds a generation once the index has grown by GENERATION_GROWTH_FACTOR
+   (2x), so the tail block is deliberately larger than the head, and grid
+   #400 carries a realistic 8x8 of axes to get there. The counts are asserted
+   by the tests that read this file; see them for the current numbers. */
+#1=IFCPROJECT('0kF0kSTOX3ovkcpuOhkPrX',$,'GridTailAxes',$,$,$,$,(#20),#10);
+#10=IFCUNITASSIGNMENT((#11));
+#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-05,#21,$);
+#21=IFCAXIS2PLACEMENT3D(#22,$,$);
+#22=IFCCARTESIANPOINT((0.,0.,0.));
+/* Grid #100: axes and their axis curves are in the head, the curves' own
+   points are in the tail - so a prefix reaches IfcPolyline and stops. */
+#100=IFCGRID('1kF0kSTOX3ovkcpuOhkPrX',$,'HeadGrid',$,$,#101,$,(#110),(#130),$,.RECTANGULAR.);
+#101=IFCLOCALPLACEMENT($,#21);
+#110=IFCGRIDAXIS('A',#111,.T.);
+#111=IFCPOLYLINE((#112,#113));
+#130=IFCGRIDAXIS('1',#131,.T.);
+#131=IFCPOLYLINE((#132,#133));
+/* Product A - blocked at hop 4a, IfcPolyline.Points. */
+#200=IFCBUILDINGELEMENTPROXY('2kF0kSTOX3ovkcpuOhkPrX',$,'TailPoints',$,$,#201,#210,$,.NOTDEFINED.);
+#201=IFCGRIDPLACEMENT(#202,$);
+#202=IFCVIRTUALGRIDINTERSECTION((#110,#130),(0.,0.));
+#210=IFCPRODUCTDEFINITIONSHAPE($,$,(#211));
+#211=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#212));
+#212=IFCBLOCK(#21,1.,1.,1.);
+/* Grid #400: every one of its sixteen axes is in the tail, so a prefix
+   cannot read the intersection's axis list at all - and cannot complete
+   gridByAxis's scan either, which is what blocks product #1000. */
+#400=IFCGRID('4kF0kSTOX3ovkcpuOhkPrX',$,'TailGrid',$,$,#401,$,(#410,#411,#412,#413,#414,#415,#416,#417),(#420,#421,#422,#423,#424,#425,#426,#427),$,.RECTANGULAR.);
+#401=IFCLOCALPLACEMENT($,#21);
+/* Product B - blocked at hop 2, IfcVirtualGridIntersection.IntersectingAxes. */
+#500=IFCBUILDINGELEMENTPROXY('5kF0kSTOX3ovkcpuOhkPrX',$,'TailAxes',$,$,#501,#510,$,.NOTDEFINED.);
+#501=IFCGRIDPLACEMENT(#502,$);
+#502=IFCVIRTUALGRIDINTERSECTION((#410,#420),(0.,0.));
+#510=IFCPRODUCTDEFINITIONSHAPE($,$,(#511));
+#511=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#512));
+#512=IFCBLOCK(#21,1.,1.,1.);
+/* Product C - the counterweight. #900 is an IFCDIRECTION where an
+   IFCGRIDAXIS belongs, and it sits in the head with everything else, so
+   this is a typing defect in the file rather than a not-yet-scanned
+   reference. It must never enter the retry queue however long the index
+   grows.
+
+   #900 exists for this and is referenced by nothing else, deliberately.
+   StepModelBase.getTypedElementByLocalID skips its type check entirely
+   when the record has already been materialised by an UNTYPED read
+   ('element.entity' is returned before the check), so pointing this at a
+   record the rest of the file also uses would make the counterweight
+   depend on which pass touched it first - the whole-model walk would sail
+   past the type check and fail downstream instead. That leniency is
+   pre-existing and unrelated to conway#546; it reproduces identically on
+   'main' and is tracked as conway#606. */
+#800=IFCBUILDINGELEMENTPROXY('8kF0kSTOX3ovkcpuOhkPrX',$,'MistypedAxis',$,$,#801,#810,$,.NOTDEFINED.);
+#801=IFCGRIDPLACEMENT(#802,$);
+#802=IFCVIRTUALGRIDINTERSECTION((#900,#130),(0.,0.));
+#900=IFCDIRECTION((0.,1.));
+#810=IFCPRODUCTDEFINITIONSHAPE($,$,(#811));
+#811=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#812));
+#812=IFCBLOCK(#21,1.,1.,1.);
+/* Grid #600: entirely in the head, points included. Its only job is to let
+   product #1000 resolve its own intersection completely, so the only thing
+   left to block that product is gridByAxis's scan of grid #400. */
+#600=IFCGRID('6kF0kSTOX3ovkcpuOhkPrX',$,'ScannedGrid',$,$,#601,$,(#610),(#630),$,.RECTANGULAR.);
+#601=IFCLOCALPLACEMENT($,#21);
+#610=IFCGRIDAXIS('U',#611,.T.);
+#611=IFCPOLYLINE((#612,#613));
+#612=IFCCARTESIANPOINT((0.,0.));
+#613=IFCCARTESIANPOINT((1.,0.));
+#630=IFCGRIDAXIS('V',#631,.T.);
+#631=IFCPOLYLINE((#632,#633));
+#632=IFCCARTESIANPOINT((0.,0.));
+#633=IFCCARTESIANPOINT((0.,1.));
+/* Product D - past hop 2 and hop 4a, blocked on the gridByAxis scan. */
+#1000=IFCBUILDINGELEMENTPROXY('9kF0kSTOX3ovkcpuOhkPrX',$,'TailGridScan',$,$,#1001,#1010,$,.NOTDEFINED.);
+#1001=IFCGRIDPLACEMENT(#1002,$);
+#1002=IFCVIRTUALGRIDINTERSECTION((#610,#630),(0.,0.));
+#1010=IFCPRODUCTDEFINITIONSHAPE($,$,(#1011));
+#1011=IFCSHAPEREPRESENTATION(#20,'Body','CSG',(#1012));
+#1012=IFCBLOCK(#21,1.,1.,1.);
+/* ---- TAIL: everything below this line is what a mid-parse prefix misses. */
+#112=IFCCARTESIANPOINT((0.,0.));
+#113=IFCCARTESIANPOINT((1.,0.));
+#132=IFCCARTESIANPOINT((0.,0.));
+#133=IFCCARTESIANPOINT((0.,1.));
+#410=IFCGRIDAXIS('U1',#430,.T.);
+#411=IFCGRIDAXIS('U2',#431,.T.);
+#412=IFCGRIDAXIS('U3',#432,.T.);
+#413=IFCGRIDAXIS('U4',#433,.T.);
+#414=IFCGRIDAXIS('U5',#434,.T.);
+#415=IFCGRIDAXIS('U6',#435,.T.);
+#416=IFCGRIDAXIS('U7',#436,.T.);
+#417=IFCGRIDAXIS('U8',#437,.T.);
+#420=IFCGRIDAXIS('V1',#438,.T.);
+#421=IFCGRIDAXIS('V2',#439,.T.);
+#422=IFCGRIDAXIS('V3',#440,.T.);
+#423=IFCGRIDAXIS('V4',#441,.T.);
+#424=IFCGRIDAXIS('V5',#442,.T.);
+#425=IFCGRIDAXIS('V6',#443,.T.);
+#426=IFCGRIDAXIS('V7',#444,.T.);
+#427=IFCGRIDAXIS('V8',#445,.T.);
+#430=IFCPOLYLINE((#450,#451));
+#431=IFCPOLYLINE((#452,#453));
+#432=IFCPOLYLINE((#454,#455));
+#433=IFCPOLYLINE((#456,#457));
+#434=IFCPOLYLINE((#458,#459));
+#435=IFCPOLYLINE((#460,#461));
+#436=IFCPOLYLINE((#462,#463));
+#437=IFCPOLYLINE((#464,#465));
+#438=IFCPOLYLINE((#466,#467));
+#439=IFCPOLYLINE((#468,#469));
+#440=IFCPOLYLINE((#470,#471));
+#441=IFCPOLYLINE((#472,#473));
+#442=IFCPOLYLINE((#474,#475));
+#443=IFCPOLYLINE((#476,#477));
+#444=IFCPOLYLINE((#478,#479));
+#445=IFCPOLYLINE((#480,#481));
+#450=IFCCARTESIANPOINT((0.,0.));
+#451=IFCCARTESIANPOINT((1.,0.));
+#452=IFCCARTESIANPOINT((0.,1.));
+#453=IFCCARTESIANPOINT((1.,1.));
+#454=IFCCARTESIANPOINT((0.,2.));
+#455=IFCCARTESIANPOINT((1.,2.));
+#456=IFCCARTESIANPOINT((0.,3.));
+#457=IFCCARTESIANPOINT((1.,3.));
+#458=IFCCARTESIANPOINT((0.,4.));
+#459=IFCCARTESIANPOINT((1.,4.));
+#460=IFCCARTESIANPOINT((0.,5.));
+#461=IFCCARTESIANPOINT((1.,5.));
+#462=IFCCARTESIANPOINT((0.,6.));
+#463=IFCCARTESIANPOINT((1.,6.));
+#464=IFCCARTESIANPOINT((0.,7.));
+#465=IFCCARTESIANPOINT((1.,7.));
+#466=IFCCARTESIANPOINT((0.,0.));
+#467=IFCCARTESIANPOINT((0.,1.));
+#468=IFCCARTESIANPOINT((1.,0.));
+#469=IFCCARTESIANPOINT((1.,1.));
+#470=IFCCARTESIANPOINT((2.,0.));
+#471=IFCCARTESIANPOINT((2.,1.));
+#472=IFCCARTESIANPOINT((3.,0.));
+#473=IFCCARTESIANPOINT((3.,1.));
+#474=IFCCARTESIANPOINT((4.,0.));
+#475=IFCCARTESIANPOINT((4.,1.));
+#476=IFCCARTESIANPOINT((5.,0.));
+#477=IFCCARTESIANPOINT((5.,1.));
+#478=IFCCARTESIANPOINT((6.,0.));
+#479=IFCCARTESIANPOINT((6.,1.));
+#480=IFCCARTESIANPOINT((7.,0.));
+#481=IFCCARTESIANPOINT((7.,1.));
+ENDSEC;
+END-ISO-10303-21;
