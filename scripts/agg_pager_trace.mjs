@@ -48,6 +48,30 @@
  * that — it exhausts the product worklist before it touches a relationship —
  * but a caller that interleaved the two would mis-attribute. Per-PHASE
  * attribution has no such assumption; it is a tag read at request time.
+ *
+ * Which state is per provider, and why it matters
+ * ----------------------------------------------
+ * A `--preview` run constructs SEVERAL providers: `StorePreviewChannel`
+ * builds one per snapshot generation during the parse, and the load builds
+ * its own. Three separate review rounds on this file each found a different
+ * field that had been left module-global across them, so the boundary is
+ * stated once here and enforced in {@link stateOf}:
+ *
+ *  - **Per provider** (all of it lives in `stateOf`): ghost list, resident
+ *    shadow, ever-loaded set, miss classification, load order, measurement
+ *    intervals and their counters, and the `--dump-stream` request stream.
+ *    Each describes how ONE cache behaved. The interval counters matter
+ *    most: the shipped policy evaluates every provider independently, so a
+ *    globally-closed interval could report a trigger no single provider can
+ *    reach. The request stream matters most for correctness of the
+ *    *thresholds*, since `pager_policy_sim.mjs` replays it through a single
+ *    LRU — only one provider's stream is ever written out.
+ *  - **Store-wide** (legitimately global — there is one store and one
+ *    file): the per-phase read/byte counters and the per-chunk-index load
+ *    histogram.
+ *  - **The load's provider only**: the wave and relationship records, which
+ *    the aggregate drain owns. The preview channel finishes during the
+ *    parse, before the drain begins, so these never interleave.
  */
 import * as fs from 'node:fs'
 import * as process from 'node:process'
@@ -229,9 +253,6 @@ const chunkLoads = new Map()
 /** Requests per chunk index, over the whole run. */
 const chunkRequests = new Map()
 
-/** Chunk indices in load order, for access-pattern shape. */
-const missOrder = []
-
 /** Per-wave scratch, set by the ensureForStep wrapper. */
 let wave
 
@@ -292,7 +313,35 @@ if ( capOverride > 0 ) {
 const providerState = new WeakMap()
 
 /**
- * Per-provider classification state, created on first use.
+ * Providers in first-seen order, so the report can enumerate them (a
+ * WeakMap cannot be iterated).
+ */
+const providers = []
+
+/**
+ * Per-provider measurement state, created on first use.
+ *
+ * EVERYTHING here is a property of ONE provider's cache, so all of it is
+ * keyed on the provider instance. Getting that boundary wrong is the
+ * defect this file has now had reported three times, each on a different
+ * field, so the rule is written down rather than left to be re-derived:
+ *
+ *   per provider  — anything describing how one cache behaved: the ghost
+ *                   list, the resident shadow, which chunks it has ever
+ *                   loaded, its miss classification, its load order, its
+ *                   measurement intervals, and its request stream.
+ *   store-wide    — anything describing traffic to the shared store: the
+ *                   per-phase byte/read counters, and the per-chunk-index
+ *                   load histogram. Those aggregate legitimately because
+ *                   there is only one store and one file.
+ *
+ * The interval counters in particular have to be per provider because the
+ * production policy evaluates each provider independently: a global
+ * 4,096-request interval can be closed by requests from several providers
+ * interleaved, so the reported hot-interval count could meet the trigger
+ * when no individual provider did, or miss it when one did. That statistic
+ * exists precisely to predict what the policy will do, so blending it
+ * makes it worse than absent.
  *
  * `ghost` is a SINGLE insertion-ordered Set, matching
  * `WindowedStepBufferProvider.ghostChunks_` — a parallel queue + set
@@ -303,69 +352,89 @@ const providerState = new WeakMap()
  * `scripts/pager_policy_sim.mjs --selftest` pins the counter-example.
  *
  * @param {object} provider The windowed provider.
- * @return {object} Its `{ ghost, shadow, everLoaded }`.
+ * @return {object} That provider's measurement state.
  */
 function stateOf( provider ) {
 
   let state = providerState.get( provider )
 
-  if ( state === void 0 ) {
-
-    state = { ghost: new Set(), shadow: new Set(), everLoaded: new Set() }
-    providerState.set( provider, state )
+  if ( state !== void 0 ) {
+    return state
   }
+
+  state = {
+    ordinal: providers.length + 1,
+
+    // Cache behaviour.
+    ghost: new Set(),
+    shadow: new Set(),
+    everLoaded: new Set(),
+
+    // Classification totals.
+    requests: 0,
+    loads: 0,
+    capacity: 0,
+    compulsory: 0,
+
+    // Load-order shape (chunk indices in the order this provider read them).
+    missOrder: [],
+
+    // Measurement intervals.
+    intervals: [],
+    touched: new Set(),
+    intervalRequests: 0,
+    intervalLoads: 0,
+    intervalCapacity: 0,
+
+    // Replayable request stream, only materialised under --dump-stream.
+    spans: streamOut !== void 0 ? new Int32Array( 1 << 16 ) : void 0,
+    spanLength: 0,
+  }
+
+  providerState.set( provider, state )
+  providers.push( provider )
 
   return state
 }
 
-let capacityMisses = 0
-let compulsoryMisses = 0
-
-/** Per-interval samples of the policy's candidate trigger signals. */
-const intervals = []
-const touchedThisInterval = new Set()
-
-let intervalReqs = 0
-let intervalMisses = 0
-let intervalCapacity = 0
+/** Run-wide request ordinal, used only as the cap trace's x-axis. */
 let totalRequests = 0
 
 /** Cap changes observed, as `[ requestIndex, cap, providerOrdinal ]`. */
 const capTrace = []
 
-/** Providers seen -> ordinal, so a second one (the preview channel's own)
- * is visible in the trace rather than blurred into the load's. */
-const providerOrdinals = new WeakMap()
-let seenProviderCount = 0
 let lastSeenCap = -1
 let lastSeenOrdinal = -1
 
-/** Replayable stream: one `[ firstChunk, lastChunk ]` pair per ensureResident. */
-let streamSpans = streamOut !== void 0 ? new Int32Array( 1 << 21 ) : void 0
-let streamLength = 0
-
 /**
- * Append one call's chunk span to the replayable stream.
+ * Append one call's chunk span to a provider's replayable stream.
  *
+ * Per provider, not per run: `pager_policy_sim.mjs` replays a stream
+ * through a SINGLE LRU, so a file holding two providers' interleaved
+ * requests would simulate a cache that never existed — and the thresholds
+ * come off that simulation. Only one provider's stream is ever written
+ * out; see the dump at the end of the report.
+ *
+ * @param {object} state The provider's measurement state.
  * @param {number} first First chunk index of the span.
  * @param {number} last Last chunk index of the span, inclusive.
  */
-function recordSpan( first, last ) {
+function recordSpan( state, first, last ) {
 
-  if ( streamSpans === void 0 ) {
+  if ( state.spans === void 0 ) {
     return
   }
 
-  if ( streamLength + 2 > streamSpans.length ) {
+  if ( state.spanLength + 2 > state.spans.length ) {
 
-    const grown = new Int32Array( streamSpans.length * 2 )
+    const grown = new Int32Array( state.spans.length * 2 )
 
-    grown.set( streamSpans )
-    streamSpans = grown
+    grown.set( state.spans )
+    state.spans = grown
   }
 
-  streamSpans[ streamLength++ ] = first
-  streamSpans[ streamLength++ ] = last
+  state.spans[ state.spanLength++ ] = first
+  state.spans[ state.spanLength++ ] = last
 }
 
 /**
@@ -392,20 +461,24 @@ function ghostPush( ghost, chunkIndex, cap ) {
   }
 }
 
-/** Close the current measurement interval and start a new one. */
-function closeInterval() {
+/**
+ * Close one provider's current measurement interval and start a new one.
+ *
+ * @param {object} state The provider's measurement state.
+ */
+function closeInterval( state ) {
 
-  intervals.push( {
-    requests: intervalReqs,
-    misses: intervalMisses,
-    capacity: intervalCapacity,
-    distinct: touchedThisInterval.size,
+  state.intervals.push( {
+    requests: state.intervalRequests,
+    misses: state.intervalLoads,
+    capacity: state.intervalCapacity,
+    distinct: state.touched.size,
   } )
 
-  intervalReqs = 0
-  intervalMisses = 0
-  intervalCapacity = 0
-  touchedThisInterval.clear()
+  state.intervalRequests = 0
+  state.intervalLoads = 0
+  state.intervalCapacity = 0
+  state.touched.clear()
 }
 
 const rawEnsureResident = providerProto.ensureResident
@@ -445,15 +518,16 @@ providerProto.ensureResident = async function( address, length ) {
     } else if ( load ) {
       ++counters.loads
       chunkLoads.set( chunkIndex, ( chunkLoads.get( chunkIndex ) ?? 0 ) + 1 )
-      missOrder.push( chunkIndex )
 
-      ++intervalMisses
+      ++state.loads
+      ++state.intervalLoads
+      state.missOrder.push( chunkIndex )
 
       if ( state.ghost.delete( chunkIndex ) ) {
-        ++capacityMisses
-        ++intervalCapacity
+        ++state.capacity
+        ++state.intervalCapacity
       } else if ( !state.everLoaded.has( chunkIndex ) ) {
-        ++compulsoryMisses
+        ++state.compulsory
       }
 
       state.everLoaded.add( chunkIndex )
@@ -462,11 +536,15 @@ providerProto.ensureResident = async function( address, length ) {
     }
 
     ++totalRequests
-    ++intervalReqs
-    touchedThisInterval.add( chunkIndex )
+    ++state.requests
+    ++state.intervalRequests
+    state.touched.add( chunkIndex )
 
-    if ( intervalReqs >= intervalRequests ) {
-      closeInterval()
+    // Per provider: the production policy evaluates each provider's own
+    // interval independently, so an interval closed by another provider's
+    // requests would predict a trigger that cannot happen.
+    if ( state.intervalRequests >= intervalRequests ) {
+      closeInterval( state )
     }
 
     if ( wave !== void 0 ) {
@@ -488,21 +566,14 @@ providerProto.ensureResident = async function( address, length ) {
     wave.maxAddress = Math.max( wave.maxAddress, address + length )
   }
 
-  recordSpan( firstChunk, lastChunk )
+  recordSpan( state, firstChunk, lastChunk )
 
   const cap = this.maxResidentChunks_
 
-  let ordinal = providerOrdinals.get( this )
-
-  if ( ordinal === void 0 ) {
-    ordinal = ++seenProviderCount
-    providerOrdinals.set( this, ordinal )
-  }
-
-  if ( cap !== lastSeenCap || ordinal !== lastSeenOrdinal ) {
-    capTrace.push( [ totalRequests, cap, ordinal ] )
+  if ( cap !== lastSeenCap || state.ordinal !== lastSeenOrdinal ) {
+    capTrace.push( [ totalRequests, cap, state.ordinal ] )
     lastSeenCap = cap
-    lastSeenOrdinal = ordinal
+    lastSeenOrdinal = state.ordinal
   }
 
   const result = await rawEnsureResident.call( this, address, length )
@@ -917,29 +988,64 @@ const loadCounts = [ ...chunkLoads.values() ]
 const loadedChunks = loadCounts.length
 const totalLoads = loadCounts.reduce( ( a, b ) => a + b, 0 )
 
-let forward = 0
-let backward = 0
-let adjacentForward = 0
-let repeats = 0
-const jumpSizes = []
+/**
+ * Load-order shape for one provider's read sequence — the statistic that
+ * tells "sequential", "strided" and "random" apart.
+ *
+ * Per provider: interleaving two caches' read orders produces jumps that
+ * neither one made.
+ *
+ * @param {number[]} order Chunk indices in the order they were loaded.
+ * @return {object} Step counts and the jump-size distribution.
+ */
+function loadOrderShape( order ) {
 
-for ( let i = 1; i < missOrder.length; ++i ) {
+  const jumpSizes = []
 
-  const delta = missOrder[ i ] - missOrder[ i - 1 ]
+  let forward = 0
+  let backward = 0
+  let adjacentForward = 0
+  let repeats = 0
 
-  if ( delta > 0 ) {
-    ++forward
-    if ( delta === 1 ) {
-      ++adjacentForward
+  for ( let i = 1; i < order.length; ++i ) {
+
+    const delta = order[ i ] - order[ i - 1 ]
+
+    if ( delta > 0 ) {
+      ++forward
+      if ( delta === 1 ) {
+        ++adjacentForward
+      }
+    } else if ( delta < 0 ) {
+      ++backward
+    } else {
+      ++repeats
     }
-  } else if ( delta < 0 ) {
-    ++backward
-  } else {
-    ++repeats
+
+    jumpSizes.push( Math.abs( delta ) )
   }
 
-  jumpSizes.push( Math.abs( delta ) )
+  return { forward, backward, adjacentForward, repeats, jumpSizes }
 }
+
+const providerStates = providers.map( ( provider ) => stateOf( provider ) )
+
+// Flush each provider's partial trailing interval before anything reads
+// the samples, so a short run still reports the work it did.
+for ( const state of providerStates ) {
+
+  if ( state.intervalRequests > 0 ) {
+    closeInterval( state )
+  }
+}
+
+const loadProvider =
+  providerStates.reduce(
+      ( best, state ) => ( best === void 0 || state.requests > best.requests ?
+        state : best ), void 0 )
+const shape = loadOrderShape( loadProvider?.missOrder ?? [] )
+const { forward, backward, adjacentForward, repeats } = shape
+const jumpSizes = shape.jumpSizes
 
 console.log( `\n=== #616 pager window trace — ${filePath}` )
 console.log( `file ${( fileSize / BYTES_PER_MB ).toFixed( 1 )} MB, ` +
@@ -984,40 +1090,69 @@ console.log( `load order: ${forward} forward (${adjacentForward} adjacent), ` +
   `median |jump| ${percentile( jumpSizes.slice(), 0.5 )}, ` +
   `p90 ${percentile( jumpSizes.slice(), 0.9 )}` )
 
-if ( intervalReqs > 0 ) {
-  closeInterval()
+/**
+ * Print one provider's miss classification and interval statistics.
+ *
+ * Both are properties of a single cache, so they are reported per provider
+ * rather than summed. A run with one provider (anything without
+ * `--preview`) prints exactly one of these, and the numbers are the same
+ * ones the blended report used to print.
+ *
+ * @param {object} state The provider's measurement state.
+ * @param {string} label How to name it in the output.
+ */
+function reportProvider( state, label ) {
+
+  const beyond = state.loads - state.capacity - state.compulsory
+  const loads = Math.max( state.loads, 1 )
+
+  console.log( `\n${label}: ${state.requests} chunk requests, ${state.loads} loads` )
+  console.log( `  miss classification: ` +
+    `${state.compulsory} compulsory (${( 100 * state.compulsory / loads ).toFixed( 1 )}%), ` +
+    `${state.capacity} capacity (${( 100 * state.capacity / loads ).toFixed( 1 )}%), ` +
+    `${beyond} beyond the ghost list` )
+  console.log( '    capacity = the chunk was in a ghost list of the last `cap` ' +
+    'evictions, so a larger window would have held it' )
+
+  const capacityPerInterval = state.intervals.map( ( row ) => row.capacity )
+  const missPerInterval = state.intervals.map( ( row ) => row.misses )
+  const distinctPerInterval = state.intervals.map( ( row ) => row.distinct )
+  const hotIntervals =
+    state.intervals.filter(
+        ( row ) => row.capacity >= 8 && row.capacity >= 0.5 * row.misses )
+
+  console.log( `  ${state.intervals.length} intervals of ${intervalRequests} requests:` )
+  console.log( `    capacity misses/interval: p50 ${percentile( capacityPerInterval.slice(), 0.5 )}, ` +
+    `p90 ${percentile( capacityPerInterval.slice(), 0.9 )}, ` +
+    `max ${Math.max( 0, ...capacityPerInterval )}` )
+  console.log( `    total misses/interval:    p50 ${percentile( missPerInterval.slice(), 0.5 )}, ` +
+    `p90 ${percentile( missPerInterval.slice(), 0.9 )}, ` +
+    `max ${Math.max( 0, ...missPerInterval )}` )
+  console.log( `    distinct chunks touched:  p50 ${percentile( distinctPerInterval.slice(), 0.5 )}, ` +
+    `p90 ${percentile( distinctPerInterval.slice(), 0.9 )}, ` +
+    `max ${Math.max( 0, ...distinctPerInterval )}` )
+  console.log( `    intervals meeting "capacity >= 8 and >= half of misses": ` +
+    `${hotIntervals.length} of ${state.intervals.length} ` +
+    `(${( 100 * hotIntervals.length / Math.max( state.intervals.length, 1 ) ).toFixed( 1 )}%)` )
 }
 
-const otherMisses = totalLoads - capacityMisses - compulsoryMisses
+if ( providerStates.length > 1 ) {
+  console.log( `\n--- ${providerStates.length} providers were constructed ` +
+    `(--preview builds one per snapshot generation, the load builds its ` +
+    `own). Miss classification, intervals and load order below are PER ` +
+    `PROVIDER: the policy evaluates each cache independently, so blending ` +
+    `them would predict triggers no single provider can reach. The store ` +
+    `totals and the chunk histogram above are store-wide, which is correct ` +
+    `— there is one store and one file.` )
+}
 
-console.log( `\nmiss classification over ${totalLoads} loads: ` +
-  `${compulsoryMisses} compulsory (${( 100 * compulsoryMisses /
-    Math.max( totalLoads, 1 ) ).toFixed( 1 )}%), ` +
-  `${capacityMisses} capacity (${( 100 * capacityMisses /
-    Math.max( totalLoads, 1 ) ).toFixed( 1 )}%), ` +
-  `${otherMisses} beyond the ghost list` )
-console.log( '  capacity = the chunk was in a ghost list of the last `cap` ' +
-  'evictions, so a larger window would have held it' )
+for ( const state of providerStates ) {
 
-const capacityPerInterval = intervals.map( ( row ) => row.capacity )
-const missPerInterval = intervals.map( ( row ) => row.misses )
-const distinctPerInterval = intervals.map( ( row ) => row.distinct )
-const hotIntervals =
-  intervals.filter( ( row ) => row.capacity >= 8 && row.capacity >= 0.5 * row.misses )
-
-console.log( `\n${intervals.length} intervals of ${intervalRequests} requests:` )
-console.log( `  capacity misses/interval: p50 ${percentile( capacityPerInterval.slice(), 0.5 )}, ` +
-  `p90 ${percentile( capacityPerInterval.slice(), 0.9 )}, ` +
-  `max ${Math.max( 0, ...capacityPerInterval )}` )
-console.log( `  total misses/interval:    p50 ${percentile( missPerInterval.slice(), 0.5 )}, ` +
-  `p90 ${percentile( missPerInterval.slice(), 0.9 )}, ` +
-  `max ${Math.max( 0, ...missPerInterval )}` )
-console.log( `  distinct chunks touched:  p50 ${percentile( distinctPerInterval.slice(), 0.5 )}, ` +
-  `p90 ${percentile( distinctPerInterval.slice(), 0.9 )}, ` +
-  `max ${Math.max( 0, ...distinctPerInterval )}` )
-console.log( `  intervals meeting "capacity >= 8 and >= half of misses": ` +
-  `${hotIntervals.length} of ${intervals.length} ` +
-  `(${( 100 * hotIntervals.length / Math.max( intervals.length, 1 ) ).toFixed( 1 )}%)` )
+  reportProvider( state,
+      providerStates.length > 1 ?
+        `provider ${state.ordinal}${state === loadProvider ? ' (the load)' : ''}` :
+        'provider' )
+}
 
 if ( capTrace.length > 1 ) {
   console.log( `\ncap trace (request index -> cap): ` +
@@ -1025,11 +1160,25 @@ if ( capTrace.length > 1 ) {
       `${at}:cap${cap}/provider${ordinal}` ).join( ' ' )}` )
 }
 
-if ( streamSpans !== void 0 ) {
+if ( streamOut !== void 0 && loadProvider !== void 0 ) {
+
+  // One provider's stream only. `pager_policy_sim.mjs` replays through a
+  // single LRU, so a file holding several providers' interleaved requests
+  // would simulate a cache that never existed — and the #616 thresholds
+  // are chosen off that simulation. The busiest provider is the load's.
   fs.writeFileSync( streamOut,
-      Buffer.from( streamSpans.buffer, 0, streamLength * 4 ) )
-  console.log( `\nrequest stream: ${streamLength / 2} spans -> ${streamOut} ` +
-    `(${( streamLength * 4 / BYTES_PER_MB ).toFixed( 1 )} MB)` )
+      Buffer.from( loadProvider.spans.buffer, 0, loadProvider.spanLength * 4 ) )
+  console.log( `\nrequest stream: ${loadProvider.spanLength / 2} spans from ` +
+    `provider ${loadProvider.ordinal} -> ${streamOut} ` +
+    `(${( loadProvider.spanLength * 4 / BYTES_PER_MB ).toFixed( 1 )} MB)` )
+
+  if ( providerStates.length > 1 ) {
+    console.log( `  NOT blended: ${providerStates.length - 1} other ` +
+      `provider(s) with ` +
+      `${providerStates.filter( ( state ) => state !== loadProvider )
+        .map( ( state ) => state.spanLength / 2 ).join( ', ' )} spans were ` +
+      `excluded, because the simulator models one cache` )
+  }
 }
 
 if ( structure.meshes !== void 0 ) {
@@ -1110,7 +1259,18 @@ if ( jsonOut !== void 0 ) {
     phases,
     chunkLoads: [ ...chunkLoads.entries() ],
     chunkRequests: [ ...chunkRequests.entries() ],
-    missOrder: missOrder.slice( 0, 200000 ),
+    // Per provider — see stateOf(). The blended array this used to hold
+    // interleaved several caches' read orders under --preview.
+    providers: providerStates.map( ( state ) => ( {
+      ordinal: state.ordinal,
+      requests: state.requests,
+      loads: state.loads,
+      capacity: state.capacity,
+      compulsory: state.compulsory,
+      intervals: state.intervals,
+      missOrder: state.missOrder.slice( 0, 200000 ),
+    } ) ),
+    capTrace,
     structure,
     relationships,
     waves: waves.slice( 0, 5000 ),
