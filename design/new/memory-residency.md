@@ -160,9 +160,9 @@ Two properties make growing safe rather than a gamble:
   trick): a load whose chunk is in the ghost list is a *capacity* miss that a
   larger window would have avoided, while a load of a chunk never resident is
   *compulsory* and no window size avoids it. A sweep's misses are compulsory,
-  so a sweep does not grow. Measured at the shipped window: **D3D 52.8% of
-  loads are capacity misses and 207 of 1,095 intervals meet the trigger;
-  PSB 4.0% and 0 of 62.**
+  so a sweep does not grow. Measured at the shipped window: **D3D 85.2% of
+  loads are capacity misses and 360 of 1,095 intervals meet the trigger;
+  PSB 5.9% and 0 of 62.**
 
 An **explicit** `maxResidentChunks` opts out and is treated as a hard budget
 — the callers that pass one chose it for a reason (a cramped test fixture, a
@@ -195,8 +195,20 @@ release on the model, not an automatic decay.
 and per-interval trigger statistics for any model, and can dump the request
 stream; `scripts/pager_policy_sim.mjs` replays a dumped stream through
 candidate policies offline — which is what made the trigger thresholds a
-measurement (a sweep of interval 2,048–16,384 x trigger 4–16 all land D3D
-within 0.012x–0.028x of the shipped window's load count) rather than a taste.
+measurement rather than a taste: over trigger 4–16 x interval 2,048–16,384
+the policy reaches a whole-file window in two doublings in every cell, and
+only the speed of getting there moves (0.012x–0.057x of the shipped window's
+load count; the 2,048–4,096 band is flat at 0.012x–0.017x).
+
+Its `--selftest` pins the one defect that would silently invalidate all of
+that. A ghost list kept as a parallel queue **plus** set desyncs the moment a
+ghost hit consumes the set entry and leaves the queue entry behind: the stale
+entry is then what the next trim shifts, so it deletes a newer chunk's valid
+membership and the effective ghost window shrinks below `cap`. The effect is
+an *undercount* of exactly the signal the policy triggers on — it made D3D
+read 52.8% capacity misses when the true figure is 85.2%. The provider itself
+always used a single insertion-ordered Set and was never affected; both
+replay tools now match it.
 
 
 ## Priorities / what's next (conway side)

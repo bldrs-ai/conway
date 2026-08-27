@@ -54,6 +54,7 @@ function flagValue( name, fallback ) {
 }
 
 const valueFlags = new Set( [ '--caps', '--interval', '--trigger', '--fraction' ] )
+const wantSelfTest = argv.includes( '--selftest' )
 const caps =
   ( flagValue( '--caps', '16,24,32,48,64,96,128' ) ).split( ',' ).map( Number )
 const evalInterval = Number( flagValue( '--interval', '4096' ) )
@@ -62,10 +63,10 @@ const fraction = Number( flagValue( '--fraction', '0.5' ) )
 const files =
   argv.filter( ( a, i ) => !a.startsWith( '--' ) && !valueFlags.has( argv[ i - 1 ] ) )
 
-if ( files.length === 0 ) {
+if ( files.length === 0 && !wantSelfTest ) {
   console.error(
       'usage: pager_policy_sim.mjs [--caps 16,32,64] [--interval N] ' +
-      '[--trigger N] [--fraction F] <stream.bin>...' )
+      '[--trigger N] [--fraction F] [--selftest] <stream.bin>...' )
   process.exit( 2 )
 }
 
@@ -80,6 +81,143 @@ function readStream( path ) {
   const raw = fs.readFileSync( path )
 
   return new Int32Array( raw.buffer, raw.byteOffset, raw.byteLength / 4 )
+}
+
+/**
+ * Classify each reference in a chunk sequence against a ghost list, using
+ * the structure named by `useQueue`.
+ *
+ * Exists for {@link selfTest} only: it is the smallest thing that exhibits
+ * the queue/set desync, so the regression can be a demonstration rather
+ * than a comment.
+ *
+ * @param {number[]} sequence Chunk indices, one reference each.
+ * @param {number} cap Residency cap in chunks.
+ * @param {boolean} useQueue Use a parallel queue + set (the broken shape)
+ * rather than the single insertion-ordered Set.
+ * @return {string[]} One of 'hit' / 'capacity' / 'beyond' per reference.
+ */
+function classifyReferences( sequence, cap, useQueue ) {
+
+  const resident = new Map()
+  const ghostSet = new Set()
+  const ghostQueue = []
+  const classes = []
+
+  const push = ( chunkIndex ) => {
+
+    if ( useQueue ) {
+
+      if ( ghostSet.has( chunkIndex ) ) {
+        return
+      }
+
+      ghostQueue.push( chunkIndex )
+      ghostSet.add( chunkIndex )
+
+      while ( ghostQueue.length > cap ) {
+        ghostSet.delete( ghostQueue.shift() )
+      }
+
+      return
+    }
+
+    ghostSet.add( chunkIndex )
+
+    while ( ghostSet.size > cap ) {
+
+      const oldest = ghostSet.values().next()
+
+      if ( oldest.done === true ) {
+        break
+      }
+
+      ghostSet.delete( oldest.value )
+    }
+  }
+
+  for ( const chunkIndex of sequence ) {
+
+    if ( resident.has( chunkIndex ) ) {
+
+      resident.delete( chunkIndex )
+      resident.set( chunkIndex, true )
+      classes.push( 'hit' )
+      continue
+    }
+
+    classes.push( ghostSet.delete( chunkIndex ) ? 'capacity' : 'beyond' )
+    resident.set( chunkIndex, true )
+
+    if ( resident.size <= cap ) {
+      continue
+    }
+
+    for ( const candidate of resident.keys() ) {
+
+      if ( resident.size <= cap ) {
+        break
+      }
+
+      if ( candidate === chunkIndex ) {
+        continue
+      }
+
+      resident.delete( candidate )
+      push( candidate )
+    }
+  }
+
+  return classes
+}
+
+/**
+ * Prove the ghost list classifies the desync counter-example correctly, and
+ * that the shape this script used to have does not.
+ *
+ * `0,1,3,2,1,0` at cap 2: the reference to 1 consumes 1's ghost entry, and
+ * with a parallel queue the stale `1` is then what the next trim shifts —
+ * deleting 0's still-valid membership, so the final 0 reads as a first
+ * touch. A cap-2 ghost list demonstrably still holds 0 at that point, so
+ * the correct answer is 'capacity'.
+ *
+ * @return {number} Process exit code.
+ */
+function selfTest() {
+
+  const sequence = [ 0, 1, 3, 2, 1, 0 ]
+  const fixed = classifyReferences( sequence, 2, false )
+  const broken = classifyReferences( sequence, 2, true )
+  const expectedFixed = 'beyond beyond beyond beyond capacity capacity'
+  const expectedBroken = 'beyond beyond beyond beyond capacity beyond'
+  let failures = 0
+
+  console.log( `sequence ${sequence.join( ',' )} at cap 2` )
+  console.log( `  single Set (this script, and the provider): ${fixed.join( ' ' )}` )
+  console.log( `  parallel queue + set (the desync)         : ${broken.join( ' ' )}` )
+
+  if ( fixed.join( ' ' ) !== expectedFixed ) {
+    console.error( `FAIL: expected "${expectedFixed}"` )
+    ++failures
+  }
+
+  if ( broken.join( ' ' ) !== expectedBroken ) {
+    console.error(
+        'FAIL: the counter-example no longer reproduces the desync — the ' +
+        'regression it pins may have moved' )
+    ++failures
+  }
+
+  console.log( failures === 0 ?
+    'selftest OK: the ghost list credits the final 0 as a capacity miss, ' +
+    'and the queue+set shape undercounts it' :
+    `selftest FAILED (${failures})` )
+
+  return failures === 0 ? 0 : 1
+}
+
+if ( wantSelfTest ) {
+  process.exit( selfTest() )
 }
 
 /**
@@ -101,7 +239,19 @@ function replay( spans, cap, options = {} ) {
 
   /** Resident chunks; Map insertion order doubles as LRU order. */
   const resident = new Map()
-  const ghostQueue = []
+
+  /*
+   * Recently-evicted chunks, in a SINGLE insertion-ordered Set — the same
+   * structure `WindowedStepBufferProvider.ghostChunks_` uses, and it has to
+   * stay that way. A parallel queue + set desyncs the moment a ghost hit
+   * consumes the set entry and leaves the queue entry behind: the stale
+   * entry is what the next trim shifts, so it deletes a *newer* chunk's
+   * valid membership and the effective ghost window shrinks below `cap`.
+   * Replaying 0,1,3,2,1,0 at cap 2 then misclassifies the final 0 as
+   * beyond-the-window when a cap-2 ghost list plainly still holds it —
+   * see `--selftest`. The failure direction is an UNDERCOUNT of capacity
+   * misses, so it silently biases any threshold derived from this replay.
+   */
   const ghostSet = new Set()
 
   let currentCap = cap
@@ -133,9 +283,8 @@ function replay( spans, cap, options = {} ) {
       ++intervalMisses
       resident.set( chunkIndex, true )
 
-      if ( adaptive && ghostSet.has( chunkIndex ) ) {
+      if ( adaptive && ghostSet.delete( chunkIndex ) ) {
         ++intervalCapacity
-        ghostSet.delete( chunkIndex )
       }
     }
 
@@ -170,13 +319,19 @@ function replay( spans, cap, options = {} ) {
 
         resident.delete( candidate )
 
-        if ( adaptive && !ghostSet.has( candidate ) ) {
+        if ( adaptive ) {
 
-          ghostQueue.push( candidate )
           ghostSet.add( candidate )
 
-          while ( ghostQueue.length > currentCap ) {
-            ghostSet.delete( ghostQueue.shift() )
+          while ( ghostSet.size > currentCap ) {
+
+            const oldest = ghostSet.values().next()
+
+            if ( oldest.done === true ) {
+              break
+            }
+
+            ghostSet.delete( oldest.value )
           }
         }
       }

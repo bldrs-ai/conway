@@ -279,15 +279,44 @@ if ( capOverride > 0 ) {
  * every eviction at O(cap) each.
  */
 
-/** Recently-evicted chunk indices, FIFO, bounded by the cap. */
-const ghostQueue = []
-const ghostSet = new Set()
+/*
+ * All three of these are PER PROVIDER. A `--preview` run creates several —
+ * the StorePreviewChannel builds one per snapshot generation, and the load
+ * builds its own — and sharing this state across them corrupts the
+ * classification: on a new provider's first miss the post-call shadow diff
+ * reads chunks that only the *previous* provider ever held as evictions
+ * from this one, and their later loads then come back "capacity" despite
+ * never having been resident here. Keyed on the provider instance, so a
+ * multi-provider run reports each one's own behaviour.
+ */
+const providerState = new WeakMap()
 
-/** Shadow of the provider's resident key set, for eviction detection. */
-const residentShadow = new Set()
+/**
+ * Per-provider classification state, created on first use.
+ *
+ * `ghost` is a SINGLE insertion-ordered Set, matching
+ * `WindowedStepBufferProvider.ghostChunks_` — a parallel queue + set
+ * desyncs as soon as a ghost hit consumes the set entry and leaves the
+ * queue entry behind, and the next trim then shifts that stale entry and
+ * deletes a newer chunk's valid membership. The effect is an UNDERCOUNT of
+ * capacity misses, which is exactly the signal the #616 policy triggers on.
+ * `scripts/pager_policy_sim.mjs --selftest` pins the counter-example.
+ *
+ * @param {object} provider The windowed provider.
+ * @return {object} Its `{ ghost, shadow, everLoaded }`.
+ */
+function stateOf( provider ) {
 
-/** Chunks that have been loaded at least once (compulsory-miss test). */
-const everLoaded = new Set()
+  let state = providerState.get( provider )
+
+  if ( state === void 0 ) {
+
+    state = { ghost: new Set(), shadow: new Set(), everLoaded: new Set() }
+    providerState.set( provider, state )
+  }
+
+  return state
+}
 
 let capacityMisses = 0
 let compulsoryMisses = 0
@@ -340,23 +369,26 @@ function recordSpan( first, last ) {
 }
 
 /**
- * Push an evicted chunk onto the ghost list, trimming to the cap.
+ * Push an evicted chunk onto a provider's ghost list, trimming to the cap.
  *
+ * @param {Set< number >} ghost The provider's ghost list.
  * @param {number} chunkIndex The evicted chunk.
  * @param {number} cap Current residency cap — the ghost list is the same
  * size, which is what makes a ghost hit mean "a 2x window would have hit".
  */
-function ghostPush( chunkIndex, cap ) {
+function ghostPush( ghost, chunkIndex, cap ) {
 
-  if ( ghostSet.has( chunkIndex ) ) {
-    return
-  }
+  ghost.add( chunkIndex )
 
-  ghostQueue.push( chunkIndex )
-  ghostSet.add( chunkIndex )
+  while ( ghost.size > cap ) {
 
-  while ( ghostQueue.length > cap ) {
-    ghostSet.delete( ghostQueue.shift() )
+    const oldest = ghost.values().next()
+
+    if ( oldest.done === true ) {
+      break
+    }
+
+    ghost.delete( oldest.value )
   }
 }
 
@@ -385,6 +417,7 @@ providerProto.ensureResident = async function( address, length ) {
   const lastChunk =
     Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
   const counters = phaseOf( phase )
+  const state = stateOf( this )
 
   let anyMissInCall = false
 
@@ -416,15 +449,14 @@ providerProto.ensureResident = async function( address, length ) {
 
       ++intervalMisses
 
-      if ( ghostSet.has( chunkIndex ) ) {
+      if ( state.ghost.delete( chunkIndex ) ) {
         ++capacityMisses
         ++intervalCapacity
-        ghostSet.delete( chunkIndex )
-      } else if ( !everLoaded.has( chunkIndex ) ) {
+      } else if ( !state.everLoaded.has( chunkIndex ) ) {
         ++compulsoryMisses
       }
 
-      everLoaded.add( chunkIndex )
+      state.everLoaded.add( chunkIndex )
     } else {
       ++counters.inflight
     }
@@ -480,14 +512,14 @@ providerProto.ensureResident = async function( address, length ) {
   if ( anyMissInCall ) {
 
     for ( const chunkIndex of this.chunks_.keys() ) {
-      residentShadow.add( chunkIndex )
+      state.shadow.add( chunkIndex )
     }
 
-    for ( const chunkIndex of residentShadow ) {
+    for ( const chunkIndex of state.shadow ) {
 
       if ( !this.chunks_.has( chunkIndex ) ) {
-        residentShadow.delete( chunkIndex )
-        ghostPush( chunkIndex, cap )
+        state.shadow.delete( chunkIndex )
+        ghostPush( state.ghost, chunkIndex, cap )
       }
     }
   }

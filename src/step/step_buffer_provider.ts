@@ -79,8 +79,9 @@ const DEFAULT_MAX_RESIDENT_CHUNKS = 16
  *  - Growth triggers on *capacity* misses only, classified against a ghost
  *    list of recently-evicted chunks. A forward sweep's misses are
  *    compulsory (the chunk was never resident), so a sweep does not grow:
- *    measured over PSB.ifc, 0 of 62 intervals met the trigger, against 207
- *    of 1,095 on D3D.
+ *    measured over PSB.ifc, 0 of 62 intervals met the trigger, against 360
+ *    of 1,095 on D3D — whose loads are 85.2% capacity misses against PSB's
+ *    5.9%.
  *
  * Residency is bounded by {@link ADAPTIVE_MAX_RESIDENT_BYTES} and by the
  * store's own size, so an adapted provider never holds more than the
@@ -94,10 +95,12 @@ const ADAPTIVE_MAX_RESIDENT_BYTES = 256 * 1024 * 1024
 
 /* Chunk requests per policy evaluation. Small enough to react inside a
  * load (D3D issues 4.5M requests, so ~1,100 evaluations), large enough
- * that the trigger is a rate rather than a burst. Sweeping the interval
- * over 2,048-16,384 and the trigger over 4-16 leaves D3D's simulated load
- * count within 0.012x-0.028x of the shipped window either way; the
- * midpoints are taken here. */
+ * that the trigger is a rate rather than a burst. Replaying D3D's recorded
+ * request stream (`scripts/pager_policy_sim.mjs`) over trigger 4-16 x
+ * interval 2,048-16,384, the policy reaches a whole-file window in two
+ * doublings in every cell; only how fast it gets there moves, from 0.012x
+ * of the shipped window's load count to 0.057x. The 2,048-4,096 band is
+ * flat at 0.012x-0.017x, and the midpoints are taken from it. */
 const ADAPTIVE_EVAL_REQUESTS = 4096
 
 /* Capacity misses in one interval that justify doubling — and the share of
