@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 
 /**
  * `scripts/layout_report.mjs`'s placement closure, over the grid chain
- * (conway#546).
+ * (conway#546) and the inverse `gridByAxis` lookup below it (conway#607).
  *
  * The script is the static analyser that produced conway#542's published
  * per-file "products deferring" percentages. It walks a product's placement
@@ -16,13 +16,23 @@ import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
  * rest. `IFCGRIDPLACEMENT` was in its `PLACEMENT_NAMES` set but nothing that
  * a grid placement references was, so the walk expanded exactly ONE hop and
  * stopped at `IFCVIRTUALGRIDINTERSECTION`, never reaching the axes, their
- * axis curves, or the points those bottom out in.
+ * axis curves, or the points those bottom out in. conway#546 closed that
+ * FORWARD half; conway#607 closed the inverse one, which no forward walk can
+ * reach at all — see the second test.
  *
  * **The direction of that error is what makes it worth a test.** A closure
  * that stops early makes a grid-placed product look usable SOONER than it
  * is, so the deferral and sharded-readiness curves came out optimistic — a
  * silently flattering number, which is the same failure mode as the
  * fixed-point defect codex found in round 2 of #543.
+ *
+ * These tests carry more weight than a normal tool test, because **no corpus
+ * model can stand in for them**: `IFCGRIDPLACEMENT` count is zero across all
+ * 47 models of `bldrs-ai/test-models` and zero in PSB, D3D, DOWA and
+ * MB-Khaya, measured on the real bytes (conway#607). Grids appear in real
+ * exports as annotation, not as a placement mechanism, so `gridByAxis` is
+ * never reached on the corpus and the hand-authored fixtures here are the
+ * only thing exercising this path.
  *
  * Driven through the CLI rather than by import: the script's module body
  * runs the whole tool on `process.argv`, so importing it under Jest would
@@ -33,15 +43,14 @@ import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 /* The report's blocker block, verbatim enough to slice on. */
 const BLOCKER_HEADING = 'deferred by (last record in the chain to arrive):'
 
-/* data/grid_placement_tail_axes.ifc, by construction. Three of its four
- * deferring proxies bottom out in an axis polyline's points, which is what
- * the extended closure now reaches. */
-const GRID_TAIL_LEAF_BLOCKED = 3
+/* data/grid_placement_tail_axes.ifc, by construction. One of its four
+ * deferring proxies — #500, whose own axes are at the tail — bottoms out in
+ * an axis polyline's points LATER than the last grid axis record, so the
+ * forward closure is still what names its blocker. */
+const GRID_TAIL_LEAF_BLOCKED = 1
 
-/* The one that does NOT: product #1000, whose engine-side blocker is an
- * INVERSE lookup the forward closure structurally cannot follow. See the
- * residual test below. */
-const GRID_TAIL_INVERSE_BLOCKED = 1
+/* The other three, all held by the same single all-or-nothing scan. */
+const GRID_TAIL_INVERSE_BLOCKED = 3
 
 
 /**
@@ -85,42 +94,117 @@ describe('layout_report grid-placement closure', () => {
     // useless without the axes it names.
     const blockers = blockerBlock('data/grid_placement_tail_axes.ifc')
 
-    // What actually arrives last for three of them: the axis polylines'
-    // points. conway#542 measured that the last record in a blocked chain is
-    // a leaf on 100% of the corpus files that defer, and this is the grid
-    // spelling of it.
+    // What actually arrives last for #500: its axis polylines' points, which
+    // the fixture writes after every grid axis record. conway#542 measured
+    // that the last record in a blocked chain is a leaf on 100% of the corpus
+    // files that defer, and this is the grid spelling of it. Reaching it at
+    // all needs the whole forward chain — intersection, axes, axis curves,
+    // points — so a walk that stops at the intersection fails here.
     expect(blockers).toMatch(
         new RegExp(`\\s${GRID_TAIL_LEAF_BLOCKED}\\s+\\(\\s*\\d+%\\)\\s+IFCCARTESIANPOINT`))
   })
 
-  test('the inverse gridByAxis dependency is a known, unmodelled residual', () => {
+  test('the inverse gridByAxis scan gates every grid-placed product', () => {
 
-    // Deliberately pinning a GAP, so it cannot be quietly forgotten and so
-    // the follow-up that closes it fails here rather than passing silently.
+    // conway#607, the half conway#546 deliberately left open.
     //
     // extractGridPlacement resolves the intersection and then calls
     // gridByAxis, which scans EVERY IfcGrid's UAxes/VAxes/WAxes because
     // IfcGridAxis carries no schema route back to its grid (PartOfU/V/W are
     // INVERSE attributes the generated layer drops). Those lists are
     // reference arrays, so conway#546 classifies their throw too — meaning
-    // the engine additionally requires every IfcGrid record AND its axis
-    // lists to be indexed before ANY grid placement resolves.
+    // the engine additionally requires every IfcGrid's axis list to be
+    // indexed before ANY grid placement resolves.
     //
-    // This walker cannot see that. Its closure runs forward from a product
+    // A forward closure structurally cannot see that: it runs from a product
     // through the records it references, and a product never references the
-    // grid — the grid references the axis, not the reverse. So product
-    // #1000, whose own intersection and axis curves are entirely inside the
-    // prefix, is reported as blocked only on its own intersection record,
+    // grid — the grid references the axis, not the reverse. So product #1000,
+    // whose own intersection, axes and axis curves are entirely inside the
+    // head, used to be reported as blocked on its own intersection record,
     // while the engine holds it until grid #400's axis list arrives at the
-    // tail. The report is therefore still OPTIMISTIC for it, in the same
-    // silently-flattering direction conway#546 exists to correct.
+    // tail. That is the silently-flattering direction again, and it is why
+    // the fix is an inverse pre-pass rather than another entry in a type set.
     //
-    // Closing this needs an inverse pass (grid -> axes) rather than another
-    // entry in a type set, which is why it is tracked separately.
+    // All three of the fixture's remaining deferring products land here
+    // rather than only #1000, and that is the point of consequence 2 in the
+    // issue: the scan visits every grid, so grid #400's tail axes hold back
+    // #200 and #800 too, whose own chains complete earlier.
     const blockers = blockerBlock('data/grid_placement_tail_axes.ifc')
 
     expect(blockers).toMatch(
-        new RegExp(`\\s${GRID_TAIL_INVERSE_BLOCKED}\\s+\\(\\s*\\d+%\\)\\s+IFCVIRTUALGRIDINTERSECTION`))
+        new RegExp(`\\s${GRID_TAIL_INVERSE_BLOCKED}\\s+\\(\\s*\\d+%\\)\\s+IFCGRIDAXIS`))
+
+    // And nothing is attributed to the intersection any more. Before the fix
+    // #1000 was, which is the report claiming it is ready as soon as its own
+    // intersection is scanned — the optimistic claim this closes.
+    expect(blockers).not.toContain('IFCVIRTUALGRIDINTERSECTION')
+  })
+
+  test('a grid-placed product whose own chain is local still waits on a distant grid', () => {
+
+    // The inverse gate in isolation. Everything product #200 references —
+    // placement, intersection, axes, curves, points — is written BEFORE it,
+    // so its forward closure is complete the moment the product record is
+    // scanned and the report said, correctly for that closure and wrongly for
+    // the engine, that nothing in this file defers at all.
+    //
+    // Grid #300 is the only thing that changes that. It is placed against
+    // nothing and shares no record with #200; its axes merely sit at the tail.
+    // gridByAxis scans it anyway, so the engine holds #200 until those axes
+    // arrive.
+    const file = path.join(workDir, 'local_chain_distant_grid.ifc')
+
+    fs.writeFileSync(file, [
+      'ISO-10303-21;',
+      'HEADER;',
+      'FILE_DESCRIPTION((\'\'),\'2;1\');',
+      'FILE_NAME(\'n.ifc\',\'2026-01-01T00:00:00\',(\'\'),(\'\'),\'\',\'\',\'\');',
+      'FILE_SCHEMA((\'IFC4\'));',
+      'ENDSEC;',
+      'DATA;',
+      '#1=IFCPROJECT(\'0kF0kSTOX3ovkcpuOhkPrX\',$,\'N\',$,$,$,$,(#20),#10);',
+      '#10=IFCUNITASSIGNMENT((#11));',
+      '#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+      '#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,\'Model\',3,1.0E-05,#21,$);',
+      '#21=IFCAXIS2PLACEMENT3D(#22,$,$);',
+      '#22=IFCCARTESIANPOINT((0.,0.,0.));',
+      // Grid #100 and product #200's whole placement chain, in dependency
+      // order, so the product's forward closure resolves at its own record.
+      '#100=IFCGRID(\'1kF0kSTOX3ovkcpuOhkPrX\',$,\'Near\',$,$,#101,$,(#110),(#130),$,.RECTANGULAR.);',
+      '#101=IFCLOCALPLACEMENT($,#21);',
+      '#112=IFCCARTESIANPOINT((0.,0.));',
+      '#113=IFCCARTESIANPOINT((1.,0.));',
+      '#111=IFCPOLYLINE((#112,#113));',
+      '#110=IFCGRIDAXIS(\'A\',#111,.T.);',
+      '#132=IFCCARTESIANPOINT((0.,0.));',
+      '#133=IFCCARTESIANPOINT((0.,1.));',
+      '#131=IFCPOLYLINE((#132,#133));',
+      '#130=IFCGRIDAXIS(\'1\',#131,.T.);',
+      '#202=IFCVIRTUALGRIDINTERSECTION((#110,#130),(0.,0.));',
+      '#201=IFCGRIDPLACEMENT(#202,$);',
+      '#200=IFCBUILDINGELEMENTPROXY(\'2kF0kSTOX3ovkcpuOhkPrX\',$,\'Local\',$,$,#201,$,$,.NOTDEFINED.);',
+      // Grid #300: unrelated to #200, axes at the tail.
+      '#300=IFCGRID(\'3kF0kSTOX3ovkcpuOhkPrX\',$,\'Far\',$,$,#301,$,(#310),(#330),$,.RECTANGULAR.);',
+      '#301=IFCLOCALPLACEMENT($,#21);',
+      '#310=IFCGRIDAXIS(\'B\',#311,.T.);',
+      '#330=IFCGRIDAXIS(\'2\',#331,.T.);',
+      '#311=IFCPOLYLINE((#312,#313));',
+      '#312=IFCCARTESIANPOINT((0.,0.));',
+      '#313=IFCCARTESIANPOINT((1.,0.));',
+      '#331=IFCPOLYLINE((#332,#333));',
+      '#332=IFCCARTESIANPOINT((0.,0.));',
+      '#333=IFCCARTESIANPOINT((0.,1.));',
+      'ENDSEC;',
+      'END-ISO-10303-21;',
+      '',
+    ].join('\n'))
+
+    const blockers = blockerBlock(file)
+
+    // #330 is the last axis record grid #300 lists. Naming it as the blocker
+    // is only possible through the inverse pass — no forward walk from #200
+    // reaches #300 or anything it references.
+    expect(blockers).toMatch(/\s1\s+\(\s*\d+%\)\s+IFCGRIDAXIS/)
   })
 
   test('a grid nothing is placed against does not gate its own product', () => {
@@ -192,6 +276,13 @@ describe('layout_report grid-placement closure', () => {
     // may only be named here if the walk followed IFCGRID -> IFCGRIDAXIS,
     // which is the over-correction this asserts is absent.
     expect(blockers).not.toContain('IFCDIRECTION')
+
+    // The same counterweight for the inverse gate of conway#607: this file
+    // has an IFCGRID with axes, but no IFCGRIDPLACEMENT, so gridByAxis is
+    // never called and nothing may be gated on the axis scan. That is the
+    // property the corpus depends on — every model in it has grids and none
+    // has a grid placement, so every published figure must be untouched.
+    expect(blockers).not.toContain('IFCGRIDAXIS')
 
     // And the file does defer, so the assertion above is not vacuous —
     // #200's own placement chain bottoms out at #203, written after it.

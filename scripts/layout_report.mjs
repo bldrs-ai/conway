@@ -61,6 +61,7 @@ const QUOTE = 0x27
 const SLASH = 0x2f
 const STAR = 0x2a
 const OPEN = 0x28
+const CLOSE = 0x29
 const ZERO = 0x30
 const NINE = 0x39
 
@@ -311,6 +312,83 @@ function eachRef(buf, from, to, onRef) {
 
 
 /**
+ * Collect every `#ref` that sits inside a NESTED aggregate of a record —
+ * `(#1,#2)` rather than a bare `#1` argument.
+ *
+ * Used for one thing: an `IFCGRID`'s `UAxes`/`VAxes`/`WAxes`. Those three are
+ * the only aggregate-valued attributes IfcGrid has in every schema conway
+ * generates (IFC2X3, IFC4, IFC4X3 — same eleven-or-ten attribute list, same
+ * three list slots), so "refs at aggregate depth" picks them out exactly,
+ * without hard-coding attribute positions or splitting arguments. The bare
+ * refs it skips are `ObjectPlacement` and `Representation`, neither of which
+ * the axis scan reads.
+ *
+ * Depth is counted from the record's own argument list: the first `(` after
+ * the type name opens depth 1, so an aggregate member is at depth >= 2.
+ * Strings and comments are skipped for the same reason `eachRef` skips them —
+ * both may legally contain `(` and `#123`.
+ *
+ * @param {Buffer} buf the file
+ * @param {number} from first byte of the args (the `=`)
+ * @param {number} to one past the last
+ * @param {Function} onRef called with each referenced id
+ */
+function eachAggregateRef(buf, from, to, onRef) {
+  let where = from
+  let depth = 0
+  while (where < to) {
+    const ch = buf[where]
+    if (ch === QUOTE) {
+      ++where
+      while (where < to) {
+        if (buf[where] === QUOTE) {
+          if (buf[where + 1] === QUOTE) {
+            where += 2
+            continue
+          }
+          ++where
+          break
+        }
+        ++where
+      }
+      continue
+    }
+    if (ch === SLASH && buf[where + 1] === STAR) {
+      const end = buf.indexOf('*/', where + 2)
+      where = end < 0 || end + 2 > to ? to : end + 2
+      continue
+    }
+    if (ch === OPEN) {
+      ++depth
+      ++where
+      continue
+    }
+    if (ch === CLOSE) {
+      --depth
+      ++where
+      continue
+    }
+    if (ch === HASH) {
+      let cursor = where + 1
+      let id = 0
+      let digits = 0
+      while (cursor < to && buf[cursor] >= ZERO && buf[cursor] <= NINE) {
+        id = id * 10 + (buf[cursor] - ZERO)
+        ++cursor
+        ++digits
+      }
+      if (digits > 0 && depth >= 2) {
+        onRef(id)
+      }
+      where = cursor
+      continue
+    }
+    ++where
+  }
+}
+
+
+/**
  * Turn a bucketed histogram into a cumulative count at each percentile.
  *
  * @param {Uint32Array} histogram counts per bucket
@@ -360,8 +438,13 @@ function report(path) {
   const typeNames = ['']
   const typeIndex = new Map()
   const typeOf = new Uint16Array(maxId + 1)
+  /* Every axis an IFCGRID lists, from every IFCGRID in the file. The INVERSE
+   * half of the grid chain — see the gate below for what it is for. Bounded by
+   * the axis count (1408 on the largest corpus model), so a plain array. */
+  const gridAxisRefs = []
+  const isGridPlacement = new Uint8Array(maxId + 1)
   let records = 0
-  eachRecord(buf, (id, typeStart, typeEnd, start, end) => {
+  eachRecord(buf, (id, typeStart, typeEnd, start, end, argsFrom) => {
     offsetOf[id] = start
     const name = buf.toString('latin1', typeStart, typeEnd).trim().toUpperCase()
     let slot = typeIndex.get(name)
@@ -385,8 +468,61 @@ function report(path) {
       leafBytes += end - start
       ++leafRecords
     }
+    if (name === 'IFCGRIDPLACEMENT') {
+      isGridPlacement[id] = 1
+    }
+    if (name === 'IFCGRID') {
+      eachAggregateRef(buf, argsFrom, end, (ref) => gridAxisRefs.push(ref))
+    }
     ++records
   })
+
+  /* The INVERSE lookup, which no forward closure can reach (conway#607).
+   *
+   * IfcGeometryExtraction.extractGridPlacement resolves the intersection and
+   * then has to find the IfcGrid that OWNS the axes, to place off that grid's
+   * own placement. IfcGridAxis's route back to its grid is the
+   * PartOfU/PartOfV/PartOfW INVERSE attributes and the generated schema layer
+   * carries no inverses, so `gridByAxis` scans every IfcGrid's UAxes/VAxes/
+   * WAxes instead. Those are reference arrays, so an axis record that is not
+   * yet indexed throws there (conway#546 classifies the throw), region 1's
+   * catch in extractGridPlacement absorbs only StepBufferNotResidentError, and
+   * the product defers and is retried.
+   *
+   * A product never references the grid — the grid references the axis, not
+   * the reverse — so walking forward from a product cannot reach an IfcGrid
+   * record at all. Before this gate the report said such a product was ready
+   * as soon as its own intersection chain was scanned, which is the same
+   * silently-flattering direction conway#546 exists to correct.
+   *
+   * Three properties of the engine scan make one scalar per file enough:
+   *
+   *  - It is ALL-OR-NOTHING across grids. The loop visits every IfcGrid, so
+   *    any grid with an unscanned axis list blocks EVERY grid placement in the
+   *    file, however local that placement's own chain is. Hence the max over
+   *    all grids rather than a per-grid gate.
+   *  - It is not sticky. `gridByAxis_` is assigned AFTER the loop, so a scan
+   *    that threw memoises nothing and the gate really is "every grid's axis
+   *    list is indexed", not "some prefix of them".
+   *  - It reads only `gridAxis.localID`, never the axis' AxisCurve. So the
+   *    gate is where the AXIS RECORDS land, not where their curves' points do
+   *    — `offsetOf`, deliberately, not `placementResolveAt`.
+   *
+   * An IfcGrid record that is not yet indexed is not visited by the scan at
+   * all (`model.types` iterates the type index), so it cannot throw and is not
+   * part of the gate. That leaves a real engine hazard this report does not
+   * model — the memo can complete over a PARTIAL set of grids and be cached —
+   * but the failure there is a silently mis-placed product rather than a
+   * deferred one, and this tool measures deferral. */
+  let gridAxisScanAt = 0
+  let gridAxisScanBlocker = 0
+
+  for (const ref of gridAxisRefs) {
+    if (ref <= maxId && offsetOf[ref] > gridAxisScanAt) {
+      gridAxisScanAt = offsetOf[ref]
+      gridAxisScanBlocker = ref
+    }
+  }
 
   // Placement chains are shallow but transitive (a local placement points at
   // its parent and at an axis placement, which points at points/directions),
@@ -412,12 +548,30 @@ function report(path) {
     return (offset - band * size / shards) / (size / shards)
   }
 
+  /* The scan's cost in each curve's own units. Grid axes are not leaves, so
+   * the leaf-first counterfactual does not get past this gate either — a
+   * point-harvesting pre-pass would not have indexed an IfcGridAxis. */
+  const gridAxisScanProgress = SHARD_COUNTS.map(
+      (shards) => bandProgress(gridAxisScanAt, shards))
+
   for (let id = 0; id <= maxId; ++id) {
-    placementResolveAt[id] = offsetOf[id]
-    placementBlocker[id] = id
-    leafFirstResolveAt[id] = isLeaf[id] === 1 ? 0 : offsetOf[id]
+    /* Seeding the gate onto the IFCGRIDPLACEMENT record itself, rather than
+     * onto the products, is what makes the rest of this free: the fixed point
+     * already propagates a placement's resolve time up through whatever
+     * references it, so a product reached via IfcLocalPlacement.PlacementRelTo
+     * is gated exactly like one that references the grid placement directly,
+     * and a file with no IFCGRIDPLACEMENT is untouched — which matches the
+     * engine, where the memo is never built at all for such a model. */
+    const gridGated = isGridPlacement[id] === 1 && gridAxisScanAt > offsetOf[id]
+
+    placementResolveAt[id] = gridGated ? gridAxisScanAt : offsetOf[id]
+    placementBlocker[id] = gridGated ? gridAxisScanBlocker : id
+    leafFirstResolveAt[id] = isLeaf[id] === 1 ? 0 :
+      (gridGated ? gridAxisScanAt : offsetOf[id])
     for (let s = 0; s < SHARD_COUNTS.length; ++s) {
-      shardChainProgress[s][id] = bandProgress(offsetOf[id], SHARD_COUNTS[s])
+      shardChainProgress[s][id] = Math.max(
+          bandProgress(offsetOf[id], SHARD_COUNTS[s]),
+          isGridPlacement[id] === 1 ? gridAxisScanProgress[s] : 0)
     }
   }
   // Iterate to a FIXED POINT, not a fixed round count. Each round propagates
