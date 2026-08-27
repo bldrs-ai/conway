@@ -13,6 +13,8 @@ performance investigation needs already exists here.
 | `generate_flame_graph.cjs` | Flame graph from a `yarn cli-profile` run |
 | `stream_corpus_sweep.mjs` | Streaming-loader sweep across the corpus |
 | `m2_consumer_spike.mjs` | What a semantic consumer costs on the streaming parse's record-event path (M2/#393): event-fed vs derived-from-columns, per model |
+| `load_phase_report.mjs` | Where a full durable load's time actually goes (#394 M3): the store-backed open + demand pump broken into named phases — wasm init, index build, index finalize, demand-prep paging and its five relationship sweeps, the pump's prefetch/extract/release, the per-batch scene walk, the rel-aggregate drain — and the serial residual that floors any parallel rework. Instruments the production path by wrapping shipped prototypes, so it cannot drift from it |
+| `index_shard_spike.mjs` | Sharded index build (#394 M7/M8): N workers index byte ranges of one STEP file and the merge is checked **byte-identical** against the single-threaded build. `--selftest` proves the record-boundary scan against adversarial fixtures (quoted `;#…=`, block comments, `''` escapes) at every split offset. Spike only — nothing wired into `IfcAPI` |
 | `step_nonproduct_survey.py` | Survey of non-product STEP entity usage across the corpus |
 | `setup-emsdk.sh`, `build-codex.sh`, `build-gha.sh` | Toolchain and build drivers |
 | `code-gen.cjs`, `gen-web-ifc-types.cjs` | Schema code generation |
