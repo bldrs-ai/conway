@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals'
-import { isRetracingSeamLoop } from './ap214_geometry_extraction'
+import { hasSeamEdgePair, isRetracingSeamLoop } from './ap214_geometry_extraction'
 
 /* eslint-disable no-magic-numbers -- the localIDs below are fixture labels,
    not quantities of the code under test; naming them would move the evidence
@@ -101,5 +101,83 @@ describe('isRetracingSeamLoop', () => {
       { orientation: true, edge_element: undefined },
       edge(1, false),
     ] as unknown as Parameters<typeof isRetracingSeamLoop>[0])).toBe(false)
+  })
+})
+
+
+describe('hasSeamEdgePair', () => {
+
+  test("the spring's loop: two circles plus one seam curve walked both ways", () => {
+
+    // Orbiter's `#50977`, EDGE_LOOP #9507 — the coil spring of solid 970
+    // (bldrs-ai/conway#611). Edges 2 and 4 are the same EDGE_CURVE #29690
+    // with opposite senses; the two CIRCLEs are unpaired.
+    const springLoop = [
+      edge(29689, true),
+      edge(29690, true),
+      edge(29691, false),
+      edge(29690, false),
+    ]
+
+    expect(hasSeamEdgePair(springLoop)).toBe(true)
+
+    // And it is NOT a retracing loop: it encloses the whole chart rather than
+    // nothing, so the two predicates must disagree on it. This is the case
+    // that distinguishes them, so asserting both here is the point.
+    expect(isRetracingSeamLoop(springLoop)).toBe(false)
+  })
+
+  test('a fully retracing loop contains a pair by definition', () => {
+
+    expect(hasSeamEdgePair([edge(28750, true), edge(28750, false)])).toBe(true)
+  })
+
+  test('an ordinary trim loop of distinct edges has no pair', () => {
+
+    // Four different curves, each once: a plain rectangular trim. Nothing here
+    // wraps a seam, so a full-coverage grid must not be reached.
+    expect(hasSeamEdgePair([
+      edge(1, true), edge(2, true), edge(3, false), edge(4, false),
+    ])).toBe(false)
+  })
+
+  test('a narrow lune is rejected however thin it is', () => {
+
+    // The same false positive codex raised on conway-geom#187, which this
+    // predicate must also be immune to: a lune is two DIFFERENT curves, so no
+    // width makes it pair. Width is not an input.
+    expect(hasSeamEdgePair([edge(101, true), edge(102, false)])).toBe(false)
+  })
+
+  test('the same curve twice in the SAME direction is not a seam', () => {
+
+    // A seam is walked once each way. Two identical senses is a malformed or
+    // doubled loop, not a face that wraps the surface, and reading it as full
+    // coverage would pave over whatever it really bounds.
+    expect(hasSeamEdgePair([edge(7, true), edge(7, true), edge(8, false)])).toBe(false)
+  })
+
+  test('an edge appearing three times is not a clean pair', () => {
+
+    expect(hasSeamEdgePair([
+      edge(7, true), edge(7, false), edge(7, true), edge(8, false),
+    ])).toBe(false)
+  })
+
+  test('a seam pair is found among unrelated edges, in any position', () => {
+
+    expect(hasSeamEdgePair([
+      edge(1, true), edge(9, true), edge(2, true), edge(9, false), edge(3, true),
+    ])).toBe(true)
+  })
+
+  test('loops too short to pair, and edges with no identity', () => {
+
+    expect(hasSeamEdgePair([])).toBe(false)
+    expect(hasSeamEdgePair([edge(1, true)])).toBe(false)
+    expect(hasSeamEdgePair(
+        [{ orientation: true, edge_element: {} },
+          { orientation: false, edge_element: {} }] as
+        unknown as Parameters<typeof hasSeamEdgePair>[0])).toBe(false)
   })
 })
