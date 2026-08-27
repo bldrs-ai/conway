@@ -17,6 +17,7 @@ primitives conway exposes to make that possible. Read them together.
 - conway #372 — SoA entity descriptors (parse-index residency). *shipped 1.372*
 - conway #373 — `getSpatialStructure(_, 'names')` + `ReleaseEntityCache`. *shipped 1.373*
 - conway #374 — windowed `StepBufferProvider` + OPFS source spill. *shipped 1.374*
+- conway #616 — adaptive residency cap for the windowed provider (D3D's 220x read amplification). *in review*
 - conway #383 — roots-only express ID iteration (`expressIDsOfTypes` /
   `RootExpressIDs`). *merged; Share consumption feature-detected*
 - conway #360 / conway-geom #139 — AFTP tessellation arena (see allocator doc). *shipped*
@@ -55,7 +56,7 @@ provide primitives for. The measured reference model throughout is **PSB**
 | Geometry output (verts/tris) | wasm heap → JS typed arrays | 533 MB | session (it's the model) | inherent; freed the redundant wasm copy after reify (#358-era) |
 | Parsed entity index | JS heap | ~1 GB (7.8 M-entity model, pre-SoA) | session | SoA descriptors (#372) |
 | Per-entity descriptor cache | JS heap | O(touched entities) | until `invalidate()` | `ReleaseEntityCache` (#373) |
-| **Raw STEP/IFC source buffer** | JS heap | 100s of MB (≈ source size) | session (pinned for property reads) | windowed `StepBufferProvider` + OPFS spill (#374) |
+| **Raw STEP/IFC source buffer** | JS heap | 100s of MB (≈ source size) | session (pinned for property reads) | windowed `StepBufferProvider` + OPFS spill (#374); adaptive slot count (#616) |
 
 The geometry (top two rows) is covered in depth by
 `emsdk-upgrade-scalable-allocator.md` and the memory-sweep work; this doc
@@ -123,6 +124,79 @@ ranges — the SoA `address_`/`length_` columns) and the bytes themselves:
 model's source bytes (Share already keeps the source in OPFS). Spill only
 *after* every synchronous sweep — parse, geometry extract, and any bulk
 property capture — has finished.
+
+
+### 4. Adaptive residency for the windowed provider — conway #616
+
+`#374`'s 4 MiB x 16 window is a constant, and a constant cannot be right
+for both access patterns real models produce. **PSB** sweeps the file
+forwards: 583 store reads, 2,754 MB, 3.2x amplification, and a bigger
+window buys it nothing. **D3D.ifc** (213.6 MB) routes 79% of its products
+through the rel-aggregate pass, whose per-target closure spans 52 of the
+file's 54 chunks — it read **47.1 GB, a 220x amplification, 56% of the
+load**, with a measured reuse distance of p50 = 16 chunks against a cap of
+exactly 16. #616's diagnosis established that the request stream is
+*identical* at every window size, so this is a retention failure, not a
+re-request loop, and residency alone can fix it.
+
+The window's **slot count** is now a policy rather than a constant. The
+provider starts at the shipped 16 and doubles the cap when a measurement
+interval shows the workload thrashing, bounded by 256 MiB and by the store's
+own size. Chunk size does not change: re-chunking would invalidate the views
+descriptors hold over live chunks, and the 4 MiB granularity is exactly what
+keeps a sweep's read count low (a 256 KiB x 256 window at the same 64 MB
+fixes D3D to 89.9 s but costs PSB +10%, because its 583 reads become 7,047).
+
+Two properties make growing safe rather than a gamble:
+
+- **LRU is a stack algorithm.** By Mattson's inclusion property, for a fixed
+  reference stream the chunks resident at cap *N* are a subset of those
+  resident at cap *N+1*, so raising the cap cannot turn a hit into a miss.
+  Growth costs memory; it cannot cost reads. The cap only ever grows within
+  a provider's life — which is what keeps that argument applicable, and why
+  there is no decay.
+- **The trigger is capacity misses, not misses.** Each load is classified
+  against a ghost list of the last `cap` evicted chunk indices (the ARC/2Q
+  trick): a load whose chunk is in the ghost list is a *capacity* miss that a
+  larger window would have avoided, while a load of a chunk never resident is
+  *compulsory* and no window size avoids it. A sweep's misses are compulsory,
+  so a sweep does not grow. Measured at the shipped window: **D3D 52.8% of
+  loads are capacity misses and 207 of 1,095 intervals meet the trigger;
+  PSB 4.0% and 0 of 62.**
+
+An **explicit** `maxResidentChunks` opts out and is treated as a hard budget
+— the callers that pass one chose it for a reason (a cramped test fixture, a
+bounded preview); the callers that take the default are the ones with no
+opinion, which is where a policy belongs.
+
+**Measured** (Node, warm page cache, `scripts/load_phase_report.mjs` on the
+production store-backed deferred path; output byte-identical in every run):
+
+| model | shipped | adaptive | aggregate paging | store reads | resident |
+| --- | --- | --- | --- | --- | --- |
+| D3D.ifc (213.6 MB) | 225.8 s | **75.4 s** | 123.5 s → 12.0 s | 11,778 → 248 | 64 MB → 213 MB (whole file) |
+| PSB.ifc (860.7 MB) | 41.1 s (median of 7) | 37.9 s (median of 7) | negligible either way | 583 → **583** | 64 MB → 64 MB (never grows) |
+
+PSB's store traffic is *bit-identical* — same 583 reads, same 2,754 MB, cap
+never leaves 16 — so its wall-clock spread is run-to-run noise, not the
+policy.
+
+**The memory cost, stated plainly:** a model that trips the trigger holds up
+to `min(fileBytes, 256 MiB)` of source chunks for the provider's life,
+against 64 MB before. That is never more than the fully-resident provider
+would have held, and it is bought in exchange for not churning 47 GB of
+4 MiB buffers through the allocator. It is *not* released when the load
+finishes: shrinking would break the inclusion argument above, and the signal
+that a load is over is not visible from inside the provider. If post-load
+retention on a D3D-shaped model turns out to matter, the fix is an explicit
+release on the model, not an automatic decay.
+
+**Tooling.** `scripts/agg_pager_trace.mjs` reports the miss classification
+and per-interval trigger statistics for any model, and can dump the request
+stream; `scripts/pager_policy_sim.mjs` replays a dumped stream through
+candidate policies offline — which is what made the trigger thresholds a
+measurement (a sweep of interval 2,048–16,384 x trigger 4–16 all land D3D
+within 0.012x–0.028x of the shipped window's load count) rather than a taste.
 
 
 ## Priorities / what's next (conway side)

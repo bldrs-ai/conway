@@ -72,11 +72,15 @@ function flagValue( name, fallback ) {
 const batchSize = Number( flagValue( '--batch', '64' ) )
 const maxWaves = Number( flagValue( '--max-waves', '0' ) )
 const structureOnly = argv.includes( '--structure-only' )
+const wantPreview = argv.includes( '--preview' )
 const jsonOut = flagValue( '--json', void 0 )
 const chunkOverride = Number( flagValue( '--chunk', '0' ) )
 const capOverride = Number( flagValue( '--cap', '0' ) )
+const streamOut = flagValue( '--dump-stream', void 0 )
+const intervalRequests = Number( flagValue( '--interval', '4096' ) )
 const valueFlags =
-  new Set( [ '--batch', '--max-waves', '--json', '--chunk', '--cap' ] )
+  new Set( [ '--batch', '--max-waves', '--json', '--chunk', '--cap',
+    '--dump-stream', '--interval' ] )
 const filePath =
   argv.find( ( a, i ) => !a.startsWith( '--' ) && !valueFlags.has( argv[ i - 1 ] ) )
 
@@ -84,6 +88,7 @@ if ( filePath === void 0 ) {
   console.error(
       'usage: agg_pager_trace.mjs [--batch N] [--max-waves N] ' +
       '[--chunk BYTES] [--cap CHUNKS] [--structure-only] ' +
+      '[--interval N] [--dump-stream out.bin] [--preview] ' +
       '[--json out.json] <model.ifc>' )
   process.exit( 2 )
 }
@@ -254,6 +259,123 @@ if ( capOverride > 0 ) {
   } )
 }
 
+/* ------------------------------------------------------------------ */
+/* Miss classification, and the replayable request stream              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A miss is only worth more window if a *bigger* window would have held the
+ * chunk. Every load is classified against a ghost list of recently-evicted
+ * chunks (the ARC/2Q trick): a load whose chunk is in the ghost list is a
+ * CAPACITY miss — direct evidence that the cap, not the access pattern, cost
+ * the read — while a load of a chunk never loaded before is COMPULSORY, and
+ * no window size avoids it. A forward sweep is almost entirely compulsory;
+ * a thrash is almost entirely capacity. That is the discriminator an
+ * adaptive policy has to trigger on, so it is measured here first.
+ *
+ * Evictions are observed rather than hooked: the provider evicts only inside
+ * `ensureResident`, and only on a call that had at least one non-hit chunk,
+ * so diffing a shadow copy of the resident key set after those calls catches
+ * every eviction at O(cap) each.
+ */
+
+/** Recently-evicted chunk indices, FIFO, bounded by the cap. */
+const ghostQueue = []
+const ghostSet = new Set()
+
+/** Shadow of the provider's resident key set, for eviction detection. */
+const residentShadow = new Set()
+
+/** Chunks that have been loaded at least once (compulsory-miss test). */
+const everLoaded = new Set()
+
+let capacityMisses = 0
+let compulsoryMisses = 0
+
+/** Per-interval samples of the policy's candidate trigger signals. */
+const intervals = []
+const touchedThisInterval = new Set()
+
+let intervalReqs = 0
+let intervalMisses = 0
+let intervalCapacity = 0
+let totalRequests = 0
+
+/** Cap changes observed, as `[ requestIndex, cap, providerOrdinal ]`. */
+const capTrace = []
+
+/** Providers seen -> ordinal, so a second one (the preview channel's own)
+ * is visible in the trace rather than blurred into the load's. */
+const providerOrdinals = new WeakMap()
+let seenProviderCount = 0
+let lastSeenCap = -1
+let lastSeenOrdinal = -1
+
+/** Replayable stream: one `[ firstChunk, lastChunk ]` pair per ensureResident. */
+let streamSpans = streamOut !== void 0 ? new Int32Array( 1 << 21 ) : void 0
+let streamLength = 0
+
+/**
+ * Append one call's chunk span to the replayable stream.
+ *
+ * @param {number} first First chunk index of the span.
+ * @param {number} last Last chunk index of the span, inclusive.
+ */
+function recordSpan( first, last ) {
+
+  if ( streamSpans === void 0 ) {
+    return
+  }
+
+  if ( streamLength + 2 > streamSpans.length ) {
+
+    const grown = new Int32Array( streamSpans.length * 2 )
+
+    grown.set( streamSpans )
+    streamSpans = grown
+  }
+
+  streamSpans[ streamLength++ ] = first
+  streamSpans[ streamLength++ ] = last
+}
+
+/**
+ * Push an evicted chunk onto the ghost list, trimming to the cap.
+ *
+ * @param {number} chunkIndex The evicted chunk.
+ * @param {number} cap Current residency cap — the ghost list is the same
+ * size, which is what makes a ghost hit mean "a 2x window would have hit".
+ */
+function ghostPush( chunkIndex, cap ) {
+
+  if ( ghostSet.has( chunkIndex ) ) {
+    return
+  }
+
+  ghostQueue.push( chunkIndex )
+  ghostSet.add( chunkIndex )
+
+  while ( ghostQueue.length > cap ) {
+    ghostSet.delete( ghostQueue.shift() )
+  }
+}
+
+/** Close the current measurement interval and start a new one. */
+function closeInterval() {
+
+  intervals.push( {
+    requests: intervalReqs,
+    misses: intervalMisses,
+    capacity: intervalCapacity,
+    distinct: touchedThisInterval.size,
+  } )
+
+  intervalReqs = 0
+  intervalMisses = 0
+  intervalCapacity = 0
+  touchedThisInterval.clear()
+}
+
 const rawEnsureResident = providerProto.ensureResident
 
 providerProto.ensureResident = async function( address, length ) {
@@ -264,9 +386,15 @@ providerProto.ensureResident = async function( address, length ) {
     Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
   const counters = phaseOf( phase )
 
+  let anyMissInCall = false
+
   for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
 
     const hit = this.chunks_.has( chunkIndex )
+
+    if ( !hit ) {
+      anyMissInCall = true
+    }
 
     // Three outcomes, not two. A request that finds the chunk absent but
     // already in `loading_` is de-duplicated by the provider and issues no
@@ -285,8 +413,28 @@ providerProto.ensureResident = async function( address, length ) {
       ++counters.loads
       chunkLoads.set( chunkIndex, ( chunkLoads.get( chunkIndex ) ?? 0 ) + 1 )
       missOrder.push( chunkIndex )
+
+      ++intervalMisses
+
+      if ( ghostSet.has( chunkIndex ) ) {
+        ++capacityMisses
+        ++intervalCapacity
+        ghostSet.delete( chunkIndex )
+      } else if ( !everLoaded.has( chunkIndex ) ) {
+        ++compulsoryMisses
+      }
+
+      everLoaded.add( chunkIndex )
     } else {
       ++counters.inflight
+    }
+
+    ++totalRequests
+    ++intervalReqs
+    touchedThisInterval.add( chunkIndex )
+
+    if ( intervalReqs >= intervalRequests ) {
+      closeInterval()
     }
 
     if ( wave !== void 0 ) {
@@ -308,7 +456,43 @@ providerProto.ensureResident = async function( address, length ) {
     wave.maxAddress = Math.max( wave.maxAddress, address + length )
   }
 
-  return await rawEnsureResident.call( this, address, length )
+  recordSpan( firstChunk, lastChunk )
+
+  const cap = this.maxResidentChunks_
+
+  let ordinal = providerOrdinals.get( this )
+
+  if ( ordinal === void 0 ) {
+    ordinal = ++seenProviderCount
+    providerOrdinals.set( this, ordinal )
+  }
+
+  if ( cap !== lastSeenCap || ordinal !== lastSeenOrdinal ) {
+    capTrace.push( [ totalRequests, cap, ordinal ] )
+    lastSeenCap = cap
+    lastSeenOrdinal = ordinal
+  }
+
+  const result = await rawEnsureResident.call( this, address, length )
+
+  // Evictions only happen on a call that had a non-hit chunk, so the shadow
+  // diff runs on those calls alone (O(cap) each, ~16 comparisons).
+  if ( anyMissInCall ) {
+
+    for ( const chunkIndex of this.chunks_.keys() ) {
+      residentShadow.add( chunkIndex )
+    }
+
+    for ( const chunkIndex of residentShadow ) {
+
+      if ( !this.chunks_.has( chunkIndex ) ) {
+        residentShadow.delete( chunkIndex )
+        ghostPush( chunkIndex, cap )
+      }
+    }
+  }
+
+  return result
 }
 
 /**
@@ -525,11 +709,21 @@ const store = new CountingFileStore( filePath )
 phase = 'parse'
 
 const tOpen = performance.now()
-const modelID = await api.OpenModelStream( store, {
+const openSettings = {
   COORDINATE_TO_ORIGIN: true,
   USE_FAST_BOOLS: true,
   DEFER_GEOMETRY: true,
-} )
+}
+
+if ( wantPreview ) {
+  // What Share does: the StorePreviewChannel then runs *during* the parse,
+  // building its own provider per snapshot generation. Included here so the
+  // adaptive cap's behaviour on that short-lived provider is observable
+  // rather than assumed.
+  openSettings.ON_PREVIEW_MESH = () => { /* cost is the point */ }
+}
+
+const modelID = await api.OpenModelStream( store, openSettings )
 const openWall = performance.now() - tOpen
 
 phase = 'other'
@@ -757,6 +951,58 @@ console.log( `load order: ${forward} forward (${adjacentForward} adjacent), ` +
   `${backward} backward, ${repeats} same-chunk-twice; ` +
   `median |jump| ${percentile( jumpSizes.slice(), 0.5 )}, ` +
   `p90 ${percentile( jumpSizes.slice(), 0.9 )}` )
+
+if ( intervalReqs > 0 ) {
+  closeInterval()
+}
+
+const otherMisses = totalLoads - capacityMisses - compulsoryMisses
+
+console.log( `\nmiss classification over ${totalLoads} loads: ` +
+  `${compulsoryMisses} compulsory (${( 100 * compulsoryMisses /
+    Math.max( totalLoads, 1 ) ).toFixed( 1 )}%), ` +
+  `${capacityMisses} capacity (${( 100 * capacityMisses /
+    Math.max( totalLoads, 1 ) ).toFixed( 1 )}%), ` +
+  `${otherMisses} beyond the ghost list` )
+console.log( '  capacity = the chunk was in a ghost list of the last `cap` ' +
+  'evictions, so a larger window would have held it' )
+
+const capacityPerInterval = intervals.map( ( row ) => row.capacity )
+const missPerInterval = intervals.map( ( row ) => row.misses )
+const distinctPerInterval = intervals.map( ( row ) => row.distinct )
+const hotIntervals =
+  intervals.filter( ( row ) => row.capacity >= 8 && row.capacity >= 0.5 * row.misses )
+
+console.log( `\n${intervals.length} intervals of ${intervalRequests} requests:` )
+console.log( `  capacity misses/interval: p50 ${percentile( capacityPerInterval.slice(), 0.5 )}, ` +
+  `p90 ${percentile( capacityPerInterval.slice(), 0.9 )}, ` +
+  `max ${Math.max( 0, ...capacityPerInterval )}` )
+console.log( `  total misses/interval:    p50 ${percentile( missPerInterval.slice(), 0.5 )}, ` +
+  `p90 ${percentile( missPerInterval.slice(), 0.9 )}, ` +
+  `max ${Math.max( 0, ...missPerInterval )}` )
+console.log( `  distinct chunks touched:  p50 ${percentile( distinctPerInterval.slice(), 0.5 )}, ` +
+  `p90 ${percentile( distinctPerInterval.slice(), 0.9 )}, ` +
+  `max ${Math.max( 0, ...distinctPerInterval )}` )
+console.log( `  intervals meeting "capacity >= 8 and >= half of misses": ` +
+  `${hotIntervals.length} of ${intervals.length} ` +
+  `(${( 100 * hotIntervals.length / Math.max( intervals.length, 1 ) ).toFixed( 1 )}%)` )
+
+if ( capTrace.length > 1 ) {
+  console.log( `\ncap trace (request index -> cap): ` +
+    `${capTrace.map( ( [ at, cap, ordinal ] ) =>
+      `${at}:cap${cap}/provider${ordinal}` ).join( ' ' )}` )
+}
+
+if ( streamSpans !== void 0 ) {
+  fs.writeFileSync( streamOut,
+      Buffer.from( streamSpans.buffer, 0, streamLength * 4 ) )
+  console.log( `\nrequest stream: ${streamLength / 2} spans -> ${streamOut} ` +
+    `(${( streamLength * 4 / BYTES_PER_MB ).toFixed( 1 )} MB)` )
+}
+
+if ( structure.meshes !== void 0 ) {
+  console.log( `\noutput: ${structure.meshes} meshes over ${structure.batches} batches` )
+}
 
 console.log( `\nproducts in model: ${structure.productCount}` )
 console.log( `worklist partition: ${structure.demandProducts} per-product + ` +
