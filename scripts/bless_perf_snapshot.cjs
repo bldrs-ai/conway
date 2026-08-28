@@ -663,7 +663,7 @@ releases. They are not interchangeable.
 
 | file | \`engine1\` is | \`measurementBasis\` | read it as |
 |---|---|---|---|
-| \`${pairedDeltaName}\` | \`${info.pairedEngine}\` — the previous release, re-measured **in this job, on this machine, minutes before/after the numbers it is differenced against** | \`paired\` | **the gate.** Within-job precision is ~0.111%, so a sub-1% move here is real |
+| \`${pairedDeltaName}\` | \`${info.pairedEngine}\` — the previous release, re-measured **in this job, on this machine, minutes before/after the numbers it is differenced against** | \`paired\` | **the gate.** Read its **median**, which is stable to under ~0.75% |
 | \`${info.deltaName}\` | \`${info.previousName.replace(/_.*$/, '')}\` — the previous release **as recorded by its own run**, on a machine nobody recorded | \`crossRun\` | continuity with the historical archive **only** |
 
 **A \`crossRun\` timing column is not a measurement of conway.** It was
@@ -681,6 +681,33 @@ The cross-run file is kept because the archive in \`../\` contains nothing
 else and cannot be retrofitted — every historical snapshot was measured on an
 unknown machine. Use it to place this release in a long trend; do not read one
 of its rows as a regression.
+
+### How much of the paired delta is signal
+
+Pairing removes the machine. It does not remove everything, and the residual
+was measured rather than assumed: an **A/A null test** — the identical engine
+over the identical corpus, four passes in one job, one of them with the corpus
+evicted from page cache ([run 33192612782](https://github.com/bldrs-ai/conway/actions/runs/33192612782),
+\`.github/workflows/perf-aa-null.yml\`). Every delta it reports must be zero.
+What it reports instead is the floor under **this** file:
+
+| quantity | floor under a null |
+|---|---|
+| whole-corpus aggregate (corpus total, pass wall clock) | **0.13% – 0.24%** |
+| **per model**, median absolute change over 97 models | **1.27% – 1.58%** |
+| per model, p10 / p90 | **≈ −3% / +4%** |
+| median change over six pairings that must all be zero | **0.000% to +0.743%** |
+
+**So per-model regression calls below ~5% are inside the noise floor.** With
+no code change at all, 10 of 97 models moved more than 5%, ~38 moved more than
+2% and ~60 moved more than 1%. The p10/p90 columns printed beside the median
+in the rc job summary are that floor, **not engine signal at per-model scale.**
+Read a single row of this file as a lead and re-run the model before believing
+it; read the **median** as the gate.
+
+These are two different quantities and they must not be swapped: the corpus
+aggregate is stable because 97 models' independent jitter averages out of it,
+which is help a single row does not get.
 
 \`${info.pairedDetailName}\` holds the previous pin's own rows from this
 job, so the paired \`engine1\` numbers stay inspectable after the run's

@@ -12,8 +12,12 @@ const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
  * lead, not a measurement.
  *
  * `paired` means both sides were measured in ONE job on ONE machine, which
- * cancels the machine factor exactly and leaves the 0.111% within-job
- * precision.
+ * cancels the machine factor exactly. What it leaves was measured by an A/A
+ * null test (run 33192612782, .github/workflows/perf-aa-null.yml): the corpus
+ * AGGREGATE is stable to 0.13-0.24%, but PER MODEL the floor is ~1.4% median
+ * absolute change with p10/p90 near -3%/+4%. Read the median of a `paired`
+ * file as the gate; a single `paired` row below ~5% is still inside the
+ * floor.
  *
  * The label is per-file, not per-row, but it is written on every row on
  * purpose: rows get copied into summaries, issue comments and spreadsheets

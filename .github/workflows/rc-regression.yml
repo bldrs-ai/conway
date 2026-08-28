@@ -68,8 +68,13 @@ on:
       # commit, byte-identical digests, all 97 models faster on the second
       # attempt — against a 9.40% median regression it was reporting. The
       # signal was smaller than the noise. Timing the previous pin in THIS
-      # job, on THIS machine, cancels the machine factor exactly and leaves
-      # the 0.111% within-job precision.
+      # job, on THIS machine, cancels the machine factor exactly. What it
+      # leaves is MEASURED, by an A/A null test of this exact configuration
+      # (run 33192612782, .github/workflows/perf-aa-null.yml): the corpus
+      # AGGREGATE is stable to 0.13-0.24%, while PER MODEL the floor is ~1.4%
+      # median absolute change with p10/p90 near -3%/+4%. The median of the
+      # paired delta is the gate; a single model moving less than ~5% is
+      # still inside the floor.
       #
       #   full  — pair over the whole corpus. The default, and what a release
       #           should use: it is the only setting under which every row of
@@ -526,9 +531,10 @@ jobs:
       # scale factor. The probe workflow found why —
       # `ubuntu-24.04-4vcpu-8gb-150gbssd` is a LABEL, not a machine: six VMs
       # came back as AMD EPYC 7763, AMD EPYC 9V74 and Intel Xeon Platinum
-      # 8370C, with an 11.24% CV of job means and a 32.8% max/min spread,
-      # against a within-job CV of 0.111%. Two engines timed on ONE machine
-      # in ONE job divide that factor out exactly.
+      # 8370C, with an 11.24% CV of job means and a 32.8% max/min spread.
+      # Two engines timed on ONE machine in ONE job divide that factor out
+      # exactly, leaving a floor of 0.13-0.24% on the corpus aggregate and
+      # ~1.4% per model (A/A null test, run 33192612782).
       #
       # WHICH PIN. The same predecessor the cross-run delta already uses —
       # `findPreviousSnapshot()` in scripts/bless_perf_snapshot.cjs, i.e. the
@@ -651,8 +657,19 @@ jobs:
       # machine belongs to the PREVIOUS pin. Any residual warming therefore
       # makes the pin look faster and this release look slower — the delta is
       # biased toward flagging a regression, which is the safe direction for a
-      # gate. Within-job CV is 0.111%, so the residual is far below anything
-      # the gate would act on.
+      # gate.
+      #
+      # NO PRE-WARM AND NO COUNTERBALANCING, and that is measured rather than
+      # assumed. `totalTimeMs` contains the model file read (conway#562 moved
+      # `loadStartMs` before `readFileSync`), so the pass-order page-cache
+      # objection was real in principle. The A/A null test (run 33192612782)
+      # says it is not there in practice: `actions/checkout` with LFS has
+      # already written the whole corpus through the page cache before pass 1
+      # (vmtouch: 100% resident, 7G/7G, on a runner with 16 GB despite the
+      # `8gb` label), and a deliberately evicted pass costs +0.13% of corpus
+      # total and 0.000% on the median model. A discarded pre-warm pass would
+      # cost a full ~5 min public / ~20 min private against the 90-minute cap
+      # to remove that. See design/new/perf-run-comparability.md Evidence 4.
       - name: Paired perf pass (previous pin, same machine)
         id: paired
         if: ${{ success() && steps.pin_install.outcome == 'success' }}
@@ -1092,11 +1109,21 @@ jobs:
 
           print()
           if found:
-              print("Read the **`paired`** row: both engines were timed in this job on "
-                    "this machine, so its within-job precision is ~0.111%. The "
-                    "`crossRun` row compares against a previous run on an unrecorded "
+              print("Read the **`paired`** row's MEDIAN: both engines were timed in "
+                    "this job on this machine, and an A/A null test of that "
+                    "configuration puts the median's floor under ~0.75% "
+                    "([run 33192612782](https://github.com/bldrs-ai/conway/actions/"
+                    "runs/33192612782)).")
+              print()
+              print("**The p10/p90 columns beside it are the noise floor, not engine "
+                    "signal.** The same A/A test measured a PER-MODEL floor of ~1.4% "
+                    "median absolute change with p10/p90 near -3%/+4%: differencing an "
+                    "engine against itself, 10 of 97 models moved more than 5%. Treat a "
+                    "per-model move below ~5% as a lead to re-run, not a regression.")
+              print()
+              print("The `crossRun` row compares against a previous run on an unrecorded "
                     "machine and has a measured 13.66% median noise floor — it is a "
-                    "lead, not a gate. "
+                    "lead at any scale. "
                     "See conway's `design/new/perf-run-comparability.md`.")
           else:
               print("_No conway-to-conway delta was produced for this release._")
@@ -1181,9 +1208,14 @@ jobs:
 
             `benchmarks/conway<version>-ci_<repo>/` carries this run's steady
             per-model timings plus **two** deltas against the previous release.
-            Read the `*_paired_delta.csv` one: both its engines were timed in
-            the same job on the same machine, which is what makes a sub-1%
-            move real. The plain `*_delta.csv` is the legacy cross-run
+            Read the `*_paired_delta.csv` one, and read its **median**: both
+            its engines were timed in the same job on the same machine, and an
+            A/A null test of that configuration puts the median's floor under
+            ~0.75%. Its **p10/p90 tails are not signal at per-model scale** —
+            the same test measured a ~1.4% median per-model floor, with 10 of
+            97 models moving more than 5% against an identical engine, so a
+            single model under ~5% is a lead to re-run rather than a
+            regression. The plain `*_delta.csv` is the legacy cross-run
             comparison, kept only for continuity with the historical archive —
             its `engine1` numbers come from a different run on a machine
             nobody recorded, and that comparison has a measured 13.66% median

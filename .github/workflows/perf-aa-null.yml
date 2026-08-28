@@ -26,14 +26,36 @@ name: Perf A/A null test (paired-configuration noise floor)
 #                         pass removes it completely.
 #   P1 > P2 > P3       -> something cumulative (thermal, allocator, host
 #                         scheduling). A pre-warm is not enough.
-#   all three equal    -> the I/O objection is answered; 0.111% stands.
+#   all three equal    -> there is no pass-order term to remove.
+#
+# THE ANSWER (run 33192612782, four passes, same engine throughout). The third
+# case. Not cold-cache shaped: median |delta| of the P1->P2 gap over the
+# P2->P3 gap is 0.88, there is no monotone decline, and P1 came out marginally
+# FASTER than P2 -- the sign is backwards for a cold start. The reason is that
+# there was no cold pass: vmtouch reported the corpus 100% resident (2,065,763
+# / 2,065,763 pages, 7G/7G) BEFORE P1, because actions/checkout with LFS
+# writes every byte through the page cache and rc-regression checks out the
+# same way. P4, which forces the cold state, costs +0.13% of corpus total
+# (140.2 -> 140.4 s) and 0.000% on the median model. Pass wall clock across
+# all four, cold included: 289.85 / 290.56 / 290.55 / 290.44 s, max-min 0.24%.
+#
+# WHAT IT MEASURED INSTEAD, and this is the durable output: the paired gate's
+# own noise floor, which is TWO numbers and they are not interchangeable.
+# Whole-corpus aggregate 0.13-0.24%. Per model, 1.27-1.58% median |delta| with
+# p10/p90 near -3%/+4% -- and against an IDENTICAL engine, ~60 of 97 models
+# moved >1%, ~38 >2% and 10 >5%. So a per-model regression call below ~5% is
+# inside the floor, while the corpus median is stable to under ~0.75%.
+# Recorded in design/new/perf-run-comparability.md Evidence 4; no pre-warm and
+# no counterbalancing were added to rc-regression as a result.
 #
 # WHY A FOURTH, EVICTED PASS. P1..P3 are faithful to what an rc job actually
 # does, and that is the headline. But their P1 is only as cold as the corpus
 # happens to be after `actions/checkout` has just written every byte of it
-# through the page cache — on the PUBLIC corpus, which fits in the runner's
-# 8 GB, P1 may be fully warm already and the faithful test would then
-# understate the bias that the PRIVATE corpus (larger than RAM) would suffer.
+# through the page cache — on the PUBLIC corpus, which fits comfortably in the
+# runner's RAM (16 GB: MemTotal 16373448 kB = 15,989 MB, so the `8gb` in the
+# runner LABEL is not the machine's memory), P1 may be fully warm already and
+# the faithful test would then understate the bias that the PRIVATE corpus
+# (larger than RAM) would suffer.
 # P4 evicts ONLY the corpus files (`vmtouch -e`, not `drop_caches`, so node,
 # the wasm Dist and node_modules stay warm) and re-runs. P3->P4 is then a
 # clean measurement of the corpus-read term on its own, and it is what the

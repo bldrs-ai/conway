@@ -137,6 +137,13 @@ The identical checksums are what license reading the timings as replicates:
 every run did the same work, so the only thing the spread describes is the
 machine.
 
+**This 0.111% is a property of the probe's workload, not a bound on the rc
+gate.** The probe deliberately does no filesystem I/O and runs one small fixed
+computation; the paired rc passes read a 3 GiB corpus and run 97 models of
+wildly different cost. Quote it only for what it is measured on — the
+scheduling-noise term in "What was rejected" below. The paired configuration's
+own floor is Evidence 4.
+
 **`task-clock` is not better than wall clock** — wall won 4 of the 6 jobs.
 That is the expected result, not a surprise: on single-threaded CPU-bound work
 with no I/O, elapsed time and CPU time measure the same interval, and
@@ -150,7 +157,10 @@ with no I/O, elapsed time and CPU time measure the same interval, and
 | AMD EPYC 9V74 | 3 |
 | Intel Xeon Platinum 8370C | 1 |
 
-`ubuntu-24.04-4vcpu-8gb-150gbssd` is a label, not a machine.
+`ubuntu-24.04-4vcpu-8gb-150gbssd` is a label, not a machine. It does not even
+describe the memory it names: `/proc/meminfo` on the A/A run (Evidence 4)
+reports `MemTotal: 16373448 kB` — **15,989 MB, not 8 GB**. Read every part of
+the label as an identifier, never as a hardware spec.
 
 | | |
 |---|---|
@@ -212,9 +222,24 @@ then measuring both engines **on that same machine, in the same job, minutes
 apart** cancels it exactly. Not approximately — the factor is common to both
 halves of the ratio and divides out.
 
-What is left is the within-job precision: **0.111%**. That is a gate that
-resolves sub-1% regressions, against a previous gate whose noise floor was
-13.66%.
+What is left had to be measured rather than assumed, and Evidence 4 below is
+that measurement — an A/A null test of this exact configuration. Its result,
+stated here so the claim and its evidence sit together:
+
+- **The whole-corpus aggregate is stable to ~0.2%** under a null.
+- **Per model the floor is ~1.4% median |Δ|**, with p10/p90 near ±3–4%.
+
+Those are different quantities, and the difference is the whole of how to read
+the gate: a corpus total averages 97 models' independent jitter away, a single
+model's row gets no such help. Pairing turns a **13.66%** cross-run floor into
+a gate whose **median is stable to under ~0.75%**. That is the win, and it is
+now measured rather than inferred.
+
+The **0.111%** figure quoted while this change was being designed — the
+perf-counter probe's within-job CV — is *not* a bound on this configuration
+and is not used as one anywhere in this document. The probe's workload does no
+filesystem I/O by construction; the paired passes read the whole corpus.
+Evidence 4 exists because that gap was pointed out in review of #632.
 
 This is not a new idea in this repo; it is the same argument
 perf-measurement.md §"The A/B runs as two passes inside one rc job" already
@@ -222,19 +247,32 @@ made for the gc-settle A/B, applied to the thing the rc actually gates on.
 That section is worth reading for the two residuals it names, both of which
 apply here unchanged:
 
-- **Pass order.** Pass 2 runs on a warmer machine. Model file I/O is outside
-  every timing column (`parseStartMs` is taken after `readFileSync`), so the
-  page cache cannot reach them; what pass 2 gets is warmer node and wasm
-  module loads. In the pairing implemented here the *current* engine runs
-  first and the *previous* pin second, so any residual warming makes the
-  previous pin look faster and this release look slower — the delta is biased
-  **toward** flagging a regression, which is the safe direction for a gate.
-- **A block design, not an interleave.** Both engines run their own whole-
-  corpus pass rather than alternating per model. Interleaving would remove the
-  warming residual too, but at 0.111% within-job CV the residual it removes is
-  smaller than a rounding error on the gate, and it would need a new runner
-  mode. Reach for `--interleave` only if a movement of that size ever needs
-  explaining.
+- **Pass order.** Pass 2 runs on a warmer machine, and — correcting what an
+  earlier draft of this section said — model file I/O *is* inside one timing
+  column. conway#562 moved `loadStartMs` to before `readFileSync`, so
+  `totalTimeMs`, the column the gate differences, contains the model read.
+  (`parseStartMs` is still taken after it, so `parseTimeMs`, `geometryTimeMs`
+  and `parsePlusGeometryMs` do not — which makes the two families a control
+  for each other.) The page cache can therefore reach the gate's own column.
+  That is exactly what Evidence 4 was built to test, and it measures the
+  resulting bias at **0.13%** of corpus total with no per-model signature at
+  all. In the pairing implemented here the *current* engine runs first and the
+  *previous* pin second, so any residual warming makes the previous pin look
+  faster and this release look slower — the delta is biased **toward**
+  flagging a regression, which is the safe direction for a gate.
+- **No pre-warm, no counterbalancing, no interleave.** Both engines run their
+  own whole-corpus pass rather than alternating per model, and no pass is run
+  and discarded first. That was an open question until Evidence 4 closed it:
+  a pre-warm only earns its cost if pass 1 is cold, and the corpus is
+  **already fully page-cache resident before pass 1**, because
+  `actions/checkout` with LFS has just written every byte of it through that
+  cache into a machine with 16 GB of RAM. A deliberately cold pass costs
+  0.13%. So a pre-warm would spend a whole extra corpus pass — ~5 min public,
+  ~20 min private, against a 90-minute cap already at ~69 — to remove an
+  effect an order of magnitude below the per-model floor, and an interleave
+  would spend a new runner mode on the same non-effect. Reach for either only
+  if the corpus stops being resident at pass 1; `.github/probe/aa-pass.sh`
+  dumps the `vmtouch` residency that says whether it still is.
 
 ### What pairing does *not* fix
 
@@ -245,6 +283,146 @@ paired delta carries that methodology step exactly as the cross-run delta did.
 The relevant boundaries are enumerated in perf-measurement.md §"Changelog of
 methodology changes" and restated on every blessed snapshot's README; read
 them before treating a step-shaped paired delta as an engine change.
+
+## Evidence 4 — the A/A null test: what pairing actually leaves behind
+
+Evidence 1–3 measure the floor pairing *removes*. This one measures the floor
+it *leaves*. They are different questions, and only the second one bounds the
+gate.
+
+**Why it exists.** In review of #632, codex raised the pass-order objection:
+pairing runs the current engine first and the pin second over the same corpus,
+`totalTimeMs` contains the model file read since conway#562, and the 0.111%
+residual quoted for it came from a probe workload whose own header says it
+does "no I/O, no network, no filesystem reads (page-cache state would leak
+in)". Every step of that is correct — the number in use could not bound this
+configuration. The reasoning was right; whether the effect it predicts is
+actually there is only decidable by measurement, and it is not there.
+
+**The test.** [`.github/workflows/perf-aa-null.yml`][aa], run
+[33192612782][aarun], on the same `ubuntu-24.04-4vcpu-8gb-150gbssd` label
+rc-regression uses. The *identical* engine over the *identical* public corpus
+(101 model files, 3.07 GiB, inside a 7.88 GiB models checkout; 97 measured
+after the batch's exclude), three passes back to back in one job — plus a
+fourth pass with the corpus evicted from page cache first. The eviction is
+`vmtouch -e` on the corpus only, not `drop_caches`, so node, the wasm Dist and
+`node_modules` stay warm and what P3→P4 isolates is the model read and
+nothing else.
+
+Every pass is the same invocation, written once in `.github/probe/aa-pass.sh`
+so the passes cannot drift apart, and analysed by
+`.github/probe/perf-aa-null.cjs`, which reproduces the gate's own statistic
+exactly: the median over models of `(later − earlier) / earlier`, no
+small-model floor, as `computePercentageChange` in `scripts/gen_delta_csv.cjs`
+computes it. So these medians read directly against a real rc paired delta's.
+
+Under a null every delta must be 0. Everything below is what is not 0.
+
+[aa]: https://github.com/bldrs-ai/conway/blob/main/.github/workflows/perf-aa-null.yml
+[aarun]: https://github.com/bldrs-ai/conway/actions/runs/33192612782
+
+### The hypothesis is falsified three ways
+
+| | |
+|---|---|
+| pass wall clock, P1 / P2 / P3 / P4 | 289.85 / 290.56 / 290.55 / 290.44 s |
+| max − min across all four, cold pass included | **0.24%** |
+| corpus total, warm P3 → evicted P4 | 140.2 s → 140.4 s = **+0.13%** |
+| median per-model change, P3 → P4 | **0.000%** |
+| corpus page-cache residency before P1 (`vmtouch`) | **2,065,763 / 2,065,763 pages — 7G / 7G** |
+
+1. **The shape is backwards for a cold start.** Median |Δ| of the P1→P2 gap
+   divided by the P2→P3 gap is **0.88**: the first gap is *smaller* than the
+   second. There is no monotone decline, and P1 came out marginally *faster*
+   than P2. A cold-cache story predicts P1 slowest and the sequence
+   decreasing; the sign is the other way.
+2. **Because there was no cold pass to begin with.** The corpus was **100%**
+   page-cache resident before P1 ran. `actions/checkout` with LFS materialises
+   every byte of it through the page cache, and the runner holds 15,989 MB of
+   RAM against a 3.07 GiB corpus. rc-regression checks out the same way, so
+   its first paired pass starts warm for the same reason.
+3. **And forcing the cold state costs almost nothing.** P4 puts the corpus in
+   the state P1 was assumed to be in: corpus total moves **+0.13%**, the
+   median model **0.000%**. Reading ~1.45 GB off SSD rather than out of RAM is
+   ~0.6–0.7 s spread across 140 s of compute.
+
+**The direct I/O measurement agrees.** Since #562, `totalTimeMs` starts
+*before* `readFileSync` and `parsePlusGeometryMs` starts *after* it, so their
+difference isolates the read with no added instrumentation. That difference is
+**~1.0 s warm and ~1.6 s cold over the whole corpus**, out of 140 s. Per
+model, `totalTimeMs` moved no more than `parsePlusGeometryMs` in any pass
+pair, the evicted one included. There is no column-specific I/O signature to
+find, because the read is ~1% of the work.
+
+### The two floors, which are different numbers
+
+This is the part to quote, and the part not to conflate.
+
+| quantity | floor under a null |
+|---|---|
+| **whole-corpus aggregate** (corpus total, pass wall clock) | **0.13% – 0.24%** |
+| **per model**, median \|Δ\| over 97 models | **1.27% – 1.58%** |
+| per model, p10 / p90 | **≈ −3% / +4%** |
+| median % change over the six A/A pairings, all of which must be zero | **0.000% to +0.743%** |
+
+The aggregate is stable because 97 models' independent jitter averages out of
+it; a single model's row has nothing to average against. Any sentence quoting
+one of these numbers about the other is wrong.
+
+### The consequence that matters: per-model calls under ~5% are noise
+
+Differencing an engine against **itself**, over 97 models:
+
+| models moving more than | count |
+|---|---|
+| 1% | ~60 of 97 |
+| 2% | ~38 of 97 |
+| 5% | **10 of 97** |
+
+Ten models "regressed" or "improved" by more than 5% with no code change at
+all. The rc job summary prints p10 and p90 beside the paired median exactly
+because those tails exist: **at per-model scale they are the noise floor, not
+engine signal.** A per-model regression call below ~5% cannot be made from one
+paired run, however well the machine cancelled. What the paired gate does
+resolve, at high confidence, is the **median over the corpus** — stable to
+under ~0.75%.
+
+The remedy for one suspicious model is not a stricter gate, it is repetition:
+re-run or hand-bisect that model, where the same pairing argument applies
+inside one job at whatever n the question is worth.
+
+### What this changed in #632, and what it did not
+
+- **No pre-warm and no counterbalancing were added.** There is no cold-start
+  term to counterbalance, and forcing one costs 0.13%. Reasoning in "The
+  answer" above.
+- **Pass ordering is unchanged**, and so is its bias-direction argument, which
+  this result does not touch.
+- **The unsupported claim is gone.** "Within-job precision is 0.111%, so a
+  sub-1% move is real" has been removed from this document, from the generated
+  snapshot README (`scripts/bless_perf_snapshot.cjs`), from `rc-regression.yml`
+  and from the rc job summary, and replaced by the two measured floors and the
+  ~5% per-model statement above.
+- **The pairing logic itself is untouched.** The A/A result bears on how a
+  paired delta should be *read*, not on how it is computed.
+
+### The A/A workflow stays, for the same reason the probe does
+
+`perf-aa-null.yml` is kept and stays dispatchable rather than being deleted
+now that it has answered. Both experiments in this repo re-test a premise that
+will drift without announcing itself:
+
+| workflow | the premise it re-tests | drifts when |
+|---|---|---|
+| `perf-counter-probe.yml` (runs [33140946078][p1] / [33141507310][p2]) | the runner pool's composition, and that its PMU is masked | GitHub adds or retires host generations, or exposes a PMU |
+| `perf-aa-null.yml` (run [33192612782][aarun]) | the paired gate's own noise floor | the corpus outgrows RAM, the runner label changes, harness concurrency changes, or the corpus's cost profile shifts |
+
+The A/A one has a specific trigger to watch for. The whole no-cold-start
+finding rests on the corpus fitting in 16 GB *after* checkout has warmed it,
+and the private corpus is the larger one. Re-run this experiment before
+trusting the floors above on a corpus that no longer fits; the `vmtouch`
+residency dump in `.github/probe/aa-pass.sh` is the check, and it prints on
+both sides of every pass.
 
 ## What changed in rc-regression
 
@@ -439,9 +617,10 @@ perf-measurement.md §"Changelog of methodology changes" is the index for the
 
 | when | change | why |
 |---|---|---|
-| this change | the rc perf delta is computed from two passes **in one job**; `engine1TotalTimeMs` in `*_paired_delta.csv` is measured by this run, not read from a previous one | cross-run drift measured at 13.66% median (97 models, two attempts of run 33128910045, byte-identical digests) against a 9.40% median reported regression — the signal was smaller than the noise. Within-job CV is 0.111%, so pairing turns a 13.66% floor into a sub-1% gate |
+| this change | the rc perf delta is computed from two passes **in one job**; `engine1TotalTimeMs` in `*_paired_delta.csv` is measured by this run, not read from a previous one | cross-run drift measured at 13.66% median (97 models, two attempts of run 33128910045, byte-identical digests) against a 9.40% median reported regression — the signal was smaller than the noise. An A/A null test of the paired configuration (run 33192612782) puts its own floor at 0.13–0.24% on the corpus aggregate and ~1.4% median \|Δ\| per model, so pairing turns a 13.66% cross-run floor into a gate whose median is stable to under ~0.75% — while per-model calls below ~5% stay inside the floor |
 | this change | the legacy cross-run `*_delta.csv` is retained alongside the paired one, and every delta row gains a `measurementBasis` column | the historical archive is cross-run and cannot be retrofitted; a file that keeps both must say on each row which is which |
 | this change | `perf-counter-probe.yml` becomes `workflow_dispatch`-only | its question is answered; its subject (the runner pool) can change without notice, so it is kept runnable rather than deleted |
+| this change | `perf-aa-null.yml` is added, and kept after answering | it measures the paired gate's own noise floor (Evidence 4), replacing the 0.111% figure that could not bound a configuration doing corpus I/O. Its subject — the corpus, the harness and the runner's RAM — changes without notice too |
 
 ## Related
 
@@ -454,6 +633,9 @@ perf-measurement.md §"Changelog of methodology changes" is the index for the
   the arithmetic behind them
 - `.github/workflows/perf-counter-probe.yml` + `.github/probe/perf-counter-probe.mjs`
   — the probe, and how to re-run it
+- `.github/workflows/perf-aa-null.yml` + `.github/probe/aa-pass.sh` +
+  `.github/probe/perf-aa-null.cjs` — the A/A null test behind Evidence 4, and
+  how to re-run it when the corpus or the runner changes
 - `scripts/bless_perf_snapshot.cjs`, `scripts/resolve_previous_pin.cjs`,
   `scripts/version_order.cjs` — how the previous pin is resolved, and how the
   two deltas are written

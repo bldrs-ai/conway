@@ -28,8 +28,17 @@
  *                          or discarding pass 1, removes it completely.
  *   P1 > P2 > P3           something cumulative (thermal, allocator, host
  *                          scheduling). A pre-warm is NOT enough.
- *   all three equal        pairing's noise floor really is the probe's, and
- *                          the I/O objection is answered empirically.
+ *   all three equal        there is no pass-order term, and the I/O objection
+ *                          is answered empirically.
+ *
+ * ANSWERED, run 33192612782: the third case. The corpus was already 100%
+ * page-cache resident before P1 (actions/checkout with LFS writes it through
+ * the cache), so there was no cold pass to decay from; a forced-cold P4 costs
+ * +0.13% of corpus total and 0.000% on the median model. The floor this
+ * measured is NOT the probe's 0.111% either -- it is 0.13-0.24% on the corpus
+ * aggregate and ~1.4% median |delta| per model, which is the number that
+ * matters and the reason a per-model call below ~5% is noise. See
+ * design/new/perf-run-comparability.md Evidence 4.
  *
  * WHICH STATISTIC. The rc gate's headline number is the MEDIAN over models of
  * `totalTimeMsPercentageChange`, with p10/p90 either side — see the "Summarize
