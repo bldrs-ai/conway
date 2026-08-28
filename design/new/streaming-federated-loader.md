@@ -1030,13 +1030,23 @@ Deliberately small first step; each has a measurable exit.
 
     **The trust gate has two halves now**, because one full verify per
     consumer is the N-way I/O a shared index exists to remove.
-    `HashingByteSource` folds the digest into the parse's own window pass
+    `HashingByteSource` can fold the digest into a parse's own window pass
     — `src/indexing/hashing.ts`'s `fnv1a` is range-scoped and resumable
     with the same basis and prime, so chaining it reproduces `hashSource`
-    byte for byte at zero extra I/O — and consumers check `byteLength`
-    alone (`sidecarMatchesSourceLength`). Full verification stays for the
-    revisit case behind `VERIFY_INDEX_SOURCE_HASH`, where a persisted
-    sidecar really may describe a file that has since changed.
+    byte for byte at zero extra I/O — leaving consumers to check
+    `byteLength` alone (`sidecarMatchesSourceLength`). Full verification
+    stays for the revisit case behind `VERIFY_INDEX_SOURCE_HASH`, where a
+    persisted sidecar really may describe a file that has since changed.
+
+    **The coordinator half is not wired.** `HashingByteSource` is the
+    mechanism, exported and tested, but nothing in the tree wraps a parse
+    source with it — every use is a standalone whole-file pass. Nor does
+    the compat surface have a *producer*: `IfcAPI` gains
+    `OpenModelFromIndex` and no method returning columns or a source hash,
+    so a coordinator must build the sidecar through the engine API
+    (`openStreamedIfcModel*` → `columns` →
+    `serializeIndexSidecarFromColumns`). Both are M4d, Share-side, and
+    should be planned as work rather than assumed present.
 - **M5 — Federation MVP.** Two cross-referenced files, shared budgets,
   link navigation, composed skeleton. Exit: a 2-file project browses
   under the same memory budget as either file alone.

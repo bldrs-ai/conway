@@ -245,6 +245,27 @@ async function runRoundtrip( filePath ) {
   const coldRoots = [ ...cold.model.expressIDsOfTypes( gen.IfcRoot ) ]
   const indexRoots = [ ...opened.model.expressIDsOfTypes( gen.IfcRoot ) ]
 
+  // A signature comparison of two empty strings reports a match, and an
+  // inline-address walk that resolves to `undefined` on both sides counts
+  // every row as agreeing. Both are the shape where "no problem observed"
+  // and "the probe never fired" are indistinguishable, so the run reports
+  // what it actually exercised and says so in one field rather than leaving
+  // it to be inferred from a tick.
+  const inlineAttributeSites =
+    coldSignature.length === 0 ? 0 : coldSignature.split( '|' ).length
+
+  let inlineLookupsResolved = 0
+
+  for ( let row = columns.firstInlineElement; row < columns.count; ++row ) {
+    if ( cold.model.getInlineElementByAddress( columns.address[ row ] ) !==
+      void 0 ) {
+      ++inlineLookupsResolved
+    }
+  }
+
+  const evidenceIsVacuous = inlineRows > 0 &&
+    ( inlineAttributeSites === 0 || inlineLookupsResolved === 0 )
+
   console.log( JSON.stringify( {
     model: path.basename( filePath ),
     bytes: store.byteLength,
@@ -263,9 +284,15 @@ async function runRoundtrip( filePath ) {
     rootsIdentical: coldRoots.length === indexRoots.length &&
       coldRoots.every( ( id, at ) => id === indexRoots[ at ] ),
     inlineLookupMismatches,
+    // How many of the inline rows the mismatch count above actually
+    // resolved on the cold side. `inlineLookupMismatches: 0` over rows that
+    // all resolve to `undefined` would be a vacuous pass.
+    inlineLookupsResolved,
     inlineAttributesIdentical: coldSignature === indexSignature,
-    inlineAttributeSites: coldSignature.length === 0 ?
-      0 : coldSignature.split( '|' ).length,
+    inlineAttributeSites,
+    // True when this model has an inline range but the probe exercised
+    // nothing over it — read this before reading any tick above.
+    evidenceIsVacuous,
     sourceHash,
     hashMs: +hashMs.toFixed( 1 ),
     coldParseMs: +coldMs.toFixed( 1 ),

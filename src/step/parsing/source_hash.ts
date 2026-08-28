@@ -25,12 +25,22 @@ const FNV_OFFSET_BASIS = 2166136261
  * index verifies independently, that second read happens N times, which is
  * the N-way I/O a shared index exists to remove (conway#541).
  *
- * The parse is already touching every byte in order. Wrapping its source
- * folds the hash into that pass: ~1.5 s of CPU on a 900 MB model, **zero**
- * extra I/O, and no format or digest change — `src/indexing/hashing.ts`'s
- * `fnv1a` is range-scoped and resumable with the same basis and prime, so
- * chaining it over the parse's windows reproduces `hashSource` byte for
- * byte (pinned by `source_hash.test.ts`).
+ * The parse is already touching every byte in order, so wrapping its source
+ * would fold the hash into that pass: ~1.5 s of CPU on a 900 MB model,
+ * **zero** extra I/O, and no format or digest change — `src/indexing/
+ * hashing.ts`'s `fnv1a` is range-scoped and resumable with the same basis
+ * and prime, so chaining it over the parse's windows reproduces
+ * `hashSource` byte for byte (pinned by `source_hash.test.ts`, over the
+ * real window shapes the streaming builder produces).
+ *
+ * **That wrapping does not exist in this repo yet**, and this comment is
+ * about a mechanism rather than a wired path: every current caller —
+ * `openIfcModelFromIndex`'s `verifySourceHash` included — constructs one of
+ * these over a whole file and calls {@link finishAsync} straight away,
+ * which is the *revisit* gate, not the distribution one. What makes it
+ * worth having anyway is that it is the piece a coordinator cannot add
+ * cheaply from outside: `hashSource` needs the file materialised, and this
+ * does not.
  *
  * ## The sequential-read contract
  *

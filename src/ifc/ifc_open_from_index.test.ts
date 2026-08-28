@@ -117,6 +117,22 @@ describe( 'openIfcModelFromIndex (conway#541)', () => {
     for ( const value of colours.values() ) {
       expect( value ).toBeCloseTo( 0.8 )
     }
+
+    // And the inline ADDRESS walk fires too, not just the attribute read —
+    // a walk whose every row resolved to `undefined` would count each one
+    // as agreeing with the other model and report a clean pass.
+    let resolved = 0
+
+    for ( let row = cold.columns.firstInlineElement;
+      row < cold.columns.count; ++row ) {
+
+      if ( cold.model!.getInlineElementByAddress(
+          cold.columns.address[ row ] ) !== void 0 ) {
+        ++resolved
+      }
+    }
+
+    expect( resolved ).toBe( cold.columns.count - cold.columns.firstInlineElement )
   } )
 
   test( 'restores the same index a cold parse built', async () => {

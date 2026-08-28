@@ -97,13 +97,22 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  * pick by case:
  *
  *  - **Distribution** (coordinator → workers, same file, one session):
- *    the coordinator folds the hash into the parse it is already doing
- *    ({@link import('./source_hash').HashingByteSource}, byte-identical to
- *    `hashSource`) and consumers check `byteLength` only
+ *    a coordinator wraps its parse source in
+ *    {@link import('./source_hash').HashingByteSource}, which folds the
+ *    digest into the pass it was already making — byte-identical to
+ *    `hashSource`, no second read — and consumers check `byteLength` only
  *    ({@link sidecarMatchesSourceLength}). What that trusts is that the
  *    store handle a worker holds addresses the bytes the coordinator
  *    hashed; the only divergence is a concurrent rewrite, which would
  *    equally corrupt the per-worker parse it replaces.
+ *
+ *    **Nothing in this repo wires that yet.** `HashingByteSource` is the
+ *    mechanism and is exported for it, but every present use — including
+ *    `openIfcModelFromIndex`'s `verifySourceHash` — is a standalone
+ *    whole-file pass. The compat surface can *consume* a sidecar
+ *    (`OpenModelFromIndex`) but has no method that *produces* one, so a
+ *    coordinator has to go through the engine API (`openStreamedIfcModel*`
+ *    → `columns` → `serializeIndexSidecarFromColumns`) to build one at all.
  *  - **Revisit** (a persisted sidecar, where the file really may have
  *    changed): full {@link sidecarMatchesSource} against `hashSource`.
  *
@@ -153,6 +162,9 @@ const HEADER_BYTES =
 
 const U32_BYTES = 4
 const F64_BYTES = 8
+
+/** Columns written over every row: address, length, typeID. */
+const COLUMNS_OVER_ALL_ROWS = 3
 
 /**
  * Bytes per complex-entry record, excluding its nested multiMapping:
@@ -415,6 +427,18 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
 
   requireAddressableSource( sourceByteLength )
 
+  // A mid-parse PREFIX is not an index, it is an index so far, and the
+  // format has no slot to say so — restoring one would present "the parse
+  // has not reached this record yet" as "this record is not in the file",
+  // which is the strong DanglingReferenceError wording conway#580 went out
+  // of its way to soften. `ColumnarIndexSink.snapshot()` hands these out to
+  // the parse-time preview channel, so this is reachable, not theoretical.
+  if ( columns.indexIsPrefix === true ) {
+    throw new Error(
+        'Refusing to serialise a prefix index: these columns are a mid-parse ' +
+        'snapshot (indexIsPrefix), not a finalized index' )
+  }
+
   const count = columns.count
   const firstInlineElement = columns.firstInlineElement
   const complexEntries = columns.complexEntries
@@ -448,7 +472,7 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   // range only (inline entities have none — see StepIndexColumns).
   const total =
     HEADER_BYTES +
-    ( count * 3 + firstInlineElement ) * U32_BYTES +
+    ( count * COLUMNS_OVER_ALL_ROWS + firstInlineElement ) * U32_BYTES +
     complexBytes
 
   const bytes = new Uint8Array( total )
@@ -495,7 +519,26 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
  * in any other order would restore a model whose inline addresses no longer
  * line up with its rows. One unfold, one order (conway#541).
  *
- * @param elements The top-level element index, children attached.
+ * **Pass a FRESH index, not one a model has taken.** `StepModelBase`'s
+ * constructor unfolds inline entities into the caller's array **in place**
+ * (it "takes ownership ... will modify values/unfold inline elements",
+ * `step_model_base.ts`), so after `new IfcStepModel( bytes, elements )` the
+ * array's tail holds the inline entities as if they were top-level records.
+ * Serialising that array pushes them through `pushTopLevel` a second time:
+ * on `data/index.ifc` the same index yields 287 rows / 280 top-level before
+ * a model and **294 / 287 after** one, with seven inline entities promoted
+ * to top-level, their absent express IDs written as `0`, and every one of
+ * them unfolded again — shifted localIDs and duplicate addresses in
+ * `inlineAddressMap_`, with nothing raised.
+ *
+ * That order — open a model, then serialise its index for the workers — is
+ * the natural one, so this throws rather than documenting. An inline entity
+ * is exactly an entry with no express ID ({@link StepInlineIndexEntry}
+ * types it `expressID?: undefined`), which makes the check a field test on
+ * the loop that was already running.
+ *
+ * @param elements The top-level element index, children attached, not yet
+ * handed to a model.
  * @param sourceByteLength The length of the source it was built from.
  * @param sourceHash The source hash (see {@link hashSource}).
  * @return {Uint8Array} The sidecar bytes.
@@ -507,7 +550,20 @@ export function serializeIndexSidecar<TypeIDType extends number>(
 
   const sink = new ColumnarIndexSink<TypeIDType>()
 
-  for ( const element of elements ) {
+  for ( let where = 0; where < elements.length; ++where ) {
+
+    const element = elements[ where ]
+
+    if ( element.expressID === void 0 ) {
+      throw new Error(
+          `Element ${where} of ${elements.length} has no express ID, so this ` +
+          'index has already been unfolded in place by a model constructor ' +
+          '(StepModelBase takes ownership of the array it is given). ' +
+          'Serialise the index BEFORE constructing a model over it, or ' +
+          'serialise the model\'s columns with ' +
+          'serializeIndexSidecarFromColumns instead.' )
+    }
+
     sink.pushTopLevel( element )
   }
 
@@ -564,6 +620,29 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
     throw new Error(
         `Corrupt sidecar: firstInlineElement ${firstInlineElement} exceeds ` +
         `count ${count}` )
+  }
+
+  // The mirror of the writer's consistency guard, and load-bearing for the
+  // same reason. `readColumn`'s memcpy fast path is bounded by the backing
+  // ArrayBuffer, not by this view, so a sidecar framed as a `subarray` of a
+  // larger buffer — a slice out of a concatenated postMessage payload, a
+  // partial store read, a pooled Node Buffer — would read whatever follows
+  // it and restore those bytes as index rows. Silently: no throw, and the
+  // columns look plausible. Header-derived length, checked before the first
+  // column read. `complexCount` contributes at least its fixed part per
+  // entry; the nested multiMapping reads run through the DataView, which is
+  // bounded by the view and throws on overrun.
+  const columnBytes = ( count * COLUMNS_OVER_ALL_ROWS + firstInlineElement ) *
+    U32_BYTES
+  const minimumBytes = HEADER_BYTES + columnBytes +
+    complexCount * ( U32_BYTES + COMPLEX_ENTRY_FIXED_BYTES )
+
+  if ( bytes.byteLength < minimumBytes ) {
+    throw new Error(
+        `Truncated sidecar: header describes ${count} rows ` +
+        `(${firstInlineElement} top-level) and ${complexCount} complex ` +
+        `entries, needing at least ${minimumBytes} bytes, but the view is ` +
+        `${bytes.byteLength}` )
   }
 
   const address = new Uint32Array( count )

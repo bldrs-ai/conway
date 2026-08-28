@@ -11,7 +11,9 @@ import { describe, expect, test } from '@jest/globals'
 
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import IfcStepParser from '../../ifc/ifc_step_parser'
-import { StepIndexColumns } from './columnar_index'
+import IfcStepModel from '../../ifc/ifc_step_model'
+import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import { ColumnarIndexSink, StepIndexColumns } from './columnar_index'
 import { StepIndexEntry } from './step_parser'
 import {
   SIDECAR_VERSION,
@@ -199,6 +201,14 @@ describe( 'index sidecar', () => {
     // Pins the inline UNFOLD ORDER across the two producers. A sidecar
     // written in any other order restores a model whose inline addresses no
     // longer line up with its rows, and nothing downstream would say so.
+    //
+    // Reaches ONE level only: `data/index.ifc`'s seven inline entities are
+    // all direct children of an IFCSURFACESTYLERENDERING, with no nesting
+    // below them. The breadth-first rule that distinguishes the orders —
+    // all first-level children before any second-level one — is pinned by
+    // `columnar_index.test.ts`'s 'inline entities unfold in the model
+    // object-walk order', which builds the depth-2 case this fixture does
+    // not contain. Both are needed; neither is sufficient.
     const { bytes, elements } = residentIndex()
     const { columns } = columnarIndex()
     const hash = hashSource( bytes )
@@ -297,6 +307,91 @@ describe( 'index sidecar', () => {
 
     expect( () => deserializeIndexSidecarToColumns<number>( blob ) )
         .toThrow( /4 GiB/ )
+  } )
+
+  test( 'refuses an index a model has already unfolded in place', () => {
+    // StepModelBase's constructor unfolds inline entities into the caller's
+    // array IN PLACE — it "takes ownership ... will modify values/unfold
+    // inline elements". So "open a model, then serialise its index for the
+    // workers", which is the natural order and the one this PR makes
+    // reachable by exporting this function, hands the writer an array whose
+    // tail is inline entities masquerading as top-level records.
+    //
+    // Unguarded the result is silent and wrong, not an error: on this
+    // fixture the same array yields 287 rows / 280 top-level before a model
+    // and 294 / 287 after one, with seven inline entities promoted, their
+    // absent express IDs written as 0, and every one of them unfolded a
+    // second time.
+    const { bytes, elements } = residentIndex()
+    const hash = hashSource( bytes )
+    const beforeModel = serializeIndexSidecar( elements, bytes.byteLength, hash )
+
+    const restoredBefore = deserializeIndexSidecarToColumns<number>( beforeModel )
+
+    expect( restoredBefore.columns.count ).toBe( 287 )
+    expect( restoredBefore.columns.firstInlineElement ).toBe( 280 )
+
+    // Hand the SAME array to a model, which mutates it.
+    new IfcStepModel(
+        bytes, elements as unknown as StepIndexEntry<EntityTypesIfc>[] )
+
+    expect( elements.length ).toBe( 287 )
+    expect( elements[ 286 ].expressID ).toBe( void 0 )
+
+    expect( () => serializeIndexSidecar( elements, bytes.byteLength, hash ) )
+        .toThrow( /already been unfolded in place/ )
+  } )
+
+  test( 'refuses a mid-parse prefix index', () => {
+    // `ColumnarIndexSink.snapshot()` hands prefix columns to the parse-time
+    // preview channel. The format has no slot for `indexIsPrefix`, so a
+    // restored one would claim to be complete — turning "the parse has not
+    // reached this record yet" into the strong DanglingReferenceError
+    // wording conway#580 went out of its way to soften.
+    const sink = new ColumnarIndexSink<number>()
+
+    sink.pushTopLevel( { address: 0, length: 10, typeID: 1, expressID: 1 } )
+
+    const prefix = sink.snapshot()
+
+    expect( prefix.indexIsPrefix ).toBe( true )
+    expect( () => serializeIndexSidecarFromColumns( prefix, 100, 0 ) )
+        .toThrow( /prefix index/ )
+
+    // ...and the finalized twin of the same sink is fine.
+    expect( () => serializeIndexSidecarFromColumns( sink.finalize(), 100, 0 ) )
+        .not.toThrow()
+  } )
+
+  test( 'refuses a blob shorter than its own header describes', () => {
+    // `readColumn`'s memcpy fast path is bounded by the backing ArrayBuffer,
+    // not by the view — so a sidecar framed as a `subarray` of a larger
+    // buffer (a slice out of a concatenated postMessage payload, a partial
+    // store read, a pooled Node Buffer) would read whatever follows it and
+    // restore those bytes as index rows, silently. That framing is the exact
+    // transport this format exists for, so it is checked, not documented.
+    const { bytes, columns } = columnarIndex()
+    const blob =
+      serializeIndexSidecarFromColumns( columns, bytes.byteLength, hashSource( bytes ) )
+
+    // Aligned view into a longer buffer whose tail is poison. Aligned is the
+    // point: misaligned already fell back to the bounds-checked DataView.
+    const backing = new Uint8Array( blob.byteLength * 2 ).fill( 0xEE )
+
+    backing.set( blob, 0 )
+
+    const truncated = backing.subarray( 0, blob.byteLength - 64 )
+
+    expect( truncated.byteOffset % 4 ).toBe( 0 )
+    expect( () => deserializeIndexSidecarToColumns<number>( truncated ) )
+        .toThrow( /Truncated sidecar/ )
+
+    // The untruncated view over the same poisoned buffer still restores
+    // exactly the index, so the guard is not just refusing everything.
+    expectSameColumns(
+        deserializeIndexSidecarToColumns<number>(
+            backing.subarray( 0, blob.byteLength ) ).columns,
+        columns )
   } )
 
   test( 'refuses columns that do not describe themselves', () => {
