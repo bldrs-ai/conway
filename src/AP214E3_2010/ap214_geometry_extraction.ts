@@ -338,6 +338,27 @@ function isWholeCurveEdge(
   return ( from === first && to === last ) || ( from === last && to === first )
 }
 
+
+/**
+ * Check every component of a native 4x4 transform for a non-finite value.
+ *
+ * GetAxis2Placement3D (conway-geom) normalises its axis references with no
+ * finiteness check of its own: a non-finite or zero-length direction ratio
+ * — or a ref_direction parallel to axis — propagates through glm::normalize
+ * and both cross products, and the matrix comes back with its X and Y basis
+ * columns entirely NaN while Z and the translation still look ordinary
+ * (conway#592). Scanning all 16 values rather than just the two known-bad
+ * columns catches that shape and any other non-finite result the same way,
+ * without hard-coding the column layout here.
+ *
+ * @param transform The native transform to check.
+ * @return {boolean} True only if every component is finite.
+ */
+export function isTransformFinite( transform: NativeTransform4x4 ): boolean {
+
+  return transform.getValues().every( ( value ) => Number.isFinite( value ) )
+}
+
 /**
  * Render something thrown that is not an Error, for a log message.
  *
@@ -2426,8 +2447,8 @@ export class AP214GeometryExtraction {
     if ( from.base_surface instanceof plane ) {
       const paramsAxis2Placement3D: ParamsAxis2Placement3D =
         this.extractAxis2Placement3D( from.base_surface.position, from.localID, true )
-      const axis2PlacementTransform = this.conwayModel
-          .getAxis2Placement3D( paramsAxis2Placement3D )
+      const axis2PlacementTransform = this.getAxis2Placement3D(
+          paramsAxis2Placement3D, from.base_surface.position.expressID )
 
       // get geometry
       const parameters: ParamsGetHalfspaceSolid = {
@@ -3014,9 +3035,10 @@ export class AP214GeometryExtraction {
     // (extractCylindricalSurface and friends), so the pcurve is orthonormalised
     // identically to the surface it lies on rather than by a second, subtly
     // different implementation here.
-    const placement = this.conwayModel.getAxis2Placement3D(
+    const placement = this.getAxis2Placement3D(
         this.extractAxis2Placement3D(
-            parameterization.position, basisSurface.localID, true ) )
+            parameterization.position, basisSurface.localID, true ),
+        parameterization.position.expressID )
 
     const transform = placement.getValues()
 
@@ -3377,8 +3399,9 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
-          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      axis2Placement3D = this.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true),
+          from.position.expressID )
       dimension = this.THREE_DIMENSIONS
     }
 
@@ -3444,8 +3467,9 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
-          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      axis2Placement3D = this.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true),
+          from.position.expressID )
       dimension = this.THREE_DIMENSIONS
     }
 
@@ -4181,7 +4205,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    return this.conwayModel.getAxis2Placement3D( transform )
+    return this.getAxis2Placement3D( transform, location.expressID )
   }
 
   /**
@@ -5108,7 +5132,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.cylinder = { active: true, radius: from.radius }
   }
 
@@ -5125,7 +5149,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.sphere = { active: true, radius: from.radius }
   }
 
@@ -5143,7 +5167,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.cone = { active: true, radius: from.radius, semiAngle: from.semi_angle }
   }
 
@@ -5160,7 +5184,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.torus = {
       active: true,
       majorRadius: from.major_radius,
@@ -5482,6 +5506,43 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Run the native AXIS2_PLACEMENT_3D transform and report a non-finite
+   * result.
+   *
+   * GetAxis2Placement3D (conway-geom) does not check its own inputs or
+   * output: a non-finite or degenerate direction ratio comes back as a
+   * matrix with NaN basis columns, silently (conway#592). The C++ side has
+   * no express ID to log against, so the check has to happen here, where
+   * every call site already has one.
+   *
+   * This only reports — it does not refuse the placement or substitute a
+   * fallback. The corrupt transform is still returned and still used, same
+   * as before this check existed; conway#592 asks for the diagnostic, not
+   * for invented recovery behaviour.
+   *
+   * @param parameters The already-extracted placement parameters.
+   * @param expressID The AXIS2_PLACEMENT_3D entity's express ID, for the
+   *     diagnostic.
+   * @return {NativeTransform4x4} The native transform, unchanged.
+   */
+  private getAxis2Placement3D(
+      parameters: ParamsAxis2Placement3D,
+      expressID: number | undefined ): NativeTransform4x4 {
+
+    const transform = this.conwayModel.getAxis2Placement3D( parameters )
+
+    if ( !isTransformFinite( transform ) ) {
+
+      Logger.error(
+          `AXIS2_PLACEMENT_3D #${expressID ?? 'unknown'} produced a ` +
+          'non-finite transform (NaN/Inf basis column) - a non-finite, ' +
+          'zero-length, or axis-parallel direction ratio.' )
+    }
+
+    return transform
+  }
+
+  /**
    * Extract a placement, adding it to the scene.
    *
    * @param from The transform to extract.
@@ -5568,8 +5629,8 @@ export class AP214GeometryExtraction {
       return axis2Placement3DParameters
     }
 
-    const axis2PlacementTransform = this.conwayModel
-        .getAxis2Placement3D(axis2Placement3DParameters)
+    const axis2PlacementTransform = this.getAxis2Placement3D(
+        axis2Placement3DParameters, from.expressID)
 
     return this.scene.addTransform(
         parentLocalId,
@@ -5607,7 +5668,7 @@ export class AP214GeometryExtraction {
   extractRawPlacement(from: placement ): NativeTransform4x4 | undefined {
     if (from instanceof axis2_placement_3d) {
       const parameters = this.extractAxis2Placement3D(from, from.localID, true )
-      return this.conwayModel.getAxis2Placement3D(parameters)
+      return this.getAxis2Placement3D(parameters, from.expressID)
     }
     return
   }
