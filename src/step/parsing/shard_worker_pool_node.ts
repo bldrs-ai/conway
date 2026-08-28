@@ -141,6 +141,13 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
   private failure_: Error | undefined
 
   /**
+   * Terminations started by {@link retire_} that {@link terminate} has to
+   * wait on — a worker retired after `terminate` took its snapshot would
+   * otherwise outlive the call that was supposed to have cleaned it up.
+   */
+  private readonly retiring_ = new Set<Promise<void>>()
+
+  /**
    * @param workers_ Every worker in the pool, warm.
    * @param spawnData The data every worker was spawned with.
    */
@@ -230,7 +237,27 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
       this.waiting_.shift()?.reject( this.failure_ )
     }
 
-    await Promise.all( this.workers_.map( ( worker ) => worker.terminate() ) )
+    // Tolerant per worker: an already-exited worker is the common case here
+    // (they die and get evicted), and one rejection must not abandon the
+    // rest half-terminated.
+    await Promise.all( this.workers_.splice( 0 ).map( ( worker ) =>
+      worker.terminate().then( () => void 0, () => void 0 ) ) )
+
+    // A replacement that landed after the snapshot above is retired by
+    // `release_`; wait for those too, so `terminate()` resolving really does
+    // mean no worker of this pool is still running.
+    await Promise.all( [ ...this.retiring_ ] )
+  }
+
+  /**
+   * How many workers the pool currently holds. Observability for the
+   * lifecycle tests — a leaked replacement shows up here as a pool that is
+   * closed but not empty.
+   *
+   * @return {number} Live worker count.
+   */
+  public get size(): number {
+    return this.workers_.length
   }
 
   /**
@@ -309,6 +336,16 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
    */
   private release_( worker: Worker ): void {
 
+    // Closed while this worker was busy — or while its replacement was still
+    // spawning, which is the race that matters: `terminate()` snapshots
+    // `workers_` and cannot see a replacement that has not landed yet.
+    // Pooling it would leak a live thread nothing will ever terminate, and a
+    // live Worker keeps the process alive.
+    if ( this.failure_ !== void 0 ) {
+      this.retire_( worker )
+      return
+    }
+
     const waiter = this.waiting_.shift()
 
     if ( waiter !== void 0 ) {
@@ -317,6 +354,29 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
     }
 
     this.idle_.push( worker )
+  }
+
+  /**
+   * Drop a worker from the pool and terminate it, tracking the termination
+   * so {@link terminate} can await one that started after its own snapshot.
+   *
+   * @param worker The worker to retire.
+   */
+  private retire_( worker: Worker ): void {
+
+    const at = this.workers_.indexOf( worker )
+
+    if ( at >= 0 ) {
+      this.workers_.splice( at, 1 )
+    }
+
+    const retiring = worker.terminate()
+        .then( () => void 0, () => void 0 )
+        .finally( () => {
+          this.retiring_.delete( retiring )
+        } )
+
+    this.retiring_.add( retiring )
   }
 }
 
@@ -366,8 +426,15 @@ function runJob<TypeIDType extends number>(
 
   return new Promise<ShardOutcome<TypeIDType>>( ( resolve, reject ) => {
 
-    const onMessage = ( message: ShardResultMessage<TypeIDType> ): void => {
+    /** Drop every listener, so a worker outliving this job settles nothing. */
+    const cleanup = (): void => {
+      worker.off( 'message', onMessage )
       worker.off( 'error', onError )
+      worker.off( 'exit', onExit )
+    }
+
+    const onMessage = ( message: ShardResultMessage<TypeIDType> ): void => {
+      cleanup()
       resolve( {
         shard: message.shard,
         stopOffset: message.stopOffset,
@@ -381,12 +448,26 @@ function runJob<TypeIDType extends number>(
     }
 
     const onError = ( thrown: Error ): void => {
-      worker.off( 'message', onMessage )
+      cleanup()
       reject( thrown )
     }
 
-    worker.once( 'message', onMessage )
-    worker.once( 'error', onError )
+    // `exit` is the one that matters and the one that was missing.
+    // `worker.terminate()` on a worker with a job in flight emits `exit`,
+    // NOT `error` — so listening only for message/error left that job's
+    // promise pending forever, and a pending promise never reaches the
+    // coordinator's serial fallback. A hang is strictly worse than a
+    // rejection here because nothing surfaces it.
+    const onExit = ( code: number ): void => {
+      cleanup()
+      reject( new Error(
+          `shard worker exited (code ${code}) before returning shard ` +
+          `${job.index}` ) )
+    }
+
+    worker.on( 'message', onMessage )
+    worker.on( 'error', onError )
+    worker.on( 'exit', onExit )
     worker.postMessage( { kind: 'job', job } )
   } )
 }

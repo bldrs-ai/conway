@@ -99,9 +99,18 @@ describe( 'NodeShardWorkerPool failure handling', () => {
         { index: 2, startOffset: 0, endOffset: 512 } ) ).rejects.toThrow()
   }, 60000 )
 
-  test( 'terminate rejects queued waiters rather than leaving them pending',
+  test( 'a job in flight when the pool is terminated rejects on worker exit',
       async () => {
 
+        // `worker.terminate()` on a worker with a job in flight emits EXIT,
+        // not `error`. `runJob` listened only for message/error, so that
+        // job's promise stayed pending forever — and a pending promise never
+        // reaches the coordinator's fallback.
+        //
+        // The job that `release_` hands over immediately before teardown is
+        // the one that hits this, so terminating an IDLE pool does not
+        // reproduce it: the first job must occupy the only worker and the
+        // second must be queued behind it.
         pool = await NodeShardWorkerPool.spawn<EntityTypesIfc>( {
           filePath: MODEL,
           poolBytes: 64 * 1024,
@@ -109,9 +118,6 @@ describe( 'NodeShardWorkerPool failure handling', () => {
           parserModuleUrl: PARSER_MODULE,
         } )
 
-        // Occupy the only worker, then queue a second claim behind it and
-        // tear the pool down. Without the terminate-time rejection the
-        // queued job never settles at all.
         const first = pool.runner(
             { index: 0, startOffset: DATA_START, endOffset: MODEL_BYTES } )
         const queued = pool.runner(
@@ -120,12 +126,60 @@ describe( 'NodeShardWorkerPool failure handling', () => {
         await first
         await pool.terminate()
 
+        // Assert on the REJECTION'S IDENTITY, not merely that something
+        // rejected. The previous version of this test raced the promise
+        // against a timeout and asserted a bare `.rejects.toThrow()`, which
+        // passes whether the job rejects for the right reason or simply
+        // never settles and trips the race — a test that cannot fail.
         await expect( Promise.race( [
           queued,
           new Promise( ( _, reject ) =>
-            setTimeout( () => reject( new Error( 'still pending' ) ), 5000 ) ),
-        ] ) ).rejects.toThrow()
+            setTimeout( () => reject( new Error( 'STILL-PENDING' ) ), 10000 ) ),
+        ] ) ).rejects.toThrow( /shard worker exited/ )
       }, 60000 )
+
+  test( 'terminate does not leave a replacement worker behind', async () => {
+
+    // `terminate()` snapshots `workers_`, so a replacement still spawning at
+    // that moment is invisible to it. Releasing that replacement into a
+    // closed pool leaks a live thread nothing will ever terminate.
+    //
+    // The bad path makes the first job kill its worker, which starts a
+    // replacement spawn; spawning takes ~300-400 ms, so terminating 50 ms in
+    // lands reliably inside that window.
+    pool = await NodeShardWorkerPool.spawn<EntityTypesIfc>( {
+      filePath: '/nonexistent/does-not-exist.ifc',
+      poolBytes: 64 * 1024,
+      workerCount: 1,
+      parserModuleUrl: PARSER_MODULE,
+    } )
+
+    const failing = pool.runner(
+        { index: 0, startOffset: 0, endOffset: 512 } ).catch( ( e ) => e )
+
+    await new Promise( ( resolve ) => setTimeout( resolve, 50 ) )
+    await pool.terminate()
+    await failing
+
+    // Give any leaked replacement time to land in the pool before looking.
+    await new Promise( ( resolve ) => setTimeout( resolve, 1500 ) )
+
+    expect( pool.size ).toBe( 0 )
+  }, 60000 )
+
+  test( 'terminate is idempotent and never throws', async () => {
+
+    pool = await NodeShardWorkerPool.spawn<EntityTypesIfc>( {
+      filePath: MODEL,
+      poolBytes: 64 * 1024,
+      workerCount: 2,
+      parserModuleUrl: PARSER_MODULE,
+    } )
+
+    await expect( pool.terminate() ).resolves.toBeUndefined()
+    await expect( pool.terminate() ).resolves.toBeUndefined()
+    expect( pool.size ).toBe( 0 )
+  }, 60000 )
 
   test( 'a claim after terminate rejects instead of hanging', async () => {
 
