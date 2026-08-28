@@ -30,9 +30,15 @@ const EXPECTED_FILE_SIZE_MM = [ 50, 50, 100 ]
 const TOLERANCE = 0.02
 
 /**
- * The same part wrapped in a one-child assembly, so its root unit scale is
- * applied through the ASSEMBLY-ROOT path instead of the inline
- * single-representation path {@link FIXTURE} takes. Geometry, units and
+ * The same part given a separate root representation, linked to it by a
+ * `SHAPE_REPRESENTATION_RELATIONSHIP` complex — NOT a NAUO/CDSR assembly,
+ * which is what "assembly" usually means in AP214. The relationship arm is
+ * not what matters here: the root's thunk comes from the shape-definition
+ * loop either way, so this covers the root-resolution line just as a NAUO
+ * would, with far less fixture.
+ *
+ * Its unit scale is therefore applied through the ASSEMBLY-ROOT path instead
+ * of the inline single-representation path {@link FIXTURE} takes. Geometry, units and
  * dimensions are `create-a-tube.step` verbatim; only the representation
  * structure differs, which is what makes the two expectations identical.
  *

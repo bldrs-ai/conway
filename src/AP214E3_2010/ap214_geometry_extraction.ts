@@ -6345,15 +6345,23 @@ export class AP214GeometryExtraction {
           // the assertion keeps that from depending on three separate
           // invariants holding in one place (conway#606 review, codex
           // round 1).
+          // The `!== void 0` is TYPE-DRIVEN, not a reachable state: `rep` is
+          // optional on `MappedSceneNode`, so it has to be narrowed, but a
+          // node without one cannot reach here — the selector above requires
+          // a `thunk`, and all four `.thunk =` sites set `.rep =` on the next
+          // line of the same unconditional block. Skipping the scale is the
+          // inert branch, chosen over `!` so that if the pairing is ever
+          // broken the result is an unscaled root rather than a throw into
+          // the catch below, which would report it as a malformed unit
+          // context.
           const rootRepresentation = mappedNode.rep
 
           if ( rootRepresentation !== void 0 ) {
             try {
               scaleTransform = this.rootUnitScaleTransform( rootRepresentation )
             } catch {
-              // Malformed unit context (prefix truncation) — no unit scale.
-              // Now the only cause that reaches here: an absent `rep` is
-              // handled above rather than thrown over.
+              // Malformed unit context (prefix truncation) — no unit scale,
+              // and now the only thing that reaches this catch.
               scaleTransform = void 0
             }
           }
