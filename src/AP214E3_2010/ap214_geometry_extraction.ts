@@ -883,6 +883,95 @@ export class AP214GeometryExtraction {
   public extentDegenerateFaceCount = 0
 
   /**
+   * When true, extractAdvancedFace records whether each face's own
+   * contribution actually landed any triangles (conway#596). Off by
+   * default: the check flushes staged tessellation right after every
+   * face's own addOrStageFace call so the triangle count read back is
+   * that face's alone, rather than the batch's — which serialises
+   * tessellation for this extraction. Callers that don't need the count
+   * (every extraction except the digest/regression path today) pay
+   * nothing by leaving this false.
+   */
+  public trackFaceAccounting = false
+
+  /**
+   * localID -> did this face's own extraction call land at least one
+   * triangle. Populated only while trackFaceAccounting is true; a face
+   * never visited (unsupported item type, unreached representation, or
+   * one whose extraction threw and was caught in extractFaces) simply
+   * never gets an entry, which unaccountedFaceCount treats the same as
+   * an explicit false — the model declared it and nothing accounted for
+   * it either way. Keyed by localID rather than expressID: expressID is
+   * undefined for inline entities, and localID is what every other
+   * face-keyed lookup in this file already uses (model.geometry included).
+   */
+  private readonly faceAccounted = new Map<number, boolean>()
+
+  /**
+   * Record one face's outcome for the conway#596 tally. No-op unless
+   * trackFaceAccounting is set, so untracked extractions don't pay for a
+   * map that nothing will read.
+   *
+   * @param localID The face's local ID.
+   * @param accounted Did this face's own extraction call land a triangle.
+   */
+  private recordFaceAccounted( localID: number, accounted: boolean ): void {
+
+    if ( !this.trackFaceAccounting ) {
+      return
+    }
+
+    // A face visited twice (the styled-item memo-reuse path) keeps its
+    // ALREADY-recorded outcome rather than being overwritten by a later,
+    // unrelated call that reuses its localID for something else - in
+    // practice this only fires from the memo-reuse branch itself, which
+    // computes its own accounted value from the reused geometry, so this
+    // is here to make the contract explicit rather than to change behavior.
+    if ( !this.faceAccounted.has( localID ) ) {
+      this.faceAccounted.set( localID, accounted )
+    }
+  }
+
+  /**
+   * Per-model unaccounted-face count for the conway#596 diagnostic: how
+   * many of this model's ADVANCED_FACEs never landed a triangle anywhere
+   * — not merged into their solid's mesh, and not emitted as their own
+   * styled mesh. `undefined` when trackFaceAccounting was never turned on
+   * (the count would be meaningless: nothing was recorded to subtract).
+   *
+   * The denominator is the STEP file's own advanced_face count, not a
+   * count of extraction visits — so a face extraction skips entirely
+   * (unsupported item type, unreached representation) is unaccounted by
+   * construction, same as one that ran and produced nothing.
+   *
+   * @return {number | undefined} The unaccounted count, or undefined if
+   * tracking was off.
+   */
+  public getUnaccountedFaceCount(): number | undefined {
+
+    if ( !this.trackFaceAccounting ) {
+      return void 0
+    }
+
+    let totalFaces = 0
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for ( const _face of this.model.types( advanced_face ) ) {
+      ++totalFaces
+    }
+
+    let accounted = 0
+
+    for ( const wasAccounted of this.faceAccounted.values() ) {
+      if ( wasAccounted ) {
+        ++accounted
+      }
+    }
+
+    return totalFaces - accounted
+  }
+
+  /**
    * The scale a face's deflection target may not be refined below: the
    * extent of the representation that defines it (conway#564 §5).
    *
@@ -4257,15 +4346,30 @@ export class AP214GeometryExtraction {
 
     const bounds = from.bounds
     const previousFaceGeometry = this.model.geometry.getByLocalID(from.localID)
-    
+
     if ( previousFaceGeometry !== void 0  ) {
-    
+
       previousFaceGeometry.temporary = false
+
+      // A revisit of a face that already has its own styled mesh (the
+      // only path that keys model.geometry by a face's OWN localID) -
+      // inherit that mesh's outcome rather than leaving this visit
+      // unrecorded.
+      this.recordFaceAccounted(
+          from.localID,
+          previousFaceGeometry.type === CanonicalMeshType.BUFFER_GEOMETRY &&
+          previousFaceGeometry.geometry.getTriangleCount() > 0)
+
       return
     }
 
     if ( from.bounds.length === 0 ) {
-    
+
+      // No boundary at all - the file declares a face with nothing to
+      // tessellate. Not a bug this extraction can do anything about, but
+      // still a face that produced no geometry.
+      this.recordFaceAccounted( from.localID, false )
+
       return
     }
     
@@ -4789,7 +4893,15 @@ export class AP214GeometryExtraction {
       const faceGeometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
 
       this.addOrStageFace(parameters, faceGeometry)
- 
+
+      // Flush now, before reading the count below - see trackFaceAccounting's
+      // doc. faceGeometry is fresh, so its triangle count is entirely this
+      // face's own contribution; no "before" reading is needed.
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+        this.recordFaceAccounted( from.localID, faceGeometry.getTriangleCount() > 0 )
+      }
+
       const canonicalMesh: CanonicalMesh = {
         type: CanonicalMeshType.BUFFER_GEOMETRY,
         geometry: faceGeometry,
@@ -4801,7 +4913,22 @@ export class AP214GeometryExtraction {
 
     } else {
 
+      // Unlike the styled branch, `geometry` is the SHARED buffer other
+      // faces of this solid append into - so the triangle count has to be
+      // sampled on both sides of this face's own call to isolate its
+      // delta, and (per trackFaceAccounting's doc) staged tessellation has
+      // to be flushed in between so the "after" read is not measuring
+      // work this face merely enqueued.
+      const beforeTriangleCount =
+        this.trackFaceAccounting ? geometry.getTriangleCount() : 0
+
       this.addOrStageFace(parameters, geometry)
+
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+        this.recordFaceAccounted(
+            from.localID, geometry.getTriangleCount() > beforeTriangleCount )
+      }
     }
 
     nativeSurface.delete()
