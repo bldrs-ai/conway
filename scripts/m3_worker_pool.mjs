@@ -105,6 +105,9 @@ async function runWorker( task ) {
   // digest would report OK on visibly different geometry. Hashed once per
   // geometry, since instances share it.
   const payloads = new Map()
+  // Accumulated over UNIQUE geometries only (the map guards re-entry), so a
+  // shard's totals are what it built, not what it instanced.
+  const sizes = { vertexFloats: 0, indexCount: 0 }
   const tGeometry = performance.now()
 
   for ( ;; ) {
@@ -148,14 +151,28 @@ async function runWorker( task ) {
                 // trying to measure. NO_PAYLOAD_DIGEST=1 keeps the copy-out
                 // (which a consumer does pay) and drops only the hash, to
                 // bound how much of a reported loss is the instrument.
+                // Sizes travel alongside the digest in BOTH modes, so the
+                // run can prove it did the work (vertex/triangle totals
+                // against the model's known figures) without depending on
+                // which verification mode is on. A timing line alone cannot
+                // distinguish a fast run from a skipped one.
+                sizes.vertexFloats += vertices.length
+                sizes.indexCount += indices.length
+
+                // Sizes ALWAYS, digest optionally. Sizes alone already
+                // catch a shard building different topology (which is what
+                // D3D turned out to do); the digest additionally catches
+                // same-sized geometry with different values.
+                const digested = noPayloadDigest ? '' :
+                  createHash( 'sha256' )
+                      .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
+                          vertices.byteLength ) )
+                      .update( new Uint8Array( indices.buffer, indices.byteOffset,
+                          indices.byteLength ) )
+                      .digest( 'hex' )
+
                 payloads.set( placed.geometryExpressID,
-                    noPayloadDigest ? `${vertices.length}:${indices.length}` :
-                      createHash( 'sha256' )
-                          .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
-                              vertices.byteLength ) )
-                          .update( new Uint8Array( indices.buffer, indices.byteOffset,
-                              indices.byteLength ) )
-                          .digest( 'hex' ) )
+                    `${vertices.length}:${indices.length}:${digested}` )
 
               } finally {
                 geometry.delete()
@@ -186,6 +203,8 @@ async function runWorker( task ) {
     index: task.index,
     openMs,
     geometryMs,
+    vertexFloats: sizes.vertexFloats,
+    indexCount: sizes.indexCount,
     wasmHeapBytes: api.wasmModule?.HEAPU8?.byteLength ?? 0,
     v8HeapBytes: v8.getHeapStatistics().used_heap_size,
     placements,
@@ -255,6 +274,8 @@ if ( !isMainThread ) {
   let referenceDigest
   let referenceWall
   let referenceGeometry
+  let referenceUnion
+  let referencePayloads
 
   for ( const count of sweep ) {
 
@@ -291,6 +312,23 @@ if ( !isMainThread ) {
     const payloadUnion =
       [ ...new Set( results.flatMap( ( result ) => result.payloads ) ) ].sort()
 
+    // Deduped across shards: a geometry two shards both built is one
+    // geometry in the model. `payloadUnion` is already the deduped set and
+    // both modes encode the sizes in it, so read them back from there rather
+    // than summing the per-shard counters (which would double-count exactly
+    // the duplication being measured).
+    let vertexFloats = 0
+    let triangles = 0
+
+    for ( const entry of payloadUnion ) {
+
+      // `${geometryExpressID}:${vertexFloats}:${indexCount}:${digest?}`
+      const parts = entry.split( ':' )
+
+      vertexFloats += Number( parts[ 1 ] )
+      triangles += Number( parts[ 2 ] ) / 3
+    }
+
     const digest = createHash( 'sha256' )
         .update( union.join( '\n' ) )
         .update( '\u0000' )
@@ -304,15 +342,42 @@ if ( !isMainThread ) {
 
     const matched = digest === referenceDigest
 
-    // A partition that loses or alters geometry is not a slow result, it is a
-    // wrong one, and anything scripting this must not keep the timings.
-    if ( !matched ) {
-      process.exitCode = 1
+    if ( referenceUnion === void 0 ) {
+      referenceUnion = union
+      referencePayloads = payloadUnion
     }
 
-    const verdict = matched ?
+    // What a mismatch actually is, not just that there is one.
+    //
+    // This path had never executed before D3D: `process` here is an ESM
+    // NAMESPACE (`import * as process`), whose properties are read-only, so
+    // the `process.exitCode = 1` that used to sit above threw a TypeError and
+    // took the run down before it printed a single timing — the union check
+    // could detect a bad partition but never report one. Assign through
+    // globalThis, and print the timings and a decomposition FIRST, so a
+    // mismatch is a diagnosis rather than a crash.
+    let detail = ''
+
+    if ( !matched ) {
+
+      const referenceSet = new Set( referenceUnion )
+      const shardedSet = new Set( union )
+      const missing = referenceUnion.filter( ( key ) => !shardedSet.has( key ) )
+      const extra = union.filter( ( key ) => !referenceSet.has( key ) )
+      const referencePayloadSet = new Set( referencePayloads )
+      const payloadsDiffer =
+        payloadUnion.filter( ( key ) => !referencePayloadSet.has( key ) ).length
+
+      detail =
+        `\n       placements ${union.length} vs ${referenceUnion.length} ` +
+        `(missing ${missing.length}, extra ${extra.length}); ` +
+        `payload entries not in the reference: ${payloadsDiffer}`
+    }
+
+    const verdict = ( matched ?
       'OK   union matches the single-worker load' :
-      'FAIL union DIFFERS from the single-worker load (placements or payloads)'
+      'FAIL union DIFFERS from the single-worker load (placements or payloads)' ) +
+      detail
 
     const slowestGeometry = Math.max( ...results.map( ( r ) => r.geometryMs ) )
     const slowestOpen = Math.max( ...results.map( ( r ) => r.openMs ) )
@@ -344,5 +409,20 @@ if ( !isMainThread ) {
         `peakRss=${( await peakRssMb() ).toFixed( 0 )}MB` )
 
     console.log( `  ${verdict}` )
+
+    if ( vertexFloats > 0 ) {
+      console.log(
+          `  geometry built: ${( vertexFloats / 6 ).toLocaleString( 'en-US' )} ` +
+          `vertices (at 6 floats each), ` +
+          `${triangles.toLocaleString( 'en-US' )} triangles, ` +
+          `${payloadUnion.length.toLocaleString( 'en-US' )} unique geometries` )
+    }
+
+    // After the report, never before it: a wrong partition is not a slow
+    // result, and anything scripting this must not keep the timings — but a
+    // human reading the output needs them to work out WHY it is wrong.
+    if ( !matched ) {
+      globalThis.process.exitCode = 1
+    }
   }
 }
