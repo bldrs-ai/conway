@@ -435,10 +435,13 @@ assumptions.**
    on-heap objects. conway #372 cut the parse index from ~1 GB to ~24 MB
    post-`invalidate` on a 7.8 M-entity model, so whatever this is, it is
    probably not that. Only a heap snapshot will say, and taking one is the
-   obvious next move; the candidates visible in the code are
+   obvious next move — §9.1 records that on this heap it is also an
+   impossible one; the candidates visible in the code are
    `conwayDirectIfcLoader`'s `captured` array (every `FlatMesh` for the whole
    model, held for the whole load), conway's per-entity descriptor cache, and
-   three.js's per-instance bookkeeping.
+   three.js's per-instance bookkeeping. **§9 measures all three**: the first
+   is right but only half the owner, the second is worth nothing at all, and
+   the third is 4.31 MB.
 
 **Unmeasured, and it is the piece I most wanted:** the split *within* the
 geometry stage. The in-page sampler took 21 samples during the 19 s download
@@ -452,17 +455,225 @@ piggy-backed on conway's own progress callback rather than injected from
 outside.
 
 
-## 9. Still open
+## 9. What the 1,233 MB of V8 objects is
 
-- **What is the 1,233 MB of V8 heap objects?** The single largest item in
-  §8 and completely unexamined. One `HeapProfiler.takeHeapSnapshot` on a
-  settled load answers it, and until it is answered no geometry-memory
-  design should be committed to.
+§8's largest item, attributed. Same box, same build, two D3D loads: one to
+reproduce §8's composition and try the obvious instrument, one to measure
+what §8's number is made of.
+
+**The composition reproduces exactly**, on a deliberately unminified build
+(`MINIFY=false SHARE_CONFIG=playwright`, so every frame and class name below
+is a real name rather than `pOA`; it costs ~3 MB of V8 objects on a small
+model, measured, and nothing else changed):
+
+| | §8 | run 1 | run 2 |
+|---|---:|---:|---:|
+| `performance.memory.usedJSHeapSize` | 2,648 | 2,664.9 | 2,664.2 |
+| V8 JS heap objects | 1,233 | 1,237.4 | **1,236.8** |
+| external, non-wasm (ArrayBuffers) | 796 | 816.5 | 816.5 |
+| wasm linear memory | 611 | 610.9 | 610.9 |
+| renderer RSS, settled | 2,935 | 2,953.7 | 3,013.6 |
+| renderer RSS, high-water *during the load* | 3,574 | 3,598.5 | 3,603.9 |
+
+Same setup as §8 in every other respect — `D3D.ifc` served over HTTP from
+localhost into `/share/v/u/…`, Chromium launched with
+**`--enable-precise-memory-info`** (without it every number in this section
+is a frozen constant, §5) and `--js-flags=--expose-gc`, wasm memories
+instrumented at document start, RSS read out of band from `/proc` so the
+starved main thread cannot blind it. Run 2's own report line:
+`Total: 4667.160s, 77.25 → 2665.16 MB heap | vertices=3204852
+triangles=2453022`. The scene it left behind is **one** `BatchedMesh` with
+**562,351** instances — that count is the denominator for everything below.
+
+
+### 9.1 A heap snapshot is not available at this heap size
+
+The obvious move — `HeapProfiler.takeHeapSnapshot` — **cannot be taken on
+this load, and that is a finding rather than a harness problem.** On the
+settled D3D heap (V8 1,236 MB, renderer RSS 2.95 GB) the snapshot walk drove
+the renderer from 2.95 GB to **13.1 GB anon-rss**, where the cgroup OOM-killed
+it. It emitted **zero** `addHeapSnapshotChunk` events and never reported the
+walk finished, so there is no partial artifact either — roughly 10 GB of
+transient for a 1.24 GB heap, about 8× the heap it is describing. The same
+harness on a 46 MB heap (dental_clinic.ifc) produces an 87 MB snapshot in
+5.1 s without trouble, so this is a scale wall, not a broken pipe. Anyone
+planning to "just take a snapshot" of a big-model load should budget ~10× the
+V8 heap in free RAM, or plan not to.
+
+`Runtime.queryObjects` is expensive here too but survivable: enumerating the
+**656,251 live `Set`s** took the renderer to 5.33 GB.
+
+### 9.2 Two instruments that do work, and they agree
+
+1. **Allocation site.** V8's sampling heap profiler
+   (`HeapProfiler.startSampling`, 128 KB mean interval) started before
+   navigation. It holds each sampled object through a weak handle and drops
+   the sample when the object is collected, so a profile read after a forced
+   GC is a live-heap attribution by JS call stack. Cost measured at ~10 % of
+   geometry wall clock (4,626 s against run 1's 4,161 s). Its live total,
+   **1,234.7 MB, is 99.8 % of the 1,236.7 MB the CDP counter reports** — the
+   profile covers essentially the whole heap.
+2. **Causal retention.** `Runtime.queryObjects` (which collects first, so
+   everything it returns is live by construction) enumerates every `Set` and
+   `Map`, then each big one is `.clear()`ed with a forced full collection
+   either side. The drop in `Runtime.getHeapUsage().usedSize` is not an
+   estimate of what a `.clear()` would save; it *is* what it saves.
+
+### 9.3 Where the 1,236.8 MB is
+
+By allocation site, rolled up to the structure that ends up holding the bytes:
+
+| holder | MB | share |
+|---|---:|---:|
+| conway `FlatMesh`/`PlacedGeometry` stream — Share's `captured` **and** conway's `meshMap`/`vectorFlatMesh` | **475.0** | 38.5 % |
+| `IncrementalBatchedBuilder.seenPlacements` — `coincidenceKey` strings + the `Set` | **396.0** | 32.1 % |
+| Share's own `SearchIndex` (`initSearch` → `indexElement`) | 131.6 | 10.7 % |
+| three.js batched model (BufferGeometry, instance tables, BVH) | 87.2 | 7.1 % |
+| conway `ResidencyController` | 67.1 | 5.4 % |
+| builder per-placement bookkeeping (`appendPlacement_`) | 30.4 | 2.5 % |
+| conway parse (`StepStringParser`, vtable, descriptors) | 4.6 | 0.4 % |
+| app shell / React / bundle | 4.9 | 0.4 % |
+| unattributed (spread thin; largest single site 4.3 MB) | 38.0 | 3.1 % |
+
+The clear-and-collect experiment, on the same settled load, against a
+post-GC baseline of **1,237.63 MB**:
+
+| cleared | entries | freed (MB) |
+|---|---:|---:|
+| the 562,351-entry `Set` of `coincidenceKey`s (`seenPlacements`) | 562,351 | **396.65** |
+| a 192,022-entry `Map` — one entry per unique geometry, the shape of `geometryCache` | 192,022 | 48.77 |
+| every other `Set` with ≥ 1,000 entries (7 named + the rest) | 1,612,962 | 22.39 |
+| every other `Map` with ≥ 1,000 entries (7 named + the rest) | 659,603 | 26.26 |
+| **conway `ReleaseEntityCache`** (found by walking the store + scene) | — | **−0.10** |
+| the `BatchedMesh` per-instance pick tables (`instanceColors` + 4 more) | 1,124,702 | 4.31 |
+| removing the whole model group from the scene | 4 roots | 0.15 |
+| **total** | | **498.43** → 739.20 MB |
+
+**The two instruments agree where they overlap**: the sampler attributes
+396.0 MB to `coincidenceKey` and its `+=`, and clearing that one `Set`
+measures 396.65 MB. That is the cross-check that makes the rest of the table
+trustworthy.
+
+§8's three named candidates each land somewhere other than where §8 put
+them:
+
+- **`captured` was right, but it is only half the owner.** The
+  `FlatMesh`/`PlacedGeometry` graph is retained *twice*: by
+  `conwayDirectIfcLoader.js`'s `captured.push(...batch)` and by conway's own
+  `streamNewMeshes_`, which does `meshMap.set(entity.expressID, mesh)` and
+  `vectorFlatMesh.push(deltaMesh)` (`ifc_api_proxy_ifc.ts`). Dropping one
+  frees nothing, and that is measured, not argued: clearing the heap's
+  largest express-ID-keyed `Map` — 228,971 entries, which is `meshMap`'s
+  shape — freed **4.4 MB** of the 475 MB it participates in.
+- **conway's descriptor cache is not the problem.** `ReleaseEntityCache`
+  on the live model freed **−0.10 MB** — i.e. nothing, within noise. conway
+  #372's columnar index is doing exactly what it claims; there is no
+  gigabyte of parsed entities here to reclaim. §8 guessed this correctly
+  ("probably not that") and it is now measured.
+- **three.js's per-instance bookkeeping is small.** All five per-instance
+  tables over 562,351 instances — 1.12 M array slots — are 4.31 MB.
+
+And one item nobody had named: **Share's own `SearchIndex` is 131.6 MB**.
+`src/search/SearchIndex.js` builds `eltsByType` / `eltsByName` /
+`eltsByGlobalId` / `eltsByExpressId` / `eltsByText`, one `Set` per distinct
+token — and `indexElementByString` indexes every key **twice**, verbatim and
+`toLowerCase()`d, so the `Set` count is doubled by construction. That is
+where the **656,251 live `Set`s** come from. It is built eagerly from
+`CadView#initSearch` as soon as the model lands, and bounded by nothing.
+
+### 9.4 The 396 MB is a string-building accident, not a data structure
+
+562,351 placements, 396.65 MB, is **739 bytes per placement** — for a key
+like `794:791:7:0:7:0:7:0:-7:0:0:10:0:0:1940550:201995:-1733751:10000:0:0:0:10000`,
+76 characters, which as a flat one-byte string is ~96 B plus a hash-table
+slot. The excess is visible in the profile's split: 211.8 MB in
+`coincidenceKey`'s own allocations and **184.5 MB in the `+=` inside it**.
+`coincidenceKey` (`flatMeshToBatchedModel.js`) builds its key with seventeen
+successive `key += …` — sixteen in a loop over the matrix, one for the colour
+— and the intermediates survive two forced full collections alongside the
+finished key. So roughly 6× the flat-string cost, and the multiplier is the
+construction, not the content.
+
+### 9.5 Steady state versus transient
+
+| | MB | verdict |
+|---|---:|---|
+| `seenPlacements` | 396.0 | **transient, outlived its use.** A load-time guard against exact-duplicate placements. Nothing reads it after `finalize()`. |
+| `FlatMesh`/`PlacedGeometry` graph | 475.0 | **transient, outlived its use** on the incremental path. The builder consumes each batch as it streams; `captured` exists only for the end-of-load *fallback* build and two debug-gated consumers, and conway's `meshMap` only to survive geometry eviction during the pump. |
+| `SearchIndex` | 131.6 | **steady state as designed**, but unbounded and eager — a policy question, not a leak. |
+| three.js batched model | 87.2 | **necessary steady state** (and its real cost is the ~796 MB of ArrayBuffers, not these objects). |
+| `ResidencyController` | 67.1 | **steady state while the model can re-extract geometry on demand.** |
+| everything else | 77.8 | mixed; no single site over 5 MB. |
+
+**871 MB — 70.5 % of the V8 heap — is transient that outlived its use.**
+
+### 9.6 How much survives to idle: all of it
+
+| | V8 used (MB) |
+|---|---:|
+| settled, at `data-model-ready` | 1,236.75 |
+| after 120 s of idle | 1,236.99 |
+| after two forced `HeapProfiler.collectGarbage` | 1,236.67 |
+
+**Nothing decays.** Idle costs the heap 0.24 MB in the wrong direction, and
+forced collection recovers 0.32 MB out of 1,237. Run 1 says the same
+(1,237.43 → 1,237.48 → 1,236.15). So the answer to "can a second model be
+opened in the same tab" is **no, and not close**: the tab sits at 2,664 MB of
+a ~4,096 MB `jsHeapSizeLimit` with the whole 611 MB of wasm linear memory
+permanently committed (§6), leaving under 1.4 GB for a load that needs 2.7 GB.
+Even after this section's clears — which are more aggressive than any real fix
+would be — the tab still holds 2,167 MB, because the 816 MB of ArrayBuffers
+and the 611 MB of wasm pages are untouched by any of it.
+
+### 9.7 The lever
+
+**Stop building `coincidenceKey` as a string.** It is worth **~380 MB of
+both peak and retention** — the largest single actionable item on this page.
+A numeric key (a hash, or a packed index) costs tens of bytes per entry
+against the measured **739 B**, so 562,351 placements go from 396.65 MB to
+somewhere around 15 MB. It is one function (`coincidenceKey` in
+`flatMeshToBatchedModel.js`), the `Set` is private to the builder, and no
+consumer reads either one. And the retention half of that is free without
+touching the key at all: `this.seenPlacements.clear()` in `finalize()`, one
+line, 396.65 MB measured. What that one line does **not** buy is the peak —
+the `Set` is at its maximum exactly when the load ends, so only a cheaper key
+moves the 2,664 MB high-water.
+
+Second, and larger but not one-line: **the 475 MB `FlatMesh` graph needs
+both of its owners dropped.** Share must stop accumulating `captured` when
+`onMeshBatch` is consuming the stream (the fallback build is the only reader,
+and it is dead code on a successful incremental assembly), and conway must
+stop retaining `meshMap`/`vectorFlatMesh` entries past the batch that emitted
+them. Either alone frees ~nothing; that is measured.
+
+**Corrections this section forces on §7.** §7 says the two JS copies of every
+geometry are "132.0 MB merged / 106.3 MB batched… ~238 MB of the 1,233".
+That is a category error: geometry vertex and index data live in
+`ArrayBuffer` backing stores, which are the **796 MB external bucket**, not
+V8 objects. In the V8-object bucket `geometryCache` is **48.8 MB**, and
+clearing it is worth that, not 238 MB. §7's arithmetic about the buffers
+themselves stands; only its attribution to §8's 1,233 MB line does not.
+
+**Unmeasured, and worth naming.** (a) Both `Map` identifications — the
+192,022-entry one as `geometryCache`, the 228,971-entry one as conway's
+`meshMap` — are by entry count and key shape, not proven: the probe recorded
+each `Map`'s size and first key, not its value shape. Their *sizes* are
+measured; their *names* are inferred. (b) Nothing here says when
+during the load each structure grows, only what is standing at the end; the
+per-stage split §8 wanted is still open. (c) The 38.0 MB unattributed is
+spread thin enough (largest single site 4.3 MB) that it was not chased.
+
+
+## 10. Still open
+
 - **What is the split inside the geometry stage?** §8 says what the load ends
-  holding; it does not say what geometry itself added, because the sampler
-  was starved (see §8's last paragraph). Fixing the harness — out-of-band RSS
-  sampling, in-page reads riding conway's progress callback — is a
-  prerequisite for the next attempt.
+  holding and §9 says what that is made of; neither says what geometry itself
+  added *when*, because the sampler was starved (see §8's last paragraph).
+  Fixing the harness — out-of-band RSS sampling, in-page reads riding
+  conway's progress callback — is a prerequisite for the next attempt.
+  §9's sampling profiler is the missing half: it survives a starved main
+  thread, and reading `getSamplingProfile` at each stage boundary would give
+  the per-stage split directly.
 - **Does parse's 778 MB scale with file size or with entity count?** Still
   unmeasured. D3D is 20.995 % inline entities, the highest in the corpus;
   PSB is 0.594 % and four times the size — comparing the two separates the
