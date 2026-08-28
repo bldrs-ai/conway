@@ -6313,17 +6313,49 @@ export class AP214GeometryExtraction {
       // All thunks are set — capture remaining assembly-tree roots as
       // pending roots in the exact order the whole-model walk executed
       // them.
-      for ( const [sourceID, mappedNode] of treeMap.entries() ) {
+      for ( const mappedNode of treeMap.values() ) {
         if ( ( mappedNode.parents ?? 0 ) === 0 && mappedNode.thunk !== void 0 && mappedNode.processed !== true ) {
 
           let scaleTransform : NativeTransform4x4 | undefined = void 0
 
-          try {
-            const shapeRepresentation = this.model.getTypedElementByLocalID( sourceID, shape_representation )! as shape_representation
-            scaleTransform = this.rootUnitScaleTransform( shapeRepresentation )
-          } catch {
-            // Malformed unit context (prefix truncation) — no unit scale.
-            scaleTransform = void 0
+          // Read the representation off the NODE rather than looking it up
+          // again by local ID. Every `.thunk =` in this walk is paired with
+          // a `.rep =`, and `rep` is the object the edge was built from, so
+          // this is the same record with one hop less work.
+          //
+          // It is also the form that cannot go wrong. The lookup this
+          // replaces was `getTypedElementByLocalID( <this node's local
+          // ID>, shape_representation )!` — a typed lookup for the SUBTYPE,
+          // while a relationship endpoint (`rep_1`/`rep_2`) is declared
+          // `representation`. The `!` meant a refusal would arrive as
+          // `undefined`, `rootUnitScaleTransform` would throw on it, and
+          // the catch below — written for malformed unit contexts — would
+          // absorb it and emit the root in FILE units: a 1000x error on a
+          // millimetre file, silent, on visible geometry.
+          //
+          // That was not reachable, and the change is behaviour-neutral:
+          // measured on as1-assembly, ap214-two-representations-one-unit,
+          // supercap, driver board and Right_Hand, the lookup returned the
+          // same object as `rep` on every root, and a synthetic plain
+          // `REPRESENTATION` root reached this loop zero times. The reason
+          // is the selector: a node needs a `thunk` to get here, the SDR
+          // loop above only gives one to an `instanceof shape_representation`,
+          // and the relationship arms that could supply a non-shape node
+          // set `parents >= 1`, which `parents === 0` excludes. Removing
+          // the assertion keeps that from depending on three separate
+          // invariants holding in one place (conway#606 review, codex
+          // round 1).
+          const rootRepresentation = mappedNode.rep
+
+          if ( rootRepresentation !== void 0 ) {
+            try {
+              scaleTransform = this.rootUnitScaleTransform( rootRepresentation )
+            } catch {
+              // Malformed unit context (prefix truncation) — no unit scale.
+              // Now the only cause that reaches here: an absent `rep` is
+              // handled above rather than thrown over.
+              scaleTransform = void 0
+            }
           }
 
           pendingRoots.push( { node: mappedNode, scaleTransform } )

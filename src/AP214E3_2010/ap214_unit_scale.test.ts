@@ -29,13 +29,37 @@ const EXPECTED_FILE_SIZE_MM = [ 50, 50, 100 ]
 /** Fractional slack, covering tessellation chord error on the tube's curves. */
 const TOLERANCE = 0.02
 
+/**
+ * The same part wrapped in a one-child assembly, so its root unit scale is
+ * applied through the ASSEMBLY-ROOT path instead of the inline
+ * single-representation path {@link FIXTURE} takes. Geometry, units and
+ * dimensions are `create-a-tube.step` verbatim; only the representation
+ * structure differs, which is what makes the two expectations identical.
+ *
+ * The distinction is not academic. `create-a-tube.step` is dispatched by
+ * the shape-definition loop, which computes its scale inline and never
+ * reaches the `pendingRoots` loop that resolves assembly roots — so before
+ * this fixture existed, no test in the repo exercised the root-resolution
+ * line at all, and a change there was invisible to the suite (conway#606
+ * review, codex round 1).
+ */
+const ASSEMBLY_FIXTURE = 'data/ap214-assembly-root-unit-scale.step'
+
 let scene: AP214SceneBuilder
+let assemblyScene: AP214SceneBuilder
 let conwayGeometry: ConwayGeometry
 
-beforeAll( async () => {
+
+/**
+ * Parse and extract a fixture into a scene.
+ *
+ * @param fixturePath The STEP file to load.
+ * @return {AP214SceneBuilder} The extracted scene.
+ */
+function buildScene( fixturePath: string ): AP214SceneBuilder {
 
   const parser = AP214StepParser.Instance
-  const buffer = new ParsingBuffer( fs.readFileSync( FIXTURE ) )
+  const buffer = new ParsingBuffer( fs.readFileSync( fixturePath ) )
 
   expect( parser.parseHeader( buffer )[ 1 ] ).toBe( ParseResult.COMPLETE )
 
@@ -43,15 +67,22 @@ beforeAll( async () => {
 
   expect( parsed ).not.toBe( void 0 )
 
-  conwayGeometry = new ConwayGeometry()
-
-  expect( await conwayGeometry.initialize() ).toBe( true )
-
   const [ result, sceneBuilder ] =
     new AP214GeometryExtraction( conwayGeometry, parsed! ).extractAP214GeometryData()
 
   expect( result ).toBe( ExtractResult.COMPLETE )
-  scene = sceneBuilder
+
+  return sceneBuilder
+}
+
+beforeAll( async () => {
+
+  conwayGeometry = new ConwayGeometry()
+
+  expect( await conwayGeometry.initialize() ).toBe( true )
+
+  scene = buildScene( FIXTURE )
+  assemblyScene = buildScene( ASSEMBLY_FIXTURE )
 } )
 
 
@@ -61,16 +92,17 @@ beforeAll( async () => {
  * where the root unit scale actually lands (vertices stay in file
  * coordinates).
  *
+ * @param forScene The scene to measure.
  * @return The size along x, y and z.
  */
-function worldSize(): number[] {
+function worldSize( forScene: AP214SceneBuilder ): number[] {
 
   const mins = [ Infinity, Infinity, Infinity ]
   const maxs = [ -Infinity, -Infinity, -Infinity ]
 
   const wasm = ( conwayGeometry as unknown as { wasmModule: { HEAPF32: Float32Array } } ).wasmModule
 
-  for ( const [ transform, , mesh ] of scene.walk() ) {
+  for ( const [ transform, , mesh ] of forScene.walk() ) {
 
     const geometry = ( mesh as unknown as { geometry: {
       GetVertexData(): number, GetVertexDataSize(): number } } ).geometry
@@ -110,7 +142,7 @@ describe( 'AP214 root unit scale', () => {
 
   test( 'a millimetre model lands in world space in metres (issue #458)', () => {
 
-    const size = worldSize()
+    const size = worldSize( scene )
 
     EXPECTED_FILE_SIZE_MM.forEach( ( millimetres, axis ) => {
 
@@ -119,6 +151,36 @@ describe( 'AP214 root unit scale', () => {
       expect( size[ axis ] ).toBeGreaterThan( expectedMetres * ( 1 - TOLERANCE ) )
       expect( size[ axis ] ).toBeLessThan( expectedMetres * ( 1 + TOLERANCE ) )
     } )
+  } )
+
+  test( 'an assembly ROOT keeps its unit scale (conway#606 review)', () => {
+
+    // The assembly-root path, which no other test reaches. #606's guard
+    // makes a typed lookup refuse a record that is not of the requested
+    // type, and the root resolution used to re-derive its representation
+    // through exactly such a lookup — for the SUBTYPE `shape_representation`
+    // — behind a `!`, with the throw absorbed by a catch written for
+    // malformed unit contexts. A root that lost its scale that way is not
+    // subtly wrong: it is emitted in FILE units.
+    //
+    // That is what this measures, and the failure it discriminates is
+    // enormous rather than marginal. Forcing the root's scale to
+    // `undefined` on this fixture takes the world size from
+    // [0.05, 0.0499, 0.1] to [50, 49.88, 100] — the 1000x error, verified
+    // by doing it rather than assumed.
+    const size = worldSize( assemblyScene )
+
+    EXPECTED_FILE_SIZE_MM.forEach( ( millimetres, axis ) => {
+
+      const expectedMetres = millimetres * MM_IN_M
+
+      expect( size[ axis ] ).toBeGreaterThan( expectedMetres * ( 1 - TOLERANCE ) )
+      expect( size[ axis ] ).toBeLessThan( expectedMetres * ( 1 + TOLERANCE ) )
+    } )
+
+    // Same part, same numbers, different representation structure: if these
+    // two ever disagree, the difference is the root path and nothing else.
+    expect( size ).toEqual( worldSize( scene ) )
   } )
 
   test( 'the scale is metres-per-file-unit, not its reciprocal (issue #458)', () => {
