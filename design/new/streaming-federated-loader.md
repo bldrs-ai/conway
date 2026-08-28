@@ -980,14 +980,63 @@ Deliberately small first step; each has a measurable exit.
     interchange format** — `sidecarMatchesSource` gates trust on the
     hash+length handshake and falls back to a cold scan on any mismatch
     (the placeholder FNV-1a hash swaps for SHA-256 as a version bump, not
-    a reshape). Inline / multi-mapping children are a v2 extension
-    (`hasChildren` flags the records the v1 format under-describes).
+    a reshape). Inline / multi-mapping children were a v2 extension —
+    **since delivered, see M4c.**
     `RangeByteSource` (a `StepExternalByteStore`) models an HTTP-Range /
     block store: it returns exactly the requested bytes while accounting
     for the wider block-aligned fetch it would really incur, so
     index-first open can read back from `stats` how little of the file it
     touched. *Remaining for M4b: the OPFS/HTTP sidecar cache round-trip in
     Share and the wired index-first open path over `RangeByteSource`.*
+  - **M4c — sidecar v2 + open-from-index (engine core, landed; conway#541).**
+    Two things, and the first is a correctness fix rather than a feature.
+
+    **v2 carries the whole index**, `[0, count)`, not just the top-level
+    range: the inline-entity range and the multi-mapping holders too. What
+    v1 dropped was not exotic — inline entities are ordinary typed values
+    written inside an attribute list, and a restored model's
+    `inlineAddressMap_` was empty, so `StepEntityBase.extractReference`
+    resolved every one of them to `null` under the default `nullOnErrors`.
+    Measured share of the index: MB-Khaya 0.274 %, PSB 0.594 %, DOWA
+    5.414 %, **D3D 20.995 % (720,661 rows)** — a 77× spread across
+    exporters, so whether v1 was safe depended on who wrote the file. The
+    symptom is surface styles, transparency and measure-valued attributes
+    quietly degrading on a model that otherwise loads and looks right.
+    `complexEntries` is 0 on every corpus model, so v1's own framing
+    (multi-mapping holders) was watching the right column for the wrong
+    risk. v1 blobs are rejected by version, never reinterpreted. Two
+    smaller repairs ride along: `address` is stored as u32 to match the
+    `Uint32Array` column it restores into (v1 wrote f64 and truncated in
+    silence above 4 GiB — now a throw at both ends), and
+    `sidecarMatchesSource` takes a structural `SidecarSourceIdentity` so
+    the columns path reaches it without the `as any` the repo's own test
+    used to need.
+
+    **`openIfcModelFromIndex` / `IfcAPI.OpenModelFromIndex`** consume that
+    index instead of building one. The seam is narrow by construction:
+    everything after the columns — `WindowedStepBufferProvider` →
+    `IfcStepModel` → demand prep → extraction — is index-agnostic and is
+    now literally one shared body (`IfcApiProxyIfc.finishWindowedOpen`).
+    The header comes off the same bounded 64 KiB prefix the store open
+    already reads for format detection, so the load report's `Model` line
+    stays real on this path. There is **no internal cold-parse fallback**:
+    `OpenModelFromIndex` returns `-1` and the caller falls back to
+    `OpenModelStream` explicitly, because silently re-parsing would spend
+    exactly the cost the call exists to avoid and make a stale index
+    invisible. An index-first open has no live parse, so it has no preview
+    channel and no derived coordination frame — fine for a worker, which
+    takes the coordinator's via `SetCoordinationFrame`, and the reason
+    index-first must not silently become the coordinator's own path.
+
+    **The trust gate has two halves now**, because one full verify per
+    consumer is the N-way I/O a shared index exists to remove.
+    `HashingByteSource` folds the digest into the parse's own window pass
+    — `src/indexing/hashing.ts`'s `fnv1a` is range-scoped and resumable
+    with the same basis and prime, so chaining it reproduces `hashSource`
+    byte for byte at zero extra I/O — and consumers check `byteLength`
+    alone (`sidecarMatchesSourceLength`). Full verification stays for the
+    revisit case behind `VERIFY_INDEX_SOURCE_HASH`, where a persisted
+    sidecar really may describe a file that has since changed.
 - **M5 — Federation MVP.** Two cross-referenced files, shared budgets,
   link navigation, composed skeleton. Exit: a 2-file project browses
   under the same memory budget as either file alone.

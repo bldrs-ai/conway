@@ -216,6 +216,58 @@ export class IfcApiModelPassthroughFactory {
   }
 
   /**
+   * Index-first open (conway#541): the caller already holds the entity
+   * index — a sidecar a coordinator built during its own parse, or one
+   * persisted from a previous visit — so there is nothing to parse. IFC
+   * only, inheriting the store path's restriction; the format is sniffed
+   * from the same bounded prefix `fromStore` reads.
+   *
+   * **No internal fallback.** Anything wrong with the sidecar (wrong
+   * version, wrong source length, a header that will not parse) returns
+   * `undefined`, so `OpenModelFromIndex` reports `-1` and the caller
+   * chooses `OpenModelStream` explicitly. Falling back here would spend a
+   * full parse to hide the mismatch that made it necessary.
+   *
+   * @param modelID
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param wasmModule
+   * @param settings
+   * @return {Promise<IfcApiModelPassthrough | undefined>}
+   */
+  public static async fromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    const prefixLen = Math.min( store.byteLength, STORE_DETECT_PREFIX_BYTES )
+    const prefix = await store.read( 0, prefixLen )
+    const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( prefix ) )
+
+    if ( modelFormat !== ModelFormatType.IFC ) {
+
+      Logger.warning(
+          'Index-first open is IFC-only; use OpenModelStreamed with a buffer ' +
+          `for format ${modelFormat}` )
+      return
+    }
+
+    try {
+
+      return await IfcApiProxyIfc.createFromIndex(
+          modelID, store, sidecar, wasmModule, settings )
+    } catch ( e ) {
+
+      const message = e instanceof Error ? e.message : String( e )
+
+      Logger.warning(
+          `Index-first open failed for model ${modelID}: ${message}` )
+    }
+  }
+
+  /**
    * Cooperative twin of from() (used by OpenModelAsync): the data parse
    * runs with periodic event-loop yields so progress UI can repaint
    * (issue #301 §2) for IFC and AP214/AP203/AP242 alike. IFC geometry
