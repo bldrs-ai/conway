@@ -1526,14 +1526,26 @@ implements Iterable<BaseEntity>, Model {
       // type` does — the first disjunct is the instance's own prototype,
       // the second its strict ancestors, and together they are its whole
       // prototype chain. It is also what the multi-mapping branch above
-      // has always used to pick a variant. (The one record whose memo is
-      // NOT built from `schema.constructors` is a type-0 external-mapping
-      // container with no `multiMapping` — `getElementByLocalID` builds
-      // that one from `externalMappingType` while `constructors[ 0 ]` is
-      // `undefined`. Its class descends from `StepEntityBase` alone, so
-      // `instanceof` still answers `undefined` for every schema type a
-      // caller can name; the parser only mints type 0 for a complex
-      // instance, which carries a `multiMapping` and returns above.)
+      // has always used to pick a variant.
+      //
+      // One record breaks that "only ever `schema.constructors`" rule and
+      // is worth naming, because it is the single place where a memo hit
+      // and a memo miss can still disagree. A type-0 external-mapping
+      // container reaching HERE (rather than the multi-mapping branch)
+      // holds an `externalMappingType` instance, since that is what
+      // `getElementByLocalID` builds for type 0, while the construct path
+      // below reads `schema.constructors[ 0 ]`, which is `undefined`. It
+      // is reachable: the parser mints type 0 for a complex instance and
+      // normally attaches a `multiMapping`, but a degenerate `#5=();`
+      // leaves that undefined and lands here — verified by parsing one.
+      // So a cold lookup answers `undefined` where a warm one answers the
+      // mapping object. The divergence is confined to a `type` argument of
+      // `StepEntityBase` / `StepExternalMapping` / `<Schema>StepExternalMapping`,
+      // none of which any generated getter passes; for every schema type a
+      // caller can actually name, both answers are `undefined`, because
+      // that class descends from `StepEntityBase` alone. Left as it is
+      // rather than special-cased: guarding it would add a branch for a
+      // query nothing issues, and the warm answer is the truthful one.
       //
       // A mismatch therefore returns `undefined` rather than falling
       // through to reconstruct: the fall-through would call the same

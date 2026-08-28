@@ -14,6 +14,7 @@ import {
   IfcProduct,
   IfcRepresentationItem,
 } from '../ifc/ifc4_gen'
+import IfcStepExternalMapping from '../ifc/ifc_step_external_mapping'
 import IfcStepModel from '../ifc/ifc_step_model'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { MISTYPED_VALUE_MESSAGE } from './dangling_reference_error'
@@ -50,6 +51,9 @@ const COMPLEX_PRODUCT_EXPRESS_ID = 300
 /** `MISTYPED_LOCATION`'s plain context record — see its doc. */
 const SUPERTYPE_RECORD_EXPRESS_ID = 4
 
+/** `DEGENERATE_COMPLEX`'s empty complex instance — see its doc. */
+const DEGENERATE_COMPLEX_EXPRESS_ID = 5
+
 /**
  * `#1`'s Location is declared `IfcCartesianPoint` and points at `#2`,
  * which is an `IfcDirection` — an indexed record of the wrong type, the
@@ -69,6 +73,19 @@ const MISTYPED_LOCATION = new TextEncoder().encode(
     '#2=IFCDIRECTION((0.,0.,1.));\n' +
     '#3=IFCCARTESIANPOINT((0.,0.,0.));\n' +
     '#4=IFCGEOMETRICREPRESENTATIONCONTEXT($,\'Model\',3,1.0E-05,#1,$);\n' + FOOTER )
+
+
+/**
+ * A degenerate STEP complex instance: `#5=();`. The parser mints type 0
+ * (`EXTERNALMAPPINGCONTAINER`) for a complex instance and normally attaches
+ * a `multiMapping`, but with no variants to record it leaves that undefined
+ * — which routes the record through the SINGLE-entity path instead of the
+ * multi-mapping branch. Not valid ISO-10303-21; conway parses it anyway,
+ * which is the point.
+ */
+const DEGENERATE_COMPLEX = new TextEncoder().encode(
+    `${HEADER}#3=IFCCARTESIANPOINT((0.,0.,0.));\n` +
+    '#5=();\n' + FOOTER )
 
 
 /**
@@ -258,6 +275,45 @@ describe( 'typed lookup of a memoized element (conway#606)', () => {
         .toBe( context )
     expect( model.getTypedElementByLocalID( localID, IfcGeometricRepresentationSubContext ) )
         .toBeUndefined()
+  } )
+
+  test( 'the one record whose memo is not built from schema.constructors', () => {
+
+    // The single place a memo hit and a memo miss can still disagree, and
+    // the reason it is documented in the source rather than left silent.
+    // `getElementByLocalID` builds a type-0 record from `externalMappingType`
+    // while the construct path reads `schema.constructors[ 0 ]`, which is
+    // `undefined` — so cold answers `undefined` where warm answers the
+    // mapping object.
+    //
+    // What matters is the SCOPE of that divergence: it needs a `type`
+    // argument of `StepEntityBase` or the external-mapping class itself,
+    // which no generated getter passes. For every schema type a caller can
+    // name, both answers are `undefined`, and that is what keeps the fix's
+    // guarantee intact. Asserted both ways so a future change that widens
+    // the divergence to a schema type fails here.
+    const localIDOf = ( model: IfcStepModel ) =>
+      model.resolveExpressID( DEGENERATE_COMPLEX_EXPRESS_ID )!
+
+    const cold = parseModel( DEGENERATE_COMPLEX )
+    const warm = parseModel( DEGENERATE_COMPLEX )
+
+    expect( warm.getElementByLocalID( localIDOf( warm ) ) )
+        .toBeInstanceOf( IfcStepExternalMapping )
+
+    // The documented divergence, pinned rather than assumed.
+    expect( cold.getTypedElementByLocalID( localIDOf( cold ), IfcStepExternalMapping ) )
+        .toBeUndefined()
+    expect( warm.getTypedElementByLocalID( localIDOf( warm ), IfcStepExternalMapping ) )
+        .toBeInstanceOf( IfcStepExternalMapping )
+
+    // ...and the guarantee that survives it: no schema type gets an object.
+    for ( const schemaType of [ IfcCartesianPoint, IfcProduct, IfcObjectDefinition ] ) {
+      expect( cold.getTypedElementByLocalID( localIDOf( cold ), schemaType ) )
+          .toBeUndefined()
+      expect( warm.getTypedElementByLocalID( localIDOf( warm ), schemaType ) )
+          .toBeUndefined()
+    }
   } )
 
   test( 'the multi-mapping path is unchanged', () => {
