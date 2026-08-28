@@ -133,6 +133,12 @@ const BUCKETS = 1000
 /* Shard counts simulated for the sharded-parse curve. */
 const SHARD_COUNTS = [1, 2, 4, 8]
 
+/* What gridAxisLine accepts as a reducible IfcPolyline axis curve, and how
+ * many axes resolveVirtualGridIntersection requires. Both mirror the engine
+ * (`ifc_geometry_extraction.ts`, GRID_INTERSECTION_AXIS_COUNT). */
+const POLYLINE_AXIS_POINTS = 2
+const GRID_INTERSECTION_AXES = 2
+
 
 /**
  * Walk the data section, calling back per record.
@@ -542,7 +548,14 @@ function report(path) {
    * lists. The INVERSE half of the grid chain — see the gate below. Bounded by
    * the grid count (36 across the whole public corpus), so plain arrays. */
   const gridSpans = []
-  const isGridPlacement = new Uint8Array(maxId + 1)
+  /* The chain a grid placement resolves THROUGH, kept only for the record
+   * types involved so these stay empty on a model without grid placement:
+   * placement -> its virtual intersection -> the axes it names -> their axis
+   * curves. Used to decide whether the placement can reach the gridByAxis
+   * scan at all; see the reachability pass below. */
+  const gridPlacementLocation = new Map()
+  const intersectionAxes = new Map()
+  const axisCurve = new Map()
   let records = 0
   eachRecord(buf, (id, typeStart, typeEnd, start, end, argsFrom) => {
     offsetOf[id] = start
@@ -569,7 +582,23 @@ function report(path) {
       ++leafRecords
     }
     if (name === 'IFCGRIDPLACEMENT') {
-      isGridPlacement[id] = 1
+      // PlacementLocation is IfcGridPlacement's first reference.
+      const refs = []
+      eachRef(buf, argsFrom, end, (ref) => refs.push(ref))
+      gridPlacementLocation.set(id, refs[0] ?? 0)
+    }
+    if (name === 'IFCVIRTUALGRIDINTERSECTION') {
+      // IntersectingAxes is its only aggregate carrying references;
+      // OffsetDistances is an aggregate of numbers.
+      const axes = []
+      eachAggregateRef(buf, argsFrom, end, (ref) => axes.push(ref))
+      intersectionAxes.set(id, axes)
+    }
+    if (name === 'IFCGRIDAXIS') {
+      // AxisCurve is IfcGridAxis's only reference.
+      const refs = []
+      eachRef(buf, argsFrom, end, (ref) => refs.push(ref))
+      axisCurve.set(id, refs[0] ?? 0)
     }
     if (name === 'IFCGRID') {
       const axes = []
@@ -578,6 +607,102 @@ function report(path) {
     }
     ++records
   })
+
+  /* Which grid placements can REACH the gridByAxis scan at all (codex round 3
+   * on conway#607).
+   *
+   * The gate below is about a scan the engine only runs if it gets that far,
+   * and extractGridPlacement does not always get that far. Walking it from
+   * entry to the `gridByAxis` call, there is exactly ONE early return —
+   *
+   *   const location = this.resolveVirtualGridIntersection( placementLocation )
+   *   if ( location === void 0 ) { return }
+   *
+   * — and nothing else between them exits: reading PlacementLocation or
+   * PlacementRefDirection can THROW, but a throw is a deferral the forward
+   * chain already models, and the IfcVirtualGridIntersection arm of
+   * PlacementRefDirection ignores an unresolvable reference (the schema
+   * default, the first axis' tangent, stands in), as does the degeneracy
+   * guard on the reference direction, which only warns.
+   *
+   * So reachability is exactly "resolveVirtualGridIntersection returns a
+   * value", and that function fails in four ways. Three are visible to a byte
+   * scanner and are modelled here:
+   *
+   *  - fewer than two entries in IntersectingAxes;
+   *  - an entry that is not an IfcGridAxis at all (a mistyped file, like the
+   *    counterweight product in data/grid_placement_tail_axes.ifc);
+   *  - an axis whose AxisCurve is not one gridAxisLine reduces: anything but
+   *    an IFCLINE, or an IFCPOLYLINE without exactly two points. The
+   *    checked-in IFCCIRCLE axis in data/grid_placement.ifc is this case.
+   *
+   * The fourth is geometric — axes that are parallel or degenerate, tested as
+   * |cross| <= eps * len0 * len1 — and it is NOT decidable from record types
+   * and offsets, which is all this tool reads. A file whose axes are
+   * well-typed but parallel is therefore still gated here while the engine
+   * returns before the scan: a false deferral, in the over-deferring
+   * direction, and the one residual of this kind that is left. Detecting it
+   * would mean parsing coordinates and reproducing the epsilon, which is a
+   * different tool from this one.
+   *
+   * The extra record pass runs only for files that actually contain a grid
+   * placement, so a model without one pays nothing — which is also why the
+   * corpus output cannot move. */
+  const reachesGridScan = new Uint8Array(maxId + 1)
+
+  if (gridPlacementLocation.size > 0) {
+    // Point counts, for the axis curves only: a Map over every IFCPOLYLINE in
+    // a solid-heavy model would be tens of millions of entries.
+    const curvePointCount = new Map()
+
+    for (const curveId of axisCurve.values()) {
+      if (curveId > 0 && curveId <= maxId) {
+        curvePointCount.set(curveId, 0)
+      }
+    }
+
+    eachRecord(buf, (id, typeStart, typeEnd, start, end, argsFrom) => {
+      if (!curvePointCount.has(id)) {
+        return
+      }
+      let points = 0
+      eachAggregateRef(buf, argsFrom, end, () => ++points)
+      curvePointCount.set(id, points)
+    })
+
+    const nameOf = (ref) =>
+      (ref > 0 && ref <= maxId ? typeNames[typeOf[ref]] : '') || ''
+
+    /* gridAxisLine reduces an IfcPolyline of exactly two points, or an
+     * IfcLine. Every other curve type warns and drops the placement. */
+    const reducibleCurve = (axisRef) => {
+      if (nameOf(axisRef) !== 'IFCGRIDAXIS') {
+        return false
+      }
+      const curveId = axisCurve.get(axisRef) ?? 0
+      const curveName = nameOf(curveId)
+
+      if (curveName === 'IFCLINE') {
+        return true
+      }
+
+      return curveName === 'IFCPOLYLINE' &&
+        curvePointCount.get(curveId) === POLYLINE_AXIS_POINTS
+    }
+
+    for (const [placementId, locationRef] of gridPlacementLocation) {
+      if (nameOf(locationRef) !== 'IFCVIRTUALGRIDINTERSECTION') {
+        continue
+      }
+      const axes = intersectionAxes.get(locationRef) ?? []
+
+      // The engine reduces axes[0] and axes[1] and ignores any third.
+      if (axes.length >= GRID_INTERSECTION_AXES &&
+        reducibleCurve(axes[0]) && reducibleCurve(axes[1])) {
+        reachesGridScan[placementId] = 1
+      }
+    }
+  }
 
   /* The INVERSE lookup, which no forward closure can reach (conway#607).
    *
@@ -689,9 +814,12 @@ function report(path) {
       (shards) => blockedRanges(
           gridSpans, offsetOf, maxId, (offset) => bandProgress(offset, shards)))
 
-  /* Whether a placement record resolves THROUGH an IfcGridPlacement, and so
-   * has to wait for the gridByAxis scan on top of its own chain. Propagated up
-   * the chain by the fixed point below, so a product reached through
+  /* Whether a placement resolves THROUGH a grid placement that actually
+   * reaches the gridByAxis scan, and so has to wait for it on top of its own
+   * chain. Seeded from reachesGridScan rather than from "is an
+   * IFCGRIDPLACEMENT", because a placement whose intersection cannot be
+   * resolved returns before the scan and must not be gated by it. Propagated
+   * up the chain by the fixed point below, so a product reached through
    * IfcLocalPlacement.PlacementRelTo is gated like one that references the
    * grid placement directly. */
   const chainHasGridPlacement = new Uint8Array(maxId + 1)
@@ -700,7 +828,7 @@ function report(path) {
     placementResolveAt[id] = offsetOf[id]
     placementBlocker[id] = id
     leafFirstResolveAt[id] = isLeaf[id] === 1 ? 0 : offsetOf[id]
-    chainHasGridPlacement[id] = isGridPlacement[id]
+    chainHasGridPlacement[id] = reachesGridScan[id]
     for (let s = 0; s < SHARD_COUNTS.length; ++s) {
       shardChainProgress[s][id] = bandProgress(offsetOf[id], SHARD_COUNTS[s])
     }

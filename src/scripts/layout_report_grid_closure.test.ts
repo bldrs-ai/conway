@@ -67,14 +67,17 @@ const STRADDLE_EARLY_IN_BAND = 0.1
 const ROW_ALL_SCANNED = 100
 const ROW_NINE_TENTHS = 90
 
-/* data/grid_placement_tail_axes.ifc, by construction. One of its four
- * deferring proxies — #500, whose own axes are at the tail — bottoms out in
- * an axis polyline's points LATER than the last grid axis record, so the
- * forward closure is still what names its blocker. */
-const GRID_TAIL_LEAF_BLOCKED = 1
+/* data/grid_placement_tail_axes.ifc, by construction. TWO of its four
+ * deferring proxies are named by the forward closure rather than the scan:
+ * #500, whose own axes are at the tail and bottom out in an axis polyline's
+ * points LATER than the last grid axis record; and #800, whose intersection
+ * names an IFCDIRECTION where an IFCGRIDAXIS belongs, so
+ * resolveVirtualGridIntersection returns undefined and the placement never
+ * reaches the scan at all (conway#607 round 3). */
+const GRID_TAIL_LEAF_BLOCKED = 2
 
-/* The other three, all held by the same single all-or-nothing scan. */
-const GRID_TAIL_INVERSE_BLOCKED = 3
+/* The other two, both held by the same all-or-nothing scan. */
+const GRID_TAIL_INVERSE_BLOCKED = 2
 
 
 /* Header, units and the world placement every inline fixture below needs, and
@@ -329,6 +332,67 @@ describe('layout_report grid-placement closure', () => {
     // report prints no blocker block, since every record it references is
     // already behind it.
     expect(blockerBlock(file)).toMatch(/\s1\s+\(\s*\d+%\)\s+IFCGRIDAXIS/)
+  })
+
+  test('a placement that aborts before the scan is not gated by it', () => {
+
+    // conway#607 round 3. extractGridPlacement only reaches gridByAxis if
+    // `resolveVirtualGridIntersection` returns a value; when it does not, the
+    // placement returns first and the scan never runs, so gating such a
+    // product is a FALSE deferral — the over-deferring direction again.
+    //
+    // One fixture for all three arms a byte scanner can see, so this pins the
+    // CONDITION rather than one instance of it. Every product below sits
+    // inside grid #300's blocked range (its record is in the prefix, its axes
+    // are at the tail), so under a gate gated merely on "is an
+    // IFCGRIDPLACEMENT" all four would be pushed to #330:
+    //
+    //   #200  two 2-point polyline axes      -> reducible, IS gated (control)
+    //   #500  an IFCCIRCLE axis curve        -> gridAxisLine drops it
+    //   #600  a 3-point IFCPOLYLINE axis     -> gridAxisLine wants exactly 2
+    //   #700  a single-axis intersection     -> needs two
+    const file = path.join(workDir, 'unreachable_scan.ifc')
+
+    fs.writeFileSync(file, [
+      ...FIXTURE_HEAD,
+      // The grid whose axes are at the tail: this is what would gate.
+      '#300=IFCGRID(\'3kF0kSTOX3ovkcpuOhkPrX\',$,\'Far\',$,$,$,$,(#310),(#330),$,.RECTANGULAR.);',
+      // The control's chain: two grid axes on 2-point polylines.
+      ...LOCAL_GRID_AND_PRODUCT_CHAIN,
+      '#200=IFCBUILDINGELEMENTPROXY(\'2kF0kSTOX3ovkcpuOhkPrX\',$,\'Control\',$,$,#201,$,$,.NOTDEFINED.);',
+      // An axis whose curve is a circle, which gridAxisLine cannot reduce.
+      '#413=IFCCARTESIANPOINT((0.,0.));',
+      '#412=IFCAXIS2PLACEMENT2D(#413,$);',
+      '#411=IFCCIRCLE(#412,4.);',
+      '#410=IFCGRIDAXIS(\'C\',#411,.T.);',
+      '#502=IFCVIRTUALGRIDINTERSECTION((#410,#130),(0.,0.));',
+      '#501=IFCGRIDPLACEMENT(#502,$);',
+      '#500=IFCBUILDINGELEMENTPROXY(\'5kF0kSTOX3ovkcpuOhkPrX\',$,\'Circle\',$,$,#501,$,$,.NOTDEFINED.);',
+      // An axis whose polyline has three points rather than two.
+      '#422=IFCCARTESIANPOINT((0.,0.));',
+      '#423=IFCCARTESIANPOINT((1.,0.));',
+      '#424=IFCCARTESIANPOINT((2.,0.));',
+      '#421=IFCPOLYLINE((#422,#423,#424));',
+      '#420=IFCGRIDAXIS(\'D\',#421,.T.);',
+      '#602=IFCVIRTUALGRIDINTERSECTION((#420,#130),(0.,0.));',
+      '#601=IFCGRIDPLACEMENT(#602,$);',
+      '#600=IFCBUILDINGELEMENTPROXY(\'6kF0kSTOX3ovkcpuOhkPrX\',$,\'ThreePoint\',$,$,#601,$,$,.NOTDEFINED.);',
+      // An intersection naming a single axis.
+      '#702=IFCVIRTUALGRIDINTERSECTION((#110),(0.));',
+      '#701=IFCGRIDPLACEMENT(#702,$);',
+      '#700=IFCBUILDINGELEMENTPROXY(\'7kF0kSTOX3ovkcpuOhkPrX\',$,\'OneAxis\',$,$,#701,$,$,.NOTDEFINED.);',
+      // ---- tail: grid #300's axes, which nothing above references
+      ...FAR_GRID_AXES_TAIL,
+      ...FIXTURE_TAIL,
+    ].join('\n'))
+
+    const blockers = blockerBlock(file)
+
+    // Exactly one product defers, and it is the control. The block ranks one
+    // line per blocking record type, so a single line IS the assertion that
+    // the other three were left alone.
+    expect(blockers).toMatch(/\s1\s+\(\s*\d+%\)\s+IFCGRIDAXIS/)
+    expect(blockers.trim().split('\n')).toHaveLength(1)
   })
 
   test('a grid the prefix has not reached yet gates nothing', () => {
