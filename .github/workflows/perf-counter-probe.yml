@@ -182,7 +182,7 @@ jobs:
           set -u
           SCRIPT=.github/probe/perf-counter-probe.mjs
           OUT=/tmp/samples.tsv
-          printf 'variant\titer\tinstructions\tcycles\ttaskClockMs\tcpuUserMs\twallMs\tchecksumInt\tchecksumFloat\n' > "$OUT"
+          printf 'variant\titer\tinstructions\tcycles\ttaskClockNs\tcpuUserMs\twallMs\tchecksumInt\tchecksumFloat\n' > "$OUT"
 
           EVENTS=""
           if [ "${HW_OK:-0}" = "1" ]; then
@@ -229,7 +229,7 @@ jobs:
               if [ -n "$CPUUS" ]; then CPUMS=$(awk -v u="$CPUUS" 'BEGIN{printf "%.3f", u/1000}'); fi
               printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "$VARIANT" "$i" "${INSTR:-}" "${CYC:-}" "${TCLK:-}" "${CPUMS:-}" "${WALL:-}" "${CKI:-}" "${CKF:-}" >> "$OUT"
-              echo "iter $VARIANT/$i instr=${INSTR:-NA} cycles=${CYC:-NA} taskClockMs=${TCLK:-NA} cpuUserMs=${CPUMS:-NA} wallMs=${WALL:-NA}"
+              echo "iter $VARIANT/$i instr=${INSTR:-NA} cycles=${CYC:-NA} taskClockNs=${TCLK:-NA} cpuUserMs=${CPUMS:-NA} wallMs=${WALL:-NA}"
             done
           done
 

@@ -113,7 +113,9 @@ function runStats(tsvPath) {
   const variants = [...new Set(rows.map((r) => r.variant))]
   // Fixed metric order so the log block reads the same on every replica and a
   // three-way diff of the job logs lines up.
-  const metrics = ['instructions', 'cycles', 'taskClockMs', 'cpuUserMs', 'wallMs']
+  // task-clock is taskClockNs, not Ms: `perf stat -x` prints the raw
+  // nanosecond count, unlike the human-readable form which converts to msec.
+  const metrics = ['instructions', 'cycles', 'taskClockNs', 'cpuUserMs', 'wallMs']
 
   for (const variant of variants) {
     const vRows = rows.filter((r) => r.variant === variant)
