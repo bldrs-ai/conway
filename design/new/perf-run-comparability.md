@@ -389,9 +389,11 @@ news.
 
 ### The two floors, which are different numbers
 
-This is the part to quote, and the part not to conflate.
+This is the part to quote, and the part not to conflate — and to quote with
+the corpus attached, since these were measured on the public one and the
+private corpus's own floor is unmeasured ("What this does not bound" below).
 
-| quantity | floor under a null |
+| quantity | floor under a null, public corpus (97 of 99 models) |
 |---|---|
 | **whole-corpus aggregate** (corpus total, pass wall clock) | **0.13% – 0.24%** |
 | **per model**, median \|Δ\| over 97 models | **1.27% – 1.58%** |
