@@ -1503,9 +1503,52 @@ implements Iterable<BaseEntity>, Model {
       return multiElements?.find( where => where instanceof type ) as O | undefined
     }
 
-    let entity = element.entity as BaseEntity | undefined
+    const memoized = element.entity as BaseEntity | undefined
 
-    if (entity === void 0 && element.typeID !== void 0) {
+    if ( memoized !== void 0 ) {
+
+      // conway#606. The memo records the entity, never the type a caller
+      // asked for, and ANY earlier read populates it — including the
+      // untyped `getElementByLocalID`. So the type test below, which used
+      // to be the only one in this method, ran on a memo MISS only: a
+      // typed lookup of an already-materialised record returned the cached
+      // object through the `as O` cast without checking it at all, and
+      // callers of `extractElement` got an entity of the wrong class where
+      // their own declared field type says otherwise. Memoization defaults
+      // to on, so this was the ordinary path, not a corner.
+      //
+      // `instanceof` is the same predicate the construct below applies,
+      // not a second opinion on it. `element.entity` for a single-mapped
+      // record is only ever `new schema.constructors[ element.typeID ]`
+      // (here, or in `getElementByLocalID`), and for an instance of that
+      // constructor `entity instanceof type` holds exactly when
+      // `type === constructorRead || constructorRead.prototype instanceof
+      // type` does — the first disjunct is the instance's own prototype,
+      // the second its strict ancestors, and together they are its whole
+      // prototype chain. It is also what the multi-mapping branch above
+      // has always used to pick a variant. (The one record whose memo is
+      // NOT built from `schema.constructors` is a type-0 external-mapping
+      // container with no `multiMapping` — `getElementByLocalID` builds
+      // that one from `externalMappingType` while `constructors[ 0 ]` is
+      // `undefined`. Its class descends from `StepEntityBase` alone, so
+      // `instanceof` still answers `undefined` for every schema type a
+      // caller can name; the parser only mints type 0 for a complex
+      // instance, which carries a `multiMapping` and returns above.)
+      //
+      // A mismatch therefore returns `undefined` rather than falling
+      // through to reconstruct: the fall-through would call the same
+      // constructor and fail the same test, so it could only build the
+      // rejected class again. The eviction/churn trade the issue raises is
+      // not reachable — a record has one schema type, so "read as two
+      // different types" cannot produce two different memo tenants — and
+      // not evicting keeps referential equality for the holders that asked
+      // for a type this record actually is.
+      return ( memoized instanceof type ? memoized : void 0 ) as O | undefined
+    }
+
+    let entity: BaseEntity | undefined
+
+    if (element.typeID !== void 0) {
 
       const elementTypeID = element.typeID
 
@@ -1520,7 +1563,7 @@ implements Iterable<BaseEntity>, Model {
         entity = new constructorRead(localID, element, this )
 
         if ( this.elementMemoization ) {
-          element.entity = entity!
+          element.entity = entity
         }
       }
     }
