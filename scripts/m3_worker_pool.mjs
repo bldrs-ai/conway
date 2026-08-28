@@ -73,6 +73,7 @@ async function runWorker( task ) {
   const fs = await import( 'node:fs' )
   const { IfcAPI } = await import( '../compiled/src/compat/web-ifc/ifc_api.js' )
 
+  const noPayloadDigest = process.env.NO_PAYLOAD_DIGEST === '1'
   const api = new IfcAPI()
 
   await api.Init()
@@ -140,13 +141,21 @@ async function runWorker( task ) {
                 const indices = api.GetIndexArray(
                     geometry.GetIndexData(), geometry.GetIndexDataSize() )
 
+                // The digest is the union check's evidence, and it is also
+                // harness cost that a real pool would not pay — charged once
+                // per shard that touches a shared geometry, so it rides on
+                // exactly the duplication term the efficiency number is
+                // trying to measure. NO_PAYLOAD_DIGEST=1 keeps the copy-out
+                // (which a consumer does pay) and drops only the hash, to
+                // bound how much of a reported loss is the instrument.
                 payloads.set( placed.geometryExpressID,
-                    createHash( 'sha256' )
-                        .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
-                            vertices.byteLength ) )
-                        .update( new Uint8Array( indices.buffer, indices.byteOffset,
-                            indices.byteLength ) )
-                        .digest( 'hex' ) )
+                    noPayloadDigest ? `${vertices.length}:${indices.length}` :
+                      createHash( 'sha256' )
+                          .update( new Uint8Array( vertices.buffer, vertices.byteOffset,
+                              vertices.byteLength ) )
+                          .update( new Uint8Array( indices.buffer, indices.byteOffset,
+                              indices.byteLength ) )
+                          .digest( 'hex' ) )
 
               } finally {
                 geometry.delete()
@@ -160,12 +169,54 @@ async function runWorker( task ) {
     }
   }
 
+  const geometryMs = performance.now() - tGeometry
+
+  // Per-worker memory, read after the pump and before anything is released.
+  //
+  // `HEAPU8.byteLength` is this worker's OWN linear memory: worker_threads
+  // give each thread its own isolate and each `IfcAPI` its own wasm instance,
+  // so N of these are N separate heaps, which is exactly the shape production
+  // can have (no COEP, so no SharedArrayBuffer). It is grow-only, so one read
+  // after the fact IS the high-water mark. The V8 number is per-isolate for
+  // the same reason. Process RSS is NOT per-worker — the main thread reads
+  // VmHWM for the whole process instead.
+  const v8 = await import( 'node:v8' )
+
   return {
     index: task.index,
     openMs,
-    geometryMs: performance.now() - tGeometry,
+    geometryMs,
+    wasmHeapBytes: api.wasmModule?.HEAPU8?.byteLength ?? 0,
+    v8HeapBytes: v8.getHeapStatistics().used_heap_size,
     placements,
     payloads: [ ...payloads ].map( ( [ id, hash ] ) => `${id}:${hash}` ),
+  }
+}
+
+
+/**
+ * The process's peak resident set, in MB, from the kernel rather than from V8.
+ *
+ * `process.memoryUsage().rss` is an instant; a pool's peak happens while the
+ * workers are alive and is gone by the time the main thread reads anything.
+ * `VmHWM` is the kernel's own high-water mark for the whole process, so it
+ * survives worker teardown — which is the number the memory question in
+ * load-performance-ledger.md §4 actually needs.
+ *
+ * @return {number} Peak RSS in MB, or 0 where /proc is not available.
+ */
+async function peakRssMb() {
+
+  try {
+
+    const fs = await import( 'node:fs' )
+    const status = fs.readFileSync( '/proc/self/status', 'utf8' )
+    const found = ( /VmHWM:\s+(\d+) kB/ ).exec( status )
+
+    return found === null ? 0 : Number( found[ 1 ] ) / 1024
+
+  } catch {
+    return 0
   }
 }
 
@@ -203,6 +254,7 @@ if ( !isMainThread ) {
 
   let referenceDigest
   let referenceWall
+  let referenceGeometry
 
   for ( const count of sweep ) {
 
@@ -264,14 +316,32 @@ if ( !isMainThread ) {
 
     const slowestGeometry = Math.max( ...results.map( ( r ) => r.geometryMs ) )
     const slowestOpen = Math.max( ...results.map( ( r ) => r.openMs ) )
+    // Summed shard CPU against the single-worker time is the DUPLICATION
+    // factor: what the partition costs in total work, separately from what
+    // imbalance costs in wall clock. The two degrade efficiency for different
+    // reasons and want different fixes, so they are reported apart.
+    const totalGeometry = results.reduce( ( sum, r ) => sum + r.geometryMs, 0 )
+    const wasmMb = results.map( ( r ) => ( r.wasmHeapBytes / 1048576 ).toFixed( 0 ) )
+    const v8Mb = results.map( ( r ) => ( r.v8HeapBytes / 1048576 ).toFixed( 0 ) )
+
+    if ( referenceGeometry === void 0 ) {
+      referenceGeometry = slowestGeometry
+    }
 
     console.log(
         `workers=${count} wall=${( wallMs / MS_PER_S ).toFixed( 1 )}s ` +
         `(${( referenceWall / wallMs ).toFixed( 2 )}x) ` +
         `open=${( slowestOpen / MS_PER_S ).toFixed( 1 )}s ` +
         `geometry=${( slowestGeometry / MS_PER_S ).toFixed( 1 )}s ` +
+        `(${( referenceGeometry / slowestGeometry ).toFixed( 2 )}x, ` +
+        `eff=${( referenceGeometry / ( slowestGeometry * count ) ).toFixed( 3 )}, ` +
+        `dup=${( totalGeometry / referenceGeometry ).toFixed( 2 )}x) ` +
         `instances=${union.length} ` +
-        `per-shard=${results.map( ( r ) => r.placements.length ).join( '/' )}` )
+        `per-shard=${results.map( ( r ) => r.placements.length ).join( '/' )} ` +
+        `shard-geometry=${results.map( ( r ) =>
+          ( r.geometryMs / MS_PER_S ).toFixed( 1 ) ).join( '/' )}s ` +
+        `wasm=${wasmMb.join( '/' )}MB v8=${v8Mb.join( '/' )}MB ` +
+        `peakRss=${( await peakRssMb() ).toFixed( 0 )}MB` )
 
     console.log( `  ${verdict}` )
   }

@@ -118,22 +118,39 @@ geometry is 89.92 % of the load
   → Amdahl cap for parallelising geometry alone   9.92x
 ```
 
-**These projections are unmeasured.** Geometry parallel efficiency has never
-been measured in this repo. The figures below assume it, and the assumption is
-doing real work in the conclusion:
+**This table was assumed; §11 has now measured it, and the assumption was
+optimistic by about a factor of two.** Both rows are kept — the assumed one so
+the correction is legible, the measured one because it is what should be
+planned against.
 
-| configuration | assumed efficiency | geometry | total | speedup |
+| configuration | efficiency | geometry | total | speedup |
 |---|---|---:|---:|---:|
-| geometry N=4 | 0.80 | 32.7 s | 44.5 s | 2.62× |
-| geometry N=8 | 0.65 | 20.1 s | 31.9 s | 3.65× |
-| geometry N=4 + parse N=4 | 0.80 / 0.857 | — | 37.8 s | **3.08×** |
+| ~~geometry N=4~~ | ~~0.80 assumed~~ | ~~32.7 s~~ | ~~44.5 s~~ | ~~2.62×~~ |
+| ~~geometry N=8~~ | ~~0.65 assumed~~ | ~~20.1 s~~ | ~~31.9 s~~ | ~~3.65×~~ |
+| ~~geometry N=4 + parse N=4~~ | ~~0.80 / 0.857 assumed~~ | — | ~~37.8 s~~ | ~~**3.08×**~~ |
+| geometry N=2 | **0.74 measured** (§11) | 70.7 s | 82.5 s | **1.41×** |
+| geometry N=4 | **0.47 measured** (§11) | 55.7 s | 67.4 s | **1.73×** |
+| geometry N=4 + parse N=4 | 0.47 / 0.857 | 55.7 s | 60.6 s | **1.92×** |
+| geometry N=8 | **unmeasurable here** — 4-core box; §11 | — | — | — |
 
-The efficiency numbers are borrowed from the *parse* measurements, and there is
-a reason to think they transfer badly in either direction. Parse sharding
-degraded from 0.94 at N=2 to 0.857 at N=4 while a register-bound spin loop held
-0.97 — that is a memory-bandwidth signature. Geometry is tessellation:
-compute-heavy, working-set-small, and plausibly a *better* scaler. Or worse, if
-the wasm heap is the shared resource. **Measure it before planning against it.**
+The assumed numbers were borrowed from the *parse* measurements, on the
+reasoning that parse sharding degraded from 0.94 at N=2 to 0.857 at N=4 while a
+register-bound spin loop held 0.97 — a memory-bandwidth signature — and that
+geometry, being compute-heavy with a small working set, was plausibly a
+*better* scaler.
+
+**It is a worse one, at every N measured, and the mechanism is not the one
+either guess named.** It is neither memory bandwidth nor a shared wasm heap:
+the box calibration ran 0.997/0.987 alongside these runs and each worker has
+its own linear memory, which *shrinks* with N. It is **duplicated work** —
+geometry shared below the representation level gets rebuilt in every shard that
+touches it, costing 1.7–2.9× the total CPU at N=4. §11 has the numbers, the
+decomposition, and the three qualifiers that stop 0.47 from being read as a
+D3D number.
+
+The rows above still assume D3D's geometry shards as well as the models §11
+could actually measure. §11's SKYLARK250 result — 1/N efficiency, no partition
+at all — is the reminder that it might not.
 
 
 ## 3. The wall moved, and it is memory
@@ -685,13 +702,15 @@ spread thin enough (largest single site 4.3 MB) that it was not chased.
   unmeasured. D3D is 20.995 % inline entities, the highest in the corpus;
   PSB is 0.594 % and four times the size — comparing the two separates the
   terms, and the run in §8 is one env var away from PSB.
-- **Does geometry parallelise better or worse than parse?** Still unmeasured,
-  and §2's whole projection rests on it — but §6 adds a constraint the
-  projection did not have: N geometry workers on the MT build share **one**
-  4 GiB linear memory, so per-shard transient multiplies inside a fixed
-  ceiling. Production is on the single-threaded build anyway
-  (`crossOriginIsolated === false`), so shipping geometry parallelism means
-  shipping COEP first, which `netlify.toml` says costs the Google Picker.
+- ~~**Does geometry parallelise better or worse than parse?**~~ **Answered in
+  §11: worse, at every N measured** — 0.74 at N=2 and 0.47 at N=4 against
+  parse's 0.94 and 0.857, on three models on a box calibrated at 0.997/0.987.
+  What is still open is the *D3D* number specifically (the file is not on this
+  box) and whether the duplication that causes it is reducible. §6's worry
+  about N workers sharing one 4 GiB linear memory turns out not to apply to
+  the shape that ships: with separate module instances per worker — which is
+  what a no-COEP production has anyway — per-worker wasm memory *falls* with
+  N, and total wasm grew only 1.4–2.2× at N=4.
 - **Why did geometry take 4,256 s here against 104.7 s in §0?** A 40×
   gap is not explained by "slower box". The two candidate differences are
   named in §8 (HTTP fetch + materialised source rather than an OPFS
@@ -705,3 +724,247 @@ spread thin enough (largest single site 4.3 MB) that it was not chased.
   symptom is likely a nonsense pointer surfacing as one of #485's
   `Invalid typed array length` errors rather than an out-of-memory message.
   Worth knowing before a user finds it.
+
+
+## 11. Geometry parallel efficiency, measured — and §2's 0.80 does not hold
+
+**Answer first: geometry parallelises *worse* than parse, not better.**
+Measured **0.74 at N=2 and 0.47 at N=4**, against parse's 0.94 and 0.857, on a
+box whose own ceiling was 0.997 and 0.987 in the same session. §2's assumed
+0.80 at N=4 is optimistic by a factor of 1.7, and the projected whole-load win
+from geometry parallelism drops from **2.62× to 1.73×**.
+
+That is the more valuable half of the result, so it is stated before the
+qualifiers rather than after them: **a geometry worker pool is worth about
+seventy percent more speed at four cores, not two and a half times.** Whether
+that still justifies the machinery — a pool, a merged scene, asset-keyed delta
+capture, and on the browser side COEP and the Google Picker — is a decision
+this number should be fed into before more of it is built.
+
+The mechanism is not the one either guess in §2 named. It is not memory
+bandwidth and it is not a shared wasm heap. It is **duplicated work**.
+
+### 11.1 What was measured, and on what
+
+`scripts/m3_worker_pool.mjs` (instrumented here to report per-shard geometry
+times, per-worker wasm and V8 heaps, duplication factor and process peak RSS).
+N `worker_threads`, each with **its own `IfcAPI`, its own wasm instance and its
+own linear memory** — deliberately the no-SharedArrayBuffer shape, because
+Share's `netlify.toml` omits COEP on purpose (§6) and the MT/SAB build is not
+what production could ship. Each worker opens the model, claims a shard with
+`SetGeometryShard`, and pumps to completion; the script's union check confirms
+every configuration reported here delivered byte-identical placements and
+payloads to the single-worker load.
+
+Sharding is `geometryDispatchKey` / `shardOfDispatchKey` exactly as
+`parallel-load-pipeline.md` §5 describes it — the mapping-source key, not an
+invented partition.
+
+Efficiency is `T₁ / (N × Tₙ)` over the **geometry phase only** (`open` excluded,
+so parse and file read are not diluting it), with `Tₙ` the slowest shard —
+makespan, which is what wall clock becomes. Three runs per configuration;
+median reported, full spread alongside.
+
+Models: whatever is on this box. **D3D is not**, which is the first thing §11
+cannot answer — see §11.5.
+
+### 11.2 Box calibration
+
+A register-bound integer spin loop, N separate **processes**, no allocation and
+no memory traffic, run immediately before and immediately after the geometry
+runs. Same instrument as M2's (which read 0.995 / 0.969 on its box).
+
+| when | N=2 | N=4 | N=1 / N=2 / N=4 medians |
+|---|---:|---:|---|
+| before | **0.997** | **0.990** | 20 745 / 20 802 / 20 956 ms |
+| after | **0.997** | **0.987** | 20 860 / 20 932 / 21 134 ms |
+
+Load average 0.02–0.35 before, no swap, 14.4 GB free; the box stayed idle
+between the two, and the two agree to 0.003. **So the hardware gives back
+98.7 % at N=4 and geometry gives back 47 %. The missing 52 points are
+algorithmic, and nothing about this box explains them.** This box is in fact
+*better* than M2's at N=4 (0.987 vs 0.969), so the geometry number is not being
+flattered by a favourable comparison — it is being measured against a stricter
+ceiling than parse was.
+
+### 11.3 The numbers
+
+Primary set, payload digest off (see §11.4 for why, and for the digest-on set).
+
+| model | file | geometry T₁ | N=2 efficiency (median, spread) | N=4 efficiency (median, spread) |
+|---|---:|---:|---|---|
+| MB-Khaya (IFC2X3, Archicad) | 31.4 MB | 3.5 s | **0.764** (0.741–0.775) | **0.471** (0.450–0.517) |
+| Schependomlaan | 47.0 MB | 1.8 s | **0.686** (0.681–0.688) | **0.347** (0.322–0.375) |
+| Snowdon Towers (IFC4, Revit) | 79.3 MB | 5.9 s | **0.743** (0.724–0.776) | **0.468** (0.451–0.475) |
+| SKYLARK250 design-kit | 381.7 MB | 36.8 s | 0.522 *(1 run)* | 0.252 *(1 run)* |
+| **median of the three that shard** | | | **0.74** | **0.47** |
+
+Spreads are tight — no configuration's three runs span more than 0.07, and
+Schependomlaan's N=2 spans 0.007. This is not a noisy measurement being
+over-read.
+
+**SKYLARK250 is not a fourth data point on the same curve; it is a different
+failure.** It did not shard *at all*: 2,924 placements, and at both N=2 and
+N=4 **every one of them landed in shard 0** — the other workers opened the
+model, found nothing to do, and exited. 0.252 at N=4 is exactly 1/N, the
+signature of no parallelism rather than of bad parallelism.
+
+The cause is worth recording, because it is a property of the dispatch design
+rather than of this model. Probing the key histogram directly: SKYLARK's 2,000
+products carry 2,000 *distinct* dispatch keys and would split 460/506/490/544
+at N=4 — the per-product partition is fine. But SKYLARK's geometry does not go
+through the per-product pass. It hangs off `IfcRelAggregates`, of which the
+model has **two**, and aggregate targets are excluded from the product worklist
+and dispatched on the *relationship's* key
+(`ifc_api_proxy_ifc.ts:2362-2364`). **Two aggregates is a hard ceiling of two
+shards, and one of the two carries essentially all the geometry, so the real
+ceiling is one.** For comparison the other models have 28 (MB-Khaya) and 86
+(Snowdon) aggregates, enough that the aggregate pass is not the constraint.
+
+So the partition has a floor set by aggregate count that nothing in
+`geometry_dispatch.ts` can see, and an assembly-shaped model can sit on it.
+Any pool design needs a within-aggregate axis or a check that refuses to spawn
+workers that will have nothing to do.
+
+### 11.4 Where the 53 points go: duplication, then imbalance
+
+The harness reports the summed shard CPU as well as the makespan, and the two
+separate cleanly.
+
+| model, N=4 | duplication (Σ shard CPU ÷ T₁) | ceiling that implies (1/dup) | measured | gap = imbalance |
+|---|---:|---:|---:|---:|
+| MB-Khaya | 1.77× | 0.565 | 0.471 | 0.094 |
+| Schependomlaan | 2.61× | 0.383 | 0.347 | 0.036 |
+| Snowdon IFC4 | 1.68× | 0.595 | 0.468 | 0.127 |
+
+At N=2 duplication is 1.17–1.38×; at N=4 it is 1.68–2.61×. **It grows with N,
+and it is the dominant term at both.** Imbalance is real but secondary —
+Schependomlaan's four shards run 1.4/1.4/1.2/1.2 s, near-perfectly balanced,
+and *still* return 0.347, because balance cannot help when the same geometry is
+being built four times.
+
+This is the affinity limit `parallel-load-pipeline.md` §5 names, arriving
+exactly where it said it would. `geometryDispatchKey` puts every occurrence of
+one mapping source in one shard, which removes duplication at the
+*representation* level; the sharing that remains lives **below** it — profiles,
+boolean operands, void geometry — where an attribute walk cannot see it.
+#394's own correction comment priced that residue at +15 % CPU on PSB and
++40 % on MB-Khaya at N=4. Measured here on MB-Khaya: **+77 %**. The correction
+comment was the right shape and low by half.
+
+Two consequences for planning:
+
+1. **This is not a scheduling problem and a work-stealing queue will not fix
+   it.** Better balance buys 0.036–0.127. Removing duplication buys the other
+   half. The lever is a partition that sees sub-representation sharing, or a
+   shared asset cache across workers — which separate module instances, the
+   only shape available without COEP, structurally cannot have.
+2. **The efficiency will keep falling as N rises**, because duplication rose
+   monotonically from N=2 to N=4 on all three models. Whatever N=8 is, it is
+   below the naive extrapolation, not above it.
+
+### 11.5 Three things this does not say
+
+**It is not a D3D number.** `D3D.ifc` is not on this box — not in
+`test-models/`, not anywhere on the filesystem. D3D is the model §0 measured
+and the model §2's projection is about, and it is a Tekla IFC4 export with
+20.995 % inline entities and an affinity profile (#536: 81,639 duplicated
+assets against an oracle of 65,288) unlike any of the three measured here.
+**Applying 0.47 to D3D's 104.7 s is an extrapolation across models, and it is
+labelled as one in §2.** SKYLARK is the standing warning that the
+model-to-model spread on this axis runs all the way to 1/N.
+
+**It is the resident-source path, not the windowed one.** Each worker does
+`readFileSync` into a full in-memory copy and opens with `DEFER_GEOMETRY` —
+which is precisely the "materialised source, no windowed provider"
+configuration §10 names as a candidate for the unexplained 40× Node-vs-browser
+gap. Two things to hold about that:
+
+- **The 40× does not reproduce on the models measured here.** MB-Khaya's
+  geometry is 3.5 s in Node against ~6.8 s in CI; Snowdon's is 5.9 s. These
+  are the same order as the browser, not 40× off it. So the gap looks
+  D3D-specific — an aggregate/pager pathology — rather than a general property
+  of the Node path, and measuring efficiency here is not measuring a uniformly
+  40×-slow thing.
+- **The direction of the remaining bias is favourable, not adverse.** Every
+  worker holds its own private copy of the file and contends with no one for
+  I/O. A windowed, store-backed provider adds a shared resource that this
+  configuration does not have. **So 0.47 is more likely an upper bound on the
+  windowed path than a lower one** — the honest reading is "at best 0.47", not
+  "0.47 ± something".
+
+**N=8 is unmeasured and unmeasurable here.** This box has 4 cores. Any N=8
+number from it would be oversubscription behaviour, not scaling, so none was
+run and §2's N=8 row is marked unmeasurable rather than left looking pending.
+
+### 11.6 Memory: it is not the first wall, and the reason is a surprise
+
+§4 asked for this before anything got built, and the trap named in the brief —
+that N instances multiply D3D's 2.66 GB and simply OOM — **does not
+materialise, for a reason worth keeping.**
+
+Peak process RSS (kernel `VmHWM`, so it survives worker teardown) and summed
+per-worker wasm linear memory, medians:
+
+| model | RSS N=1 | RSS N=2 | RSS N=4 | ×N=4 | wasm N=1 | wasm N=2 | wasm N=4 | ×N=4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| MB-Khaya | 590 MB | 830 MB | 1 348 MB | 2.28× | 102 MB | 130 MB | 198 MB | 1.94× |
+| Schependomlaan | 475 MB | 822 MB | 1 528 MB | 3.22× | 74 MB | 100 MB | 165 MB | 2.23× |
+| Snowdon IFC4 | 635 MB | 978 MB | 1 757 MB | 2.77× | 209 MB | 245 MB | 298 MB | 1.43× |
+| SKYLARK250 | 4 139 MB | 4 287 MB | 4 639 MB | 1.12×¹ | 707 MB | 723 MB | 755 MB | 1.07×¹ |
+
+¹ Not a scaling number — SKYLARK never partitioned, so N=2 and N=4 are one
+working worker plus idle ones at ~64 MB each.
+
+**Per-worker wasm memory falls with N.** Snowdon: 209 MB at N=1 becomes
+71/71/85/71 MB at N=4. Each shard's working set is a fraction of the model's,
+so the linear memory each instance grows to is a fraction too. That is why the
+totals land at 1.4–2.2× rather than 4×, and it inverts §6's stated worry: §6
+reasoned about N workers sharing **one** 4 GiB memory on the MT build and
+concluded per-shard transient multiplies inside a fixed ceiling. With separate
+instances — the shape production can actually have — each worker gets its own
+4 GiB budget *and* needs less of it. **Per-worker headroom improves with N.**
+
+What does grow near-linearly is the V8 side (Snowdon 174 → 291 → 460 MB) plus a
+~55–65 MB per-worker Node floor, which is what carries the total RSS to
+2.3–3.2×.
+
+**Extrapolating to D3D** (labelled as extrapolation, since D3D is absent): a
+2.66 GB single-instance peak at 2.3–3.2× is 6–8.5 GB device-total at N=4, with
+each worker holding roughly 1.5–2.1 GB — comfortably under both the 4 GiB wasm
+ceiling and the ~4 GB JS heap cap that §6 says a load must fit under
+*simultaneously*. On a 16 GB box that fits; on an 8 GB laptop it does not.
+
+So the finding §4 asked for is: **memory is not what gates geometry
+parallelism at N=4 — the partition is.** That reorders #635: the duplication
+problem is the prerequisite, and the memory work that was assumed to gate the
+pool turns out not to. What memory *does* gate is the device class, and that
+is a product decision (which laptops open a 2 GB model) rather than an
+engineering one.
+
+### 11.7 Reproducing this
+
+```sh
+# box calibration, before and after — N processes, register-bound, no memory
+node scripts/spin_calibrate.mjs --workers 1,2,4 --runs 3
+
+# efficiency, per model; NO_PAYLOAD_DIGEST=1 removes the harness's own
+# per-shard SHA-256, which rides on the duplication term it is measuring
+NO_PAYLOAD_DIGEST=1 node --expose-gc scripts/m3_worker_pool.mjs <model.ifc> --workers 1,2,4
+```
+
+`spin_calibrate.mjs` is committed rather than re-derived per investigation:
+M2 established the practice of calibrating the box and left no artifact, and
+the practice is worth exactly nothing if the next measurement has to reinvent
+it and gets a subtly different kernel. Run it **immediately before and after**
+the thing being measured, not once a session — an earlier M2 run on a
+contended box reported D3D as a net loss at every N, and re-measurement on an
+idle box turned it into a 1.15× win.
+
+The digest-on set, kept because it is the conservative reading and because the
+gap between the two bounds the instrument, is: MB-Khaya 0.727 / 0.422,
+Schependomlaan 0.723 / 0.322, Snowdon 0.764 / 0.450 at N=2 / N=4. **The digest
+costs at most 0.05 of efficiency**, most of it on the models with the highest
+duplication, exactly as expected — a shared geometry that two shards both build
+is also a geometry that two shards both hash. Every number in §11.3 and §11.4
+is from the digest-off runs; every union check passed in both sets.
