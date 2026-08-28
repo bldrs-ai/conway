@@ -132,6 +132,15 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
   private spawnData_: ShardWorkerData
 
   /**
+   * Set once the pool can no longer serve anyone — a replacement that would
+   * not spawn, or a `terminate()`. From then on `claim_` rejects instead of
+   * queueing: a pool with no workers left has nothing to release, so a
+   * queued claim would wait forever and never reach the coordinator's
+   * fallback. A rejected build is recoverable; a hung one is not.
+   */
+  private failure_: Error | undefined
+
+  /**
    * @param workers_ Every worker in the pool, warm.
    * @param spawnData The data every worker was spawned with.
    */
@@ -212,10 +221,13 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
    */
   public async terminate(): Promise<void> {
 
-    // Fail anything still queued first. A waiter parked on a pool that is
-    // being torn down would otherwise never settle.
+    // Fail anything still queued first, and mark the pool down so a claim
+    // arriving AFTER the teardown rejects too rather than parking on an idle
+    // list that will never be replenished.
+    this.failure_ ??= new Error( 'shard worker pool terminated' )
+
     while ( this.waiting_.length > 0 ) {
-      this.waiting_.shift()?.reject( new Error( 'shard worker pool terminated' ) )
+      this.waiting_.shift()?.reject( this.failure_ )
     }
 
     await Promise.all( this.workers_.map( ( worker ) => worker.terminate() ) )
@@ -227,6 +239,10 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
    * @return {Promise<Worker>} An idle worker.
    */
   private claim_(): Promise<Worker> {
+
+    if ( this.failure_ !== void 0 ) {
+      return Promise.reject( this.failure_ )
+    }
 
     const idle = this.idle_.pop()
 
@@ -271,6 +287,8 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
     } catch ( thrown ) {
 
       const error = thrown instanceof Error ? thrown : new Error( String( thrown ) )
+
+      this.failure_ ??= error
 
       while ( this.waiting_.length > 0 ) {
         this.waiting_.shift()?.reject( error )

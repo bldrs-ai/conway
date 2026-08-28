@@ -127,6 +127,28 @@ describe( 'NodeShardWorkerPool failure handling', () => {
         ] ) ).rejects.toThrow()
       }, 60000 )
 
+  test( 'a claim after terminate rejects instead of hanging', async () => {
+
+    // A pool with no workers left has nothing to release, so a queued claim
+    // would wait forever and never reach the coordinator's fallback. This is
+    // the same guard that covers a replacement that will not spawn, which is
+    // otherwise hard to induce.
+    const dead = await NodeShardWorkerPool.spawn<EntityTypesIfc>( {
+      filePath: MODEL,
+      poolBytes: 64 * 1024,
+      workerCount: 1,
+      parserModuleUrl: PARSER_MODULE,
+    } )
+
+    await dead.terminate()
+
+    await expect( Promise.race( [
+      dead.runner( { index: 0, startOffset: DATA_START, endOffset: MODEL_BYTES } ),
+      new Promise( ( _, reject ) =>
+        setTimeout( () => reject( new Error( 'claim never settled' ) ), 10000 ) ),
+    ] ) ).rejects.toThrow( /terminated/ )
+  }, 60000 )
+
   test( 'a healthy pool reports a real shard', async () => {
 
     // Guards the tests above from passing on a pool that never works at all.
