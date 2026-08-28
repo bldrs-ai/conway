@@ -253,6 +253,65 @@ describe( 'index sidecar', () => {
     expectSameColumns( restored.columns, columns )
   } )
 
+  test( 'round-trips complex express IDs above 0x7FFFFFFF unsigned', () => {
+    // Express IDs are unsigned everywhere else in the system — the
+    // `expressID` column is a Uint32Array and the parser reads them
+    // unsigned. An i32 field with a −1 sentinel, which is what this used to
+    // be, breaks that twice: IDs at or above 0x80000000 read back negative,
+    // and 0xFFFFFFFF is indistinguishable from the sentinel and silently
+    // becomes `undefined`. It bites harder than a wrong number because
+    // `StepModelBase.entry()` hands back the retained complex descriptor
+    // rather than rebuilding it from the unsigned column, so the wrong ID
+    // reaches an entity with nothing downstream noticing.
+    const columns: StepIndexColumns<number> = {
+      address: new Uint32Array( [ 0, 40 ] ),
+      length: new Uint32Array( [ 40, 60 ] ),
+      typeID: new Int32Array( [ 7, 8 ] ),
+      expressID: new Uint32Array( [ 1, 0x80000001 ] ),
+      count: 2,
+      firstInlineElement: 2,
+      expressIdsSorted: true,
+      complexEntries: new Map( [
+        [ 1, {
+          address: 40,
+          length: 60,
+          expressID: 0x80000001,
+          multiMapping: [
+            // The two values the old encoding could not represent, plus a
+            // genuinely absent one — absence is real for nested entries,
+            // which StepIndexEntryBase types `expressID?: number`.
+            { address: 44, length: 8, typeID: 3, expressID: 0xFFFFFFFF },
+            { address: 52, length: 8, typeID: 4, expressID: 0x80000000 },
+            { address: 60, length: 8, typeID: 5 },
+          ],
+        } ],
+      ] ),
+    }
+
+    const restored = deserializeIndexSidecarToColumns<number>(
+        serializeIndexSidecarFromColumns( columns, 110, 0 ) )
+
+    const complex = restored.columns.complexEntries?.get( 1 )
+
+    expect( complex?.expressID ).toBe( 0x80000001 )
+    expect( complex?.multiMapping?.[ 0 ].expressID ).toBe( 0xFFFFFFFF )
+    expect( complex?.multiMapping?.[ 1 ].expressID ).toBe( 0x80000000 )
+
+    // Absent stays absent, and is carried by a flag rather than by a value
+    // a real ID could collide with.
+    expect( complex?.multiMapping?.[ 2 ] ).not.toHaveProperty( 'expressID' )
+
+    // Every one is a non-negative integer on the way back out.
+    for ( const value of [ complex?.expressID,
+      complex?.multiMapping?.[ 0 ].expressID,
+      complex?.multiMapping?.[ 1 ].expressID ] ) {
+
+      expect( value ).toBeGreaterThan( 0 )
+    }
+
+    expectSameColumns( restored.columns, columns )
+  } )
+
   test( 'preserves undefined typeID through the -1 sentinel', () => {
     const elements: StepIndexEntry<number>[] = [
       { address: 0, length: 10, typeID: 7, expressID: 1 },

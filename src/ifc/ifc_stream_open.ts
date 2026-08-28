@@ -78,6 +78,18 @@ export interface StreamedIfcOpen {
    * The columnar index the model was built from. Hand to
    * `serializeIndexSidecarFromColumns` (with a source hash) to produce the
    * revisit sidecar — the columns ARE the sidecar payload (M7 identity).
+   *
+   * **Check `result === ParseResult.COMPLETE` first.** These columns are
+   * populated even when the parse stopped short: a truncated or malformed
+   * file yields the rows indexed before the failure, and `model` is
+   * withheld while `columns` is not. Those rows are a prefix in substance
+   * but carry no `indexIsPrefix` flag — `ColumnarIndexSink.finalize()` sets
+   * it only for an explicit `snapshot()` — so nothing downstream, including
+   * the sidecar writer's own prefix guard, can tell them from a whole
+   * index. `data/index.ifc` truncated to 60 % serialises happily and
+   * restores as complete, 167 rows where the file has 287. conway#628
+   * tracks closing that at the source; until then the check is the
+   * caller's.
    */
   columns: StepIndexColumns<EntityTypesIfc>
 
@@ -96,10 +108,10 @@ const DEFAULT_STREAM_POOL_BYTES = 1024 * 1024
 // prefix once before it refuses — a valid model must not be turned away by
 // the size of a buffer, least of all on the path with no CI coverage.
 // eslint-disable-next-line no-magic-numbers
-const HEADER_PREFIX_BYTES = 64 * 1024
+export const HEADER_PREFIX_BYTES = 64 * 1024
 
 // eslint-disable-next-line no-magic-numbers
-const HEADER_PREFIX_RETRY_BYTES = 4 * 1024 * 1024
+export const HEADER_PREFIX_RETRY_BYTES = 4 * 1024 * 1024
 
 
 /**

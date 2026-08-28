@@ -25,9 +25,27 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  *   typeID[]            i32 × count      (−1 = no concrete type)
  *   expressID[]         u32 × firstInlineElement
  *   complexEntries      complexCount × { localID u32, entry }
- *       entry:  address u32, length u32, typeID i32, expressID i32
- *               (−1 = none), multiCount u32, multiCount × entry
+ *       entry:  address u32, length u32, typeID i32, flags u32,
+ *               expressID u32, multiCount u32, multiCount × entry
  * ```
+ *
+ * A complex entry's `expressID` is **unsigned**, with presence carried in
+ * `flags` bit 0 rather than by a sentinel value. The obvious encoding — i32
+ * with −1 for absent — fails twice: every express ID at or above
+ * `0x80000000` reads back negative, disagreeing with the `expressID` column
+ * and with the parser, which both treat IDs as unsigned; and `0xFFFFFFFF`
+ * is indistinguishable from the sentinel, so a real ID silently becomes
+ * `undefined`. That matters more than a wrong number, because
+ * `StepModelBase.entry()` hands back the retained complex descriptor rather
+ * than rebuilding it from the unsigned column, so an entity opened from a
+ * sidecar would expose the wrong ID with nothing downstream noticing.
+ *
+ * Absence is real, but only for nested `multiMapping` sub-entries
+ * ({@link StepIndexEntryBase} declares `expressID?: number`).
+ * A complex HOLDER is keyed into `complexEntries` by top-level localID and typed
+ * {@link StepIndexEntry}, which requires one — the same fact the
+ * already-unfolded guard in `serializeIndexSidecar` relies on, so the
+ * two cannot disagree about what "absent" means.
  *
  * The columns are written verbatim off {@link StepIndexColumns} and read
  * back verbatim, so a restored index is the *same* index — same row order,
@@ -135,8 +153,8 @@ export const SIDECAR_VERSION_TOP_LEVEL_ONLY = 1
 
 const UNDEFINED_TYPE = -1
 
-/** Sentinel for "this entry has no express ID" in the complex-entry blob. */
-const NO_EXPRESS_ID = -1
+/** Complex-entry `flags` bit 0 — this entry carries an express ID. */
+const COMPLEX_FLAG_HAS_EXPRESS_ID = 1
 
 // FNV-1a 32-bit parameters (see hashSource).
 const FNV_OFFSET_BASIS = 2166136261
@@ -168,9 +186,9 @@ const COLUMNS_OVER_ALL_ROWS = 3
 
 /**
  * Bytes per complex-entry record, excluding its nested multiMapping:
- * address, length, typeID, expressID, multiCount.
+ * address, length, typeID, flags, expressID, multiCount.
  */
-const COMPLEX_ENTRY_FIXED_BYTES = 5 * U32_BYTES
+const COMPLEX_ENTRY_FIXED_BYTES = 6 * U32_BYTES
 
 // Column reads/writes take a typed-array fast path when the host is
 // little-endian and the blob is 4-aligned — a memcpy instead of tens of
@@ -296,8 +314,12 @@ function writeComplexEntry<TypeIDType>(
       entry.typeID === void 0 ? UNDEFINED_TYPE : ( entry.typeID as number ),
       true )
   offset += U32_BYTES
-  view.setInt32(
-      offset, entry.expressID === void 0 ? NO_EXPRESS_ID : entry.expressID, true )
+  view.setUint32(
+      offset,
+      entry.expressID === void 0 ? 0 : COMPLEX_FLAG_HAS_EXPRESS_ID,
+      true )
+  offset += U32_BYTES
+  view.setUint32( offset, ( entry.expressID ?? 0 ) >>> 0, true )
   offset += U32_BYTES
   view.setUint32( offset, multiMapping.length, true ); offset += U32_BYTES
 
@@ -323,7 +345,8 @@ function readComplexEntry<TypeIDType>(
   const address = view.getUint32( cursor.offset, true ); cursor.offset += U32_BYTES
   const length = view.getUint32( cursor.offset, true ); cursor.offset += U32_BYTES
   const typeID = view.getInt32( cursor.offset, true ); cursor.offset += U32_BYTES
-  const expressID = view.getInt32( cursor.offset, true ); cursor.offset += U32_BYTES
+  const flags = view.getUint32( cursor.offset, true ); cursor.offset += U32_BYTES
+  const expressID = view.getUint32( cursor.offset, true ); cursor.offset += U32_BYTES
   const multiCount = view.getUint32( cursor.offset, true ); cursor.offset += U32_BYTES
 
   const entry: StepIndexEntryBase<TypeIDType> = { address, length }
@@ -332,7 +355,7 @@ function readComplexEntry<TypeIDType>(
     entry.typeID = typeID as unknown as TypeIDType
   }
 
-  if ( expressID !== NO_EXPRESS_ID ) {
+  if ( ( flags & COMPLEX_FLAG_HAS_EXPRESS_ID ) !== 0 ) {
     entry.expressID = expressID
   }
 
@@ -415,7 +438,13 @@ function readColumn(
  * Serialise a columnar index to a v2 sidecar blob: **the whole index**,
  * `[0, count)`, including the inline range and the multi-mapping holders.
  *
- * @param columns The columnar index.
+ * The columns must come from a **completed** parse. This refuses a flagged
+ * prefix (`ColumnarIndexSink.snapshot()`), but a parse that stopped short
+ * produces columns that carry no flag at all, so the check the caller owns
+ * is `result === ParseResult.COMPLETE` — see conway#628 and
+ * {@link import('../../ifc/ifc_stream_open').StreamedIfcOpen.columns}.
+ *
+ * @param columns The columnar index, from a completed parse.
  * @param sourceByteLength The length of the source it was built from.
  * @param sourceHash The source hash (see {@link hashSource}).
  * @return {Uint8Array} The sidecar bytes.
@@ -433,6 +462,16 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   // which is the strong DanglingReferenceError wording conway#580 went out
   // of its way to soften. `ColumnarIndexSink.snapshot()` hands these out to
   // the parse-time preview channel, so this is reachable, not theoretical.
+  //
+  // This catches only the FLAGGED case, and the limit is in what the sink
+  // records rather than in how it is tested here: `finalize()` runs
+  // regardless of `ParseResult` and never sets `indexIsPrefix`, so columns
+  // from a parse that stopped short are a prefix in substance and complete
+  // in signal — indistinguishable from a whole index at this point.
+  // **The caller must check `result === ParseResult.COMPLETE`** before
+  // serialising columns from `openStreamedIfcModel*`, which returns
+  // populated columns alongside a failed result. conway#628 tracks fixing
+  // it at the source.
   if ( columns.indexIsPrefix === true ) {
     throw new Error(
         'Refusing to serialise a prefix index: these columns are a mid-parse ' +

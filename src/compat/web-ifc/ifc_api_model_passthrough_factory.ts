@@ -6,6 +6,7 @@ import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import { HEADER_PREFIX_RETRY_BYTES } from '../../ifc/ifc_stream_open'
 
 /** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
 // eslint-disable-next-line no-magic-numbers
@@ -216,6 +217,54 @@ export class IfcApiModelPassthroughFactory {
   }
 
   /**
+   * Sniff a store's format from a bounded prefix, growing the prefix once
+   * if the first read was not enough.
+   *
+   * `ModelFormatDetector` needs `FILE_SCHEMA`, which sits *after*
+   * `FILE_DESCRIPTION` — so a long header pushes it past the 64 KiB the
+   * detection read covers and the sniff comes back `undefined`. Measured on
+   * `data/index.ifc` with an 80 KiB comment injected into its header: the
+   * 64 KiB prefix detects `undefined`, a 4 MiB prefix detects IFC. Without
+   * the retry `OpenModelFromIndex` returns −1 on a perfectly good model,
+   * *before* reaching the header retry inside `openIfcModelFromIndex` —
+   * so the engine function would handle the long header and the compat API
+   * that advertises it would not (conway#541 review round 2).
+   *
+   * The second read only happens on the failure path, and is bounded by the
+   * same constant the engine open grows to, imported rather than repeated
+   * so the two cannot drift.
+   *
+   * `fromStore` reads its own 64 KiB prefix and has the same limitation.
+   * That is pre-existing on a shipped path rather than introduced here, so
+   * it is not changed in this pass — see the issue referenced from
+   * `index_sidecar.ts`.
+   *
+   * @param store The store to sniff.
+   * @return {Promise<ModelFormatType | undefined>} The detected format.
+   */
+  private static async detectFromStore(
+      store: StepExternalByteStore ): Promise<ModelFormatType | undefined> {
+
+    const firstLength = Math.min( store.byteLength, STORE_DETECT_PREFIX_BYTES )
+    const first = await store.read( 0, firstLength )
+    const detected = ModelFormatDetector.detect( new ParsingBuffer( first ) )
+
+    if ( detected !== void 0 || firstLength >= store.byteLength ) {
+      return detected
+    }
+
+    const retryLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
+
+    if ( retryLength <= firstLength ) {
+      return detected
+    }
+
+    return ModelFormatDetector.detect(
+        new ParsingBuffer( await store.read( 0, retryLength ) ) )
+  }
+
+
+  /**
    * Index-first open (conway#541): the caller already holds the entity
    * index — a sidecar a coordinator built during its own parse, or one
    * persisted from a previous visit — so there is nothing to parse. IFC
@@ -242,9 +291,7 @@ export class IfcApiModelPassthroughFactory {
       wasmModule: any,
       settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
 
-    const prefixLen = Math.min( store.byteLength, STORE_DETECT_PREFIX_BYTES )
-    const prefix = await store.read( 0, prefixLen )
-    const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( prefix ) )
+    const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
 
     if ( modelFormat !== ModelFormatType.IFC ) {
 
