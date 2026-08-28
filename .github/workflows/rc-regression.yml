@@ -1060,6 +1060,22 @@ jobs:
 
           snapshot = sys.argv[1]
 
+          # WHOSE CORPUS THE A/A FLOOR WAS MEASURED ON. This step runs once
+          # per matrix target, so the qualification below has to be chosen the
+          # same way renderReadme()'s does in scripts/bless_perf_snapshot.cjs
+          # — printed unconditionally it told a reader of the PUBLIC target's
+          # summary that the only measured floor does not bound the very
+          # corpus it was measured on. This literal and that file's
+          # AA_NULL_CORPUS must agree; a test pins that they do.
+          #
+          # The discriminator is the repo's last path segment, matching how
+          # the snapshot directory is named. matrix.target.name ('public' /
+          # 'private') would be the exact one and is currently unused — worth
+          # switching to if a target is ever added under another org, where
+          # `<other-org>/test-models` would take the public branch here.
+          AA_NULL_CORPUS = 'test-models'
+          corpus = os.environ.get('REPO_NAME', '').rsplit('/', 1)[-1]
+
 
           def pct(row):
               """The totalTimeMs percentage change as a float, or None."""
@@ -1124,12 +1140,24 @@ jobs:
               # The null test runs on bldrs-ai/test-models only. This summary is
               # printed for whichever matrix target ran, so the qualification has
               # to travel with the numbers rather than be inferred from them.
-              print("_Those floors were measured on the **public** corpus "
-                    "(`bldrs-ai/test-models`, 97 of its 99 walked models), not on "
-                    "this one. For a private-corpus release they are the only "
-                    "measured floor anyone has, not a bound on this run: see "
-                    "conway's `design/new/perf-run-comparability.md` Evidence 4, "
-                    "'What this does not bound'._")
+              if corpus == AA_NULL_CORPUS:
+                  print("_Those floors were measured on **this** corpus "
+                        "(`bldrs-ai/test-models`, 97 of its 99 walked models, "
+                        "at `baf0f87d`) — same repo, same runner label, same "
+                        "harness. What is not established is the model set: "
+                        "the null test pinned that commit and this job checks "
+                        "the target out at its default branch, so models added "
+                        "or removed since it are outside what was measured. "
+                        "The snapshot's README names the commit this run "
+                        "blessed._")
+              else:
+                  print("_Those floors were measured on the **public** corpus "
+                        "(`bldrs-ai/test-models`, 97 of its 99 walked models), "
+                        "not on this one. For a private-corpus release they are "
+                        "the only measured floor anyone has, not a bound on "
+                        "this run: see conway's "
+                        "`design/new/perf-run-comparability.md` Evidence 4, "
+                        "'What this does not bound'._")
               print()
               print("The `crossRun` row compares against a previous run on an unrecorded "
                     "machine and has a measured 13.66% median noise floor — it is a "

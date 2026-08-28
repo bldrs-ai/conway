@@ -104,6 +104,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFileSync } = require('child_process');
 
 const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 const { generateDeltaCSV, MEASUREMENT_BASIS } = require('./gen_delta_csv.cjs');
@@ -342,6 +343,47 @@ const MAX_NAMED_MISSING = 10;
  * than inherit the number, so this is compared against, never assumed.
  */
 const AA_NULL_CORPUS = 'test-models';
+
+/**
+ * The commit of that corpus the floor was measured over, short-form, as
+ * `perf-aa-null.yml` resolved `TEST_MODELS_REF` for run 33192612782.
+ *
+ * The floor is a property of a MODEL SET, not of a repo name, and the two
+ * workflows do not agree on how they get one: `perf-aa-null.yml` pins its
+ * checkout (`ref: ${{ steps.tmsha.outputs.sha }}`), while `rc-regression.yml`
+ * checks the matrix target out with no `ref:` at all, i.e. whatever its
+ * default branch holds at release time. So a snapshot can be the public
+ * corpus by name and a different set of models by content, and nothing in
+ * either job compares the two. The README states both commits instead of
+ * asserting "same models" off a matching directory name.
+ */
+const AA_NULL_CORPUS_SHA = 'baf0f87d';
+
+/**
+ * The commit the model corpus is checked out at, short-form.
+ *
+ * Read off the checkout rather than passed down from the workflow so there is
+ * no second place for it to go stale. Best-effort on purpose: a models root
+ * that is not a git checkout (a local bless over a plain directory, every
+ * unit test) yields '', and the README then says the commit is unrecorded
+ * rather than a release failing over a missing `.git`.
+ *
+ * @param {string} modelsRoot Path the corpus was checked out into.
+ * @return {string} Short SHA, or '' when it cannot be read.
+ */
+function corpusCommit(modelsRoot) {
+  try {
+    return execFileSync(
+      'git',
+      ['-C', modelsRoot, 'rev-parse',
+        `--short=${AA_NULL_CORPUS_SHA.length}`, 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    // Not a checkout, no git, a detached worktree with no HEAD — all the
+    // same answer here: the commit is not knowable, so do not claim one.
+    return '';
+  }
+}
 
 /**
  * One sentence saying the paired pass did not cover what it had to.
@@ -618,6 +660,10 @@ function removeStalePairedDetail(outDir) {
  * @param {Object} info Snapshot description.
  * @param {string} info.engine Engine label.
  * @param {string} info.repoName Model repo directory name.
+ * @param {string} [info.corpusSha] Short SHA the corpus is checked out at,
+ *   or '' when it could not be read. Printed beside the commit the A/A
+ *   floor was measured over, so a reader can see whether the two match
+ *   instead of inferring it from the repo name.
  * @param {number} info.modelCount Models measured.
  * @param {number} info.retentionCount Rows carrying a measured retention
  *   figure, i.e. rows whose child had `--expose-gc` to settle with. Reported
@@ -672,9 +718,17 @@ function renderReadme(info) {
   // which is the exact property the null test found the current floor to rest
   // on. So the claim is qualified per target rather than generalised, and the
   // private floor is named as unmeasured until someone measures it.
-  const aaCorpusCaveat = info.repoName === AA_NULL_CORPUS ?
-    '**This snapshot is that corpus.** Same models, same runner label, same\n' +
-    'harness, so the floor above is a measured bound on this file.' :
+  //
+  // And on the PUBLIC target the qualification is about the commit, not the
+  // repo: matching `bldrs-ai/test-models` by name says nothing about the
+  // model set, because the null test pinned its checkout and this job does
+  // not (see AA_NULL_CORPUS_SHA). Same-name-different-models is the case that
+  // would otherwise assert a bound nobody measured, so the two commits are
+  // printed side by side and only a match claims "same models".
+  const blessedAt = info.corpusSha || '';
+  const sameCommit =
+    blessedAt !== '' && blessedAt.startsWith(AA_NULL_CORPUS_SHA);
+  const aaCorpusCaveat = info.repoName !== AA_NULL_CORPUS ?
     `**This snapshot is \`${info.repoName}\`, which is NOT the corpus that was\n` +
     'measured, so the floor above is not a measured bound on this file.** The\n' +
     'A/A null test has only ever run against `bldrs-ai/test-models`. This\n' +
@@ -686,13 +740,38 @@ function renderReadme(info) {
     'and as an order of magnitude here — not as a bound on this file. What it\n' +
     'would cost to measure this corpus\'s own floor is in conway\'s\n' +
     '[design/new/perf-run-comparability.md](https://github.com/bldrs-ai/conway/blob/main/design/new/perf-run-comparability.md)\n' +
-    'Evidence 4, "What this does not bound".';
+    'Evidence 4, "What this does not bound".' :
+    sameCommit ?
+      '**This snapshot is that corpus, at the very commit the floor was\n' +
+      `measured over** (\`${AA_NULL_CORPUS_SHA}\`). Same models, same runner\n` +
+      'label, same harness, so the floor above is a measured bound on this\n' +
+      'file.' :
+      '**This snapshot is that corpus** — same repository, same runner label,\n' +
+      'same harness. What is NOT established is that it is the same **model\n' +
+      `set**: the floor was measured over \`${AA_NULL_CORPUS_SHA}\`, while this\n` +
+      'snapshot was blessed at ' +
+      `${blessedAt !== '' ? `\`${blessedAt}\`` : 'an unrecorded commit'}` +
+      ' — `rc-regression.yml` checks the\n' +
+      'target repo out at its default branch, with no pinned `ref:`, so the\n' +
+      'corpus can gain or lose models between the two. Nothing in either job\n' +
+      'compares them. Read the floor as a measured bound on this file to the\n' +
+      'extent the corpus has not moved under it.';
 
   // WHICH COLUMNS ARE A MEASUREMENT AND WHICH ARE A LEAD. This is the half of
   // the directory a reader is most likely to get wrong, because the two delta
   // files share a column layout and differ only in how `engine1` was
   // obtained. Stated first, before any column definition, and repeated in the
   // `measurementBasis` cell of every row of both files.
+  //
+  // THE FLOOR NUMBERS BELOW ARE HAND-TRANSCRIBED from run 33192612782's
+  // report (`AA_*` grep lines and aa-report.md in its artifact), and so are
+  // the 97/99 model counts. Nothing checks them against the analyser: the rc
+  // job has no access to that run's output, and re-deriving them would mean
+  // an rc release reading another workflow's artifact. Treat them as a
+  // maintained constant with a named provenance — when the A/A test is re-run
+  // on a changed corpus, the new run's numbers have to be copied here, into
+  // the `Summarize the paired delta` step of rc-regression.yml, and into
+  // design/new/perf-run-comparability.md together.
   const pairedSection = pairedDeltaName !== '' ?
     `## Which delta to read
 
@@ -728,7 +807,7 @@ over the identical corpus, four passes in one job, one of them with the corpus
 evicted from page cache ([run 33192612782](https://github.com/bldrs-ai/conway/actions/runs/33192612782),
 \`.github/workflows/perf-aa-null.yml\`). Every delta it reports must be zero.
 What it reports instead is a floor — **measured on the public corpus,
-\`bldrs-ai/test-models\` at \`baf0f87d\`, over 97 of the 99 models the batch
+\`bldrs-ai/test-models\` at \`${AA_NULL_CORPUS_SHA}\`, over 97 of the 99 models the batch
 walks there** (two pairs share a \`<stem>.perf.csv\` and collapse to one row —
 conway#633):
 
@@ -1250,6 +1329,9 @@ function main() {
     renderReadme({
       engine,
       repoName,
+      // Best-effort, and read here rather than plumbed through the workflow:
+      // see corpusCommit(). '' just means the README says so.
+      corpusSha: corpusCommit(modelsRoot),
       modelCount,
       // Counted from the input rows rather than assumed from the workflow:
       // the same script blesses a run whose children had no --expose-gc, and
@@ -1274,8 +1356,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  AA_NULL_CORPUS,
+  AA_NULL_CORPUS_SHA,
   DETAIL_COLUMNS,
   collectCorpusModels,
+  corpusCommit,
   coverageSkipReason,
   findPreviousSnapshot,
   pairedCoverage,

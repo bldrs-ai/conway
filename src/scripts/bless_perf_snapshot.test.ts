@@ -19,14 +19,19 @@ const require_ = createRequire(import.meta.url)
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
 const {
-  DETAIL_COLUMNS, collectCorpusModels, coverageSkipReason, findPreviousSnapshot,
+  AA_NULL_CORPUS, AA_NULL_CORPUS_SHA,
+  DETAIL_COLUMNS, collectCorpusModels, corpusCommit, coverageSkipReason,
+  findPreviousSnapshot,
   isChronologicalDelta,
   pairedCoverage, removeStaleDeltas, removeStalePairedDetail, parsePairedFlags,
   renderReadme, writeDetailCsv, versionCompare,
 } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
+    AA_NULL_CORPUS: string,
+    AA_NULL_CORPUS_SHA: string,
     DETAIL_COLUMNS: string[],
     collectCorpusModels: (rootDir: string, exclude?: RegExp) => string[],
+    corpusCommit: (modelsRoot: string) => string,
     coverageSkipReason: (
       coverage: { expected: string[], missing: string[] }) => string,
     pairedCoverage: (
@@ -40,6 +45,7 @@ const {
     renderReadme: (info: {
       engine: string,
       repoName: string,
+      corpusSha?: string,
       modelCount: number,
       retentionCount: number,
       deltaName: string,
@@ -956,13 +962,57 @@ describe('renderReadme', () => {
       expect(text).toContain('over 97 of the 99 models the batch')
     }
 
-    expect(publicReadme).toContain('**This snapshot is that corpus.**')
-    expect(publicReadme).not.toContain('not a measured bound')
+    expect(publicReadme).toContain('**This snapshot is that corpus')
+    expect(publicReadme).not.toContain('is NOT the corpus that was')
 
     expect(privateReadme).toContain(
       '`test-models-private`, which is NOT the corpus that was')
     expect(privateReadme).toContain('not a measured bound on this file')
     expect(privateReadme).toContain('would cost to measure this corpus')
+  })
+
+  test('does not claim the same models off a matching corpus name', () => {
+    // The floor is a property of a MODEL SET. `perf-aa-null.yml` pinned its
+    // checkout to the commit it measured; `rc-regression.yml` checks the
+    // matrix target out with no `ref:` at all, so it gets whatever the
+    // default branch holds at release time and nothing compares the two. The
+    // public branch used to assert "Same models" purely because the
+    // directory name matched, which is the one place in this README that
+    // asserts a bound rather than disclaiming one.
+    const measured = renderReadme({ ...paired, corpusSha: AA_NULL_CORPUS_SHA })
+    const moved = renderReadme({ ...paired, corpusSha: 'deadbeef' })
+    const unknown = renderReadme({ ...paired, corpusSha: '' })
+
+    // Only a commit that matches the measured one earns the strong claim.
+    expect(measured).toContain('at the very commit the floor was')
+    expect(measured).toContain('Same models')
+    expect(measured).toContain(`\`${AA_NULL_CORPUS_SHA}\``)
+
+    // Everything else names both commits and stops short of "same models".
+    for (const text of [moved, unknown]) {
+      expect(text).not.toContain('Same models')
+      expect(text).toContain('What is NOT established is that it is the same')
+      expect(text).toContain('with no pinned `ref:`')
+      expect(text).toContain('to the\nextent the corpus has not moved under it')
+    }
+
+    expect(moved).toContain('blessed at `deadbeef`')
+    expect(unknown).toContain('blessed at an unrecorded commit')
+
+    // A corpus SHA is never a reason to soften the PRIVATE branch, which
+    // already disclaims the floor outright.
+    expect(renderReadme({
+      ...paired, repoName: 'test-models-private',
+      corpusSha: AA_NULL_CORPUS_SHA,
+    })).toContain('is NOT the corpus that was')
+  })
+
+  test('reads the corpus commit off the checkout, or reports none', () => {
+    // A models root that is not a git checkout is the normal case outside
+    // CI, and it must degrade to "unrecorded" rather than failing a bless.
+    expect(corpusCommit(path.join(workDir, 'not-a-checkout'))).toBe('')
+    expect(corpusCommit(process.cwd()))
+      .toMatch(new RegExp(`^[0-9a-f]{${AA_NULL_CORPUS_SHA.length}}$`))
   })
 
   test('states a narrowed scope rather than letting it pass silently', () => {
@@ -1007,5 +1057,69 @@ describe('renderReadme', () => {
     expect(text).toContain('13.66% median noise floor')
     expect(text).toContain('Read it as a lead')
     expect(text).not.toContain('This directory holds **two**')
+  })
+})
+
+/**
+ * The rc job summary carries the same A/A floor the snapshot README does, and
+ * so needs the same qualification — but it is Python inside
+ * `.github/workflows/rc-regression.yml`, generated once per matrix target and
+ * never exercised by anything before a release runs. Printed unconditionally
+ * it told the reader of the PUBLIC target's summary that the only measured
+ * floor "was not measured on this one", i.e. asserted a falsehood about the
+ * exact corpus it was measured on.
+ *
+ * These read the workflow as text on purpose. Executing it would put a
+ * python3 dependency on `yarn test`, which has to run on every dev machine;
+ * what has to hold is structural — that the paragraph is behind a branch, on
+ * the same corpus name renderReadme() branches on, with the two arms the
+ * right way round.
+ */
+describe('the rc job summary\'s A/A floor paragraph', () => {
+
+  const workflow = fs.readFileSync(
+    path.resolve(process.cwd(), '.github/workflows/rc-regression.yml'), 'utf8')
+
+  // Everything below is scoped to the one step that prints the paragraph;
+  // the file holds several unrelated Python heredocs.
+  const step = workflow.split('- name: Summarize the paired delta')[1] || ''
+
+  test('branches the floor\'s scope on the matrix target', () => {
+    // The step's env is where the target's identity enters the Python.
+    expect(step).toContain('REPO_NAME: ${{ matrix.target.repo }}')
+    expect(step).toContain('os.environ.get(\'REPO_NAME\', \'\')')
+
+    const arms = step.split('if corpus == AA_NULL_CORPUS:')
+
+    expect(arms).toHaveLength(2)
+
+    const [publicArm, privateArm] = arms[1].split(/\n +else:\n/)
+
+    // The public target is told the floor WAS measured here...
+    expect(publicArm).toContain('measured on **this** corpus')
+    expect(publicArm).not.toContain('not on this one')
+
+    // ...and only the other targets are told it was not. An inverted
+    // condition swaps these two and fails here.
+    expect(privateArm).toContain('measured on the **public** corpus')
+    expect(privateArm).toContain('not on this one')
+  })
+
+  test('branches on the same corpus name the README does', () => {
+    // Two copies of one fact in two languages. If they ever disagree, one of
+    // the two documents a release ships is qualified against the wrong repo.
+    expect(step).toContain(`AA_NULL_CORPUS = '${AA_NULL_CORPUS}'`)
+    expect(step).toContain(`at \`${AA_NULL_CORPUS_SHA}\``)
+  })
+
+  test('does not claim the same models off a matching corpus name', () => {
+    // The README's F2 fix, in the summary's own words: the null test pinned
+    // its checkout and this job does not, so matching the corpus by name
+    // says nothing about the model set.
+    const publicArm =
+      step.split('if corpus == AA_NULL_CORPUS:')[1].split(/\n +else:\n/)[0]
+
+    expect(publicArm).toContain('What is not established is the model set')
+    expect(publicArm).not.toContain('Same models')
   })
 })

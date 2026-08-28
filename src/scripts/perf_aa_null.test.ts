@@ -207,7 +207,7 @@ describe('corpusShortfall', () => {
 
 describe('corpusCoverage', () => {
 
-  test('walks the corpus and reports 2 of 4 models as unmeasurable', () => {
+  test('walks the corpus and reports 2 of 5 models as unmeasurable', () => {
     // End to end over a real tree, through the same collectCorpusModels() the
     // paired gate uses: this is the public corpus's shape in miniature —
     // 5 models walked, 3 rows possible, and an exclude that prunes.

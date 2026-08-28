@@ -383,7 +383,17 @@ demand from `collectCorpusModels()` — the same walk the paired gate uses, not
 a second one — reports coverage as its own section above the statistics, and
 annotates the job with a `::warning::` on any shortfall. It still exits 0: the
 report is the deliverable of four corpus passes and must survive its own bad
-news.
+news. Note where that annotation lands: `console.warn` is stderr and the job
+pipes the analyser through `tee aa-grep.txt`, which captures stdout only, so
+the warning is in the job log but not in the artifact — the `AA_CORPUS_*`
+lines carry the same shortfall as numbers and *are* in both.
+
+Borrowing the gate's walk means the experiment's denominator is now decided by
+production code, so `perf-aa-null.yml`'s push trigger lists the analyser's
+full local require closure (`bless_perf_snapshot.cjs`, `perf_ab_compare.cjs`,
+`gen_delta_csv.cjs`, `version_order.cjs`, `csv_rfc4180.cjs`) alongside its own
+files. Without that, a change to `collectCorpusModels()` or `MODEL_EXTENSIONS`
+would move what the A/A test considers complete coverage with no re-run.
 
 [i633]: https://github.com/bldrs-ai/conway/issues/633
 
@@ -451,7 +461,22 @@ So a private snapshot's README must not present these numbers as a bound on
 its own file, and since #632 it does not: `renderReadme()` compares the
 snapshot's repo against `AA_NULL_CORPUS` and, for any other target, states
 that the floor is public-corpus evidence and that this corpus's own floor is
-unmeasured.
+unmeasured. The rc **job summary** takes the same branch, on the same corpus
+name, in its own Python — it is printed once per matrix target, so an
+unconditional "not on this one" there told the reader of the *public*
+target's summary that the only measured floor does not bound the corpus it
+was measured on.
+
+**And on the public target the qualification is about the commit, not the
+repo.** Matching `bldrs-ai/test-models` by name says nothing about the model
+set: `perf-aa-null.yml` pins its checkout (`ref:` the resolved
+`TEST_MODELS_REF`, `baf0f87d` for run 33192612782) while `rc-regression.yml`
+checks the matrix target out with **no `ref:`**, i.e. the default branch at
+release time, and nothing in either job compares them. A public corpus that
+has gained or lost models since `baf0f87d` is a different model set behind
+the same name, so the README reads the blessed commit off the checkout
+(`corpusCommit()`), prints it beside the measured one, and claims "same
+models" only when the two match.
 
 **What measuring it would cost, honestly.** Four private passes at ~20m30s
 (the measured blessed-pass time, rc-regression.yml "THE 35 IS DERIVED") is

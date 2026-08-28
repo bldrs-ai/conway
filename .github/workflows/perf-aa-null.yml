@@ -89,7 +89,8 @@ name: Perf A/A null test (paired-configuration noise floor)
 # rc-regression.yml, and it blesses nothing.
 
 on:
-  # Scoped to its own two files so it runs from the branch it is developed on
+  # Scoped to its own files and its analyser's dependencies, so it runs from
+  # the branch it is developed on
   # without firing on every unrelated commit. `workflow_dispatch` alone is not
   # dispatchable until the workflow reaches the default branch, which is the
   # trap perf-counter-probe.yml documents; this experiment is not on main.
@@ -98,6 +99,20 @@ on:
       - '.github/workflows/perf-aa-null.yml'
       - '.github/probe/perf-aa-null.cjs'
       - '.github/probe/aa-pass.sh'
+      # The analyser's demand is seeded by the paired gate's own corpus walk
+      # (`collectCorpusModels` in bless_perf_snapshot.cjs), so PRODUCTION code
+      # decides what this experiment considers complete coverage. Without
+      # these, a change to that walk or to MODEL_EXTENSIONS silently moves the
+      # denominator with no re-run. This is the analyser's full local require
+      # closure, not just its three direct imports: it is small enough (five
+      # files) that listing all of it beats a rule about which layer counts.
+      # To re-derive after an import changes, follow `require('../../scripts/`
+      # out of the analyser and `require('./` out of each file it reaches.
+      - 'scripts/bless_perf_snapshot.cjs'
+      - 'scripts/perf_ab_compare.cjs'
+      - 'scripts/gen_delta_csv.cjs'
+      - 'scripts/version_order.cjs'
+      - 'scripts/csv_rfc4180.cjs'
   workflow_dispatch:
     inputs:
       passes:

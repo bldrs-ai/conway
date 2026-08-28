@@ -905,7 +905,12 @@ function main() {
   const passes = [];
 
   for (let i = 0; i < args.length; ++i) {
-    if (valueFlags[args[i]] !== undefined) {
+    // Object.hasOwn, not a truthiness or `!== undefined` test on the
+    // lookup: `--markdown` and friends are the keys, but an argument
+    // spelled `toString` or `__proto__` hits Object.prototype and would
+    // otherwise be consumed as a value flag along with the token after
+    // it. Unreachable from the workflow; wrong is still wrong.
+    if (Object.hasOwn(valueFlags, args[i])) {
       options[valueFlags[args[i]]] = args[++i] ?? '';
       continue;
     }
@@ -952,6 +957,14 @@ function main() {
   // An annotation, not an exit code: the report is the deliverable of four
   // corpus passes and must survive its own bad news. It goes to the log the
   // same way `reportPairedSkipped()` announces a withheld paired delta.
+  //
+  // WHERE IT LANDS. console.warn writes to stderr, and the workflow captures
+  // this process with `| tee aa-grep.txt`, which captures stdout only — so
+  // these annotations are in the job log and the Actions annotation list but
+  // NOT in the archived artifact. The `AA_CORPUS_*` grep lines above are on
+  // stdout and so are in both; they carry the same shortfall as numbers.
+  // Anyone auditing a past run from its artifact must read those, not look
+  // for a warning that was never written there.
   if (!coverage.verified) {
     console.warn(
         '::warning::A/A coverage is unverified' +
