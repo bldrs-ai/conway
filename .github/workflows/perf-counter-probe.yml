@@ -1,0 +1,259 @@
+name: Perf counter probe (PMU availability + metric variance)
+
+# EXPERIMENT, not part of CI. Answers two questions about the dedicated runner
+# pool, both of which decide how we measure conway's performance:
+#
+#   Q1 — Are hardware PMU counters (`instructions:u`) available, and if so how
+#        stable is instruction count run-to-run on identical input? Wall clock
+#        on this pool has a measured ~14% noise floor, which is too coarse to
+#        gate on. Instruction count would be the compute analogue of
+#        heap-used-after-GC: a near-deterministic number that moves only when
+#        the code's actual work moves. The headline output is
+#        CV(instructions) vs CV(wall) vs CV(cpuUsage), all measured WITHIN one
+#        job so machine-to-machine differences cannot contaminate the ratio.
+#
+#   Q2 — Is the pool heterogeneous silicon? A uniform ~14% speedup was measured
+#        between two attempts of the same job, flat across model duration
+#        (correlation with log duration = -0.009) — the signature of a faster
+#        machine, not of interference. Three concurrent matrix jobs land on
+#        three separate VMs; if their CPU model strings differ, that is the
+#        confirmation.
+#
+# Triggering: `workflow_dispatch` alone is not dispatchable until the workflow
+# sits on the default branch, so the push trigger below is what actually fires
+# it from the experiment branch. Scoped to the probe's own files so ordinary
+# work on that branch does not re-run it.
+#
+# Self-contained on purpose: this workflow plus .github/probe/perf-counter-probe.mjs
+# and nothing else. It must not be merged into, or depended on by, build.yml or
+# rc-regression.yml.
+
+on:
+  push:
+    branches: ['claude/worker-model-geometry-streaming-b4nk8w']
+    paths:
+      - '.github/workflows/perf-counter-probe.yml'
+      - '.github/probe/perf-counter-probe.mjs'
+  workflow_dispatch:
+
+concurrency:
+  group: perf-counter-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    # The SAME dedicated runner label rc-regression's regression job uses
+    # (.github/workflows/rc-regression.yml). Measuring a different pool would
+    # answer a question nobody asked — the runner IS the subject here.
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    timeout-minutes: 25
+    strategy:
+      # Three replicas is the Q2 sample. fail-fast would let one job's failure
+      # destroy the very comparison the matrix exists to make.
+      fail-fast: false
+      matrix:
+        replica: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ------------------------------------------------------------------ Q2
+      - name: Machine identity
+        run: |
+          echo "PROBE_REPLICA=${{ matrix.replica }}"
+          echo "PROBE_RUNNER_LABEL=ubuntu-24.04-4vcpu-8gb-150gbssd"
+          echo "PROBE_RUN_ID=${{ github.run_id }} PROBE_RUN_ATTEMPT=${{ github.run_attempt }}"
+          # Prefixed so three job logs can be grepped into one side-by-side
+          # table without hand-reading lscpu output.
+          MODEL=$(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//')
+          echo "PROBE_CPU_MODEL=${MODEL}"
+          echo "PROBE_NPROC=$(nproc)"
+          echo "PROBE_UNAME=$(uname -a)"
+          for f in family model stepping microcode 'cpu MHz'; do
+            echo "PROBE_CPUINFO_${f// /_}=$(grep -m1 "^$f" /proc/cpuinfo | sed 's/^[^:]*:[[:space:]]*//')"
+          done
+          echo "--- lscpu ---"
+          lscpu || true
+          echo "--- cpu flags ---"
+          grep -m1 '^flags' /proc/cpuinfo || true
+          echo "--- cpufreq (absent on most virtualised hosts; absence is itself a data point) ---"
+          for f in scaling_governor scaling_max_freq scaling_cur_freq cpuinfo_max_freq; do
+            p=/sys/devices/system/cpu/cpu0/cpufreq/$f
+            if [ -r "$p" ]; then echo "PROBE_CPUFREQ_${f}=$(cat "$p")"; else echo "PROBE_CPUFREQ_${f}=absent"; fi
+          done
+          echo "--- hypervisor / product ---"
+          echo "PROBE_HYPERVISOR=$(systemd-detect-virt 2>/dev/null || echo unknown)"
+          cat /sys/class/dmi/id/product_name 2>/dev/null || true
+          echo "--- memory ---"
+          free -g || true
+
+      # ------------------------------------------------------------------ Q1
+      - name: Install perf
+        run: |
+          echo "PROBE_PARANOID_BEFORE=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo unreadable)"
+          echo "PROBE_KPTR_RESTRICT=$(cat /proc/sys/kernel/kptr_restrict 2>/dev/null || echo unreadable)"
+          sudo apt-get update -qq || true
+          # linux-tools-common + linux-tools-generic supply a perf binary that
+          # usually works. linux-tools-$(uname -r) is the exactly-matching one
+          # and frequently does NOT exist for Azure kernels — its failure is
+          # EXPECTED, not a probe failure, so it is tried separately and its
+          # exit status discarded. The generic binary may print a
+          # version-mismatch warning and still count fine.
+          sudo apt-get install -y -qq linux-tools-common linux-tools-generic || true
+          if sudo apt-get install -y -qq "linux-tools-$(uname -r)"; then
+            echo "PROBE_PERF_PKG_EXACT=installed"
+          else
+            echo "PROBE_PERF_PKG_EXACT=unavailable (expected on Azure kernels)"
+          fi
+          # Lowering paranoid separates "kernel policy forbids it" (fixable
+          # here, and therefore fixable in a real perf job) from "the PMU is not
+          # exposed to the guest at all" (not fixable from inside the VM).
+          sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null 2>&1 || true
+          echo "PROBE_PARANOID_AFTER=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo unreadable)"
+          if command -v perf >/dev/null 2>&1; then
+            echo "PROBE_PERF_BINARY=$(command -v perf)"
+            echo "PROBE_PERF_VERSION=$(perf --version 2>&1 | head -1)"
+          else
+            echo "PROBE_PERF_BINARY=missing"
+          fi
+          echo "--- PMU devices exposed to the guest ---"
+          # A `cpu` (or cpu_core/cpu_atom) entry here is the crispest signal
+          # that a hardware PMU is visible at all; only software/tracepoint/
+          # breakpoint entries means the hypervisor masked it.
+          ls /sys/bus/event_source/devices/ 2>/dev/null || echo "(none)"
+          echo "PROBE_PMU_DEVICES=$(ls /sys/bus/event_source/devices/ 2>/dev/null | tr '\n' ',')"
+
+      - name: Classify perf failure mode (software events vs hardware events)
+        id: classify
+        run: |
+          SW_OK=0
+          HW_OK=0
+          if ! command -v perf >/dev/null 2>&1; then
+            echo "PROBE_PERF_MODE=perf-binary-missing"
+          else
+            echo "===== SOFTWARE EVENTS (need no PMU) ====="
+            # If THIS fails, perf itself is broken/blocked — a different
+            # diagnosis from a masked PMU, and the one that would also rule out
+            # task-clock as a wall-clock replacement.
+            perf stat -e task-clock,page-faults,context-switches -- /bin/true > /tmp/sw.txt 2>&1 || true
+            cat /tmp/sw.txt
+            if grep -qE '[0-9]+([.,][0-9]+)?[[:space:]]+(msec[[:space:]]+)?task-clock' /tmp/sw.txt; then
+              SW_OK=1
+            fi
+
+            echo "===== HARDWARE EVENTS (need an exposed PMU) ====="
+            perf stat -e instructions:u,cycles:u -- /bin/true > /tmp/hw.txt 2>&1 || true
+            cat /tmp/hw.txt
+            # `<not supported>` / `<not counted>` next to instructions is the
+            # masked-PMU signature: perf ran, the event just never counted.
+            if grep -qE '^[[:space:]]*[0-9][0-9.,]*[[:space:]]+instructions' /tmp/hw.txt; then
+              HW_OK=1
+            fi
+
+            echo "===== perf list (hardware section) ====="
+            perf list hw 2>&1 | head -40 || true
+
+            if [ "$SW_OK" = 1 ] && [ "$HW_OK" = 1 ]; then
+              echo "PROBE_PERF_MODE=hardware-counters-available"
+            elif [ "$SW_OK" = 1 ] && [ "$HW_OK" = 0 ]; then
+              echo "PROBE_PERF_MODE=pmu-masked (software events counted, hardware events did not)"
+            elif [ "$SW_OK" = 0 ] && [ "$HW_OK" = 0 ]; then
+              echo "PROBE_PERF_MODE=perf-broken (even software events did not count)"
+            else
+              echo "PROBE_PERF_MODE=anomalous (hardware counted but software did not)"
+            fi
+          fi
+          echo "PROBE_SW_OK=$SW_OK"
+          echo "PROBE_HW_OK=$HW_OK"
+          echo "sw_ok=$SW_OK" >> "$GITHUB_OUTPUT"
+          echo "hw_ok=$HW_OK" >> "$GITHUB_OUTPUT"
+
+      - name: Measure variance (10 iterations x 2 node variants)
+        env:
+          SW_OK: ${{ steps.classify.outputs.sw_ok }}
+          HW_OK: ${{ steps.classify.outputs.hw_ok }}
+        run: |
+          set -u
+          SCRIPT=.github/probe/perf-counter-probe.mjs
+          OUT=/tmp/samples.tsv
+          printf 'variant\titer\tinstructions\tcycles\ttaskClockMs\tcpuUserMs\twallMs\tchecksumInt\tchecksumFloat\n' > "$OUT"
+
+          EVENTS=""
+          if [ "${HW_OK:-0}" = "1" ]; then
+            EVENTS="instructions:u,cycles:u,task-clock,page-faults"
+          elif [ "${SW_OK:-0}" = "1" ]; then
+            EVENTS="task-clock,page-faults"
+          fi
+          echo "PROBE_EVENTS_USED=${EVENTS:-<none: running bare node>}"
+
+          field() { awk -F';' -v ev="$1" '$3==ev { print $1; exit }' "$2" 2>/dev/null || true; }
+          numeric() { case "$1" in ''|*[!0-9.]*) echo "" ;; *) echo "$1" ;; esac; }
+
+          # Two variants because V8's background compiler and GC threads are a
+          # real source of run-to-run instruction-count jitter, and a metric's
+          # usefulness depends on which regime the measured workload is in:
+          #   plain       — stock node, concurrent optimizing compilation on.
+          #                 This is the regime a real conway benchmark runs in.
+          #   predictable — `--predictable` forces single-threaded V8, so this
+          #                 is the FLOOR: the best instruction-count stability
+          #                 obtainable, with thread scheduling removed.
+          for VARIANT in plain predictable; do
+            NODEFLAGS=""
+            if [ "$VARIANT" = "predictable" ]; then NODEFLAGS="--predictable"; fi
+            # One untimed warmup per variant so the first sample does not carry
+            # cold page-cache and cold CPU-frequency state into the statistics.
+            node $NODEFLAGS "$SCRIPT" workload > /dev/null 2>&1 || true
+            for i in $(seq 1 10); do
+              PCSV=/tmp/perf-$VARIANT-$i.csv
+              NJSON=/tmp/node-$VARIANT-$i.json
+              if [ -n "$EVENTS" ]; then
+                perf stat -x';' -e "$EVENTS" -o "$PCSV" -- node $NODEFLAGS "$SCRIPT" workload > "$NJSON" 2>/dev/null || true
+              else
+                : > "$PCSV"
+                node $NODEFLAGS "$SCRIPT" workload > "$NJSON" 2>/dev/null || true
+              fi
+              INSTR=$(numeric "$(field 'instructions:u' "$PCSV")")
+              CYC=$(numeric "$(field 'cycles:u' "$PCSV")")
+              TCLK=$(numeric "$(field 'task-clock' "$PCSV")")
+              CPUUS=$(grep -oP '"cpuUserUs":\K[0-9]+' "$NJSON" || true)
+              WALL=$(grep -oP '"wallMs":\K[0-9.]+' "$NJSON" || true)
+              CKI=$(grep -oP '"checksumInt":\K[0-9]+' "$NJSON" || true)
+              CKF=$(grep -oP '"checksumFloat":"\K[^"]+' "$NJSON" || true)
+              CPUMS=""
+              if [ -n "$CPUUS" ]; then CPUMS=$(awk -v u="$CPUUS" 'BEGIN{printf "%.3f", u/1000}'); fi
+              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$VARIANT" "$i" "${INSTR:-}" "${CYC:-}" "${TCLK:-}" "${CPUMS:-}" "${WALL:-}" "${CKI:-}" "${CKF:-}" >> "$OUT"
+              echo "iter $VARIANT/$i instr=${INSTR:-NA} cycles=${CYC:-NA} taskClockMs=${TCLK:-NA} cpuUserMs=${CPUMS:-NA} wallMs=${WALL:-NA}"
+            done
+          done
+
+          echo "===== RAW SAMPLES ====="
+          cat "$OUT"
+          echo "===== first perf csv verbatim (parser sanity) ====="
+          cat /tmp/perf-plain-1.csv || true
+
+      - name: Report CV table
+        run: |
+          echo "PROBE_REPLICA=${{ matrix.replica }} PROBE_CPU_MODEL=$(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//')"
+          node .github/probe/perf-counter-probe.mjs stats /tmp/samples.tsv | tee /tmp/cv.txt
+          {
+            echo "### Replica ${{ matrix.replica }}"
+            echo ""
+            echo '```'
+            grep -E '^PROBE_(CV|CHECKSUM)' /tmp/cv.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-counter-probe-replica-${{ matrix.replica }}
+          path: |
+            /tmp/samples.tsv
+            /tmp/cv.txt
+          if-no-files-found: warn
