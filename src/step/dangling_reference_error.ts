@@ -20,9 +20,10 @@
  * PREEMPTION, so one malformed placement could keep paying for rebuilds
  * that could never satisfy it (conway#542, codex round 1 on #543).
  *
- * Deliberately thrown only from the reference-resolution failure paths in
- * `StepEntityBase`; it carries no fallback meaning, so a caller that does
- * not care can keep treating it as the `Error` it extends.
+ * Deliberately minted in one place only — {@link unresolvedReferenceError}
+ * below, which every reference-resolution failure path routes through. It
+ * carries no fallback meaning, so a caller that does not care can keep
+ * treating it as the `Error` it extends.
  *
  * The two causes above also want two different MESSAGES, which is what
  * `highestIndexedExpressID` selects (conway#580). Against a complete
@@ -68,4 +69,79 @@ export class DanglingReferenceError extends Error {
 
     this.name = 'DanglingReferenceError'
   }
+}
+
+
+/**
+ * The slice of a step model {@link unresolvedReferenceError} reads.
+ *
+ * Narrower than `StepModelBase` on purpose: this module is imported by the
+ * step layer *and* by `IfcGeometryExtraction`, and taking the concrete
+ * model type here would drag its whole generic parameter list — and a
+ * cycle back through `step_entity_base` — into both.
+ */
+export interface UnresolvedReferenceModel {
+
+  /**
+   * @param expressID The referenced record.
+   * @return {number | undefined} Its local ID, or undefined when the index
+   * does not hold it.
+   */
+  resolveExpressID( expressID: number ): number | undefined
+
+  /** Whether the index is known to be an incomplete prefix. */
+  readonly indexIsPrefix: boolean
+
+  /** Highest express ID the index holds. A maximum, not a scan boundary. */
+  readonly maxIndexedExpressID: number
+}
+
+/**
+ * What every untagged reference failure has said since before
+ * {@link DanglingReferenceError} existed, and what the generated
+ * single-valued and typed-array getters both throw for a mistyped entry.
+ * Kept identical so classifying a path changes only the absent case.
+ */
+export const MISTYPED_VALUE_MESSAGE = 'Value in STEP was incorrectly typed'
+
+/**
+ * Classify a reference that failed to resolve.
+ *
+ * `getElementByExpressID` / `getTypedElementByExpressID` answer `undefined`
+ * for two opposite causes: the record is not in the index at all, or it is
+ * indexed but is the wrong entity type. A mid-parse prefix reader must tell
+ * them apart — the first may resolve once more of the file is scanned, the
+ * second never will — so the absent case gets its own error type (see
+ * {@link DanglingReferenceError}). Called only on a throwing path, so
+ * neither the extra index lookup nor the maximum-ID scan behind it costs
+ * anything in the common case.
+ *
+ * Shared rather than duplicated because three call sites must agree on the
+ * answer or the preview's retry queue goes wrong in one of two directions:
+ * `StepEntityBase`'s scalar and reference-array extraction, and
+ * `IfcGeometryExtraction.relatedProductByExpressID_`, which deliberately
+ * mirrors what the generated array getter throws for the same entry.
+ *
+ * @param model The model whose index decides absence.
+ * @param expressID The reference's target, or undefined when the field did
+ * not hold a reference at all (an unresolved inline element).
+ * @return {Error} The error to throw: `DanglingReferenceError` only when
+ * the record is absent from the index, an untagged `Error` otherwise.
+ */
+export function unresolvedReferenceError(
+    model: UnresolvedReferenceModel,
+    expressID: number | undefined ): Error {
+
+  if ( expressID !== void 0 && model.resolveExpressID( expressID ) === void 0 ) {
+
+    // Hand the highest indexed ID over ONLY for a prefix index, so the
+    // message can report absence-so-far instead of claiming the record is
+    // missing from the file (conway#580). A complete model keeps the
+    // absolute wording, because there the claim is true.
+    return new DanglingReferenceError(
+        expressID,
+        model.indexIsPrefix ? model.maxIndexedExpressID : void 0 )
+  }
+
+  return new Error( MISTYPED_VALUE_MESSAGE )
 }

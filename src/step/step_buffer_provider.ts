@@ -53,6 +53,63 @@
 const DEFAULT_CHUNK_BYTES = 4 * 1024 * 1024
 const DEFAULT_MAX_RESIDENT_CHUNKS = 16
 
+/* Adaptive residency (issue #616).
+ *
+ * The default 4 MiB x 16 window is right for a load that sweeps the file
+ * forwards, which is what most models do. It is badly wrong for a model
+ * whose rel-aggregate pass walks a working set larger than the window:
+ * D3D.ifc read 47.1 GB from a 213.6 MB file — a 220x read amplification
+ * that was 56% of its load — with a measured reuse distance of p50 = 16
+ * chunks against a cap of exactly 16. Every one of those re-reads was a
+ * capacity miss; the request stream itself is identical at every window
+ * size, so it is a retention failure, not a re-request loop.
+ *
+ * Neither model's shape is knowable at open, so the cap is a policy rather
+ * than a constant: start at the shipped window and double it when the
+ * workload demonstrates that a larger one would have avoided the reads.
+ *
+ * Two properties make growth safe rather than a gamble:
+ *
+ *  - LRU is a stack algorithm (Mattson's inclusion property): for a fixed
+ *    reference stream, the chunks resident at cap N are a subset of those
+ *    resident at cap N+1, so raising the cap can never turn a hit into a
+ *    miss. Growth costs memory; it cannot cost reads. The cap only ever
+ *    grows within a provider's life, which is what keeps that argument
+ *    applicable — a shrink would break it.
+ *  - Growth triggers on *capacity* misses only, classified against a ghost
+ *    list of recently-evicted chunks. A forward sweep's misses are
+ *    compulsory (the chunk was never resident), so a sweep does not grow:
+ *    measured over PSB.ifc, 0 of 62 intervals met the trigger, against 360
+ *    of 1,095 on D3D — whose loads are 85.2% capacity misses against PSB's
+ *    5.9%.
+ *
+ * Residency is bounded by {@link ADAPTIVE_MAX_RESIDENT_BYTES} and by the
+ * store's own size, so an adapted provider never holds more than the
+ * fully-resident {@link ResidentStepBufferProvider} would have. That bound
+ * is the memory cost of the policy and it is deliberate: a thrashing model
+ * trades transient garbage (D3D churned 47 GB of 4 MiB buffers) for bounded
+ * retention.
+ */
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (256MiB)
+const ADAPTIVE_MAX_RESIDENT_BYTES = 256 * 1024 * 1024
+
+/* Chunk requests per policy evaluation. Small enough to react inside a
+ * load (D3D issues 4.5M requests, so ~1,100 evaluations), large enough
+ * that the trigger is a rate rather than a burst. Replaying D3D's recorded
+ * request stream (`scripts/pager_policy_sim.mjs`) over trigger 4-16 x
+ * interval 2,048-16,384, the policy reaches a whole-file window in two
+ * doublings in every cell; only how fast it gets there moves, from 0.012x
+ * of the shipped window's load count to 0.057x. The 2,048-4,096 band is
+ * flat at 0.012x-0.017x, and the midpoints are taken from it. */
+const ADAPTIVE_EVAL_REQUESTS = 4096
+
+/* Capacity misses in one interval that justify doubling — and the share of
+ * that interval's misses they must be. The fraction is what keeps a model
+ * that is simply reading a lot of new file (all-compulsory misses) from
+ * growing on volume alone. */
+const ADAPTIVE_GROWTH_CAPACITY_MISSES = 8
+const ADAPTIVE_GROWTH_MISS_FRACTION = 0.5
+
 /**
  * Brand carrying the absolute source address of a view's first byte.
  * Cursors recorded against a windowed view are view-relative; adding
@@ -298,7 +355,36 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
   private readonly chunkBytes_: number
 
-  private readonly maxResidentChunks_: number
+  /**
+   * Current residency cap in chunks. Mutable: the adaptive policy raises
+   * it (never lowers it — see the inclusion argument above) up to
+   * {@link adaptiveCapChunks_}.
+   */
+  private maxResidentChunks_: number
+
+  /**
+   * Ceiling the adaptive policy may raise the cap to. Equal to the
+   * starting cap when adaptation is off, which makes every policy hook a
+   * no-op without a second branch at each call site.
+   */
+  private readonly adaptiveCapChunks_: number
+
+  /**
+   * Chunk indices evicted recently, insertion-ordered (Set iteration order
+   * is insertion order, so the front is the oldest) and bounded by the
+   * current cap. A load of a chunk in here is a capacity miss: a window
+   * twice this size would have held it. Empty when adaptation is off.
+   */
+  private readonly ghostChunks_ = new Set< number >()
+
+  /** Chunk requests seen in the current policy evaluation interval. */
+  private intervalRequests_ = 0
+
+  /** Store reads issued in the current interval. */
+  private intervalLoads_ = 0
+
+  /** Of those reads, the ones a larger window would have avoided. */
+  private intervalCapacityMisses_ = 0
 
   /** Resident chunks by chunk index; Map order doubles as LRU order. */
   private readonly chunks_ = new Map< number, Uint8Array >()
@@ -318,21 +404,54 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   /**
    * Construct this over an external byte store.
    *
+   * `maxResidentChunks` is a starting point, not a budget, unless the
+   * caller says otherwise: omitting it opts into the adaptive policy
+   * (issue #616), while passing a cap explicitly is read as a hard
+   * residency budget and pins the window exactly where it is asked for.
+   * That split is deliberate — the callers that pass a cap are the ones
+   * that chose it for a reason (a cramped test fixture, a memory-bounded
+   * preview), and the ones that take the default are the ones with no
+   * opinion, which is where a policy belongs. Pass `adaptive` to override
+   * either reading.
+   *
    * @param store_ The store holding the source bytes.
    * @param chunkBytes Chunk size in bytes (default 4MiB).
    * @param maxResidentChunks LRU residency cap in chunks (default 16).
+   * @param adaptive Whether the cap may grow on measured thrash; defaults
+   * to true exactly when `maxResidentChunks` was left to the default.
    */
   constructor(
       private readonly store_: StepExternalByteStore,
       chunkBytes: number = DEFAULT_CHUNK_BYTES,
-      maxResidentChunks: number = DEFAULT_MAX_RESIDENT_CHUNKS ) {
+      maxResidentChunks?: number,
+      adaptive: boolean = maxResidentChunks === void 0 ) {
 
     if ( chunkBytes <= 0 || !Number.isInteger( chunkBytes ) ) {
       throw new Error( `Invalid chunkBytes ${chunkBytes}` )
     }
 
+    const startingCap =
+      Math.max( 1, maxResidentChunks ?? DEFAULT_MAX_RESIDENT_CHUNKS )
+
     this.chunkBytes_        = chunkBytes
-    this.maxResidentChunks_ = Math.max( 1, maxResidentChunks )
+    this.maxResidentChunks_ = startingCap
+
+    if ( !adaptive ) {
+
+      this.adaptiveCapChunks_ = startingCap
+      return
+    }
+
+    // Never more chunks than the store has, and never more bytes than the
+    // ceiling — so the adapted window is bounded both by the policy and by
+    // what a fully-resident provider would have held anyway.
+    const storeChunks =
+      Math.max( 1, Math.ceil( store_.byteLength / chunkBytes ) )
+    const ceilingChunks =
+      Math.max( 1, Math.floor( ADAPTIVE_MAX_RESIDENT_BYTES / chunkBytes ) )
+
+    this.adaptiveCapChunks_ =
+      Math.max( startingCap, Math.min( storeChunks, ceilingChunks ) )
   }
 
   /**
@@ -367,6 +486,26 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
    */
   public get residentChunkCount(): number {
     return this.chunks_.size
+  }
+
+  /**
+   * The residency cap currently in force, in chunks. Equal to the
+   * constructor's cap unless the adaptive policy has raised it.
+   *
+   * @return {number} The cap.
+   */
+  public get residencyCapChunks(): number {
+    return this.maxResidentChunks_
+  }
+
+  /**
+   * The highest cap the adaptive policy may reach, in chunks. Equal to
+   * {@link residencyCapChunks}'s starting value when adaptation is off.
+   *
+   * @return {number} The ceiling.
+   */
+  public get adaptiveResidencyCapChunks(): number {
+    return this.adaptiveCapChunks_
   }
 
   /**
@@ -473,10 +612,13 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
         if ( resident !== void 0 ) {
 
           this.touch_( chunkIndex, resident )
+          this.notePolicyRequest_( chunkIndex, false )
           continue
         }
 
         let inflight = this.loading_.get( chunkIndex )
+
+        this.notePolicyRequest_( chunkIndex, inflight === void 0 )
 
         if ( inflight === void 0 ) {
 
@@ -522,6 +664,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
           }
 
           this.chunks_.delete( candidate )
+          this.rememberEvicted_( candidate )
         }
       }
 
@@ -578,6 +721,89 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     }
 
     return span
+  }
+
+  /**
+   * Record that a chunk left the window, so a later load of it can be
+   * recognised as a capacity miss rather than a first touch. The ghost
+   * list is the size of the cache, which is what makes a ghost hit mean
+   * "a window twice this size would have held it".
+   *
+   * @param chunkIndex The evicted chunk.
+   */
+  private rememberEvicted_( chunkIndex: number ): void {
+
+    if ( this.maxResidentChunks_ >= this.adaptiveCapChunks_ ) {
+
+      // At the ceiling — or never adapting at all — there is no decision
+      // left for this list to inform, so drop it and stop paying for it.
+      // A provider with an explicit cap takes this branch on every
+      // eviction it ever performs, so it must stay a single comparison.
+      if ( this.ghostChunks_.size > 0 ) {
+        this.ghostChunks_.clear()
+      }
+
+      return
+    }
+
+    this.ghostChunks_.add( chunkIndex )
+
+    while ( this.ghostChunks_.size > this.maxResidentChunks_ ) {
+
+      const oldest = this.ghostChunks_.values().next()
+
+      if ( oldest.done === true ) {
+        break
+      }
+
+      this.ghostChunks_.delete( oldest.value )
+    }
+  }
+
+  /**
+   * Feed one chunk request to the residency policy, and evaluate it at
+   * interval boundaries.
+   *
+   * Only requests that reach the store count as loads here: a request the
+   * provider de-duplicates against an in-flight read costs no bytes, and
+   * counting those would inflate the miss signal by the fan-out of a
+   * closure walk's `Promise.all` rather than by anything the window did.
+   *
+   * @param chunkIndex The chunk requested.
+   * @param isLoad Whether this request is issuing a store read.
+   */
+  private notePolicyRequest_( chunkIndex: number, isLoad: boolean ): void {
+
+    if ( this.maxResidentChunks_ >= this.adaptiveCapChunks_ ) {
+      return
+    }
+
+    ++this.intervalRequests_
+
+    if ( isLoad ) {
+
+      ++this.intervalLoads_
+
+      if ( this.ghostChunks_.delete( chunkIndex ) ) {
+        ++this.intervalCapacityMisses_
+      }
+    }
+
+    if ( this.intervalRequests_ < ADAPTIVE_EVAL_REQUESTS ) {
+      return
+    }
+
+    if ( this.intervalCapacityMisses_ >= ADAPTIVE_GROWTH_CAPACITY_MISSES &&
+         this.intervalCapacityMisses_ >=
+           ADAPTIVE_GROWTH_MISS_FRACTION * this.intervalLoads_ ) {
+
+      this.maxResidentChunks_ =
+        Math.min( this.adaptiveCapChunks_, this.maxResidentChunks_ * 2 )
+    }
+
+    this.intervalRequests_       = 0
+    this.intervalLoads_          = 0
+    this.intervalCapacityMisses_ = 0
   }
 
   /**

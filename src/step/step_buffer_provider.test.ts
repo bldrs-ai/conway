@@ -224,3 +224,131 @@ describe('WindowedStepBufferProvider', () => {
     expect(() => provider.acquire(0, 48)).not.toThrow()
   })
 })
+
+
+/** Store over synthesised bytes that counts the reads it serves. */
+function countingStore(byteLength: number): StepExternalByteStore & {reads: number} {
+
+  const store = {
+    reads: 0,
+    byteLength,
+    read(offset: number, length: number): Promise< Uint8Array > {
+      ++store.reads
+
+      const bytes = new Uint8Array(length)
+
+      for (let where = 0; where < length; ++where) {
+        bytes[where] = (offset + where) % 256
+      }
+      return Promise.resolve(bytes)
+    },
+  }
+
+  return store
+}
+
+/** Store that reports a size but never actually serves bytes. */
+function sizedStore(byteLength: number): StepExternalByteStore {
+  return {byteLength, read: () => Promise.resolve(new Uint8Array(0))}
+}
+
+// The adaptive residency policy from issue #616. A load whose working set
+// exceeds the window re-reads the same chunks forever (D3D.ifc: 47.1 GB from
+// a 213.6 MB file); a load that sweeps forwards does not, and must not pay
+// for a bigger window it cannot use. These pin both sides of that split, and
+// the rule that decides which callers get a policy at all.
+describe('WindowedStepBufferProvider adaptive residency', () => {
+
+  const CHUNK = 16
+
+  // One chunk more than the cap is LRU's worst case: the chunk needed next
+  // is always the one just evicted, so every request is a capacity miss.
+  const THRASH_CHUNKS = 6
+
+  // One policy evaluation interval is 4096 chunk requests.
+  const PAST_ONE_INTERVAL = 4200
+
+  /**
+   * Cycle a working set through the provider, one chunk per request.
+   *
+   * @param provider The provider under test.
+   * @param requests How many requests to issue.
+   * @param workingSet How many distinct chunks to cycle over.
+   * @return {Promise< void >} Resolves when done.
+   */
+  async function cycle(
+      provider: WindowedStepBufferProvider,
+      requests: number,
+      workingSet: number): Promise< void > {
+
+    for (let step = 0; step < requests; ++step) {
+      await provider.ensureResident((step % workingSet) * CHUNK, 1)
+    }
+  }
+
+  test('grows the cap when a thrashing working set produces capacity misses', async () => {
+    const store = countingStore(CHUNK * 64)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4, true)
+
+    expect(provider.residencyCapChunks).toBe(4)
+
+    await cycle(provider, PAST_ONE_INTERVAL, THRASH_CHUNKS)
+
+    expect(provider.residencyCapChunks).toBe(8)
+
+    // The working set now fits, so a further pass over it reads nothing —
+    // which is the whole point of having grown.
+    const readsAfterGrowth = store.reads
+
+    await cycle(provider, 600, THRASH_CHUNKS)
+
+    expect(store.reads).toBe(readsAfterGrowth)
+  })
+
+  test('does not grow on a forward sweep, whose misses are all compulsory', async () => {
+    const sweepChunks = 5000
+    const store = countingStore(CHUNK * sweepChunks)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4, true)
+
+    for (let chunk = 0; chunk < sweepChunks; ++chunk) {
+      await provider.ensureResident(chunk * CHUNK, 1)
+    }
+
+    // More requests than an interval, and more misses than any trigger —
+    // but no chunk is ever asked for twice, so no window would have helped.
+    expect(store.reads).toBe(sweepChunks)
+    expect(provider.residencyCapChunks).toBe(4)
+  })
+
+  test('an explicitly-capped provider is a hard budget and never grows', async () => {
+    const store = countingStore(CHUNK * 64)
+    const provider = new WindowedStepBufferProvider(store, CHUNK, 4)
+
+    expect(provider.adaptiveResidencyCapChunks).toBe(4)
+
+    await cycle(provider, PAST_ONE_INTERVAL, THRASH_CHUNKS)
+
+    expect(provider.residencyCapChunks).toBe(4)
+    expect(provider.residentChunkCount).toBeLessThanOrEqual(4)
+
+    // Still thrashing: one read per request, exactly as before #616.
+    expect(store.reads).toBe(PAST_ONE_INTERVAL)
+  })
+
+  test('bounds growth by the 256 MiB ceiling and by the store size', () => {
+    const MIB = 1024 * 1024
+
+    // 1 GB store at the shipped 4 MiB chunk — the byte ceiling binds.
+    expect(new WindowedStepBufferProvider(sizedStore(1024 * MIB))
+        .adaptiveResidencyCapChunks).toBe(64)
+
+    // 100 MB store — the store binds first, so the window can at most
+    // become the whole file, which is what the resident provider holds.
+    expect(new WindowedStepBufferProvider(sizedStore(100 * MIB))
+        .adaptiveResidencyCapChunks).toBe(25)
+
+    // An explicit cap opts out, however large the store.
+    expect(new WindowedStepBufferProvider(sizedStore(1024 * MIB), 4 * MIB, 8)
+        .adaptiveResidencyCapChunks).toBe(8)
+  })
+})

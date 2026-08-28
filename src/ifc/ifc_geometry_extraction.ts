@@ -52,7 +52,10 @@ import {
 } from '../../dependencies/conway-geom'
 import { Uint32Sink } from '../step/parsing/uint32_sink'
 import { StepBufferNotResidentError } from '../step/step_buffer_provider'
-import { DanglingReferenceError } from '../step/dangling_reference_error'
+import {
+  DanglingReferenceError,
+  unresolvedReferenceError,
+} from '../step/dangling_reference_error'
 import { DanglingPlacementError } from './dangling_placement_error'
 import { CanonicalMaterial, ColorRGBA, exponentToRoughness } from '../core/canonical_material'
 import { CanonicalMesh, CanonicalMeshType } from '../core/canonical_mesh'
@@ -5044,6 +5047,13 @@ export class IfcGeometryExtraction {
         curve: curve,
         orientation: bound.Orientation,
         type: (bound.type === EntityTypesIfc.IFCFACEOUTERBOUND) ? 0 : 1,
+        // The IFC front end does not yet decide seam-ness; false is exactly
+        // today's behaviour. IFC's degenerate-loop spelling is the VERTEX_LOOP,
+        // which TriangulateSphericalSurface already handles by point count.
+        seam: false,
+        // Likewise for the seam PAIR: undecided on this front end, and false
+        // leaves TriangulateBspline on its existing earcut path.
+        seamPair: false,
       }
 
       const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
@@ -8083,11 +8093,19 @@ export class IfcGeometryExtraction {
 
     if ( relatedObject === void 0 ) {
 
-      // What the getter does with the same entry: extractBufferElement
-      // returns undefined for a reference that resolves to nothing (or to
-      // something that is not an IfcObjectDefinition) and the getter throws
-      // this exact message.
-      throw new Error( 'Value in STEP was incorrectly typed' )
+      // What the getter does with the same entry, and it has to STAY what
+      // the getter does: `extractBufferElement` now classifies an entry it
+      // cannot resolve rather than returning undefined for the caller to
+      // throw over (conway#546), so mirroring the old bare Error here would
+      // have quietly broken the correspondence this method exists to keep.
+      //
+      // Behaviour-neutral on today's paths: all three callers catch
+      // permissively (`instanceof Error`, or a bare catch that breaks the
+      // loop) and none discriminates on DanglingReferenceError, so this
+      // changes the message a prefix read logs and nothing else. Recorded
+      // rather than mutation-verified, for the same reason the #536 review
+      // left this fallback un-verified.
+      throw unresolvedReferenceError( this.model, relatedExpressID )
     }
 
     return relatedObject instanceof IfcProduct ? relatedObject : void 0

@@ -1,11 +1,14 @@
 import { describe, expect, test } from '@jest/globals'
 
 import IfcStepParser from '../ifc/ifc_step_parser'
-import { IfcAxis2Placement3D } from '../ifc/ifc4_gen'
+import { IfcAxis2Placement3D, IfcPolyline } from '../ifc/ifc4_gen'
 import EntityTypesIfc from '../ifc/ifc4_gen/entity_types_ifc.gen'
 import IfcStepModel from '../ifc/ifc_step_model'
 import ParsingBuffer from '../parsing/parsing_buffer'
-import { DanglingReferenceError } from './dangling_reference_error'
+import {
+  DanglingReferenceError,
+  MISTYPED_VALUE_MESSAGE,
+} from './dangling_reference_error'
 import { BufferByteSource } from './parsing/byte_source'
 import { ColumnarIndexSink, StepIndexColumns } from './parsing/columnar_index'
 import { ParseResult } from './parsing/step_parser'
@@ -314,5 +317,127 @@ describe( 'DanglingReferenceError wording', () => {
     expect( new DanglingReferenceError( 7, 0 ).message ).toBe(
         'Reference to #7 is not present in this prefix index ' +
         '(highest indexed so far: #0)' )
+  } )
+} )
+
+
+/**
+ * conway#546: the scalar paths above are only half the story. A placement
+ * chain also hops through REFERENCE ARRAYS — `IfcPolyline.Points` is the
+ * one a grid axis bottoms out in — and those are read by
+ * `extractBufferElement`, which used to answer an unresolved entry with
+ * `undefined` and leave the throwing to the generated getter. The getter
+ * throws a bare, untagged `Error`, so an array hop that had merely not been
+ * scanned yet was indistinguishable from a malformed one: the preview
+ * channels counted the deferral and queued nothing, and their forward-only
+ * unit cursor meant the product could never preview (see
+ * `store_preview_channel.test.ts` for that end of it).
+ *
+ * The bet these three pin is the DISTINCTION, in both directions. An
+ * absent record must classify — that is the recovery #543 dropped. An
+ * entry that is indexed but is the wrong entity type must NOT, because a
+ * longer prefix cannot change that answer and tagging it would put a
+ * permanently broken placement back in the retry queue, which is also
+ * what buys early generation preemption (the endless-preemption bug #543
+ * fixed).
+ */
+
+/** A two-point polyline whose points are both written after it. */
+const ARRAY_FORWARD_REFERENCE = new TextEncoder().encode(
+    `${HEADER}#1=IFCPOLYLINE((#2,#3));\n` +
+    '#2=IFCCARTESIANPOINT((0.,0.));\n' +
+    '#3=IFCCARTESIANPOINT((1.,0.));\n' + FOOTER )
+
+/**
+ * The same array hop, but #2 is an IFCDIRECTION and the entry wants an
+ * IFCCARTESIANPOINT. Indexed, present, and wrong — the case a longer
+ * prefix cannot fix.
+ */
+const ARRAY_MISTYPED_ENTRY = new TextEncoder().encode(
+    `${HEADER}#1=IFCPOLYLINE((#2));\n` +
+    '#2=IFCDIRECTION((0.,0.,1.));\n' + FOOTER )
+
+
+/**
+ * Read a polyline's Points and return whatever comes back out.
+ *
+ * @param model The model to read the polyline out of.
+ * @return {unknown} The thrown value. Reading Points must throw.
+ */
+function throwOnPoints( model: IfcStepModel ): unknown {
+
+  const polyline = model.getElementByExpressID( 1 ) as IfcPolyline | undefined
+
+  expect( polyline ).not.toBe( void 0 )
+
+  let caught: unknown
+
+  try {
+    void polyline!.Points
+  } catch ( ex ) {
+    caught = ex
+  }
+
+  expect( caught ).toBeInstanceOf( Error )
+
+  return caught
+}
+
+
+describe( 'reference-array classification', () => {
+
+  test( 'an array entry absent from a prefix classifies as dangling', () => {
+
+    const model = new IfcStepModel(
+        ARRAY_FORWARD_REFERENCE, prefixColumns( ARRAY_FORWARD_REFERENCE ) )
+
+    const caught = throwOnPoints( model )
+
+    // The whole point: before conway#546 this was a bare Error carrying
+    // MISTYPED_VALUE_MESSAGE, which extractPlacementStrict_ could not
+    // re-tag, so the product was deferred and never retried.
+    expect( caught ).toBeInstanceOf( DanglingReferenceError )
+    expect( ( caught as DanglingReferenceError ).expressID ).toBe( 2 )
+    expect( ( caught as Error ).message ).toBe(
+        'Reference to #2 is not present in this prefix index ' +
+        '(highest indexed so far: #1)' )
+  } )
+
+  test( 'the same array entry resolves once the parse reaches it', () => {
+
+    // The control. Without this the test above could pass against a file
+    // whose #2 never arrives, which is a different defect entirely.
+    const { columns, result } = buildColumnarIndexStreaming(
+        new BufferByteSource( ARRAY_FORWARD_REFERENCE ),
+        IfcStepParser.Instance,
+        POOL_BYTES )
+
+    expect( result ).toBe( ParseResult.COMPLETE )
+
+    const model = new IfcStepModel( ARRAY_FORWARD_REFERENCE, columns )
+    const polyline = model.getElementByExpressID( 1 ) as IfcPolyline
+
+    expect( polyline.Points.map( ( point ) => point.expressID ) ).toEqual( [2, 3] )
+  } )
+
+  test( 'an indexed array entry of the wrong type stays untagged', () => {
+
+    // The counterweight, and the reason this is a classification rather
+    // than a blanket tag. #2 IS in the index — it is simply not an
+    // IfcCartesianPoint — so no amount of extra parse changes the answer
+    // and the preview must not keep retrying it.
+    const { columns, result } = buildColumnarIndexStreaming(
+        new BufferByteSource( ARRAY_MISTYPED_ENTRY ),
+        IfcStepParser.Instance,
+        POOL_BYTES )
+
+    expect( result ).toBe( ParseResult.COMPLETE )
+
+    const model = new IfcStepModel( ARRAY_MISTYPED_ENTRY, columns )
+
+    const caught = throwOnPoints( model )
+
+    expect( caught ).not.toBeInstanceOf( DanglingReferenceError )
+    expect( ( caught as Error ).message ).toBe( MISTYPED_VALUE_MESSAGE )
   } )
 } )

@@ -229,6 +229,27 @@ describe('findPreviousSnapshot', () => {
     expect(previous!.engine).toBe('conway1.451.1357-ci')
   })
 
+  test('keeps a predecessor below a post-conway#533 suffixed version', () => {
+    // The single input where the version_order fix bites for the bless path.
+    // `version` comes off the rc-* tag, so since conway#533 it carries a
+    // `-g<shorthash>`. The old comparator read `546-g3eae7637` as 0 via its
+    // `|| 0` guard, so the blessed version compared as 1.1556.0 and this
+    // legitimate predecessor failed the "strictly below" bound and was
+    // silently discarded.
+    const benchmarks = makeBenchmarks([
+      'conway1.1556.100_test-models',
+    ])
+
+    const previous =
+      findPreviousSnapshot(
+        benchmarks,
+        'conway1.1556.546-g3eae7637-ci_test-models',
+        '1.1556.546-g3eae7637')
+
+    expect(previous).not.toBeNull()
+    expect(previous!.name).toBe('conway1.1556.100_test-models')
+  })
+
   test('excludes the directory this run is writing', () => {
     // Re-running the same rc must not diff a snapshot against itself.
     const benchmarks = makeBenchmarks([

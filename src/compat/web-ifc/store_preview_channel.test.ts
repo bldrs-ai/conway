@@ -17,6 +17,28 @@ import { StorePreviewChannel } from './store_preview_channel'
 import type { PreviewMeshPayload } from './streamed_preview_channel'
 
 
+/* data/grid_placement_tail_axes.ifc, by construction — see that file's
+ * header comment for which record is which. Exact rather than "greater
+ * than": the fixture is synthetic and committed alongside this test, and
+ * the counts are what pin that the MISTYPED product did not get retried
+ * along with the three that should have. */
+const GRID_TAIL_PRODUCTS = 7
+const GRID_TAIL_GRIDS = 3
+const GRID_TAIL_DEFERRING = 4
+
+/* The deferrals a longer prefix can fix: product #200 on IfcPolyline.Points,
+ * #500 on IfcVirtualGridIntersection.IntersectingAxes, and #1000 on the
+ * IfcGrid.UAxes read inside gridByAxis. All three are reference arrays, and
+ * before conway#546 none of them classified. The fourth deferral, #800, is
+ * mistyped and must stay out of this count. */
+const GRID_TAIL_RETRYABLE = 3
+
+/* One product per tick (tickMaxAttempts_ = 1), so a generation of seven
+ * needs at least seven; a few spare so the assertions are about the
+ * channel rather than about arithmetic. */
+const TICKS_TO_EXHAUST = 16
+
+
 describe( 'StorePreviewChannel', () => {
 
   let conwayGeometry: ConwayGeometry
@@ -217,6 +239,126 @@ describe( 'StorePreviewChannel', () => {
     // one missing holds this at zero.
     expect( afterFull.retried ).toBeGreaterThan( 0 )
     expect( afterFull.emitted ).toBeGreaterThan( 0 )
+
+    channel.stop()
+  }, 120000 )
+
+
+  test( 'a grid-placed product blocked on a reference array is retried',
+      async () => {
+
+    // conway#546, the store half. The sibling test above covers the SCALAR
+    // hops of a placement chain; this one covers the hops of a grid
+    // placement that are read through a REFERENCE ARRAY, which #543's
+    // classification narrowing left untagged:
+    //
+    //   hop 2    IfcVirtualGridIntersection.IntersectingAxes   product #500
+    //   hop 4a   IfcPolyline.Points                           product #200
+    //   inverse  IfcGrid.UAxes, inside gridByAxis             product #1000
+    //
+    // The third is not a forward hop at all: IfcGridAxis has no schema route
+    // back to its grid, so extractGridPlacement scans every IfcGrid's axis
+    // lists. Product #1000's own intersection resolves completely off the
+    // prefix, so that scan is the only thing left to block it.
+    //
+    // Before the fix all three threw a bare untagged Error out of the
+    // generated array getter, extractPlacementStrict_ had nothing to re-tag,
+    // and the forward-only unit cursor meant none of them could ever preview.
+    const text =
+      fs.readFileSync( 'data/grid_placement_tail_axes.ifc', 'utf8' )
+    const lines = text.split( '\n' )
+    const tailAt = lines.findIndex( ( line ) => line.startsWith( '/* ---- TAIL' ) )
+
+    expect( tailAt ).toBeGreaterThan( 0 )
+
+    const prefixText =
+      `${lines.slice( 0, tailAt ).join( '\n' )}\nENDSEC;\nEND-ISO-10303-21;\n`
+    const prefixBytes = new Uint8Array( Buffer.from( prefixText, 'latin1' ) )
+    const fullBytes = new Uint8Array( Buffer.from( text, 'latin1' ) )
+
+    const store = new InMemoryStepByteStore( fullBytes )
+    const sink = new ColumnarIndexSink< number >()
+    const payloads: PreviewMeshPayload[] = []
+
+    const channel = new StorePreviewChannel(
+        store, sink, conwayGeometry, true, ( mesh ) => payloads.push( mesh ),
+        64, 48 * 1024 * 1024, 1 )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    internals.tickBudgetMs_ = Number.MAX_SAFE_INTEGER
+    internals.tickMaxAttempts_ = 1
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( prefixBytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    // Enough ticks to run the whole generation out: this fixture is small
+    // enough to exhaust, so the rebuild below comes through the
+    // exhaustion arm rather than preemption (which the sibling test
+    // already pins).
+    for ( let tick = 0; tick < TICKS_TO_EXHAUST; ++tick ) {
+      internals.lastInlineTick_ = 0
+      await channel.maybeTickAsync()
+    }
+
+    const afterPrefix = channel.previewYield
+
+    // Three grids place fine off their own IfcLocalPlacement and carry no
+    // geometry; the four proxies all defer.
+    expect( channel.productCount ).toBe( GRID_TAIL_PRODUCTS )
+    expect( afterPrefix.emitted ).toBe( GRID_TAIL_GRIDS )
+    expect( afterPrefix.deferred ).toBe( GRID_TAIL_DEFERRING )
+
+    // THE assertion. Three of the four deferrals are reference-array hops
+    // that had simply not been scanned yet, and all three must now be
+    // classified — this reads 0 without the fix. The fourth is product
+    // #800, whose intersection names an IFCDIRECTION where an IFCGRIDAXIS
+    // belongs: indexed, wrong, and unfixable by more parsing, so it must
+    // NOT be classified or the endless-preemption bug #543 fixed returns.
+    expect( afterPrefix.deferredOnPlacement ).toBe( GRID_TAIL_RETRYABLE )
+    expect( afterPrefix.retried ).toBe( 0 )
+
+    // Exactly nothing, not merely no geometry. The fixture has no spatial
+    // containment (no site, no storey), so the prefix-generation spatial
+    // walk conway#518 added has no plate to emit either — asserting the
+    // whole stream is empty is strictly stronger than filtering it.
+    expect( payloads ).toHaveLength( 0 )
+
+    // Stage two: the reset-and-replay the streaming builder performs when
+    // it grows its window, so top-level localIDs stay in dense parse order
+    // and the deferred ids the channel holds still mean what they meant.
+    sink.reset()
+
+    expect( buildIndexStreaming(
+        new BufferByteSource( fullBytes ),
+        IfcStepParser.Instance,
+        4 * 1024,
+        void 0,
+        sink ).result ).toBe( ParseResult.COMPLETE )
+
+    for ( let tick = 0; tick < TICKS_TO_EXHAUST; ++tick ) {
+      internals.lastInlineTick_ = 0
+      await channel.maybeTickAsync()
+    }
+
+    const afterFull = channel.previewYield
+
+    // All three come back through the retry queue and become pixels.
+    // `retried` rather than the mesh count alone is what separates this
+    // from a channel that merely got lucky on a later generation.
+    expect( afterFull.retried ).toBe( GRID_TAIL_RETRYABLE )
+    expect( afterFull.emitted ).toBe( GRID_TAIL_GRIDS + GRID_TAIL_RETRYABLE )
+    expect( payloads ).toHaveLength( GRID_TAIL_RETRYABLE )
+    expect( payloads.every( ( p ) => p.vertexData !== void 0 ) ).toBe( true )
+
+    // And the mistyped one never joined them, however long the index got.
+    expect( afterFull.deferredOnPlacement ).toBe( GRID_TAIL_RETRYABLE )
+    expect( afterFull.deferred ).toBe( GRID_TAIL_DEFERRING )
 
     channel.stop()
   }, 120000 )

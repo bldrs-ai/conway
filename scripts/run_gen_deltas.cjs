@@ -5,41 +5,92 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
+const { versionCompare } = require("./version_order.cjs");
 
 //
-// Helper: parse out the numeric version from "conway0.9.789_test-models"
-// or "webifc1.4_test-models-private", returning "0.9.789" or "1.4".
+// Helper: parse out the version from "conway0.9.789_test-models",
+// "conway1.1556.546-g3eae7637_test-models" or "webifc1.4_test-models-private",
+// returning "0.9.789", "1.1556.546-g3eae7637" or "1.4".
 // Returns null if no match.
 //
+// The optional `-<suffix>` group is load-bearing, not defensive. Since
+// conway#533 every published version carries a `-g<shorthash>` prerelease, and
+// benchmark.cjs names the output directory from the installed package version
+// VERBATIM. Without the group, `conway1.1556.546-g3eae7637_test-models` failed
+// to match and the directory was dropped from discovery entirely -- silently,
+// leaving this tool to compare two stale pre-change directories or to bail
+// with "Need at least two". Blessed rc snapshots (`conway<version>-ci_<repo>`,
+// written by bless_perf_snapshot.cjs) carry a suffix too. They are now
+// RECOGNISED here rather than mis-parsed, but discoverEngineDirs() below still
+// excludes them from selection -- see the comment there.
+//
+// The ordering half of the same bug is in version_order.cjs: a suffixed
+// version's last numeric component read as 0, not as NaN. See that header.
+//
+// The FULL version including the suffix is returned, because it names the
+// delta CSVs written below and those must match the directory they describe.
+// Ordering is versionCompare's problem, not this function's.
+//
 function parseVersion(dirName) {
+  const version = /(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)(?:_test-models.*)?$/;
+
   // 1) Try conway
-  let match = dirName.match(/^conway(\d+(?:\.\d+)*)(?:_test-models.*)?$/);
+  let match = dirName.match(new RegExp(`^conway${version.source}`));
   if (match) return match[1];
 
   // 2) Try webifc
-  match = dirName.match(/^webifc(\d+(?:\.\d+)*)(?:_test-models.*)?$/);
+  match = dirName.match(new RegExp(`^webifc${version.source}`));
   if (match) return match[1];
 
   return null;
 }
 
 //
-// Helper: compare two version strings "0.7.727" < "0.10.100" numerically.
+// Is `version` a blessed rc snapshot, i.e. one written by
+// bless_perf_snapshot.cjs as `conway<version>-ci_<repo>`?
 //
-function versionCompare(a, b) {
-  // Split on '.' and compare numeric parts
-  const aParts = a.split(".").map(Number);
-  const bParts = b.split(".").map(Number);
-  const len = Math.max(aParts.length, bParts.length);
+// The suffix may be the whole prerelease (`1.543.1513-ci`) or the tail of it,
+// since a version that already carries `-g<shorthash>` gains `-ci` after it
+// (`1.1556.546-g3eae7637-ci`).
+//
+function isBlessedSnapshot(version) {
+  return version === "ci" || version.endsWith("-ci");
+}
 
-  for (let i = 0; i < len; i++) {
-    const aVal = aParts[i] || 0;
-    const bVal = bParts[i] || 0;
-    if (aVal < bVal) return -1;
-    if (aVal > bVal) return 1;
+//
+// Group benchmark directory names into sorted conway and webifc lists,
+// oldest first.
+//
+// Blessed rc snapshots are excluded from the conway list deliberately and
+// provisionally, preserving the pre-conway#533 behaviour while the question of
+// whether they should participate is settled: https://github.com/bldrs-ai/conway/issues/614
+// (remove this filter to change it, not the regex, which is already correct).
+// Note before lifting it: `-ci` is appended AFTER `-g<hash>`, so semver reads
+// `g3eae7637-ci` as one identifier sorting ABOVE `g3eae7637` -- a post-#533
+// blessed snapshot sorts NEWER than the release it blesses, and the tool would
+// diff a release against its own blessed copy. Detail in conway#615.
+//
+function discoverEngineDirs(names) {
+  const conwayDirs = [];
+  const webifcDirs = [];
+
+  for (const name of names) {
+    const version = parseVersion(name);
+    if (!version) continue; // not a conway/webifc dir we recognize
+
+    if (name.startsWith("conway")) {
+      if (isBlessedSnapshot(version)) continue;
+      conwayDirs.push({ name, version });
+    } else if (name.startsWith("webifc")) {
+      webifcDirs.push({ name, version });
+    }
   }
 
-  return 0;
+  // Sort by version ascending
+  conwayDirs.sort((a, b) => versionCompare(a.version, b.version));
+  webifcDirs.sort((a, b) => versionCompare(a.version, b.version));
+
+  return { conwayDirs, webifcDirs };
 }
 
 //
@@ -64,27 +115,9 @@ function main() {
   // Read all entries in the /benchmarks directory
   const allEntries = fs.readdirSync(baseDir, { withFileTypes: true });
 
-  // Separate Conway and WebIfc directories
-  const conwayDirs = [];
-  const webifcDirs = [];
-
-  for (const entry of allEntries) {
-    if (!entry.isDirectory()) continue;
-
-    const name = entry.name;
-    const version = parseVersion(name);
-    if (!version) continue; // not a conway/webifc dir we recognize
-
-    if (name.startsWith("conway")) {
-      conwayDirs.push({ name, version });
-    } else if (name.startsWith("webifc")) {
-      webifcDirs.push({ name, version });
-    }
-  }
-
-  // Sort by version ascending
-  conwayDirs.sort((a, b) => versionCompare(a.version, b.version));
-  webifcDirs.sort((a, b) => versionCompare(a.version, b.version));
+  const { conwayDirs, webifcDirs } = discoverEngineDirs(
+    allEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+  );
 
   // Check we have at least two conway directories
   if (conwayDirs.length < 2) {
@@ -164,4 +197,12 @@ function main() {
   console.log("\nAll delta CSVs generated in:", path.join(baseDir, newestConway.name));
 }
 
-main();
+// Guarded so the unit test can require this module for parseVersion /
+// versionCompare without the CLI running against process.argv.
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  parseVersion, versionCompare, isBlessedSnapshot, discoverEngineDirs,
+};

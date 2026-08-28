@@ -818,6 +818,9 @@ async function main() {
         `npm show @bldrs-ai/conway version`,
         { stdio: ['pipe','pipe','ignore'] }
       ).toString().trim();
+      // Guessing the predecessor's directory name by decrementing the minor
+      // cannot match a real directory, so the delta below is always skipped
+      // with the "not found" warning: https://github.com/bldrs-ai/conway/issues/613
       const parts = oldVersion.split('.');
       if (parts.length === 3) {
         const minor = parseInt(parts[1], 10);

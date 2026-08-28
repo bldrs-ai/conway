@@ -442,6 +442,157 @@ export function extractColorOrFactor(
  * Handles Geometry data extraction from a populated AP214StepModel
  * Can export to OBJ, GLTF (Draco), GLB (Draco)
  */
+/**
+ * Does this EDGE_LOOP retrace itself - every edge traversed exactly twice,
+ * once in each direction?
+ *
+ * Such a loop encloses no area and cannot trim anything. ISO 10303-42 gives
+ * it the same meaning as a VERTEX_LOOP: the face covers the WHOLE surface.
+ * `#50626` on `Orbiter_v1.1_Gear_7.5.step` is the case that surfaced it - a
+ * sphere written as one great circle walked forward and back, which reached
+ * the triangulator as 47 ordinary boundary points and was tessellated to
+ * nothing (bldrs-ai/conway#595).
+ *
+ * Decided HERE, on the ORIENTED_EDGEs, rather than downstream from the point
+ * list, because that makes it a topological fact rather than a measurement.
+ * The first version of the fix tested the loop's enclosed area, and a thin
+ * spherical lune's enclosed area tends to zero continuously as its angular
+ * width shrinks - so a narrow but GENUINE trim would eventually have been
+ * replaced by the whole sphere, silently (codex, bldrs-ai/conway-geom#187).
+ * A lune is bounded by two DIFFERENT edge curves, so no width makes it
+ * retrace, and this test cannot be fooled by one at any width.
+ *
+ * Pairs are matched on the underlying edge element's localID, so the general
+ * multi-edge seam (out along A then B, back along B then A) is covered, not
+ * just the two-edge spelling this model uses.
+ *
+ * @param edgeList The loop's oriented edges, in order.
+ * @return {boolean} True when every edge appears exactly twice with opposite
+ *   orientations, and the loop is non-empty.
+ */
+export function isRetracingSeamLoop(
+    edgeList: readonly {orientation: boolean, edge_element: {localID: number}}[],
+): boolean {
+
+  // An odd count cannot pair up, and an empty loop is not a seam.
+  if (edgeList.length === 0 || (edgeList.length % 2) !== 0) {
+    return false
+  }
+
+  // localID -> count of forward traversals minus reverse traversals, and the
+  // total appearances. A retrace needs each edge to appear exactly twice with
+  // the two orientations cancelling.
+  const balance = new Map<number, {net: number, total: number}>()
+
+  for (const edge of edgeList) {
+
+    const key = edge.edge_element?.localID
+
+    if (key === void 0) {
+      return false
+    }
+
+    const entry = balance.get(key) ?? {net: 0, total: 0}
+
+    entry.net += edge.orientation ? 1 : -1
+    entry.total += 1
+
+    balance.set(key, entry)
+  }
+
+  for (const entry of balance.values()) {
+
+    if (entry.total !== 2 || entry.net !== 0) {
+      return false
+    }
+  }
+
+  return true
+}
+
+
+/**
+ * Does this EDGE_LOOP CONTAIN a retraced edge pair - at least one edge
+ * traversed exactly twice, once in each direction - while still enclosing
+ * area with its other edges?
+ *
+ * This is the SEAM EDGE of ISO 10303-42, and it means something different
+ * from isRetracingSeamLoop above. There the WHOLE loop retraces, so it
+ * encloses nothing and the face covers the whole surface. Here only part of
+ * it does, and the retraced pair is the two sides of the surface's seam: a
+ * face on a surface closed in one parameter has to cross that seam to close
+ * up, and the only way to bound it is to walk the seam curve down one side
+ * and back up the other. A loop containing such a pair is therefore a face
+ * that wraps the CLOSED parameter completely.
+ *
+ * `#50977` on `Orbiter_v1.1_Gear_7.5.step` - the coil spring, solid 970 - is
+ * the case this exists for. Its EDGE_LOOP `#9507` is four edges, and two of
+ * them are the same `EDGE_CURVE #29690` with opposite senses:
+ *
+ *   ORIENTED_EDGE #42931 .T.  EDGE_CURVE #29689   CIRCLE r=0.45  (v = 0)
+ *   ORIENTED_EDGE #42932 .T.  EDGE_CURVE #29690   the seam, up
+ *   ORIENTED_EDGE #42933 .F.  EDGE_CURVE #29691   CIRCLE r=0.45  (v = vmax)
+ *   ORIENTED_EDGE #42934 .F.  EDGE_CURVE #29690   the seam, back down
+ *
+ * The two circles are unpaired, so isRetracingSeamLoop is correctly false:
+ * this loop DOES enclose area. What it also does is wrap the surface's u
+ * seam, and that is the fact TriangulateBspline needs in order to know the
+ * face covers the entire parametric chart (bldrs-ai/conway#611).
+ *
+ * Decided here, on the ORIENTED_EDGEs, for the same reason isRetracingSeamLoop
+ * is: the file STATES that edges 2 and 4 share an edge curve with opposite
+ * senses, so this is read off rather than inferred. The alternative considered
+ * and rejected was testing downstream whether the projected uv boundary
+ * encloses the whole chart - which infers coverage from a measurement and
+ * needs a tolerance, the failure mode this family of defects is made of.
+ *
+ * Pairs match on the underlying edge element's localID, exactly as above, so
+ * a multi-edge seam is covered and not just the single-curve spelling.
+ *
+ * @param edgeList The loop's oriented edges, in order.
+ * @return {boolean} True when some edge appears exactly twice with opposite
+ *   orientations.
+ */
+export function hasSeamEdgePair(
+    edgeList: readonly {orientation: boolean, edge_element: {localID: number}}[],
+): boolean {
+
+  // Two edges is the minimum that can pair at all.
+  if (edgeList.length < 2) {
+    return false
+  }
+
+  const balance = new Map<number, {net: number, total: number}>()
+
+  for (const edge of edgeList) {
+
+    const key = edge.edge_element?.localID
+
+    // An edge with no identity cannot be matched to its partner. Bail rather
+    // than let the unknowns look interchangeable.
+    if (key === void 0) {
+      return false
+    }
+
+    const entry = balance.get(key) ?? {net: 0, total: 0}
+
+    entry.net += edge.orientation ? 1 : -1
+    entry.total += 1
+
+    balance.set(key, entry)
+  }
+
+  for (const entry of balance.values()) {
+
+    if (entry.total === 2 && entry.net === 0) {
+      return true
+    }
+  }
+
+  return false
+}
+
+
 export class AP214GeometryExtraction {
 
   private readonly TWO_DIMENSIONS: number = 2
@@ -4128,6 +4279,16 @@ export class AP214GeometryExtraction {
    const loopIsOuter: boolean[] = []
    const loopOrientations: boolean[] = []
 
+   // Parallel to loopCurves: is this loop a retracing seam? See
+   // isRetracingSeamLoop - a topological fact about the ORIENTED_EDGEs,
+   // which are visible here and not downstream.
+   const loopSeams: boolean[] = []
+
+   // Parallel likewise: does this loop merely CONTAIN a retraced pair, i.e.
+   // wrap the surface's seam? See hasSeamEdgePair - a different fact from
+   // loopSeams, and the two are independent.
+   const loopSeamPairs: boolean[] = []
+
    for ( const bound of bounds ) {
 
       let vec3Array: StdVector< Vector3 >
@@ -4457,6 +4618,44 @@ export class AP214GeometryExtraction {
       loopCurves.push( curve )
       loopIsOuter.push( bound.type === EntityTypesAP214.FACE_OUTER_BOUND )
       loopOrientations.push( bound.orientation )
+      // Seam-ness is read off `edge_list` - what the FILE says - while the
+      // boundary handed to the triangulator is built from `nativeEdgeCurves`
+      // - what extraction actually PRODUCED. Requiring the two to agree is
+      // what makes the first a sound statement about the second.
+      //
+      // They diverge when an edge fails to extract: the `curve === undefined`
+      // path above logs and omits that edge, leaving a partial boundary while
+      // `edge_list` still reads as a perfect retrace. The flag would then tell
+      // TriangulateSphericalSurface to replace that partial boundary with an
+      // entire sphere - spurious volume and bounds, silently, because
+      // emitting triangles suppresses the contributed-no-geometry warning.
+      // That is strictly worse than the extraction failure it would mask,
+      // which at least leaves a partial face and an error in the log
+      // (codex P1, bldrs-ai/conway#609).
+      //
+      // Compared as a COUNT rather than a flag set at the one known failure
+      // site: each of the three push sites contributes exactly one curve per
+      // edge, so `size() === edge_list.length` is precisely "every edge
+      // reached the boundary" - and it stays precise if another skip path is
+      // added later, which a hand-maintained boolean would not.
+      const everyEdgeExtracted =
+        innerBound instanceof edge_loop &&
+        nativeEdgeCurves.size() === innerBound.edge_list.length
+
+      loopSeams.push(
+        everyEdgeExtracted &&
+        innerBound instanceof edge_loop &&
+        isRetracingSeamLoop( innerBound.edge_list ) )
+
+      // Gated on everyEdgeExtracted for the same reason loopSeams is: a loop
+      // that lost an edge on the way to the boundary is not one whose topology
+      // we can still read, and a seam pair inferred from a partial edge list
+      // would send a face down the full-coverage path on the strength of edges
+      // that never arrived.
+      loopSeamPairs.push(
+        everyEdgeExtracted &&
+        innerBound instanceof edge_loop &&
+        hasSeamEdgePair( innerBound.edge_list ) )
 
       vec3Array.delete()
       nativeEdgeCurves.delete()
@@ -4517,6 +4716,8 @@ export class AP214GeometryExtraction {
         curve: loopCurves[ loopIndex ],
         orientation: loopOrientations[ loopIndex ],
         type: loopIsOuter[ loopIndex ] ? 0 : 1,
+        seam: loopSeams[ loopIndex ],
+        seamPair: loopSeamPairs[ loopIndex ],
       }
 
       const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
