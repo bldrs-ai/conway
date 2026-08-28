@@ -14,6 +14,14 @@
 # CONWAY_PERF_EXPOSE_GC=1 set by the caller — so `totalTimeMs` here is the
 # quantity the rc gate computes on and not a lookalike from a bespoke harness.
 #
+# THE EXCLUDE COMES FROM THE ENVIRONMENT, and is not defaulted here. The
+# analyser walks the corpus under the SAME regex to derive what every pass was
+# supposed to measure (`--corpus-exclude`, .github/probe/perf-aa-null.cjs); a
+# default here would be a second copy of that literal, and a demand that
+# disagrees with the measurement about which models are in scope is the exact
+# failure the corpus-seeded demand exists to prevent. The workflow sets it
+# once, at job level.
+#
 # `output_folder` STAYS RELATIVE, for the reason rc-regression.yml spells out
 # on its paired pass: the batch ends every run with `git diff -- <output>`
 # executed inside the model checkout, and an absolute path makes git exit 128
@@ -27,6 +35,7 @@
 set -euo pipefail
 
 NAME="${1:?usage: aa-pass.sh <PASS_NAME>}"
+EXCLUDE="${AA_EXCLUDE:?AA_EXCLUDE must be set (see .github/workflows/perf-aa-null.yml)}"
 OUT="aa-${NAME}-out"
 RESIDENCY="aa-residency-${NAME}.txt"
 
@@ -48,7 +57,7 @@ START=$(date +%s)
 
 node --experimental-specifier-resolution=node \
   ./compiled/src/ifc/ifc_regression_batch_main.js \
-  -e 'sp-.*\.ifc|cg4.*-cylinder\.stp' \
+  -e "${EXCLUDE}" \
   --concurrency 1 \
   --timeout 300000 \
   --perf "${GITHUB_WORKSPACE}/perf-${NAME}.csv" \

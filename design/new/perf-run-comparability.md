@@ -302,9 +302,10 @@ actually there is only decidable by measurement, and it is not there.
 **The test.** [`.github/workflows/perf-aa-null.yml`][aa], run
 [33192612782][aarun], on the same `ubuntu-24.04-4vcpu-8gb-150gbssd` label
 rc-regression uses. The *identical* engine over the *identical* public corpus
-(101 model files, 3.07 GiB, inside a 7.88 GiB models checkout; 97 measured
-after the batch's exclude), three passes back to back in one job — plus a
-fourth pass with the corpus evicted from page cache first. The eviction is
+(3.07 GiB of models inside a 7.88 GiB checkout; **99 models walked** under the
+batch's exclude, of which **97 are measurable** — see "What the 97 is 97 of"
+below), three passes back to back in one job — plus a fourth pass with the
+corpus evicted from page cache first. The eviction is
 `vmtouch -e` on the corpus only, not `drop_caches`, so node, the wasm Dist and
 `node_modules` stay warm and what P3→P4 isolates is the model read and
 nothing else.
@@ -354,6 +355,38 @@ model, `totalTimeMs` moved no more than `parsePlusGeometryMs` in any pass
 pair, the evicted one included. There is no column-specific I/O signature to
 find, because the read is ~1% of the work.
 
+### What the 97 is 97 of
+
+Every pass wrote 97 rows and the analyser paired all 97, which reads like the
+whole corpus and is not. The corpus walk finds **99** models at that pin under
+the batch's exclude. The two that never appear are lost before any analysis
+runs: the per-model perf CSV is named `<stem>.perf.csv`
+(`path.parse(ifcPath).name` in `ifc_regression_batch_main.ts`) and written
+with an overwrite, so two models sharing a *stem* leave one file between them.
+The corpus has two such pairs — `ifc/index.ifc` vs `ifc/bldrs/index.ifc`
+([conway#633][i633]), and `step/zoo.dev/a-gear.step` vs its `a-gear.stp`
+symlink, which share a stem while their basenames differ.
+
+**No number in this section moves because of that**, and the reason is worth
+stating rather than assuming: the two lost models produce no rows *in any
+pass*, so they are not silently averaged in anywhere — every median,
+percentile and threshold count below is over the same 97 models it always was.
+What changes is the denominator those numbers may be quoted against. They are
+a floor measured over 97 of 99 models, not over "the corpus".
+
+That distinction was invisible while the analyser seeded its expected models
+from the pass outputs, which is the same correlated-loss defect the paired
+gate's demand was rewritten to remove: passes that share a driver and a tree
+lose the same models together, and a demand read off them cannot notice. The
+A/A analyser now takes `--corpus` and `--corpus-exclude` and derives the
+demand from `collectCorpusModels()` — the same walk the paired gate uses, not
+a second one — reports coverage as its own section above the statistics, and
+annotates the job with a `::warning::` on any shortfall. It still exits 0: the
+report is the deliverable of four corpus passes and must survive its own bad
+news.
+
+[i633]: https://github.com/bldrs-ai/conway/issues/633
+
 ### The two floors, which are different numbers
 
 This is the part to quote, and the part not to conflate.
@@ -390,6 +423,53 @@ under ~0.75%.
 The remedy for one suspicious model is not a stricter gate, it is repetition:
 re-run or hand-bisect that model, where the same pairing argument applies
 inside one job at whatever n the question is worth.
+
+### What this does not bound: the private corpus
+
+**Everything above was measured on the public corpus, and the private one is
+the corpus that gates a release.** `perf-aa-null.yml` hardcodes
+`bldrs-ai/test-models`; it has never run against `bldrs-ai/test-models-private`.
+The floors therefore describe 97 public models on that runner label, and three
+of the properties they rest on are exactly the ones that differ:
+
+- **Model count and cost profile.** 97 measurable public models at ~140 s of
+  total compute against 107 private models at ~20m30s a pass. The per-model
+  floor is a distribution over models; a different set of models is a
+  different distribution, and the aggregate's stability comes from averaging
+  *those* models' independent jitter.
+- **Page-cache residency.** The headline result — no cold-start term, because
+  `vmtouch` found the corpus 100% resident before P1 — holds *because* 3.07
+  GiB fits in 15,989 MB of RAM. That argument does not transfer to a corpus
+  that may not fit, and the +0.13% P3→P4 eviction cost is the public corpus's
+  answer to a question the private one would answer differently.
+- **What the eviction pass measures.** On public, P4 is a small correction. On
+  a larger-than-RAM corpus it is the term under test.
+
+So a private snapshot's README must not present these numbers as a bound on
+its own file, and since #632 it does not: `renderReadme()` compares the
+snapshot's repo against `AA_NULL_CORPUS` and, for any other target, states
+that the floor is public-corpus evidence and that this corpus's own floor is
+unmeasured.
+
+**What measuring it would cost, honestly.** Four private passes at ~20m30s
+(the measured blessed-pass time, rc-regression.yml "THE 35 IS DERIVED") is
+**~82 minutes of passes alone**, before the ~2 min build on a warm wasm cache,
+the ~1m33s LFS checkout and the census. That is ~87 minutes against this
+workflow's 120-minute cap — it fits only while the wasm cache hits, and a cold
+wasm build (~30 min) puts it at the cap. **The passes cannot be split across
+jobs:** the premise of the whole test is that nothing varies but position in
+the sequence, and two jobs are two machines, which is the 11.24% factor this
+document exists to remove. It also needs read access to the private repo,
+which this workflow does not currently have — it checks out with the default
+token, while rc-regression uses a secret.
+
+None of that is a reason to skip it; it is a reason not to describe it as a
+quick follow-up. A defensible smaller version exists — three passes and no
+eviction is ~62 minutes and still answers the shape question — but the
+eviction pass is the one that matters most on a corpus that may exceed RAM, so
+the cheap version is the least informative one. Until someone spends the job,
+**the private floor is unmeasured**, and that is what the generated README
+says.
 
 ### What this changed in #632, and what it did not
 
@@ -617,7 +697,7 @@ perf-measurement.md §"Changelog of methodology changes" is the index for the
 
 | when | change | why |
 |---|---|---|
-| this change | the rc perf delta is computed from two passes **in one job**; `engine1TotalTimeMs` in `*_paired_delta.csv` is measured by this run, not read from a previous one | cross-run drift measured at 13.66% median (97 models, two attempts of run 33128910045, byte-identical digests) against a 9.40% median reported regression — the signal was smaller than the noise. An A/A null test of the paired configuration (run 33192612782) puts its own floor at 0.13–0.24% on the corpus aggregate and ~1.4% median \|Δ\| per model, so pairing turns a 13.66% cross-run floor into a gate whose median is stable to under ~0.75% — while per-model calls below ~5% stay inside the floor |
+| this change | the rc perf delta is computed from two passes **in one job**; `engine1TotalTimeMs` in `*_paired_delta.csv` is measured by this run, not read from a previous one | cross-run drift measured at 13.66% median (97 models, two attempts of run 33128910045, byte-identical digests) against a 9.40% median reported regression — the signal was smaller than the noise. An A/A null test of the paired configuration (run 33192612782, public corpus, 97 of its 99 walked models) puts its own floor at 0.13–0.24% on the corpus aggregate and ~1.4% median \|Δ\| per model, so pairing turns a 13.66% cross-run floor into a gate whose median is stable to under ~0.75% — while per-model calls below ~5% stay inside the floor |
 | this change | the legacy cross-run `*_delta.csv` is retained alongside the paired one, and every delta row gains a `measurementBasis` column | the historical archive is cross-run and cannot be retrofitted; a file that keeps both must say on each row which is which |
 | this change | `perf-counter-probe.yml` becomes `workflow_dispatch`-only | its question is answered; its subject (the runner pool) can change without notice, so it is kept runnable rather than deleted |
 | this change | `perf-aa-null.yml` is added, and kept after answering | it measures the paired gate's own noise floor (Evidence 4), replacing the 0.111% figure that could not bound a configuration doing corpus I/O. Its subject — the corpus, the harness and the runner's RAM — changes without notice too |

@@ -937,6 +937,34 @@ describe('renderReadme', () => {
       'performance-detail-paired-conway1.451.1357-paired.csv')
   })
 
+  test('scopes the A/A floor to the corpus it was measured on', () => {
+    // `perf-aa-null.yml` hardcodes `bldrs-ai/test-models`, and this README is
+    // generated for whichever matrix target ran. On the private target — the
+    // corpus that actually gates a release — the unqualified text stamped a
+    // public-corpus measurement onto a snapshot nobody had measured, over a
+    // corpus with a different model count and cost profile that, unlike the
+    // public one, is not guaranteed to fit the page cache the no-cold-start
+    // result rests on.
+    const publicReadme = renderReadme(paired)
+    const privateReadme =
+      renderReadme({ ...paired, repoName: 'test-models-private' })
+
+    // The measurement names its own corpus in both, so the number is never
+    // separable from where it came from.
+    for (const text of [publicReadme, privateReadme]) {
+      expect(text).toContain('measured on the public corpus')
+      expect(text).toContain('over 97 of the 99 models the batch')
+    }
+
+    expect(publicReadme).toContain('**This snapshot is that corpus.**')
+    expect(publicReadme).not.toContain('not a measured bound')
+
+    expect(privateReadme).toContain(
+      '`test-models-private`, which is NOT the corpus that was')
+    expect(privateReadme).toContain('not a measured bound on this file')
+    expect(privateReadme).toContain('would cost to measure this corpus')
+  })
+
   test('states a narrowed scope rather than letting it pass silently', () => {
     const full = renderReadme(paired)
     const smoke = renderReadme({ ...paired, pairedScope: 'smoke' })

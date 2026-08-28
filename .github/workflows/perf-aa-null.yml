@@ -48,6 +48,21 @@ name: Perf A/A null test (paired-configuration noise floor)
 # Recorded in design/new/perf-run-comparability.md Evidence 4; no pre-warm and
 # no counterbalancing were added to rc-regression as a result.
 #
+# WHAT THE 97 IS 97 OF. The batch walks 99 models at that corpus pin under the
+# exclude below, and every pass wrote 97 rows: the per-model perf CSV is named
+# `<stem>.perf.csv` and written with an overwrite, so two pairs sharing a stem
+# (`ifc/index.ifc` vs `ifc/bldrs/index.ifc`, conway#633; and
+# `step/zoo.dev/a-gear.step` vs its `a-gear.stp` symlink) each collapse to one
+# row. Nothing above moves as a result -- the two lost models produce no rows
+# to skew a median with -- but the floors are measured over 97 of 99 models,
+# and the analyser now derives that denominator from a walk of the corpus
+# (`--corpus`) rather than from the passes, so it cannot silently drift again.
+#
+# THE FLOORS ARE PUBLIC-CORPUS EVIDENCE. They are not a measured bound on a
+# private-corpus snapshot, and nothing generated from them may say otherwise:
+# see "PUBLIC CORPUS ONLY" below and perf-run-comparability.md Evidence 4,
+# "What this does not bound".
+#
 # WHY A FOURTH, EVICTED PASS. P1..P3 are faithful to what an rc job actually
 # does, and that is the headline. But their P1 is only as cold as the corpus
 # happens to be after `actions/checkout` has just written every byte of it
@@ -106,6 +121,13 @@ env:
   # Same knob build.yml uses, resolved to a concrete SHA below so the corpus is
   # pinned and recorded rather than floating.
   TEST_MODELS_REF: ${{ vars.TEST_MODELS_REF || 'main' }}
+  # rc-regression's blessed-pass exclude, written ONCE for this workflow.
+  # `aa-pass.sh` gives it to every pass and the analyser walks the corpus under
+  # the same regex to derive what those passes were supposed to measure. Two
+  # copies of this literal would let the demand and the measurement disagree
+  # about which models are in scope, which is the failure the corpus-seeded
+  # demand exists to prevent.
+  AA_EXCLUDE: 'sp-.*\.ifc|cg4.*-cylinder\.stp'
 
 jobs:
   aa-null:
@@ -254,10 +276,20 @@ jobs:
           free -m || true
           # Model bytes only — the checkout also carries the committed baseline
           # CSVs and .git, which no pass reads.
-          MODEL_BYTES=$(find models -type f \
+          #
+          # `-xtype f` rather than `-type f`: the corpus contains at least one
+          # model that is a SYMLINK to another (`step/zoo.dev/a-gear.stp` ->
+          # `a-gear.step`), and the batch walks it as a model like any other
+          # (`collectIFCFiles()` splits on `isDirectory()`, so a symlink to a
+          # file is a file). `-type f` skips it and undercounts the corpus by
+          # one against what the passes actually process. Bytes are then
+          # double-counted for such a pair, which is right for "how much does a
+          # pass read" and wrong for "how big is the checkout" — the latter is
+          # the `du` line below.
+          MODEL_BYTES=$(find models -xtype f \
             \( -iname '*.ifc' -o -iname '*.step' -o -iname '*.stp' \) \
             -printf '%s\n' | awk '{s+=$1} END {print s+0}')
-          MODEL_COUNT=$(find models -type f \
+          MODEL_COUNT=$(find models -xtype f \
             \( -iname '*.ifc' -o -iname '*.step' -o -iname '*.stp' \) | wc -l)
           echo "AA_CORPUS_MODEL_FILES=${MODEL_COUNT}"
           echo "AA_CORPUS_MODEL_BYTES=${MODEL_BYTES}"
@@ -326,10 +358,16 @@ jobs:
           done
           echo "Analysing passes:$PASSES"
           # shellcheck disable=SC2086
+          # `--corpus` is what stops this report describing whatever the
+          # passes happened to emit as whole-corpus statistics: the demand is
+          # seeded from the filesystem, which ran no pass, under the same
+          # exclude every pass used.
           node .github/probe/perf-aa-null.cjs \
             --markdown aa-report.md \
             --csv aa-per-model.csv \
             --label "public @ ${{ steps.tmsha.outputs.sha }}" \
+            --corpus models \
+            --corpus-exclude "$AA_EXCLUDE" \
             $PASSES | tee aa-grep.txt
           {
             echo "**Runner:** \`ubuntu-24.04-4vcpu-8gb-150gbssd\`, $(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//'), $(awk '/^MemTotal:/ {printf "%.1f GB", $2/1048576}' /proc/meminfo) RAM."

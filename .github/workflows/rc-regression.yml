@@ -1121,6 +1121,16 @@ jobs:
                     "engine against itself, 10 of 97 models moved more than 5%. Treat a "
                     "per-model move below ~5% as a lead to re-run, not a regression.")
               print()
+              # The null test runs on bldrs-ai/test-models only. This summary is
+              # printed for whichever matrix target ran, so the qualification has
+              # to travel with the numbers rather than be inferred from them.
+              print("_Those floors were measured on the **public** corpus "
+                    "(`bldrs-ai/test-models`, 97 of its 99 walked models), not on "
+                    "this one. For a private-corpus release they are the only "
+                    "measured floor anyone has, not a bound on this run: see "
+                    "conway's `design/new/perf-run-comparability.md` Evidence 4, "
+                    "'What this does not bound'._")
+              print()
               print("The `crossRun` row compares against a previous run on an unrecorded "
                     "machine and has a measured 13.66% median noise floor — it is a "
                     "lead at any scale. "
@@ -1215,7 +1225,10 @@ jobs:
             the same test measured a ~1.4% median per-model floor, with 10 of
             97 models moving more than 5% against an identical engine, so a
             single model under ~5% is a lead to re-run rather than a
-            regression. The plain `*_delta.csv` is the legacy cross-run
+            regression. Both floors were measured on the **public** corpus
+            (97 of its 99 walked models); on a private-corpus release they are
+            the best evidence available rather than a measured bound on this
+            file, and the snapshot's `README.md` says which case it is. The plain `*_delta.csv` is the legacy cross-run
             comparison, kept only for continuity with the historical archive —
             its `engine1` numbers come from a different run on a machine
             nobody recorded, and that comparison has a measured 13.66% median

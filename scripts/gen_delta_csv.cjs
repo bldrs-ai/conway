@@ -17,7 +17,11 @@ const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
  * AGGREGATE is stable to 0.13-0.24%, but PER MODEL the floor is ~1.4% median
  * absolute change with p10/p90 near -3%/+4%. Read the median of a `paired`
  * file as the gate; a single `paired` row below ~5% is still inside the
- * floor.
+ * floor. Those figures are the PUBLIC corpus's (97 of the 99 models the batch
+ * walks there); no null test has run against the private corpus, so on a
+ * private snapshot they are the best evidence available and not a measured
+ * bound — see perf-run-comparability.md Evidence 4, "What this does not
+ * bound".
  *
  * The label is per-file, not per-row, but it is written on every row on
  * purpose: rows get copied into summaries, issue comments and spreadsheets

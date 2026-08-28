@@ -62,19 +62,52 @@
  * is a far stronger conclusion than the totals alone can support. A gap that
  * shows up in BOTH is compute — machine warming, not the file read.
  *
+ * WHERE THE DEMAND COMES FROM. The models this report is allowed to call the
+ * corpus are read off a WALK OF THE CORPUS (`--corpus`, with the batch's own
+ * `--corpus-exclude`), never off the pass outputs. Seeding the expected set
+ * from the passes is the defect `pairedCoverage()` in
+ * scripts/bless_perf_snapshot.cjs was rewritten to remove, and it has exactly
+ * the same shape here: every pass runs the same batch driver over the same
+ * tree, so a model no pass emits a row for is missing from all of them at
+ * once, the join has nothing to notice, and the totals are published as
+ * whole-corpus statistics over a corpus that is quietly smaller. The
+ * filesystem is the one party in this chain that ran no pass.
+ *
+ * It is not a hypothetical: the public corpus at
+ * baf0f87d (run 33192612782) walks 99 models under the batch's exclude and
+ * every pass wrote 97 rows, because the per-model perf CSV is named
+ * `<stem>.perf.csv` (`path.parse(ifcPath).name` in
+ * src/ifc/ifc_regression_batch_main.ts) while the row inside it is keyed on
+ * `path.basename()`. Two corpus models sharing a STEM therefore write one
+ * file and one of them is lost before any analysis begins:
+ * `ifc/index.ifc` vs `ifc/bldrs/index.ifc` (conway#633), and
+ * `step/zoo.dev/a-gear.step` vs its `a-gear.stp` symlink. The measured
+ * numbers are unaffected — the two lost models produce no rows to skew
+ * anything — but "97 models" is 97 of 99, and this report now says which.
+ *
  * Usage:
  *   node .github/probe/perf-aa-null.cjs --markdown <out.md> [--csv <out.csv>]
- *       [--label <text>] P1=perf-p1.csv P2=perf-p2.csv P3=perf-p3.csv ...
+ *       [--label <text>] [--corpus <dir> [--corpus-exclude <regex>]]
+ *       P1=perf-p1.csv P2=perf-p2.csv P3=perf-p3.csv ...
  *
  * Pass names are free-form and appear verbatim in the report; the order they
  * are given in is the order they ran in, and every ordered pair (i before j)
  * is reported. Analysis findings NEVER exit non-zero — this is an experiment's
  * reporter, and a run that produced numbers must hand them over even when the
- * numbers are bad.
+ * numbers are bad. A coverage shortfall is not an exception to that: it is
+ * reported at the top of the report, on `::warning::` and in the grep lines,
+ * because a run that cost four corpus passes must still surrender them.
  */
 
 const fs = require('fs');
+const path = require('path');
 const { csvRow } = require('../../scripts/csv_rfc4180.cjs');
+// The SAME walk the paired gate's demand uses, rather than a second one
+// written here: it already mirrors `collectIFCFiles()` in
+// ifc_regression_batch_main.ts (recursive readdir, exclude tested against the
+// resolved path before the dir/file split, extension-keyed), and two walks
+// that are supposed to agree eventually will not.
+const { collectCorpusModels } = require('../../scripts/bless_perf_snapshot.cjs');
 const {
   median,
   numeric,
@@ -153,6 +186,238 @@ function joinPasses(passes) {
   }
 
   return { models, dropped };
+}
+
+/**
+ * What the corpus demands of every pass, keyed the way the perf CSVs are.
+ *
+ * TWO DIFFERENT KEYS ARE IN PLAY and the difference is the whole point:
+ *
+ *   the STEM   decides which file a child writes. `runForFile()` is handed
+ *              `path.join(perfDir, `${path.parse(ifcPath).name}.perf.csv`)`,
+ *              and the writer is `fsPromises.writeFile` — an overwrite. Two
+ *              corpus models with the same stem therefore leave ONE file,
+ *              whichever child finished last, and the other model is gone
+ *              before `aggregatePerfCsvs()` reads the directory.
+ *   the BASENAME is what lands in the row's `file` column
+ *              (src/ifc/ifc_regression_main.ts), so it is what this analyser
+ *              joins passes on.
+ *
+ * So the demand is expressed in basenames, but the collision that costs a
+ * model is a STEM collision — which is strictly wider than the basename
+ * collision `pairedCoverage()` reports: `a-gear.step` and `a-gear.stp` have
+ * different basenames and the same stem, and only one of them is ever
+ * measured. A colliding stem contributes NO expected basename, because which
+ * of its models survived is not knowable from here; it is counted and named
+ * instead, so the shortfall is stated rather than hidden inside a "missing"
+ * count it would double.
+ *
+ * @param {Array<string>} corpusModels Model paths from collectCorpusModels().
+ * @return {{models: number, expected: Array<string>,
+ *   collisions: Array<{stem: string, paths: Array<string>}>,
+ *   unmeasurable: number}} `expected` is what every pass must have written a
+ *   row for; `unmeasurable` is how many corpus models the stem collisions
+ *   cost, which no pass can ever recover.
+ */
+function corpusDemand(corpusModels) {
+  const byStem = new Map();
+
+  for (const modelPath of corpusModels) {
+    const stem = path.parse(modelPath).name;
+
+    byStem.set(stem, [...(byStem.get(stem) || []), modelPath]);
+  }
+
+  const expected = [];
+  const collisions = [];
+  let unmeasurable = 0;
+
+  for (const [stem, paths] of byStem) {
+    if (paths.length > 1) {
+      collisions.push({ stem, paths: [...paths].sort() });
+      unmeasurable += paths.length - 1;
+      continue;
+    }
+
+    expected.push(path.basename(paths[0]));
+  }
+
+  return {
+    models: corpusModels.length,
+    expected: expected.sort(),
+    collisions: collisions.sort((a, b) => (a.stem > b.stem ? 1 : -1)),
+    unmeasurable,
+  };
+}
+
+/**
+ * Check the join against the corpus demand.
+ *
+ * `missing` says WHY as well as what: a model the passes dropped for a bad
+ * status is a different failure from one that never appeared at all, and only
+ * the second is the one the pass-seeded demand could not see.
+ *
+ * @param {{expected: Array<string>, collisions: Array<object>}} demand
+ *   Output of corpusDemand.
+ * @param {{models: Array<object>, dropped: Array<object>}} joined Join result.
+ * @return {{missing: Array<{file: string, why: string}>,
+ *   unexpected: Array<string>}} Empty arrays on full coverage.
+ */
+function corpusShortfall(demand, joined) {
+  const measured = new Set(joined.models.map((model) => model.file));
+  const droppedWhy = new Map(joined.dropped.map((d) => [d.file, d.why]));
+  // A colliding stem's row is legitimately present under one of its
+  // basenames, so neither of them is an unexpected row.
+  const collided = new Set(demand.collisions.flatMap(
+      (collision) => collision.paths.map((p) => path.basename(p))));
+  const expected = new Set(demand.expected);
+
+  return {
+    missing: demand.expected
+        .filter((file) => !measured.has(file))
+        .map((file) => ({
+          file,
+          why: droppedWhy.get(file) ?? 'absent from every pass',
+        })),
+    unexpected: [...measured, ...droppedWhy.keys()]
+        .filter((file) => !expected.has(file) && !collided.has(file))
+        .sort(),
+  };
+}
+
+/**
+ * The coverage verdict, or a stated refusal to give one.
+ *
+ * @param {string} corpusRoot Corpus root, or '' when none was given.
+ * @param {string} corpusExclude The batch's exclude regex source, or ''.
+ * @param {{models: Array<object>, dropped: Array<object>}} joined Join result.
+ * @return {object} `verified` false means the report may not describe its
+ *   numbers as covering the corpus, and says which of the two reasons applies.
+ */
+function corpusCoverage(corpusRoot, corpusExclude, joined) {
+  if (corpusRoot === '') {
+    return { verified: false, corpusRoot, walkError: '' };
+  }
+
+  let corpusModels = null;
+
+  try {
+    corpusModels = collectCorpusModels(
+        corpusRoot, corpusExclude !== '' ? new RegExp(corpusExclude) : undefined);
+  } catch (e) {
+    // A walk that throws leaves the demand unknown, which is a coverage
+    // failure and not a reason to lose the report — the same call
+    // bless_perf_snapshot.cjs makes on the same failure.
+    return { verified: false, corpusRoot, walkError: e.message };
+  }
+
+  const demand = corpusDemand(corpusModels);
+  const shortfall = corpusShortfall(demand, joined);
+
+  return {
+    verified: true,
+    corpusRoot,
+    walkError: '',
+    ...demand,
+    ...shortfall,
+    measured: joined.models.length,
+    complete: shortfall.missing.length === 0 &&
+      shortfall.unexpected.length === 0 && demand.unmeasurable === 0,
+  };
+}
+
+/**
+ * The coverage section, which has to come before any statistic it qualifies.
+ *
+ * @param {object} coverage Output of corpusCoverage.
+ * @return {Array<string>} Markdown lines.
+ */
+function renderCoverage(coverage) {
+  const out = ['### Corpus coverage — what the passes were supposed to measure', ''];
+
+  if (!coverage.verified) {
+    out.push(
+        coverage.walkError !== '' ?
+          `**Coverage is unverified**: the corpus under \`${coverage.corpusRoot}\` ` +
+          `could not be walked (${coverage.walkError}).` :
+          '**Coverage is unverified**: no `--corpus` was given, so the only ' +
+          'models this report knows about are the ones the passes themselves ' +
+          'wrote rows for.',
+        '',
+        'A model absent from EVERY pass is invisible to a demand seeded that ' +
+        'way — every pass shares one batch driver and one tree, so their ' +
+        'losses are correlated. Read the numbers below as covering the models ' +
+        'named in them, and **not** as whole-corpus statistics.',
+        '');
+
+    return out;
+  }
+
+  const collided = coverage.collisions.reduce(
+      (sum, collision) => sum + collision.paths.length, 0);
+
+  out.push(
+      `Demanded of every pass by a walk of \`${coverage.corpusRoot}\` — the one ` +
+      'input here that no pass produced.',
+      '',
+      '| | |',
+      '|---|---:|',
+      `| models in the corpus walk | ${coverage.models} |`,
+      `| — of those, sharing a \`<stem>.perf.csv\` (${
+        coverage.collisions.length} stem(s)) | ${collided} |`,
+      `| — unmeasurable, lost to that sharing | ${coverage.unmeasurable} |`,
+      `| demanded of every pass, one model to one row | ${
+        coverage.expected.length} |`,
+      `| — demanded and missing | ${coverage.missing.length} |`,
+      `| measured but not in the corpus walk | ${coverage.unexpected.length} |`,
+      `| **models carrying the statistics below** | **${
+        coverage.measured} of ${coverage.models}** |`,
+      '');
+
+  if (coverage.collisions.length > 0) {
+    out.push(
+        `**${coverage.unmeasurable} corpus model(s) cannot be measured at ` +
+        'all.** The per-model perf CSV is named after the model\'s stem and ' +
+        'written with an overwrite, so models sharing a stem collapse to one ' +
+        'row before any pass is analysed — and which of them survived is not ' +
+        'recoverable from the row, so a colliding stem demands nothing and is ' +
+        'counted here instead. This costs coverage, not accuracy: the lost ' +
+        'models contribute no rows, so no statistic below is skewed by them — ' +
+        'but the corpus is larger than the sample. Tracked as ' +
+        '[conway#633](https://github.com/bldrs-ai/conway/issues/633).',
+        '');
+
+    for (const collision of coverage.collisions) {
+      out.push(`- \`${collision.stem}\` ← ${
+        collision.paths.map((p) => `\`${p}\``).join(', ')}`);
+    }
+
+    out.push('');
+  }
+
+  if (coverage.missing.length > 0) {
+    out.push(
+        `**Missing (${coverage.missing.length})** — demanded by the corpus ` +
+        'walk, not delivered by the passes:',
+        '');
+
+    for (const entry of coverage.missing) {
+      out.push(`- \`${entry.file}\` — ${entry.why}`);
+    }
+
+    out.push('');
+  }
+
+  if (coverage.unexpected.length > 0) {
+    out.push(
+        `**${coverage.unexpected.length} measured model(s) are not in the ` +
+        'corpus walk**, so the walk and the passes disagree about what the ' +
+        'corpus is and neither can be trusted as the denominator: ' +
+        `${coverage.unexpected.map((f) => `\`${f}\``).join(', ')}.`,
+        '');
+  }
+
+  return out;
 }
 
 /**
@@ -401,9 +666,11 @@ function renderVerdict(models, passes) {
  * @param {Array<{name: string, rows: Array<object>}>} passes Passes in order.
  * @param {{models: Array<object>, dropped: Array<object>}} joined Join result.
  * @param {string} label Corpus/run label for the heading.
+ * @param {object} coverage Output of corpusCoverage — what the corpus walk
+ *   demanded, or why the demand is unknown.
  * @return {string} Markdown, newline terminated.
  */
-function renderMarkdown(passes, joined, label) {
+function renderMarkdown(passes, joined, label, coverage) {
   const { models, dropped } = joined;
   const pairs = orderedPairs(passes);
   const out = [];
@@ -423,8 +690,15 @@ function renderMarkdown(passes, joined, label) {
   out.push('');
   out.push(
       `${models.length} model(s) came back OK in every pass and carry the ` +
-      `statistics; ${dropped.length} did not.`);
+      `statistics; ${dropped.length} did not.` +
+      (coverage.verified ?
+        ` The corpus walk finds ${coverage.models} model(s) under the ` +
+        'batch\'s exclude, so every statistic below covers ' +
+        `${models.length} of ${coverage.models} — see the coverage section ` +
+        'directly beneath, and do not restate these numbers without it.' :
+        ''));
   out.push('');
+  out.push(...renderCoverage(coverage));
   out.push(
       '### Per-model percentage change, as the rc gate computes it (no floor)');
   out.push('');
@@ -518,10 +792,26 @@ function renderMarkdown(passes, joined, label) {
  *
  * @param {Array<{name: string}>} passes Passes in run order.
  * @param {{models: Array<object>}} joined Join result.
+ * @param {object} coverage Output of corpusCoverage.
  * @return {Array<string>} The lines.
  */
-function grepLines(passes, joined) {
+function grepLines(passes, joined, coverage) {
   const lines = [`AA_MODELS_PAIRED=${joined.models.length}`];
+
+  // Coverage first, and always present: a reader grepping AA_MEDIAN_* out of
+  // a job log needs the denominator in the same place, or the median goes
+  // into a document as a whole-corpus number again.
+  lines.push(
+      `AA_CORPUS_VERIFIED=${coverage.verified ? 1 : 0}`,
+      `AA_CORPUS_MODELS=${coverage.verified ? coverage.models : 'N/A'}`,
+      `AA_CORPUS_DEMANDED=${
+        coverage.verified ? coverage.expected.length : 'N/A'}`,
+      `AA_CORPUS_UNMEASURABLE=${
+        coverage.verified ? coverage.unmeasurable : 'N/A'}`,
+      `AA_CORPUS_MISSING=${
+        coverage.verified ? coverage.missing.length : 'N/A'}`,
+      `AA_CORPUS_UNEXPECTED=${
+        coverage.verified ? coverage.unexpected.length : 'N/A'}`);
 
   for (const pair of orderedPairs(passes)) {
     for (const column of TIMING_COLUMNS) {
@@ -601,13 +891,22 @@ function renderCsv(passes, joined) {
  */
 function main() {
   const args = process.argv.slice(2);
-  const options = { label: 'aa', markdown: '', csv: '' };
+  // Flag -> option key, spelled out rather than derived from the flag text,
+  // so `--corpus-exclude` lands somewhere addressable.
+  const valueFlags = {
+    '--label': 'label',
+    '--markdown': 'markdown',
+    '--csv': 'csv',
+    '--corpus': 'corpus',
+    '--corpus-exclude': 'corpusExclude',
+  };
+  const options =
+    { label: 'aa', markdown: '', csv: '', corpus: '', corpusExclude: '' };
   const passes = [];
 
   for (let i = 0; i < args.length; ++i) {
-    if (args[i] === '--label' || args[i] === '--markdown' ||
-        args[i] === '--csv') {
-      options[args[i].slice(2)] = args[++i] ?? '';
+    if (valueFlags[args[i]] !== undefined) {
+      options[valueFlags[args[i]]] = args[++i] ?? '';
       continue;
     }
 
@@ -627,7 +926,8 @@ function main() {
   if (passes.length < 2 || !options.markdown) {
     console.error(
         'usage: perf-aa-null.cjs --markdown <out.md> [--csv <out.csv>] ' +
-        '[--label <text>] P1=perf-p1.csv P2=perf-p2.csv ...');
+        '[--label <text>] [--corpus <dir> [--corpus-exclude <regex>]] ' +
+        'P1=perf-p1.csv P2=perf-p2.csv ...');
     process.exit(2);
   }
 
@@ -636,17 +936,41 @@ function main() {
   }
 
   const joined = joinPasses(passes);
+  const coverage =
+    corpusCoverage(options.corpus, options.corpusExclude, joined);
 
-  fs.writeFileSync(options.markdown, renderMarkdown(passes, joined, options.label));
+  fs.writeFileSync(
+      options.markdown,
+      renderMarkdown(passes, joined, options.label, coverage));
 
   if (options.csv) {
     fs.writeFileSync(options.csv, renderCsv(passes, joined));
   }
 
-  console.log(grepLines(passes, joined).join('\n'));
+  console.log(grepLines(passes, joined, coverage).join('\n'));
+
+  // An annotation, not an exit code: the report is the deliverable of four
+  // corpus passes and must survive its own bad news. It goes to the log the
+  // same way `reportPairedSkipped()` announces a withheld paired delta.
+  if (!coverage.verified) {
+    console.warn(
+        '::warning::A/A coverage is unverified' +
+        `${coverage.walkError !== '' ? ` (${coverage.walkError})` : ''}; ` +
+        'the report\'s numbers cover the models the passes wrote and cannot ' +
+        'be described as whole-corpus.');
+  } else if (!coverage.complete) {
+    console.warn(
+        `::warning::A/A coverage is ${joined.models.length} of ` +
+        `${coverage.models} corpus model(s): ${coverage.unmeasurable} ` +
+        `unmeasurable (shared perf-CSV stem), ${coverage.missing.length} ` +
+        `missing, ${coverage.unexpected.length} not in the corpus walk.`);
+  }
+
   console.log(
       `Paired ${joined.models.length} model(s) across ${passes.length} ` +
-      `pass(es); wrote ${options.markdown}` +
+      `pass(es)` +
+      `${coverage.verified ? ` of ${coverage.models} in the corpus` : ''}; ` +
+      `wrote ${options.markdown}` +
       `${options.csv ? ` and ${options.csv}` : ''}.`);
 }
 
@@ -657,9 +981,13 @@ if (require.main === module) {
 module.exports = {
   RATIO_FLOOR_MS,
   changesFor,
+  corpusCoverage,
+  corpusDemand,
+  corpusShortfall,
   joinPasses,
   orderedPairs,
   passTotals,
+  renderCoverage,
   renderCsv,
   renderMarkdown,
   summarise,

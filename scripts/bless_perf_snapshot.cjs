@@ -332,6 +332,18 @@ function pairedCoverage(corpusModels, blessedRows, pairedRows, smokeListPath) {
 const MAX_NAMED_MISSING = 10;
 
 /**
+ * The corpus the A/A null test measured the paired configuration's floor on,
+ * as the repo directory name this script is passed — rc-regression.yml hands
+ * it the last path segment of the matrix target's repo.
+ *
+ * `.github/workflows/perf-aa-null.yml` hardcodes `bldrs-ai/test-models`, and
+ * the floor it produced is a property of that corpus on that runner — not of
+ * pairing in the abstract. Every other target's README has to say so rather
+ * than inherit the number, so this is compared against, never assumed.
+ */
+const AA_NULL_CORPUS = 'test-models';
+
+/**
  * One sentence saying the paired pass did not cover what it had to.
  *
  * @param {{expected: Array<string>, missing: Array<string>}} coverage
@@ -650,6 +662,32 @@ function renderReadme(info) {
     ].join('\n') :
     'Only a `crossRun` delta was produced for this release: the paired pass\ndid not run.';
 
+  // WHOSE CORPUS THE A/A FLOOR WAS MEASURED ON. The floor quoted below came
+  // from `perf-aa-null.yml`, which hardcodes `bldrs-ai/test-models` — the
+  // PUBLIC corpus. This README is generated for whichever matrix target ran,
+  // and for the private one the same paragraph would be stamping a number
+  // nobody measured onto the snapshot that actually gates the release. The
+  // private corpus has a different model count and cost profile, and unlike
+  // the public one it is not guaranteed to fit in the runner's page cache —
+  // which is the exact property the null test found the current floor to rest
+  // on. So the claim is qualified per target rather than generalised, and the
+  // private floor is named as unmeasured until someone measures it.
+  const aaCorpusCaveat = info.repoName === AA_NULL_CORPUS ?
+    '**This snapshot is that corpus.** Same models, same runner label, same\n' +
+    'harness, so the floor above is a measured bound on this file.' :
+    `**This snapshot is \`${info.repoName}\`, which is NOT the corpus that was\n` +
+    'measured, so the floor above is not a measured bound on this file.** The\n' +
+    'A/A null test has only ever run against `bldrs-ai/test-models`. This\n' +
+    'corpus holds a different number of models with a different cost profile,\n' +
+    'and where the public corpus was 100% page-cache resident before the first\n' +
+    'pass (which is *why* the measured cold-start term is 0.13%), a corpus\n' +
+    'larger than the runner\'s RAM has no such guarantee. Read the numbers\n' +
+    'above as the only floor anyone has measured for the paired configuration,\n' +
+    'and as an order of magnitude here — not as a bound on this file. What it\n' +
+    'would cost to measure this corpus\'s own floor is in conway\'s\n' +
+    '[design/new/perf-run-comparability.md](https://github.com/bldrs-ai/conway/blob/main/design/new/perf-run-comparability.md)\n' +
+    'Evidence 4, "What this does not bound".';
+
   // WHICH COLUMNS ARE A MEASUREMENT AND WHICH ARE A LEAD. This is the half of
   // the directory a reader is most likely to get wrong, because the two delta
   // files share a column layout and differ only in how `engine1` was
@@ -663,7 +701,7 @@ releases. They are not interchangeable.
 
 | file | \`engine1\` is | \`measurementBasis\` | read it as |
 |---|---|---|---|
-| \`${pairedDeltaName}\` | \`${info.pairedEngine}\` — the previous release, re-measured **in this job, on this machine, minutes before/after the numbers it is differenced against** | \`paired\` | **the gate.** Read its **median**, which is stable to under ~0.75% |
+| \`${pairedDeltaName}\` | \`${info.pairedEngine}\` — the previous release, re-measured **in this job, on this machine, minutes before/after the numbers it is differenced against** | \`paired\` | **the gate.** Read its **median**, whose measured floor — on the public corpus — is below |
 | \`${info.deltaName}\` | \`${info.previousName.replace(/_.*$/, '')}\` — the previous release **as recorded by its own run**, on a machine nobody recorded | \`crossRun\` | continuity with the historical archive **only** |
 
 **A \`crossRun\` timing column is not a measurement of conway.** It was
@@ -689,9 +727,12 @@ was measured rather than assumed: an **A/A null test** — the identical engine
 over the identical corpus, four passes in one job, one of them with the corpus
 evicted from page cache ([run 33192612782](https://github.com/bldrs-ai/conway/actions/runs/33192612782),
 \`.github/workflows/perf-aa-null.yml\`). Every delta it reports must be zero.
-What it reports instead is the floor under **this** file:
+What it reports instead is a floor — **measured on the public corpus,
+\`bldrs-ai/test-models\` at \`baf0f87d\`, over 97 of the 99 models the batch
+walks there** (two pairs share a \`<stem>.perf.csv\` and collapse to one row —
+conway#633):
 
-| quantity | floor under a null |
+| quantity | floor under a null, public corpus |
 |---|---|
 | whole-corpus aggregate (corpus total, pass wall clock) | **0.13% – 0.24%** |
 | **per model**, median absolute change over 97 models | **1.27% – 1.58%** |
@@ -708,6 +749,8 @@ it; read the **median** as the gate.
 These are two different quantities and they must not be swapped: the corpus
 aggregate is stable because 97 models' independent jitter averages out of it,
 which is help a single row does not get.
+
+${aaCorpusCaveat}
 
 \`${info.pairedDetailName}\` holds the previous pin's own rows from this
 job, so the paired \`engine1\` numbers stay inspectable after the run's
