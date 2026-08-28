@@ -232,6 +232,14 @@ interface SplitOutcome {
    * detection, so it is counted separately.
    */
   pastEndOfData: boolean
+
+  /**
+   * True when some shard indexed NO records. The merge has to carry the
+   * express-ID seam across it without resetting, and re-key nothing — an
+   * edge the sweep produces naturally and which is asserted below rather
+   * than assumed, so it cannot silently stop happening.
+   */
+  hadEmptyShard: boolean
 }
 
 
@@ -288,6 +296,7 @@ function checkSplit(
     columns: mergeIndexShards( shards ),
     falseCandidateCaught,
     pastEndOfData,
+    hadEmptyShard: shards.some( ( shard ) => shard.topLevelCount === 0 ),
   }
 }
 
@@ -385,6 +394,42 @@ describe( 'adversarial splits: every byte offset of every trap fixture', () => {
     // entries with second-level children on BOTH sides of the seam.
     expect( firstLevel ).toBeGreaterThanOrEqual( 6 )
     expect( secondLevel ).toBeGreaterThanOrEqual( 6 )
+  } )
+
+  test( 'the sweep really produces empty shards, and they merge clean', () => {
+
+    // An empty shard is the edge the merge's seam carry and localID re-key
+    // are most likely to get wrong, and the every-offset sweep produces it
+    // naturally — but only an assertion keeps that true. Without this, a
+    // change to the boundary scan could stop generating the case and every
+    // other test here would still pass.
+    let emptyShardSplits = 0
+    let checked = 0
+
+    for ( const [ , body ] of FIXTURES ) {
+
+      const bytes = new TextEncoder().encode(
+          `${HEADER}${body}ENDSEC;\nEND-ISO-10303-21;\n` )
+      const reference = serialColumns( bytes, SMALL_POOL )
+      const dataStart = dataBlockStart( bytes )
+
+      for ( let target = dataStart; target <= bytes.length; ++target ) {
+
+        const found = findRecordBoundaryCandidate( bytes, target, bytes.length )
+        const candidate = found < 0 ? bytes.length : found
+        const outcome = checkSplit( bytes, dataStart, [ candidate ] )
+
+        if ( !outcome.hadEmptyShard ) {
+          continue
+        }
+
+        ++emptyShardSplits
+        checked += compareIndexColumns( outcome.columns, reference ).length
+      }
+    }
+
+    expect( emptyShardSplits ).toBeGreaterThan( 20 )
+    expect( checked ).toBe( 0 )
   } )
 
   test( 'the merge sees inline entities and complex instances', () => {
