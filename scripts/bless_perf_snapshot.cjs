@@ -229,6 +229,34 @@ function collectCorpusModels(rootDir, excludeRegex) {
 }
 
 /**
+ * The `file` values of the rows a perf pass actually MEASURED.
+ *
+ * `status` is the regression child's own verdict, and a `FAIL` row is a row:
+ * both children write one when the parse returns no model
+ * (`ifc_regression_main.ts` / `ap214_regression_main.ts`, the `model === void
+ * 0` arm) and when extraction returns no scene, with the stages the load
+ * never reached carried as `N/A`. So a failed load leaves a filename behind
+ * in the perf CSV exactly as a successful one does, and a coverage check
+ * keyed on the filename alone counts it as measured — while the paired delta
+ * built from those two rows carries `N/A` for every timing column and
+ * contributes nothing to the median the release is gated on.
+ *
+ * Anything that is not exactly `OK` is not a measurement here. That includes
+ * a row with no `status` column at all: this reads a perf.csv the batch just
+ * wrote, so an absent status means an input shape this script does not know,
+ * and silently promoting it to `OK` would put the failure it is looking for
+ * back in the covered set.
+ *
+ * @param {Array<Object>} rows perf.csv row objects.
+ * @return {Array<string>} `file` values of the `OK` rows, duplicates kept.
+ */
+function okFiles(rows) {
+  return rows
+    .filter((row) => (row.status || '').trim() === 'OK')
+    .map((row) => row.file || '');
+}
+
+/**
  * Which models the paired delta was SUPPOSED to cover, and which it misses.
  *
  * This is the gate's own integrity check, and it exists because nothing
@@ -260,6 +288,22 @@ function collectCorpusModels(rootDir, excludeRegex) {
  * one-sided rows under `MEASUREMENT_BASIS.PAIRED`, so a model only the paired
  * pass timed contributes nothing to the file this check is guarding.
  *
+ * A `FAIL` ROW IS NOT A MEASUREMENT, AND IT IS NOT A LOSS EITHER. Both
+ * regression children write a perf row on their failure paths (see
+ * `okFiles`), so a model that neither engine could load is present in both
+ * CSVs, survives `isTwoSided`, and reaches the paired delta with `N/A` in
+ * every timing column. Counting it as covered lets the gate declare complete
+ * coverage while its median is computed over fewer models than the count
+ * beside it implies. It is reported as its OWN category rather than folded
+ * into `missing`, and deliberately does not degrade the delta: `missing` is a
+ * child that vanished — evidence the pass itself is untrustworthy — whereas a
+ * `FAIL` is a load the harness ran and reported on. The case that makes the
+ * distinction load-bearing is conway#634, a corpus model the published pin
+ * cannot load at all: it will FAIL on the paired side of every release until
+ * that lands, so degrading here would withhold the gate indefinitely for a
+ * reason #634 owns. The count travels into the README and the job summary
+ * instead, so the gate's real size is stated rather than implied.
+ *
  * A smoke list narrows the demand (the `smoke` scope runs the paired pass over
  * `regression/smoke_models.txt` only). It narrows against the corpus, and an
  * entry matching nothing in the corpus is reported rather than dropped: a list
@@ -282,16 +326,25 @@ function collectCorpusModels(rootDir, excludeRegex) {
  * @param {string} smokeListPath Model list narrowing the demand, or '' for
  *   "the whole corpus".
  * @return {{expected: Array<string>, missing: Array<string>,
- *   listError: string, unmatched: Array<string>, collisions: Array<string>}}
- *   `missing` is empty on full coverage. The other three are reasons the
- *   coverage cannot be verified at all rather than shortfalls: `listError`
- *   names a smoke list that could not be read, `unmatched` the smoke entries
- *   no corpus model matched, `collisions` the expected basenames more than
- *   one corpus model writes.
+ *   failed: Array<string>, listError: string, unmatched: Array<string>,
+ *   collisions: Array<string>}}
+ *   `missing` is empty on full coverage. `failed` names the expected models
+ *   both passes produced a row for where at least one side is not `OK` —
+ *   covered by the delta's row set, absent from its numbers. The other
+ *   three
+ *   are reasons the coverage cannot be verified at all rather than
+ *   shortfalls: `listError` names a smoke list that could not be read,
+ *   `unmatched` the smoke entries no corpus model matched, `collisions` the
+ *   expected basenames more than one corpus model writes.
  */
 function pairedCoverage(corpusModels, blessedRows, pairedRows, smokeListPath) {
   const measured = new Set(pairedRows.map((row) => row.file || ''));
   const blessed = new Set(blessedRows.map((row) => row.file || ''));
+  // Present-and-measured, kept apart from present-at-all: the difference
+  // between the two is `failed`, and folding it into either one loses the
+  // distinction the caller acts on.
+  const measuredOk = new Set(okFiles(pairedRows));
+  const blessedOk = new Set(okFiles(blessedRows));
 
   // basename -> the corpus paths that write it, so a collision is visible.
   const corpus = new Map();
@@ -308,7 +361,7 @@ function pairedCoverage(corpusModels, blessedRows, pairedRows, smokeListPath) {
   if (smokeListPath !== '') {
     if (!fs.existsSync(smokeListPath)) {
       return {
-        expected: [], missing: [], listError: smokeListPath,
+        expected: [], missing: [], failed: [], listError: smokeListPath,
         unmatched: [], collisions: [],
       };
     }
@@ -323,6 +376,12 @@ function pairedCoverage(corpusModels, blessedRows, pairedRows, smokeListPath) {
     expected,
     missing: expected.filter(
       (name) => !measured.has(name) || !blessed.has(name)).sort(),
+    // Only models BOTH passes produced a row for: a model missing from a
+    // pass is `missing`, and reporting it here as well would double-count
+    // one model against two different remedies.
+    failed: expected.filter(
+      (name) => measured.has(name) && blessed.has(name) &&
+        !(measuredOk.has(name) && blessedOk.has(name))).sort(),
     listError: '',
     unmatched,
     collisions: expected.filter((name) => corpus.get(name).length > 1).sort(),
@@ -402,6 +461,33 @@ function coverageSkipReason(coverage) {
 }
 
 /**
+ * One sentence saying how much of the paired delta is actually a measurement.
+ *
+ * Written whenever `failed` is non-empty, which is a covered-but-unmeasured
+ * state rather than a failure of the gate — see `pairedCoverage`. It exists
+ * because the alternative is a README and a job summary that report the
+ * corpus size beside a median computed over fewer models, with nothing on
+ * either page saying so.
+ *
+ * @param {{expected: Array<string>, failed: Array<string>}} coverage
+ * @return {string} Note text, for the log and the README.
+ */
+function coverageFailedNote(coverage) {
+  const named = coverage.failed.slice(0, MAX_NAMED_MISSING).join(', ');
+  const elided = coverage.failed.length - MAX_NAMED_MISSING;
+
+  const measured = coverage.expected.length - coverage.failed.length;
+
+  return `${coverage.failed.length} of the ${
+    coverage.expected.length} covered ${
+    coverage.failed.length === 1 ? 'models carries' : 'models carry'} a ` +
+    `non-OK row on at least one side (${named}${
+      elided > 0 ? ` and ${elided} more` : ''}), so the paired delta reports ` +
+    'N/A for every timing column of those rows and the gate\'s median is ' +
+    `over ${measured} model${measured === 1 ? '' : 's'}`;
+}
+
+/**
  * Report a discarded paired delta where a human will see it.
  *
  * The log is not enough: the paired delta IS the release gate, and its absence
@@ -430,6 +516,63 @@ function reportPairedSkipped(reason) {
   } catch (e) {
     // A summary that cannot be written must not cost the snapshot.
     console.warn(`Could not write the job summary: ${e.message}`);
+  }
+}
+
+/**
+ * The three states the paired gate can end a run in, as this script decides
+ * them. Spelled the same way `renderReadme` spells them in prose, because the
+ * job summary and the re-bless PR body are generated from this and the README
+ * from that, and a release that says different things on two pages is the
+ * failure this vocabulary exists to prevent.
+ *
+ * `withheld` is "attempted and its result discarded"; `absent` is "did not
+ * run". They are not the same claim about a release and must not collapse
+ * into one "no paired delta" phrasing.
+ */
+const PAIRED_STATE = { PAIRED: 'paired', WITHHELD: 'withheld', ABSENT: 'absent' };
+
+/**
+ * Publish the paired gate's outcome as GitHub step outputs.
+ *
+ * The workflow has two more surfaces that describe the gate — the job summary
+ * and the re-bless PR body — and until this existed both were written as if
+ * the paired delta were always produced. That is not a rare path: the
+ * conway#633 basename collision fires on every full-corpus release today, so
+ * the DEFAULT outcome is `withheld` and the default messaging promised a
+ * `paired` row that is not in the directory. Neither surface can re-derive
+ * WHY from the files on disk; only this script knows, so it says so here
+ * rather than leaving the workflow to parse the README's prose.
+ *
+ * Whether a `measurementBasis: paired` file was actually produced is
+ * determined independently, by the summary step reading the CSVs it is about
+ * to print. This output carries the reason, not the verdict.
+ *
+ * @param {string} state One of PAIRED_STATE.
+ * @param {string} reason Clause completing "withheld because ...", or '' when
+ *   the state is not `withheld`.
+ */
+function reportPairedOutcome(state, reason) {
+  const outputPath = process.env.GITHUB_OUTPUT;
+
+  if (!outputPath) {
+    return;
+  }
+
+  try {
+    fs.appendFileSync(
+      outputPath,
+      // `key=value` on one line, so any newline in the value would end the
+      // record early and leave the rest of it parsed as another key. The
+      // reasons this script builds are single-line; this is what keeps that
+      // true of one built later.
+      `paired-state=${state}\n` +
+      `paired-reason=${reason.replace(/[\r\n]+/g, ' ')}\n`,
+      'utf8');
+  } catch (e) {
+    // Same policy as the job summary: a report that cannot be written must
+    // not cost the snapshot, which is the run's only durable record.
+    console.warn(`Could not write the step output: ${e.message}`);
   }
 }
 
@@ -680,6 +823,11 @@ function removeStalePairedDetail(outDir) {
  * @param {string} [info.pairedScope] 'full' or 'smoke' — which models the
  *   paired pass covered. A narrower scope is a narrower gate and the README
  *   has to say so on its face.
+ * @param {string} [info.pairedFailedNote] coverageFailedNote() for this run,
+ *   or '' when every covered model produced an `OK` row on both sides. The
+ *   paired delta carries a row for a model neither engine could load, with
+ *   `N/A` in every timing column, so the file's row count is not the gate's
+ *   sample size and the README has to say which is which.
  * @param {string} [info.pairedSkipReason] Why a requested paired delta was
  *   withheld, e.g. a pass that lost models. '' when none was requested or
  *   none was withheld. Printed for the same reason the scope is: the reader
@@ -843,7 +991,17 @@ delta was suspect.
 ${pairedScope === 'full' ?
   'The paired pass covered the **full corpus**, the same models as the blessed pass.' :
   '**Scope: the smoke subset only.** The paired pass ran over `regression/smoke_models.txt`, not the full corpus, so the paired delta covers roughly a dozen models. Every model outside that subset has a `crossRun` row and no `paired` row — which is a narrower gate, deliberately chosen for this run, not a failure.'}
-
+${info.pairedFailedNote ?
+  `\n**Not every covered row is a measurement.** ${
+    info.pairedFailedNote[0].toUpperCase()}${info.pairedFailedNote.slice(1)}.\n` +
+  'A regression child writes a perf row on its failure paths too, so a model\n' +
+  'neither engine could load is present on both sides and reaches this file\n' +
+  'with `N/A` for every timing column. Read the row count of the delta as the\n' +
+  "models it covers and the `n` in the rc job summary as the gate's sample\n" +
+  'size; they are not the same number. A model the *previous pin* cannot load\n' +
+  'is conway#634; a model that fails in *this* release is caught by the\n' +
+  'digest gate, not here.\n' :
+  ''}
 ` :
     `## Which delta to read
 
@@ -1214,6 +1372,10 @@ function main() {
   // because ...". '' means it is not absent, or that no paired pass was asked
   // for at all.
   let pairedSkipReason = '';
+  // How much of a produced paired delta is actually a measurement, or '' when
+  // all of it is. Not a skip reason: these rows are IN the file — see
+  // pairedCoverage's note on `failed`.
+  let pairedFailedNote = '';
 
   if (paired.csv !== '' && previous !== null) {
     const pairedRows =
@@ -1294,6 +1456,15 @@ function main() {
       pairedDetailName = `performance-detail-paired-${pairedEngine}.csv`;
       const pairedDetailPath = path.join(outDir, pairedDetailName);
 
+      // Covered but not measured: rows both passes produced with a non-OK
+      // status on at least one side. They do not withhold the delta — see
+      // pairedCoverage — but they are not in its median either, so the count
+      // travels to the README and the log rather than being dropped here.
+      if (coverage.failed.length > 0) {
+        pairedFailedNote = coverageFailedNote(coverage);
+        console.warn(`::notice::Paired delta partly unmeasured: ${pairedFailedNote}.`);
+      }
+
       writeDetailCsv(pairedRows, pairedDetailPath, pairedEngine, timestamp);
       console.log(
         `Wrote ${pairedRows.length} paired rows to ${pairedDetailPath}`);
@@ -1312,6 +1483,7 @@ function main() {
       } catch (e) {
         console.warn(`Failed to generate paired delta: ${e.message}`);
         pairedDeltaName = '';
+        pairedFailedNote = '';
         pairedSkipReason = `the paired delta could not be generated: ${e.message}`;
       }
     }
@@ -1323,6 +1495,14 @@ function main() {
   if (pairedSkipReason !== '') {
     reportPairedSkipped(pairedSkipReason);
   }
+
+  // The workflow's other two surfaces read this. `withheld` and `absent` are
+  // different claims about the release and the PR body says which; see
+  // reportPairedOutcome.
+  reportPairedOutcome(
+    pairedDeltaName !== '' ? PAIRED_STATE.PAIRED :
+      pairedSkipReason !== '' ? PAIRED_STATE.WITHHELD : PAIRED_STATE.ABSENT,
+    pairedSkipReason);
 
   fs.writeFileSync(
     path.join(outDir, 'README.md'),
@@ -1346,6 +1526,7 @@ function main() {
         paired.engine !== '' ? paired.engine :
           (previous !== null ? `conway${previous.version}-paired` : ''),
       pairedScope: paired.scope,
+      pairedFailedNote,
       pairedSkipReason,
     }),
     'utf8');
@@ -1359,9 +1540,13 @@ module.exports = {
   AA_NULL_CORPUS,
   AA_NULL_CORPUS_SHA,
   DETAIL_COLUMNS,
+  PAIRED_STATE,
   collectCorpusModels,
   corpusCommit,
+  coverageFailedNote,
   coverageSkipReason,
+  okFiles,
+  reportPairedOutcome,
   findPreviousSnapshot,
   pairedCoverage,
   parsePairedFlags,

@@ -20,27 +20,33 @@ const require_ = createRequire(import.meta.url)
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
 const {
   AA_NULL_CORPUS, AA_NULL_CORPUS_SHA,
-  DETAIL_COLUMNS, collectCorpusModels, corpusCommit, coverageSkipReason,
+  DETAIL_COLUMNS, PAIRED_STATE,
+  collectCorpusModels, corpusCommit, coverageFailedNote, coverageSkipReason,
   findPreviousSnapshot,
-  isChronologicalDelta,
+  isChronologicalDelta, okFiles,
   pairedCoverage, removeStaleDeltas, removeStalePairedDetail, parsePairedFlags,
-  renderReadme, writeDetailCsv, versionCompare,
+  renderReadme, reportPairedOutcome, writeDetailCsv, versionCompare,
 } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     AA_NULL_CORPUS: string,
     AA_NULL_CORPUS_SHA: string,
     DETAIL_COLUMNS: string[],
+    PAIRED_STATE: { PAIRED: string, WITHHELD: string, ABSENT: string },
     collectCorpusModels: (rootDir: string, exclude?: RegExp) => string[],
     corpusCommit: (modelsRoot: string) => string,
+    coverageFailedNote: (
+      coverage: { expected: string[], failed: string[] }) => string,
     coverageSkipReason: (
       coverage: { expected: string[], missing: string[] }) => string,
+    okFiles: (rows: Record<string, string>[]) => string[],
+    reportPairedOutcome: (state: string, reason: string) => void,
     pairedCoverage: (
       corpusModels: string[],
       blessedRows: Record<string, string>[],
       pairedRows: Record<string, string>[],
       smokeListPath: string) =>
-      { expected: string[], missing: string[], listError: string,
-        unmatched: string[], collisions: string[] },
+      { expected: string[], missing: string[], failed: string[],
+        listError: string, unmatched: string[], collisions: string[] },
     isChronologicalDelta: (name: string, version: string) => boolean,
     renderReadme: (info: {
       engine: string,
@@ -54,6 +60,7 @@ const {
       pairedDetailName?: string,
       pairedEngine?: string,
       pairedScope?: string,
+      pairedFailedNote?: string,
       pairedSkipReason?: string,
     }) => string,
     removeStaleDeltas: (outDir: string, version: string) => string[],
@@ -727,6 +734,64 @@ describe('pairedCoverage', () => {
     expect(coverage.missing).toEqual([])
   })
 
+  test('a FAIL row is covered but NOT counted as a measurement', () => {
+    // THE FINDING. Both regression children write a perf row on their failure
+    // paths (`ifc_regression_main.ts` / `ap214_regression_main.ts`, the
+    // `model === void 0` arm and the `scene === void 0` status), so a model
+    // neither engine could load leaves a filename in BOTH CSVs. Keyed on the
+    // filename alone it read as full coverage, survived `isTwoSided`, and
+    // reached the paired delta with N/A in every timing column — the gate's
+    // median computed over fewer models than the count beside it implied.
+    const coverage = pairedCoverage(
+      corpus(['index.ifc', 'broken.ifc']),
+      rows(['index.ifc', 'broken.ifc']),
+      [{ file: 'index.ifc', status: 'OK' },
+        { file: 'broken.ifc', status: 'FAIL' }], '')
+
+    // Not missing: the pass ran it and reported on it. That distinction is
+    // what keeps conway#634 — a model the published pin cannot load — from
+    // withholding the gate on every release.
+    expect(coverage.missing).toEqual([])
+    expect(coverage.failed).toEqual(['broken.ifc'])
+  })
+
+  test('a FAIL on the BLESSED side counts the same way', () => {
+    // The delta is two-sided, so either side losing the load costs the same
+    // row. A check that only looked at the pin's rows would miss this one.
+    const coverage = pairedCoverage(
+      corpus(['index.ifc', 'broken.ifc']),
+      [{ file: 'index.ifc', status: 'OK' },
+        { file: 'broken.ifc', status: 'FAIL' }],
+      rows(['index.ifc', 'broken.ifc']), '')
+
+    expect(coverage.missing).toEqual([])
+    expect(coverage.failed).toEqual(['broken.ifc'])
+  })
+
+  test('a model a pass never wrote is missing, not failed', () => {
+    // The two categories have different remedies — one says the pass is
+    // untrustworthy, the other says the model does not load — so a model must
+    // not be counted against both.
+    const coverage = pairedCoverage(
+      corpus(['index.ifc', 'gone.ifc']),
+      rows(['index.ifc', 'gone.ifc']), rows(['index.ifc']), '')
+
+    expect(coverage.missing).toEqual(['gone.ifc'])
+    expect(coverage.failed).toEqual([])
+  })
+
+  test('a row with no status at all is not promoted to a measurement', () => {
+    // These rows come from a perf.csv the batch just wrote. An absent status
+    // is an input shape this script does not know, and reading it as OK would
+    // put the failure the check is looking for back in the covered set.
+    const coverage = pairedCoverage(
+      corpus(['index.ifc']), [{ file: 'index.ifc' }], [{ file: 'index.ifc' }],
+      '')
+
+    expect(coverage.missing).toEqual([])
+    expect(coverage.failed).toEqual(['index.ifc'])
+  })
+
   test('an unreadable list is reported rather than silently ignored', () => {
     const coverage = pairedCoverage(
       corpus(['index.ifc']), rows(['index.ifc']), rows(['index.ifc']),
@@ -747,6 +812,98 @@ describe('coverageSkipReason', () => {
     expect(reason).toContain('m0.ifc')
     expect(reason).toContain('and 2 more')
     expect(reason).not.toContain('m11.ifc')
+  })
+})
+
+describe('okFiles', () => {
+
+  test('only an exact OK counts, whitespace tolerated', () => {
+    expect(okFiles([
+      { file: 'a.ifc', status: 'OK' },
+      { file: 'b.ifc', status: ' OK ' },
+      { file: 'c.ifc', status: 'FAIL' },
+      { file: 'd.ifc', status: '' },
+      { file: 'e.ifc' },
+    ])).toEqual(['a.ifc', 'b.ifc'])
+  })
+})
+
+describe('coverageFailedNote', () => {
+
+  test('states the gate\'s real sample size, and elides a flood of names', () => {
+    const failed = Array.from({ length: 12 }, (_, i) => `m${i}.ifc`)
+    const note = coverageFailedNote({
+      expected: Array.from({ length: 40 }, (_, i) => `m${i}.ifc`), failed })
+
+    expect(note).toContain('12 of the 40 covered models carry')
+    expect(note).toContain('non-OK row on at least one side')
+    // The number the summary's `n` will show, said out loud rather than left
+    // for a reader to subtract.
+    expect(note).toContain("gate's median is over 28 models")
+    expect(note).toContain('m0.ifc')
+    expect(note).toContain('and 2 more')
+    expect(note).not.toContain('m11.ifc')
+  })
+})
+
+describe('reportPairedOutcome', () => {
+
+  /**
+   * Run reportPairedOutcome against a throwaway GITHUB_OUTPUT.
+   *
+   * @param state One of PAIRED_STATE.
+   * @param reason Withheld-because clause, or ''.
+   * @return What landed in the output file.
+   */
+  function capture(state: string, reason: string): string {
+    const outPath = path.join(workDir, 'output.txt')
+    const before = process.env.GITHUB_OUTPUT
+
+    fs.writeFileSync(outPath, '', 'utf8')
+    process.env.GITHUB_OUTPUT = outPath
+    try {
+      reportPairedOutcome(state, reason)
+    } finally {
+      if (before === undefined) {
+        delete process.env.GITHUB_OUTPUT
+      } else {
+        process.env.GITHUB_OUTPUT = before
+      }
+    }
+
+    return fs.readFileSync(outPath, 'utf8')
+  }
+
+  test('publishes the state and the reason for the workflow to render from', () => {
+    // The job summary and the re-bless PR body both describe the gate, and
+    // neither can re-derive WHY there is none from the files on disk. This is
+    // the only place that knows.
+    const written = capture(PAIRED_STATE.WITHHELD, 'the corpus collided')
+
+    expect(written).toContain(`paired-state=${PAIRED_STATE.WITHHELD}\n`)
+    expect(written).toContain('paired-reason=the corpus collided\n')
+  })
+
+  test('keeps a reason on one line, whatever it is built from', () => {
+    // `key=value` is a line-oriented record: a newline inside the value ends
+    // it early and the remainder is parsed as another key.
+    const written = capture(PAIRED_STATE.WITHHELD, 'first\nsecond\r\nthird')
+
+    expect(written.trimEnd().split('\n')).toHaveLength(2)
+    expect(written).toContain('paired-reason=first second third')
+  })
+
+  test('is a no-op off CI rather than throwing', () => {
+    const before = process.env.GITHUB_OUTPUT
+
+    delete process.env.GITHUB_OUTPUT
+    try {
+      expect(() => reportPairedOutcome(PAIRED_STATE.ABSENT, '')).not.toThrow()
+    } finally {
+      if (before !== undefined) {
+        process.env.GITHUB_OUTPUT = before
+      }
+    }
   })
 })
 
@@ -1015,6 +1172,34 @@ describe('renderReadme', () => {
       .toMatch(new RegExp(`^[0-9a-f]{${AA_NULL_CORPUS_SHA.length}}$`))
   })
 
+  test('says how much of the paired delta is actually a measurement', () => {
+    // The delta's row count is not the gate's sample size: a model neither
+    // engine could load has a row with N/A in every timing column. Left
+    // unsaid, the README reports the corpus size beside a median computed
+    // over fewer models.
+    const withFailures = renderReadme({
+      ...paired,
+      pairedFailedNote:
+        '2 of the 97 covered models carry a non-OK row on at least one side ' +
+        "(broken.ifc, other.ifc), so the paired delta reports N/A for every " +
+        "timing column of those rows and the gate's median is over 95 models",
+    })
+
+    expect(withFailures).toContain('**Not every covered row is a measurement.**')
+    expect(withFailures).toContain('2 of the 97 covered models')
+    expect(withFailures).toContain("gate's median is over 95 models")
+    // The two remedies are different issues, and the README says which is
+    // which rather than leaving a reader to file the wrong one.
+    expect(withFailures).toContain('conway#634')
+    expect(withFailures.replace(/\s+/gu, ' '))
+      .toContain('caught by the digest\ngate, not here'.replace(/\s+/gu, ' '))
+
+    // And a clean run says nothing, so the paragraph's presence is itself
+    // the signal.
+    expect(renderReadme(paired))
+      .not.toContain('Not every covered row is a measurement')
+  })
+
   test('states a narrowed scope rather than letting it pass silently', () => {
     const full = renderReadme(paired)
     const smoke = renderReadme({ ...paired, pairedScope: 'smoke' })
@@ -1121,5 +1306,145 @@ describe('the rc job summary\'s A/A floor paragraph', () => {
 
     expect(publicArm).toContain('What is not established is the model set')
     expect(publicArm).not.toContain('Same models')
+  })
+})
+
+/**
+ * The rc job summary and the re-bless PR body both describe the paired gate,
+ * and until this they described one the release may not have.
+ *
+ * The summary's gate paragraph, and the PR body's "**two** deltas ... read the
+ * `*_paired_delta.csv`", were printed whenever ANY delta file summarized — a
+ * flag the surviving `crossRun` file sets on its own. So a release whose
+ * pairing was withheld was sent to read a `paired` row that is not in the
+ * directory. That is the DEFAULT path today: conway#633's live basename
+ * collision (`ifc/index.ifc` vs `ifc/bldrs/index.ifc`) withholds pairing on
+ * every full-corpus release, and a PR whose whole subject is not trusting a
+ * number more than it deserves cannot ship messaging that overstates its own
+ * output.
+ *
+ * Read as text, for the reason the A/A floor tests above give: executing the
+ * heredoc would put a python3 dependency on `yarn test`. What has to hold is
+ * structural — that the verdict comes from the `measurementBasis` of the
+ * files written and not from "some delta exists", and that both surfaces
+ * render from it. The heredoc itself was extracted and executed against
+ * fabricated snapshots (paired present, paired withheld, paired-but-all-N/A,
+ * no delta at all, non-rc ref, missing directory, and a mid-step crash) while
+ * this was written.
+ */
+describe('the rc job summary\'s paired-gate verdict', () => {
+
+  const workflow = fs.readFileSync(
+    path.resolve(process.cwd(), '.github/workflows/rc-regression.yml'), 'utf8')
+
+  const step = workflow.split('- name: Summarize the paired delta')[1] || ''
+
+  test('reads the verdict off measurementBasis, not off "a delta exists"', () => {
+    // `found` is still tracked — it separates "only a crossRun delta" from
+    // "no delta at all" — but it must not be what selects the gate paragraph.
+    expect(step).toContain('if stats[\'basis\'] == \'paired\':')
+    expect(step).toContain('if paired:')
+    // The mutation this exists to catch: the gate paragraph back under the
+    // flag any delta file sets.
+    expect(step).not.toMatch(/\n {10}if found:\n/)
+  })
+
+  test('a paired file with no timing in it is not a gate', () => {
+    // Every row N/A on both sides is a file that exists and measures nothing.
+    // It is reported as what it is rather than as a gate or as absent.
+    expect(step).toContain('paired_file = True')
+    expect(step).toContain('if stats[\'n\'] > 0:')
+    expect(step).toContain('paired = True')
+  })
+
+  test('the gate paragraph is inside the paired arm only', () => {
+    const gateArm = step.split('\n          if paired:\n')[1] || ''
+    const withheldArm = gateArm.split('\n          elif found:\n')[1] || ''
+
+    expect(gateArm).toContain('Read the **`paired`** row\'s MEDIAN')
+    // The withheld arm is what a default release actually prints, and it must
+    // not carry the gate's language.
+    expect(withheldArm).not.toContain('Read the **`paired`** row\'s MEDIAN')
+    expect(withheldArm).toContain('has no performance gate')
+    expect(withheldArm).toContain('explicitly not a gate')
+  })
+
+  test('the withheld case names WHY, in the README\'s own vocabulary', () => {
+    // Two states a reader cannot tell apart from a directory listing, and
+    // they are different claims about a release. renderReadme() already
+    // distinguishes them; inventing a third phrasing here would leave the
+    // two documents a release ships describing the same run differently.
+    const readmeWithheld = renderReadme({
+      engine: 'conway1.560.1600-ci',
+      repoName: 'test-models',
+      modelCount: 97,
+      retentionCount: 97,
+      deltaName: 'conway1.451.1357-ci_1.560.1600_delta.csv',
+      previousName: 'conway1.451.1357-ci_test-models',
+      pairedSkipReason: 'the corpus collided',
+    }).replace(/\s+/gu, ' ')
+    const readmeAbsent = renderReadme({
+      engine: 'conway1.560.1600-ci',
+      repoName: 'test-models',
+      modelCount: 97,
+      retentionCount: 97,
+      deltaName: 'conway1.451.1357-ci_1.560.1600_delta.csv',
+      previousName: 'conway1.451.1357-ci_test-models',
+    }).replace(/\s+/gu, ' ')
+
+    expect(readmeWithheld).toContain(
+      'attempted and its result was discarded** — withheld because')
+    expect(readmeAbsent).toContain('the paired pass did not run')
+
+    // Whitespace-flattened, and asserted in fragments that sit inside one
+    // Python string literal: the heredoc wraps these sentences across
+    // adjacent literals, so a contiguous match would break on a reflow that
+    // changed nothing a reader sees.
+    const flattened = step.replace(/\s+/gu, ' ')
+
+    expect(flattened).toContain('A paired pass was attempted and its result was')
+    expect(flattened).toContain('discarded — withheld because')
+    expect(flattened).toContain('The paired pass did not run.')
+    // And the reason itself comes from the one party that knows it.
+    expect(step).toContain(
+      'PAIRED_STATE: ${{ steps.bless_perf.outputs.paired-state }}')
+    expect(step).toContain(
+      'PAIRED_REASON: ${{ steps.bless_perf.outputs.paired-reason }}')
+  })
+
+  test('surfaces the gate\'s sample size beside its median', () => {
+    // F2's other surface: `n` counts models with a timing on both sides, and
+    // a FAIL row is in the file but not in it.
+    expect(step).toContain('the models that carry a timing on ')
+    expect(step).toContain('not the models the delta has a row for')
+  })
+
+  test('every exit path leaves the PR step a paragraph', () => {
+    // The step is `continue-on-error`, so a crash inside the Python would
+    // otherwise interpolate an empty string into the PR body — a release
+    // whose description of its own gate silently vanished.
+    expect(step).toContain('trap emit_paragraph EXIT')
+    // And the seed claims nothing, so winning is never a false promise.
+    expect(step).toContain(
+      '**Whether this release has a paired performance gate could not be')
+  })
+})
+
+describe('the re-bless PR body', () => {
+
+  const workflow = fs.readFileSync(
+    path.resolve(process.cwd(), '.github/workflows/rc-regression.yml'), 'utf8')
+
+  const prStep = workflow.split('- name: Open re-bless PR in')[1] || ''
+
+  test('renders the perf paragraph from the run, not from a fixed promise', () => {
+    expect(prStep).toContain('${{ steps.paired_gate.outputs.paragraph }}')
+  })
+
+  test('does not promise two deltas or a paired median unconditionally', () => {
+    // The literal text codex found: a body that told every reader to read the
+    // `*_paired_delta.csv` median, on the path where that file is not written.
+    expect(prStep).not.toContain('plus **two** deltas')
+    expect(prStep).not.toContain('Read the `*_paired_delta.csv` one')
   })
 })

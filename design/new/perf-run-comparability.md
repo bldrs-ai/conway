@@ -623,6 +623,54 @@ which moves the benchmarks layout and needs its own bless cycle; it is tracked
 as [conway#633](https://github.com/bldrs-ai/conway/issues/633), and this branch
 comes out when it lands.
 
+**A `FAIL` row is covered but is not a measurement, and it is a third
+category.** Both regression children write a perf row on their failure paths —
+`ifc_regression_main.ts` and `ap214_regression_main.ts` each write one when the
+parse returns no model, and again with `status: FAIL` when extraction returns
+no scene — so a model neither engine could load leaves a filename in *both*
+CSVs, survives the one-sided filter, and reaches the paired delta with `N/A` in
+every timing column. Keyed on the filename alone that read as full coverage,
+and the gate's median was computed over fewer models than the count beside it
+implied. It is now reported as its own category rather than folded into
+`missing`, and deliberately **does not degrade** the delta: `missing` is a
+child that vanished, which is evidence the pass itself cannot be trusted,
+whereas a `FAIL` is a load the harness ran and reported on. The distinction is
+load-bearing because of
+[conway#634](https://github.com/bldrs-ai/conway/issues/634) — a corpus model
+the published pin cannot load at all, which will be `FAIL` on the paired side
+of every release until that lands, so degrading here would withhold the gate
+indefinitely for a reason #634 owns. The count travels instead: the snapshot's
+README names the models and states the median's real sample size, and the job
+summary says that its `n` is the models with a timing on both sides, not the
+models the file has a row for.
+
+### The messaging is rendered from what was produced, not from what was asked for
+
+The paired delta is a file the release may not have, and three documents
+describe it: the snapshot's `README.md`, the rc **job summary**, and the body
+of the **re-bless PR** opened in the model repo. Only the first was ever
+written from the outcome. The other two keyed off "some conway-to-conway delta
+file summarized" — a condition the surviving cross-run file satisfies on its
+own — so a release whose pairing was withheld was told to read the `paired`
+row's median and promised "**two** deltas" in the PR that blesses it. With the
+#633 collision firing on every full-corpus release, *withheld* is the default
+path, so that was the default message: a claim to have a performance gate that
+this workflow had explicitly declined to produce.
+
+Both now render from the `measurementBasis` column of the files actually
+written. `bless_perf_snapshot.cjs` publishes its own verdict as step outputs —
+`paired`, `withheld` (attempted and its result discarded, plus the clause
+completing "withheld because …"), or `absent` (did not run) — because nothing
+downstream can re-derive *why* from a directory listing. The job summary
+decides *whether* independently, by reading the deltas it is about to print,
+and uses the script's output only for the reason; the PR paragraph is composed
+in the same step and interpolated into the body. The vocabulary is the
+README's, deliberately: two of the three documents a release ships describing
+the same run in different words is the failure this shares wording to avoid. A
+`paired` file that landed with every row `N/A` on both sides is a fourth state
+and is reported as what it is — a file with nothing in it to gate on — rather
+than as a gate or as one that was never written.
+
 **A row with only one side is absent, not `N/A`.** `generateDeltaCSV` unions
 its two inputs, which is right for `crossRun` — a model added to or dropped
 from the corpus between two releases is a fact worth carrying — but in a

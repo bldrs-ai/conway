@@ -357,19 +357,29 @@ describe('a partial paired pass is not blessed as the gate', () => {
     'retainedRssMb', 'retainedHeapUsedMb', 'retainedExternalMb',
   ]
 
+  /** Filename, totalTimeMs, and the child's status when it is not `OK`. */
+  type PerfModel = [string, string] | [string, string, string]
+
   const SCRIPT = path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')
   const OUT_DIR = 'models/benchmarks/conway1.5.0-ci_test-models'
 
   /**
    * A batch-written perf.csv.
    *
-   * @param models Filename -> totalTimeMs, in the order the batch sorted them.
+   * The third tuple element is the child's `status`, defaulting to `OK`. It
+   * is not decoration: both regression children write a row on their failure
+   * paths, so a `FAIL` row is what a model neither engine could load actually
+   * leaves behind, and several tests below turn on the difference between
+   * that and no row at all.
+   *
+   * @param models Filename -> totalTimeMs [-> status], in the order the batch
+   *   sorted them.
    * @return The whole file, header included.
    */
-  function perfCsv(models: [string, string][]): string {
-    const rows = models.map(([file, totalTimeMs]) => [
-      file, 'OK', 'ifc-regression', '10', '20', totalTimeMs, '30', '1.5', '64',
-      '120', '130', '20', '30', '5', '4', '2', '1', '0.5',
+  function perfCsv(models: PerfModel[]): string {
+    const rows = models.map(([file, totalTimeMs, status]) => [
+      file, status ?? 'OK', 'ifc-regression', '10', '20', totalTimeMs, '30',
+      '1.5', '64', '120', '130', '20', '30', '5', '4', '2', '1', '0.5',
     ].join(','))
 
     return `${PERF_HEADER.join(',')}\n${rows.join('\n')}\n`
@@ -390,7 +400,7 @@ describe('a partial paired pass is not blessed as the gate', () => {
    * @param corpus Corpus-relative model paths, or undefined for the union.
    */
   function seed(
-      blessed: [string, string][], pairedRows: [string, string][],
+      blessed: PerfModel[], pairedRows: PerfModel[],
       corpus?: string[]): void {
     const previous = path.join(
       workDir, 'models/benchmarks/conway1.4.0-ci_test-models')
@@ -398,7 +408,9 @@ describe('a partial paired pass is not blessed as the gate', () => {
     fs.mkdirSync(previous, { recursive: true })
     fs.writeFileSync(
       path.join(previous, 'performance-detail.csv'),
-      detailCsvFor('conway1.4.0-ci', blessed), 'utf8')
+      detailCsvFor(
+        'conway1.4.0-ci',
+        blessed.map(([file, totalTimeMs]) => [file, totalTimeMs])), 'utf8')
     fs.writeFileSync(
       path.join(workDir, 'perf.csv'), perfCsv(blessed), 'utf8')
     fs.writeFileSync(
@@ -424,6 +436,7 @@ describe('a partial paired pass is not blessed as the gate', () => {
    */
   function bless(extraArgs: string[] = []): string {
     const summaryPath = path.join(workDir, 'summary.md')
+    const outputPath = path.join(workDir, 'step-output.txt')
     // The workflow's own exclude. Present on every run because the corpus
     // walk is what the demand is derived from, and it has to see the tree the
     // passes saw.
@@ -441,12 +454,32 @@ describe('a partial paired pass is not blessed as the gate', () => {
         ],
         {
           cwd: workDir,
-          env: { ...process.env, GITHUB_STEP_SUMMARY: summaryPath },
+          env: {
+            ...process.env,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            GITHUB_OUTPUT: outputPath,
+          },
           stdio: 'pipe',
         })
 
     return fs.existsSync(summaryPath) ?
       fs.readFileSync(summaryPath, 'utf8') : ''
+  }
+
+  /**
+   * The step outputs the last `bless()` published.
+   *
+   * The rc workflow's job summary and its re-bless PR body both describe the
+   * paired gate, and neither can re-derive from the files on disk WHY there
+   * is none. This is how the reason reaches them.
+   *
+   * @return `key=value` lines, or '' when the run wrote none.
+   */
+  function stepOutput(): string {
+    const outputPath = path.join(workDir, 'step-output.txt')
+
+    return fs.existsSync(outputPath) ?
+      fs.readFileSync(outputPath, 'utf8') : ''
   }
 
   /**
@@ -639,6 +672,116 @@ describe('a partial paired pass is not blessed as the gate', () => {
     expect(readme).toContain('#633')
     // Degraded, not aborted, like every other pairing failure.
     expect(snapshotFiles()).toContain('conway1.4.0-ci_1.5.0_delta.csv')
+  })
+
+  test('a FAIL row is covered, but not counted as a measurement', () => {
+    // THE FINDING. Both regression children write a perf row on their failure
+    // paths, so a model neither engine could load leaves a filename in both
+    // CSVs, survives `isTwoSided`, and reaches the paired delta with N/A in
+    // every timing column. Keyed on the filename alone that read as full
+    // coverage, and the gate's median was quietly over fewer models than the
+    // count beside it implied.
+    seed(
+      [['index.ifc', '100'], ['broken.ifc', '0', 'FAIL']],
+      [['index.ifc', '102'], ['broken.ifc', '0', 'FAIL']])
+
+    bless(['--paired-scope', 'full'])
+
+    // NOT withheld. A FAIL is a load the harness ran and reported on, unlike
+    // a child that vanished — and conway#634 is a corpus model the published
+    // pin cannot load, which would otherwise withhold the gate on every
+    // release for a reason that issue owns.
+    expect(snapshotFiles()).toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+
+    const readme =
+      fs.readFileSync(path.join(workDir, OUT_DIR, 'README.md'), 'utf8')
+
+    expect(readme).toContain('Not every covered row is a measurement')
+    expect(readme).toContain('broken.ifc')
+    expect(readme).toContain("gate's median is over 1 model")
+    expect(readme).toContain('conway#634')
+  })
+
+  test('a clean pass says nothing about failures', () => {
+    // The negative control: the qualification's presence is itself the
+    // signal, so it must not be boilerplate on every snapshot.
+    seed(
+      [['index.ifc', '100'], ['duplex.ifc', '200']],
+      [['index.ifc', '102'], ['duplex.ifc', '210']])
+
+    bless(['--paired-scope', 'full'])
+
+    expect(fs.readFileSync(path.join(workDir, OUT_DIR, 'README.md'), 'utf8'))
+        .not.toContain('Not every covered row is a measurement')
+  })
+
+  test('a blessed pass a model died in is still MISSING, not just failed', () => {
+    // The two categories must not collapse: a row that is absent is evidence
+    // the pass itself is untrustworthy, and that still withholds the gate.
+    seed(
+      [['index.ifc', '100']],
+      [['index.ifc', '102'], ['duplex.ifc', '0', 'FAIL']],
+      ['ifc/index.ifc', 'ifc/duplex.ifc'])
+
+    const summary = bless(['--paired-scope', 'full'])
+
+    expect(snapshotFiles())
+        .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+    expect(summary).toContain('duplex.ifc')
+  })
+
+  test('publishes the gate\'s outcome for the workflow to render from', () => {
+    // The rc job summary and the re-bless PR body used to promise a `paired`
+    // row unconditionally, because all either could see was that SOME delta
+    // file existed — which the surviving cross-run file guarantees. The
+    // verdict they render from now starts here.
+    seed(
+      [['index.ifc', '100'], ['duplex.ifc', '200']],
+      [['index.ifc', '102'], ['duplex.ifc', '210']])
+
+    bless(['--paired-scope', 'full'])
+
+    expect(stepOutput()).toContain('paired-state=paired')
+  })
+
+  test('a withheld gate publishes WHY, on one line', () => {
+    // `withheld` is "attempted and its result discarded"; `absent` is "did
+    // not run". Different claims about a release, and the only party that can
+    // tell them apart is this script.
+    seed(
+      [['index.ifc', '100'], ['duplex.ifc', '200']],
+      [['index.ifc', '102']])
+
+    bless(['--paired-scope', 'full'])
+
+    const output = stepOutput()
+
+    expect(output).toContain('paired-state=withheld')
+    expect(output).toContain('paired-reason=')
+    expect(output).toContain('duplex.ifc')
+    // `key=value` is a line-oriented record: a reason that wrapped would be
+    // parsed as another key.
+    expect(output.trimEnd().split('\n')).toHaveLength(2)
+  })
+
+  test('a paired pass that never ran is `absent`, not `withheld`', () => {
+    seed(
+      [['index.ifc', '100']],
+      [['index.ifc', '102']])
+    fs.rmSync(path.join(workDir, 'perf-paired.csv'))
+
+    const outputPath = path.join(workDir, 'step-output.txt')
+
+    execFileSync(
+        process.execPath,
+        [SCRIPT, 'perf.csv', 'models', '1.5.0', 'test-models'],
+        {
+          cwd: workDir,
+          env: { ...process.env, GITHUB_OUTPUT: outputPath },
+          stdio: 'pipe',
+        })
+
+    expect(fs.readFileSync(outputPath, 'utf8')).toContain('paired-state=absent')
   })
 
   test('a rerun with no paired pass at all clears the last one’s rows', () => {
