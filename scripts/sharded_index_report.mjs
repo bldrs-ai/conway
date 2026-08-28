@@ -2,7 +2,7 @@
  * Serial vs sharded index build, over the SHIPPED builder (#394 M2).
  *
  * This is the measurement half of `src/step/parsing/sharded_index_builder.ts`
- * and `shard_worker_pool_node.ts`: it imports the compiled library rather
+ * and `shard_worker_pool_node.mjs`: it imports the compiled library rather
  * than reimplementing it, so a number quoted from here is a number about the
  * code that ships. (Its ancestor, `scripts/index_shard_spike.mjs`, carried
  * its own copy of the shard and merge logic — that was the point of a spike
@@ -143,8 +143,11 @@ async function main() {
     compareIndexColumns,
     mergeIndexShards,
   } = await load( 'src/step/parsing/sharded_index_builder.js' )
+  // Bench transport, and deliberately a sibling script rather than a
+  // shipped module — see its header. `ShardRunner` in the builder is the
+  // contract; this is one bench-grade implementation of it.
   const { NodeShardWorkerPool } =
-    await load( 'src/step/parsing/shard_worker_pool_node.js' )
+    await import( './shard_worker_pool_node.mjs' )
   const parserExports = await load( parserModule )
 
   const parser = parserExports.default.Instance

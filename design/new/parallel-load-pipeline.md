@@ -515,11 +515,20 @@ partly imbalance — byte-equal shards are not record-equal (703,349 /
 
 ### 3.5a M2: shipped as library code, and re-measured
 
-The spike is now `src/step/parsing/sharded_index_builder.ts` plus
-`shard_worker_pool_node.ts` (#394 M2, conway#624). It is **opt-in**: nothing
-calls it, the serial builder is the default and the fallback, and at N = 1
-`buildColumnarIndexShardedAsync` delegates to `buildColumnarIndexStreaming`
-itself rather than running one shard through the parallel path.
+The spike is now `src/step/parsing/sharded_index_builder.ts` (#394 M2,
+conway#624). It is **opt-in**: nothing calls it, the serial builder is the
+default and the fallback, and at N = 1 `buildColumnarIndexShardedAsync`
+delegates to `buildColumnarIndexStreaming` itself rather than running one
+shard through the parallel path.
+
+What ships is the builder and the merge. The Node `worker_threads` pool that
+produced the timings below is **bench transport** and lives in
+`scripts/shard_worker_pool_node.mjs`: unpublished, in no export barrel, and
+carrying lifecycle defects that are listed in its own header. `ShardRunner`
+in the builder is the contract; the shipped default is `inProcessShardRunner`,
+which has no worker lifecycle at all. So the numbers in this section were
+measured through code that is deliberately held to a lower bar than the code
+being measured — worth knowing when reading them.
 `scripts/sharded_index_report.mjs` measures the shipped code instead of
 carrying its own copy, and its N = 1 row *forces* the shard path so the
 machinery's own cost is visible.

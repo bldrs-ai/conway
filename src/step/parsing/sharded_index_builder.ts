@@ -236,9 +236,29 @@ export interface ShardOutcome<TypeIDType extends number> {
 
 
 /**
- * Runs one shard job somewhere — in this thread, in a worker, in a process.
- * The coordinator never touches the runner's byte source: a worker opens its
- * own, which is why a job carries offsets and nothing else.
+ * Runs one shard job somewhere — in this thread, in a worker, in a process,
+ * in a browser Worker. **This is the transport contract**, and it is
+ * deliberately the only thing this module knows about parallelism: the
+ * coordinator never touches the runner's byte source, which is why a job
+ * carries byte offsets and nothing else. A worker opens its own source from
+ * whatever it was configured with.
+ *
+ * Two implementations exist, and neither is a peer of the other:
+ *
+ * - {@link inProcessShardRunner} is the **default and the only one that
+ *   ships**. It runs shards one after another in this thread — correct, no
+ *   faster than the serial build, and with no worker lifecycle at all, so
+ *   none of a pool's failure modes are reachable through it.
+ * - `scripts/shard_worker_pool_node.mjs` is a **bench-grade** Node
+ *   `worker_threads` pool. It is what produces the speedup numbers in
+ *   `design/new/parallel-load-pipeline.md` §3.5a, it is not published, and
+ *   its header lists lifecycle defects that are known and unfixed. Read it
+ *   as a reference implementation of this contract, not as a component to
+ *   depend on; promoting it into `src/` means owning that lifecycle first.
+ *
+ * A caller wanting real parallelism supplies its own runner. Anything that
+ * can move `ShardJob` offsets out and a {@link ShardOutcome} back satisfies
+ * it — the builder is indifferent to how.
  */
 export type ShardRunner<TypeIDType extends number> =
   ( job: ShardJob ) => Promise<ShardOutcome<TypeIDType>>
@@ -263,7 +283,8 @@ export interface ShardedIndexOptions<TypeIDType extends number> {
   /**
    * Where shards run. Default: in this thread, one after another — correct,
    * and no faster than the serial build. Parallelism comes from supplying a
-   * runner backed by workers (`shard_worker_pool_node.ts` is the Node one).
+   * runner backed by workers; see {@link ShardRunner} for the contract and
+   * for why the Node pool that measures this lives in `scripts/`.
    */
   readonly runner?: ShardRunner<TypeIDType>
 
