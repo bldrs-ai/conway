@@ -287,6 +287,35 @@ The previous pin's own rows are archived beside the deltas as
 `performance-detail-paired-conway<prev>.csv`, so the paired `engine1` numbers
 are inspectable after the run artifact expires.
 
+### The paired delta is all-or-nothing
+
+A paired delta over a silently reduced corpus is worse than no paired delta,
+because everything downstream — the README, the job summary, the release
+conversation — presents it as the gate. Two things enforce that it is complete.
+
+**Coverage is checked as a set, and a shortfall degrades the release to
+cross-run.** Nothing upstream fails loudly when the paired pass loses models:
+a per-model child that times out or is killed leaves no per-file perf CSV,
+`aggregatePerfCsvs()` writes the rows that survived, and the batch still exits
+0 — so a truncated `perf-paired.csv` is indistinguishable from a complete one
+by existence, exit status or row count. `bless_perf_snapshot.cjs` therefore
+compares the paired row set against the models the scope had to cover (the
+blessed pass's own rows under `full`; `regression/smoke_models.txt`
+intersected with them under `smoke`) and, on any missing model, withholds the
+paired delta entirely, names the missing models in the job summary and in the
+snapshot's README, and falls back to the cross-run delta. A set, not a count:
+two failures cancelling two additions leaves a count intact, and the set
+difference is what names the models.
+
+**A row with only one side is absent, not `N/A`.** `generateDeltaCSV` unions
+its two inputs, which is right for `crossRun` — a model added to or dropped
+from the corpus between two releases is a fact worth carrying — but in a
+`paired` file the label asserts of every row that both engines were timed in
+one job on one machine. A one-sided row cannot make that claim, so the paired
+delta drops it rather than publishing it with `engine1 = N/A` under a `paired`
+stamp. This is what makes the README's "every model outside the smoke subset
+has a `crossRun` row and no `paired` row" true rather than aspirational.
+
 ### The field-semantics change, recorded
 
 `engine1TotalTimeMs` in the paired file stops meaning "a number from a previous

@@ -159,6 +159,136 @@ function readPerfCsv(perfPath) {
 }
 
 /**
+ * Read a one-model-per-line list in `regression/smoke_models.txt`'s format:
+ * basenames with extensions, `#` comments and blank lines ignored.
+ *
+ * @param {string} listPath Path to the list.
+ * @return {Array<string>} Model basenames, in file order.
+ */
+function readModelList(listPath) {
+  return fs.readFileSync(listPath, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+/**
+ * Which models the paired pass was SUPPOSED to measure, and which it missed.
+ *
+ * This is the gate's own integrity check, and it exists because nothing
+ * upstream of here fails loudly when the paired pass loses models. A per-model
+ * child that times out or is killed is recorded as a failure by `runForFile()`
+ * with no per-file perf CSV to its name; `aggregatePerfCsvs()` then writes the
+ * rows that DID survive and the batch ends `process.exit(0)`. So a truncated
+ * `perf-paired.csv` is indistinguishable from a complete one by existence, by
+ * exit status, or by "has at least one row" — and a paired delta over a
+ * silently reduced corpus is worse than no paired delta at all, because the
+ * README and the job summary present it as the release gate.
+ *
+ * A SET, not a count. Two children failing while two models the pin's walk
+ * newly sees are added leaves the count intact and the comparison different;
+ * the set difference also names what is missing, which is what makes the
+ * degrade message actionable.
+ *
+ * WHAT IS EXPECTED. Without a list, every model the blessed pass measured —
+ * both passes walk the same corpus under the same exclude regex, so the
+ * blessed row set IS the paired pass's target. With one (the `smoke` scope
+ * narrows the paired pass to `regression/smoke_models.txt`), the listed
+ * models INTERSECTED with the blessed set: a name in the list that the
+ * blessed pass has no row for either is not in the corpus or was lost by the
+ * blessed pass too, and in both cases the paired delta simply has no row to
+ * write — it is not evidence that the paired pass was truncated.
+ *
+ * Keyed on the perf CSV's `file` column, which the regression child writes as
+ * `path.basename()`, so it is cwd-independent — the paired pass runs from
+ * inside the installed package and the blessed pass from the workspace root.
+ * Two corpus models sharing a basename (`ifc/index.ifc` and
+ * `ifc/bldrs/index.ifc` do) collapse to one entry on both sides, so this
+ * cannot see one of that pair going missing. That is the same pre-existing
+ * collision the digest stems have, not a gap this introduces.
+ *
+ * @param {Array<Object>} blessedRows perf.csv rows for this release.
+ * @param {Array<Object>} pairedRows perf.csv rows from the previous pin.
+ * @param {string} expectedListPath Model list to expect, or '' for "whatever
+ *   the blessed pass measured".
+ * @return {{expected: Array<string>, missing: Array<string>,
+ *   listError: string}} `missing` is empty on full coverage; `listError` names
+ *   an expected-model list that could not be read, which is itself a reason to
+ *   degrade — an unverifiable gate is not a gate.
+ */
+function pairedCoverage(blessedRows, pairedRows, expectedListPath) {
+  const measured = new Set(pairedRows.map((row) => row.file || ''));
+  const blessed = new Set(blessedRows.map((row) => row.file || ''));
+
+  let expected = [...blessed];
+
+  if (expectedListPath !== '') {
+    if (!fs.existsSync(expectedListPath)) {
+      return { expected: [], missing: [], listError: expectedListPath };
+    }
+
+    expected = readModelList(expectedListPath).filter((name) => blessed.has(name));
+  }
+
+  return {
+    expected,
+    missing: expected.filter((name) => !measured.has(name)).sort(),
+    listError: '',
+  };
+}
+
+/** How many missing model names a degrade message spells out before eliding. */
+const MAX_NAMED_MISSING = 10;
+
+/**
+ * One sentence saying the paired pass did not cover what it had to.
+ *
+ * @param {{expected: Array<string>, missing: Array<string>}} coverage
+ * @return {string} Reason text, for the log, the job summary and the README.
+ */
+function coverageSkipReason(coverage) {
+  const named = coverage.missing.slice(0, MAX_NAMED_MISSING).join(', ');
+  const elided = coverage.missing.length - MAX_NAMED_MISSING;
+
+  return `the paired pass measured ${
+    coverage.expected.length - coverage.missing.length} of the ${
+    coverage.expected.length} models it had to cover, missing ${named}${
+    elided > 0 ? ` and ${elided} more` : ''}`;
+}
+
+/**
+ * Report a discarded paired delta where a human will see it.
+ *
+ * The log is not enough: the paired delta IS the release gate, and its absence
+ * has to reach the same two places its presence does — the job summary someone
+ * reads during the release, and the README committed next to the snapshot,
+ * which is all a reader has months later.
+ *
+ * @param {string} reason Why the paired delta was not written.
+ */
+function reportPairedSkipped(reason) {
+  console.warn(`::warning::Paired delta withheld: ${reason}.`);
+
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+
+  if (!summaryPath) {
+    return;
+  }
+
+  try {
+    fs.appendFileSync(
+      summaryPath,
+      `\n> **No paired delta for this release.** Withheld because ${reason}. ` +
+      'The release falls back to the `crossRun` delta, which has a 13.66% ' +
+      'median noise floor and is a lead rather than a gate.\n',
+      'utf8');
+  } catch (e) {
+    // A summary that cannot be written must not cost the snapshot.
+    console.warn(`Could not write the job summary: ${e.message}`);
+  }
+}
+
+/**
  * Write the run as a performance-detail.csv.
  *
  * @param {Array<Object>} rows perf.csv row objects.
@@ -401,6 +531,11 @@ function removeStalePairedDetail(outDir) {
  * @param {string} [info.pairedScope] 'full' or 'smoke' — which models the
  *   paired pass covered. A narrower scope is a narrower gate and the README
  *   has to say so on its face.
+ * @param {string} [info.pairedSkipReason] Why a requested paired delta was
+ *   withheld, e.g. a pass that lost models. '' when none was requested or
+ *   none was withheld. Printed for the same reason the scope is: the reader
+ *   of this directory months later has nothing else to tell a paired pass
+ *   that never ran from one that ran and was discarded.
  * @return {string} README body.
  */
 function renderReadme(info) {
@@ -410,6 +545,19 @@ function renderReadme(info) {
 
   const pairedDeltaName = info.pairedDeltaName || '';
   const pairedScope = info.pairedScope || 'full';
+
+  // Two different states, and a reader months from now cannot tell them apart
+  // from the directory listing: no paired pass was asked for, versus one ran
+  // and was thrown away. The second one names why on the snapshot's own face.
+  const unpairedOpening = info.pairedSkipReason ?
+    [
+      'Only a `crossRun` delta was produced for this release. **A paired',
+      'pass was attempted and its result was discarded** — withheld because',
+      `${info.pairedSkipReason}. A partial paired delta is worse than none:`,
+      'it would carry the `paired` label, and with it the claim to be this',
+      "release's gate, over a subset of the corpus nobody chose.",
+    ].join('\n') :
+    'Only a `crossRun` delta was produced for this release: the paired pass\ndid not run.';
 
   // WHICH COLUMNS ARE A MEASUREMENT AND WHICH ARE A LEAD. This is the half of
   // the directory a reader is most likely to get wrong, because the two delta
@@ -459,8 +607,7 @@ ${pairedScope === 'full' ?
 ` :
     `## Which delta to read
 
-Only a \`crossRun\` delta was produced for this release: the paired pass did
-not run. **A \`crossRun\` timing column is not a measurement of conway** —
+${unpairedOpening} **A \`crossRun\` timing column is not a measurement of conway** —
 \`engine1\` comes from a previous run on a machine nobody recorded, and that
 comparison has a measured 13.66% median noise floor against a 9.40% median
 reported regression. Read it as a lead. Why, and what pairing does about it:
@@ -686,11 +833,13 @@ check for.
  * Flags rather than positionals because they are optional and arrive
  * together: `--paired <csv>` is the previous pin's perf.csv as measured by
  * THIS job, `--paired-engine` is the label its rows get, `--paired-scope` is
- * `full` or `smoke`. All three absent is the ordinary un-paired run.
+ * `full` or `smoke`, and `--paired-expected <list>` names the models that
+ * scope was supposed to cover (see pairedCoverage). All absent is the
+ * ordinary un-paired run.
  *
  * @param {Array<string>} argv process.argv.
- * @return {{csv: string, engine: string, scope: string}} Empty strings where
- *   a flag was not supplied.
+ * @return {{csv: string, engine: string, scope: string, expected: string}}
+ *   Empty strings where a flag was not supplied.
  */
 function parsePairedFlags(argv) {
   const read = (flag) => {
@@ -704,6 +853,7 @@ function parsePairedFlags(argv) {
     csv: read('--paired'),
     engine: read('--paired-engine'),
     scope: read('--paired-scope') || 'full',
+    expected: read('--paired-expected'),
   };
 }
 
@@ -716,7 +866,7 @@ function main() {
       `Usage: node ${path.basename(process.argv[1])} ` +
       '<perf.csv> <models-checkout-root> <conway-version> <repo-name> ' +
       '[--paired <previous-pin-perf.csv>] [--paired-engine <label>] ' +
-      '[--paired-scope full|smoke]');
+      '[--paired-scope full|smoke] [--paired-expected <model-list>]');
     process.exit(1);
   }
 
@@ -800,54 +950,76 @@ function main() {
   // share an engine label.
   let pairedDeltaName = '';
   let pairedDetailName = '';
+  // Why the paired delta is absent, in a clause that completes "withheld
+  // because ...". '' means it is not absent, or that no paired pass was asked
+  // for at all.
+  let pairedSkipReason = '';
 
   if (paired.csv !== '' && previous !== null) {
-    if (!fs.existsSync(paired.csv)) {
-      console.warn(
-        `Paired perf CSV ${paired.csv} does not exist; paired delta skipped.`);
+    // Before the branch, not inside the success arm: this run owns the
+    // directory's paired state either way, and a re-run that DEGRADES must
+    // not leave the previous run's paired rows sitting beside a README that
+    // no longer names them. The stale paired *delta* is already gone —
+    // removeStaleDeltas above matches the `_paired` spelling too.
+    const removedDetail = removeStalePairedDetail(outDir);
+    if (removedDetail.length > 0) {
+      console.log(
+        `Removed superseded paired detail: ${removedDetail.join(', ')}`);
+    }
+
+    const pairedRows =
+      fs.existsSync(paired.csv) ? readPerfCsv(paired.csv) : null;
+    const coverage = pairedRows === null ? null :
+      pairedCoverage(rows, pairedRows, paired.expected);
+
+    if (pairedRows === null) {
+      pairedSkipReason = `the paired pass produced no ${path.basename(paired.csv)}`;
+    } else if (pairedRows.length === 0) {
+      pairedSkipReason = `${path.basename(paired.csv)} has no model rows`;
+    } else if (coverage.listError !== '') {
+      pairedSkipReason =
+        `the expected-model list ${coverage.listError} could not be read, ` +
+        'so the paired pass\'s coverage cannot be verified';
+    } else if (coverage.missing.length > 0) {
+      // The finding this branch exists for: a partial paired pass used to be
+      // blessed as the gate, because the only test applied to it was that the
+      // file existed with a row in it. Degrading to the cross-run delta is the
+      // same branch every other pairing failure already lands in.
+      pairedSkipReason = coverageSkipReason(coverage);
     } else {
-      const pairedRows = readPerfCsv(paired.csv);
+      const pairedEngine =
+        paired.engine !== '' ? paired.engine : `conway${previous.version}-paired`;
+      pairedDetailName = `performance-detail-paired-${pairedEngine}.csv`;
+      const pairedDetailPath = path.join(outDir, pairedDetailName);
 
-      if (pairedRows.length === 0) {
-        console.warn(
-          `${paired.csv} has no model rows; paired delta skipped.`);
-      } else {
-        const removedDetail = removeStalePairedDetail(outDir);
-        if (removedDetail.length > 0) {
-          console.log(
-            `Removed superseded paired detail: ${removedDetail.join(', ')}`);
-        }
+      writeDetailCsv(pairedRows, pairedDetailPath, pairedEngine, timestamp);
+      console.log(
+        `Wrote ${pairedRows.length} paired rows to ${pairedDetailPath}`);
 
-        const pairedEngine =
-          paired.engine !== '' ? paired.engine : `conway${previous.version}-paired`;
-        pairedDetailName = `performance-detail-paired-${pairedEngine}.csv`;
-        const pairedDetailPath = path.join(outDir, pairedDetailName);
+      pairedDeltaName = `${previous.engine}_${version}_paired_delta.csv`;
 
-        writeDetailCsv(pairedRows, pairedDetailPath, pairedEngine, timestamp);
-        console.log(
-          `Wrote ${pairedRows.length} paired rows to ${pairedDetailPath}`);
-
-        pairedDeltaName = `${previous.engine}_${version}_paired_delta.csv`;
-
-        // Same failure policy as the cross-run delta above: losing the delta
-        // must not lose the rows, which are the run's only durable record
-        // once the artifact expires.
-        try {
-          generateDeltaCSV(
-            pairedDetailPath, detailPath,
-            path.join(outDir, pairedDeltaName), false,
-            MEASUREMENT_BASIS.PAIRED);
-          console.log(`Wrote paired delta ${pairedDeltaName}`);
-        } catch (e) {
-          console.warn(`Failed to generate paired delta: ${e.message}`);
-          pairedDeltaName = '';
-        }
+      // Same failure policy as the cross-run delta above: losing the delta
+      // must not lose the rows, which are the run's only durable record
+      // once the artifact expires.
+      try {
+        generateDeltaCSV(
+          pairedDetailPath, detailPath,
+          path.join(outDir, pairedDeltaName), false,
+          MEASUREMENT_BASIS.PAIRED);
+        console.log(`Wrote paired delta ${pairedDeltaName}`);
+      } catch (e) {
+        console.warn(`Failed to generate paired delta: ${e.message}`);
+        pairedDeltaName = '';
+        pairedSkipReason = `the paired delta could not be generated: ${e.message}`;
       }
     }
   } else if (paired.csv !== '') {
-    console.warn(
-      'A paired perf CSV was supplied but no predecessor snapshot exists; ' +
-      'paired delta skipped.');
+    pairedSkipReason =
+      'no predecessor snapshot exists to pair against';
+  }
+
+  if (pairedSkipReason !== '') {
+    reportPairedSkipped(pairedSkipReason);
   }
 
   fs.writeFileSync(
@@ -869,6 +1041,7 @@ function main() {
         paired.engine !== '' ? paired.engine :
           (previous !== null ? `conway${previous.version}-paired` : ''),
       pairedScope: paired.scope,
+      pairedSkipReason,
     }),
     'utf8');
 }
@@ -879,7 +1052,9 @@ if (require.main === module) {
 
 module.exports = {
   DETAIL_COLUMNS,
+  coverageSkipReason,
   findPreviousSnapshot,
+  pairedCoverage,
   parsePairedFlags,
   isChronologicalDelta,
   removeStaleDeltas,

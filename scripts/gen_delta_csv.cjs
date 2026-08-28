@@ -30,7 +30,8 @@ const MEASUREMENT_BASIS = { PAIRED: 'paired', CROSS_RUN: 'crossRun' };
  * @param {string} outputCsvPath Where to write the resulting delta CSV.
  * @param {boolean} [isWebIfc=false] If true, compute only selected deltas and output a limited set of columns.
  * @param {string} [measurementBasis='crossRun'] One of MEASUREMENT_BASIS.
- *   Stamped into every row's `measurementBasis` column.
+ *   Stamped into every row's `measurementBasis` column. A `paired` delta also
+ *   DROPS its one-sided rows — see isTwoSided.
  */
 function generateDeltaCSV(
     csvPath1, csvPath2, outputCsvPath, isWebIfc = false,
@@ -39,7 +40,35 @@ function generateDeltaCSV(
   const data2 = readDataFromCsv(csvPath2);
 
   const deltas = computeDeltas(data1, data2, isWebIfc);
-  writeDataToCsv(deltas, outputCsvPath, isWebIfc, measurementBasis);
+
+  // computeDeltas unions its two inputs, emitting an all-N/A row for a model
+  // only one side measured. That is right for `crossRun` — the archive's
+  // whole job is continuity, and a model added to or dropped from the corpus
+  // between two releases is a fact about the corpus worth carrying — but it
+  // is a false claim in a `paired` file, where the label asserts of EVERY ROW
+  // that both engines were timed in one job on one machine. A row whose
+  // `engine1` is `N/A` was not, so it is absent here rather than present and
+  // mislabelled.
+  const written = measurementBasis === MEASUREMENT_BASIS.PAIRED ?
+    deltas.filter(isTwoSided) :
+    deltas;
+
+  writeDataToCsv(written, outputCsvPath, isWebIfc, measurementBasis);
+}
+
+/**
+ * Did BOTH sides of the delta contribute a row to this one?
+ *
+ * computeDeltas marks the missing half of a one-sided row by writing `N/A`
+ * into every column it would have filled from that side, `engine1`/`engine2`
+ * included — and a real detail CSV always names its engine, so those two
+ * cells are an unambiguous marker rather than a value that could occur.
+ *
+ * @param {Object} delta One row as built by computeDeltas.
+ * @return {boolean} True when the row differences two measurements.
+ */
+function isTwoSided(delta) {
+  return delta.engine1 !== 'N/A' && delta.engine2 !== 'N/A';
 }
 
 /**

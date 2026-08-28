@@ -938,7 +938,10 @@ jobs:
       # only when perf-paired.csv actually exists, and bless_perf_snapshot.cjs
       # warns and writes the cross-run delta alone when it does not. Every way
       # the paired pass can fail — no predecessor, npm unreachable, a pin too
-      # old to carry the batch entry point, a timeout — lands in that branch.
+      # old to carry the batch entry point, a step timeout — lands in that
+      # branch, and so does the one failure that leaves a FILE behind: a pass
+      # that lost per-model children and aggregated the survivors. See the
+      # coverage check below.
       - name: Bless perf snapshot and delta
         if: ${{ !cancelled() }}
         env:
@@ -967,6 +970,23 @@ jobs:
             # snapshot. Two files sharing a column layout must not also share
             # an engine label.
             PAIRED_ARGS="--paired $PAIRED --paired-engine conway${PIN_NPM_VERSION}-paired --paired-scope $PERF_PAIR"
+            # WHICH MODELS THAT FILE HAD TO CONTAIN. Existence is not a test:
+            # a per-model child that times out or is killed leaves no per-file
+            # perf CSV, the batch aggregates the rows that survived and still
+            # exits 0, so a truncated perf-paired.csv looks exactly like a
+            # complete one from here. bless_perf_snapshot.cjs compares the
+            # paired row set against the models it was supposed to cover and
+            # degrades to the cross-run delta on any shortfall.
+            #
+            # Under `full` the target is implicit — both passes walk the same
+            # corpus under the same exclude regex, so the blessed pass's own
+            # rows ARE the expected set and no list is needed. Under `smoke`
+            # the paired pass was narrowed by the list below, so the list has
+            # to be handed over or the check would demand the whole corpus and
+            # degrade every smoke run.
+            if [ "$PERF_PAIR" = "smoke" ]; then
+              PAIRED_ARGS="$PAIRED_ARGS --paired-expected regression/smoke_models.txt"
+            fi
           else
             echo "::notice::No perf-paired.csv; writing the cross-run delta only."
           fi

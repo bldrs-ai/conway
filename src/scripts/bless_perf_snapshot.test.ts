@@ -19,12 +19,19 @@ const require_ = createRequire(import.meta.url)
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
 const {
-  DETAIL_COLUMNS, findPreviousSnapshot, isChronologicalDelta, removeStaleDeltas,
-  removeStalePairedDetail, parsePairedFlags, renderReadme, writeDetailCsv,
-  versionCompare,
+  DETAIL_COLUMNS, coverageSkipReason, findPreviousSnapshot, isChronologicalDelta,
+  pairedCoverage, removeStaleDeltas, removeStalePairedDetail, parsePairedFlags,
+  renderReadme, writeDetailCsv, versionCompare,
 } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     DETAIL_COLUMNS: string[],
+    coverageSkipReason: (
+      coverage: { expected: string[], missing: string[] }) => string,
+    pairedCoverage: (
+      blessedRows: Record<string, string>[],
+      pairedRows: Record<string, string>[],
+      expectedListPath: string) =>
+      { expected: string[], missing: string[], listError: string },
     isChronologicalDelta: (name: string, version: string) => boolean,
     renderReadme: (info: {
       engine: string,
@@ -37,11 +44,12 @@ const {
       pairedDetailName?: string,
       pairedEngine?: string,
       pairedScope?: string,
+      pairedSkipReason?: string,
     }) => string,
     removeStaleDeltas: (outDir: string, version: string) => string[],
     removeStalePairedDetail: (outDir: string) => string[],
     parsePairedFlags: (argv: string[]) =>
-      { csv: string, engine: string, scope: string },
+      { csv: string, engine: string, scope: string, expected: string },
     findPreviousSnapshot: (dir: string, self: string, version: string) =>
       { name: string, version: string, engine: string } | null,
     writeDetailCsv: (
@@ -521,26 +529,110 @@ describe('removeStalePairedDetail', () => {
 
 describe('parsePairedFlags', () => {
 
-  test('reads the three flags, and defaults scope to full', () => {
+  test('reads the four flags, and defaults scope to full', () => {
     expect(parsePairedFlags([
       'node', 'bless', 'perf.csv', 'models', '1.5.0', 'test-models',
       '--paired', '/tmp/perf-paired.csv',
       '--paired-engine', 'conway1.4.0-paired',
       '--paired-scope', 'smoke',
+      '--paired-expected', 'regression/smoke_models.txt',
     ])).toEqual({
       csv: '/tmp/perf-paired.csv',
       engine: 'conway1.4.0-paired',
       scope: 'smoke',
+      expected: 'regression/smoke_models.txt',
     })
 
     expect(parsePairedFlags(['node', 'bless', 'perf.csv', 'models']))
-        .toEqual({ csv: '', engine: '', scope: 'full' })
+        .toEqual({ csv: '', engine: '', scope: 'full', expected: '' })
   })
 
   test('a trailing flag with no value reads as absent', () => {
     // Otherwise `undefined` reaches fs.existsSync and the paired branch is
     // entered on a run that supplied nothing.
     expect(parsePairedFlags(['node', 'bless', '--paired']).csv).toBe('')
+  })
+})
+
+describe('pairedCoverage', () => {
+
+  /**
+   * perf.csv rows, reduced to the only column coverage looks at.
+   *
+   * @param names Model basenames as the regression child wrote them.
+   * @return Row objects.
+   */
+  function rows(names: string[]): Record<string, string>[] {
+    return names.map((file) => ({ file, status: 'OK' }))
+  }
+
+  test('reports the models the paired pass did not measure', () => {
+    const coverage = pairedCoverage(
+      rows(['index.ifc', 'duplex.ifc', 'MB-Khaya.ifc']),
+      rows(['index.ifc']), '')
+
+    expect(coverage.missing).toEqual(['MB-Khaya.ifc', 'duplex.ifc'])
+    expect(coverage.expected).toHaveLength(3)
+  })
+
+  test('compares sets, so two failures cannot cancel to the right count', () => {
+    // The reason this is not `pairedRows.length === blessedRows.length`: a
+    // pass that lost one model and picked up another has the count of a
+    // complete one, and only the difference names what went missing.
+    const coverage = pairedCoverage(
+      rows(['index.ifc', 'duplex.ifc']),
+      rows(['index.ifc', 'stray.ifc']), '')
+
+    expect(coverage.missing).toEqual(['duplex.ifc'])
+  })
+
+  test('an expected list narrows the demand to that list', () => {
+    // `smoke` scope: the paired pass covers regression/smoke_models.txt, so
+    // demanding the whole corpus would degrade every smoke run.
+    const listPath = path.join(workDir, 'smoke.txt')
+
+    fs.writeFileSync(listPath, '# header\n\nindex.ifc\n', 'utf8')
+
+    expect(pairedCoverage(
+      rows(['index.ifc', 'duplex.ifc']), rows(['index.ifc']),
+      listPath).missing).toEqual([])
+  })
+
+  test('a listed model the blessed pass has no row for is not demanded', () => {
+    // It is either not in this corpus or was lost by the blessed pass too. In
+    // both cases the delta has no row to write, which is not evidence that
+    // the PAIRED pass was truncated — and this check only speaks to that.
+    const listPath = path.join(workDir, 'smoke.txt')
+
+    fs.writeFileSync(listPath, 'index.ifc\nnot-in-corpus.ifc\n', 'utf8')
+
+    const coverage = pairedCoverage(
+      rows(['index.ifc']), rows(['index.ifc']), listPath)
+
+    expect(coverage.expected).toEqual(['index.ifc'])
+    expect(coverage.missing).toEqual([])
+  })
+
+  test('an unreadable list is reported rather than silently ignored', () => {
+    const coverage = pairedCoverage(
+      rows(['index.ifc']), rows(['index.ifc']),
+      path.join(workDir, 'nope.txt'))
+
+    expect(coverage.listError).toContain('nope.txt')
+  })
+})
+
+describe('coverageSkipReason', () => {
+
+  test('names the missing models, and elides a flood of them', () => {
+    const missing = Array.from({ length: 12 }, (_, i) => `m${i}.ifc`)
+    const reason = coverageSkipReason({
+      expected: Array.from({ length: 40 }, (_, i) => `m${i}.ifc`), missing })
+
+    expect(reason).toContain('28 of the 40 models')
+    expect(reason).toContain('m0.ifc')
+    expect(reason).toContain('and 2 more')
+    expect(reason).not.toContain('m11.ifc')
   })
 })
 
@@ -747,6 +839,27 @@ describe('renderReadme', () => {
     expect(smoke).toContain('**Scope: the smoke subset only.**')
     expect(smoke).toContain('`crossRun` row and no `paired` row')
     expect(smoke).not.toContain('covered the **full corpus**')
+  })
+
+  test('distinguishes a discarded paired pass from one that never ran', () => {
+    // Both leave a directory with one delta in it. Only the README can tell a
+    // reader months later which of the two happened, and a withheld gate is
+    // the one worth knowing about — it says the paired pass ran and could not
+    // be trusted.
+    const discarded = renderReadme({
+      ...info,
+      pairedSkipReason:
+        'the paired pass measured 96 of the 97 models it had to cover, ' +
+        'missing duplex.ifc',
+    })
+
+    expect(discarded).toContain('discarded')
+    expect(discarded).toContain('missing duplex.ifc')
+    expect(discarded).toContain('A partial paired delta is worse than none')
+    // Still the un-paired branch: no second delta is named anywhere.
+    expect(discarded).not.toContain('This directory holds **two**')
+
+    expect(renderReadme(info)).not.toContain('discarded')
   })
 
   test('still warns off the cross-run delta when no paired pass ran', () => {
