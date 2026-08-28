@@ -46,8 +46,10 @@ whose own message says "the three ParameterVertex surface tessellators
 commit message names *spherical*, but `TriangulateSphericalSurface()`
 (`mesh_utils.h:1324`) has no `ScratchArenaScope` and never constructs a
 `WingedEdgeMesh<ParameterVertex>` — it builds `WingedEdgeMesh<glm::dvec3>` on
-the default heap resource (**[code]**, read in full: lines 1324–2344 contain
-no `ScratchArenaScope`, no `ThreadScratchResource`). The commit's *code* covers
+the default heap resource (**[code]**, read in full: lines 1324–1655 —
+`TriangulateSphericalSurface()`'s own span, ending where
+`TriangulateToroidalSurface()` begins at `:1656` — contain no
+`ScratchArenaScope`, no `ThreadScratchResource`). The commit's *code* covers
 conical, not spherical; the commit's *prose* says the opposite. Site 4
 (`TriangulateBounds`) landed separately, in `2afcf37 "AFTP phase 2: wire
 TriangulateBounds scratch to the arena"`.
@@ -67,7 +69,7 @@ natural way to conclude the opposite, and a review round did exactly that
 
 1. `ConwayGeometryProcessor.cpp:705-711` — the `!parameters.advancedBrep`
    branch. This covers planar **non-advanced** faces only.
-2. `ConwayGeometryProcessor.cpp:745-747` — the **fall-through `else` at the
+2. `ConwayGeometryProcessor.cpp:745-748` — the **fall-through `else` at the
    end of the `advancedBrep` branch**, after the seven
    `surface.<kind>.Active` tests. This is the one a planar advanced face
    reaches.
@@ -107,7 +109,7 @@ row read from the named function body):
 | `TriConical` | `TriangulateConicalSurface` | `<ParameterVertex>` on `ThreadScratchResource()` | **yes** — site 1 |
 | `TriSphere` | `TriangulateSphericalSurface` | `<glm::dvec3>`, default heap | **no** |
 | `TriToroidal` | `TriangulateToroidalSurface` | `<glm::dvec3>`, default heap | **no** |
-| `TriRevolution` | `TriangulateRevolution` | `<glm::dvec3>`, default heap | **no** (falls back to `TriangulateBounds` — arena-covered — only on a degenerate-unwrap exit) |
+| `TriRevolution` | `TriangulateRevolution` | `<glm::dvec3>`, default heap | **no** |
 | `TriExtrusion` | `TriangulateExtrusion` (surface-of-linear-extrusion tessellator) | `<glm::dvec3>` main body; delegates to `TriangulateBounds` on several fallback branches | **partially** — main algorithm no, several named fallbacks yes |
 
 Four of eight advanced-BREP surface tags are arena-covered; four are not.
@@ -157,7 +159,8 @@ tag (`TriBounds`) that does have coverage.
 One corroborating detail: `AllocTelemetryScope`, the instrument the AFTP
 telemetry pass reads (`structures/alloc_telemetry.h:17`), is placed only
 around `AddFaceToGeometry`/`AddFaceToGeometrySimple`
-(`ConwayGeometryProcessor.cpp:676`, `:807`). It never wraps
+(`ConwayGeometryProcessor.cpp:676`, `:624`). `StageFaceToGeometrySimple`
+(`:807`) has no telemetry scope of its own. It never wraps
 `getExtrudedAreaSolid`/`Extrude()`. So "the AFTP telemetry pass recorded zero
 scoped faces on ordinary extrusion/profile/CSG IFC models" is expected on
 architectural grounds alone — the instrument was never placed on that call
@@ -188,11 +191,20 @@ worth confirming rather than assuming." **It does not; it is IFC-only.**
   AP214 mechanical-CAD format).
 - The AP214 (STEP mechanical) model class, `AP214StepModel`
   (`src/AP214E3_2010/ap214_step_model.ts:21`), holds
-  `geometry = new AP214ModelGeometry()` — **[code]**, and
-  `AP214ModelGeometry` (`src/AP214E3_2010/ap214_model_geometry.ts`) has no
-  `residency`, `budget`, or `evict` member at all — repo-grep over that file
-  is empty for all three terms. There is no AP214 analogue of
-  `GeometryResidency`.
+  `geometry = new AP214ModelGeometry()` (`ap214_step_model.ts:25`) —
+  **[code]**, and `AP214ModelGeometry`
+  (`src/AP214E3_2010/ap214_model_geometry.ts`) has no `residency`,
+  `budget`, or `evict` member at all — repo-grep over that file is empty
+  for all three terms. There is no AP214 analogue of `GeometryResidency`.
+  `AP214ModelGeometry` does have `delete(localID)` and
+  `deleteTemporaries()` (`ap214_model_geometry.ts:59,77`), and
+  `deleteTemporaries()` is called on the AP214 load path
+  (`ap214_geometry_extraction.ts:6746`), the exact mirror of the IFC call
+  at `ifc_geometry_extraction.ts:8649` — so AP214 does shed CSG/boolean
+  temporaries the same way IFC does. What it lacks is specifically a
+  *budgeted LRU over retained meshes*: no cap, no recency tracking, no
+  byte ceiling, nothing driven by `GEOMETRY_BUDGET_MB`, and no
+  `GeometryResidency` registration.
 - The `GEOMETRY_BUDGET_MB` open setting wires in only through
   `ifc_api_proxy_ifc.ts:437-440` (`model.geometryResidency.setBudgetBytes(...)`),
   which only exists on the IFC front end
@@ -203,27 +215,39 @@ So `demandGeometry` (the issue's name for this mechanism) does not exist
 under that literal name anywhere in the tree (**[code]**, repo-wide grep is
 empty); the actual API is `GeometryResidency.evictToBudget()` /
 `.setBudgetBytes()`, called from `ifc_api_proxy_ifc.ts` only. **A STEP
-(AP214) load gets no eviction, no LRU, no budget of any kind on its
-extracted-geometry cache** — it retains everything for the process
-lifetime, full stop. This is a real gap, and a bigger one than "does the
-budget apply to STEP too" — STEP has no comparable machinery to apply.
+(AP214) load sheds its CSG/boolean temporaries via `deleteTemporaries()`,
+same as IFC, but has no budgeted LRU, no recency tracking, and no byte
+ceiling over the meshes it retains** — nothing driven by
+`GEOMETRY_BUDGET_MB`, and no `GeometryResidency` registration. This is a
+real gap, and a bigger one than "does the budget apply to STEP too" — STEP
+has no comparable retained-mesh eviction policy to apply, even though it
+does clean up transients the way IFC does.
 
 ## Adaptive residency (#616/#617) — format-agnostic, and the one mechanism that is shared
 
 `WindowedStepBufferProvider` (`src/step/step_buffer_provider.ts:354`) is
-constructed from `StepModelBase.openStreamed` (`src/step/step_model_base.ts:822`)
-— **[code]**. `StepModelBase` is the common ancestor of both `IfcStepModel`
-and `AP214StepModel` (both `extends StepModelBase<...>` —
-`ifc_step_model.ts:21`, `ap214_step_model.ts:21`). This mechanism operates
-on the raw STEP-source byte window during parsing, before any format-specific
-geometry extraction begins, so it is genuinely shared: both formats get the
-same adaptive-cap policy, the same thrash detection, the same doubling
-behaviour described in `step_buffer_provider.ts:58-115`.
+constructed inside `StepModelBase.spillSourceToExternalStore`
+(`src/step/step_model_base.ts:811`, construction at `:822`) — **[code]**.
+(There is no `StepModelBase.openStreamed` — grepped empty.)
+`StepModelBase` is the common ancestor of both `IfcStepModel` and
+`AP214StepModel` (both `extends StepModelBase<...>` — `ifc_step_model.ts:21`,
+`ap214_step_model.ts:21`), and `spillSourceToExternalStore` itself is
+format-agnostic — the *class* is shared. But every **open-time**
+construction of `WindowedStepBufferProvider` in the tree is IFC-side
+(`ifc_step_parser.ts:118,159`, `ifc_stream_open.ts:129,211`,
+`ifc_api_proxy_ifc.ts:1245`); `src/AP214E3_2010/` constructs none, and has
+no `ap214_stream_open` — AP214 reaches the mechanism only if a caller
+explicitly spills via `ifc_api_proxy_ap214.ts:213` →
+`spillSourceToExternalStore`. So "both formats get the same adaptive-cap
+policy" is true of the mechanism *when a caller spills*, not of an
+ordinary AP214 open — an AP214 open does not windowed-buffer its source by
+default the way an IFC open does. Once spilling happens, the policy is
+identical: the same thrash detection, the same doubling behaviour
+described in `step_buffer_provider.ts:58-115`, for both formats.
 
 This is the one row in this matrix where "applies across formats" is
-correct as stated (issue text didn't claim this one needed confirming, and
-the audit backs that up) — included here so the matrix is complete rather
-than only correcting claims.
+correct, with that qualification — included here so the matrix is
+complete rather than only correcting claims.
 
 On D3D specifically: per conway#635, adaptive residency grows the window to
 the whole 213.6 MB file "by design," so on this model it *costs* ~150 MB
@@ -287,10 +311,6 @@ was evaluated and excluded.
   used for Arty_Z7 against D3D, this time keyed to the new tags. This is a
   wasm rebuild plus a telemetry pass, which is why it's out of scope here
   rather than attempted.
-- **Whether `TriangulateRevolution`'s degenerate-fallback path to
-  `TriangulateBounds` fires often enough on real corpora to matter.** Read
-  from code that the fallback exists; not measured how frequently it is
-  taken.
 - **Whether an AP214-side `GeometryResidency` analogue is wanted at all.**
   This audit establishes that none exists, not whether AP214's load profile
   needs one — STEP mechanical-CAD models may have a different retained-vs-
@@ -311,8 +331,14 @@ it by default:
    arena-backed by construction, not by retrofit.** The pattern already
    exists and is cheap to apply: construct on `conway::ThreadScratchResource()`
    under a `ScratchArenaScope` (or `conway::ScratchAllocator<T>` for a bare
-   `std::vector`) at the top of the function, exactly as sites 1–4 above do.
-   A new `Triangulate*` function, a new CSG entry point, or a new solid-sweep
+   `std::vector`) immediately before the scratch structure it covers, as
+   sites 1–4 above do — at the top of the function for sites 1–3, or, for
+   site 4, at the top of the branch that actually allocates
+   (`geometry_utils.h:767`, inside `TriangulateBounds`'s
+   `else if (bounds.size() > 0)` arm, not the function's top-level
+   `if` at `:743`). The scope should sit as close to its allocation as the
+   function's control flow allows, not necessarily at the function's own
+   entry. A new `Triangulate*` function, a new CSG entry point, or a new solid-sweep
    helper should default to this rather than needing someone to notice its
    allocation profile first. The four currently-uncovered advanced-BREP
    tags (`TriSphere`, `TriToroidal`, `TriRevolution`, `TriExtrusion`) and
