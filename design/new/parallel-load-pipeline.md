@@ -513,15 +513,16 @@ calibration. D3D's 0.73 is partly load (2.4–2.8 during that run) and
 partly imbalance — byte-equal shards are not record-equal (703,349 /
 678,449 / 685,726 / 644,312 top-level rows).
 
-### 3.5a M2: shipped as library code — and the efficiency did not reproduce
+### 3.5a M2: shipped as library code, and re-measured
 
 The spike is now `src/step/parsing/sharded_index_builder.ts` plus
-`shard_worker_pool_node.ts` (#394 M2). It is **opt-in**: nothing calls it, the
-serial builder is the default and the fallback, and at N = 1 the coordinator
-delegates to `buildColumnarIndexStreaming` itself rather than running one
-shard through the parallel path. `scripts/sharded_index_report.mjs` measures
-the shipped code instead of carrying its own copy, and its N = 1 row *forces*
-the shard path so the machinery's own cost is visible.
+`shard_worker_pool_node.ts` (#394 M2, conway#624). It is **opt-in**: nothing
+calls it, the serial builder is the default and the fallback, and at N = 1
+`buildColumnarIndexShardedAsync` delegates to `buildColumnarIndexStreaming`
+itself rather than running one shard through the parallel path.
+`scripts/sharded_index_report.mjs` measures the shipped code instead of
+carrying its own copy, and its N = 1 row *forces* the shard path so the
+machinery's own cost is visible.
 
 Four things differ from the spike, each a decision rather than a port:
 
@@ -542,53 +543,76 @@ Four things differ from the spike, each a decision rather than a port:
 
 **Byte-identity holds.** Same SHA-256 over all four columns plus `count`,
 `firstInlineElement`, `expressIdsSorted` and `complexEntries.size`, at N = 1,
-2 and 4 on both models, over three runs each, with **0 seam repairs**.
+2 and 4 on both models, over three runs each, with **0 seam repairs** — in
+every run taken, contended or idle.
 
-**The speedups did not reproduce, and the efficiency is lower** *(measured
-here, 2026-08-28)*. Box: the same 4 cores / 16 GB / no swap, calibrated
-immediately before the runs at **0.991 pure-CPU efficiency at N = 4** (four
-spin processes, 1547 ms solo vs 1560 ms worst) — so the box was genuinely
-idle and the shortfall is not contention on the calibration's terms. Three
-runs per configuration, each a fresh process after a page-cache warm; median
-first, best in parentheses.
+**The timings reproduce, but only on an idle box** *(measured here,
+2026-08-28)*. Same 4 cores / 16 GB / no swap.
+
+*Conditions, stated because they turned out to decide the verdict.* The table
+below was taken at **00:30 UTC on 2026-08-28**, with `uptime` reporting
+loadavg **0.29 / 2.50 / 11.13** and `free -m` **15,207 MB available**, no other
+`node` process on the box, and this session the only agent on it. Three runs
+per configuration, each a fresh process after a double page-cache warm; median
+first, best in parentheses. Immediately before the runs the box was calibrated
+with four pure-CPU processes at **0.995 (N = 2) / 0.969 (N = 4)** — that, not
+1.0, is the ceiling these rows are against.
 
 | model | serial | N=1 (forced) | N=2 | N=4 | N=4 shard efficiency |
 |---|---:|---:|---:|---:|---:|
-| PSB 860.7 MB | 7,700 ms | 8,259 (0.93×) | 4,378 (1.76×) | 3,198 (**2.41×**), best 2,639 (2.92×) | 0.630, best **0.785** |
-| D3D 213.6 MB | 3,467 ms | 7,447 (0.47×) | 5,903 (0.59×) | 4,873 (**0.71×**), best 4,204 (0.82×) | 0.198, best 0.232 |
+| PSB 860.7 MB (0.594 % inline) | 7,895 ms | 7,921 (1.00×) | 4,199 (1.88×) | 2,424 (**3.26×**), best 3.30× | **0.857** (best 0.871) |
+| D3D 213.6 MB (20.995 % inline) | 3,024 ms | 6,309 (0.48×) | 4,013 (0.75×) | 2,623 (**1.15×**), best 1.23× | 0.331 |
 
-Against §3.5's 3.42× / 0.90 on PSB this is a **miss**, and it is recorded as
-one. Three things are worth separating before anyone reads it as a
-regression:
+Against §3.5's 3.42× / 0.90 on PSB and 1.10× on D3D: **PSB narrowly misses,
+D3D slightly beats.** Three things are worth stating precisely.
 
-- **The per-shard parse time did not get worse.** At N = 4 on PSB the worst
-  shard is 2,289–2,452 ms here against the spike's 2,577 ms. What moved is the
-  *baseline*: this run's serial reference is 7,700 ms against the spike's
-  9,244 ms for the same work on the same box. Efficiency is a ratio to that
-  baseline, so a 19 % faster reference costs ~0.15 of efficiency on its own.
-  **Why the serial reference is faster was not isolated** — candidates are the
-  explicit double page-cache warm here, and `main` having moved across #616 /
-  #617 / #618 — so this is offered as arithmetic, not as an explanation.
-- **The N = 2 → N = 4 fall is real and is not explained by the calibration.**
-  N = 2 reaches 0.902, right on the spike's figure; N = 4 falls to 0.785 at
-  best. A register-bound spin loop scales at 0.991 on this box while four
-  concurrent window parses do not, which points at memory bandwidth rather
-  than cores — but that is a hypothesis, not a measurement.
-- **The N = 4 spread is wide** (2,639–3,430 ms on PSB, 4,204–6,096 ms on D3D)
-  against a serial reference that is stable to ±5 %. Wide spread on the
-  parallel rows only is the signature of something intermittently taking a
-  core, so the *best* rows are likely the truer ones — and even those miss.
+- **PSB's N = 4 efficiency is 0.857 against §3.5's 0.90 and M2's 0.935.** That
+  is a miss and is recorded as one. It is 88 % of *this box's own*
+  contemporaneous pure-CPU ceiling (0.969), and the gap opens between N = 2
+  (0.967, i.e. essentially free) and N = 4. A register-bound spin loop scales
+  at 0.969 here while four concurrent window parses reach 0.857, which points
+  at memory bandwidth rather than cores — a hypothesis, not a measurement, and
+  the obvious next probe.
+- **The shard path costs nothing at N = 1 on PSB** (7,921 ms against a 7,895 ms
+  serial build, efficiency 1.009). Pack, transfer, deserialize and merge
+  together are inside the run-to-run spread on a model with 0.594 % inline
+  rows. On D3D the same term costs **2.1×**, which is §3.6 in one number.
+- **Contention destroys these numbers and does not announce itself.** The
+  contended figures are kept here deliberately, as the contrast rather than as
+  history. The same three configurations measured **14 minutes earlier**, at
+  00:16 UTC with loadavg **2.05 rising to 7.04** across the run and three
+  sibling agents running full pre-commit gates, gave:
 
-**D3D is now a net loss at every N, including N = 1.** One shard covering the
-whole file is **2.1× slower than the serial build** (7,447 ms vs 3,467 ms).
-That is not sharding: it is §3.6's transfer term, paid in full by a single
-shard, because all 720,661 retained inline entities are structured-cloned
-across `postMessage` whatever N is. §3.6's conclusion therefore stands
-unchanged and hardens into a **precondition**: until inline entities are
-packed into typed arrays and transferred zero-copy, the sharded builder must
-not be turned on for inline-heavy models, and the derived shard count would
-happily pick 4 for D3D today. This is the single most important thing to fix
-before any caller opts in by default.
+  | | contended, 00:16 UTC | idle, 00:30 UTC |
+  |---|---:|---:|
+  | PSB N=4 | 2.41×, efficiency 0.630 | **3.26×, 0.857** |
+  | PSB N=1 shard-path cost | 7 % | **0 %** |
+  | D3D N=4 | **0.71× — a net loss** | **1.15× — a net win** |
+
+  The serial reference was stable to ±5 % across *both* sets, so the damage
+  was confined to the parallel rows. **Wide spread on the parallel rows against
+  a stable serial row is the signature**, and the honest reading is that a
+  contended box understates parallel efficiency badly enough to invert a sign.
+  Anyone re-running this must state which box each row came from.
+
+  Two operational notes, because both cost hours. Loadavg on this host reached
+  **121** with three agents each running `yarn precommit` (each of which runs
+  the full Jest suite) against 16 GB; at that point jest workers are
+  `SIGKILL`ed by the OOM killer, which reads as a failed gate rather than as a
+  full box. And **stopping an agent does not reap its processes**: a detached
+  `yarn precommit` tree from a stopped session was found holding ~6 GB with no
+  agent attached, and killing it took the box from loadavg 108 to 12. Some of
+  the contention above was therefore phantom, which is a further reason to
+  trust the idle rows.
+
+**D3D's loss at N = 1 and N = 2 is §3.6's transfer term, not sharding.** All
+720,661 retained inline entities are structured-cloned across `postMessage`
+whatever N is, so one shard covering the whole file already pays it in full.
+That is precisely the cost the v2 sidecar's typed-array inline columns
+(#541 / conway#623) exist to remove, so D3D's numbers here measure a term that
+work deletes rather than a property of the sharded build. Until it lands, the
+guard stands: do not turn the sharded builder on for inline-heavy models — and
+note the *derived* shard count would happily pick 4 for D3D today.
 
 ### 3.6 The negative: D3D, and why it is a transfer problem
 
