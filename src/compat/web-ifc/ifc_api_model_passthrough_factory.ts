@@ -234,10 +234,11 @@ export class IfcApiModelPassthroughFactory {
    * same constant the engine open grows to, imported rather than repeated
    * so the two cannot drift.
    *
-   * `fromStore` reads its own 64 KiB prefix and has the same limitation.
-   * That is pre-existing on a shipped path rather than introduced here, so
-   * it is not changed in this pass — see the issue referenced from
-   * `index_sidecar.ts`.
+   * `fromStore` reads its own 64 KiB prefix and has the same limitation —
+   * and, separately, makes that read outside its own try, so a rejecting
+   * store makes `OpenModelStream` reject rather than return −1. Both are
+   * pre-existing on a shipped path rather than introduced here, so neither
+   * is changed in this pass; both are tracked in conway#628.
    *
    * @param store The store to sniff.
    * @return {Promise<ModelFormatType | undefined>} The detected format.
@@ -291,17 +292,28 @@ export class IfcApiModelPassthroughFactory {
       wasmModule: any,
       settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
 
-    const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
-
-    if ( modelFormat !== ModelFormatType.IFC ) {
-
-      Logger.warning(
-          'Index-first open is IFC-only; use OpenModelStreamed with a buffer ' +
-          `for format ${modelFormat}` )
-      return
-    }
-
+    // Detection is INSIDE the guard, and that placement is the contract
+    // rather than tidiness. `detectFromStore` reads the store — up to twice
+    // on the failure path — and a store read can reject: OPFS handle
+    // revoked, file truncated under us, network-backed range read failing.
+    // Outside the try that rejection escapes and `OpenModelFromIndex`
+    // rejects its promise instead of returning −1, breaking the contract
+    // stated above at exactly the moment a caller most needs the explicit
+    // `OpenModelStream` fallback (conway#541 review round 3).
     try {
+
+      const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
+
+      if ( modelFormat !== ModelFormatType.IFC ) {
+
+        // Deliberately a different message from the catch below: both end in
+        // −1, so the log line is the only thing that separates "this is not
+        // an IFC file" from "the store would not answer".
+        Logger.warning(
+            'Index-first open is IFC-only; use OpenModelStreamed with a buffer ' +
+            `for format ${modelFormat}` )
+        return
+      }
 
       return await IfcApiProxyIfc.createFromIndex(
           modelID, store, sidecar, wasmModule, settings )

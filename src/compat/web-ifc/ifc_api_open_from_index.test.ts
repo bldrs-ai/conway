@@ -70,6 +70,52 @@ function paddedHeaderSource( padBytes: number ): Uint8Array {
 }
 
 
+/**
+ * A store whose reads reject after the first `failAfter` calls — an OPFS
+ * handle going away, a file truncated under us, a range read failing.
+ */
+class RejectingStore {
+
+  private reads_ = 0
+
+  /**
+   * @param bytes_ The bytes to serve while still healthy.
+   * @param failAfter_ How many reads succeed before the rest reject.
+   */
+  constructor(
+    private readonly bytes_: Uint8Array,
+    private readonly failAfter_: number ) {}
+
+  /**
+   * @return {number} The stored length.
+   */
+  public get byteLength(): number {
+    return this.bytes_.byteLength
+  }
+
+  /**
+   * @return {number} Reads served so far, healthy or not.
+   */
+  public get reads(): number {
+    return this.reads_
+  }
+
+  /**
+   * @param offset Absolute offset.
+   * @param length Bytes to read.
+   * @return {Promise<Uint8Array>} The bytes, or a rejection.
+   */
+  public async read( offset: number, length: number ): Promise<Uint8Array> {
+
+    if ( this.reads_++ >= this.failAfter_ ) {
+      throw new Error( 'store read failed' )
+    }
+
+    return this.bytes_.slice( offset, offset + length )
+  }
+}
+
+
 describe( 'IfcAPI.OpenModelFromIndex (conway#541)', () => {
 
   test( 'opens a model from a sidecar', async () => {
@@ -111,6 +157,40 @@ describe( 'IfcAPI.OpenModelFromIndex (conway#541)', () => {
         SETTINGS )
 
     expect( modelID ).toBe( -1 )
+  } )
+
+  test( 'returns -1 rather than rejecting when the store read fails', async () => {
+    // The contract this entry documents is "-1, and the caller falls back to
+    // OpenModelStream explicitly". A rejected promise is not that, and it
+    // breaks the contract at exactly the moment a caller most needs the
+    // fallback — when store access is what failed. Detection used to run
+    // outside the guard, so the rejection escaped (conway#541 round 3).
+    const sidecar = await sidecarFor( bytes )
+    const store = new RejectingStore( bytes, 0 )
+
+    const modelID = await api.OpenModelFromIndex(
+        store as unknown as InMemoryStepByteStore, sidecar, SETTINGS )
+
+    expect( modelID ).toBe( -1 )
+    expect( store.reads ).toBeGreaterThan( 0 )
+  } )
+
+  test( 'returns -1 when the second, grow-the-prefix read fails', async () => {
+    // The sniff retry added in round 2 made the failure path do TWO store
+    // reads, so it doubled the surface a rejection can escape from. This is
+    // the read the first version of that retry did not cover: the first read
+    // succeeds, detection comes back undefined, and the retry rejects.
+    const padded = paddedHeaderSource( 80 * 1024 )
+    const sidecar = await sidecarFor( padded )
+    const store = new RejectingStore( padded, 1 )
+
+    const modelID = await api.OpenModelFromIndex(
+        store as unknown as InMemoryStepByteStore, sidecar, SETTINGS )
+
+    expect( modelID ).toBe( -1 )
+
+    // Two reads attempted, so the retry really is the one that rejected.
+    expect( store.reads ).toBe( 2 )
   } )
 
   test( 'returns -1 on a v1 sidecar rather than reinterpreting it', async () => {
