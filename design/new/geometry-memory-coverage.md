@@ -56,11 +56,36 @@ TriangulateBounds scratch to the arena"`.
 "scoped to `AddFaceToGeometry`" line is wrong, and that the real scope is
 narrower — "two curved-surface triangulators... A planar-faced BREP gets
 nothing either." Site 4 directly refutes the second half: **a planar-faced
-BREP face *does* get arena coverage**, via `TriangulateBounds`, which is the
-function `AddFaceToGeometry` dispatches to for every non-advanced-BREP face
-(**[code]**, `ConwayGeometryProcessor.cpp:705-711`). So the corrected
-picture is not "two sites, planar gets nothing" — it is "four sites, and
-the gap is elsewhere." See the matrix below for where.
+BREP face *does* get arena coverage**, via `TriangulateBounds`. So the
+corrected picture is not "two sites, planar gets nothing" — it is "four
+sites, and the gap is elsewhere." See the matrix below for where.
+
+**`TriangulateBounds` is called from two places, and only the second one
+makes the claim above true** (**[code]**). Reading just the first is the
+natural way to conclude the opposite, and a review round did exactly that
+(#639), so both are spelled out here:
+
+1. `ConwayGeometryProcessor.cpp:705-711` — the `!parameters.advancedBrep`
+   branch. This covers planar **non-advanced** faces only.
+2. `ConwayGeometryProcessor.cpp:745-747` — the **fall-through `else` at the
+   end of the `advancedBrep` branch**, after the seven
+   `surface.<kind>.Active` tests. This is the one a planar advanced face
+   reaches.
+
+A planar `IfcAdvancedFace` / `advanced_face` takes route 2: the extractors
+set `advancedBrep: true` (`ifc_geometry_extraction.ts:5083`,
+`ap214_geometry_extraction.ts:4774`), and `extractSurface` for an `IfcPlane`
+sets only `nativeSurface.transformation` (`ifc_geometry_extraction.ts:5101-5103`)
+— never any of the seven `Active` flags, which each default to `false`
+(`IfcGeometryReps.h`). With no curved-surface flag set, the chain is
+`advancedBrep: true` → the `else` at :711 → every `Active` false → the
+final `else` at :745 → `TriangulateBounds` → the `ScratchArenaScope` at
+`geometry_utils.h:767`.
+
+**Do not reason about this from the `AllocSite` tag.** Both call sites tag
+their work `AllocSite::TriBounds`, so the telemetry cannot separate "planar
+non-advanced" from "planar advanced, fallen through" — a distinction that
+matters precisely when deciding whether the advanced-BREP path is covered.
 
 ## The dispatcher and its eight tagged paths
 
