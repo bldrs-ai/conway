@@ -43,6 +43,30 @@ import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 /* The report's blocker block, verbatim enough to slice on. */
 const BLOCKER_HEADING = 'deferred by (last record in the chain to arrive):'
 
+/* Likewise the sharded table. */
+const SHARDED_HEADING = 'sharded parse — placed products emittable'
+
+/* Column indices into a `shardedRow`, which prints one column per simulated
+ * shard count in the script's SHARD_COUNTS order. */
+const SHARD_N1 = 0
+const SHARD_N2 = 1
+
+/* The band-boundary fixture, as fractions of its own size. Two axes of one
+ * grid, one just short of the N=2 boundary and one just past it. */
+const STRADDLE_TOTAL_BYTES = 4000
+const STRADDLE_BEFORE_BOUNDARY = 0.49
+const STRADDLE_AFTER_BOUNDARY = 0.52
+
+/* What "just short of" and "just past" have to mean for that fixture to be
+ * testing anything: the earlier axis nearly finishes its band, the later one
+ * has barely started the next. */
+const STRADDLE_LATE_IN_BAND = 0.9
+const STRADDLE_EARLY_IN_BAND = 0.1
+
+/* Progress rows read out of the sharded table. */
+const ROW_ALL_SCANNED = 100
+const ROW_NINE_TENTHS = 90
+
 /* data/grid_placement_tail_axes.ifc, by construction. One of its four
  * deferring proxies — #500, whose own axes are at the tail — bottoms out in
  * an axis polyline's points LATER than the last grid axis record, so the
@@ -51,6 +75,58 @@ const GRID_TAIL_LEAF_BLOCKED = 1
 
 /* The other three, all held by the same single all-or-nothing scan. */
 const GRID_TAIL_INVERSE_BLOCKED = 3
+
+
+/* Header, units and the world placement every inline fixture below needs, and
+ * nothing that bears on what they test. */
+const FIXTURE_HEAD = [
+  'ISO-10303-21;',
+  'HEADER;',
+  'FILE_DESCRIPTION((\'\'),\'2;1\');',
+  'FILE_NAME(\'n.ifc\',\'2026-01-01T00:00:00\',(\'\'),(\'\'),\'\',\'\',\'\');',
+  'FILE_SCHEMA((\'IFC4\'));',
+  'ENDSEC;',
+  'DATA;',
+  '#1=IFCPROJECT(\'0kF0kSTOX3ovkcpuOhkPrX\',$,\'N\',$,$,$,$,(#20),#10);',
+  '#10=IFCUNITASSIGNMENT((#11));',
+  '#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
+  '#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,\'Model\',3,1.0E-05,#21,$);',
+  '#21=IFCAXIS2PLACEMENT3D(#22,$,$);',
+  '#22=IFCCARTESIANPOINT((0.,0.,0.));',
+]
+
+const FIXTURE_TAIL = ['ENDSEC;', 'END-ISO-10303-21;', '']
+
+/* Grid #100 and the grid placement #200 hangs off, written in dependency
+ * order — every record before the one that references it — so the product's
+ * FORWARD closure is complete at its own record and the only thing that can
+ * defer it is the inverse scan. #100 carries no ObjectPlacement, so it is not
+ * itself a placed product and cannot muddy a deferral count. */
+const LOCAL_GRID_AND_PRODUCT_CHAIN = [
+  '#100=IFCGRID(\'1kF0kSTOX3ovkcpuOhkPrX\',$,\'Near\',$,$,$,$,(#110),(#130),$,.RECTANGULAR.);',
+  '#112=IFCCARTESIANPOINT((0.,0.));',
+  '#113=IFCCARTESIANPOINT((1.,0.));',
+  '#111=IFCPOLYLINE((#112,#113));',
+  '#110=IFCGRIDAXIS(\'A\',#111,.T.);',
+  '#132=IFCCARTESIANPOINT((0.,0.));',
+  '#133=IFCCARTESIANPOINT((0.,1.));',
+  '#131=IFCPOLYLINE((#132,#133));',
+  '#130=IFCGRIDAXIS(\'1\',#131,.T.);',
+  '#202=IFCVIRTUALGRIDINTERSECTION((#110,#130),(0.,0.));',
+  '#201=IFCGRIDPLACEMENT(#202,$);',
+]
+
+/* Grid #300's axes and their curves. */
+const FAR_GRID_AXES_TAIL = [
+  '#310=IFCGRIDAXIS(\'B\',#311,.T.);',
+  '#330=IFCGRIDAXIS(\'2\',#331,.T.);',
+  '#311=IFCPOLYLINE((#312,#313));',
+  '#312=IFCCARTESIANPOINT((0.,0.));',
+  '#313=IFCCARTESIANPOINT((1.,0.));',
+  '#331=IFCPOLYLINE((#332,#333));',
+  '#332=IFCCARTESIANPOINT((0.,0.));',
+  '#333=IFCCARTESIANPOINT((0.,1.));',
+]
 
 
 /**
@@ -68,6 +144,54 @@ function blockerBlock(file: string): string {
   const at = out.indexOf(BLOCKER_HEADING)
 
   return at < 0 ? '' : out.slice(at + BLOCKER_HEADING.length)
+}
+
+
+/**
+ * The sharded table's row for one progress percentage, as counts per shard
+ * count in `SHARD_COUNTS` order (N=1, 2, 4, 8).
+ *
+ * @param file The model to report on.
+ * @param pct The progress row to read, e.g. 50.
+ * @return The four cumulative counts on that row.
+ */
+function shardedRow(file: string, pct: number): number[] {
+
+  const script = path.resolve(process.cwd(), 'scripts/layout_report.mjs')
+  const out =
+    execFileSync(process.execPath, [script, file], { stdio: 'pipe' }).toString()
+
+  const table = out.slice(out.indexOf(SHARDED_HEADING))
+  const row = new RegExp(`^\\s*${pct}% \\|(.*)$`, 'm').exec(table)
+
+  if (row === null) {
+    throw new Error(`no ${pct}% row in the sharded table of ${file}`)
+  }
+
+  return row[1].trim().split(/\s+/).map(Number)
+}
+
+
+/**
+ * A comment line of exactly `bytes` bytes including the newline `join` adds.
+ *
+ * Padding is how these fixtures put a record at a chosen FRACTION of the
+ * file, which is the only way to exercise a shard band boundary. Comments are
+ * inert to the report — `eachRecord` and `eachRef` both skip them — so they
+ * move offsets without adding records or references.
+ *
+ * @param bytes Total size to occupy, newline included.
+ * @return The comment line.
+ */
+function padTo(bytes: number): string {
+
+  const overhead = 5
+
+  if (bytes < overhead) {
+    throw new Error(`padding of ${bytes} bytes is below the comment overhead`)
+  }
+
+  return `/*${'x'.repeat(bytes - overhead)}*/`
 }
 
 
@@ -140,7 +264,7 @@ describe('layout_report grid-placement closure', () => {
     expect(blockers).not.toContain('IFCVIRTUALGRIDINTERSECTION')
   })
 
-  test('a grid-placed product whose own chain is local still waits on a distant grid', () => {
+  test('a grid-placed product whose own chain is local still waits on a VISIBLE grid', () => {
 
     // The inverse gate in isolation. Everything product #200 references —
     // placement, intersection, axes, curves, points — is written BEFORE it,
@@ -148,55 +272,27 @@ describe('layout_report grid-placement closure', () => {
     // scanned and the report said, correctly for that closure and wrongly for
     // the engine, that nothing in this file defers at all.
     //
-    // Grid #300 is the only thing that changes that. It is placed against
-    // nothing and shares no record with #200; its axes merely sit at the tail.
-    // gridByAxis scans it anyway, so the engine holds #200 until those axes
-    // arrive.
-    const file = path.join(workDir, 'local_chain_distant_grid.ifc')
+    // Grid #300 is the only thing that changes that, and the ORDER of its
+    // record is the whole point: it sits in the same prefix as #200 while its
+    // axes are at the tail, so `model.types(IfcGrid)` hands it to the scan,
+    // reading its axis list throws, and the scan fails as a whole. A grid
+    // placement is held by a grid it has nothing to do with — that is the
+    // all-or-nothing property, stated as consequence 2 of the issue.
+    const file = path.join(workDir, 'local_chain_visible_grid.ifc')
 
     fs.writeFileSync(file, [
-      'ISO-10303-21;',
-      'HEADER;',
-      'FILE_DESCRIPTION((\'\'),\'2;1\');',
-      'FILE_NAME(\'n.ifc\',\'2026-01-01T00:00:00\',(\'\'),(\'\'),\'\',\'\',\'\');',
-      'FILE_SCHEMA((\'IFC4\'));',
-      'ENDSEC;',
-      'DATA;',
-      '#1=IFCPROJECT(\'0kF0kSTOX3ovkcpuOhkPrX\',$,\'N\',$,$,$,$,(#20),#10);',
-      '#10=IFCUNITASSIGNMENT((#11));',
-      '#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);',
-      '#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,\'Model\',3,1.0E-05,#21,$);',
-      '#21=IFCAXIS2PLACEMENT3D(#22,$,$);',
-      '#22=IFCCARTESIANPOINT((0.,0.,0.));',
+      ...FIXTURE_HEAD,
       // Grid #100 and product #200's whole placement chain, in dependency
       // order, so the product's forward closure resolves at its own record.
-      '#100=IFCGRID(\'1kF0kSTOX3ovkcpuOhkPrX\',$,\'Near\',$,$,#101,$,(#110),(#130),$,.RECTANGULAR.);',
-      '#101=IFCLOCALPLACEMENT($,#21);',
-      '#112=IFCCARTESIANPOINT((0.,0.));',
-      '#113=IFCCARTESIANPOINT((1.,0.));',
-      '#111=IFCPOLYLINE((#112,#113));',
-      '#110=IFCGRIDAXIS(\'A\',#111,.T.);',
-      '#132=IFCCARTESIANPOINT((0.,0.));',
-      '#133=IFCCARTESIANPOINT((0.,1.));',
-      '#131=IFCPOLYLINE((#132,#133));',
-      '#130=IFCGRIDAXIS(\'1\',#131,.T.);',
-      '#202=IFCVIRTUALGRIDINTERSECTION((#110,#130),(0.,0.));',
-      '#201=IFCGRIDPLACEMENT(#202,$);',
+      ...LOCAL_GRID_AND_PRODUCT_CHAIN,
+      // Grid #300 BEFORE the product it gates. Placed against nothing, and
+      // ObjectPlacement is absent so it is not itself a placed product — that
+      // keeps the deferral count below unambiguous.
+      '#300=IFCGRID(\'3kF0kSTOX3ovkcpuOhkPrX\',$,\'Far\',$,$,$,$,(#310),(#330),$,.RECTANGULAR.);',
       '#200=IFCBUILDINGELEMENTPROXY(\'2kF0kSTOX3ovkcpuOhkPrX\',$,\'Local\',$,$,#201,$,$,.NOTDEFINED.);',
-      // Grid #300: unrelated to #200, axes at the tail.
-      '#300=IFCGRID(\'3kF0kSTOX3ovkcpuOhkPrX\',$,\'Far\',$,$,#301,$,(#310),(#330),$,.RECTANGULAR.);',
-      '#301=IFCLOCALPLACEMENT($,#21);',
-      '#310=IFCGRIDAXIS(\'B\',#311,.T.);',
-      '#330=IFCGRIDAXIS(\'2\',#331,.T.);',
-      '#311=IFCPOLYLINE((#312,#313));',
-      '#312=IFCCARTESIANPOINT((0.,0.));',
-      '#313=IFCCARTESIANPOINT((1.,0.));',
-      '#331=IFCPOLYLINE((#332,#333));',
-      '#332=IFCCARTESIANPOINT((0.,0.));',
-      '#333=IFCCARTESIANPOINT((0.,1.));',
-      'ENDSEC;',
-      'END-ISO-10303-21;',
-      '',
+      // ---- tail: grid #300's axes, and nothing #200 references
+      ...FAR_GRID_AXES_TAIL,
+      ...FIXTURE_TAIL,
     ].join('\n'))
 
     const blockers = blockerBlock(file)
@@ -205,6 +301,121 @@ describe('layout_report grid-placement closure', () => {
     // is only possible through the inverse pass — no forward walk from #200
     // reaches #300 or anything it references.
     expect(blockers).toMatch(/\s1\s+\(\s*\d+%\)\s+IFCGRIDAXIS/)
+  })
+
+  test('a grid the prefix has not reached yet gates nothing', () => {
+
+    // The counterweight, and the correction codex found in round 1 of #607.
+    //
+    // `gridByAxis` scans `model.types(IfcGrid)`, which iterates the TYPE
+    // INDEX — so a grid record the prefix has not reached is never handed to
+    // the scan and cannot throw. Gating on "the last axis of any grid in the
+    // FILE" would defer #200 here anyway, which is over-deferral: for a tool
+    // whose entire output is a deferral measurement that is exactly as wrong
+    // as the optimism this issue exists to remove, just less flattering.
+    //
+    // Nothing is sticky across prefixes either — both preview channels build
+    // a fresh IfcGeometryExtraction per generation, so `gridByAxis_` never
+    // survives into the next prefix and each one re-runs the scan over the
+    // grids it can see.
+    //
+    // Byte-for-byte the file above with ONE record moved: grid #300 now sits
+    // after the product instead of before it.
+    const file = path.join(workDir, 'unreached_grid.ifc')
+
+    fs.writeFileSync(file, [
+      ...FIXTURE_HEAD,
+      ...LOCAL_GRID_AND_PRODUCT_CHAIN,
+      '#200=IFCBUILDINGELEMENTPROXY(\'2kF0kSTOX3ovkcpuOhkPrX\',$,\'Local\',$,$,#201,$,$,.NOTDEFINED.);',
+      // ---- everything below is outside the prefix that already holds #200
+      '#300=IFCGRID(\'3kF0kSTOX3ovkcpuOhkPrX\',$,\'Far\',$,$,$,$,(#310),(#330),$,.RECTANGULAR.);',
+      ...FAR_GRID_AXES_TAIL,
+      ...FIXTURE_TAIL,
+    ].join('\n'))
+
+    // Nothing in this file defers: #200's own chain is behind it, and the one
+    // grid that could gate it is not visible until after it is emitted. So
+    // the report prints no blocker block at all.
+    expect(blockerBlock(file)).toBe('')
+  })
+
+  test('the sharded gate takes the max in BAND PROGRESS, not of the byte offset', () => {
+
+    // The second finding of codex round 1, and it is invisible on every other
+    // fixture here: `bandProgress` resets at each band boundary, so it is NOT
+    // monotonic in absolute offset. Taking one file-wide "last axis by byte
+    // offset" and converting THAT to band progress therefore answers a
+    // different question from "the last axis any reader reaches" — the max has
+    // to be taken after the mapping, per shard count.
+    //
+    // Two axes of one grid, placed either side of the N=2 boundary: #410 at
+    // ~49% of the file (band 0, nearly done) and #420 at ~52% (band 1, barely
+    // started). #420 is last by byte offset and FIRST to be reached with two
+    // readers, so the two formulas differ by most of a band.
+    //
+    // Nothing else in the file straddles anything: product #200's own chain
+    // and grid #400's record are all early in band 0, and grid #400 carries no
+    // ObjectPlacement so #200 is the only placed product in the file.
+    const file = path.join(workDir, 'band_boundary_axes.ifc')
+
+    const head = [
+      ...FIXTURE_HEAD,
+      '#400=IFCGRID(\'4kF0kSTOX3ovkcpuOhkPrX\',$,\'Straddle\',$,$,$,$,(#410),(#420),$,.RECTANGULAR.);',
+      ...LOCAL_GRID_AND_PRODUCT_CHAIN.slice(1),
+      '#200=IFCBUILDINGELEMENTPROXY(\'2kF0kSTOX3ovkcpuOhkPrX\',$,\'Local\',$,$,#201,$,$,.NOTDEFINED.);',
+    ]
+    const axisA = '#410=IFCGRIDAXIS(\'B\',#111,.T.);'
+    const axisB = '#420=IFCGRIDAXIS(\'2\',#131,.T.);'
+
+    // Solve the padding for a chosen total: the head runs to 49% of it, one
+    // axis follows, a short pad carries the next past the 50% boundary, and
+    // the rest of the file is trailing pad.
+    const total = STRADDLE_TOTAL_BYTES
+    const headBytes = head.join('\n').length + 1
+    const paddingBefore = Math.round(total * STRADDLE_BEFORE_BOUNDARY) - headBytes
+    const paddingBetween = Math.round(total * STRADDLE_AFTER_BOUNDARY) -
+      (headBytes + paddingBefore + axisA.length + 1)
+    const tailBytes = FIXTURE_TAIL.join('\n').length
+    const paddingAfter = total -
+      (Math.round(total * STRADDLE_AFTER_BOUNDARY) + axisB.length + 1 + tailBytes)
+
+    fs.writeFileSync(file, [
+      ...head,
+      padTo(paddingBefore),
+      axisA,
+      padTo(paddingBetween),
+      axisB,
+      padTo(paddingAfter),
+      ...FIXTURE_TAIL,
+    ].join('\n'))
+
+    // The fixture validates ITSELF before it validates the script: padding
+    // arithmetic that drifted would otherwise leave both formulas agreeing
+    // and the assertion below passing for no reason.
+    const written = fs.readFileSync(file)
+    const size = written.length
+    const text = written.toString('latin1')
+    const bandProgress = (offset: number, shards: number): number => {
+      const band = Math.min(shards - 1, Math.floor(offset / size * shards))
+      return (offset - band * size / shards) / (size / shards)
+    }
+    const atA = bandProgress(text.indexOf('#410='), 2)
+    const atB = bandProgress(text.indexOf('#420='), 2)
+
+    expect(text.indexOf('#420=')).toBeGreaterThan(text.indexOf('#410='))
+    expect(atA).toBeGreaterThan(STRADDLE_LATE_IN_BAND)
+    expect(atB).toBeLessThan(STRADDLE_EARLY_IN_BAND)
+
+    // With one reader there is no boundary to straddle and both formulas
+    // agree, so this column is the control: the product is emittable by the
+    // last decile either way.
+    expect(shardedRow(file, ROW_ALL_SCANNED)[SHARD_N1]).toBe(1)
+
+    // With two readers the gate is #410's 0.98, not #420's 0.04. The product
+    // is therefore NOT emittable at 90% of per-shard progress — which is
+    // exactly what the old formula claimed, and it claimed it from the start.
+    expect(shardedRow(file, ROW_NINE_TENTHS)[SHARD_N2]).toBe(0)
+    expect(shardedRow(file, ROW_ALL_SCANNED)[SHARD_N2]).toBe(1)
   })
 
   test('a grid nothing is placed against does not gate its own product', () => {

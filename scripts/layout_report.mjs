@@ -316,12 +316,22 @@ function eachRef(buf, from, to, onRef) {
  * `(#1,#2)` rather than a bare `#1` argument.
  *
  * Used for one thing: an `IFCGRID`'s `UAxes`/`VAxes`/`WAxes`. Those three are
- * the only aggregate-valued attributes IfcGrid has in every schema conway
- * generates (IFC2X3, IFC4, IFC4X3 — same eleven-or-ten attribute list, same
- * three list slots), so "refs at aggregate depth" picks them out exactly,
- * without hard-coding attribute positions or splitting arguments. The bare
- * refs it skips are `ObjectPlacement` and `Representation`, neither of which
- * the axis scan reads.
+ * IfcGrid's only aggregate-valued attributes — `src/ifc/ifc4_gen/IfcGrid.gen.ts`
+ * declares exactly them as `Array<IfcGridAxis>`, and everything it inherits up
+ * through IfcRoot is a scalar or a single ref — so "refs at aggregate depth"
+ * picks them out exactly, without hard-coding attribute positions or splitting
+ * arguments. The bare refs it skips are `ObjectPlacement` and `Representation`,
+ * neither of which the axis scan reads. Confirmed on real output rather than
+ * the schema alone: PSB's `IFCGRID` records carry their representation as a
+ * bare `#ref` and their axes as the only lists.
+ *
+ * This is a byte scanner, not a schema reader, so what it needs is only that
+ * the axis lists stay IfcGrid's sole aggregates. A revision that added another
+ * one would fold a non-axis reference into the gate and defer products that
+ * the engine emits — and note that "it would only over-defer" is NOT a defence
+ * here: over-deferral is as wrong as optimism for a tool whose entire output
+ * is a deferral measurement (codex round 1 on conway#607). Re-check this if
+ * IfcGrid ever grows an attribute.
  *
  * Depth is counted from the record's own argument list: the first `(` after
  * the type name opens depth 1, so an aggregate member is at depth >= 2.
@@ -389,6 +399,94 @@ function eachAggregateRef(buf, from, to, onRef) {
 
 
 /**
+ * The prefixes at which `gridByAxis`'s scan cannot complete, as a sorted list
+ * of disjoint half-open ranges.
+ *
+ * One range per IfcGrid — `[where the grid record appears, where the last axis
+ * it lists appears)` — merged. Inside a range that grid is visible to the scan
+ * and its axis list is not fully indexed, so the scan throws and EVERY grid
+ * placement in the file is held, not just placements against that grid.
+ *
+ * `coordOf` maps a byte offset into the coordinate the caller measures in: the
+ * identity for the leading-prefix curves, `bandProgress` for a sharded one.
+ * The max over a grid's axes has to be taken AFTER that mapping, not before:
+ * `bandProgress` resets at every band boundary, so it is not monotonic in
+ * absolute offset and the last axis in the file is not the last axis to be
+ * reached (codex round 1 on conway#607).
+ *
+ * @param {Array} spans `{ at, axes }` per IFCGRID record
+ * @param {Uint32Array} offsetOf id -> byte offset
+ * @param {number} maxId largest id in the file
+ * @param {Function} coordOf byte offset -> the caller's coordinate
+ * @return {Array} sorted, disjoint `{ at, until, blocker }` ranges
+ */
+function blockedRanges(spans, offsetOf, maxId, coordOf) {
+  const ranges = []
+
+  for (const span of spans) {
+    let until = -Infinity
+    let blocker = 0
+    for (const ref of span.axes) {
+      // A ref to a record the file never defines resolves at 0 everywhere
+      // else in this tool; it cannot be what the scan waits for.
+      if (ref > maxId) {
+        continue
+      }
+      const axisAt = coordOf(offsetOf[ref])
+      if (axisAt > until) {
+        until = axisAt
+        blocker = ref
+      }
+    }
+    const at = coordOf(span.at)
+    if (until > at) {
+      ranges.push({ at: at, until: until, blocker: blocker })
+    }
+  }
+
+  ranges.sort((a, b) => a.at - b.at)
+
+  const merged = []
+  for (const range of ranges) {
+    const last = merged[merged.length - 1]
+    // `<=` so that ranges which merely touch are fused: pushing a product to
+    // the end of one must not land it at the start of the next.
+    if (last !== undefined && range.at <= last.until) {
+      if (range.until > last.until) {
+        last.until = range.until
+        last.blocker = range.blocker
+      }
+      continue
+    }
+    merged.push({ at: range.at, until: range.until, blocker: range.blocker })
+  }
+
+  return merged
+}
+
+
+/**
+ * The first coordinate at or after `at` that is outside every blocked range.
+ *
+ * @param {Array} ranges from `blockedRanges`, sorted and disjoint
+ * @param {number} at the coordinate a product's own chain resolves at
+ * @return {object} `{ at, blocker }`, blocker 0 when nothing moved
+ */
+function pushPastBlocked(ranges, at) {
+  for (const range of ranges) {
+    if (range.at > at) {
+      break
+    }
+    if (at < range.until) {
+      return { at: range.until, blocker: range.blocker }
+    }
+  }
+
+  return { at: at, blocker: 0 }
+}
+
+
+/**
  * Turn a bucketed histogram into a cumulative count at each percentile.
  *
  * @param {Uint32Array} histogram counts per bucket
@@ -438,10 +536,10 @@ function report(path) {
   const typeNames = ['']
   const typeIndex = new Map()
   const typeOf = new Uint16Array(maxId + 1)
-  /* Every axis an IFCGRID lists, from every IFCGRID in the file. The INVERSE
-   * half of the grid chain — see the gate below for what it is for. Bounded by
-   * the axis count (1408 on the largest corpus model), so a plain array. */
-  const gridAxisRefs = []
+  /* One entry per IFCGRID: where the grid record itself lands, and the axes it
+   * lists. The INVERSE half of the grid chain — see the gate below. Bounded by
+   * the grid count (36 across the whole public corpus), so plain arrays. */
+  const gridSpans = []
   const isGridPlacement = new Uint8Array(maxId + 1)
   let records = 0
   eachRecord(buf, (id, typeStart, typeEnd, start, end, argsFrom) => {
@@ -472,7 +570,9 @@ function report(path) {
       isGridPlacement[id] = 1
     }
     if (name === 'IFCGRID') {
-      eachAggregateRef(buf, argsFrom, end, (ref) => gridAxisRefs.push(ref))
+      const axes = []
+      eachAggregateRef(buf, argsFrom, end, (ref) => axes.push(ref))
+      gridSpans.push({ at: start, axes: axes })
     }
     ++records
   })
@@ -483,46 +583,55 @@ function report(path) {
    * then has to find the IfcGrid that OWNS the axes, to place off that grid's
    * own placement. IfcGridAxis's route back to its grid is the
    * PartOfU/PartOfV/PartOfW INVERSE attributes and the generated schema layer
-   * carries no inverses, so `gridByAxis` scans every IfcGrid's UAxes/VAxes/
-   * WAxes instead. Those are reference arrays, so an axis record that is not
-   * yet indexed throws there (conway#546 classifies the throw), region 1's
-   * catch in extractGridPlacement absorbs only StepBufferNotResidentError, and
-   * the product defers and is retried.
+   * carries no inverses, so `gridByAxis` scans IfcGrid's UAxes/VAxes/WAxes
+   * instead. Those are reference arrays, so an axis record that is not yet
+   * indexed throws there (conway#546 classifies the throw), region 1's catch
+   * in extractGridPlacement absorbs only StepBufferNotResidentError, and the
+   * product defers and is retried.
    *
    * A product never references the grid — the grid references the axis, not
    * the reverse — so walking forward from a product cannot reach an IfcGrid
-   * record at all. Before this gate the report said such a product was ready
-   * as soon as its own intersection chain was scanned, which is the same
+   * record at all. Without this the report said such a product was ready as
+   * soon as its own intersection chain was scanned, which is the same
    * silently-flattering direction conway#546 exists to correct.
    *
-   * Three properties of the engine scan make one scalar per file enough:
+   * The scan is PREFIX-DEPENDENT, and modelling it as one file-wide "last
+   * axis in the file" scalar is wrong in the OPPOSITE direction — it defers a
+   * product whose own grid is complete because some grid it has never seen,
+   * further down the file, has axes further down still (codex round 1 on
+   * conway#607). For a tool whose whole output is a deferral measurement,
+   * over-deferring is exactly as wrong as under-deferring.
    *
-   *  - It is ALL-OR-NOTHING across grids. The loop visits every IfcGrid, so
-   *    any grid with an unscanned axis list blocks EVERY grid placement in the
-   *    file, however local that placement's own chain is. Hence the max over
-   *    all grids rather than a per-grid gate.
-   *  - It is not sticky. `gridByAxis_` is assigned AFTER the loop, so a scan
-   *    that threw memoises nothing and the gate really is "every grid's axis
-   *    list is indexed", not "some prefix of them".
-   *  - It reads only `gridAxis.localID`, never the axis' AxisCurve. So the
-   *    gate is where the AXIS RECORDS land, not where their curves' points do
-   *    — `offsetOf`, deliberately, not `placementResolveAt`.
+   * What the engine actually does at a given prefix:
    *
-   * An IfcGrid record that is not yet indexed is not visited by the scan at
-   * all (`model.types` iterates the type index), so it cannot throw and is not
-   * part of the gate. That leaves a real engine hazard this report does not
-   * model — the memo can complete over a PARTIAL set of grids and be cached —
-   * but the failure there is a silently mis-placed product rather than a
-   * deferred one, and this tool measures deferral. */
-  let gridAxisScanAt = 0
-  let gridAxisScanBlocker = 0
-
-  for (const ref of gridAxisRefs) {
-    if (ref <= maxId && offsetOf[ref] > gridAxisScanAt) {
-      gridAxisScanAt = offsetOf[ref]
-      gridAxisScanBlocker = ref
-    }
-  }
+   *  - `model.types(IfcGrid)` iterates the TYPE INDEX, so the loop visits only
+   *    the grids inside the prefix. A grid the prefix has not reached cannot
+   *    throw, and cannot gate anything.
+   *  - Within that set it is ALL-OR-NOTHING: one visible grid with an
+   *    unscanned axis list fails the whole scan, so a grid placement is held
+   *    even when its own grid is complete. That is the real content of
+   *    consequence 2 in the issue.
+   *  - It reads only `gridAxis.localID`, never the axis' AxisCurve, so what
+   *    matters is where the AXIS RECORDS land — `offsetOf`, deliberately not
+   *    `placementResolveAt`, which would over-gate on the axis curves' points.
+   *  - Nothing is sticky across prefixes: `gridByAxis_` memoises only a
+   *    COMPLETED scan, and both preview channels build a fresh
+   *    IfcGeometryExtraction per generation (`store_preview_channel.ts:635`,
+   *    `streamed_preview_channel.ts:265`), so the memo never survives into
+   *    the next prefix and every generation re-runs the scan.
+   *
+   * So each grid contributes a half-open BLOCKED RANGE
+   * `[where the grid appears, where its last axis appears)`: inside it the
+   * grid is visible and incomplete, and every grid placement in the file is
+   * held. Merging those ranges gives the set of prefixes at which no grid
+   * placement can resolve, and a product's answer is the first prefix at or
+   * after its own chain that is outside the set.
+   *
+   * Emission is a one-time event, so "first prefix that works" is the whole
+   * question — a later grid re-blocking the scan cannot un-emit a product
+   * already emitted, and the curves stay monotone even though the underlying
+   * predicate is not. */
+  const gridBlocked = blockedRanges(gridSpans, offsetOf, maxId, (offset) => offset)
 
   // Placement chains are shallow but transitive (a local placement points at
   // its parent and at an axis placement, which points at points/directions),
@@ -548,30 +657,27 @@ function report(path) {
     return (offset - band * size / shards) / (size / shards)
   }
 
-  /* The scan's cost in each curve's own units. Grid axes are not leaves, so
-   * the leaf-first counterfactual does not get past this gate either — a
-   * point-harvesting pre-pass would not have indexed an IfcGridAxis. */
-  const gridAxisScanProgress = SHARD_COUNTS.map(
-      (shards) => bandProgress(gridAxisScanAt, shards))
+  /* The same blocked ranges in each shard simulation's own coordinate. Built
+   * from the axis offsets rather than from the absolute gate, because
+   * bandProgress is not monotonic in offset — see blockedRanges. */
+  const gridBlockedSharded = SHARD_COUNTS.map(
+      (shards) => blockedRanges(
+          gridSpans, offsetOf, maxId, (offset) => bandProgress(offset, shards)))
+
+  /* Whether a placement record resolves THROUGH an IfcGridPlacement, and so
+   * has to wait for the gridByAxis scan on top of its own chain. Propagated up
+   * the chain by the fixed point below, so a product reached through
+   * IfcLocalPlacement.PlacementRelTo is gated like one that references the
+   * grid placement directly. */
+  const chainHasGridPlacement = new Uint8Array(maxId + 1)
 
   for (let id = 0; id <= maxId; ++id) {
-    /* Seeding the gate onto the IFCGRIDPLACEMENT record itself, rather than
-     * onto the products, is what makes the rest of this free: the fixed point
-     * already propagates a placement's resolve time up through whatever
-     * references it, so a product reached via IfcLocalPlacement.PlacementRelTo
-     * is gated exactly like one that references the grid placement directly,
-     * and a file with no IFCGRIDPLACEMENT is untouched — which matches the
-     * engine, where the memo is never built at all for such a model. */
-    const gridGated = isGridPlacement[id] === 1 && gridAxisScanAt > offsetOf[id]
-
-    placementResolveAt[id] = gridGated ? gridAxisScanAt : offsetOf[id]
-    placementBlocker[id] = gridGated ? gridAxisScanBlocker : id
-    leafFirstResolveAt[id] = isLeaf[id] === 1 ? 0 :
-      (gridGated ? gridAxisScanAt : offsetOf[id])
+    placementResolveAt[id] = offsetOf[id]
+    placementBlocker[id] = id
+    leafFirstResolveAt[id] = isLeaf[id] === 1 ? 0 : offsetOf[id]
+    chainHasGridPlacement[id] = isGridPlacement[id]
     for (let s = 0; s < SHARD_COUNTS.length; ++s) {
-      shardChainProgress[s][id] = Math.max(
-          bandProgress(offsetOf[id], SHARD_COUNTS[s]),
-          isGridPlacement[id] === 1 ? gridAxisScanProgress[s] : 0)
+      shardChainProgress[s][id] = bandProgress(offsetOf[id], SHARD_COUNTS[s])
     }
   }
   // Iterate to a FIXED POINT, not a fixed round count. Each round propagates
@@ -596,9 +702,11 @@ function report(path) {
       let at = placementResolveAt[id]
       let leafAt = leafFirstResolveAt[id]
       let blocker = placementBlocker[id]
+      let gridPlaced = chainHasGridPlacement[id]
       const shardAt = SHARD_COUNTS.map((unused, s) => shardChainProgress[s][id])
       eachRef(buf, argsFrom, end, (ref) => {
         if (ref <= maxId) {
+          gridPlaced |= chainHasGridPlacement[ref]
           const refAt = placementResolveAt[ref]
           if (refAt > at) {
             at = refAt
@@ -629,6 +737,10 @@ function report(path) {
       }
       if (leafAt > leafFirstResolveAt[id]) {
         leafFirstResolveAt[id] = leafAt
+        changed = true
+      }
+      if (gridPlaced > chainHasGridPlacement[id]) {
+        chainHasGridPlacement[id] = gridPlaced
         changed = true
       }
     })
@@ -664,6 +776,7 @@ function report(path) {
     let hasPlacement = false
     let blocker = 0
     let leafPlacementAt = 0
+    let gridPlaced = false
     const shardReady = SHARD_COUNTS.map(
         (shards) => bandProgress(start, shards))
     eachRef(buf, argsFrom, end, (ref) => {
@@ -678,6 +791,9 @@ function report(path) {
         hasPlacement = true
       }
       if (gatesProduct[ref] === 1) {
+        if (chainHasGridPlacement[ref] === 1) {
+          gridPlaced = true
+        }
         const chainAt = placementResolveAt[ref]
         if (chainAt > placementAt) {
           placementAt = chainAt
@@ -707,10 +823,40 @@ function report(path) {
     // placement chain. That is the population the preview iterates.
     if (hasPlacement && isPlacement[id] === 0) {
       ++products
-      const readyAt = Math.max(resolveAt, placementAt)
+      let readyAt = Math.max(resolveAt, placementAt)
+      let leafReadyAt = Math.max(resolveAt, leafPlacementAt)
+
+      /* The gridByAxis gate, applied LAST and to the whole ready point rather
+       * than to the placement chain alone (conway#607). A product is emitted
+       * at the first prefix where its closure is complete AND the scan can
+       * run, so pushing past a blocked range has to happen after every other
+       * requirement is in — pushing first and taking a max afterwards could
+       * land back inside the range it just escaped.
+       *
+       * placementAt moves with it so that the deferral count and the blocker
+       * attribution below stay in agreement with the curve: a product held by
+       * the scan IS deferred by its placement, and the record it waits for is
+       * the last axis of the grid that blocked the scan. */
+      if (gridPlaced) {
+        const pushed = pushPastBlocked(gridBlocked, readyAt)
+
+        if (pushed.at > readyAt) {
+          readyAt = pushed.at
+          placementAt = pushed.at
+          blocker = pushed.blocker
+        }
+
+        // Grid axes are not leaves, so a point-harvesting pre-pass would not
+        // have indexed one and the counterfactual waits here too.
+        leafReadyAt = pushPastBlocked(gridBlocked, leafReadyAt).at
+
+        for (let s = 0; s < SHARD_COUNTS.length; ++s) {
+          shardReady[s] = pushPastBlocked(gridBlockedSharded[s], shardReady[s]).at
+        }
+      }
       productScanned[bucketOf(start)]++
       productUsable[bucketOf(readyAt)]++
-      productLeafFirst[bucketOf(Math.max(resolveAt, leafPlacementAt))]++
+      productLeafFirst[bucketOf(leafReadyAt)]++
       for (let s = 0; s < SHARD_COUNTS.length; ++s) {
         productSharded[s][Math.min(
             BUCKETS, Math.floor(shardReady[s] * BUCKETS))]++
