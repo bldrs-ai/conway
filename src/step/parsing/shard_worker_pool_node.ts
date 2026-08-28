@@ -123,13 +123,22 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
   private readonly idle_: Worker[]
 
   /** Waiters for an idle worker, in arrival order. */
-  private readonly waiting_: ( ( worker: Worker ) => void )[] = []
+  private readonly waiting_: {
+    resolve: ( worker: Worker ) => void,
+    reject: ( thrown: Error ) => void,
+  }[] = []
+
+  /** What every worker was spawned with, so a dead one can be replaced. */
+  private spawnData_: ShardWorkerData
 
   /**
    * @param workers_ Every worker in the pool, warm.
+   * @param spawnData The data every worker was spawned with.
    */
-  private constructor( private readonly workers_: Worker[] ) {
+  private constructor(
+      private readonly workers_: Worker[], spawnData: ShardWorkerData ) {
     this.idle_ = [ ...workers_ ]
+    this.spawnData_ = spawnData
   }
 
   /**
@@ -160,7 +169,7 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
 
     const workers = await Promise.all( spawning )
 
-    return new NodeShardWorkerPool<TypeIDType>( workers )
+    return new NodeShardWorkerPool<TypeIDType>( workers, data )
   }
 
   /**
@@ -175,11 +184,24 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
 
       const worker = await this.claim_()
 
+      let outcome: ShardOutcome<TypeIDType>
+
       try {
-        return await runJob<TypeIDType>( worker, job )
-      } finally {
-        this.release_( worker )
+        outcome = await runJob<TypeIDType>( worker, job )
+      } catch ( thrown ) {
+        // NOT a `finally` release. A job rejects because the worker emitted
+        // `error` or exited, so the worker is gone or unusable; handing it
+        // back to the idle list would give a later shard a worker that can
+        // never answer — rejecting again at best, and leaving a job pending
+        // forever at worst. This pool is deliberately long-lived across
+        // loads, so one bad worker would otherwise poison every later build.
+        await this.evict_( worker )
+        throw thrown
       }
+
+      this.release_( worker )
+
+      return outcome
     }
   }
 
@@ -189,6 +211,13 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
    * @return {Promise<void>} Resolves when they are all gone.
    */
   public async terminate(): Promise<void> {
+
+    // Fail anything still queued first. A waiter parked on a pool that is
+    // being torn down would otherwise never settle.
+    while ( this.waiting_.length > 0 ) {
+      this.waiting_.shift()?.reject( new Error( 'shard worker pool terminated' ) )
+    }
+
     await Promise.all( this.workers_.map( ( worker ) => worker.terminate() ) )
   }
 
@@ -205,9 +234,53 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
       return Promise.resolve( idle )
     }
 
-    return new Promise<Worker>( ( resolve ) => {
-      this.waiting_.push( resolve )
+    return new Promise<Worker>( ( resolve, reject ) => {
+      this.waiting_.push( { resolve, reject } )
     } )
+  }
+
+  /**
+   * Retire a worker that failed a job and put a fresh one in its place, so
+   * the pool keeps the width the caller asked for.
+   *
+   * If the replacement cannot be spawned there is no worker to give anyone,
+   * so every queued waiter is rejected rather than left pending — a hung
+   * `claim_` is the one failure mode worse than a rejected build, because it
+   * never reaches the coordinator's fallback at all.
+   *
+   * @param worker The worker to retire.
+   * @return {Promise<void>} Resolves once it is replaced or the pool is
+   * marked down.
+   */
+  private async evict_( worker: Worker ): Promise<void> {
+
+    const at = this.workers_.indexOf( worker )
+
+    if ( at >= 0 ) {
+      this.workers_.splice( at, 1 )
+    }
+
+    // Terminating an already-dead worker is a no-op that resolves, so this
+    // needs no guard for the exited case.
+    await worker.terminate().catch( () => void 0 )
+
+    let replacement: Worker
+
+    try {
+      replacement = await spawnWarmWorker( this.spawnData_ )
+    } catch ( thrown ) {
+
+      const error = thrown instanceof Error ? thrown : new Error( String( thrown ) )
+
+      while ( this.waiting_.length > 0 ) {
+        this.waiting_.shift()?.reject( error )
+      }
+
+      return
+    }
+
+    this.workers_.push( replacement )
+    this.release_( replacement )
   }
 
   /**
@@ -221,7 +294,7 @@ export class NodeShardWorkerPool<TypeIDType extends number> {
     const waiter = this.waiting_.shift()
 
     if ( waiter !== void 0 ) {
-      waiter( worker )
+      waiter.resolve( worker )
       return
     }
 

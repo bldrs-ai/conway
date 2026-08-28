@@ -1003,6 +1003,25 @@ export async function buildColumnarIndexShardedAsync<TypeIDType extends number>(
     }
   }
 
+  // Decide the shard count BEFORE touching the header, so that N = 1 reaches
+  // `serial()` without this function having parsed anything at all. Ordering
+  // these the other way round is what made N = 1 observably different from
+  // `buildColumnarIndexStreaming`: the shard-only header pre-scan ran first,
+  // so a malformed header threw under `fallbackToSerial: false`, and a valid
+  // header larger than HEADER_SCAN_BYTES could fail even though the caller's
+  // own `pool` would have parsed it. N = 1 is the cheapest correctness
+  // guarantee here only if it is *literally* the serial builder.
+  //
+  // The byte floor is applied to the whole source rather than to the data
+  // section, because the header is at most a few kilobytes against a
+  // megabyte-scale MIN_BYTES_PER_SHARD and measuring it would cost the very
+  // pre-scan this ordering exists to avoid.
+  const shardCount = resolveShardCount( sourceBytes, options )
+
+  if ( shardCount <= 1 ) {
+    return serial()
+  }
+
   const { header, dataStart, result: headerResult } =
     parseHeaderForShards( source, parser )
 
@@ -1013,12 +1032,6 @@ export async function buildColumnarIndexShardedAsync<TypeIDType extends number>(
     // inventing a second spelling of either.
     return failOrFallback(
         options, `header did not parse (result ${headerResult})`, serial )
-  }
-
-  const shardCount = resolveShardCount( sourceBytes - dataStart, options )
-
-  if ( shardCount <= 1 ) {
-    return serial()
   }
 
   const starts = [ dataStart ]
@@ -1058,28 +1071,31 @@ export async function buildColumnarIndexShardedAsync<TypeIDType extends number>(
 
   const run = options.runner ?? inProcessShardRunner( source, parser, pool )
 
-  const outcomes = await Promise.all(
-      starts.map( ( startOffset, index ) =>
-        run( { index, startOffset, endOffset: ends[ index ] } ) ) )
-
-  // The seam gate, left to right so a repair's new stop offset is what the
-  // next seam is checked against. stop(k) === start(k+1) at every seam
-  // proves, from the header-anchored start(0), that every shard began on a
-  // true record boundary.
+  // A runner REJECTS on the failures most likely to happen for real: a
+  // worker that crashes or exits, a transport error, an I/O failure opening
+  // the model in a worker. Those have to reach the same policy as every
+  // other failure — an unhandled rejection out of `Promise.all` would sail
+  // straight past `fallbackToSerial`, which is exactly the guarantee this
+  // module claims. Both the initial dispatch and the seam-repair re-runs are
+  // inside the guard, because a repair runs a shard again and can reject the
+  // same way.
+  let outcomes: ShardOutcome<TypeIDType>[]
   let seamRepairs = 0
 
-  for ( let seam = 0; seam + 1 < outcomes.length; ++seam ) {
+  try {
 
-    const stop = outcomes[ seam ].stopOffset
+    outcomes = await Promise.all(
+        starts.map( ( startOffset, index ) =>
+          run( { index, startOffset, endOffset: ends[ index ] } ) ) )
 
-    if ( stop === starts[ seam + 1 ] ) {
-      continue
-    }
+    seamRepairs = await repairSeams( outcomes, starts, ends, run )
 
-    ++seamRepairs
-    starts[ seam + 1 ] = stop
-    outcomes[ seam + 1 ] = await run(
-        { index: seam + 1, startOffset: stop, endOffset: ends[ seam + 1 ] } )
+  } catch ( thrown ) {
+
+    const detail = thrown instanceof Error ? thrown.message : String( thrown )
+
+    return failOrFallback(
+        options, `a shard runner failed: ${detail}`, serial, thrown )
   }
 
   const failure = describeShardFailure( outcomes )
@@ -1117,6 +1133,51 @@ export async function buildColumnarIndexShardedAsync<TypeIDType extends number>(
     seamRepairs,
     fellBackToSerial: false,
   }
+}
+
+
+/**
+ * Run the seam gate left to right, repairing any shard whose start was a
+ * false boundary candidate.
+ *
+ * `stop(k) === start(k+1)` at every seam proves, from the header-anchored
+ * `start(0)`, that every shard began on a true record boundary. Left to
+ * right matters: a repair changes that shard's own stop offset, and it is
+ * the repaired value the next seam has to be checked against.
+ *
+ * Mutates `outcomes` and `starts` in place. Extracted from the coordinator
+ * so the repair re-runs sit inside the same rejection guard as the initial
+ * dispatch — a repair calls the runner again and can reject the same way.
+ *
+ * @param outcomes The shard outcomes, in file order.
+ * @param starts Each shard's start offset, in file order.
+ * @param ends Each shard's end offset, in file order.
+ * @param run The shard runner.
+ * @return {Promise<number>} How many seams needed a repair.
+ */
+async function repairSeams<TypeIDType extends number>(
+    outcomes: ShardOutcome<TypeIDType>[],
+    starts: number[],
+    ends: readonly number[],
+    run: ShardRunner<TypeIDType> ): Promise<number> {
+
+  let seamRepairs = 0
+
+  for ( let seam = 0; seam + 1 < outcomes.length; ++seam ) {
+
+    const stop = outcomes[ seam ].stopOffset
+
+    if ( stop === starts[ seam + 1 ] ) {
+      continue
+    }
+
+    ++seamRepairs
+    starts[ seam + 1 ] = stop
+    outcomes[ seam + 1 ] = await run(
+        { index: seam + 1, startOffset: stop, endOffset: ends[ seam + 1 ] } )
+  }
+
+  return seamRepairs
 }
 
 
@@ -1159,16 +1220,31 @@ function describeShardFailure<TypeIDType extends number>(
  * @param options The caller's options.
  * @param reason Why the sharded build could not proceed.
  * @param serial Runs the serial build with a reason attached.
+ * @param cause The underlying error, when there was one — a runner's own
+ * rejection, attached so `fallbackToSerial: false` does not lose it.
  * @return {ShardedColumnarIndexResult} The serial build, when falling back.
  */
 function failOrFallback<TypeIDType extends number>(
     options: ShardedIndexOptions<TypeIDType>,
     reason: string,
-    serial: ( reason?: string ) => ShardedColumnarIndexResult<TypeIDType> ):
+    serial: ( reason?: string ) => ShardedColumnarIndexResult<TypeIDType>,
+    cause?: unknown ):
     ShardedColumnarIndexResult<TypeIDType> {
 
   if ( options.fallbackToSerial === false ) {
-    throw new Error( `sharded index build failed: ${reason}` )
+
+    const error = new Error( `sharded index build failed: ${reason}` )
+
+    // `cause` carries the runner's own rejection so a caller that opted out
+    // of the fallback still gets the underlying worker error, not just this
+    // wrapper's summary of it. Assigned rather than passed to the Error
+    // constructor: the two-argument form is ES2022 and this package targets
+    // ES2021, so `new Error( message, { cause } )` does not type-check here.
+    if ( cause !== void 0 ) {
+      ( error as { cause?: unknown } ).cause = cause
+    }
+
+    throw error
   }
 
   return serial( reason )

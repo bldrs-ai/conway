@@ -43,11 +43,13 @@ import {
 } from './index_sidecar'
 import {
   MAX_DERIVED_SHARD_COUNT,
+  ShardRunner,
   ShardStop,
   buildColumnarIndexShardedAsync,
   buildIndexShardRange,
   compareIndexColumns,
   findRecordBoundaryCandidate,
+  inProcessShardRunner,
   mergeIndexShards,
   resolveShardCount,
 } from './sharded_index_builder'
@@ -622,6 +624,164 @@ describe( 'buildColumnarIndexShardedAsync over real fixtures', () => {
         .toEqual(
             serializeIndexSidecarFromColumns( reference, bytes.length, hash ) )
   } )
+} )
+
+
+describe( 'a runner that rejects', () => {
+
+  /**
+   * A runner that fails the way a worker pool really fails: the shard job
+   * rejects rather than returning a bad outcome. A crashed worker, a worker
+   * that exits, a transport error and an I/O failure opening the model in a
+   * worker all arrive here.
+   *
+   * @param onShard Which shard index should reject; every other shard runs
+   * in process as normal.
+   * @param bytes The model bytes.
+   * @return {ShardRunner} The runner.
+   */
+  function rejectingRunner(
+      onShard: number, bytes: Uint8Array ): ShardRunner<EntityTypesIfc> {
+
+    const inner =
+      inProcessShardRunner( new BufferByteSource( bytes ), PARSER, SMALL_POOL )
+
+    return ( job ) => {
+
+      if ( job.index === onShard ) {
+        return Promise.reject( new Error( 'worker exited with code 1' ) )
+      }
+
+      return inner( job )
+    }
+  }
+
+  test( 'falls back to serial and reports the runner error', async () => {
+
+    const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+    const reference = serialColumns( bytes, SMALL_POOL )
+
+    const built = await buildColumnarIndexShardedAsync(
+        new BufferByteSource( bytes ), PARSER, SMALL_POOL,
+        { shardCount: 4, runner: rejectingRunner( 2, bytes ) } )
+
+    // The guarantee this module leans on hardest: a worker crash is a
+    // REPORTED serial fallback, not an unhandled rejection out of the load.
+    expect( built.fellBackToSerial ).toBe( true )
+    expect( built.fallbackReason ).toMatch( /shard runner failed/ )
+    expect( built.fallbackReason ).toMatch( /worker exited with code 1/ )
+    expect( built.shardCount ).toBe( 1 )
+    expect( compareIndexColumns( built.columns, reference ) ).toEqual( [] )
+  } )
+
+  test( 'fallbackToSerial: false rethrows, keeping the runner error as cause',
+      async () => {
+
+        const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+
+        const build = buildColumnarIndexShardedAsync(
+            new BufferByteSource( bytes ), PARSER, SMALL_POOL,
+            {
+              shardCount: 4,
+              fallbackToSerial: false,
+              runner: rejectingRunner( 0, bytes ),
+            } )
+
+        await expect( build ).rejects.toThrow( /sharded index build failed/ )
+
+        // The underlying worker error survives the wrapper, so a caller that
+        // opted out of the fallback can still see what actually broke.
+        await build.catch( ( thrown ) => {
+          expect( ( thrown as { cause?: Error } ).cause )
+              .toBeInstanceOf( Error )
+          expect( ( ( thrown as { cause?: Error } ).cause as Error ).message )
+              .toMatch( /worker exited with code 1/ )
+        } )
+      } )
+
+  test( 'a rejection from a SEAM REPAIR is caught too', async () => {
+
+    // The repair re-runs a shard, so it can reject exactly like the initial
+    // dispatch. It runs after `Promise.all` has already resolved, which is
+    // what makes it a separate path worth its own test.
+    const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+    const reference = serialColumns( bytes, SMALL_POOL )
+    const inner =
+      inProcessShardRunner( new BufferByteSource( bytes ), PARSER, SMALL_POOL )
+
+    const seen = new Set<number>()
+
+    const runner: ShardRunner<EntityTypesIfc> = ( job ) => {
+
+      // Reject only the SECOND time a shard index is asked for, which is
+      // what a repair is; the first pass resolves normally.
+      if ( seen.has( job.index ) ) {
+        return Promise.reject( new Error( 'worker died during repair' ) )
+      }
+
+      seen.add( job.index )
+
+      // Report a stop offset that cannot match the next shard's start, to
+      // force the seam gate into a repair.
+      return inner( job ).then( ( outcome ) => ( {
+        ...outcome,
+        stopOffset: job.index === 0 ? outcome.stopOffset - 1 : outcome.stopOffset,
+      } ) )
+    }
+
+    const built = await buildColumnarIndexShardedAsync(
+        new BufferByteSource( bytes ), PARSER, SMALL_POOL,
+        { shardCount: 2, runner } )
+
+    expect( built.fellBackToSerial ).toBe( true )
+    expect( built.fallbackReason ).toMatch( /worker died during repair/ )
+    expect( compareIndexColumns( built.columns, reference ) ).toEqual( [] )
+  } )
+} )
+
+
+describe( 'N=1 really is the serial builder', () => {
+
+  /** A model whose header does not parse. */
+  const MALFORMED = new TextEncoder().encode(
+      'ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(' )
+
+  test( 'a malformed header at N=1 returns the serial result, never throws',
+      async () => {
+
+        // The shard-only header pre-scan used to run BEFORE the N=1
+        // delegation, so this threw under fallbackToSerial: false — making
+        // N=1 observably different from buildColumnarIndexStreaming, which
+        // is the entire guarantee N=1 exists to provide.
+        const serial = buildColumnarIndexStreaming(
+            new BufferByteSource( MALFORMED ), PARSER, SMALL_POOL )
+
+        for ( const fallbackToSerial of [ true, false ] ) {
+
+          const built = await buildColumnarIndexShardedAsync(
+              new BufferByteSource( MALFORMED ), PARSER, SMALL_POOL,
+              { shardCount: 1, fallbackToSerial } )
+
+          expect( built.result ).toBe( serial.result )
+          expect( built.fellBackToSerial ).toBe( false )
+          expect( built.shardCount ).toBe( 1 )
+          expect( built.header ).toEqual( serial.header )
+          expect( built.stats ).toEqual( serial.stats )
+        }
+      } )
+
+  test( 'a derived N=1 on a small model also never reaches the header scan',
+      async () => {
+
+        // No explicit shardCount: the byte floor decides, and data/index.ifc
+        // is far under it. Same guarantee, reached by the other route.
+        const built = await buildColumnarIndexShardedAsync(
+            new BufferByteSource( MALFORMED ), PARSER, SMALL_POOL,
+            { fallbackToSerial: false } )
+
+        expect( built.shardCount ).toBe( 1 )
+        expect( built.fellBackToSerial ).toBe( false )
+      } )
 } )
 
 
