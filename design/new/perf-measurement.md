@@ -368,6 +368,18 @@ why a **cross-version `*_delta.csv` timing column is a lead, not a
 measurement**: a model that "got 30% faster between releases" may have
 changed by nothing at all.
 
+**That confound has since been measured and then removed.** Two attempts
+of one job — same commit, byte-identical digests, only the perf CSVs
+differing — came out 13.66% apart at the median across 97 models, against
+a 9.40% median regression the delta was reporting; the cause is that
+`ubuntu-24.04-4vcpu-8gb-150gbssd` is a label spanning three CPU models
+across two vendors, with an 11.24% CV of job means. The rc delta is now
+computed from **both pins timed in one job**, which is this section's
+argument applied to the thing the release actually gates on, and the
+cross-run delta survives beside it only for continuity with the archive.
+Numbers, the PMU probe behind them, and the pairing design:
+[perf-run-comparability.md](perf-run-comparability.md).
+
 **The blessed pass is the default one, not the control.** The flag-on
 pass is what ships, and its `perf.csv` is the only file passed to
 `bless_perf_snapshot.cjs` or committed by the re-bless PR. The control
@@ -875,11 +887,17 @@ about the path every Share user takes.
 | #562 §1 | `totalTimeMs` on both regression children becomes the load's **wall clock** (before `readFileSync` → after `model.invalidate(true)`); the old sum becomes `parsePlusGeometryMs` | it was `parseTimeMs + geometryTimeMs` by construction — 0-5 ms of slack on all 46 OK rows of the 1.451 snapshot — while meaning a genuine wall clock on the loader path, so one column held two quantities and neither was the load. **`totalTimeMs` steps up once** on regression rows, by the file read plus the teardown; read `parsePlusGeometryMs` across that boundary. Does not touch #562 §2, the larger half: the bench still runs a load path Share never takes |
 | #554 (via the two-pass rc A/B) | `parseTimeMs` drops by about 10 ms per load (13-16% at a ~60 ms parse, unresolvable against a 578 ms one), `heapUsedMb` 5-11 MB and `rssMb` 6-9 MB, against the same code without the settle | the pre-load settle collects engine-init garbage *outside* the timed region that used to be collected inside it, and the end-of-load memory instants sample from that collected floor. Not a new column, but a redefinition of three existing ones by methodology: do not difference parse/heapUsed/rss across this boundary. Distinct from #557 above, which moves `geometryTimeMs` and the memory columns on IFC rows only |
 
+| in-job pairing | the rc timing delta is computed from two passes in ONE job, so `engine1TotalTimeMs` in the new `*_paired_delta.csv` is measured by this run rather than read out of a previous one; the legacy cross-run `*_delta.csv` is retained unchanged beside it, and every delta row gains a `measurementBasis` column reading `paired` or `crossRun` | the frozen-baseline comparison had a 13.66% median noise floor — measured across 97 models on two attempts of one job with byte-identical digests — against a 9.40% median reported regression, so the signal was smaller than the noise. Within-job CV is 0.111%. Redefining the field is the point of the change and the old semantics survive under the old name; the evidence, the rejected alternatives (CPU time, instruction counts) and the cost are in [perf-run-comparability.md](perf-run-comparability.md) |
+
 Restoring `geometryMemoryMb` checks out against history: SKYLARK250 reads
 **185.22** against the **185.836** recorded at 1.451.
 
 ## Related
 
+- `design/new/perf-run-comparability.md` — whether two of these numbers may
+  be subtracted at all: the measured cross-run noise floor, the runner-pool
+  heterogeneity behind it, and the in-job pairing that replaced the frozen
+  baseline in the rc delta
 - `design/new/memory-residency.md` — the residency budget, and why live
   native allocation rather than heap high-water is the unit for a ceiling
 - `design/new/ci-regression-cost.md` — CI tiering, the rc / re-bless / LFS runbook

@@ -20,7 +20,8 @@ const require_ = createRequire(import.meta.url)
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
 const {
   DETAIL_COLUMNS, findPreviousSnapshot, isChronologicalDelta, removeStaleDeltas,
-  renderReadme, writeDetailCsv, versionCompare,
+  removeStalePairedDetail, parsePairedFlags, renderReadme, writeDetailCsv,
+  versionCompare,
 } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     DETAIL_COLUMNS: string[],
@@ -32,8 +33,15 @@ const {
       retentionCount: number,
       deltaName: string,
       previousName: string,
+      pairedDeltaName?: string,
+      pairedDetailName?: string,
+      pairedEngine?: string,
+      pairedScope?: string,
     }) => string,
     removeStaleDeltas: (outDir: string, version: string) => string[],
+    removeStalePairedDetail: (outDir: string) => string[],
+    parsePairedFlags: (argv: string[]) =>
+      { csv: string, engine: string, scope: string },
     findPreviousSnapshot: (dir: string, self: string, version: string) =>
       { name: string, version: string, engine: string } | null,
     writeDetailCsv: (
@@ -465,6 +473,75 @@ describe('isChronologicalDelta', () => {
       expect(isChronologicalDelta(name, '0.23.940')).toBe(false)
     }
   })
+
+  test('matches the paired sibling, since it is predecessor-named too', () => {
+    // The paired delta carries its predecessor in its name for the same
+    // reason the cross-run one does, so it goes stale the same way: a re-run
+    // that selects a different predecessor writes a differently NAMED file
+    // and the old one survives the workflow's whole-directory staging. Two
+    // authoritative-looking paired deltas against different predecessors, in
+    // one release directory, with the README naming only one.
+    expect(isChronologicalDelta(
+      'conway1.451.1357-ci_1.543.1513_paired_delta.csv', '1.543.1513'))
+        .toBe(true)
+    // Still bounded to THIS release.
+    expect(isChronologicalDelta(
+      'conway1.451.1357-ci_1.543.1513_paired_delta.csv', '1.451.1357'))
+        .toBe(false)
+    // And the webifc exclusion is not weakened by the optional group.
+    expect(isChronologicalDelta(
+      'webifc0.0.67_conway0.23.940_paired_delta.csv', '0.23.940')).toBe(false)
+    // The paired DETAIL file is not a delta and must not be swept by the
+    // delta cleanup — removeStalePairedDetail owns it.
+    expect(isChronologicalDelta(
+      'performance-detail-paired-conway1.451.1357-paired.csv', '1.543.1513'))
+        .toBe(false)
+  })
+})
+
+describe('removeStalePairedDetail', () => {
+
+  test('removes every paired detail file and nothing else', () => {
+    // Named for the predecessor, which is not fixed for a release, so the
+    // whole family is swept rather than one expected name.
+    const keep = ['performance-detail.csv', 'README.md',
+      'conway1.451.1357-ci_1.543.1513_delta.csv',
+      'conway1.451.1357-ci_1.543.1513_paired_delta.csv']
+    const drop = ['performance-detail-paired-conway1.451.1357-paired.csv',
+      'performance-detail-paired-conway1.300.900-paired.csv']
+
+    for (const name of [...keep, ...drop]) {
+      fs.writeFileSync(path.join(workDir, name), 'x', 'utf8')
+    }
+
+    expect(removeStalePairedDetail(workDir).sort()).toEqual(drop.sort())
+    expect(fs.readdirSync(workDir).sort()).toEqual(keep.sort())
+  })
+})
+
+describe('parsePairedFlags', () => {
+
+  test('reads the three flags, and defaults scope to full', () => {
+    expect(parsePairedFlags([
+      'node', 'bless', 'perf.csv', 'models', '1.5.0', 'test-models',
+      '--paired', '/tmp/perf-paired.csv',
+      '--paired-engine', 'conway1.4.0-paired',
+      '--paired-scope', 'smoke',
+    ])).toEqual({
+      csv: '/tmp/perf-paired.csv',
+      engine: 'conway1.4.0-paired',
+      scope: 'smoke',
+    })
+
+    expect(parsePairedFlags(['node', 'bless', 'perf.csv', 'models']))
+        .toEqual({ csv: '', engine: '', scope: 'full' })
+  })
+
+  test('a trailing flag with no value reads as absent', () => {
+    // Otherwise `undefined` reaches fs.existsSync and the paired branch is
+    // entered on a run that supplied nothing.
+    expect(parsePairedFlags(['node', 'bless', '--paired']).csv).toBe('')
+  })
 })
 
 describe('renderReadme', () => {
@@ -621,5 +698,65 @@ describe('renderReadme', () => {
       '`../conway1.451.1357-ci_test-models/`.')
     expect(renderReadme({ ...info, deltaName: '', previousName: '' }))
       .toContain('no delta was produced')
+  })
+
+  // The directory ships TWO conway-to-conway deltas with identical column
+  // layouts, differing only in how `engine1` was obtained. A reader who
+  // cannot tell them apart reads a 13.66%-noise-floor row as a regression,
+  // which is the exact failure the pairing work exists to end. So the README
+  // has to separate them ITSELF, before any column definition.
+  const paired = {
+    ...info,
+    pairedDeltaName: 'conway1.451.1357-ci_1.560.1600_paired_delta.csv',
+    pairedDetailName: 'performance-detail-paired-conway1.451.1357-paired.csv',
+    pairedEngine: 'conway1.451.1357-paired',
+    pairedScope: 'full',
+  }
+
+  test('says which delta is the gate and which is only continuity', () => {
+    const text = renderReadme(paired)
+
+    expect(text).toContain('This directory holds **two** conway-to-conway deltas')
+    expect(text).toContain('conway1.451.1357-ci_1.560.1600_paired_delta.csv')
+    expect(text).toContain('**the gate.**')
+    expect(text).toContain('continuity with the historical archive **only**')
+
+    // The measured numbers, not an adjective. A reader who is about to act
+    // on a cross-run row needs the size of the floor and the size of the
+    // signal in the same sentence.
+    expect(text).toContain('13.66% median')
+    expect(text).toContain('9.40% median')
+    expect(text).toContain('measurementBasis')
+
+    // Where the evidence lives.
+    expect(text).toContain('perf-run-comparability.md')
+
+    // And the archived rows, so the paired engine1 numbers outlive the
+    // 90-day artifact.
+    expect(text).toContain(
+      'performance-detail-paired-conway1.451.1357-paired.csv')
+  })
+
+  test('states a narrowed scope rather than letting it pass silently', () => {
+    const full = renderReadme(paired)
+    const smoke = renderReadme({ ...paired, pairedScope: 'smoke' })
+
+    expect(full).toContain('covered the **full corpus**')
+    expect(full).not.toContain('Scope: the smoke subset only')
+
+    expect(smoke).toContain('**Scope: the smoke subset only.**')
+    expect(smoke).toContain('`crossRun` row and no `paired` row')
+    expect(smoke).not.toContain('covered the **full corpus**')
+  })
+
+  test('still warns off the cross-run delta when no paired pass ran', () => {
+    // The un-paired path is the one a reader is MOST likely to misread,
+    // because the directory then looks exactly like every historical one.
+    const text = renderReadme(info)
+
+    expect(text).toContain('Only a `crossRun` delta was produced')
+    expect(text).toContain('13.66% median noise floor')
+    expect(text).toContain('Read it as a lead')
+    expect(text).not.toContain('This directory holds **two**')
   })
 })

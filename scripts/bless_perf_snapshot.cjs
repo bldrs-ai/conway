@@ -106,7 +106,7 @@ const path = require('path');
 const os = require('os');
 
 const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
-const { generateDeltaCSV } = require('./gen_delta_csv.cjs');
+const { generateDeltaCSV, MEASUREMENT_BASIS } = require('./gen_delta_csv.cjs');
 
 // Ordering lives in version_order.cjs, shared with run_gen_deltas.cjs so the
 // two tools agree about which snapshot is newer. This used to be a local
@@ -292,6 +292,7 @@ function findPreviousSnapshot(benchmarksDir, selfDirName, version) {
  *
  *   conway0.22.921_0.23.940_delta.csv        -> true  for 0.23.940
  *   conway1.451.1357-ci_1.543.1513_delta.csv -> true  for 1.543.1513
+ *   conway1.451.1357-ci_1.543.1513_paired_delta.csv -> true for 1.543.1513
  *   webifc0.0.67_conway0.23.940_delta.csv    -> FALSE, does not start `conway`
  *   performance-detail.csv / performance.csv -> false
  *   README.md / index.html / 00-*.log.txt    -> false
@@ -302,12 +303,18 @@ function findPreviousSnapshot(benchmarksDir, selfDirName, version) {
  * — conway0.23.940_test-models/ ships all three today — and those are a
  * different comparison that this script does not own and must not touch.
  *
+ * The `_paired` variant is matched for exactly the same reason the plain one
+ * is: it is named after its predecessor, the predecessor is not fixed for a
+ * given release, and a stale paired delta left behind would be a whole second
+ * authoritative-looking file describing a comparison the README does not name.
+ *
  * @param {string} name A directory entry name.
  * @param {string} version Version being blessed, e.g. '1.543.1513'.
- * @return {boolean} True when the file is this release's chronological delta.
+ * @return {boolean} True when the file is this release's chronological delta,
+ *   in either its cross-run or its paired spelling.
  */
 function isChronologicalDelta(name, version) {
-  const match = name.match(/^conway([^_]+)_(.+)_delta\.csv$/);
+  const match = name.match(/^conway([^_]+)_(.+?)(_paired)?_delta\.csv$/);
 
   return match !== null && match[2] === version;
 }
@@ -343,6 +350,36 @@ function removeStaleDeltas(outDir, version) {
 }
 
 /**
+ * Remove any previously written paired detail CSV before writing this run's.
+ *
+ * The file is named for the PREDECESSOR (`performance-detail-paired-conway
+ * <prev>.csv`), and the predecessor is not fixed for a given release — the
+ * same hazard `removeStaleDeltas` exists for. Matching the whole family
+ * rather than one expected name is deliberate: this directory belongs to one
+ * release, so any file of this shape in it is either the one about to be
+ * rewritten or a stale one from a re-run that picked a different predecessor,
+ * and leaving the latter would put a second engine's rows beside the delta
+ * without anything naming them.
+ *
+ * @param {string} outDir This release's snapshot directory.
+ * @return {Array<string>} Names removed, for logging.
+ */
+function removeStalePairedDetail(outDir) {
+  const removed = [];
+
+  for (const name of fs.readdirSync(outDir)) {
+    if (!/^performance-detail-paired-.+\.csv$/.test(name)) {
+      continue;
+    }
+
+    fs.rmSync(path.join(outDir, name), { force: true });
+    removed.push(name);
+  }
+
+  return removed;
+}
+
+/**
  * README recording which harness produced the snapshot.
  *
  * @param {Object} info Snapshot description.
@@ -355,12 +392,82 @@ function removeStaleDeltas(outDir, version) {
  *   why without anyone having to find this script.
  * @param {string} info.deltaName Delta filename, or '' when none was produced.
  * @param {string} info.previousName Previous snapshot directory, or ''.
+ * @param {string} [info.pairedDeltaName] Paired delta filename, or '' when the
+ *   paired pass did not run.
+ * @param {string} [info.pairedDetailName] Filename of the previous pin's own
+ *   rows as measured by THIS job, or ''.
+ * @param {string} [info.pairedEngine] Engine label given to those rows, e.g.
+ *   'conway1.543.1513-paired'.
+ * @param {string} [info.pairedScope] 'full' or 'smoke' — which models the
+ *   paired pass covered. A narrower scope is a narrower gate and the README
+ *   has to say so on its face.
  * @return {string} README body.
  */
 function renderReadme(info) {
   const deltaLine = info.deltaName !== '' ?
     `\`${info.deltaName}\` diffs this run against \`../${info.previousName}/\`.` :
     'No previous snapshot was committed in this repo, so no delta was produced.';
+
+  const pairedDeltaName = info.pairedDeltaName || '';
+  const pairedScope = info.pairedScope || 'full';
+
+  // WHICH COLUMNS ARE A MEASUREMENT AND WHICH ARE A LEAD. This is the half of
+  // the directory a reader is most likely to get wrong, because the two delta
+  // files share a column layout and differ only in how `engine1` was
+  // obtained. Stated first, before any column definition, and repeated in the
+  // `measurementBasis` cell of every row of both files.
+  const pairedSection = pairedDeltaName !== '' ?
+    `## Which delta to read
+
+This directory holds **two** conway-to-conway deltas over the same pair of
+releases. They are not interchangeable.
+
+| file | \`engine1\` is | \`measurementBasis\` | read it as |
+|---|---|---|---|
+| \`${pairedDeltaName}\` | \`${info.pairedEngine}\` — the previous release, re-measured **in this job, on this machine, minutes before/after the numbers it is differenced against** | \`paired\` | **the gate.** Within-job precision is ~0.111%, so a sub-1% move here is real |
+| \`${info.deltaName}\` | \`${info.previousName.replace(/_.*$/, '')}\` — the previous release **as recorded by its own run**, on a machine nobody recorded | \`crossRun\` | continuity with the historical archive **only** |
+
+**A \`crossRun\` timing column is not a measurement of conway.** It was
+measured at a **13.66% median** run-to-run drift across 97 models — two
+attempts of one job, same commit, byte-identical digests, only the perf CSVs
+differing — against a **9.40% median** regression that same delta was
+reporting. The signal was smaller than the noise. The cause is that
+\`ubuntu-24.04-4vcpu-8gb-150gbssd\` is a label spanning three CPU models
+across two vendors, with an 11.24% CV of job means and a 32.8% max/min spread;
+the full evidence, and why CPU time and instruction counts do not fix it, is
+in conway's
+[design/new/perf-run-comparability.md](https://github.com/bldrs-ai/conway/blob/main/design/new/perf-run-comparability.md).
+
+The cross-run file is kept because the archive in \`../\` contains nothing
+else and cannot be retrofitted — every historical snapshot was measured on an
+unknown machine. Use it to place this release in a long trend; do not read one
+of its rows as a regression.
+
+\`${info.pairedDetailName}\` holds the previous pin's own rows from this
+job, so the paired \`engine1\` numbers stay inspectable after the run's
+\`perf-serial-*\` artifact expires.
+
+**Memory columns are paired too, and they did not need to be.** RSS and heap
+figures are far less machine-sensitive than timings; they are in the paired
+file because the pass measures whole rows, not because a cross-run memory
+delta was suspect.
+
+${pairedScope === 'full' ?
+  'The paired pass covered the **full corpus**, the same models as the blessed pass.' :
+  '**Scope: the smoke subset only.** The paired pass ran over `regression/smoke_models.txt`, not the full corpus, so the paired delta covers roughly a dozen models. Every model outside that subset has a `crossRun` row and no `paired` row — which is a narrower gate, deliberately chosen for this run, not a failure.'}
+
+` :
+    `## Which delta to read
+
+Only a \`crossRun\` delta was produced for this release: the paired pass did
+not run. **A \`crossRun\` timing column is not a measurement of conway** —
+\`engine1\` comes from a previous run on a machine nobody recorded, and that
+comparison has a measured 13.66% median noise floor against a 9.40% median
+reported regression. Read it as a lead. Why, and what pairing does about it:
+conway's
+[design/new/perf-run-comparability.md](https://github.com/bldrs-ai/conway/blob/main/design/new/perf-run-comparability.md).
+
+`;
 
   // Which condition of the rc job's two-pass A/B produced this directory.
   // Always the settle-on pass — the control pass is never blessed — but a
@@ -391,7 +498,7 @@ Steady per-model load timings captured by the \`rebless\` job of conway's
 
 ${info.modelCount} models measured. ${deltaLine}
 
-## Harness
+${pairedSection}## Harness
 
 Produced by \`ifc_regression_batch_main --perf\` — conway loading in a plain
 node process. This is **not** the same harness as the older
@@ -573,6 +680,33 @@ check for.
 `;
 }
 
+/**
+ * Read the optional paired-pass flags off argv.
+ *
+ * Flags rather than positionals because they are optional and arrive
+ * together: `--paired <csv>` is the previous pin's perf.csv as measured by
+ * THIS job, `--paired-engine` is the label its rows get, `--paired-scope` is
+ * `full` or `smoke`. All three absent is the ordinary un-paired run.
+ *
+ * @param {Array<string>} argv process.argv.
+ * @return {{csv: string, engine: string, scope: string}} Empty strings where
+ *   a flag was not supplied.
+ */
+function parsePairedFlags(argv) {
+  const read = (flag) => {
+    const at = argv.indexOf(flag);
+    // `at + 1 < argv.length` so a trailing `--paired` with no value reads as
+    // absent instead of `undefined` reaching fs.existsSync.
+    return at !== -1 && at + 1 < argv.length ? argv[at + 1] : '';
+  };
+
+  return {
+    csv: read('--paired'),
+    engine: read('--paired-engine'),
+    scope: read('--paired-scope') || 'full',
+  };
+}
+
 /** Entry point. */
 function main() {
   const [, , perfPath, modelsRoot, version, repoName] = process.argv;
@@ -580,9 +714,13 @@ function main() {
   if (!perfPath || !modelsRoot || !version || !repoName) {
     console.error(
       `Usage: node ${path.basename(process.argv[1])} ` +
-      '<perf.csv> <models-checkout-root> <conway-version> <repo-name>');
+      '<perf.csv> <models-checkout-root> <conway-version> <repo-name> ' +
+      '[--paired <previous-pin-perf.csv>] [--paired-engine <label>] ' +
+      '[--paired-scope full|smoke]');
     process.exit(1);
   }
+
+  const paired = parsePairedFlags(process.argv);
 
   if (!fs.existsSync(perfPath)) {
     console.warn(`No perf CSV at ${perfPath}; nothing to bless.`);
@@ -648,6 +786,70 @@ function main() {
     }
   }
 
+  // THE PAIRED DELTA, which is the one the release is gated on. It is written
+  // after the cross-run delta rather than instead of it: the historical
+  // archive in benchmarks/ is entirely cross-run and cannot be retrofitted, so
+  // the old file survives for continuity while the paired file carries the
+  // signal. See design/new/perf-run-comparability.md.
+  //
+  // Its `engine1` label deliberately does NOT match the cross-run file's. The
+  // rows come from the published package at the previous version, measured in
+  // this job — not from that release's own blessed snapshot — so they are
+  // labelled `conway<version>-paired` against the other file's
+  // `conway<version>-ci`. Two files that share a column layout must not also
+  // share an engine label.
+  let pairedDeltaName = '';
+  let pairedDetailName = '';
+
+  if (paired.csv !== '' && previous !== null) {
+    if (!fs.existsSync(paired.csv)) {
+      console.warn(
+        `Paired perf CSV ${paired.csv} does not exist; paired delta skipped.`);
+    } else {
+      const pairedRows = readPerfCsv(paired.csv);
+
+      if (pairedRows.length === 0) {
+        console.warn(
+          `${paired.csv} has no model rows; paired delta skipped.`);
+      } else {
+        const removedDetail = removeStalePairedDetail(outDir);
+        if (removedDetail.length > 0) {
+          console.log(
+            `Removed superseded paired detail: ${removedDetail.join(', ')}`);
+        }
+
+        const pairedEngine =
+          paired.engine !== '' ? paired.engine : `conway${previous.version}-paired`;
+        pairedDetailName = `performance-detail-paired-${pairedEngine}.csv`;
+        const pairedDetailPath = path.join(outDir, pairedDetailName);
+
+        writeDetailCsv(pairedRows, pairedDetailPath, pairedEngine, timestamp);
+        console.log(
+          `Wrote ${pairedRows.length} paired rows to ${pairedDetailPath}`);
+
+        pairedDeltaName = `${previous.engine}_${version}_paired_delta.csv`;
+
+        // Same failure policy as the cross-run delta above: losing the delta
+        // must not lose the rows, which are the run's only durable record
+        // once the artifact expires.
+        try {
+          generateDeltaCSV(
+            pairedDetailPath, detailPath,
+            path.join(outDir, pairedDeltaName), false,
+            MEASUREMENT_BASIS.PAIRED);
+          console.log(`Wrote paired delta ${pairedDeltaName}`);
+        } catch (e) {
+          console.warn(`Failed to generate paired delta: ${e.message}`);
+          pairedDeltaName = '';
+        }
+      }
+    }
+  } else if (paired.csv !== '') {
+    console.warn(
+      'A paired perf CSV was supplied but no predecessor snapshot exists; ' +
+      'paired delta skipped.');
+  }
+
   fs.writeFileSync(
     path.join(outDir, 'README.md'),
     renderReadme({
@@ -661,6 +863,12 @@ function main() {
         (row) => (row.retainedRssMb || UNMEASURED) !== UNMEASURED).length,
       deltaName,
       previousName: previous !== null ? previous.name : '',
+      pairedDeltaName,
+      pairedDetailName,
+      pairedEngine:
+        paired.engine !== '' ? paired.engine :
+          (previous !== null ? `conway${previous.version}-paired` : ''),
+      pairedScope: paired.scope,
     }),
     'utf8');
 }
@@ -672,8 +880,10 @@ if (require.main === module) {
 module.exports = {
   DETAIL_COLUMNS,
   findPreviousSnapshot,
+  parsePairedFlags,
   isChronologicalDelta,
   removeStaleDeltas,
+  removeStalePairedDetail,
   readPerfCsv,
   renderReadme,
   versionCompare,

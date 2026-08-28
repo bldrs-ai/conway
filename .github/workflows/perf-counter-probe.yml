@@ -19,21 +19,33 @@ name: Perf counter probe (PMU availability + metric variance)
 #        three separate VMs; if their CPU model strings differ, that is the
 #        confirmation.
 #
-# Triggering: `workflow_dispatch` alone is not dispatchable until the workflow
-# sits on the default branch, so the push trigger below is what actually fires
-# it from the experiment branch. Scoped to the probe's own files so ordinary
-# work on that branch does not re-run it.
+# BOTH QUESTIONS ARE ANSWERED. Runs 33140946078 and 33141507310 (6 VMs, 120
+# timed iterations) found: Q1 no — the PMU is masked by the Azure hypervisor,
+# software events count but `instructions:u` returns `<not supported>` and
+# /sys/bus/event_source/devices/ has no `cpu` device at all, unchanged by
+# lowering perf_event_paranoid. Q2 yes — one runner label produced AMD EPYC
+# 7763, AMD EPYC 9V74 and Intel Xeon Platinum 8370C, with an 11.24% CV of job
+# means against a 0.111% within-job CV. The consequence for how conway is
+# measured, and the in-job pairing built on it, are in
+# design/new/perf-run-comparability.md.
+#
+# KEPT, NOT DELETED, and this is why: the answer is a property of GitHub's
+# runner pool, not of conway. The pool can gain a PMU-exposing host, or lose
+# the Intel machines, without telling anyone — and the assumption that a
+# cross-run timing comparison is worthless is now load-bearing in
+# rc-regression.yml. This is the one dispatch that re-tests it.
+#
+# Triggering: `workflow_dispatch` only, now that this sits on the default
+# branch (a workflow_dispatch-only workflow is not dispatchable until it
+# does, which is what the removed push trigger existed for). Do not re-add a
+# push trigger: this is a 6-VM matrix, and its question is not one that any
+# individual commit changes.
 #
 # Self-contained on purpose: this workflow plus .github/probe/perf-counter-probe.mjs
 # and nothing else. It must not be merged into, or depended on by, build.yml or
 # rc-regression.yml.
 
 on:
-  push:
-    branches: ['claude/worker-model-geometry-streaming-b4nk8w']
-    paths:
-      - '.github/workflows/perf-counter-probe.yml'
-      - '.github/probe/perf-counter-probe.mjs'
   workflow_dispatch:
 
 concurrency:
