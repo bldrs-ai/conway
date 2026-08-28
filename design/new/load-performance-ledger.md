@@ -203,6 +203,10 @@ transient, and it is the single biggest item on the page.
 
 ## 5. What the instrument actually measures
 
+*Method extracted and generalised in
+[browser-memory-analysis.md](browser-memory-analysis.md) — read that before
+measuring anything else; this section is the D3D-specific instance of it.*
+
 **Before reading §0 or §3 again, know this: the heap column in a load report
 is blank in every browser that is not launched with a debug flag, and the
 numbers in §0 could only have come from a run that was.**
@@ -487,6 +491,9 @@ triangles=2453022`. The scene it left behind is **one** `BatchedMesh` with
 
 
 ### 9.1 A heap snapshot is not available at this heap size
+
+*Generalised, with the budget rule and the techniques that replace it, in
+[browser-memory-analysis.md](browser-memory-analysis.md) §3–§4.*
 
 The obvious move — `HeapProfiler.takeHeapSnapshot` — **cannot be taken on
 this load, and that is a finding rather than a harness problem.** On the
