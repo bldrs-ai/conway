@@ -449,8 +449,10 @@ function blockedRanges(spans, offsetOf, maxId, coordOf) {
   const merged = []
   for (const range of ranges) {
     const last = merged[merged.length - 1]
-    // `<=` so that ranges which merely touch are fused: pushing a product to
-    // the end of one must not land it at the start of the next.
+    // `<=` is REQUIRED rather than merely tidy: [10,100) and [100,200) are
+    // contiguous as blocked SETS, so leaving them separate would let a
+    // product pushed to the end of the first land at the start of the second
+    // and be reported ready at a prefix where the scan still throws.
     if (last !== undefined && range.at <= last.until) {
       if (range.until > last.until) {
         last.until = range.until
@@ -614,11 +616,15 @@ function report(path) {
    *  - It reads only `gridAxis.localID`, never the axis' AxisCurve, so what
    *    matters is where the AXIS RECORDS land — `offsetOf`, deliberately not
    *    `placementResolveAt`, which would over-gate on the axis curves' points.
-   *  - Nothing is sticky across prefixes: `gridByAxis_` memoises only a
-   *    COMPLETED scan, and both preview channels build a fresh
-   *    IfcGeometryExtraction per generation (`store_preview_channel.ts:635`,
-   *    `streamed_preview_channel.ts:265`), so the memo never survives into
-   *    the next prefix and every generation re-runs the scan.
+   *  - Nothing is sticky, and the memo cannot even hypothetically hold a
+   *    PARTIAL scan: `this.gridByAxis_ = gridByAxis` is at
+   *    `ifc_geometry_extraction.ts:5944`, after the loop, so a scan that threw
+   *    assigns nothing. Across prefixes it does not survive either — every
+   *    non-test construction site builds a fresh IfcGeometryExtraction per
+   *    generation or per load (`store_preview_channel.ts:635`,
+   *    `streamed_preview_channel.ts:265`, four sites in
+   *    `ifc_api_proxy_ifc.ts`, `conway_model_loader.ts:517`), so each
+   *    generation re-runs the scan over the grids it can see.
    *
    * So each grid contributes a half-open BLOCKED RANGE
    * `[where the grid appears, where its last axis appears)`: inside it the
@@ -627,10 +633,29 @@ function report(path) {
    * placement can resolve, and a product's answer is the first prefix at or
    * after its own chain that is outside the set.
    *
-   * Emission is a one-time event, so "first prefix that works" is the whole
-   * question — a later grid re-blocking the scan cannot un-emit a product
-   * already emitted, and the curves stay monotone even though the underlying
-   * predicate is not. */
+   * What that answer IS, precisely, because the distinction only appeared
+   * with these ranges: it is the first prefix at which emission is POSSIBLE,
+   * not one at which the engine necessarily attempts it. Before this the
+   * predicate was monotone, so "usable by prefix X" and "usable at prefix X"
+   * were the same statement on every row of the table; with two grids whose
+   * blocked ranges leave a GAP between them they are not. A product landing
+   * in such a gap is reported usable across a span where the scan throws at
+   * every prefix on either side, and the engine realises it only if a
+   * generation boundary falls inside that window — which is not likely,
+   * since generations are sparse by construction (GENERATION_GROWTH_FACTOR
+   * of 2x plus firstGenerationMinRecords, `store_preview_channel.ts:596-606`,
+   * `streamed_preview_channel.ts:884-895`). Miss the gap and the product
+   * waits for the far end of the next range, an unbounded distance away and
+   * in the optimistic direction.
+   *
+   * The fix for that is NOT to push to the last range's end: that is the
+   * file-wide over-deferral codex round 1 correctly rejected, and it would be
+   * wrong for every product that does get emitted in a gap. It is recorded
+   * here instead because it costs nothing today — it needs two grids with a
+   * gap between their ranges, and no corpus model contains an
+   * IFCGRIDPLACEMENT at all — and because a reader comparing this curve
+   * against a real preview run deserves to know which of the two questions
+   * it answers. */
   const gridBlocked = blockedRanges(gridSpans, offsetOf, maxId, (offset) => offset)
 
   // Placement chains are shallow but transitive (a local placement points at

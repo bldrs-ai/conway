@@ -303,6 +303,34 @@ describe('layout_report grid-placement closure', () => {
     expect(blockers).toMatch(/\s1\s+\(\s*\d+%\)\s+IFCGRIDAXIS/)
   })
 
+  test('the gate reaches a product through IfcLocalPlacement.PlacementRelTo', () => {
+
+    // The nesting the seeding is built for, and the one path round 2 could
+    // only verify by hand. A product's ObjectPlacement is an
+    // IfcLocalPlacement whose PlacementRelTo is the IfcGridPlacement, so the
+    // product does not reference the grid placement directly and the flag has
+    // to travel up the chain through the fixed point to reach it.
+    //
+    // Same shape as the VISIBLE-grid test otherwise: #300 is in the prefix
+    // with its axes at the tail, and #200's own chain is entirely behind it.
+    const file = path.join(workDir, 'nested_grid_placement.ifc')
+
+    fs.writeFileSync(file, [
+      ...FIXTURE_HEAD,
+      ...LOCAL_GRID_AND_PRODUCT_CHAIN,
+      '#203=IFCLOCALPLACEMENT(#201,#21);',
+      '#300=IFCGRID(\'3kF0kSTOX3ovkcpuOhkPrX\',$,\'Far\',$,$,$,$,(#310),(#330),$,.RECTANGULAR.);',
+      '#200=IFCBUILDINGELEMENTPROXY(\'2kF0kSTOX3ovkcpuOhkPrX\',$,\'Nested\',$,$,#203,$,$,.NOTDEFINED.);',
+      ...FAR_GRID_AXES_TAIL,
+      ...FIXTURE_TAIL,
+    ].join('\n'))
+
+    // Without the propagation the product is gated by nothing at all and the
+    // report prints no blocker block, since every record it references is
+    // already behind it.
+    expect(blockerBlock(file)).toMatch(/\s1\s+\(\s*\d+%\)\s+IFCGRIDAXIS/)
+  })
+
   test('a grid the prefix has not reached yet gates nothing', () => {
 
     // The counterweight, and the correction codex found in round 1 of #607.
@@ -347,6 +375,14 @@ describe('layout_report grid-placement closure', () => {
     // offset" and converting THAT to band progress therefore answers a
     // different question from "the last axis any reader reaches" — the max has
     // to be taken after the mapping, per shard count.
+    //
+    // Why a fixture of its own: on data/grid_placement_tail_axes.ifc the two
+    // formulas agree to 0.0000 at N=1, 2, 4 and 8, so a test written against
+    // that file would pin nothing. The reason is not that grid #400's axes are
+    // contiguous — it is that they all FIT WITHIN A SINGLE BAND at every
+    // simulated shard count, which is what makes the mapping monotone over the
+    // set being maxed. A grid whose axes span a boundary is the case that
+    // separates the two, and this fixture is the smallest such grid.
     //
     // Two axes of one grid, placed either side of the N=2 boundary: #410 at
     // ~49% of the file (band 0, nearly done) and #420 at ~52% (band 1, barely
