@@ -5051,6 +5051,9 @@ export class IfcGeometryExtraction {
         // today's behaviour. IFC's degenerate-loop spelling is the VERTEX_LOOP,
         // which TriangulateSphericalSurface already handles by point count.
         seam: false,
+        // Likewise for the seam PAIR: undecided on this front end, and false
+        // leaves TriangulateBspline on its existing earcut path.
+        seamPair: false,
       }
 
       const bound3D: Bound3DObject = this.conwayModel.createBound3D(parametersCreateBounds3D)
