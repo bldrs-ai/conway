@@ -377,13 +377,21 @@ describe('a partial paired pass is not blessed as the gate', () => {
 
   /**
    * Lay out a workspace with one committed predecessor snapshot to pair
-   * against, this release's blessed perf.csv, and the paired pass's output.
+   * against, this release's blessed perf.csv, the paired pass's output, and
+   * — separately from both — the corpus on disk that the coverage demand is
+   * derived from.
+   *
+   * `corpus` defaults to the union of the two passes' rows, i.e. a tree that
+   * lost nothing. A test that wants a model NEITHER pass measured, or two
+   * files writing one basename, passes it explicitly.
    *
    * @param blessed Models this release measured.
    * @param pairedRows Models the previous pin's pass came back with.
+   * @param corpus Corpus-relative model paths, or undefined for the union.
    */
   function seed(
-      blessed: [string, string][], pairedRows: [string, string][]): void {
+      blessed: [string, string][], pairedRows: [string, string][],
+      corpus?: string[]): void {
     const previous = path.join(
       workDir, 'models/benchmarks/conway1.4.0-ci_test-models')
 
@@ -395,16 +403,32 @@ describe('a partial paired pass is not blessed as the gate', () => {
       path.join(workDir, 'perf.csv'), perfCsv(blessed), 'utf8')
     fs.writeFileSync(
       path.join(workDir, 'perf-paired.csv'), perfCsv(pairedRows), 'utf8')
+
+    const files = corpus ?? [...new Set(
+      [...blessed, ...pairedRows].map(([file]) => file))]
+
+    for (const rel of files) {
+      const full = path.join(workDir, 'models', rel)
+
+      fs.mkdirSync(path.dirname(full), { recursive: true })
+      fs.writeFileSync(full, 'model bytes', 'utf8')
+    }
   }
 
   /**
    * Run the bless script over the seeded workspace.
    *
    * @param extraArgs Flags beyond the paired trio, e.g. --paired-expected.
+   *   Pass `--corpus-exclude` here to override the default.
    * @return The job summary the run wrote, '' when it wrote none.
    */
   function bless(extraArgs: string[] = []): string {
     const summaryPath = path.join(workDir, 'summary.md')
+    // The workflow's own exclude. Present on every run because the corpus
+    // walk is what the demand is derived from, and it has to see the tree the
+    // passes saw.
+    const corpusExclude = extraArgs.includes('--corpus-exclude') ?
+      [] : ['--corpus-exclude', 'sp-.*\\.ifc|cg4.*-cylinder\\.stp']
 
     execFileSync(
         process.execPath,
@@ -412,6 +436,7 @@ describe('a partial paired pass is not blessed as the gate', () => {
           SCRIPT, 'perf.csv', 'models', '1.5.0', 'test-models',
           '--paired', 'perf-paired.csv',
           '--paired-engine', 'conway1.4.0-paired',
+          ...corpusExclude,
           ...extraArgs,
         ],
         {
@@ -521,5 +546,127 @@ describe('a partial paired pass is not blessed as the gate', () => {
     expect(snapshotFiles())
         .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
     expect(summary).toContain('nonexistent.txt')
+  })
+
+  test('a model BOTH passes lost is still demanded', () => {
+    // THE CORRELATED-LOSS HOLE, end to end. Both passes run the same batch
+    // driver over the same tree, so they share its failure modes: a model
+    // whose child is killed in both is absent from both CSVs. A demand read
+    // off either output drops it at the same moment the measurement does, and
+    // a paired median over a quietly smaller corpus goes out as the release
+    // gate. The corpus on disk is the one input neither pass wrote.
+    seed(
+      [['index.ifc', '100']],
+      [['index.ifc', '102']],
+      ['ifc/index.ifc', 'ifc/duplex.ifc'])
+
+    const summary = bless(['--paired-scope', 'full'])
+
+    expect(snapshotFiles())
+        .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+    expect(summary).toContain('duplex.ifc')
+    expect(snapshotFiles()).toContain('conway1.4.0-ci_1.5.0_delta.csv')
+  })
+
+  test('the corpus walk honours the exclude, so it does not over-demand', () => {
+    // The negative control for the test above: an excluded model is not in
+    // the corpus the passes walked, so demanding it would degrade every run.
+    seed(
+      [['index.ifc', '100']],
+      [['index.ifc', '102']],
+      ['ifc/index.ifc', 'ifc/sp-concat.ifc', 'step/cg4-cylinder.stp'])
+
+    expect(bless(['--paired-scope', 'full'])).toBe('')
+    expect(snapshotFiles()).toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+  })
+
+  test('a smoke list matching nothing degrades, rather than passing empty', () => {
+    // With no entry matching, the demand is empty, nothing can be missing,
+    // and any paired CSV at all clears a check that only looks at `missing` —
+    // while the README goes on calling the result the smoke gate.
+    seed(
+      [['index.ifc', '100'], ['duplex.ifc', '200']],
+      [['index.ifc', '102']])
+    fs.writeFileSync(
+      path.join(workDir, 'smoke.txt'), 'renamed-since.ifc\n', 'utf8')
+
+    const summary = bless(
+      ['--paired-scope', 'smoke', '--paired-expected', 'smoke.txt'])
+
+    expect(snapshotFiles())
+        .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+    expect(summary).toContain('renamed-since.ifc')
+  })
+
+  test('a smoke entry no corpus file matches degrades', () => {
+    // The rest of the list matching is not enough: dropping the entry would
+    // narrow the gate silently, which is the failure this check exists for.
+    seed(
+      [['index.ifc', '100']],
+      [['index.ifc', '102']])
+    fs.writeFileSync(
+      path.join(workDir, 'smoke.txt'), 'index.ifc\ntypo.ifc\n', 'utf8')
+
+    const summary = bless(
+      ['--paired-scope', 'smoke', '--paired-expected', 'smoke.txt'])
+
+    expect(snapshotFiles())
+        .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+    expect(summary).toContain('typo.ifc')
+  })
+
+  test('a basename collision degrades and names conway#633', () => {
+    // Two corpus files write one `index.perf.csv`, so one row is lost and a
+    // check keyed on basename cannot see it. Interim guard: the gate says it
+    // is unverifiable instead of under-covering in silence. The real fix —
+    // path-qualified identities across the perf CSVs and digest stems — is
+    // conway#633, and this test goes when that lands.
+    seed(
+      [['index.ifc', '100']],
+      [['index.ifc', '102']],
+      ['ifc/index.ifc', 'ifc/bldrs/index.ifc'])
+
+    const summary = bless(['--paired-scope', 'full'])
+
+    expect(snapshotFiles())
+        .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+    expect(summary).toContain('index.ifc')
+    expect(summary).toContain('#633')
+
+    const readme =
+      fs.readFileSync(path.join(workDir, OUT_DIR, 'README.md'), 'utf8')
+
+    expect(readme).toContain('#633')
+    // Degraded, not aborted, like every other pairing failure.
+    expect(snapshotFiles()).toContain('conway1.4.0-ci_1.5.0_delta.csv')
+  })
+
+  test('a rerun with no paired pass at all clears the last one’s rows', () => {
+    // `--paired` is omitted entirely when the paired step produced no CSV, so
+    // a cleanup living inside the paired branch never runs. removeStaleDeltas
+    // still takes the old paired DELTA (it matches the `_paired` spelling)
+    // and the regenerated README says the paired pass did not run — leaving
+    // the previous run's paired rows in the directory with nothing naming
+    // them.
+    seed(
+      [['index.ifc', '100'], ['duplex.ifc', '200']],
+      [['index.ifc', '102'], ['duplex.ifc', '210']])
+    bless(['--paired-scope', 'full'])
+
+    expect(snapshotFiles())
+        .toContain('performance-detail-paired-conway1.4.0-paired.csv')
+
+    // The rerun: same snapshot, no perf-paired.csv this time.
+    fs.rmSync(path.join(workDir, 'perf-paired.csv'))
+    execFileSync(
+        process.execPath,
+        [SCRIPT, 'perf.csv', 'models', '1.5.0', 'test-models'],
+        { cwd: workDir, stdio: 'pipe' })
+
+    expect(snapshotFiles().filter(
+        (name) => name.startsWith('performance-detail-paired-'))).toEqual([])
+    expect(snapshotFiles())
+        .not.toContain('conway1.4.0-ci_1.5.0_paired_delta.csv')
+    expect(snapshotFiles()).toContain('performance-detail.csv')
   })
 })

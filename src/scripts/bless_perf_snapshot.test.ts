@@ -19,19 +19,23 @@ const require_ = createRequire(import.meta.url)
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
 const {
-  DETAIL_COLUMNS, coverageSkipReason, findPreviousSnapshot, isChronologicalDelta,
+  DETAIL_COLUMNS, collectCorpusModels, coverageSkipReason, findPreviousSnapshot,
+  isChronologicalDelta,
   pairedCoverage, removeStaleDeltas, removeStalePairedDetail, parsePairedFlags,
   renderReadme, writeDetailCsv, versionCompare,
 } =
   require_(path.resolve(process.cwd(), 'scripts/bless_perf_snapshot.cjs')) as {
     DETAIL_COLUMNS: string[],
+    collectCorpusModels: (rootDir: string, exclude?: RegExp) => string[],
     coverageSkipReason: (
       coverage: { expected: string[], missing: string[] }) => string,
     pairedCoverage: (
+      corpusModels: string[],
       blessedRows: Record<string, string>[],
       pairedRows: Record<string, string>[],
-      expectedListPath: string) =>
-      { expected: string[], missing: string[], listError: string },
+      smokeListPath: string) =>
+      { expected: string[], missing: string[], listError: string,
+        unmatched: string[], collisions: string[] },
     isChronologicalDelta: (name: string, version: string) => boolean,
     renderReadme: (info: {
       engine: string,
@@ -49,7 +53,8 @@ const {
     removeStaleDeltas: (outDir: string, version: string) => string[],
     removeStalePairedDetail: (outDir: string) => string[],
     parsePairedFlags: (argv: string[]) =>
-      { csv: string, engine: string, scope: string, expected: string },
+      { csv: string, engine: string, scope: string, expected: string,
+        corpusExclude: string },
     findPreviousSnapshot: (dir: string, self: string, version: string) =>
       { name: string, version: string, engine: string } | null,
     writeDetailCsv: (
@@ -529,28 +534,58 @@ describe('removeStalePairedDetail', () => {
 
 describe('parsePairedFlags', () => {
 
-  test('reads the four flags, and defaults scope to full', () => {
+  test('reads the five flags, and defaults scope to full', () => {
     expect(parsePairedFlags([
       'node', 'bless', 'perf.csv', 'models', '1.5.0', 'test-models',
       '--paired', '/tmp/perf-paired.csv',
       '--paired-engine', 'conway1.4.0-paired',
       '--paired-scope', 'smoke',
       '--paired-expected', 'regression/smoke_models.txt',
+      '--corpus-exclude', 'sp-.*\\.ifc',
     ])).toEqual({
       csv: '/tmp/perf-paired.csv',
       engine: 'conway1.4.0-paired',
       scope: 'smoke',
       expected: 'regression/smoke_models.txt',
+      corpusExclude: 'sp-.*\\.ifc',
     })
 
     expect(parsePairedFlags(['node', 'bless', 'perf.csv', 'models']))
-        .toEqual({ csv: '', engine: '', scope: 'full', expected: '' })
+        .toEqual({
+          csv: '', engine: '', scope: 'full', expected: '', corpusExclude: '',
+        })
   })
 
   test('a trailing flag with no value reads as absent', () => {
     // Otherwise `undefined` reaches fs.existsSync and the paired branch is
     // entered on a run that supplied nothing.
     expect(parsePairedFlags(['node', 'bless', '--paired']).csv).toBe('')
+  })
+})
+
+describe('collectCorpusModels', () => {
+
+  test('walks like the batch does: recursive, extension-keyed, regex-pruned', () => {
+    // Mirrors collectIFCFiles() in ifc_regression_batch_main.ts, and the
+    // mirroring is the point — this is where the paired gate's demand comes
+    // from, so it has to see the tree the passes saw.
+    for (const rel of [
+      'ifc/index.ifc', 'ifc/bldrs/index.ifc', 'step/part.STP',
+      'step/other.step', 'ifc/sp-concat.ifc', 'notes/README.md',
+      'skipme/hidden.ifc',
+    ]) {
+      fs.mkdirSync(path.join(workDir, path.dirname(rel)), { recursive: true })
+      fs.writeFileSync(path.join(workDir, rel), 'x', 'utf8')
+    }
+
+    const found = collectCorpusModels(workDir, /sp-.*\.ifc|skipme/)
+        .map((p) => path.relative(workDir, p).split(path.sep).join('/'))
+
+    // .md is not a model; sp-*.ifc is excluded by name; `skipme` is excluded
+    // as a DIRECTORY, because the regex is tested before the dir/file split.
+    expect(found.sort()).toEqual([
+      'ifc/bldrs/index.ifc', 'ifc/index.ifc', 'step/other.step', 'step/part.STP',
+    ])
   })
 })
 
@@ -566,8 +601,19 @@ describe('pairedCoverage', () => {
     return names.map((file) => ({ file, status: 'OK' }))
   }
 
+  /**
+   * A corpus walk's output, one model per named directory so no two collide.
+   *
+   * @param names Model basenames.
+   * @return Paths as collectCorpusModels would return them.
+   */
+  function corpus(names: string[]): string[] {
+    return names.map((name, i) => `models/d${i}/${name}`)
+  }
+
   test('reports the models the paired pass did not measure', () => {
     const coverage = pairedCoverage(
+      corpus(['index.ifc', 'duplex.ifc', 'MB-Khaya.ifc']),
       rows(['index.ifc', 'duplex.ifc', 'MB-Khaya.ifc']),
       rows(['index.ifc']), '')
 
@@ -580,42 +626,104 @@ describe('pairedCoverage', () => {
     // pass that lost one model and picked up another has the count of a
     // complete one, and only the difference names what went missing.
     const coverage = pairedCoverage(
+      corpus(['index.ifc', 'duplex.ifc']),
       rows(['index.ifc', 'duplex.ifc']),
       rows(['index.ifc', 'stray.ifc']), '')
 
     expect(coverage.missing).toEqual(['duplex.ifc'])
   })
 
-  test('an expected list narrows the demand to that list', () => {
+  test('a model BOTH passes lost is still demanded', () => {
+    // THE CORRELATED-LOSS HOLE. The first version of this check read the
+    // demand off the blessed pass's rows, so a model whose child died in both
+    // passes dropped out of the demand at the same time it dropped out of the
+    // measurement, `missing` came back empty, and a paired median over a
+    // quietly smaller corpus was published as the release gate. The corpus
+    // walk is the one input here that neither pass produced.
+    const coverage = pairedCoverage(
+      corpus(['index.ifc', 'duplex.ifc']),
+      rows(['index.ifc']),
+      rows(['index.ifc']), '')
+
+    expect(coverage.missing).toEqual(['duplex.ifc'])
+  })
+
+  test('a model only the paired pass measured is not covered either', () => {
+    // Coverage is of the paired DELTA, and generateDeltaCSV drops one-sided
+    // rows under MEASUREMENT_BASIS.PAIRED — so a model the blessed pass lost
+    // contributes nothing to the file this check is guarding, however well
+    // the paired pass timed it.
+    const coverage = pairedCoverage(
+      corpus(['index.ifc', 'duplex.ifc']),
+      rows(['index.ifc']),
+      rows(['index.ifc', 'duplex.ifc']), '')
+
+    expect(coverage.missing).toEqual(['duplex.ifc'])
+  })
+
+  test('a smoke list narrows the demand to that list', () => {
     // `smoke` scope: the paired pass covers regression/smoke_models.txt, so
     // demanding the whole corpus would degrade every smoke run.
     const listPath = path.join(workDir, 'smoke.txt')
 
     fs.writeFileSync(listPath, '# header\n\nindex.ifc\n', 'utf8')
 
-    expect(pairedCoverage(
-      rows(['index.ifc', 'duplex.ifc']), rows(['index.ifc']),
-      listPath).missing).toEqual([])
-  })
-
-  test('a listed model the blessed pass has no row for is not demanded', () => {
-    // It is either not in this corpus or was lost by the blessed pass too. In
-    // both cases the delta has no row to write, which is not evidence that
-    // the PAIRED pass was truncated — and this check only speaks to that.
-    const listPath = path.join(workDir, 'smoke.txt')
-
-    fs.writeFileSync(listPath, 'index.ifc\nnot-in-corpus.ifc\n', 'utf8')
-
     const coverage = pairedCoverage(
-      rows(['index.ifc']), rows(['index.ifc']), listPath)
+      corpus(['index.ifc', 'duplex.ifc']),
+      rows(['index.ifc', 'duplex.ifc']), rows(['index.ifc']), listPath)
 
     expect(coverage.expected).toEqual(['index.ifc'])
     expect(coverage.missing).toEqual([])
   })
 
+  test('a smoke entry no corpus file matches is reported, not dropped', () => {
+    // Filtering it away would shrink the gate to whatever happened to match,
+    // silently — the same failure mode the whole check exists to prevent. A
+    // list naming models that are not there is a misconfiguration.
+    const listPath = path.join(workDir, 'smoke.txt')
+
+    fs.writeFileSync(listPath, 'index.ifc\nnot-in-corpus.ifc\n', 'utf8')
+
+    const coverage = pairedCoverage(
+      corpus(['index.ifc']), rows(['index.ifc']), rows(['index.ifc']), listPath)
+
+    expect(coverage.unmatched).toEqual(['not-in-corpus.ifc'])
+  })
+
+  test('a smoke list matching nothing leaves an empty demand', () => {
+    // `missing` is necessarily empty when nothing is expected, so any paired
+    // CSV at all would pass a check that only looked at `missing`.
+    const listPath = path.join(workDir, 'smoke.txt')
+
+    fs.writeFileSync(listPath, 'renamed.ifc\n', 'utf8')
+
+    const coverage = pairedCoverage(
+      corpus(['index.ifc']), rows(['index.ifc']), rows(['index.ifc']), listPath)
+
+    expect(coverage.expected).toEqual([])
+    expect(coverage.missing).toEqual([])
+    expect(coverage.unmatched).toEqual(['renamed.ifc'])
+  })
+
+  test('two corpus files writing one basename are reported (conway#633)', () => {
+    // `ifc/index.ifc` and `ifc/bldrs/index.ifc` are a live pair. They write
+    // the same `index.perf.csv`, so one row is lost, and a check keyed on
+    // basename cannot see it go.
+    const coverage = pairedCoverage(
+      ['models/ifc/index.ifc', 'models/ifc/bldrs/index.ifc',
+        'models/ifc/duplex.ifc'],
+      rows(['index.ifc', 'duplex.ifc']),
+      rows(['index.ifc', 'duplex.ifc']), '')
+
+    expect(coverage.collisions).toEqual(['index.ifc'])
+    // And nothing looks wrong without that field: the collapsed pair reads as
+    // full coverage, which is exactly why the caller has to consult it.
+    expect(coverage.missing).toEqual([])
+  })
+
   test('an unreadable list is reported rather than silently ignored', () => {
     const coverage = pairedCoverage(
-      rows(['index.ifc']), rows(['index.ifc']),
+      corpus(['index.ifc']), rows(['index.ifc']), rows(['index.ifc']),
       path.join(workDir, 'nope.txt'))
 
     expect(coverage.listError).toContain('nope.txt')
@@ -629,7 +737,7 @@ describe('coverageSkipReason', () => {
     const reason = coverageSkipReason({
       expected: Array.from({ length: 40 }, (_, i) => `m${i}.ifc`), missing })
 
-    expect(reason).toContain('28 of the 40 models')
+    expect(reason).toContain('covers 28 of the 40 models')
     expect(reason).toContain('m0.ifc')
     expect(reason).toContain('and 2 more')
     expect(reason).not.toContain('m11.ifc')

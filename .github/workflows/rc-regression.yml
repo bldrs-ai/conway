@@ -962,36 +962,55 @@ jobs:
               exit 0
               ;;
           esac
-          PAIRED_ARGS=""
+          # An ARRAY, not a string: --corpus-exclude's value is a regex with
+          # `*` and `|` in it, and an unquoted string expansion would let the
+          # shell glob it before node ever sees it.
+          PAIRED_ARGS=()
           PAIRED="${GITHUB_WORKSPACE}/perf-paired.csv"
           if [ -f "$PAIRED" ]; then
             # `-paired`, not `-ci`: these rows come from the published package
             # measured by THIS job, not from that release's own blessed
             # snapshot. Two files sharing a column layout must not also share
             # an engine label.
-            PAIRED_ARGS="--paired $PAIRED --paired-engine conway${PIN_NPM_VERSION}-paired --paired-scope $PERF_PAIR"
+            PAIRED_ARGS=(--paired "$PAIRED"
+              --paired-engine "conway${PIN_NPM_VERSION}-paired"
+              --paired-scope "$PERF_PAIR")
             # WHICH MODELS THAT FILE HAD TO CONTAIN. Existence is not a test:
             # a per-model child that times out or is killed leaves no per-file
             # perf CSV, the batch aggregates the rows that survived and still
             # exits 0, so a truncated perf-paired.csv looks exactly like a
             # complete one from here. bless_perf_snapshot.cjs compares the
-            # paired row set against the models it was supposed to cover and
-            # degrades to the cross-run delta on any shortfall.
+            # paired delta's row set against the models it was supposed to
+            # cover and degrades to the cross-run delta on any shortfall.
             #
-            # Under `full` the target is implicit — both passes walk the same
-            # corpus under the same exclude regex, so the blessed pass's own
-            # rows ARE the expected set and no list is needed. Under `smoke`
-            # the paired pass was narrowed by the list below, so the list has
-            # to be handed over or the check would demand the whole corpus and
-            # degrade every smoke run.
+            # `--corpus-exclude` IS WHAT MAKES THAT COMPARISON INDEPENDENT.
+            # The script derives the demand by walking `models` itself, and
+            # this is the same exclude the regeneration step above hands the
+            # batch, so the walk sees the same tree. It must not come from
+            # either pass's output: both passes run the same batch driver and
+            # share its failure modes, so a model whose child dies in BOTH is
+            # missing from both CSVs and a demand read off either one is short
+            # by exactly the models that went missing. The filesystem is the
+            # only party here that did not run the passes. Keep this regex in
+            # step with the `-e` on `Regenerate baseline digests`; if it
+            # drifts, the walk over-collects and the gate degrades loudly
+            # rather than narrowing quietly.
+            #
+            # `--paired-expected` NARROWS that demand under `smoke`, where the
+            # paired pass was deliberately restricted to this list. Without
+            # it the check would demand the whole corpus and degrade every
+            # smoke run. It is a narrowing of the corpus walk, not a
+            # substitute for it — an entry no corpus file matches is reported,
+            # not dropped.
+            PAIRED_ARGS+=(--corpus-exclude 'sp-.*\.ifc|cg4.*-cylinder\.stp')
             if [ "$PERF_PAIR" = "smoke" ]; then
-              PAIRED_ARGS="$PAIRED_ARGS --paired-expected regression/smoke_models.txt"
+              PAIRED_ARGS+=(--paired-expected regression/smoke_models.txt)
             fi
           else
             echo "::notice::No perf-paired.csv; writing the cross-run delta only."
           fi
           node scripts/bless_perf_snapshot.cjs \
-            "$PERF" models "$VERSION" "${REPO_NAME##*/}" $PAIRED_ARGS
+            "$PERF" models "$VERSION" "${REPO_NAME##*/}" "${PAIRED_ARGS[@]}"
 
       # Put the gate's actual number in the job summary. Without this the
       # paired delta exists only as a file inside a PR in another repo, and

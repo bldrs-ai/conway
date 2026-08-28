@@ -299,13 +299,44 @@ a per-model child that times out or is killed leaves no per-file perf CSV,
 `aggregatePerfCsvs()` writes the rows that survived, and the batch still exits
 0 — so a truncated `perf-paired.csv` is indistinguishable from a complete one
 by existence, exit status or row count. `bless_perf_snapshot.cjs` therefore
-compares the paired row set against the models the scope had to cover (the
-blessed pass's own rows under `full`; `regression/smoke_models.txt`
-intersected with them under `smoke`) and, on any missing model, withholds the
-paired delta entirely, names the missing models in the job summary and in the
-snapshot's README, and falls back to the cross-run delta. A set, not a count:
-two failures cancelling two additions leaves a count intact, and the set
-difference is what names the models.
+compares the paired delta's row set against the models it had to cover and, on
+any missing model, withholds the paired delta entirely, names the missing
+models in the job summary and in the snapshot's README, and falls back to the
+cross-run delta. A set, not a count: two failures cancelling two additions
+leaves a count intact, and the set difference is what names the models.
+
+**What it has to cover is derived from the corpus, not from either pass.**
+The first version of this check read the demand off the blessed pass's own
+rows, reasoning that both passes walk the same tree under the same exclude
+regex. That is exactly why it was wrong: sharing a driver means sharing its
+failure modes. A model whose child dies in *both* passes is absent from both
+row sets, the set difference is empty, and a paired median over a quietly
+smaller corpus is published looking complete. The demand now comes from
+`collectCorpusModels()` walking the models checkout — the one party in this
+chain that did not run either pass — mirroring `collectIFCFiles()` in
+`ifc_regression_batch_main.ts` and taking the batch's exclude regex via
+`--corpus-exclude`. A model counts as covered only when *both* passes measured
+it, because that is exactly the set of rows a paired delta contains.
+
+**Anything that makes coverage unverifiable degrades too — an unverifiable
+gate is not a gate.** An expected-model list that cannot be read; a corpus walk
+that throws; a smoke list whose entries match no corpus file (a
+misconfiguration, and narrowing the gate to whatever happened to match is the
+failure this check exists to prevent); an expected set that comes out empty,
+where nothing can be missing and any paired CSV at all would pass. Each lands
+in the same cross-run-only branch, with its own reason on the snapshot's face.
+
+**A basename collision degrades it as well, for now.** Perf rows and digest
+stems are keyed on `path.basename()`, so two corpus models sharing a basename
+write the same `<stem>.perf.csv`: one row is lost, and a check keyed on the
+same basename cannot see it go. The corpus has a live pair — `ifc/index.ifc`
+and `ifc/bldrs/index.ifc` are different files — so today this branch fires and
+every release falls back to the cross-run delta. That is the honest state:
+under-covering in silence is the thing being avoided. The real fix is
+path-qualified model identities across the perf CSVs and the digest stems,
+which moves the benchmarks layout and needs its own bless cycle; it is tracked
+as [conway#633](https://github.com/bldrs-ai/conway/issues/633), and this branch
+comes out when it lands.
 
 **A row with only one side is absent, not `N/A`.** `generateDeltaCSV` unions
 its two inputs, which is right for `crossRun` — a model added to or dropped

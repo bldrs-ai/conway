@@ -172,11 +172,66 @@ function readModelList(listPath) {
     .filter((line) => line !== '' && !line.startsWith('#'));
 }
 
+/** Model extensions the regression batch walks, from SUPPORTED_MODEL_EXTENSIONS. */
+const MODEL_EXTENSIONS = ['.ifc', '.stp', '.step'];
+
 /**
- * Which models the paired pass was SUPPOSED to measure, and which it missed.
+ * Every model in the corpus, walked the way the regression batch walks it.
+ *
+ * Mirrors `collectIFCFiles()` in src/ifc/ifc_regression_batch_main.ts: a
+ * recursive readdir where the exclude regex is tested against each resolved
+ * path BEFORE the directory/file split, so it prunes directories as well as
+ * files, and a file counts as a model on its lowercased extension alone.
+ *
+ * It exists so `pairedCoverage()` can be told what the corpus holds by
+ * something NEITHER PERF PASS PRODUCED. Both passes run the same batch driver
+ * over the same tree and share its failure modes, so a model whose child is
+ * killed in both is absent from both outputs — and an expected set read off
+ * either output cannot see that it is short. The filesystem can.
+ *
+ * @param {string} rootDir Corpus root, the same path the batch was given.
+ * @param {RegExp|undefined} excludeRegex Exclude filter, or undefined for
+ *   none. An absent filter over-collects (the excluded models show up as
+ *   expected and then as missing), which degrades the paired gate loudly
+ *   rather than narrowing it silently.
+ * @return {Array<string>} Model paths, in walk order.
+ */
+function collectCorpusModels(rootDir, excludeRegex) {
+  const found = [];
+
+  /**
+   * @param {string} currentPath Directory to descend into.
+   */
+  function walk(currentPath) {
+    const items = fs.readdirSync(currentPath, { withFileTypes: true });
+
+    items.sort((a, b) => (a.name > b.name ? 1 : -1));
+
+    for (const item of items) {
+      const resolved = path.join(currentPath, item.name);
+
+      if (excludeRegex && excludeRegex.test(resolved)) {
+        continue;
+      }
+
+      if (item.isDirectory()) {
+        walk(resolved);
+      } else if (MODEL_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) {
+        found.push(resolved);
+      }
+    }
+  }
+
+  walk(rootDir);
+
+  return found;
+}
+
+/**
+ * Which models the paired delta was SUPPOSED to cover, and which it misses.
  *
  * This is the gate's own integrity check, and it exists because nothing
- * upstream of here fails loudly when the paired pass loses models. A per-model
+ * upstream of here fails loudly when a perf pass loses models. A per-model
  * child that times out or is killed is recorded as a failure by `runForFile()`
  * with no per-file perf CSV to its name; `aggregatePerfCsvs()` then writes the
  * rows that DID survive and the batch ends `process.exit(0)`. So a truncated
@@ -190,50 +245,86 @@ function readModelList(listPath) {
  * the set difference also names what is missing, which is what makes the
  * degrade message actionable.
  *
- * WHAT IS EXPECTED. Without a list, every model the blessed pass measured —
- * both passes walk the same corpus under the same exclude regex, so the
- * blessed row set IS the paired pass's target. With one (the `smoke` scope
- * narrows the paired pass to `regression/smoke_models.txt`), the listed
- * models INTERSECTED with the blessed set: a name in the list that the
- * blessed pass has no row for either is not in the corpus or was lost by the
- * blessed pass too, and in both cases the paired delta simply has no row to
- * write — it is not evidence that the paired pass was truncated.
+ * WHAT IS EXPECTED comes from the CORPUS WALK, not from either pass. An
+ * earlier revision read it off the blessed pass's own rows, on the reasoning
+ * that both passes walk the same tree under the same exclude regex — which is
+ * exactly why that was wrong: sharing a driver means sharing its failure
+ * modes, so a model whose child dies in BOTH passes is absent from both row
+ * sets, the difference is empty, and a paired median over a quietly smaller
+ * corpus is published looking complete. `collectCorpusModels()` reads the
+ * filesystem, which neither pass wrote.
+ *
+ * WHAT COUNTS AS COVERED is a model BOTH passes measured, because that is
+ * exactly the set of rows a paired delta contains — `generateDeltaCSV` drops
+ * one-sided rows under `MEASUREMENT_BASIS.PAIRED`, so a model only the paired
+ * pass timed contributes nothing to the file this check is guarding.
+ *
+ * A smoke list narrows the demand (the `smoke` scope runs the paired pass over
+ * `regression/smoke_models.txt` only). It narrows against the corpus, and an
+ * entry matching nothing in the corpus is reported rather than dropped: a list
+ * that names models which are not there is a misconfiguration, and silently
+ * shrinking the gate to whatever happened to match is the failure mode this
+ * whole check exists to prevent.
  *
  * Keyed on the perf CSV's `file` column, which the regression child writes as
  * `path.basename()`, so it is cwd-independent — the paired pass runs from
  * inside the installed package and the blessed pass from the workspace root.
- * Two corpus models sharing a basename (`ifc/index.ifc` and
- * `ifc/bldrs/index.ifc` do) collapse to one entry on both sides, so this
- * cannot see one of that pair going missing. That is the same pre-existing
- * collision the digest stems have, not a gap this introduces.
+ * That makes two corpus models sharing a basename indistinguishable here, and
+ * the corpus has a live pair (`ifc/index.ifc` and `ifc/bldrs/index.ifc`), so
+ * `collisions` reports them and the caller degrades. See conway#633 for the
+ * real fix — path-qualified identities across the perf CSVs and the digest
+ * stems — after which this field and its branch can go.
  *
+ * @param {Array<string>} corpusModels Model paths from collectCorpusModels().
  * @param {Array<Object>} blessedRows perf.csv rows for this release.
  * @param {Array<Object>} pairedRows perf.csv rows from the previous pin.
- * @param {string} expectedListPath Model list to expect, or '' for "whatever
- *   the blessed pass measured".
+ * @param {string} smokeListPath Model list narrowing the demand, or '' for
+ *   "the whole corpus".
  * @return {{expected: Array<string>, missing: Array<string>,
- *   listError: string}} `missing` is empty on full coverage; `listError` names
- *   an expected-model list that could not be read, which is itself a reason to
- *   degrade — an unverifiable gate is not a gate.
+ *   listError: string, unmatched: Array<string>, collisions: Array<string>}}
+ *   `missing` is empty on full coverage. The other three are reasons the
+ *   coverage cannot be verified at all rather than shortfalls: `listError`
+ *   names a smoke list that could not be read, `unmatched` the smoke entries
+ *   no corpus model matched, `collisions` the expected basenames more than
+ *   one corpus model writes.
  */
-function pairedCoverage(blessedRows, pairedRows, expectedListPath) {
+function pairedCoverage(corpusModels, blessedRows, pairedRows, smokeListPath) {
   const measured = new Set(pairedRows.map((row) => row.file || ''));
   const blessed = new Set(blessedRows.map((row) => row.file || ''));
 
-  let expected = [...blessed];
+  // basename -> the corpus paths that write it, so a collision is visible.
+  const corpus = new Map();
 
-  if (expectedListPath !== '') {
-    if (!fs.existsSync(expectedListPath)) {
-      return { expected: [], missing: [], listError: expectedListPath };
+  for (const modelPath of corpusModels) {
+    const name = path.basename(modelPath);
+
+    corpus.set(name, [...(corpus.get(name) || []), modelPath]);
+  }
+
+  let expected = [...corpus.keys()];
+  let unmatched = [];
+
+  if (smokeListPath !== '') {
+    if (!fs.existsSync(smokeListPath)) {
+      return {
+        expected: [], missing: [], listError: smokeListPath,
+        unmatched: [], collisions: [],
+      };
     }
 
-    expected = readModelList(expectedListPath).filter((name) => blessed.has(name));
+    const listed = readModelList(smokeListPath);
+
+    expected = listed.filter((name) => corpus.has(name));
+    unmatched = listed.filter((name) => !corpus.has(name)).sort();
   }
 
   return {
     expected,
-    missing: expected.filter((name) => !measured.has(name)).sort(),
+    missing: expected.filter(
+      (name) => !measured.has(name) || !blessed.has(name)).sort(),
     listError: '',
+    unmatched,
+    collisions: expected.filter((name) => corpus.get(name).length > 1).sort(),
   };
 }
 
@@ -250,7 +341,7 @@ function coverageSkipReason(coverage) {
   const named = coverage.missing.slice(0, MAX_NAMED_MISSING).join(', ');
   const elided = coverage.missing.length - MAX_NAMED_MISSING;
 
-  return `the paired pass measured ${
+  return `the paired delta covers ${
     coverage.expected.length - coverage.missing.length} of the ${
     coverage.expected.length} models it had to cover, missing ${named}${
     elided > 0 ? ` and ${elided} more` : ''}`;
@@ -833,13 +924,15 @@ check for.
  * Flags rather than positionals because they are optional and arrive
  * together: `--paired <csv>` is the previous pin's perf.csv as measured by
  * THIS job, `--paired-engine` is the label its rows get, `--paired-scope` is
- * `full` or `smoke`, and `--paired-expected <list>` names the models that
- * scope was supposed to cover (see pairedCoverage). All absent is the
- * ordinary un-paired run.
+ * `full` or `smoke`, `--paired-expected <list>` narrows the coverage demand
+ * to a model list (the `smoke` scope's subset), and `--corpus-exclude
+ * <regex>` is the batch's own exclude filter, so the corpus walk that derives
+ * the demand sees the same tree the passes did (see pairedCoverage). All
+ * absent is the ordinary un-paired run.
  *
  * @param {Array<string>} argv process.argv.
- * @return {{csv: string, engine: string, scope: string, expected: string}}
- *   Empty strings where a flag was not supplied.
+ * @return {{csv: string, engine: string, scope: string, expected: string,
+ *   corpusExclude: string}} Empty strings where a flag was not supplied.
  */
 function parsePairedFlags(argv) {
   const read = (flag) => {
@@ -854,6 +947,7 @@ function parsePairedFlags(argv) {
     engine: read('--paired-engine'),
     scope: read('--paired-scope') || 'full',
     expected: read('--paired-expected'),
+    corpusExclude: read('--corpus-exclude'),
   };
 }
 
@@ -866,7 +960,8 @@ function main() {
       `Usage: node ${path.basename(process.argv[1])} ` +
       '<perf.csv> <models-checkout-root> <conway-version> <repo-name> ' +
       '[--paired <previous-pin-perf.csv>] [--paired-engine <label>] ' +
-      '[--paired-scope full|smoke] [--paired-expected <model-list>]');
+      '[--paired-scope full|smoke] [--paired-expected <model-list>] ' +
+      '[--corpus-exclude <regex>]');
     process.exit(1);
   }
 
@@ -902,6 +997,22 @@ function main() {
   const removed = removeStaleDeltas(outDir, version);
   if (removed.length > 0) {
     console.log(`Removed superseded delta(s): ${removed.join(', ')}`);
+  }
+
+  // Unconditional, and beside the delta cleanup rather than inside the paired
+  // branch below: this run owns the directory's paired state whatever it
+  // decides to do with it, and the case that motivated hoisting it out of the
+  // success arm is only half the hazard. Re-blessing an already-blessed
+  // snapshot whose paired step produced nothing this time omits `--paired`
+  // ENTIRELY, so a cleanup living under `paired.csv !== ''` never runs —
+  // `removeStaleDeltas` takes the old paired delta (it matches the `_paired`
+  // spelling) and the regenerated README says the paired pass did not run,
+  // while the previous run's `performance-detail-paired-*.csv` sits there
+  // unnamed by anything.
+  const removedDetail = removeStalePairedDetail(outDir);
+  if (removedDetail.length > 0) {
+    console.log(
+      `Removed superseded paired detail: ${removedDetail.join(', ')}`);
   }
 
   const previous = findPreviousSnapshot(benchmarksDir, dirName, version);
@@ -956,30 +1067,72 @@ function main() {
   let pairedSkipReason = '';
 
   if (paired.csv !== '' && previous !== null) {
-    // Before the branch, not inside the success arm: this run owns the
-    // directory's paired state either way, and a re-run that DEGRADES must
-    // not leave the previous run's paired rows sitting beside a README that
-    // no longer names them. The stale paired *delta* is already gone —
-    // removeStaleDeltas above matches the `_paired` spelling too.
-    const removedDetail = removeStalePairedDetail(outDir);
-    if (removedDetail.length > 0) {
-      console.log(
-        `Removed superseded paired detail: ${removedDetail.join(', ')}`);
-    }
-
     const pairedRows =
       fs.existsSync(paired.csv) ? readPerfCsv(paired.csv) : null;
-    const coverage = pairedRows === null ? null :
-      pairedCoverage(rows, pairedRows, paired.expected);
+    // What the corpus holds, read off the filesystem rather than off either
+    // pass's output — see pairedCoverage. A walk that throws (a models root
+    // that is not there, an exclude regex that will not compile) leaves the
+    // demand unknown, which degrades: an unverifiable gate is not a gate.
+    let corpusModels = null;
+    let corpusError = '';
+
+    try {
+      corpusModels = collectCorpusModels(
+        modelsRoot,
+        paired.corpusExclude !== '' ?
+          new RegExp(paired.corpusExclude) : undefined);
+    } catch (e) {
+      corpusError = e.message;
+    }
+
+    const coverage = pairedRows === null || corpusModels === null ? null :
+      pairedCoverage(corpusModels, rows, pairedRows, paired.expected);
 
     if (pairedRows === null) {
       pairedSkipReason = `the paired pass produced no ${path.basename(paired.csv)}`;
     } else if (pairedRows.length === 0) {
       pairedSkipReason = `${path.basename(paired.csv)} has no model rows`;
+    } else if (corpusModels === null) {
+      pairedSkipReason =
+        `the corpus under ${modelsRoot} could not be walked (${corpusError}), ` +
+        'so the paired delta\'s coverage cannot be verified';
     } else if (coverage.listError !== '') {
       pairedSkipReason =
         `the expected-model list ${coverage.listError} could not be read, ` +
-        'so the paired pass\'s coverage cannot be verified';
+        'so the paired delta\'s coverage cannot be verified';
+    } else if (coverage.unmatched.length > 0) {
+      // A list naming models the corpus does not hold is a misconfiguration,
+      // and the alternative — quietly narrowing the gate to whichever entries
+      // happened to match — is the exact failure this check exists to stop.
+      pairedSkipReason =
+        `the expected-model list names ${coverage.unmatched.length} model(s) ` +
+        `no corpus file matches (${
+          coverage.unmatched.slice(0, MAX_NAMED_MISSING).join(', ')}), so ` +
+        'what the paired delta had to cover is not what was asked for';
+    } else if (coverage.expected.length === 0) {
+      // Nothing to be short of, so `missing` is necessarily empty and any
+      // paired CSV at all would pass. That is not coverage, it is the absence
+      // of a measurement — an empty corpus walk, or a scope that selected
+      // nothing.
+      pairedSkipReason =
+        'the set of models the paired delta had to cover came out empty, so ' +
+        'its coverage cannot be verified';
+    } else if (coverage.collisions.length > 0) {
+      // INTERIM GUARD for conway#633. Perf rows and digest stems are keyed on
+      // basename, so two corpus models sharing one (`ifc/index.ifc` and
+      // `ifc/bldrs/index.ifc` are a live pair) write the same
+      // `<stem>.perf.csv` and one row is simply lost — and being keyed on the
+      // same basename, this check cannot see it go. So today this branch
+      // fires on every release and the gate falls back to cross-run — which
+      // is the honest state, and the point: degrading explicitly beats
+      // under-covering in silence. The real fix is path-qualified identities
+      // across the perf CSVs and the digest stems, which moves the benchmarks
+      // layout and needs its own bless cycle. Remove this branch, and
+      // `collisions`, when #633 lands.
+      pairedSkipReason =
+        `${coverage.collisions.length} model basename(s) are written by more ` +
+        `than one corpus file (${coverage.collisions.join(', ')}), so a row ` +
+        'lost to that collision cannot be detected — see conway#633';
     } else if (coverage.missing.length > 0) {
       // The finding this branch exists for: a partial paired pass used to be
       // blessed as the gate, because the only test applied to it was that the
@@ -1052,6 +1205,7 @@ if (require.main === module) {
 
 module.exports = {
   DETAIL_COLUMNS,
+  collectCorpusModels,
   coverageSkipReason,
   findPreviousSnapshot,
   pairedCoverage,
