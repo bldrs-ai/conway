@@ -152,17 +152,36 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
     ]
     const newTags = [
       'AdvancedFace', 'ExtrudeSolid', 'SweepSolid', 'CsgBoolean',
-      'ExtrudeCap', 'CsgOperandPrep', 'CsgKernel',
+      'ExtrudeCap', 'CsgOperandPrep', 'CsgKernel', 'VertexWeld',
     ]
 
     for (const tag of faceTags.concat(newTags)) {
       expect(telemetryHeader).toContain(`  ${tag},`)
     }
 
-    // `Count` is the array bound for every per-site counter, so an enumerator
-    // added after it would silently size them short.
-    expect(telemetryHeader.trimEnd().includes('  TriExtrusion,')).toBe(true)
-    expect((telemetryHeader.match(/^\s+Count$/gm) ?? []).length).toBe(2)
+  })
+
+  test('Count is the last enumerator in both arms of the #ifdef', () => {
+    // `Count` is the array bound for every per-(kind, site) counter, so an
+    // enumerator added *after* it silently sizes them short — and the
+    // static_assert that would catch it lives in the translation unit only the
+    // opt-in build compiles, so nothing in CI fires it. An earlier version of
+    // this test merely checked that two `Count` lines existed, which an
+    // enumerator appended after `Count` in both arms would have passed.
+    const bodies = [...telemetryHeader.matchAll(/enum class AllocSite \{([^}]*)\}/g)]
+        .map((match) => match[1])
+
+    expect(bodies).toHaveLength(2)
+
+    for (const body of bodies) {
+      const enumerators = body.split('\n')
+          .map((line) => line.replace(/\/\/.*$/, '').trim())
+          .filter((line) => line.length > 0)
+          .map((line) => line.replace(/\s*=.*$/, '').replace(/,$/, ''))
+
+      expect(enumerators[enumerators.length - 1]).toBe('Count')
+      expect(enumerators.filter((name) => name === 'Count')).toHaveLength(1)
+    }
   })
 
   test('the enum is declared before the scope class that takes one', () => {
@@ -190,7 +209,7 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
 
     for (const name of [
       'advanced_face', 'extrude_solid', 'sweep_solid', 'csg_boolean',
-      'extrude_cap', 'csg_operand_prep', 'csg_kernel',
+      'extrude_cap', 'csg_operand_prep', 'csg_kernel', 'vertex_weld',
     ]) {
       expect(telemetrySource).toContain(`"${name}"`)
     }

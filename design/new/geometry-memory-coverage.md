@@ -337,90 +337,121 @@ extrusion *is* present the unit count matches the entity count exactly:
 15 `extrude_solid` units; `aggregate_master_voids.ifc` has 2 plus one
 `IFCRELVOIDSELEMENT` and records 3 `extrude_solid` units and 1 `csg_boolean`.
 
-### The profile
+### The profile, in absolute counts
 
-Allocator calls made inside each instrumented scope, one D3D load:
+**What the denominator is, before any number.** The instrument counts an
+allocation only when it happens inside an `AllocTelemetryScope` — `onAlloc`
+returns immediately when `!tls.active`. There is no load-wide counter. So the
+totals below are **allocator calls observed inside the four instrumented scope
+kinds**, not D3D's allocator traffic, and a percentage taken against them is a
+share of that subtotal only.
 
-| Scope kind | Units | Alloc calls | Share | Cumulative bytes/unit (avg) | Live peak/unit (avg) |
-|---|---:|---:|---:|---:|---:|
-| `csg_boolean` | 6,466 | **43,185,966** | **98.77 %** | 2.73 MB | 108 KB |
-| `extrude_solid` | 22,429 | 508,934 | 1.16 % | 4.9 KB | 2.1 KB |
-| `sweep_solid` | 325 | 27,784 | 0.06 % | 62 KB | 39 KB |
-| `advanced_face` | 320 | 2,464 | 0.01 % | 1.0 KB | 0.7 KB |
-| **total** | **29,540** | **43,725,148** | | | |
+An earlier revision of this section quoted "98.8 % of D3D's allocator traffic"
+and it was wrong in exactly the way this whole document exists to correct: the
+first artifact was *where the instrument sat*, and that one was *what the
+denominator covered*. Both make an unmeasured region look like zero. The
+figures are therefore given as absolute counts, which is what the instrument
+actually establishes.
+
+| Scope kind | Units | Allocator calls (in scope) | Cumulative bytes/unit (avg) |
+|---|---:|---:|---:|
+| `csg_boolean` | 6,466 | **43,185,966** | 2.73 MB |
+| `extrude_solid` | 22,429 | **508,934** | 4.9 KB |
+| `sweep_solid` | 325 | **27,784** | 62 KB |
+| `advanced_face` | 320 | **2,464** | 1.0 KB |
+| observed total | 29,540 | 43,725,148 | |
 
 Within `csg_boolean`, by site: `csg_kernel` (the `csg.run()` calls) 33.2 M
-calls / 16.76 GB gross bytes; `csg_operand_prep` (`Geometry::Cleanup()` on the
-operands) 9.86 M calls / 863 MB. Within `extrude_solid`: `extrude_cap` 77.8 %,
-`earcut` 15.3 %, the side-wall pass 6.9 %.
+calls / 16.76 GB; `csg_operand_prep` (`Geometry::Cleanup()`, excluding the weld
+it delegates to) 5.89 M / 620 MB; `vertex_weld` (the global `VertexWelder`)
+3.97 M / 243 MB. Within `extrude_solid`: `extrude_cap` 396 k, `earcut` 78 k,
+the side-wall pass 35 k.
 
 For scale on the same run: `peakWasmHeapMb` 610.9, `geometryMemoryMb` 175.1,
 geometry stage 31.6 s of a 35.3 s load.
 
-### Three things this settles
+### What this establishes, and what it does not
 
-1. **The "zero scoped faces" reading was an instrument artifact, and the
-   artifact was enormous.** The pre-existing instrumentation saw 2,464 of
-   D3D's 43.7 M in-scope allocator calls — **0.006 %**. 98.9 % of the
-   instrumented units (29,220 of 29,540) are on call graphs that had no scope
-   at all. Any conclusion previously drawn from that null described the
-   instrument, not the model.
-2. **Extrusion is not the lever.** Solid extrusion is 1.16 % of D3D's
-   allocator traffic, at 4.9 KB cumulative allocation per swept solid — small,
-   shallow, and already nearly free. Arena-backing `Extrude()` would remove
-   roughly one percent of the allocator calls on the model the work was scoped
-   around.
-3. **CSG is, by roughly two orders of magnitude.** `BoolSubtract` accounts for
-   98.8 % of in-scope allocator calls.
+**Established, on absolute counts, and robust to every caveat below:**
 
-All three rest on **counts**, which are the one thing this instrument measures
-without qualification. The byte columns do not carry the same weight, for two
-independent reasons set out next.
+1. **The "zero scoped faces" reading was an instrument artifact.** The
+   pre-existing instrumentation covered one scope kind, and that kind makes
+   **2,464 allocator calls on a 213.6 MB model**. 29,220 of 29,540 units were
+   on call graphs with no scope at all. Whatever that null was evidence of, it
+   was not the extrusion path's allocation cost.
+2. **Item 3 as written is refuted, and refuted without needing a
+   denominator.** It proposes extending the `AddFaceToGeometry` scopes. That
+   path makes 2,464 allocator calls on this model. 2,464 is negligible in
+   absolute terms whatever the true load-wide total turns out to be — there is
+   no total against which it becomes significant.
+3. **CSG/boolean composition is *a* major lever.** 43,185,966 allocator calls
+   and 16.76 GB of gross bytes in one load are large in absolute terms, four
+   orders of magnitude above the path item 3 named.
 
-### The byte columns are not yet trustworthy, and here is exactly why
+**Not established:**
 
-Both of these were raised in review of conway#651 / conway-geom#192, verified
-against source, and are recorded here rather than quietly dropped — the next
-person would otherwise re-derive the same broken numbers.
+- **That CSG is *the* largest lever.** That is a ranking claim and it needs a
+  load-wide denominator this instrument does not have. An unscoped path could
+  be larger; nothing here rules it out.
+- **Any share-of-load percentage**, for the same reason.
+- **Every byte quantity derived from `tls.liveBytes`** — per-unit peak,
+  retained, and any ratio between them. See below.
+
+### Derived byte quantities are not established, for two named reasons
+
+Both were raised in review of conway#651 / conway-geom#192 and verified against
+source. They are recorded rather than deleted so the numbers are not
+re-derived by the next reader.
 
 **1. The instrument does not track allocation ownership.** `onFree`
 (`alloc_telemetry.cpp`) subtracts *every* free that happens inside a scope from
 the in-scope live counter, including frees of memory allocated **before** the
-scope began. It cannot tell the two apart, because it does not record which
+scope began. It cannot tell the two apart, because it never recorded which
 pointers it handed out. So `liveBytes` — and therefore the per-unit peak and
 the retained figure at scope exit — is corrupted whenever a pre-scope free
-lands inside a unit. The clamp at that site only stops the counter going
-negative; it does not stop the corruption, and where it fires it is erasing
-bytes that really were live in scope.
+lands inside a unit.
 
-The instrument now counts the clamp firings so the exposure is quantified per
-path rather than left as a general suspicion. Measured on D3D:
+The instrument counts the clamp firings, and on D3D they are 878,666 in
+`csg_boolean` and zero in the other three kinds. **Zero is not an
+all-clear, and an earlier revision of this section was wrong to grade the
+columns "usable" on that basis.** A pre-scope free *smaller* than what is
+currently live is subtracted silently, with no clamp and no other signal.
+Concrete cases exist on paths reporting zero: `Extrude(IfcProfile profile)`
+takes its profile **by value**, so the copy is made before the scope opens and
+`profile.curve.Add2d()` can reallocate that copy inside it; a face scope grows
+caller-owned `Geometry` vectors the same way. So the clamp counter proves the
+defect *fires* in CSG; it proves nothing about the other three.
 
-| Scope kind | In-scope frees | Clamped frees | Clamped bytes | Peak / retained |
-|---|---:|---:|---:|---|
-| `csg_boolean` | 42,593,806 | **878,669** | 30.9 MB | **unreliable** |
-| `extrude_solid` | 464,076 | 0 | 0 | usable |
-| `sweep_solid` | 27,156 | 0 | 0 | usable |
-| `advanced_face` | 2,400 | 0 | 0 | usable |
+**Consequence: no scope kind's peak or retained figure is trustworthy**, and
+the report no longer prints a peak:retained ratio on any of them. The fix is
+pointer-ownership tracking — subtract a free only if this scope allocated that
+pointer.
 
-So the defect bites exactly where the numbers are largest — CSG, where
-`Cleanup()` and the kernel free operand buffers allocated before the
-composition began — and nowhere else. Note the clamp count is a **lower
-bound** on the occurrences: a pre-scope free smaller than the current live
-counter corrupts it silently without clamping. The fix is pointer-ownership
-tracking (subtract a free only if this scope allocated that pointer); until
-that exists, `csg_boolean`'s peak and retained columns should not be quoted.
+**2. Retained also counts reusable global scratch.** `Geometry.cpp:30`
+declares a file-scope `VertexWelder welder;` whose containers are
+`clear()`/`resize()`/`reserve()`d in `weld()` and **never** `shrink_to_fit`, so
+capacity grown inside a scope is still live at scope close and is booked as
+retained *output*. `CSGMesher::reset()` has the same shape. The retained figure
+therefore depends on which unit last grew the cache.
 
-**2. Retained bytes include reusable global scratch, on every path.**
-`Geometry.cpp:30` declares a file-scope `VertexWelder welder;`. Its containers
-are `clear()`/`resize()`/`reserve()`d in `weld()` and **never**
-`shrink_to_fit`, so capacity grown inside a scope is still live when the scope
-closes and is counted as retained *output* when it is in fact reusable
-scratch. `CSGMesher::reset()` has the same shape. This makes the retained
-figure depend on which unit last grew the cache — a warm cache reports less
-retained than a cold one for identical work. Deriving retained bytes from the
-returned geometry, rather than from what is still live at scope exit, would
-fix this.
+How far this one reaches was settled by measuring rather than reading, because
+`welder.weld()` has two call sites and only one is CSG-specific:
+`Geometry::Cleanup()` (`:400`) and `Geometry::Reify()` (`:103`). The welder is
+tagged `AllocSite::VertexWeld`, and on D3D it fires **3,972,812 times under
+`csg_boolean` and zero times under the other three kinds** — `Reify` is reached
+from the data getters (`GetVertexData`, `GetIndexData`, `GetVertexDataSize`,
+`GeometryToObj`), which the binding layer calls after the geometry function has
+returned, so its weld lands in no scope at all. This defect is CSG-only; defect
+1 is not, which is why the verdict above is "no kind is trustworthy" rather
+than "CSG is not".
+
+Deriving retained bytes from the returned geometry, rather than from what is
+live at scope exit, would fix this one.
+
+**What survives both.** Allocator **call counts** and **cumulative bytes** are
+computed in `onAlloc` alone, accumulate monotonically, and are never touched by
+`onFree` or by `liveBytes`. Neither defect can reach them. They carry the
+in-scope-only caveat from the section above and nothing further.
 
 ### Arena sizing needs cumulative bytes, not the live peak
 
@@ -441,32 +472,43 @@ The instrument now records both. For `csg_boolean` on D3D:
 | < 8 MiB | 98.3 % |
 | < 128 MiB | 100 % |
 
-Average 2.73 MB, **maximum 85 MB**, against a live-peak average of 108 KB —
-a 25× gap on the average and far more in the tail. A 256 KiB arena would cover
-about 5 % of compositions; covering 93 % needs ~4 MB, and covering all of them
-needs ~128 MB. That is a materially different proposition from what the
-live-peak histogram implied, and it is a real constraint on the rescope below
-rather than a footnote.
+Average 2.73 MB, **maximum 85 MB**. A 256 KiB arena would cover about 5 % of
+compositions; covering 93 % needs ~4 MB, and covering all of them needs
+~128 MB. That is a materially different proposition from what the live-peak
+histogram implied, and it is a real constraint on the rescope below rather
+than a footnote.
+
+Two assumptions this column rests on, since the rest of the doc retires the
+byte quantities and this one is deliberately kept:
+
+- It is computed in `onAlloc` alone and is never touched by `onFree`, so
+  neither ownership defect reaches it. It is not comparable to the live peak
+  and the doc no longer states a ratio between them.
+- `__wrap_realloc` counts the **full new size** of every growth step, not the
+  increment. For arena sizing that is the correct model rather than a
+  double-count — a bump arena cannot grow a block in place either, so a vector
+  doubling from 1 MB to 2 MB really does consume 3 MB of arena. Read as a
+  *heap* figure it would be an overstatement; it is not offered as one.
 
 `extrude_solid`, for contrast, is genuinely small on this distribution too:
 100 % of swept solids allocate under 32 KiB cumulatively.
 
 ### One comparison this does *not* license
 
-The peak-to-retained ratios this instrument produces are **not** comparable to
-the 60× quoted for Arty_Z7, and now for three reasons rather than one. The
-original: this column is Σ(per-unit transient peak) / Σ(per-unit retained),
-both accumulated inside scopes, whereas the Arty_Z7 60× is a whole-process
-figure (~75 MB retained under a ~4.5 GB heap peak) whose denominator includes
-everything a load holds. The two added above: ownership is untracked, and
-retained includes global scratch. A whole-process ratio for D3D would need the
-perf harness's peak/retained columns, not this instrument.
+There is **no** peak-to-retained ratio to compare against the 60× quoted for
+Arty_Z7, because this instrument no longer offers one — see the two ownership
+defects above. Even if it did, the denominators differ: a per-scope ratio
+accumulates only inside instrumented scopes, whereas the Arty_Z7 60× is a
+whole-process figure (~75 MB retained under a ~4.5 GB heap peak) covering
+everything a load holds. A whole-process ratio for D3D would need the perf
+harness's peak/retained columns.
 
-What *is* directly comparable, and unaffected by all three, is the
-allocator-call churn: 43.7 M malloc/free-shaped calls against 610.9 MB of peak
-wasm heap, with 16.76 GB of gross bytes cycled through the allocator by the
-CSG kernel alone. The churn the arena was built to remove is real here. It is
-simply not where item 3 was pointed.
+What can be said, on counts alone: 43,185,966 allocator calls in CSG
+composition and 16.76 GB of gross bytes cycled through the allocator by the
+kernel, in a load whose peak wasm heap is 610.9 MB. That is real churn of the
+kind the arena was built to remove. Whether it is the *most* such churn in the
+load is exactly the ranking question the missing load-wide denominator leaves
+open.
 
 ## Still unmeasured, and what it would take
 
@@ -478,10 +520,17 @@ simply not where item 3 was pointed.
   about the CSG kernel's internals, and it should be answered before any arena
   is placed there — a bump arena rewound at scope exit is only correct for
   allocations that die inside the scope.
-- **Trustworthy byte columns**, which need pointer-ownership tracking in
-  `onFree` and a retained figure derived from returned geometry rather than
-  from what is live at scope exit. Both are described above. Until then the
-  count columns are the load-bearing ones.
+- **A load-wide allocator-call denominator.** This is the single missing
+  measurement that would turn "CSG is *a* major lever" into a ranking, and it
+  is the reason no share-of-load percentage appears in this doc. It needs a
+  counter outside every `AllocTelemetryScope` — the wrappers already see every
+  allocation and simply decline to count the unscoped ones. Without it, an
+  unscoped path being larger than CSG cannot be excluded.
+- **Any trustworthy peak or retained figure, on any path**, which needs
+  pointer-ownership tracking in `onFree` and a retained figure derived from
+  returned geometry rather than from what is live at scope exit. Both are
+  described above. Allocator-call counts and cumulative bytes do not depend on
+  either fix.
 - **A whole-process peak-vs-retained figure for D3D**, comparable to
   Arty_Z7's 60×. See the caveat above: this instrument cannot produce one.
 - **Whether an AP214-side `GeometryResidency` analogue is wanted at all.**
@@ -565,17 +614,21 @@ it by default:
   genuinely zero arena coverage there, for a different structural reason
   (separate call graph, not "planar BREP") than the ledger implied.
 - The "largest lever" framing was a **hypothesis** when the audit was
-  written; item 2 has since **measured it and found it misdirected**.
-  Extending the arena to the extrusion path — the work the ledger called the
-  largest lever — would reach 1.2 % of D3D's allocator traffic. The 98.8 % is
-  in CSG/boolean composition.
+  written; item 2 has since **measured it and found it misdirected**. The path
+  item 3 named makes 2,464 allocator calls on D3D; CSG composition makes
+  43,185,966. That refutes the target without settling the ranking — "largest
+  lever" remains unproven in either direction, because no load-wide
+  denominator exists.
 - The instrument itself now covers the solid-sweep and CSG call graphs, and
   every scope names its kind, so the "zero scoped faces" failure mode cannot
   recur silently on those paths. `src/ifc/alloc_telemetry_coverage.test.ts`
   pins the placements by matching each function body, not by grepping for the
   enum name.
 - Two defects in the instrument's **byte** accounting — untracked allocation
-  ownership in `onFree`, and reusable global scratch counted as retained —
-  are now documented and, for the first, quantified per path by a clamp
-  counter. The **count** columns are unaffected, and they are what the
+  ownership in `onFree` (corrupts *peak*), and reusable global scratch counted
+  as retained (corrupts *retained*) — are documented and, crucially, their
+  reach is now measured rather than assumed: a clamp counter for the first, an
+  `AllocSite::VertexWeld` tag for the second. Both land on `csg_boolean` and
+  neither reaches the other three scope kinds on D3D. The **count** and
+  **cumulative-byte** columns are unaffected everywhere, and they are what the
   conclusions above rest on.
