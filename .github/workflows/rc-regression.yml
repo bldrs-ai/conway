@@ -61,6 +61,39 @@ on:
         description: 'Also run the gc-off control pass and A/B comparison'
         type: boolean
         default: false
+      # IN-JOB PAIRING (design/new/perf-run-comparability.md), ON by default.
+      # The rc's timing delta used to compare this run against numbers frozen
+      # into a previous run's committed snapshot. That comparison has a
+      # MEASURED 13.66% median noise floor — two attempts of one job, same
+      # commit, byte-identical digests, all 97 models faster on the second
+      # attempt — against a 9.40% median regression it was reporting. The
+      # signal was smaller than the noise. Timing the previous pin in THIS
+      # job, on THIS machine, cancels the machine factor exactly. What it
+      # leaves is MEASURED, by an A/A null test of this exact configuration
+      # (run 33192612782, .github/workflows/perf-aa-null.yml): the corpus
+      # AGGREGATE is stable to 0.13-0.24%, while PER MODEL the floor is ~1.4%
+      # median absolute change with p10/p90 near -3%/+4%. The median of the
+      # paired delta is the gate; a single model moving less than ~5% is
+      # still inside the floor.
+      #
+      #   full  — pair over the whole corpus. The default, and what a release
+      #           should use: it is the only setting under which every row of
+      #           the paired delta is a measurement.
+      #   smoke — pair over regression/smoke_models.txt only (~12 models).
+      #           A NARROWER GATE, and the snapshot README says so. For a
+      #           dispatch where 20 minutes of private-corpus pairing is not
+      #           worth it, never as a silent fallback.
+      #   off   — no paired pass. Only the legacy cross-run delta is written,
+      #           which is a lead and not a gate. Use with `perf_ab`, or when
+      #           npm is unreachable.
+      #
+      # A tag push supplies no inputs, so `full` applies and every release is
+      # gated on a paired delta.
+      perf_pair:
+        description: 'Pair the previous pin in-job (full corpus / smoke subset / off)'
+        type: choice
+        options: [full, smoke, off]
+        default: full
 
 env:
   EMSDK_VERSION: '6.0.2'
@@ -121,25 +154,32 @@ jobs:
     # own 35-min cap, the batch self-exits, and per-model work is
     # timeout-bounded, so this rarely fires.
     #
-    # THIS 90 IS SIZED FOR THE perf_ab RUN, not for a release. The budget,
-    # PRIVATE (the binding corpus — it is ~4x the public one in wall time),
-    # measured on run 32601886424 unless noted:
+    # THIS 90 IS SIZED FOR A TWO-HEAVY-PASS RUN, not for a one-pass release.
+    # The budget, PRIVATE (the binding corpus — it is ~4x the public one in
+    # wall time), measured on run 32601886424 unless noted:
     #
     #   checkout + node + deps + tsc, warm WASM cache   1m57s  -> budget  5m
     #   private corpus LFS checkout                     1m33s  -> budget  5m
     #   blessed digest pass                            ~20m30s -> cap    35m
-    #   gc-off control pass (perf_ab only)             ~20m    -> cap    35m
+    #   previous-pin install (npm, perf_pair only)      <1m     -> budget  2m
+    #   paired perf pass       (perf_pair only)        ~20m30s -> cap    35m
+    #   gc-off control pass    (perf_ab only)          ~20m    -> cap    35m
     #   gates, summaries, artifact, bless, PR, post       ~15s  -> budget  3m
     #                                                            --------
-    #                                       perf_ab run:           83m
-    #                                       plain rc  :            48m
+    #                              perf_pair=full run (default):  70m
+    #                              perf_ab run (perf_pair=off) :  83m
+    #                              neither                     :  48m
     #
-    # 90 leaves ~7 min over the perf_ab budget, and every heavy pass is
-    # separately capped, so a wedge is cancelled inside its own step long
-    # before this ceiling — this number only has to bound the untimed steps.
-    # A plain rc uses barely half of it, and that slack is not waste: a job
-    # cap costs nothing on a run that does not hit it, and sizing it to the
-    # 48m case would red every deliberate A/B run.
+    # PAIRING AND perf_ab CANNOT BOTH RUN, and the job refuses the
+    # combination in its first step rather than discovering it 70 minutes in:
+    # four heavy passes is ~104m against this 90m ceiling. They ask different
+    # questions and neither is urgent, so serialising them into two dispatches
+    # is the cheap answer. See "Reject an over-budget pass combination" below.
+    #
+    # 90 leaves ~7 min over the larger of the two two-pass budgets, and every
+    # heavy pass is separately capped, so a wedge is cancelled inside its own
+    # step long before this ceiling — this number only has to bound the
+    # untimed steps.
     #
     # NOT sized for a cold WASM-cache rebuild on top of two long passes: that
     # combination is already pathological and should be cancelled. A cold
@@ -147,6 +187,33 @@ jobs:
     # rebuild is ever cancelled here.
     timeout-minutes: 90
     steps:
+      # Fail in seconds, on the cheapest step in the job, rather than at
+      # minute 70. Four heavy corpus passes (blessed + paired + control, plus
+      # the paired pass's install) budget at ~104 minutes against this job's
+      # 90-minute ceiling, so the combination cannot complete — it would be
+      # killed mid-control-pass, after the re-bless PR had already been
+      # opened, leaving a green-looking release whose A/B silently produced
+      # nothing. The two questions are independent and neither is urgent:
+      # dispatch twice.
+      #
+      # Same two-representation read of `perf_ab` as the control pass below —
+      # a `type: boolean` input is a real boolean in `inputs` and the string
+      # 'true' in `github.event.inputs`, and testing only one fails silently
+      # against the other. `perf_pair` is `type: choice`, i.e. a string in
+      # both contexts, so one read is enough for it.
+      - name: Reject an over-budget pass combination
+        env:
+          PERF_PAIR: ${{ github.event.inputs.perf_pair || 'full' }}
+          # A boolean expression renders as the string 'true'/'false', so the
+          # shell test below is a plain string compare with no quoting games.
+          PERF_AB: ${{ inputs.perf_ab == true || github.event.inputs.perf_ab == 'true' }}
+        run: |
+          echo "perf_pair=$PERF_PAIR perf_ab=$PERF_AB"
+          if [ "$PERF_AB" = "true" ] && [ "$PERF_PAIR" != "off" ]; then
+            echo "::error::perf_ab and perf_pair are both on. That is four heavy corpus passes (~104 min) against this job's 90-minute cap. Re-dispatch with perf_pair=off for the A/B, or with perf_ab unticked for the paired gate."
+            exit 1
+          fi
+
       # --- Build conway from source (identical to run-ifc-regression) ---
       - name: Checkout conway
         uses: actions/checkout@v4
@@ -444,6 +511,206 @@ jobs:
           print("\nNo new failures. Pre-existing known-failers do not block the rc.")
           EOF
 
+      # --- IN-JOB PAIRING (design/new/perf-run-comparability.md) ---
+      #
+      # WHY. Everything below this point used to compare `engine2` — the
+      # corpus this run just timed — against `engine1`, a column of numbers a
+      # PREVIOUS run froze into the committed snapshot, on a machine nobody
+      # recorded. Run 33128910045 was re-run, so its two attempts are the same
+      # workflow, the same commit and the same runner label; their bless
+      # commits (4d2b174, 7d7cf39) differ in the two perf CSVs and in NOTHING
+      # else — every digest file is byte-identical, and `engine1TotalTimeMs`
+      # matches on all 97 rows. Yet all 97 models were faster on attempt 2, by
+      # a median 13.66%, 87% of them by more than 10%. The regression that
+      # same delta was reporting had a median of 9.40%. The signal was
+      # smaller than the noise.
+      #
+      # It is not contention: bucketed by model duration the drift is flat
+      # (-11.43% / -14.04% / -13.52% / -13.88% from 13 ms to 27.5 s,
+      # correlation with log duration -0.009), which is a uniform machine
+      # scale factor. The probe workflow found why —
+      # `ubuntu-24.04-4vcpu-8gb-150gbssd` is a LABEL, not a machine: six VMs
+      # came back as AMD EPYC 7763, AMD EPYC 9V74 and Intel Xeon Platinum
+      # 8370C, with an 11.24% CV of job means and a 32.8% max/min spread.
+      # Two engines timed on ONE machine in ONE job divide that factor out
+      # exactly, leaving a floor of 0.13-0.24% on the corpus aggregate and
+      # ~1.4% per model (A/A null test, run 33192612782).
+      #
+      # WHICH PIN. The same predecessor the cross-run delta already uses —
+      # `findPreviousSnapshot()` in scripts/bless_perf_snapshot.cjs, i.e. the
+      # newest committed `conway<version>-ci_<repo>` sorting strictly below
+      # this release, ordered by scripts/version_order.cjs.
+      # scripts/resolve_previous_pin.cjs delegates to that function rather
+      # than re-deriving the choice, so the paired delta and the cross-run
+      # delta can never describe different comparisons under the same column
+      # layout.
+      #
+      # WHERE THE ENGINE COMES FROM. The published npm package at that
+      # version, running ITS OWN `ifc_regression_batch_main.js`. That keeps
+      # both halves in the SAME HARNESS — the regression child, not
+      # headless-three — which is what stops gen_delta_csv.cjs withholding
+      # every measurement column as `crossHarness` (see its MEASUREMENT_COLUMNS
+      # header). This is also why the workflow-header rule "do NOT install the
+      # published package instead of building from source" is not violated
+      # here: that rule protects the BLESSED DIGESTS, which must be
+      # byte-reproducible by a later smoke run. Nothing this pass produces is
+      # blessed — its digests go to a scratch folder and are deleted, and only
+      # its perf CSV survives.
+      #
+      # WHAT PAIRING DOES NOT FIX. It cancels the machine, not a change of
+      # methodology. If the previous pin predates the #554 settle, the #562
+      # `totalTimeMs` redefinition or the #557 engine-init move, the paired
+      # delta carries that step exactly as the cross-run delta did. Those
+      # boundaries are enumerated in design/new/perf-measurement.md
+      # §"Changelog of methodology changes".
+      #
+      # continue-on-error for the same reason the passes below carry it: an
+      # unreadable benchmarks/ or a malformed directory name must cost the
+      # release its paired delta, not its re-bless PR. A failed step publishes
+      # no outputs, so `found` is unset and the install step skips.
+      - name: Resolve the previous pin to pair against
+        id: pin
+        if: ${{ success() && (github.event.inputs.perf_pair || 'full') != 'off' }}
+        continue-on-error: true
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ matrix.target.repo }}
+        run: |
+          # Same rc-tag gate the bless step applies: a dispatch from `main`
+          # has no release version, so it has nothing to name a predecessor
+          # relative to and pairing is meaningless there.
+          case "$REF_NAME" in
+            rc-*) VERSION="${REF_NAME#rc-}" ;;
+            *)
+              echo "::notice::Ref '$REF_NAME' is not an rc-* tag; skipping the paired pass."
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          node scripts/resolve_previous_pin.cjs models "$VERSION" "${REPO_NAME##*/}" \
+            >> "$GITHUB_OUTPUT"
+
+      # Installed into its own directory, with --no-save and no package.json of
+      # ours, so nothing about this can perturb the tree that produced the
+      # blessed pass. `npm pack`-then-extract would work too; `npm install`
+      # into a scratch prefix is fewer moving parts.
+      #
+      # continue-on-error, and a preflight on the batch entry point: a package
+      # old enough to predate `ifc_regression_batch_main` or the `--perf` flag
+      # would otherwise fail this step and, with it, every later step that
+      # rides the implicit success() — including the re-bless PR that IS the
+      # release's regression report. The paired delta is the most valuable
+      # thing this job produces and still the most expendable: without it the
+      # release falls back to the cross-run delta it has always had.
+      - name: Install the previous pin (published package)
+        id: pin_install
+        if: ${{ success() && steps.pin.outputs.found == 'true' }}
+        continue-on-error: true
+        env:
+          PIN_VERSION: ${{ steps.pin.outputs.npm_version }}
+        run: |
+          set -e
+          PREV_ROOT="${GITHUB_WORKSPACE}/prev-engine"
+          mkdir -p "$PREV_ROOT"
+          cd "$PREV_ROOT"
+          npm install --no-save --no-audit --no-fund \
+            "@bldrs-ai/conway@${PIN_VERSION}"
+          PKG="$PREV_ROOT/node_modules/@bldrs-ai/conway"
+          BATCH="$PKG/compiled/src/ifc/ifc_regression_batch_main.js"
+          if [ ! -f "$BATCH" ]; then
+            echo "::warning::@bldrs-ai/conway@${PIN_VERSION} ships no ifc_regression_batch_main.js; the paired pass cannot run against it."
+            exit 1
+          fi
+          if [ ! -d "$PKG/compiled/dependencies/conway-geom/Dist" ]; then
+            echo "::warning::@bldrs-ai/conway@${PIN_VERSION} ships no conway-geom Dist; the paired pass cannot run against it."
+            exit 1
+          fi
+          RESOLVED=$(node -p "require('$PKG/package.json').version")
+          echo "Resolved @bldrs-ai/conway@$RESOLVED"
+          echo "pkg=$PKG" >> "$GITHUB_OUTPUT"
+
+      # THE PAIRED PASS. Runs with cwd INSIDE the installed package, because
+      # the batch spawns its per-model children as `node
+      # ./compiled/src/{ifc,AP214E3_2010}/*_regression_main.js` — a path
+      # relative to process.cwd(), not to the batch script. From the workspace
+      # root that would silently spawn THIS release's children under the
+      # previous release's batch driver, i.e. measure the wrong engine and
+      # look like it worked. The package's own `compiled/dependencies/
+      # conway-geom/Dist` comes along for the same reason: the engine imports
+      # it by a path relative to the compiled module.
+      #
+      # `model_folder` is absolute (the corpus is in the workspace, not in the
+      # package) but `output_folder` STAYS RELATIVE, for the reason spelled
+      # out on the control pass below: runDiff ends every run with
+      # `git diff -- <output_folder>` executed inside the model checkout, and
+      # an absolute path makes git exit 128 with "is outside repository".
+      # A relative `perf-paired-out` resolves to nothing there and diffs
+      # empty, exactly as `perf-control-out` does.
+      #
+      # CONWAY_PERF_EXPOSE_GC='1' pins the same configuration the blessed pass
+      # runs under. On a pin old enough to predate conway#554 the variable is
+      # simply unread, and that pin's retention columns come out N/A and its
+      # parse column carries the pre-settle methodology — a real limitation of
+      # pairing against an old release, not a defect in this step.
+      #
+      # ORDER IS DELIBERATE: this runs AFTER the blessed pass, so the warmer
+      # machine belongs to the PREVIOUS pin. Any residual warming therefore
+      # makes the pin look faster and this release look slower — the delta is
+      # biased toward flagging a regression, which is the safe direction for a
+      # gate.
+      #
+      # NO PRE-WARM AND NO COUNTERBALANCING, and that is measured rather than
+      # assumed. `totalTimeMs` contains the model file read (conway#562 moved
+      # `loadStartMs` before `readFileSync`), so the pass-order page-cache
+      # objection was real in principle. The A/A null test (run 33192612782)
+      # says it is not there in practice: `actions/checkout` with LFS has
+      # already written the whole corpus through the page cache before pass 1
+      # (vmtouch: 100% resident, 7G/7G, on a runner with 16 GB despite the
+      # `8gb` label), and a deliberately evicted pass costs +0.13% of corpus
+      # total and 0.000% on the median model. A discarded pre-warm pass would
+      # cost a full ~5 min public / ~20 min private against the 90-minute cap
+      # to remove that. See design/new/perf-run-comparability.md Evidence 4.
+      - name: Paired perf pass (previous pin, same machine)
+        id: paired
+        if: ${{ success() && steps.pin_install.outcome == 'success' }}
+        timeout-minutes: 35
+        continue-on-error: true
+        env:
+          CONWAY_PERF_EXPOSE_GC: '1'
+          PERF_PAIR: ${{ github.event.inputs.perf_pair || 'full' }}
+          PKG: ${{ steps.pin_install.outputs.pkg }}
+        run: |
+          set -e
+          # `smoke` narrows the paired gate to regression/smoke_models.txt.
+          # Same exclude-regex construction build.yml's smoke job uses: the
+          # batch CLI has no include list, and the regex must be
+          # extension-anchored so the directory walk is not cut off (the walk
+          # applies the same regex to directories).
+          EXCLUDE='sp-.*\.ifc|cg4.*-cylinder\.stp'
+          if [ "$PERF_PAIR" = "smoke" ]; then
+            EXCLUDE=$(python3 - <<'EOF'
+          import re
+          names = [l.strip() for l in open('regression/smoke_models.txt')
+                   if l.strip() and not l.strip().startswith('#')]
+          assert names, 'smoke_models.txt selected no models'
+          alts = '|'.join(re.escape(n) for n in names)
+          print(rf"^(?!.*/(?:{alts})$).*\.(?:[iI][fF][cC]|[sS][tT][eE][pP]|[sS][tT][pP])$")
+          EOF
+          )
+            echo "Pairing over the smoke subset only."
+          fi
+          cd "$PKG"
+          node --experimental-specifier-resolution=node \
+            ./compiled/src/ifc/ifc_regression_batch_main.js \
+            -e "$EXCLUDE" \
+            --concurrency 1 \
+            --timeout 300000 \
+            --perf "${GITHUB_WORKSPACE}/perf-paired.csv" \
+            "${GITHUB_WORKSPACE}/models" \
+            perf-paired-out \
+            --parallel --mem-utilization 90
+          rm -rf "$PKG/perf-paired-out"
+
       # --- The gc-off control pass (conway#554) — OPT-IN, DEFAULT OFF ---
       #
       # THE COMPARISON HAS BEEN MADE. Run 32601886424's public job executed
@@ -654,6 +921,7 @@ jobs:
           name: perf-serial-${{ matrix.target.name }}-${{ github.run_id }}
           path: |
             perf.csv
+            perf-paired.csv
             perf-nogc.csv
             perf-gc-ab.csv
             perf-gc-ab.md
@@ -681,11 +949,28 @@ jobs:
       # should not mint one. `!cancelled()` so a run that the failure gate
       # reddened still writes (and logs) its numbers — the PR step below stays
       # gated on success, so a bad rc still cannot bless anything.
+      #
+      # THE PAIRED CSV IS OPTIONAL HERE, and that is what keeps the release's
+      # deliverable independent of the pairing experiment: `--paired` is passed
+      # only when perf-paired.csv actually exists, and bless_perf_snapshot.cjs
+      # warns and writes the cross-run delta alone when it does not. Every way
+      # the paired pass can fail — no predecessor, npm unreachable, a pin too
+      # old to carry the batch entry point, a step timeout — lands in that
+      # branch, and so does the one failure that leaves a FILE behind: a pass
+      # that lost per-model children and aggregated the survivors. See the
+      # coverage check below.
       - name: Bless perf snapshot and delta
+        # Named so the summary and PR-body step below can read this script's
+        # own verdict on the paired gate — `paired` / `withheld` / `absent`,
+        # plus the clause completing "withheld because ...". Nothing
+        # downstream can re-derive the REASON from the files on disk.
+        id: bless_perf
         if: ${{ !cancelled() }}
         env:
           REF_NAME: ${{ github.ref_name }}
           REPO_NAME: ${{ matrix.target.repo }}
+          PIN_NPM_VERSION: ${{ steps.pin.outputs.npm_version }}
+          PERF_PAIR: ${{ github.event.inputs.perf_pair || 'full' }}
         run: |
           PERF="${GITHUB_WORKSPACE}/perf.csv"
           if [ ! -f "$PERF" ]; then
@@ -699,8 +984,393 @@ jobs:
               exit 0
               ;;
           esac
+          # An ARRAY, not a string: --corpus-exclude's value is a regex with
+          # `*` and `|` in it, and an unquoted string expansion would let the
+          # shell glob it before node ever sees it.
+          PAIRED_ARGS=()
+          PAIRED="${GITHUB_WORKSPACE}/perf-paired.csv"
+          if [ -f "$PAIRED" ]; then
+            # `-paired`, not `-ci`: these rows come from the published package
+            # measured by THIS job, not from that release's own blessed
+            # snapshot. Two files sharing a column layout must not also share
+            # an engine label.
+            PAIRED_ARGS=(--paired "$PAIRED"
+              --paired-engine "conway${PIN_NPM_VERSION}-paired"
+              --paired-scope "$PERF_PAIR")
+            # WHICH MODELS THAT FILE HAD TO CONTAIN. Existence is not a test:
+            # a per-model child that times out or is killed leaves no per-file
+            # perf CSV, the batch aggregates the rows that survived and still
+            # exits 0, so a truncated perf-paired.csv looks exactly like a
+            # complete one from here. bless_perf_snapshot.cjs compares the
+            # paired delta's row set against the models it was supposed to
+            # cover and degrades to the cross-run delta on any shortfall.
+            #
+            # `--corpus-exclude` IS WHAT MAKES THAT COMPARISON INDEPENDENT.
+            # The script derives the demand by walking `models` itself, and
+            # this is the same exclude the regeneration step above hands the
+            # batch, so the walk sees the same tree. It must not come from
+            # either pass's output: both passes run the same batch driver and
+            # share its failure modes, so a model whose child dies in BOTH is
+            # missing from both CSVs and a demand read off either one is short
+            # by exactly the models that went missing. The filesystem is the
+            # only party here that did not run the passes. Keep this regex in
+            # step with the `-e` on `Regenerate baseline digests`; if it
+            # drifts, the walk over-collects and the gate degrades loudly
+            # rather than narrowing quietly.
+            #
+            # `--paired-expected` NARROWS that demand under `smoke`, where the
+            # paired pass was deliberately restricted to this list. Without
+            # it the check would demand the whole corpus and degrade every
+            # smoke run. It is a narrowing of the corpus walk, not a
+            # substitute for it — an entry no corpus file matches is reported,
+            # not dropped.
+            PAIRED_ARGS+=(--corpus-exclude 'sp-.*\.ifc|cg4.*-cylinder\.stp')
+            if [ "$PERF_PAIR" = "smoke" ]; then
+              PAIRED_ARGS+=(--paired-expected regression/smoke_models.txt)
+            fi
+          else
+            echo "::notice::No perf-paired.csv; writing the cross-run delta only."
+          fi
           node scripts/bless_perf_snapshot.cjs \
-            "$PERF" models "$VERSION" "${REPO_NAME##*/}"
+            "$PERF" models "$VERSION" "${REPO_NAME##*/}" "${PAIRED_ARGS[@]}"
+
+      # Put the gate's actual number in the job summary, and compose what the
+      # re-bless PR says about it. Without this the paired delta exists only as
+      # a file inside a PR in another repo, and the whole point of pairing is
+      # that someone reads a percentage and believes it. Both distributions are
+      # printed side by side on purpose: seeing the cross-run spread next to the
+      # paired one is the fastest way to understand why only one of them is a
+      # gate.
+      #
+      # BOTH SURFACES ARE RENDERED FROM WHAT IS ON DISK, not from an assumption
+      # that pairing succeeded. This step used to print the gate paragraph, and
+      # the PR body below used to promise "**two** deltas", whenever ANY delta
+      # file summarized — so a release whose paired pass was withheld was told
+      # to read a `paired` row that is not in the directory. That is not an edge
+      # case: conway#633's live basename collision (`ifc/index.ifc` vs
+      # `ifc/bldrs/index.ifc`) makes `withheld` the DEFAULT outcome of a
+      # full-corpus release today, so the default messaging was the wrong one.
+      # The `paired` verdict now comes from the `measurementBasis` column of
+      # the files actually written, and the reason comes from the step output
+      # bless_perf_snapshot.cjs sets — the only party that knows why.
+      #
+      # `!cancelled()` and a tolerant body for the same reason as the perf
+      # summary above — a reporting step must never be able to withhold the
+      # re-bless PR.
+      - name: Summarize the paired delta
+        id: paired_gate
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ matrix.target.repo }}
+          # `withheld` (attempted, discarded) / `absent` (did not run) /
+          # `paired`, and the clause completing "withheld because ...". Only
+          # the bless script knows which; see reportPairedOutcome there. Empty
+          # when that step exited before blessing, which is a fourth state and
+          # is reported as unknown rather than guessed at.
+          PAIRED_STATE: ${{ steps.bless_perf.outputs.paired-state }}
+          PAIRED_REASON: ${{ steps.bless_perf.outputs.paired-reason }}
+        run: |
+          # The paragraph the re-bless PR body below uses to describe this
+          # release's gate. Written to a file rather than straight to
+          # $GITHUB_OUTPUT so that EVERY path out of this step leaves the PR
+          # step a paragraph — including a crash inside the Python, which
+          # `continue-on-error` would otherwise turn into an empty promise.
+          # The seed value claims nothing.
+          PARA="${GITHUB_WORKSPACE}/paired-gate.md"
+          cat > "$PARA" <<'FALLBACK'
+          **Whether this release has a paired performance gate could not be
+          determined here** — the step that reads the blessed snapshot did not
+          finish. The snapshot's own `README.md` states which case it is, in the
+          same words; read that before treating any number in this diff as a gate.
+          FALLBACK
+          emit_paragraph() {
+            {
+              echo 'paragraph<<PARAGRAPH_EOF'
+              cat "$PARA"
+              echo 'PARAGRAPH_EOF'
+            } >> "$GITHUB_OUTPUT"
+          }
+          trap emit_paragraph EXIT
+          case "$REF_NAME" in
+            rc-*) VERSION="${REF_NAME#rc-}" ;;
+            *)
+              echo "Not an rc-* tag; no snapshot to summarize."
+              cat > "$PARA" <<'NOSNAPSHOT'
+          **No perf snapshot was blessed by this run**, which was not triggered by
+          an `rc-*` tag: the blessed benchmark directory is named for a release and
+          a dispatch run has no release to name one after. This PR therefore carries
+          digest churn only — there is no timing delta of any kind in it, paired or
+          cross-run.
+          NOSNAPSHOT
+              exit 0
+              ;;
+          esac
+          DIR="models/benchmarks/conway${VERSION}-ci_${REPO_NAME##*/}"
+          if [ ! -d "$DIR" ]; then
+            echo "No snapshot directory at $DIR."
+            cat > "$PARA" <<'NODIR'
+          **No perf snapshot directory was written for this release**, so this PR
+          carries digest churn only — there is no timing delta of any kind in it,
+          paired or cross-run. The `Bless perf snapshot and delta` step's log says
+          why.
+          NODIR
+            exit 0
+          fi
+          python3 - "$DIR" "$PARA" >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import csv, glob, os, statistics, sys
+
+          snapshot = sys.argv[1]
+          # The re-bless PR's paragraph, seeded by the shell above and
+          # overwritten here once the files on disk have been read.
+          paragraph_path = sys.argv[2]
+
+          # WHOSE CORPUS THE A/A FLOOR WAS MEASURED ON. This step runs once
+          # per matrix target, so the qualification below has to be chosen the
+          # same way renderReadme()'s does in scripts/bless_perf_snapshot.cjs
+          # — printed unconditionally it told a reader of the PUBLIC target's
+          # summary that the only measured floor does not bound the very
+          # corpus it was measured on. This literal and that file's
+          # AA_NULL_CORPUS must agree; a test pins that they do.
+          #
+          # The discriminator is the repo's last path segment, matching how
+          # the snapshot directory is named. matrix.target.name ('public' /
+          # 'private') would be the exact one and is currently unused — worth
+          # switching to if a target is ever added under another org, where
+          # `<other-org>/test-models` would take the public branch here.
+          AA_NULL_CORPUS = 'test-models'
+          corpus = os.environ.get('REPO_NAME', '').rsplit('/', 1)[-1]
+
+          # WHY there is no paired delta, when there is none. The presence of
+          # one is decided below from the files themselves; this only supplies
+          # the reason, and the two vocabularies are the README's: `withheld`
+          # is "attempted and its result discarded", `absent` is "did not
+          # run". They are different claims about a release.
+          paired_state = os.environ.get('PAIRED_STATE', '').strip()
+          paired_reason = os.environ.get('PAIRED_REASON', '').strip()
+
+
+          def pct(row):
+              """The totalTimeMs percentage change as a float, or None."""
+              raw = (row.get('totalTimeMsPercentageChange') or '').strip()
+              if not raw or raw.upper() == 'N/A':
+                  return None
+              try:
+                  return float(raw.rstrip('%'))
+              except ValueError:
+                  return None
+
+
+          def summarize(path):
+              """A delta file's basis and its distribution of timing changes.
+
+              The basis is read whether or not the file carries any numbers:
+              it is what says which comparison this is, and a `paired` file
+              whose every row is N/A still exists and still has to be
+              reported as what it is rather than silently dropped.
+              """
+              with open(path, newline='') as handle:
+                  rows = list(csv.DictReader(handle))
+              basis = (rows[0].get('measurementBasis') or '?') if rows else '?'
+              values = sorted(v for v in (pct(r) for r in rows) if v is not None)
+              if not values:
+                  return {'basis': basis, 'n': 0,
+                          'median': None, 'p10': None, 'p90': None}
+              # p10/p90 by index rather than statistics.quantiles: n can be
+              # smaller than the 10 quantiles that call requires (a smoke-scope
+              # pairing is ~12 rows) and it raises rather than degrading.
+              lo = values[int(0.10 * (len(values) - 1))]
+              hi = values[int(0.90 * (len(values) - 1))]
+              return {
+                  'n': len(values),
+                  'median': statistics.median(values),
+                  'p10': lo,
+                  'p90': hi,
+                  'basis': basis,
+              }
+
+
+          def why_no_paired():
+              """One sentence naming which of the no-gate cases this is.
+
+              The first case is decided by the files, the rest by the bless
+              script's own verdict: a `paired` file that landed with nothing
+              measurable in it is not something the script can report, since
+              from where it stands it wrote the delta successfully.
+              """
+              if paired_file:
+                  return ('A `paired` delta WAS produced, and every one of its '
+                          'rows is `N/A` on both sides — a file with nothing in '
+                          'it to gate on.')
+              if paired_state == 'withheld' and paired_reason:
+                  return ('A paired pass was attempted and its result was '
+                          'discarded — withheld because ' + paired_reason + '.')
+              if paired_state == 'withheld':
+                  return ('A paired pass was attempted and its result was '
+                          'discarded; the `Bless perf snapshot and delta` step '
+                          'logs why.')
+              if paired_state == 'absent':
+                  return 'The paired pass did not run.'
+              return ('Whether a paired pass ran at all is not recorded here; '
+                      "the snapshot's `README.md` says which case it is.")
+
+
+          print(f"### conway-to-conway timing delta ({os.path.basename(snapshot)})")
+          print()
+          print("| file | basis | n | p10 | median | p90 |")
+          print("| --- | --- | --- | --- | --- | --- |")
+
+          found = False
+          # A `paired` file that landed AND carries at least one timing. Both
+          # halves matter: `found` says only that some delta summarized, and
+          # under a withheld pairing the surviving cross-run file makes it
+          # true — which is exactly how this summary came to tell readers to
+          # look for a `paired` row that was never written.
+          paired = False
+          # A `paired` file landed, with or without a usable number in it. Kept
+          # apart from `paired` so an all-N/A pairing is reported as the file
+          # it is rather than as one that was never written.
+          paired_file = False
+          paired_n = 0
+          for path in sorted(glob.glob(os.path.join(snapshot, 'conway*_delta.csv'))):
+              stats = summarize(path)
+              found = True
+              if stats['basis'] == 'paired':
+                  paired_file = True
+                  if stats['n'] > 0:
+                      paired = True
+                      paired_n = stats['n']
+              cells = ('| – | – | – |' if stats['n'] == 0 else
+                       f"| {stats['p10']:+.2f}% | **{stats['median']:+.2f}%** | "
+                       f"{stats['p90']:+.2f}% |")
+              print(f"| `{os.path.basename(path)}` | **{stats['basis']}** | "
+                    f"{stats['n']} {cells}")
+
+          print()
+          if paired:
+              print("Read the **`paired`** row's MEDIAN: both engines were timed in "
+                    "this job on this machine, and an A/A null test of that "
+                    "configuration puts the median's floor under ~0.75% "
+                    "([run 33192612782](https://github.com/bldrs-ai/conway/actions/"
+                    "runs/33192612782)).")
+              print()
+              print(f"**Its `n` is {paired_n} — the models that carry a timing on "
+                    "both sides, not the models the delta has a row for.** A "
+                    "regression child writes a perf row on its failure paths too, "
+                    "so a model neither engine could load reaches the paired file "
+                    "with `N/A` in every timing column and is outside this median. "
+                    "The snapshot's `README.md` names them.")
+              print()
+              print("**The p10/p90 columns beside it are the noise floor, not engine "
+                    "signal.** The same A/A test measured a PER-MODEL floor of ~1.4% "
+                    "median absolute change with p10/p90 near -3%/+4%: differencing an "
+                    "engine against itself, 10 of 97 models moved more than 5%. Treat a "
+                    "per-model move below ~5% as a lead to re-run, not a regression.")
+              print()
+              # The null test runs on bldrs-ai/test-models only. This summary is
+              # printed for whichever matrix target ran, so the qualification has
+              # to travel with the numbers rather than be inferred from them.
+              if corpus == AA_NULL_CORPUS:
+                  print("_Those floors were measured on **this** corpus "
+                        "(`bldrs-ai/test-models`, 97 of its 99 walked models, "
+                        "at `baf0f87d`) — same repo, same runner label, same "
+                        "harness. What is not established is the model set: "
+                        "the null test pinned that commit and this job checks "
+                        "the target out at its default branch, so models added "
+                        "or removed since it are outside what was measured. "
+                        "The snapshot's README names the commit this run "
+                        "blessed._")
+              else:
+                  print("_Those floors were measured on the **public** corpus "
+                        "(`bldrs-ai/test-models`, 97 of its 99 walked models), "
+                        "not on this one. For a private-corpus release they are "
+                        "the only measured floor anyone has, not a bound on "
+                        "this run: see conway's "
+                        "`design/new/perf-run-comparability.md` Evidence 4, "
+                        "'What this does not bound'._")
+              print()
+              print("The `crossRun` row compares against a previous run on an unrecorded "
+                    "machine and has a measured 13.66% median noise floor — it is a "
+                    "lead at any scale. "
+                    "See conway's `design/new/perf-run-comparability.md`.")
+          elif found:
+              print("**No `paired` delta with a timing in it was produced for this "
+                    "release, so this release has no performance gate.** "
+                    + why_no_paired())
+              print()
+              print("The only timings on this page are `crossRun`. A `crossRun` timing "
+                    "column compares against a previous run on a machine nobody "
+                    "recorded and has a measured 13.66% median noise floor, against a "
+                    "9.40% median regression one such delta was reporting — the signal "
+                    "was smaller than the noise. It is **explicitly not a gate**, and "
+                    "being the only number on this page does not make it one. Read it "
+                    "as a lead at any scale, and see conway's "
+                    "`design/new/perf-run-comparability.md`.")
+          else:
+              print("_No conway-to-conway delta was produced for this release._")
+
+          # THE RE-BLESS PR'S PARAGRAPH, from the same verdict. It is a
+          # separate audience — the PR is read in the model repo, months
+          # later, by someone who never opens this job — and it used to
+          # promise "two deltas" and a `paired` median unconditionally.
+          snapshot_dir = f"`benchmarks/{os.path.basename(snapshot)}/`"
+          if paired:
+              paragraph = (
+                  f"{snapshot_dir} carries this run's steady per-model timings "
+                  "plus **two** deltas against the previous release.\n"
+                  "Read the `*_paired_delta.csv` one, and read its **median**: "
+                  "both\nits engines were timed in the same job on the same "
+                  "machine, and an\nA/A null test of that configuration puts the "
+                  "median's floor under\n~0.75%. Its **p10/p90 tails are not "
+                  "signal at per-model scale** —\nthe same test measured a ~1.4% "
+                  "median per-model floor, with 10 of\n97 models moving more than "
+                  "5% against an identical engine, so a\nsingle model under ~5% "
+                  "is a lead to re-run rather than a\nregression. Both floors "
+                  "were measured on the **public** corpus\n(97 of its 99 walked "
+                  "models); on a private-corpus release they are\nthe best "
+                  "evidence available rather than a measured bound on this\nfile, "
+                  "and the snapshot's `README.md` says which case it is.\n"
+                  f"That median is over **{paired_n} models** — the ones with a "
+                  "timing on both\nsides. A model neither engine could load has a "
+                  "row in the file and\n`N/A` in every timing column of it, so the "
+                  "row count is not the\nsample size.\n\n"
+                  "The plain `*_delta.csv` is the legacy cross-run\ncomparison, "
+                  "kept only for continuity with the historical archive —\nits "
+                  "`engine1` numbers come from a different run on a machine\n"
+                  "nobody recorded, and that comparison has a measured 13.66% "
+                  "median\nnoise floor. Every row states which it is in its\n"
+                  "`measurementBasis` column. That directory's `README.md` says "
+                  "all\nof this on its face; read it before differencing anything "
+                  "here\nagainst an older snapshot.")
+          elif found:
+              paragraph = (
+                  f"{snapshot_dir} carries this run's steady per-model timings "
+                  "and no\nusable paired delta.\n\n"
+                  "**This release has no performance gate.** " + why_no_paired() +
+                  " A paired delta is\nthe only conway-to-conway comparison whose "
+                  "two engines were timed in one\njob on one machine, and it is "
+                  "the only one this workflow will call a gate.\n\n"
+                  "What is here instead is the legacy cross-run delta, kept for "
+                  "continuity\nwith the historical archive: its `engine1` numbers "
+                  "come from a different\nrun on a machine nobody recorded, and "
+                  "that comparison has a measured\n13.66% median noise floor "
+                  "against a 9.40% median regression it was\nreporting. Read it "
+                  "as a lead at any scale — **not** as a gate, and not as\none "
+                  "merely because it is the only delta in this diff. Every row "
+                  "states\nwhich it is in its `measurementBasis` column, and that "
+                  "directory's\n`README.md` says all of this on its face.")
+          else:
+              paragraph = (
+                  f"{snapshot_dir} carries this run's steady per-model timings "
+                  "and **no**\ndelta at all: no previous blessed snapshot was "
+                  "found to compare against,\nso neither a paired nor a cross-run "
+                  "comparison was produced. This release\nhas no performance "
+                  "gate. The directory's `README.md` says why.")
+
+          with open(paragraph_path, 'w') as handle:
+              handle.write(paragraph + '\n')
+          EOF
 
       # The batch always writes regression/test_models/changes.csv via a git
       # diff whose pathspec is relative to the model folder, so under this
@@ -744,6 +1414,15 @@ jobs:
       # Open (or update) a PR in the target repo with only the baseline diff.
       # add-paths scopes the commit to regression/test_models so nothing else
       # in the checkout (e.g. LFS smudge artifacts) can leak in.
+      #
+      # THE PERF PARAGRAPH IS INTERPOLATED, not written here. It used to be a
+      # fixed block promising "**two** deltas" and telling the reader to read
+      # the `paired` median — a promise this workflow cannot keep on the path
+      # it takes by default, since conway#633's basename collision withholds
+      # pairing on every full-corpus release today. `paired_gate` composes it
+      # from the `measurementBasis` of the files actually written, so a
+      # release with no gate says so in the PR that blesses it rather than
+      # sending a reader to look for a row that is not there.
       - name: Open re-bless PR in ${{ matrix.target.repo }}
         uses: peter-evans/create-pull-request@v7
         with:
@@ -779,11 +1458,7 @@ jobs:
             diffs in conway mean "this PR moved geometry", not accumulated
             drift.
 
-            `benchmarks/conway<version>-ci_<repo>/` carries this run's steady
-            per-model timings plus a delta against the previous blessed
-            snapshot. Read that directory's `README.md` before differencing it
-            against an older snapshot — the timing columns are comparable
-            across harnesses, the memory columns are not.
+            ${{ steps.paired_gate.outputs.paragraph }}
 
             Generated by conway's `rc-regression` workflow.
 
