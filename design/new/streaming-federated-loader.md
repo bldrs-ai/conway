@@ -657,12 +657,24 @@ Deliberately small first step; each has a measurable exit.
   "budgeted arena", in the production pump rather than a harness.
   `GeometryResidency` (`src/ifc/geometry_residency.ts`) holds an LRU over
   both of a model's geometry stores against a byte ceiling, evicting at
-  each batch boundary. Configured at open (`GEOMETRY_BUDGET_MB`) or after
-  (`SetGeometryBudget`), and **unlimited by default**, because eviction
-  changes a contract: an evicted asset is gone from `GetGeometry` until
-  something re-extracts it, which is safe for a consumer that copies
-  payloads at delivery (Share#1640) and unsafe for one that fetches
-  lazily later.
+  the START of each pump call. Configured at open (`GEOMETRY_BUDGET_MB`)
+  or after (`SetGeometryBudget`), and **unlimited by default**, because
+  eviction changes a contract: an evicted asset is gone from
+  `GetGeometry` until something re-extracts it, which is safe for a
+  consumer that copies payloads at delivery (Share#1640) and unsafe for
+  one that fetches lazily later.
+
+    Eviction runs at the head of a pump call, not its tail, and that is
+  load-bearing rather than incidental: "at delivery" for a real embedder
+  means *after the pump call returns* — Share's `onMeshBatch` reads the
+  delta back through `GetGeometry` once it has the batch, then yields and
+  pumps again. Tail eviction made that window a lie whenever a single
+  batch's geometry exceeded the whole budget (a 1.9 GB Revit export at
+  64 MB), freeing what the call had just delivered and handing the copy a
+  deleted embind handle — *"Cannot pass deleted object as a pointer of
+  type IfcGeometry"*, Sentry SHARE-1NK. The guarantee is now: everything
+  pump call N delivered is resident until call N+1 begins, at the price of
+  a transient overshoot of up to one batch.
 
   **PSB.ifc at batch 8 — the size Share pumps at:**
 

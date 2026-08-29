@@ -82,16 +82,44 @@ export interface Loadersettings {
 
   /**
    * Conway extension (DEFER_GEOMETRY only; M3's budgeted arena): cap the
-   * native geometry a model keeps resident, in MB. At each pump batch the
-   * least-recently-used assets are evicted until the live set fits.
-   * Unset — the default — keeps everything, which is what every consumer
-   * did before this existed.
+   * native geometry a model keeps resident, in MB. At the START of each pump
+   * batch the least-recently-used assets are evicted until the live set
+   * fits. Unset — the default — keeps everything, which is what every
+   * consumer did before this existed.
    *
    * **This changes a contract, so it is opt-in.** An evicted asset is gone
    * from `GetGeometry` until something re-extracts it, which is safe for a
    * consumer that copies payloads at delivery (the invariant Share#1640
    * asserts) and unsafe for one that keeps geometry IDs and fetches them
    * lazily later.
+   *
+   * **What "at delivery" means, precisely.** Everything pump call N
+   * delivered stays resident until pump call N+1 BEGINS, so the copy window
+   * is the whole gap between calls — an embedder may return from the pump,
+   * yield to the event loop, and only then read back the batch's geometry.
+   * Eviction ran at the tail of the pump until Sentry SHARE-1NK, which made
+   * that window a lie: a batch bigger than the whole budget was evicted by
+   * its own call, and the copy that followed hit a freed handle. The price
+   * of the guarantee is that the live set may transiently exceed the budget
+   * by one batch.
+   *
+   * **The trailing batch is the consumer's job, not the engine's.** The
+   * "by one batch" overshoot above is normally transient — pump call N+1's
+   * head eviction trims whatever call N left over budget. But nothing forces
+   * a call N+1: a consumer whose loop stops the moment `remaining` reaches 0
+   * never makes that call, so if the FINAL batch pushed `liveBytes` over
+   * budget, that overshoot is permanent, not transient — it persists for the
+   * model's lifetime. Evicting at the tail of that last call instead is not
+   * a fix: it would reintroduce the SHARE-1NK bug above for exactly that
+   * batch, since the embedder's copy happens after the call returns and
+   * there is still no in-engine signal for "the embedder is done copying."
+   * The trim is therefore on the consumer: pump once more after `remaining`
+   * reaches 0 (it extracts nothing and costs only the eviction pass) or call
+   * `SetGeometryBudget` directly. Share's own loop already does the former —
+   * its stop condition is `remaining === 0 && extracted === 0`, not
+   * `remaining === 0` alone, which guarantees exactly one such zero-work
+   * call. See {@link ExtractGeometryBatch}'s doc for the same contract from
+   * the pump-signature side.
    *
    * Budgeted on each native's `getAllocationSize` — vertices, triangles,
    * edges, the triangle-edge structures and the float vertex mirror. That is
@@ -910,8 +938,13 @@ export class IfcAPI {
    * opened with `OpenModelStreamed(data, {DEFER_GEOMETRY: true})`,
    * extract the next `batchSize` products and emit this batch's meshes —
    * the incremental twin of StreamAllMeshes. Feature-detect with
-   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly
-   * until `remaining` is 0.
+   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly until
+   * `remaining === 0 && extracted === 0` — one call PAST `remaining` alone
+   * first reaching 0. That extra call extracts nothing, but it still runs
+   * the geometry budget's head eviction (see `GEOMETRY_BUDGET_MB`), which is
+   * the only thing that trims an overshoot the final real batch left over
+   * budget; stopping at `remaining === 0` alone can leave that overshoot
+   * resident for the model's lifetime.
    *
    * DELTA CONTRACT: an entity may be emitted again in a LATER call with
    * a FlatMesh containing only its NEW placed instances (shared/mapped
@@ -940,6 +973,13 @@ export class IfcAPI {
    * Same contract as the setting: an evicted asset is gone from GetGeometry
    * until something re-extracts it, which is safe for a consumer that copies
    * payloads at delivery and unsafe for one that fetches lazily later.
+   *
+   * Same trailing-batch caveat as the setting, too: this eviction pass runs
+   * against the live set as it stands right now, so it does not by itself
+   * guarantee a LATER pump call won't push `liveBytes` back over budget.
+   * Calling this explicitly after a demand pump's `remaining` reaches 0 is
+   * exactly the "pump once more" trim `GEOMETRY_BUDGET_MB` describes — a
+   * direct call here is equivalent to that trailing zero-work pump call.
    *
    * @param modelID handle retrieved by an open
    * @param megabytes the ceiling, in MB of native allocation (see

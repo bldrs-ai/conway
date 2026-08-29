@@ -62,6 +62,7 @@ import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
+import { isNativeDeleted } from './native_geometry_liveness'
 
 // Batch size used when a whole-model consumer (streamAllMeshes) drains
 // a deferred model's remaining products synchronously.
@@ -145,10 +146,11 @@ interface IfcProxyLoadState {
 /**
  * The placements of a FlatMesh whose native geometry is still alive.
  *
- * There is no "is this deleted" predicate on the binding, so liveness is
- * probed by the cheapest call that touches the native and throws when it is
- * gone. Only used on the degraded StreamAllMeshes path, where the
- * alternative is handing a consumer a handle that aborts on read.
+ * Liveness is `isNativeDeleted` first — embind's own predicate, which costs
+ * a property read — with the cheapest call that touches the native kept as
+ * the backstop for a handle that is unusable for some other reason. Only
+ * used on the degraded StreamAllMeshes path, where the alternative is
+ * handing a consumer a handle that aborts on read.
  *
  * @param mesh The accumulated per-entity mesh.
  * @param geometryMap Express ID to [geometry, material, transform].
@@ -166,7 +168,7 @@ function livePlacements(
     const placed = mesh.geometries.get(where)
     const entry = geometryMap.get(placed.geometryExpressID)
 
-    if (entry === void 0) {
+    if (entry === void 0 || isNativeDeleted(entry[0])) {
       continue
     }
 
@@ -1484,9 +1486,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         // eslint-disable-next-line no-unused-vars
         const [geometryObject, _] = mapResult
         if (geometryObject !== void 0) {
-          const clone = geometryObject.clone()
 
-          return clone
+          // A map entry is not proof the native is still alive — eviction
+          // under GEOMETRY_BUDGET_MB frees it without purging this map, and
+          // cloning a freed handle aborts inside embind rather than
+          // returning. See isNativeDeleted for the full account; the catch
+          // is the backstop for any other way the handle can be unusable.
+          // Either way this degrades to the dummy below, which is the
+          // documented behaviour for an evicted asset.
+          if (!isNativeDeleted(geometryObject)) {
+
+            try {
+              const clone = geometryObject.clone()
+
+              return clone
+            } catch (error) {
+              Logger.error(
+                  `[GetGeometry]: clone failed for expressID ` +
+                  `${geometryExpressID}: ` +
+                  `${error instanceof Error ? error.message : String(error)}`)
+            }
+          } else {
+            Logger.error(
+                `[GetGeometry]: geometry for expressID ${geometryExpressID} ` +
+                `was freed (evicted under the geometry budget, or released)`)
+          }
         } else {
           Logger.error(`[GetGeometry]: Geometry Object not found for expressID: \n          ${geometryExpressID}`)
         }
@@ -2049,7 +2073,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * meshes through `meshCallback` — the incremental twin of
    * streamAllMeshes. Placed-geometry math (coordination, scaling,
    * centering) is identical; the shared meshMap is updated so
-   * getFlatMesh keeps working. Call repeatedly until `remaining` is 0.
+   * getFlatMesh keeps working. Call repeatedly until
+   * `remaining === 0 && extracted === 0` — one call past `remaining` alone
+   * first reaching 0, needed only to run the geometry budget's head
+   * eviction against the final real batch (see the trailing-batch
+   * paragraph on `pumpGeometryBatch_` below).
    *
    * Requires a model opened with deferred geometry
    * (`OpenModelStreamed(data, {..., DEFER_GEOMETRY: true})`); on a
@@ -2107,6 +2135,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if (!this.model[0].isSourceExternal) {
       return this.pumpGeometryBatch_(batchSize, meshCallback)
     }
+
+    // Evict at the START of the call, never at its end — see the identical
+    // note in pumpGeometryBatch_ for why. This is the pump Share drives, and
+    // the one the SHARE-1NK crash came from.
+    this.model[0].geometryResidency.evictToBudget()
 
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
@@ -2228,25 +2261,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
-    // Capture before eviction — and capture even when nobody asked for
-    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
-    // every batch and captures once at the end (see streamAllMeshes), which
-    // works only while geometry survives to be captured. With a budget it
-    // does not: anything evicted before that final capture can no longer be
-    // resolved, so those instances vanish from the model with no error. On
-    // the shared-representation fixture at a 2 KiB budget that path
-    // delivered 3 placements against classic's 16.
+    // Capture even when nobody asked for meshes. The deferred
+    // StreamAllMeshes drain pumps with `noCallback` for every batch and
+    // captures once at the end (see streamAllMeshes), which works only while
+    // geometry survives to be captured. With a budget it does not: anything
+    // evicted before that final capture can no longer be resolved, so those
+    // instances vanish from the model with no error. On the
+    // shared-representation fixture at a 2 KiB budget that path delivered 3
+    // placements against classic's 16.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
     } else if (this.model[0].geometryResidency.enabled) {
-      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
+      this.streamNewMeshes_(() => { /* capture into meshMap */ })
     }
-
-    // Evict AFTER the capture, never before: the delta capture resolves each
-    // new node's geometry to emit it, so evicting first would drop assets
-    // this batch is about to deliver and re-extract them immediately. A
-    // no-op unless a budget is configured.
-    this.model[0].geometryResidency.evictToBudget()
 
     const {totalWork, remaining} = this.demandProgress_()
 
@@ -3008,6 +3035,53 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       batchSize: number,
       meshCallback?: (mesh: FlatMesh) => void ): {extracted: number, remaining: number} {
 
+    // Evict at the START of the call, not at its end. The contract this buys:
+    // every asset a pump call delivers stays resident at least until the NEXT
+    // pump call begins, so an embedder that copies payloads out between calls
+    // can never be handed a geometry ID whose native has already been freed.
+    //
+    // This used to run at the tail, after the delta capture, on the reasoning
+    // that the capture had to resolve each new node's geometry first. True,
+    // but incomplete: the capture is not the last read of that geometry. The
+    // embedder's is, and it happens AFTER the call returns — Share's
+    // onMeshBatch calls GetGeometry/GetVertexArray on the delta it just
+    // received, then yields and pumps again (the "copy at delivery"
+    // invariant of Share#1640). Tail eviction could therefore free geometry
+    // the very same call had just delivered — trivially so whenever one
+    // batch's assets exceed the whole budget, as they do on 1.9 GB Revit
+    // exports at GEOMETRY_BUDGET_MB=64 — and the embedder's copy then hit a
+    // freed embind handle: "Cannot pass deleted object as a pointer of type
+    // IfcGeometry" (Sentry SHARE-1NK).
+    //
+    // The cost is a transient overshoot of up to one batch's bytes, which is
+    // the deliberate trade: a budget that is momentarily exceeded by a batch
+    // beats a budget that hands out dangling handles. A no-op unless a
+    // budget is configured. Both pumps need this — the async twin is what
+    // Share drives, this one is what a synchronous embedder and the test
+    // suite drive, and a budget honoured on only one of them is a budget
+    // that silently does not apply.
+    //
+    // That "transient" word only holds while pumping continues. Nothing
+    // forces a caller to make another call: a consumer that stops the
+    // instant `remaining` reaches 0 never triggers another head eviction,
+    // so if the FINAL batch pushed liveBytes over budget, that overshoot is
+    // permanent for the model's lifetime rather than transient. Tail-evicting
+    // that last call instead is not on the table — it would reintroduce the
+    // exact SHARE-1NK crash above for that one batch, because the embedder's
+    // copy still happens after the call returns and there is no in-engine
+    // signal for "the embedder has finished copying the last batch." The
+    // trim is therefore the consumer's one remaining obligation: make one
+    // more pump call after `remaining` reaches 0 (it extracts nothing, but
+    // still runs this head eviction) or call `SetGeometryBudget` directly.
+    // Share's production loop already does the former — its stop condition
+    // is `remaining === 0 && extracted === 0`, which guarantees exactly one
+    // such zero-work call — and geometry_budget_copy_window.test.ts's drain
+    // helper stops the same way, mirroring the real consumer rather than
+    // masking the issue. See
+    // GEOMETRY_BUDGET_MB's and ExtractGeometryBatch's doc comments in
+    // ifc_api.ts for the same contract stated from the embedder side.
+    this.model[0].geometryResidency.evictToBudget()
+
     const products = this.demandProducts_ ?? []
     const aggregates = this.demandAggregates_ ?? []
 
@@ -3086,28 +3160,19 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
-    // Capture before eviction — and capture even when nobody asked for
-    // meshes. The deferred StreamAllMeshes drain pumps with `noCallback` for
-    // every batch and captures once at the end (see streamAllMeshes), which
-    // works only while geometry survives to be captured. With a budget it
-    // does not: anything evicted before that final capture can no longer be
-    // resolved, so those instances vanish from the model with no error. On
-    // the shared-representation fixture at a 2 KiB budget that path
-    // delivered 3 placements against classic's 16.
+    // Capture even when nobody asked for meshes. The deferred
+    // StreamAllMeshes drain pumps with `noCallback` for every batch and
+    // captures once at the end (see streamAllMeshes), which works only while
+    // geometry survives to be captured. With a budget it does not: anything
+    // evicted before that final capture can no longer be resolved, so those
+    // instances vanish from the model with no error. On the
+    // shared-representation fixture at a 2 KiB budget that path delivered 3
+    // placements against classic's 16.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
     } else if (this.model[0].geometryResidency.enabled) {
-      this.streamNewMeshes_(() => { /* capture into meshMap before eviction */ })
+      this.streamNewMeshes_(() => { /* capture into meshMap */ })
     }
-
-    // Evict AFTER the capture, never before: the delta capture resolves
-    // each new node's geometry to emit it, so evicting first would drop
-    // assets this batch is about to deliver and re-extract them at once.
-    // A no-op unless a budget is configured. Both pumps need this — the
-    // async twin is what Share drives, this one is what a synchronous
-    // embedder and the test suite drive, and a budget honoured on only
-    // one of them is a budget that silently does not apply.
-    this.model[0].geometryResidency.evictToBudget()
 
     const {totalWork, remaining} = this.demandProgress_()
 
