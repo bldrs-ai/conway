@@ -47,6 +47,7 @@ import {
   ap214PreviewAdapter,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
+import { isNativeDeleted } from './native_geometry_liveness'
 
 /* Moving-window size for the streamed columnar parse (matches the IFC
  * proxy; the window bounds parse-time scratch, not the source buffer,
@@ -982,9 +983,34 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         // eslint-disable-next-line no-unused-vars
         const [geometryObject, _] = mapResult
         if (geometryObject !== void 0) {
-          const clone = geometryObject.clone()
 
-          return clone
+          // A map entry is not proof the native is still alive: this map is
+          // keyed by express ID, and the extraction below it frees natives
+          // with no back-channel to it (dropNonSceneGeometry,
+          // deleteTemporaries). Cloning a freed handle aborts inside embind
+          // rather than returning — the IFC twin's instance of exactly that
+          // is Sentry SHARE-1NK, where eviction under GEOMETRY_BUDGET_MB
+          // was the freeing party. See isNativeDeleted; the catch is the
+          // backstop for any other way the handle can be unusable. Either
+          // way this degrades to the dummy below rather than throwing
+          // through a consumer's mesh loop.
+          if (!isNativeDeleted(geometryObject)) {
+
+            try {
+              const clone = geometryObject.clone()
+
+              return clone
+            } catch (error) {
+              Logger.error(
+                  `[GetGeometry]: clone failed for expressID ` +
+                  `${geometryExpressID}: ` +
+                  `${error instanceof Error ? error.message : String(error)}`)
+            }
+          } else {
+            Logger.error(
+                `[GetGeometry]: geometry for expressID ${geometryExpressID} ` +
+                `was freed (evicted under the geometry budget, or released)`)
+          }
         } else {
           Logger.error(`[GetGeometry]: Geometry Object not found for expressID: 
           ${geometryExpressID}`)

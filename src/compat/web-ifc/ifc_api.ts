@@ -82,16 +82,26 @@ export interface Loadersettings {
 
   /**
    * Conway extension (DEFER_GEOMETRY only; M3's budgeted arena): cap the
-   * native geometry a model keeps resident, in MB. At each pump batch the
-   * least-recently-used assets are evicted until the live set fits.
-   * Unset — the default — keeps everything, which is what every consumer
-   * did before this existed.
+   * native geometry a model keeps resident, in MB. At the START of each pump
+   * batch the least-recently-used assets are evicted until the live set
+   * fits. Unset — the default — keeps everything, which is what every
+   * consumer did before this existed.
    *
    * **This changes a contract, so it is opt-in.** An evicted asset is gone
    * from `GetGeometry` until something re-extracts it, which is safe for a
    * consumer that copies payloads at delivery (the invariant Share#1640
    * asserts) and unsafe for one that keeps geometry IDs and fetches them
    * lazily later.
+   *
+   * **What "at delivery" means, precisely.** Everything pump call N
+   * delivered stays resident until pump call N+1 BEGINS, so the copy window
+   * is the whole gap between calls — an embedder may return from the pump,
+   * yield to the event loop, and only then read back the batch's geometry.
+   * Eviction ran at the tail of the pump until Sentry SHARE-1NK, which made
+   * that window a lie: a batch bigger than the whole budget was evicted by
+   * its own call, and the copy that followed hit a freed handle. The price
+   * of the guarantee is that the live set may transiently exceed the budget
+   * by one batch.
    *
    * Budgeted on each native's `getAllocationSize` — vertices, triangles,
    * edges, the triangle-edge structures and the float vertex mirror. That is
