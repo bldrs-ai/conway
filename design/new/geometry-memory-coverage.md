@@ -448,50 +448,59 @@ than "CSG is not".
 Deriving retained bytes from the returned geometry, rather than from what is
 live at scope exit, would fix this one.
 
-**What survives both.** Allocator **call counts** and **cumulative bytes** are
-computed in `onAlloc` alone, accumulate monotonically, and are never touched by
-`onFree` or by `liveBytes`. Neither defect can reach them. They carry the
-in-scope-only caveat from the section above and nothing further.
+**What survives.** Allocator **call counts**. They are computed in `onAlloc`
+alone, accumulate monotonically, never touch `liveBytes`, and need neither
+ownership nor lifetime information to mean what they say. Their only caveat is
+the in-scope restriction stated above.
 
-### Arena sizing needs cumulative bytes, not the live peak
+Cumulative bytes is uncorrupted in the same way, but it is **not** a
+substitute: as the next section sets out, it is total in-scope allocation
+*volume*, a superset of anything an arena could hold. It is printed as a raw
+diagnostic and no conclusion here rests on it.
 
-An earlier draft of this section cited "98.1 % of boolean compositions peak
-under 256 KiB" as evidence that CSG transients are arena-shaped. **That was
-the wrong distribution.** `ScratchArena` makes deallocation a no-op until the
-enclosing scope rewinds, so what an arena must hold for one unit is every byte
-that unit allocated, not the most it held at once. On a path that recycles
-heavily the two differ by more than an order of magnitude.
+**The common cause, worth stating once.** Five separate review findings
+narrowed a byte quantity on this page — `onFree` clamping, the global welder's
+capacity, the live-peak distribution, zero-clamps-as-an-all-clear, and
+cumulative volume — and every one reduces to the same sentence: **a byte figure
+is meaningless without allocation ownership and lifetime, and this instrument
+tracks neither.** Counts need neither. That asymmetry is why every conclusion
+here is stated in counts, and why the byte columns are printed but disowned.
 
-The instrument now records both. For `csg_boolean` on D3D:
+### Arena sizing is not answerable by this instrument
 
-| Cumulative allocation per composition | Cumulative % of units |
-|---|---:|
-| < 128 KiB | 4.6 % |
-| < 1 MiB | 53.2 % |
-| < 4 MiB | 92.8 % |
-| < 8 MiB | 98.3 % |
-| < 128 MiB | 100 % |
+This section has been wrong twice and is now a retraction rather than a
+result. Both retractions are kept because each names a distinct trap.
 
-Average 2.73 MB, **maximum 85 MB**. A 256 KiB arena would cover about 5 % of
-compositions; covering 93 % needs ~4 MB, and covering all of them needs
-~128 MB. That is a materially different proposition from what the live-peak
-histogram implied, and it is a real constraint on the rescope below rather
-than a footnote.
+**First attempt.** It cited "98.1 % of boolean compositions peak under
+256 KiB" as evidence that CSG transients are arena-shaped. Wrong
+distribution: `ScratchArena` makes deallocation a no-op until the enclosing
+scope rewinds, so the live peak — the most a unit held at once — is not what
+an arena must hold.
 
-Two assumptions this column rests on, since the rest of the doc retires the
-byte quantities and this one is deliberately kept:
+**Second attempt.** It replaced that with cumulative bytes allocated per unit,
+measured them, and quoted "**~4 MB covers 93 % of compositions**" as the
+arena-sizing constraint. **That is also withdrawn.** Cumulative in-scope bytes
+is a *superset* of the arena-eligible subset, and on this path a large one: it
+includes the `Geometry` that `csg.run()` returns — which by definition must
+outlive the composition — and the global `VertexWelder`'s capacity, which
+persists across units by design. Neither can live in an arena rewound at scope
+exit. So the figure is **total in-scope allocation volume, not required arena
+capacity**, and it bounds the arena in neither direction: it overstates by
+including what must escape, and it is confined to instrumented scopes.
 
-- It is computed in `onAlloc` alone and is never touched by `onFree`, so
-  neither ownership defect reaches it. It is not comparable to the live peak
-  and the doc no longer states a ratio between them.
-- `__wrap_realloc` counts the **full new size** of every growth step, not the
-  increment. For arena sizing that is the correct model rather than a
-  double-count — a bump arena cannot grow a block in place either, so a vector
-  doubling from 1 MB to 2 MB really does consume 3 MB of arena. Read as a
-  *heap* figure it would be an overstatement; it is not offered as one.
+**What would answer it.** Arena sizing needs cumulative bytes *restricted to
+allocations that die inside the scope*. That is a lifetime classification, and
+it sits on top of the pointer-ownership tracking the peak and retained columns
+already need — the same two fixes, in the same place. Until both exist this
+instrument can say **where the allocator calls are**, and nothing about what an
+arena there would cost.
 
-`extrude_solid`, for contrast, is genuinely small on this distribution too:
-100 % of swept solids allocate under 32 KiB cumulatively.
+The numbers are still recorded, because they are raw and uncorrupted and
+deleting them would only invite recomputation. For `csg_boolean` on D3D, total
+in-scope allocation volume per composition averages 2.73 MB with a maximum of
+85 MB; for `extrude_solid`, 100 % of swept solids are under 32 KiB. Read those
+as volume. They are not arena capacity and no recommendation in this doc rests
+on them.
 
 ### One comparison this does *not* license
 
@@ -512,11 +521,11 @@ open.
 
 ## Still unmeasured, and what it would take
 
-- **Whether an arena would actually help CSG, as opposed to being merely
-  where the calls are.** The measurement above sizes the opportunity in
-  allocator calls and in cumulative bytes; it does not establish that
-  `csg.run()`'s allocations are scope-lifetime (freed before the composition
-  closes) rather than structures that outlive it. That is a code question
+- **Whether an arena would help CSG, and what it would cost**, as opposed to
+  merely where the calls are. The measurement above counts allocator calls; it
+  does not establish that `csg.run()`'s allocations are scope-lifetime (freed
+  before the composition closes) rather than structures that outlive it — and
+  that same unknown is what makes the arena unsizable. That is a code question
   about the CSG kernel's internals, and it should be answered before any arena
   is placed there — a bump arena rewound at scope exit is only correct for
   allocations that die inside the scope.
@@ -526,11 +535,20 @@ open.
   counter outside every `AllocTelemetryScope` — the wrappers already see every
   allocation and simply decline to count the unscoped ones. Without it, an
   unscoped path being larger than CSG cannot be excluded.
-- **Any trustworthy peak or retained figure, on any path**, which needs
-  pointer-ownership tracking in `onFree` and a retained figure derived from
-  returned geometry rather than from what is live at scope exit. Both are
-  described above. Allocator-call counts and cumulative bytes do not depend on
-  either fix.
+- **Any byte-level claim at all**, which needs two things this instrument does
+  not have:
+  1. **Allocation ownership** — record which pointers a scope handed out, so
+     `onFree` subtracts only its own. Without it, peak and retained are
+     corrupted on every path, silently and with no signal.
+  2. **Lifetime classification** — separate allocations that die inside the
+     scope from those that must outlive it (the returned `Geometry`, the
+     persistent welder capacity). Without it there is no arena-eligible
+     subset, so no arena can be sized.
+
+  Together these are the prerequisite for any byte number here to bound
+  anything, and they are a distinct piece of work from "measure the per-path
+  allocation profile". Allocator-call counts depend on neither, which is why
+  this doc's conclusions survive without them.
 - **A whole-process peak-vs-retained figure for D3D**, comparable to
   Arty_Z7's 60×. See the caveat above: this instrument cannot produce one.
 - **Whether an AP214-side `GeometryResidency` analogue is wanted at all.**
@@ -565,8 +583,17 @@ it by default:
    allocation profile first. The four currently-uncovered advanced-BREP
    tags (`TriSphere`, `TriToroidal`, `TriRevolution`, `TriExtrusion`) and
    the two currently-uncovered non-advanced-BREP paths (`Extrude()`, CSG)
-   are the concrete backlog this principle names — extending them is
-   conway#637 item 3, gated on the item-2 measurement above.
+   are the concrete backlog this principle names. **Item 2's measurement has
+   ordered that backlog: CSG first, and on call counts alone.** `BoolSubtract`
+   makes 43,185,966 in-scope allocator calls on D3D; the path conway#637
+   item 3 actually named makes 2,464. So item 3 as written is wrong twice
+   over — it cannot reach either uncovered path, and the path it substitutes
+   for is negligible in absolute terms. Two limits on how far that carries:
+   it makes CSG *a* major lever, not *the* largest (that ranking needs a
+   load-wide denominator nobody has), and it says **nothing about what an
+   arena there would cost** — sizing one needs a lifetime classification this
+   instrument does not have. See
+   [Measured](#measured-d3ds-allocation-profile-item-2).
 2. **Telemetry attribution (`AllocTagScope`/`AllocSite`) is added at the
    same time as the scratch structure, not after.** It's what makes the
    next audit possible without re-deriving this matrix by hand. Every
