@@ -8,10 +8,11 @@ was commissioned to check (conway#637, sub-issue of conway#635). Read this
 doc, not the ledger, for the current, verified state of arena coverage — the
 ledger's §7 claim about scope is superseded below.
 
-**Scope of this doc.** Audit and policy only (conway#637 items 1 and 4).
-Measuring D3D's per-face allocation profile (item 2) and extending arena
-coverage (item 3) are out of scope here — see [Unmeasured](#unmeasured-and-what-it-would-take)
-and [Policy](#the-policy) for what those need.
+**Scope of this doc.** Audit and policy (conway#637 items 1 and 4), plus the
+measurement those commissioned (item 2 — see
+[Measured](#measured-d3ds-allocation-profile-item-2)). Extending arena
+coverage (item 3) is still out of scope here, and the measurement below
+changes what item 3 should be.
 
 **Method.** Every claim below is either **[code]** — read from the pinned
 `dependencies/conway-geom` revision, cited file:line, verified by grep and by
@@ -309,33 +310,98 @@ splits by format, and it splits because the mechanism was built once, for
 `IfcStepModel`, and never given an AP214 counterpart — not because AP214
 was evaluated and excluded.
 
-## Unmeasured, and what it would take
+## Measured: D3D's allocation profile (item 2)
 
-- **Whether the arena mechanism (not just its current placement) would help
-  the extrusion/CSG path.** conway#637 is explicit that the ledger's "single
-  largest identified lever" framing is a hypothesis riding on an analogy
-  (Arty_Z7's 60× peak-to-retained ratio, D3D's similarly-shaped ratio),
-  not a finding. This audit does not change that status — nothing here
-  measures D3D's per-face allocation profile. Restated per the issue's
-  claim-discipline bar: **treat "extending arena scope is the largest
-  lever" as unproven** until measured.
-- **Method for that measurement, from what this audit found in the
-  instrumentation already in the tree:** `AllocTelemetryScope`
-  (`structures/alloc_telemetry.h`) and its `AllocTagScope`/`AllocSite`
-  attribution enum already exist and already cover all eight
-  `AddFaceToGeometry` surface tags. They do **not** cover
-  `getExtrudedAreaSolid`/`Extrude()` or the CSG/boolean call graph. The
-  minimal extension for item 2 is: (a) wrap `Extrude()` (and, separately,
-  whatever CSG entry point composes voids/booleans for extrusions) in an
-  `AllocTelemetryScope`, matching the existing per-face-in-`AddFaceToGeometry`
-  placement; (b) add `AllocSite` tags for the solid-extrusion cap earcut and
-  for CSG, distinct from the existing `TriExtrusion` tag (which is the
-  *surface* tessellator and must not be conflated with this — see the
-  naming trap noted above); (c) rebuild with `CONWAY_ALLOC_TELEMETRY` per
-  `alloc_telemetry.h`'s header comment; (d) run the same AFTP telemetry pass
-  used for Arty_Z7 against D3D, this time keyed to the new tags. This is a
-  wasm rebuild plus a telemetry pass, which is why it's out of scope here
-  rather than attempted.
+conway#637 item 2 asked for D3D's per-face allocation profile, to test the
+ledger's hypothesis that extending the arena is "the single largest identified
+lever". It has now been run. **The hypothesis is refuted for the extrusion
+path and redirected to CSG.**
+
+**Method.** The `AllocTelemetryScope` / `AllocSite` instrument was extended to
+the two call graphs the audit above found uninstrumented — `Extrude()` /
+`Sweep()` / `SweepCircular()` (solid sweeps) and `BoolSubtract()` (CSG/boolean
+composition) — and every scope now names its *kind*, so a swept solid's
+numbers are bucketed separately from a BREP face's instead of averaging into
+one meaningless per-"face" population. Built with `CONWAY_ALLOC_TELEMETRY=1`
+(`yarn build-codex-MT`) and run through `ifc_regression_main` on
+`D3D.ifc` (213.6 MB, Tekla IFC4 export), which is the model conway#635's
+numbers come from.
+
+**Probe validation first, per the rule this instrument violated once already.**
+`block.ifc`, `index.ifc`, `index_georeferenced.ifc` and `grid_placement.ifc`
+still report zero units — and that null is now explained rather than trusted:
+those models carry only `IfcPolygonalFaceSet` (vertices and indices given
+directly, no tessellation) or `IfcBlock` (a directly-constructed box). Where
+extrusion *is* present the unit count matches the entity count exactly:
+`mapped_shared_representation.ifc` has 15 `IFCEXTRUDEDAREASOLID` and records
+15 `extrude_solid` units; `aggregate_master_voids.ifc` has 2 plus one
+`IFCRELVOIDSELEMENT` and records 3 `extrude_solid` units and 1 `csg_boolean`.
+
+### The profile
+
+Allocator calls made inside each instrumented scope, one D3D load:
+
+| Scope kind | Units | Alloc calls | Share | Avg peak/unit | Retained total | peak:retained |
+|---|---:|---:|---:|---:|---:|---:|
+| `csg_boolean` | 6,466 | **43,185,966** | **98.77 %** | 108 KB | 346.9 MB | 2.0× |
+| `extrude_solid` | 22,429 | 508,934 | 1.16 % | 2.1 KB | 35.2 MB | 1.4× |
+| `sweep_solid` | 325 | 27,784 | 0.06 % | 39 KB | 8.5 MB | 1.5× |
+| `advanced_face` | 320 | 2,464 | 0.01 % | 0.7 KB | 0.06 MB | 3.7× |
+| **total** | **29,540** | **43,725,148** | | | | |
+
+Within `csg_boolean`, by site: `csg_kernel` (the `csg.run()` calls) 33.2 M
+calls / 16.76 GB gross bytes churned; `csg_operand_prep` (`Geometry::Cleanup()`
+on the operands) 9.86 M calls / 863 MB. Within `extrude_solid`:
+`extrude_cap` 77.8 %, `earcut` 15.3 %, the side-wall pass 6.9 %.
+
+For scale on the same run: `peakWasmHeapMb` 610.9, `geometryMemoryMb` 175.1,
+geometry stage 31.6 s of a 35.3 s load.
+
+### Three things this settles
+
+1. **The "zero scoped faces" reading was an instrument artifact, and the
+   artifact was enormous.** The pre-existing instrumentation saw 2,464 of
+   D3D's 43.7 M in-scope allocator calls — **0.006 %**. 98.9 % of the
+   instrumented units (29,220 of 29,540) are on call graphs that had no scope
+   at all. Any conclusion previously drawn from that null described the
+   instrument, not the model.
+2. **Extrusion is not the lever.** Solid extrusion is 1.16 % of D3D's
+   allocator traffic, at 2.1 KB average transient peak — small, shallow, and
+   already nearly free. Arena-backing `Extrude()` would remove roughly one
+   percent of the allocator calls on the model the work was scoped around.
+3. **CSG is, by roughly two orders of magnitude.** `BoolSubtract` accounts for
+   98.8 % of in-scope allocator calls, and its transients are arena-shaped:
+   98.1 % of boolean compositions peak under 256 KiB, with a 3.9 MB tail.
+
+### And one thing it does *not* settle
+
+The peak-to-retained ratios measured here — 1.4× to 3.7× — are **not** the 60×
+quoted for Arty_Z7, but the two numbers are not the same measurement and
+should not be compared as if they were. This column is
+Σ(per-unit transient peak) / Σ(per-unit retained bytes), both accumulated
+inside instrumented scopes. The Arty_Z7 60× is a whole-process figure
+(~75 MB retained under a ~4.5 GB heap peak) whose denominator includes
+everything a load holds, not just what escapes a tessellation scope. A
+whole-process ratio for D3D would need the perf harness's peak/retained
+columns, not this instrument.
+
+What *is* directly comparable is the allocator-call churn, and that mechanism
+is unambiguously present on D3D: 43.7 M malloc/free-shaped calls against
+610.9 MB of peak wasm heap, 16.76 GB of gross bytes cycled through the
+allocator by the CSG kernel alone. The churn the arena was built to remove is
+real here. It is simply not where item 3 was pointed.
+
+## Still unmeasured, and what it would take
+
+- **Whether an arena would actually help CSG, as opposed to being merely
+  well-shaped for it.** The measurement above sizes the opportunity; it does
+  not establish that `csg.run()`'s allocations are scope-lifetime (freed
+  before the composition closes) rather than structures that outlive it. That
+  is a code question about the CSG kernel's internals, and it should be
+  answered before any arena is placed there — a bump arena rewound at scope
+  exit is only correct for allocations that die inside the scope.
+- **A whole-process peak-vs-retained figure for D3D**, comparable to
+  Arty_Z7's 60×. See the caveat above: this instrument cannot produce one.
 - **Whether an AP214-side `GeometryResidency` analogue is wanted at all.**
   This audit establishes that none exists, not whether AP214's load profile
   needs one — STEP mechanical-CAD models may have a different retained-vs-
@@ -416,6 +482,12 @@ it by default:
   **confirmed** by reading `Extrude()` and the CSG call graph directly —
   genuinely zero arena coverage there, for a different structural reason
   (separate call graph, not "planar BREP") than the ledger implied.
-- The "largest lever" framing remains a **hypothesis**, unchanged by this
-  audit, with a concrete measurement method now written down for whoever
-  picks up item 2.
+- The "largest lever" framing was a **hypothesis** when the audit was
+  written; item 2 has since **measured it and found it misdirected**.
+  Extending the arena to the extrusion path — the work the ledger called the
+  largest lever — would reach 1.2 % of D3D's allocator traffic. The 98.8 % is
+  in CSG/boolean composition.
+- The instrument itself now covers the solid-sweep and CSG call graphs, and
+  every scope names its kind, so the "zero scoped faces" failure mode cannot
+  recur silently on those paths. `src/ifc/alloc_telemetry_coverage.test.ts`
+  pins the placements.
