@@ -676,6 +676,44 @@ Deliberately small first step; each has a measurable exit.
   pump call N delivered is resident until call N+1 begins, at the price of
   a transient overshoot of up to one batch.
 
+    **Implementation, third landed piece — a streaming-consumer ownership
+  contract (2026-08-29, conway#638).** The budget above bounds *native*
+  bytes. The JS side had its own, larger problem: a deferred open builds
+  each `PlacedGeometry` once and files that one object into **three**
+  pointer spines — the model's cumulative per-entity `meshMap`, its
+  `vectorFlatMesh`, and whatever the embedder keeps from the mesh
+  callback. Measured on a D3D load that graph is **475 MB** of V8 heap,
+  the largest single bucket, and dropping any one spine alone frees only
+  ~4.4 MB, because the other two keep the same graph alive (4.4 MB is
+  the *predicted* size of one 562 351-entry spine at 8 B, so that number
+  confirms the model rather than refuting it). A consumer that assembles
+  every batch as it lands — Share's incremental batched builder — never
+  reads the two conway holds.
+
+    `STREAMING_CONSUMER` (a `DEFER_GEOMETRY`-only open setting, default
+  off, both proxies) lets the caller say so: the pump hands each delta
+  `FlatMesh` to the callback and keeps no reference, so neither conway
+  spine grows. **It drops JS pointer spines and nothing else** — the
+  natives are owned by the geometry store and freed only by eviction or
+  `ReleaseModelGeometry`, so the copy-window guarantee above is
+  untouched, as is the trailing zero-work pump call that trims the final
+  batch. The retention was never load-bearing for Share's empty-pump
+  fallback, which the issue text originally claimed: that fallback fires
+  only when the pump produced *nothing*, and in that case `meshMap` was
+  empty going in and a fresh scene walk serves it.
+
+    What is load-bearing is a late whole-model ask. `StreamAllMeshes`,
+  `LoadAllGeometry` and `GetFlatMesh` on such a model **re-walk the live
+  scene** rather than replaying a cache that no longer exists — with the
+  delta capture, not the classic walk, because only the delta capture
+  seeds coordination from the frame the stream actually used. Because the
+  re-walk clears and restarts at instance zero, it is *idempotent*, which
+  incidentally closes the latent doubling bug a second `StreamAllMeshes`
+  has on the retaining path (Share's `IfcItemsMap.js:274-283`). Once the
+  natives are genuinely gone — released, or evicted in their entirety —
+  those entry points **throw and name the contract** rather than
+  returning a model with no geometry in it.
+
   **PSB.ifc at batch 8 — the size Share pumps at:**
 
   | budget | live | wasm peak | delta meshes | geometry |

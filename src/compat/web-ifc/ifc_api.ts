@@ -69,6 +69,44 @@ export interface Loadersettings {
   DEFER_GEOMETRY?: boolean
 
   /**
+   * Conway extension (DEFER_GEOMETRY only; conway#638): the caller declares
+   * that IT owns the pumped mesh stream, so conway keeps no reference to it.
+   *
+   * Default (absent/false) is the historical behaviour, unchanged: every
+   * `PlacedGeometry` the pump builds is filed into the model's cumulative
+   * per-entity `meshMap` and its `vectorFlatMesh` spine as well as being
+   * handed to the mesh callback, so a later whole-model ask can be served
+   * out of that cache. On a D3D-scale model that cache is the largest single
+   * bucket of JS heap a load holds — 475 MB of `FlatMesh`/`PlacedGeometry`
+   * measured — and a consumer that assembles each batch as it lands (Share's
+   * incremental batched builder) never reads it.
+   *
+   * With this set, the pump delivers each delta `FlatMesh` to the callback
+   * and drops it. **The callback is the only delivery**: whatever the
+   * consumer does not copy or keep is gone.
+   *
+   * **This drops JS pointer spines, never native geometry.** The natives
+   * behind the delivered placements are owned by the model's geometry store
+   * and are freed only by `GEOMETRY_BUDGET_MB` eviction or
+   * `ReleaseModelGeometry`, neither of which this setting touches. The
+   * copy-window guarantee above — everything pump call N delivered stays
+   * resident until call N+1 begins — therefore holds exactly as it does
+   * without this flag.
+   *
+   * **A late whole-model ask still works, until the natives are gone.**
+   * `StreamAllMeshes`, `LoadAllGeometry` and `GetFlatMesh` on such a model
+   * re-walk the live scene rather than replaying a cache, which costs a walk
+   * but returns the same placements the pump delivered. Once the geometry has
+   * been released — or evicted in its entirety under a budget — there is
+   * nothing left to walk, and those entry points throw a descriptive error
+   * naming this contract rather than silently returning an empty model.
+   *
+   * Ignored on a non-deferred open, which has no pump and no accumulation to
+   * suppress.
+   */
+  STREAMING_CONSUMER?: boolean
+
+  /**
    * Conway extension (OpenModelStreamed + DEFER_GEOMETRY only; demand/tiled
    * rendering slice A2): receive PREVIEW mesh payloads while the parse is
    * still running — self-contained (geometry copied out of the wasm heap),
