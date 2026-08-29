@@ -6046,6 +6046,15 @@ export class AP214GeometryExtraction {
 
     const treeMap = new Map<number, MappedSceneNode>()
 
+    // conway#597: representation localID → the PDS a pick under it should
+    // report, populated by the plain shape_representation_relationship loop
+    // further down and consulted here by makeThunk's item-attribution calls
+    // only — occurrence-path threading keeps using each edge's own
+    // relationship localID exactly as before (see the loop for why).
+    // Declared here, outside the block that populates it, so makeThunk's
+    // closure — defined before that block — can see it.
+    const ownerOverrideByRepLocalID = new Map<number, number>()
+
     const makeThunk = (
         representation: shape_representation,
         owningElementLocalID?: number,
@@ -6136,6 +6145,16 @@ export class AP214GeometryExtraction {
           }
         }
                 
+        // conway#597: items belonging directly to a representation reached
+        // only via a plain shape_representation_relationship (no SDR of its
+        // own — the SolidWorks multibody pattern) attribute to the owning
+        // part's PDS rather than to `owningLocalID` (which stays the
+        // relationship's own id, still correct for occurrence-path
+        // threading above/below). Every other representation has no entry
+        // here and this is a no-op.
+        const itemOwningLocalID =
+          ownerOverrideByRepLocalID.get( representation.localID ) ?? owningLocalID
+
         const includeItems = slice?.includeItems ?? true
 
         // `representation.items` is a dereferencing getter, so keep it
@@ -6185,14 +6204,14 @@ export class AP214GeometryExtraction {
             }
 
             if ( item instanceof styled_item ) {
-              this.extractStyledItemWithProcessing( item, owningLocalID )
+              this.extractStyledItemWithProcessing( item, itemOwningLocalID )
               continue
             }
 
             if ( item instanceof mapped_item ) {
-              this.extractMappedItem( item, owningLocalID )
+              this.extractMappedItem( item, itemOwningLocalID )
             } else {
-              this.extractRepresentationItem( item, owningLocalID )
+              this.extractRepresentationItem( item, itemOwningLocalID )
               const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
               if ( styledItemLocalID !== void 0 ) {
                 const styledItem =
@@ -6384,6 +6403,20 @@ export class AP214GeometryExtraction {
       // orient CDSR assembly edges semantically below.
       const productDefLocalIDByRep = new Map<number, number>()
 
+      // Representation → the PDS itself (conway#597). A plain (non-CDSR)
+      // shape_representation_relationship has no assembly occurrence to key
+      // on — its edge exists to bind a representation with no SDR of its
+      // own (a SolidWorks multibody advanced_brep_shape_representation) to
+      // the SDR-bound representation of the part it belongs to. This is
+      // what resolves that binding back to the part's own PDS, the same
+      // identity a directly-SDR'd part's geometry already carries
+      // (`AP214SceneGeometry.relatedElementLocalId` is documented as always
+      // a product_definition_shape localID) — separate from
+      // productDefLocalIDByRep because that map drills one level further,
+      // past the PDS to the product_definition, which the CDSR orientation
+      // check below needs but this does not.
+      const pdsLocalIDByRep = new Map<number, number>()
+
       for ( const sdr of model.types( shape_definition_representation ) ) {
         try {
           const usedRepresentation = sdr.used_representation
@@ -6394,6 +6427,11 @@ export class AP214GeometryExtraction {
           if ( usedRepresentation?.localID !== void 0 &&
               productDef instanceof product_definition ) {
             productDefLocalIDByRep.set( usedRepresentation.localID, productDef.localID )
+          }
+
+          if ( usedRepresentation?.localID !== void 0 &&
+              definition instanceof product_definition_shape ) {
+            pdsLocalIDByRep.set( usedRepresentation.localID, definition.localID )
           }
         } catch {
           // Malformed SDR reference — the rep just stays un-mapped and the
@@ -6508,14 +6546,117 @@ export class AP214GeometryExtraction {
         }
       }
 
-      const shapeRelationships = [...model.types(shape_representation_relationship)]     
+      const shapeRelationships = [...model.types(shape_representation_relationship)]
+
+      // conway#597: a plain (non-CDSR) shape_representation_relationship
+      // edge used to hand its OWN localID to the geometry it binds, which
+      // surfaces a SHAPE_REPRESENTATION_RELATIONSHIP express id at
+      // selection time instead of the owning part's PDS — Orbiter's own
+      // repro chains two such edges (#857 -> #886 -> #970), so a lookup on
+      // the immediate rep_1/rep_2 alone isn't enough. Build the undirected
+      // graph of these edges (CDSR-consumed ones excluded — those already
+      // carry a correct NAUO-derived identity from the loop above) and walk
+      // it breadth-first from whichever representation this edge starts
+      // from, stopping at the first SDR-bound representation reached.
+      const repAdjacency = new Map<number, number[]>()
+
+      for ( const relationship of shapeRelationships ) {
+
+        if ( shapeRepresentationRelationshipsSeen.has( relationship.localID ) ) {
+          continue
+        }
+
+        try {
+          const rep1LocalID = relationship.rep_1.localID
+          const rep2LocalID = relationship.rep_2.localID
+
+          let forward = repAdjacency.get( rep1LocalID )
+          if ( forward === void 0 ) {
+            forward = []
+            repAdjacency.set( rep1LocalID, forward )
+          }
+          forward.push( rep2LocalID )
+
+          let backward = repAdjacency.get( rep2LocalID )
+          if ( backward === void 0 ) {
+            backward = []
+            repAdjacency.set( rep2LocalID, backward )
+          }
+          backward.push( rep1LocalID )
+        } catch {
+          // Malformed relationship — no edge to add for it.
+        }
+      }
+
+      /**
+       * Resolve the PDS owning a representation, walking plain
+       * shape_representation_relationship edges outward when the
+       * representation has no SDR of its own. Breadth-first, so the
+       * nearest SDR-bound representation wins; if more than one distinct
+       * PDS is reachable at the same nearest distance, the mapping is
+       * genuinely ambiguous and this reports that (via `undefined`) rather
+       * than guessing one of them.
+       *
+       * @param startRepLocalID The representation to resolve from.
+       * @return {number | undefined} The owning PDS's localID, or
+       * `undefined` if none is reachable, or reachable ambiguously.
+       */
+      const resolvePdsLocalID = ( startRepLocalID: number ): number | undefined => {
+
+        const direct = pdsLocalIDByRep.get( startRepLocalID )
+
+        if ( direct !== void 0 ) {
+          return direct
+        }
+
+        const visited = new Set<number>( [ startRepLocalID ] )
+        let frontier = repAdjacency.get( startRepLocalID ) ?? []
+
+        while ( frontier.length > 0 ) {
+
+          const found = new Set<number>()
+          const next: number[] = []
+
+          for ( const repLocalID of frontier ) {
+
+            if ( visited.has( repLocalID ) ) {
+              continue
+            }
+            visited.add( repLocalID )
+
+            const pds = pdsLocalIDByRep.get( repLocalID )
+
+            if ( pds !== void 0 ) {
+              found.add( pds )
+              continue // Resolved on this branch — don't walk past it.
+            }
+
+            for ( const neighbor of repAdjacency.get( repLocalID ) ?? [] ) {
+              if ( !visited.has( neighbor ) ) {
+                next.push( neighbor )
+              }
+            }
+          }
+
+          if ( found.size === 1 ) {
+            return [ ...found ][0]
+          }
+
+          if ( found.size > 1 ) {
+            return void 0 // Ambiguous fan-out at this distance — don't guess.
+          }
+
+          frontier = next
+        }
+
+        return void 0
+      }
 
       for ( const shapeRelationship of shapeRelationships ) {
         if ( shapeRepresentationRelationshipsSeen.has( shapeRelationship.localID ) ) {
           continue
         }
-        const owningLocalID = shapeRelationship.localID
-        shapeRepresentationRelationshipsSeen.add( owningLocalID )
+        shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
 
         /* Note, the rep_1 and rep_2 are swapped here compared to the
          * context_dependent_shape_representation case above. This is because
@@ -6527,6 +6668,7 @@ export class AP214GeometryExtraction {
         let targetShape
         let transform
         let isContinue
+        const owningLocalID = shapeRelationship.localID
 
         try {
           sourceShape = shapeRelationship.rep_2
@@ -6542,6 +6684,32 @@ export class AP214GeometryExtraction {
 
         if (isContinue) {
           continue
+        }
+
+        // conway#597: `owningLocalID` above (the relationship's own
+        // localID) still drives occurrence-path threading exactly as
+        // before — the NEMA multibody fixture's occurrence path
+        // deliberately ends with the SRR's own express id to disambiguate
+        // a multibody solid set from other items under the same NAUO (see
+        // ap214_occurrence_geometry.test.ts). What conway#597 asks for is
+        // narrower: the express id a *pick* surfaces (relatedElementLocalId)
+        // should be the owning part's PDS, not the relationship's. Record
+        // that resolution separately, keyed by the representation whose
+        // OWN items (sourceShape's) will be attributed — makeThunk applies
+        // it only to item attribution, leaving the occurrence-path seed
+        // (`owningLocalID` above, and everything derived from it for
+        // children) untouched.
+        const resolvedOwnerLocalID = resolvePdsLocalID( targetShape.localID )
+
+        if ( resolvedOwnerLocalID !== void 0 ) {
+          ownerOverrideByRepLocalID.set( sourceShape.localID, resolvedOwnerLocalID )
+        } else {
+          Logger.warning(
+              `SHAPE_REPRESENTATION_RELATIONSHIP #${shapeRelationship.expressID} ` +
+              'has no SDR-bound representation reachable from either side ' +
+              '(absent, or ambiguously more than one); selection under ' +
+              'it will surface the relationship\'s own express id rather ' +
+              'than the owning part\'s.' )
         }
 
         const sourceID = sourceShape.localID
@@ -6560,14 +6728,14 @@ export class AP214GeometryExtraction {
         sourceNode.rep = sourceShape
         sourceNode.owningLocalID = owningLocalID
 
-        let targetNode = treeMap.get( targetID )       
+        let targetNode = treeMap.get( targetID )
         if ( targetNode === void 0 ) {
           targetNode = { parents: 0, children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
-        }        
+        }
       }
 
       const shapeDefinitions = model.types( shape_definition_representation )
