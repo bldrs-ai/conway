@@ -89,6 +89,14 @@ async function drain(
 
     betweenCalls?.( delivered )
 
+    // Stopping on `remaining === 0 && extracted === 0` rather than
+    // `remaining === 0` alone costs one extra zero-work call, but that call
+    // is the contract, not a test convenience: it mirrors Share's own
+    // production stop condition, and it is the only thing that runs the
+    // head eviction that trims the final real batch's overshoot (see the
+    // trailing-batch paragraph on pumpGeometryBatch_ in
+    // ifc_api_proxy_ifc.ts). Stopping at `remaining === 0` alone would leave
+    // that overshoot resident and this suite would never see it evicted.
     if ( remaining === 0 && extracted === 0 ) {
       break
     }

@@ -2073,7 +2073,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * meshes through `meshCallback` — the incremental twin of
    * streamAllMeshes. Placed-geometry math (coordination, scaling,
    * centering) is identical; the shared meshMap is updated so
-   * getFlatMesh keeps working. Call repeatedly until `remaining` is 0.
+   * getFlatMesh keeps working. Call repeatedly until
+   * `remaining === 0 && extracted === 0` — one call past `remaining` alone
+   * first reaching 0, needed only to run the geometry budget's head
+   * eviction against the final real batch (see the trailing-batch
+   * paragraph on `pumpGeometryBatch_` below).
    *
    * Requires a model opened with deferred geometry
    * (`OpenModelStreamed(data, {..., DEFER_GEOMETRY: true})`); on a
@@ -3056,6 +3060,26 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // Share drives, this one is what a synchronous embedder and the test
     // suite drive, and a budget honoured on only one of them is a budget
     // that silently does not apply.
+    //
+    // That "transient" word only holds while pumping continues. Nothing
+    // forces a caller to make another call: a consumer that stops the
+    // instant `remaining` reaches 0 never triggers another head eviction,
+    // so if the FINAL batch pushed liveBytes over budget, that overshoot is
+    // permanent for the model's lifetime rather than transient. Tail-evicting
+    // that last call instead is not on the table — it would reintroduce the
+    // exact SHARE-1NK crash above for that one batch, because the embedder's
+    // copy still happens after the call returns and there is no in-engine
+    // signal for "the embedder has finished copying the last batch." The
+    // trim is therefore the consumer's one remaining obligation: make one
+    // more pump call after `remaining` reaches 0 (it extracts nothing, but
+    // still runs this head eviction) or call `SetGeometryBudget` directly.
+    // Share's production loop already does the former — its stop condition
+    // is `remaining === 0 && extracted === 0`, which guarantees exactly one
+    // such zero-work call — and geometry_budget_copy_window.test.ts's drain
+    // helper stops the same way, mirroring the real consumer rather than
+    // masking the issue. See
+    // GEOMETRY_BUDGET_MB's and ExtractGeometryBatch's doc comments in
+    // ifc_api.ts for the same contract stated from the embedder side.
     this.model[0].geometryResidency.evictToBudget()
 
     const products = this.demandProducts_ ?? []
