@@ -338,6 +338,58 @@ function isWholeCurveEdge(
   return ( from === first && to === last ) || ( from === last && to === first )
 }
 
+
+/**
+ * Scan every sample of a 3D CurveObject for a non-finite coordinate.
+ *
+ * A degenerate AXIS2_PLACEMENT_3D basis (conway#592) makes the untrimmed
+ * whole-curve recovery below (conway#492) sample the same bad placement
+ * that produced the original degenerate trim, so a full complement of
+ * points comes back that are all NaN. The point-COUNT gate the recovery
+ * already applies can't see that — NaN points still outnumber the
+ * collapsed trim — so this is a separate, necessary check (conway#591).
+ *
+ * @param curveObject The curve whose samples to check.
+ * @return {boolean} True only if every sample's x, y, and z are finite.
+ */
+export function isCurveFinite( curveObject: CurveObject ): boolean {
+
+  for ( let i = 0; i < curveObject.getPointsSize(); ++i ) {
+
+    const point = curveObject.get3d( i )
+
+    if ( !Number.isFinite( point.x ) ||
+         !Number.isFinite( point.y ) ||
+         !Number.isFinite( point.z ) ) {
+
+      return false
+    }
+  }
+
+  return true
+}
+
+
+/**
+ * Check every component of a native 4x4 transform for a non-finite value.
+ *
+ * GetAxis2Placement3D (conway-geom) normalises its axis references with no
+ * finiteness check of its own: a non-finite or zero-length direction ratio
+ * — or a ref_direction parallel to axis — propagates through glm::normalize
+ * and both cross products, and the matrix comes back with its X and Y basis
+ * columns entirely NaN while Z and the translation still look ordinary
+ * (conway#592). Scanning all 16 values rather than just the two known-bad
+ * columns catches that shape and any other non-finite result the same way,
+ * without hard-coding the column layout here.
+ *
+ * @param transform The native transform to check.
+ * @return {boolean} True only if every component is finite.
+ */
+export function isTransformFinite( transform: NativeTransform4x4 ): boolean {
+
+  return transform.getValues().every( ( value ) => Number.isFinite( value ) )
+}
+
 /**
  * Render something thrown that is not an Error, for a log message.
  *
@@ -881,6 +933,95 @@ export class AP214GeometryExtraction {
   public extentMeasuredFaceCount   = 0
   public extentMissingFaceCount    = 0
   public extentDegenerateFaceCount = 0
+
+  /**
+   * When true, extractAdvancedFace records whether each face's own
+   * contribution actually landed any triangles (conway#596). Off by
+   * default: the check flushes staged tessellation right after every
+   * face's own addOrStageFace call so the triangle count read back is
+   * that face's alone, rather than the batch's — which serialises
+   * tessellation for this extraction. Callers that don't need the count
+   * (every extraction except the digest/regression path today) pay
+   * nothing by leaving this false.
+   */
+  public trackFaceAccounting = false
+
+  /**
+   * localID -> did this face's own extraction call land at least one
+   * triangle. Populated only while trackFaceAccounting is true; a face
+   * never visited (unsupported item type, unreached representation, or
+   * one whose extraction threw and was caught in extractFaces) simply
+   * never gets an entry, which unaccountedFaceCount treats the same as
+   * an explicit false — the model declared it and nothing accounted for
+   * it either way. Keyed by localID rather than expressID: expressID is
+   * undefined for inline entities, and localID is what every other
+   * face-keyed lookup in this file already uses (model.geometry included).
+   */
+  private readonly faceAccounted = new Map<number, boolean>()
+
+  /**
+   * Record one face's outcome for the conway#596 tally. No-op unless
+   * trackFaceAccounting is set, so untracked extractions don't pay for a
+   * map that nothing will read.
+   *
+   * @param localID The face's local ID.
+   * @param accounted Did this face's own extraction call land a triangle.
+   */
+  private recordFaceAccounted( localID: number, accounted: boolean ): void {
+
+    if ( !this.trackFaceAccounting ) {
+      return
+    }
+
+    // A face visited twice (the styled-item memo-reuse path) keeps its
+    // ALREADY-recorded outcome rather than being overwritten by a later,
+    // unrelated call that reuses its localID for something else - in
+    // practice this only fires from the memo-reuse branch itself, which
+    // computes its own accounted value from the reused geometry, so this
+    // is here to make the contract explicit rather than to change behavior.
+    if ( !this.faceAccounted.has( localID ) ) {
+      this.faceAccounted.set( localID, accounted )
+    }
+  }
+
+  /**
+   * Per-model unaccounted-face count for the conway#596 diagnostic: how
+   * many of this model's ADVANCED_FACEs never landed a triangle anywhere
+   * — not merged into their solid's mesh, and not emitted as their own
+   * styled mesh. `undefined` when trackFaceAccounting was never turned on
+   * (the count would be meaningless: nothing was recorded to subtract).
+   *
+   * The denominator is the STEP file's own advanced_face count, not a
+   * count of extraction visits — so a face extraction skips entirely
+   * (unsupported item type, unreached representation) is unaccounted by
+   * construction, same as one that ran and produced nothing.
+   *
+   * @return {number | undefined} The unaccounted count, or undefined if
+   * tracking was off.
+   */
+  public getUnaccountedFaceCount(): number | undefined {
+
+    if ( !this.trackFaceAccounting ) {
+      return void 0
+    }
+
+    let totalFaces = 0
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for ( const _face of this.model.types( advanced_face ) ) {
+      ++totalFaces
+    }
+
+    let accounted = 0
+
+    for ( const wasAccounted of this.faceAccounted.values() ) {
+      if ( wasAccounted ) {
+        ++accounted
+      }
+    }
+
+    return totalFaces - accounted
+  }
 
   /**
    * The scale a face's deflection target may not be refined below: the
@@ -2337,8 +2478,8 @@ export class AP214GeometryExtraction {
     if ( from.base_surface instanceof plane ) {
       const paramsAxis2Placement3D: ParamsAxis2Placement3D =
         this.extractAxis2Placement3D( from.base_surface.position, from.localID, true )
-      const axis2PlacementTransform = this.conwayModel
-          .getAxis2Placement3D( paramsAxis2Placement3D )
+      const axis2PlacementTransform = this.getAxis2Placement3D(
+          paramsAxis2Placement3D, from.base_surface.position.expressID )
 
       // get geometry
       const parameters: ParamsGetHalfspaceSolid = {
@@ -2925,9 +3066,10 @@ export class AP214GeometryExtraction {
     // (extractCylindricalSurface and friends), so the pcurve is orthonormalised
     // identically to the surface it lies on rather than by a second, subtly
     // different implementation here.
-    const placement = this.conwayModel.getAxis2Placement3D(
+    const placement = this.getAxis2Placement3D(
         this.extractAxis2Placement3D(
-            parameterization.position, basisSurface.localID, true ) )
+            parameterization.position, basisSurface.localID, true ),
+        parameterization.position.expressID )
 
     const transform = placement.getValues()
 
@@ -3288,8 +3430,9 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
-          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      axis2Placement3D = this.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true),
+          from.position.expressID )
       dimension = this.THREE_DIMENSIONS
     }
 
@@ -3355,8 +3498,9 @@ export class AP214GeometryExtraction {
 
     } else {
 
-      axis2Placement3D = this.conwayModel.getAxis2Placement3D(
-          this.extractAxis2Placement3D(from.position, from.localID, true) )
+      axis2Placement3D = this.getAxis2Placement3D(
+          this.extractAxis2Placement3D(from.position, from.localID, true),
+          from.position.expressID )
       dimension = this.THREE_DIMENSIONS
     }
 
@@ -4092,7 +4236,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    return this.conwayModel.getAxis2Placement3D( transform )
+    return this.getAxis2Placement3D( transform, location.expressID )
   }
 
   /**
@@ -4257,15 +4401,30 @@ export class AP214GeometryExtraction {
 
     const bounds = from.bounds
     const previousFaceGeometry = this.model.geometry.getByLocalID(from.localID)
-    
+
     if ( previousFaceGeometry !== void 0  ) {
-    
+
       previousFaceGeometry.temporary = false
+
+      // A revisit of a face that already has its own styled mesh (the
+      // only path that keys model.geometry by a face's OWN localID) -
+      // inherit that mesh's outcome rather than leaving this visit
+      // unrecorded.
+      this.recordFaceAccounted(
+          from.localID,
+          previousFaceGeometry.type === CanonicalMeshType.BUFFER_GEOMETRY &&
+          previousFaceGeometry.geometry.getTriangleCount() > 0)
+
       return
     }
 
     if ( from.bounds.length === 0 ) {
-    
+
+      // No boundary at all - the file declares a face with nothing to
+      // tessellate. Not a bug this extraction can do anything about, but
+      // still a face that produced no geometry.
+      this.recordFaceAccounted( from.localID, false )
+
       return
     }
     
@@ -4460,9 +4619,20 @@ export class AP214GeometryExtraction {
                     edgeCurve, true, true,
                     { exist: false, start: void 0, end: void 0 } )
 
-                const recovered =
+                const untrimmedLarger =
                   untrimmed !== void 0 &&
                   untrimmed.getPointsSize() > curve.getPointsSize()
+
+                // Point count alone isn't proof the recovery is good: a
+                // degenerate placement (conway#592) makes the untrimmed
+                // re-extraction sample the SAME bad basis that produced the
+                // collapsed trim, and that comes back as a full complement of
+                // NaN points which still passes the count check. Confirming
+                // every recovered point is finite is what tells the two
+                // cases apart (conway#591) — only accept the recovery once
+                // both hold.
+                const recovered =
+                  untrimmedLarger && isCurveFinite( untrimmed! )
 
                 if ( recovered ) {
 
@@ -4482,6 +4652,42 @@ export class AP214GeometryExtraction {
                   // this its native allocation is unreachable.
                   curve.delete()
                   curve = untrimmed
+                } else if ( untrimmedLarger ) {
+
+                  // The recovery produced more points than the trim, but they
+                  // aren't usable - distinct message from the one above so
+                  // errors.csv keeps the two families apart (the split
+                  // geometry_utils.h's no-basis branch uses for the same
+                  // reason). Stay on the original (loud) collapsed-trim path:
+                  // the caller below still sees `curve` at its degenerate
+                  // point count, which is what makes the failure visible
+                  // downstream instead of silently substituting NaN.
+                  Logger.warning(
+                      `Whole-curve trim on edge #${edgeElement.expressID} ` +
+                      `(${EntityTypesAP214[edgeCurve.type]}) resolved to ` +
+                      `${curve.getPointsSize()} point(s); untrimmed recovery ` +
+                      `produced ${untrimmed!.getPointsSize()} non-finite ` +
+                      'point(s), discarding it.' )
+
+                  // extractCurve's own untrimmed call (above) already
+                  // memoised this exact object into this.curves — under the
+                  // BASIS curve's localID, and, when that basis curve is a
+                  // surface_curve/seam_curve (or any other extractCurve
+                  // variant that recurses and caches at each level, e.g. a
+                  // pcurve's surface_curve or a composite_curve_segment's
+                  // parent_curve), ALSO under the inner curve's own localID
+                  // from the recursive call. Deleting the native object
+                  // without removing every one of those entries leaves the
+                  // others dangling: the next lookup of ANY alias (another
+                  // edge on the same curve, or the regression digest's
+                  // curves.objs() traversal) would retrieve an
+                  // already-deleted Embind object instead of re-extracting.
+                  // deleteValue finds every alias by object identity rather
+                  // than retracing which recursive shape produced them, so
+                  // this holds regardless of how many levels deep the
+                  // caching went.
+                  this.curves.deleteValue( untrimmed! )
+                  untrimmed!.delete()
                 }
 
                 // Memoise under the edge either way. The adjacent face's
@@ -4789,7 +4995,15 @@ export class AP214GeometryExtraction {
       const faceGeometry = (new (this.wasmModule.IfcGeometry)) as GeometryObject
 
       this.addOrStageFace(parameters, faceGeometry)
- 
+
+      // Flush now, before reading the count below - see trackFaceAccounting's
+      // doc. faceGeometry is fresh, so its triangle count is entirely this
+      // face's own contribution; no "before" reading is needed.
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+        this.recordFaceAccounted( from.localID, faceGeometry.getTriangleCount() > 0 )
+      }
+
       const canonicalMesh: CanonicalMesh = {
         type: CanonicalMeshType.BUFFER_GEOMETRY,
         geometry: faceGeometry,
@@ -4801,7 +5015,36 @@ export class AP214GeometryExtraction {
 
     } else {
 
+      // Unlike the styled branch, `geometry` is the SHARED buffer other
+      // faces of this solid append into - so the triangle count has to be
+      // sampled on both sides of this face's own call to isolate its
+      // delta, and (per trackFaceAccounting's doc) staged tessellation has
+      // to be flushed in between so the "after" read is not measuring
+      // work this face merely enqueued.
+      //
+      // The "before" read needs the same flush FIRST: a shell mixes plain
+      // `face`s (extractFace -> addOrStageFaceSimple, staged, no flush of
+      // its own) with advanced_faces into this same buffer via extractFaces,
+      // so an earlier simple face in the shell can still have a staged job
+      // outstanding when this face's baseline is read. Without flushing
+      // here, that job lands together with THIS face's own staged job at
+      // the flush below, and its triangles inflate the delta - a
+      // zero-triangle advanced face reads as accounted for because of
+      // triangles a DIFFERENT, earlier face produced.
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+      }
+
+      const beforeTriangleCount =
+        this.trackFaceAccounting ? geometry.getTriangleCount() : 0
+
       this.addOrStageFace(parameters, geometry)
+
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+        this.recordFaceAccounted(
+            from.localID, geometry.getTriangleCount() > beforeTriangleCount )
+      }
     }
 
     nativeSurface.delete()
@@ -4981,7 +5224,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.cylinder = { active: true, radius: from.radius }
   }
 
@@ -4998,7 +5241,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.sphere = { active: true, radius: from.radius }
   }
 
@@ -5016,7 +5259,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.cone = { active: true, radius: from.radius, semiAngle: from.semi_angle }
   }
 
@@ -5033,7 +5276,7 @@ export class AP214GeometryExtraction {
     const transform =
       this.extractAxis2Placement3D(location, from.localID, true)
 
-    nativeSurface.transformation = this.conwayModel.getAxis2Placement3D(transform)
+    nativeSurface.transformation = this.getAxis2Placement3D(transform, location.expressID)
     nativeSurface.torus = {
       active: true,
       majorRadius: from.major_radius,
@@ -5355,6 +5598,50 @@ export class AP214GeometryExtraction {
   }
 
   /**
+   * Run the native AXIS2_PLACEMENT_3D transform and report a non-finite
+   * result.
+   *
+   * GetAxis2Placement3D (conway-geom) does not check its own inputs or
+   * output: a non-finite or degenerate direction ratio comes back as a
+   * matrix with NaN basis columns, silently (conway#592). The C++ side has
+   * no express ID to log against, so the check has to happen here, where
+   * every call site already has one.
+   *
+   * This only reports — it does not refuse the placement or substitute a
+   * fallback. The corrupt transform is still returned and still used, same
+   * as before this check existed; conway#592 asks for the diagnostic, not
+   * for invented recovery behaviour.
+   *
+   * @param parameters The already-extracted placement parameters.
+   * @param expressID The AXIS2_PLACEMENT_3D entity's express ID, for the
+   *     diagnostic.
+   * @return {NativeTransform4x4} The native transform, unchanged.
+   */
+  private getAxis2Placement3D(
+      parameters: ParamsAxis2Placement3D,
+      expressID: number | undefined ): NativeTransform4x4 {
+
+    const transform = this.conwayModel.getAxis2Placement3D( parameters )
+
+    if ( !isTransformFinite( transform ) ) {
+
+      // The express ID goes through Logger.error's own parameter, not
+      // interpolated into the message: Logger dedups on message text, so
+      // baking a per-call express ID into the string would make every
+      // record a distinct "first occurrence" and defeat that — the whole
+      // point of the record parameter is letting many AXIS2_PLACEMENT_3D
+      // failures collapse into one counted family (findLogIndex, logger.ts).
+      Logger.error(
+          'AXIS2_PLACEMENT_3D produced a non-finite transform (NaN/Inf ' +
+          'basis column) - a non-finite, zero-length, or axis-parallel ' +
+          'direction ratio.',
+          expressID )
+    }
+
+    return transform
+  }
+
+  /**
    * Extract a placement, adding it to the scene.
    *
    * @param from The transform to extract.
@@ -5441,8 +5728,8 @@ export class AP214GeometryExtraction {
       return axis2Placement3DParameters
     }
 
-    const axis2PlacementTransform = this.conwayModel
-        .getAxis2Placement3D(axis2Placement3DParameters)
+    const axis2PlacementTransform = this.getAxis2Placement3D(
+        axis2Placement3DParameters, from.expressID)
 
     return this.scene.addTransform(
         parentLocalId,
@@ -5480,7 +5767,7 @@ export class AP214GeometryExtraction {
   extractRawPlacement(from: placement ): NativeTransform4x4 | undefined {
     if (from instanceof axis2_placement_3d) {
       const parameters = this.extractAxis2Placement3D(from, from.localID, true )
-      return this.conwayModel.getAxis2Placement3D(parameters)
+      return this.getAxis2Placement3D(parameters, from.expressID)
     }
     return
   }
@@ -5798,6 +6085,24 @@ export class AP214GeometryExtraction {
 
     const treeMap = new Map<number, MappedSceneNode>()
 
+    // conway#597: representation localID → the PDS a pick under it should
+    // report, populated by the plain shape_representation_relationship loop
+    // further down and consulted here by makeThunk's item-attribution calls
+    // only — occurrence-path threading keeps using each edge's own
+    // relationship localID exactly as before (see the loop for why).
+    // Declared here, outside the block that populates it, so makeThunk's
+    // closure — defined before that block — can see it.
+    const ownerOverrideByRepLocalID = new Map<number, number>()
+
+    // conway#597 review: memoises resolvePdsLocalID's outcome per SOURCE
+    // representation (present once resolution for that source has run, even
+    // when the outcome was undefined/ambiguous) so a source reachable via
+    // several plain-SRR edges is resolved exactly once, from itself, seeing
+    // every edge's target together — not once per edge from that edge's
+    // own target alone, which let a later edge silently overwrite an
+    // earlier one's entry and bypassed the equidistant-ambiguity refusal.
+    const sourceOwnerResolution = new Map<number, number | undefined>()
+
     const makeThunk = (
         representation: shape_representation,
         owningElementLocalID?: number,
@@ -5888,6 +6193,16 @@ export class AP214GeometryExtraction {
           }
         }
                 
+        // conway#597: items belonging directly to a representation reached
+        // only via a plain shape_representation_relationship (no SDR of its
+        // own — the SolidWorks multibody pattern) attribute to the owning
+        // part's PDS rather than to `owningLocalID` (which stays the
+        // relationship's own id, still correct for occurrence-path
+        // threading above/below). Every other representation has no entry
+        // here and this is a no-op.
+        const itemOwningLocalID =
+          ownerOverrideByRepLocalID.get( representation.localID ) ?? owningLocalID
+
         const includeItems = slice?.includeItems ?? true
 
         // `representation.items` is a dereferencing getter, so keep it
@@ -5937,14 +6252,14 @@ export class AP214GeometryExtraction {
             }
 
             if ( item instanceof styled_item ) {
-              this.extractStyledItemWithProcessing( item, owningLocalID )
+              this.extractStyledItemWithProcessing( item, itemOwningLocalID )
               continue
             }
 
             if ( item instanceof mapped_item ) {
-              this.extractMappedItem( item, owningLocalID )
+              this.extractMappedItem( item, itemOwningLocalID )
             } else {
-              this.extractRepresentationItem( item, owningLocalID )
+              this.extractRepresentationItem( item, itemOwningLocalID )
               const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
               if ( styledItemLocalID !== void 0 ) {
                 const styledItem =
@@ -6136,6 +6451,20 @@ export class AP214GeometryExtraction {
       // orient CDSR assembly edges semantically below.
       const productDefLocalIDByRep = new Map<number, number>()
 
+      // Representation → the PDS itself (conway#597). A plain (non-CDSR)
+      // shape_representation_relationship has no assembly occurrence to key
+      // on — its edge exists to bind a representation with no SDR of its
+      // own (a SolidWorks multibody advanced_brep_shape_representation) to
+      // the SDR-bound representation of the part it belongs to. This is
+      // what resolves that binding back to the part's own PDS, the same
+      // identity a directly-SDR'd part's geometry already carries
+      // (`AP214SceneGeometry.relatedElementLocalId` is documented as always
+      // a product_definition_shape localID) — separate from
+      // productDefLocalIDByRep because that map drills one level further,
+      // past the PDS to the product_definition, which the CDSR orientation
+      // check below needs but this does not.
+      const pdsLocalIDByRep = new Map<number, number>()
+
       for ( const sdr of model.types( shape_definition_representation ) ) {
         try {
           const usedRepresentation = sdr.used_representation
@@ -6146,6 +6475,11 @@ export class AP214GeometryExtraction {
           if ( usedRepresentation?.localID !== void 0 &&
               productDef instanceof product_definition ) {
             productDefLocalIDByRep.set( usedRepresentation.localID, productDef.localID )
+          }
+
+          if ( usedRepresentation?.localID !== void 0 &&
+              definition instanceof product_definition_shape ) {
+            pdsLocalIDByRep.set( usedRepresentation.localID, definition.localID )
           }
         } catch {
           // Malformed SDR reference — the rep just stays un-mapped and the
@@ -6260,14 +6594,117 @@ export class AP214GeometryExtraction {
         }
       }
 
-      const shapeRelationships = [...model.types(shape_representation_relationship)]     
+      const shapeRelationships = [...model.types(shape_representation_relationship)]
+
+      // conway#597: a plain (non-CDSR) shape_representation_relationship
+      // edge used to hand its OWN localID to the geometry it binds, which
+      // surfaces a SHAPE_REPRESENTATION_RELATIONSHIP express id at
+      // selection time instead of the owning part's PDS — Orbiter's own
+      // repro chains two such edges (#857 -> #886 -> #970), so a lookup on
+      // the immediate rep_1/rep_2 alone isn't enough. Build the undirected
+      // graph of these edges (CDSR-consumed ones excluded — those already
+      // carry a correct NAUO-derived identity from the loop above) and walk
+      // it breadth-first from whichever representation this edge starts
+      // from, stopping at the first SDR-bound representation reached.
+      const repAdjacency = new Map<number, number[]>()
+
+      for ( const relationship of shapeRelationships ) {
+
+        if ( shapeRepresentationRelationshipsSeen.has( relationship.localID ) ) {
+          continue
+        }
+
+        try {
+          const rep1LocalID = relationship.rep_1.localID
+          const rep2LocalID = relationship.rep_2.localID
+
+          let forward = repAdjacency.get( rep1LocalID )
+          if ( forward === void 0 ) {
+            forward = []
+            repAdjacency.set( rep1LocalID, forward )
+          }
+          forward.push( rep2LocalID )
+
+          let backward = repAdjacency.get( rep2LocalID )
+          if ( backward === void 0 ) {
+            backward = []
+            repAdjacency.set( rep2LocalID, backward )
+          }
+          backward.push( rep1LocalID )
+        } catch {
+          // Malformed relationship — no edge to add for it.
+        }
+      }
+
+      /**
+       * Resolve the PDS owning a representation, walking plain
+       * shape_representation_relationship edges outward when the
+       * representation has no SDR of its own. Breadth-first, so the
+       * nearest SDR-bound representation wins; if more than one distinct
+       * PDS is reachable at the same nearest distance, the mapping is
+       * genuinely ambiguous and this reports that (via `undefined`) rather
+       * than guessing one of them.
+       *
+       * @param startRepLocalID The representation to resolve from.
+       * @return {number | undefined} The owning PDS's localID, or
+       * `undefined` if none is reachable, or reachable ambiguously.
+       */
+      const resolvePdsLocalID = ( startRepLocalID: number ): number | undefined => {
+
+        const direct = pdsLocalIDByRep.get( startRepLocalID )
+
+        if ( direct !== void 0 ) {
+          return direct
+        }
+
+        const visited = new Set<number>( [ startRepLocalID ] )
+        let frontier = repAdjacency.get( startRepLocalID ) ?? []
+
+        while ( frontier.length > 0 ) {
+
+          const found = new Set<number>()
+          const next: number[] = []
+
+          for ( const repLocalID of frontier ) {
+
+            if ( visited.has( repLocalID ) ) {
+              continue
+            }
+            visited.add( repLocalID )
+
+            const pds = pdsLocalIDByRep.get( repLocalID )
+
+            if ( pds !== void 0 ) {
+              found.add( pds )
+              continue // Resolved on this branch — don't walk past it.
+            }
+
+            for ( const neighbor of repAdjacency.get( repLocalID ) ?? [] ) {
+              if ( !visited.has( neighbor ) ) {
+                next.push( neighbor )
+              }
+            }
+          }
+
+          if ( found.size === 1 ) {
+            return [ ...found ][0]
+          }
+
+          if ( found.size > 1 ) {
+            return void 0 // Ambiguous fan-out at this distance — don't guess.
+          }
+
+          frontier = next
+        }
+
+        return void 0
+      }
 
       for ( const shapeRelationship of shapeRelationships ) {
         if ( shapeRepresentationRelationshipsSeen.has( shapeRelationship.localID ) ) {
           continue
         }
-        const owningLocalID = shapeRelationship.localID
-        shapeRepresentationRelationshipsSeen.add( owningLocalID )
+        shapeRepresentationRelationshipsSeen.add( shapeRelationship.localID )
 
         /* Note, the rep_1 and rep_2 are swapped here compared to the
          * context_dependent_shape_representation case above. This is because
@@ -6279,6 +6716,7 @@ export class AP214GeometryExtraction {
         let targetShape
         let transform
         let isContinue
+        const owningLocalID = shapeRelationship.localID
 
         try {
           sourceShape = shapeRelationship.rep_2
@@ -6294,6 +6732,56 @@ export class AP214GeometryExtraction {
 
         if (isContinue) {
           continue
+        }
+
+        // conway#597: `owningLocalID` above (the relationship's own
+        // localID) still drives occurrence-path threading exactly as
+        // before — the NEMA multibody fixture's occurrence path
+        // deliberately ends with the SRR's own express id to disambiguate
+        // a multibody solid set from other items under the same NAUO (see
+        // ap214_occurrence_geometry.test.ts). What conway#597 asks for is
+        // narrower: the express id a *pick* surfaces (relatedElementLocalId)
+        // should be the owning part's PDS, not the relationship's. Record
+        // that resolution separately, keyed by the representation whose
+        // OWN items (sourceShape's) will be attributed — makeThunk applies
+        // it only to item attribution, leaving the occurrence-path seed
+        // (`owningLocalID` above, and everything derived from it for
+        // children) untouched.
+        //
+        // Resolved from sourceShape, not targetShape (review finding):
+        // targetShape is only THIS edge's one neighbour, so resolving from
+        // it can never see a second edge into the same source with a
+        // different PDS at the same distance — the exact case the
+        // ambiguity refusal exists for. Resolving from sourceShape walks
+        // repAdjacency's full (already-built) neighbour set for it, so a
+        // source reached by two SDR-bound targets is judged once, together.
+        // Memoised per source so a source reached by several edges is
+        // resolved (and, on ambiguity, warned about) exactly once rather
+        // than once per edge with a later edge silently overwriting an
+        // earlier one's entry.
+        if ( !sourceOwnerResolution.has( sourceShape.localID ) ) {
+
+          const resolvedOwnerLocalID = resolvePdsLocalID( sourceShape.localID )
+
+          sourceOwnerResolution.set( sourceShape.localID, resolvedOwnerLocalID )
+
+          if ( resolvedOwnerLocalID !== void 0 ) {
+            ownerOverrideByRepLocalID.set( sourceShape.localID, resolvedOwnerLocalID )
+          } else {
+            // The express ID goes through Logger.warning's own parameter,
+            // not interpolated into the message: Logger dedups on message
+            // text, so baking a per-source express ID into the string would
+            // make every ambiguous source a distinct "first occurrence" and
+            // defeat that — the same fix as conway#592's placement
+            // diagnostic (this file, getAxis2Placement3D).
+            Logger.warning(
+                'Representation has no SDR-bound representation reachable ' +
+                '(absent, or ambiguously more than one at the same ' +
+                'distance); selection under it will surface a ' +
+                'SHAPE_REPRESENTATION_RELATIONSHIP\'s express id rather ' +
+                'than the owning part\'s.',
+                sourceShape.expressID )
+          }
         }
 
         const sourceID = sourceShape.localID
@@ -6312,14 +6800,14 @@ export class AP214GeometryExtraction {
         sourceNode.rep = sourceShape
         sourceNode.owningLocalID = owningLocalID
 
-        let targetNode = treeMap.get( targetID )       
+        let targetNode = treeMap.get( targetID )
         if ( targetNode === void 0 ) {
           targetNode = { parents: 0, children: [[sourceID, owningLocalID, transform]] }
           treeMap.set( targetID, targetNode )
         } else {
           targetNode.children ??= []
           targetNode.children.push( [sourceID, owningLocalID, transform] )
-        }        
+        }
       }
 
       const shapeDefinitions = model.types( shape_definition_representation )

@@ -850,6 +850,7 @@ async function main() {
     {ConwayModelLoader},
     {default: Logger},
     {default: Environment},
+    {default: DiagnosticTally},
   ] = await Promise.all([
     compiled('dependencies/conway-geom/index.js'),
     compiled('src/AP214E3_2010/ap214_geometry_extraction.js'),
@@ -857,6 +858,7 @@ async function main() {
     compiled('src/loaders/conway_model_loader.js'),
     compiled('src/logging/logger.js'),
     compiled('src/utilities/environment.js'),
+    compiled('src/logging/diagnostic_tally.js'),
   ])
 
   Environment.checkEnvironment()
@@ -866,15 +868,19 @@ async function main() {
   // "Error extracting fill area style color" was one of five defects the
   // AmazingHand model surfaced — but they repeat per entity, so they are
   // counted by message rather than echoed.
-  const messages = new Map()
+  //
+  // Counted via a LoggingProxy (DiagnosticTally), NOT the console sink.
+  // Logger.sink fires only on a message's first occurrence — that's
+  // intentional so an interactive console isn't spammed by repeats — so a
+  // counter built off it always read 1x regardless of how many times the
+  // message actually recurred (conway#590). A proxy is invoked on every
+  // occurrence with the entry's running count, which is what this report's
+  // "N messages, M distinct" header needs to be honest.
+  const diagnosticTally = new DiagnosticTally()
+
+  Logger.addProxy(diagnosticTally)
 
   Logger.setSink((level, message) => {
-    if (level === 'warning' || level === 'error') {
-      const key = `${level}: ${message.split('\n')[0].slice(0, 120)}`
-
-      messages.set(key, (messages.get(key) ?? 0) + 1)
-    }
-
     if (!options.quiet) {
       console.error(message)
     }
@@ -943,6 +949,8 @@ async function main() {
         '  This stage measured nothing because it threw, NOT because the\n' +
         '  model is clean. The other stages above are unaffected.')
   }
+
+  const messages = new Map(diagnosticTally.entries())
 
   if (messages.size > 0) {
     const ranked = [...messages].sort((a, b) => b[1] - a[1])

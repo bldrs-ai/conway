@@ -63,6 +63,36 @@ export default class SimpleMemoization< T > {
   }
 
   /**
+   * Delete every cache entry whose value is reference-equal to `value`.
+   *
+   * A single memoized extraction can be cached under more than one id when
+   * the caller recurses and caches at each level of its own recursion
+   * (`cachePassthrough` is the identity transform by default, so the SAME
+   * object is what every one of those calls stores) - deleting the value
+   * itself and only one of those entries leaves the others pointing at a
+   * deleted object. This finds every alias by identity instead of requiring
+   * the caller to retrace which recursive shape produced them.
+   *
+   * @param value The cached value to remove every alias of.
+   * @return {number} How many entries were removed.
+   */
+  public deleteValue( value: T ): number {
+
+    let removed = 0
+
+    for ( const [ id, cached ] of this.cache_ ) {
+
+      if ( cached === value ) {
+
+        this.cache_.delete( id )
+        ++removed
+      }
+    }
+
+    return removed
+  }
+
+  /**
    * Get the cached item for a particular id.
    *
    * @param id
