@@ -43,19 +43,28 @@ const DEGENERATE_EDGE_EXPRESS_ID = 28750
 // edge's bound degenerates to nothing rather than corrupting the surface.
 const SPHERE_GRID_TRIANGLES = 2208
 
-let extraction: AP214GeometryExtraction
-let model: AP214StepModel
-let lines: { level: LogLevelName, message: string }[]
+/** What one fixture's extraction produced, for the tests below to inspect. */
+type Loaded = {
+  extraction: AP214GeometryExtraction,
+  model: AP214StepModel,
+  lines: { level: LogLevelName, message: string }[],
+}
 
-/** What a user would have seen on the console for this extraction. */
-beforeAll(async () => {
+/**
+ * Parse a fixture, extract its one ADVANCED_FACE, and capture what a user
+ * would have seen echoed to the console during that extraction.
+ *
+ * @param fixturePath The fixture to load.
+ * @return {Promise<Loaded>} The stood-up extraction, model, and console lines.
+ */
+async function loadAndExtract(fixturePath: string): Promise<Loaded> {
 
   const conwayGeometry = new ConwayGeometry()
 
   expect(await conwayGeometry.initialize()).toBe(true)
 
   const parser = AP214StepParser.Instance
-  const buffer = new ParsingBuffer(fs.readFileSync(FIXTURE))
+  const buffer = new ParsingBuffer(fs.readFileSync(fixturePath))
 
   expect(parser.parseHeader(buffer)[1]).toBe(ParseResult.COMPLETE)
 
@@ -63,10 +72,10 @@ beforeAll(async () => {
 
   expect(result).toBe(ParseResult.COMPLETE)
 
-  model = parsed as AP214StepModel
+  const model = parsed as AP214StepModel
   model.nullOnErrors = true
 
-  extraction = new AP214GeometryExtraction(conwayGeometry, model)
+  const extraction = new AP214GeometryExtraction(conwayGeometry, model)
 
   const faces = Array.from(model.types(advanced_face))
 
@@ -74,7 +83,7 @@ beforeAll(async () => {
   // reads identically to a pass.
   expect(faces.length).toBe(1)
 
-  lines = []
+  const lines: { level: LogLevelName, message: string }[] = []
   Logger.clearLogs()
   Logger.setSink((level, message) => {
     lines.push({ level, message })
@@ -88,6 +97,16 @@ beforeAll(async () => {
     Logger.setSink()
     Logger.clearLogs()
   }
+
+  return { extraction, model, lines }
+}
+
+let extraction: AP214GeometryExtraction
+let model: AP214StepModel
+let lines: { level: LogLevelName, message: string }[]
+
+beforeAll(async () => {
+  ( { extraction, model, lines } = await loadAndExtract(FIXTURE))
 })
 
 
@@ -207,3 +226,64 @@ describe('a degenerate AXIS2_PLACEMENT_3D through extraction (conway#592/#591)',
     expect( cachedCurveExpressIDs ).not.toContain( DEGENERATE_CIRCLE_EXPRESS_ID )
   } )
 })
+
+
+describe( 'a rejected recovery whose basis curve is a SEAM_CURVE (codex round-2 finding)', () => {
+
+  // Same fixture shape as above, but the closed edge's basis (edge_geometry,
+  // `edgeCurve` in extractAdvancedFace) is a SEAM_CURVE wrapping the
+  // degenerate CIRCLE as curve_3d, rather than the CIRCLE directly.
+  // extractCurve's `from instanceof surface_curve` branch recurses -
+  // `this.extractCurve(from.curve_3d, ...)` - and BOTH the recursive call
+  // (keyed on curve_3d's own localID) and the outer frame (keyed on the
+  // seam_curve's localID, i.e. edgeCurve.localID) cache the SAME returned
+  // object, since AP214ModelCurves has no cachePassthrough to clone it.
+  // Deleting only the edgeCurve.localID entry - what the original fix did -
+  // leaves the curve_3d alias dangling: this fixture is what pins that,
+  // since a plain-CIRCLE basis (the sibling describe block above) only ever
+  // produces the one alias and can't exercise it.
+  const SEAM_FIXTURE = 'data/ap214-degenerate-placement-seam-curve.step'
+
+  const SEAM_CURVE_EXPRESS_ID = 28751
+  const INNER_CIRCLE_EXPRESS_ID = 18104
+
+  let seamModel: AP214StepModel
+  let seamLines: { level: LogLevelName, message: string }[]
+
+  beforeAll( async () => {
+    ( { model: seamModel, lines: seamLines } = await loadAndExtract( SEAM_FIXTURE ) )
+  } )
+
+  test( 'both diagnostics still fire with a SEAM_CURVE basis', () => {
+
+    expect( seamLines.some( ( line ) =>
+      line.level === 'error' &&
+      line.message.includes( 'AXIS2_PLACEMENT_3D produced a non-finite transform' ) ) )
+        .toBe( true )
+
+    expect( seamLines.some( ( line ) =>
+      line.level === 'warning' &&
+      line.message.includes( 'discarding it' ) ) )
+        .toBe( true )
+  } )
+
+  test( 'the cache traversal does not hit a deleted object (review finding)', () => {
+
+    expect( () => Array.from( seamModel.curves.objs() ) ).not.toThrow()
+  } )
+
+  test( 'neither the outer (SEAM_CURVE) nor the inner (curve_3d) alias survives the rejection', () => {
+
+    const cachedCurveExpressIDs = Array.from( seamModel.curves )
+        .map( ( [ localID ] ) => seamModel.getExpressIDByLocalID( localID ) )
+
+    // The outer alias, keyed on edgeCurve.localID (the SEAM_CURVE itself) -
+    // what the original single-delete fix already removed.
+    expect( cachedCurveExpressIDs ).not.toContain( SEAM_CURVE_EXPRESS_ID )
+
+    // The inner alias, keyed on curve_3d.localID (the wrapped CIRCLE) - what
+    // the original fix missed, and what deleteValue's identity scan catches
+    // regardless of how many levels of recursive caching produced it.
+    expect( cachedCurveExpressIDs ).not.toContain( INNER_CIRCLE_EXPRESS_ID )
+  } )
+} )

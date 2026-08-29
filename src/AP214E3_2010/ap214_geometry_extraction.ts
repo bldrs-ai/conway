@@ -4670,16 +4670,23 @@ export class AP214GeometryExtraction {
                       'point(s), discarding it.' )
 
                   // extractCurve's own untrimmed call (above) already
-                  // memoised this exact object into this.curves under the
-                  // BASIS curve's localID before returning it — deleting
-                  // the native object without also removing that entry
-                  // leaves a dangling reference: the next basis-curve
-                  // untrimmed extraction (another edge on the same curve,
-                  // or the regression digest's curves.objs() traversal)
-                  // would retrieve an already-deleted Embind object instead
-                  // of re-extracting. Drop the cache entry first so the
-                  // next lookup re-extracts (and re-rejects) honestly.
-                  this.curves.delete( edgeCurve.localID )
+                  // memoised this exact object into this.curves — under the
+                  // BASIS curve's localID, and, when that basis curve is a
+                  // surface_curve/seam_curve (or any other extractCurve
+                  // variant that recurses and caches at each level, e.g. a
+                  // pcurve's surface_curve or a composite_curve_segment's
+                  // parent_curve), ALSO under the inner curve's own localID
+                  // from the recursive call. Deleting the native object
+                  // without removing every one of those entries leaves the
+                  // others dangling: the next lookup of ANY alias (another
+                  // edge on the same curve, or the regression digest's
+                  // curves.objs() traversal) would retrieve an
+                  // already-deleted Embind object instead of re-extracting.
+                  // deleteValue finds every alias by object identity rather
+                  // than retracing which recursive shape produced them, so
+                  // this holds regardless of how many levels deep the
+                  // caching went.
+                  this.curves.deleteValue( untrimmed! )
                   untrimmed!.delete()
                 }
 
