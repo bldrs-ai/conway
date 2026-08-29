@@ -223,7 +223,7 @@ real gap, and a bigger one than "does the budget apply to STEP too" — STEP
 has no comparable retained-mesh eviction policy to apply, even though it
 does clean up transients the way IFC does.
 
-## Adaptive residency (#616/#617) — format-agnostic, and the one mechanism that is shared
+## Adaptive residency (#616/#617) — a shared class, but wiring decides who gets it
 
 `WindowedStepBufferProvider` (`src/step/step_buffer_provider.ts:354`) is
 constructed inside `StepModelBase.spillSourceToExternalStore`
@@ -238,16 +238,41 @@ construction of `WindowedStepBufferProvider` in the tree is IFC-side
 `ifc_api_proxy_ifc.ts:1245`); `src/AP214E3_2010/` constructs none, and has
 no `ap214_stream_open` — AP214 reaches the mechanism only if a caller
 explicitly spills via `ifc_api_proxy_ap214.ts:213` →
-`spillSourceToExternalStore`. So "both formats get the same adaptive-cap
-policy" is true of the mechanism *when a caller spills*, not of an
-ordinary AP214 open — an AP214 open does not windowed-buffer its source by
-default the way an IFC open does. Once spilling happens, the policy is
-identical: the same thrash detection, the same doubling behaviour
-described in `step_buffer_provider.ts:58-115`, for both formats.
+`spillSourceToExternalStore`.
 
-This is the one row in this matrix where "applies across formats" is
-correct, with that qualification — included here so the matrix is
-complete rather than only correcting claims.
+**The first-order gate is the open mode, not the format** — a correction
+this doc's own earlier revision got wrong by framing it as IFC-versus-AP214
+(**[code]**, and raised in review on #639). Two sibling paths in
+`ifc_api_proxy_ifc.ts` make it plain:
+
+| Open | Model construction | Windowed? |
+|---|---|---|
+| buffer-backed (`:1054`) | `new IfcStepModel(data, columns)` | **no** — the source stays resident |
+| store-backed (`:1245`) | `new WindowedStepBufferProvider(store)` → `new IfcStepModel(void 0, columns, provider)` | yes |
+
+The same split is in the parser: `parseDataToModel` /
+`parseDataToModelAsync` construct `new IfcStepModel(input.buffer, …)` with a
+resident buffer (`ifc_step_parser.ts:48-71`), while only the
+`parseStreamToModel` / `parseStreamToModelAsync` pair installs a provider
+(`:118`, `:159`). **So an ordinary buffer-backed IFC open gets no adaptive
+source residency either.** It is not that IFC windows by default and AP214
+does not.
+
+Two qualifications stack, and both belong on any claim about this
+mechanism:
+
+1. **Open mode** — buffer-backed opens, in either format, are unwindowed.
+2. **Format** — IFC additionally has an *open-time* store-backed path that
+   installs the provider (`ifc_stream_open.ts:129,211`,
+   `ifc_api_proxy_ifc.ts:1245`); `src/AP214E3_2010/` constructs none and has
+   no `ap214_stream_open`, so AP214 reaches the mechanism only when a caller
+   explicitly spills.
+
+Once a provider is installed the policy is identical for both formats —
+the same thrash detection and doubling behaviour described in
+`step_buffer_provider.ts:58-115`. The *class* is genuinely shared; the
+*wiring* is not, and the wiring is what decides whether a given load is
+protected.
 
 On D3D specifically: per conway#635, adaptive residency grows the window to
 the whole 213.6 MB file "by design," so on this model it *costs* ~150 MB
@@ -265,16 +290,16 @@ describes `IfcModelGeometry`'s cache behaviour and has no AP214 counterpart.
 
 ## The matrix, per geometry path
 
-| Path | Scratch arena | Geometry budget / residency (extracted-mesh cache) | Adaptive residency (source window) |
+| Path | Scratch arena | Geometry budget / residency (extracted-mesh cache) | Adaptive residency (source window) — **gated on open mode, see below** |
 |---|---|---|---|
-| IFC extrusion / profile (`IfcExtrudedAreaSolid` → `Extrude()`) | **no** — [code] | yes (IFC-only) | yes (shared) |
-| IFC CSG / boolean composition | **no** — [code] | yes (IFC-only) | yes (shared) |
-| IFC advanced BREP, planar face | yes, via `TriBounds` — [code] | yes (IFC-only) | yes (shared) |
-| IFC advanced BREP, conical/cylindrical/B-spline face | yes — [code] | yes (IFC-only) | yes (shared) |
-| IFC advanced BREP, spherical/toroidal/revolution/extrusion-surface face | **no** (main body) — [code] | yes (IFC-only) | yes (shared) |
-| STEP (AP214) solid extrusion (`Extrude()`) | **no** — [code] | **no AP214 analogue exists** — [code] | yes (shared) |
-| STEP (AP214) advanced BREP, planar face | yes, via `TriBounds` — [code] | **no** — [code] | yes (shared) |
-| STEP (AP214) advanced BREP, curved face | same per-surface split as IFC (shared compiled function) — [code] | **no** — [code] | yes (shared) |
+| IFC extrusion / profile (`IfcExtrudedAreaSolid` → `Extrude()`) | **no** — [code] | yes (IFC-only) | only on a **store-backed** open — [code] |
+| IFC CSG / boolean composition | **no** — [code] | yes (IFC-only) | only on a **store-backed** open — [code] |
+| IFC advanced BREP, planar face | yes, via `TriBounds` — [code] | yes (IFC-only) | only on a **store-backed** open — [code] |
+| IFC advanced BREP, conical/cylindrical/B-spline face | yes — [code] | yes (IFC-only) | only on a **store-backed** open — [code] |
+| IFC advanced BREP, spherical/toroidal/revolution/extrusion-surface face | **no** (main body) — [code] | yes (IFC-only) | only on a **store-backed** open — [code] |
+| STEP (AP214) solid extrusion (`Extrude()`) | **no** — [code] | **no AP214 analogue exists** — [code] | only if a caller **explicitly spills** — [code] |
+| STEP (AP214) advanced BREP, planar face | yes, via `TriBounds` — [code] | **no** — [code] | only if a caller **explicitly spills** — [code] |
+| STEP (AP214) advanced BREP, curved face | same per-surface split as IFC (shared compiled function) — [code] | **no** — [code] | only if a caller **explicitly spills** — [code] |
 
 The scratch-arena column is identical for STEP and IFC on every advanced-BREP
 row because `AddFaceToGeometry` is one compiled function shared by both
@@ -358,12 +383,17 @@ it by default:
    mechanical-CAD assemblies don't show IFC's cold-representation pattern,
    measured on corpus X") recorded here or in a successor doc, not an
    absence nobody chose.
-4. **The STEP-source adaptive residency window (#616/#617) is correctly
-   format-agnostic already** because it sits below both front ends at the
-   byte-source layer. Any future format that parses through
-   `StepModelBase` inherits it automatically — this is the shape the other
-   two mechanisms should be steered toward where feasible, rather than each
-   format wiring its own copy.
+4. **The STEP-source adaptive residency window (#616/#617) is
+   format-agnostic in its *class* but not in its *wiring*, and the wiring
+   is what protects a load.** Inheriting `StepModelBase` does **not** get a
+   format windowed automatically: the provider is installed by the open
+   path, so a buffer-backed open is unwindowed in either format, and AP214
+   has no open-time installation at all. The policy ask is therefore the
+   mirror of item 3's: **state which open modes are expected to be
+   windowed, and make an unwindowed open of a large source a deliberate,
+   recorded choice rather than a property of which entry point the caller
+   happened to call.** Sharing a base class is where this mechanism is
+   ahead of the other two; it is not yet where it needs to be.
 5. **Byte-identical is the bar for any coverage extension**, per conway#637's
    verification section: an arena or a residency policy changes *where*
    something lives, never *what* is computed. Digest re-blessing is only
