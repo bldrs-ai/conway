@@ -341,18 +341,18 @@ extrusion *is* present the unit count matches the entity count exactly:
 
 Allocator calls made inside each instrumented scope, one D3D load:
 
-| Scope kind | Units | Alloc calls | Share | Avg peak/unit | Retained total | peak:retained |
-|---|---:|---:|---:|---:|---:|---:|
-| `csg_boolean` | 6,466 | **43,185,966** | **98.77 %** | 108 KB | 346.9 MB | 2.0× |
-| `extrude_solid` | 22,429 | 508,934 | 1.16 % | 2.1 KB | 35.2 MB | 1.4× |
-| `sweep_solid` | 325 | 27,784 | 0.06 % | 39 KB | 8.5 MB | 1.5× |
-| `advanced_face` | 320 | 2,464 | 0.01 % | 0.7 KB | 0.06 MB | 3.7× |
-| **total** | **29,540** | **43,725,148** | | | | |
+| Scope kind | Units | Alloc calls | Share | Cumulative bytes/unit (avg) | Live peak/unit (avg) |
+|---|---:|---:|---:|---:|---:|
+| `csg_boolean` | 6,466 | **43,185,966** | **98.77 %** | 2.73 MB | 108 KB |
+| `extrude_solid` | 22,429 | 508,934 | 1.16 % | 4.9 KB | 2.1 KB |
+| `sweep_solid` | 325 | 27,784 | 0.06 % | 62 KB | 39 KB |
+| `advanced_face` | 320 | 2,464 | 0.01 % | 1.0 KB | 0.7 KB |
+| **total** | **29,540** | **43,725,148** | | | |
 
 Within `csg_boolean`, by site: `csg_kernel` (the `csg.run()` calls) 33.2 M
-calls / 16.76 GB gross bytes churned; `csg_operand_prep` (`Geometry::Cleanup()`
-on the operands) 9.86 M calls / 863 MB. Within `extrude_solid`:
-`extrude_cap` 77.8 %, `earcut` 15.3 %, the side-wall pass 6.9 %.
+calls / 16.76 GB gross bytes; `csg_operand_prep` (`Geometry::Cleanup()` on the
+operands) 9.86 M calls / 863 MB. Within `extrude_solid`: `extrude_cap` 77.8 %,
+`earcut` 15.3 %, the side-wall pass 6.9 %.
 
 For scale on the same run: `peakWasmHeapMb` 610.9, `geometryMemoryMb` 175.1,
 geometry stage 31.6 s of a 35.3 s load.
@@ -366,40 +366,122 @@ geometry stage 31.6 s of a 35.3 s load.
    at all. Any conclusion previously drawn from that null described the
    instrument, not the model.
 2. **Extrusion is not the lever.** Solid extrusion is 1.16 % of D3D's
-   allocator traffic, at 2.1 KB average transient peak — small, shallow, and
-   already nearly free. Arena-backing `Extrude()` would remove roughly one
-   percent of the allocator calls on the model the work was scoped around.
+   allocator traffic, at 4.9 KB cumulative allocation per swept solid — small,
+   shallow, and already nearly free. Arena-backing `Extrude()` would remove
+   roughly one percent of the allocator calls on the model the work was scoped
+   around.
 3. **CSG is, by roughly two orders of magnitude.** `BoolSubtract` accounts for
-   98.8 % of in-scope allocator calls, and its transients are arena-shaped:
-   98.1 % of boolean compositions peak under 256 KiB, with a 3.9 MB tail.
+   98.8 % of in-scope allocator calls.
 
-### And one thing it does *not* settle
+All three rest on **counts**, which are the one thing this instrument measures
+without qualification. The byte columns do not carry the same weight, for two
+independent reasons set out next.
 
-The peak-to-retained ratios measured here — 1.4× to 3.7× — are **not** the 60×
-quoted for Arty_Z7, but the two numbers are not the same measurement and
-should not be compared as if they were. This column is
-Σ(per-unit transient peak) / Σ(per-unit retained bytes), both accumulated
-inside instrumented scopes. The Arty_Z7 60× is a whole-process figure
-(~75 MB retained under a ~4.5 GB heap peak) whose denominator includes
-everything a load holds, not just what escapes a tessellation scope. A
-whole-process ratio for D3D would need the perf harness's peak/retained
-columns, not this instrument.
+### The byte columns are not yet trustworthy, and here is exactly why
 
-What *is* directly comparable is the allocator-call churn, and that mechanism
-is unambiguously present on D3D: 43.7 M malloc/free-shaped calls against
-610.9 MB of peak wasm heap, 16.76 GB of gross bytes cycled through the
-allocator by the CSG kernel alone. The churn the arena was built to remove is
-real here. It is simply not where item 3 was pointed.
+Both of these were raised in review of conway#651 / conway-geom#192, verified
+against source, and are recorded here rather than quietly dropped — the next
+person would otherwise re-derive the same broken numbers.
+
+**1. The instrument does not track allocation ownership.** `onFree`
+(`alloc_telemetry.cpp`) subtracts *every* free that happens inside a scope from
+the in-scope live counter, including frees of memory allocated **before** the
+scope began. It cannot tell the two apart, because it does not record which
+pointers it handed out. So `liveBytes` — and therefore the per-unit peak and
+the retained figure at scope exit — is corrupted whenever a pre-scope free
+lands inside a unit. The clamp at that site only stops the counter going
+negative; it does not stop the corruption, and where it fires it is erasing
+bytes that really were live in scope.
+
+The instrument now counts the clamp firings so the exposure is quantified per
+path rather than left as a general suspicion. Measured on D3D:
+
+| Scope kind | In-scope frees | Clamped frees | Clamped bytes | Peak / retained |
+|---|---:|---:|---:|---|
+| `csg_boolean` | 42,593,806 | **878,669** | 30.9 MB | **unreliable** |
+| `extrude_solid` | 464,076 | 0 | 0 | usable |
+| `sweep_solid` | 27,156 | 0 | 0 | usable |
+| `advanced_face` | 2,400 | 0 | 0 | usable |
+
+So the defect bites exactly where the numbers are largest — CSG, where
+`Cleanup()` and the kernel free operand buffers allocated before the
+composition began — and nowhere else. Note the clamp count is a **lower
+bound** on the occurrences: a pre-scope free smaller than the current live
+counter corrupts it silently without clamping. The fix is pointer-ownership
+tracking (subtract a free only if this scope allocated that pointer); until
+that exists, `csg_boolean`'s peak and retained columns should not be quoted.
+
+**2. Retained bytes include reusable global scratch, on every path.**
+`Geometry.cpp:30` declares a file-scope `VertexWelder welder;`. Its containers
+are `clear()`/`resize()`/`reserve()`d in `weld()` and **never**
+`shrink_to_fit`, so capacity grown inside a scope is still live when the scope
+closes and is counted as retained *output* when it is in fact reusable
+scratch. `CSGMesher::reset()` has the same shape. This makes the retained
+figure depend on which unit last grew the cache — a warm cache reports less
+retained than a cold one for identical work. Deriving retained bytes from the
+returned geometry, rather than from what is still live at scope exit, would
+fix this.
+
+### Arena sizing needs cumulative bytes, not the live peak
+
+An earlier draft of this section cited "98.1 % of boolean compositions peak
+under 256 KiB" as evidence that CSG transients are arena-shaped. **That was
+the wrong distribution.** `ScratchArena` makes deallocation a no-op until the
+enclosing scope rewinds, so what an arena must hold for one unit is every byte
+that unit allocated, not the most it held at once. On a path that recycles
+heavily the two differ by more than an order of magnitude.
+
+The instrument now records both. For `csg_boolean` on D3D:
+
+| Cumulative allocation per composition | Cumulative % of units |
+|---|---:|
+| < 128 KiB | 4.6 % |
+| < 1 MiB | 53.2 % |
+| < 4 MiB | 92.8 % |
+| < 8 MiB | 98.3 % |
+| < 128 MiB | 100 % |
+
+Average 2.73 MB, **maximum 85 MB**, against a live-peak average of 108 KB —
+a 25× gap on the average and far more in the tail. A 256 KiB arena would cover
+about 5 % of compositions; covering 93 % needs ~4 MB, and covering all of them
+needs ~128 MB. That is a materially different proposition from what the
+live-peak histogram implied, and it is a real constraint on the rescope below
+rather than a footnote.
+
+`extrude_solid`, for contrast, is genuinely small on this distribution too:
+100 % of swept solids allocate under 32 KiB cumulatively.
+
+### One comparison this does *not* license
+
+The peak-to-retained ratios this instrument produces are **not** comparable to
+the 60× quoted for Arty_Z7, and now for three reasons rather than one. The
+original: this column is Σ(per-unit transient peak) / Σ(per-unit retained),
+both accumulated inside scopes, whereas the Arty_Z7 60× is a whole-process
+figure (~75 MB retained under a ~4.5 GB heap peak) whose denominator includes
+everything a load holds. The two added above: ownership is untracked, and
+retained includes global scratch. A whole-process ratio for D3D would need the
+perf harness's peak/retained columns, not this instrument.
+
+What *is* directly comparable, and unaffected by all three, is the
+allocator-call churn: 43.7 M malloc/free-shaped calls against 610.9 MB of peak
+wasm heap, with 16.76 GB of gross bytes cycled through the allocator by the
+CSG kernel alone. The churn the arena was built to remove is real here. It is
+simply not where item 3 was pointed.
 
 ## Still unmeasured, and what it would take
 
 - **Whether an arena would actually help CSG, as opposed to being merely
-  well-shaped for it.** The measurement above sizes the opportunity; it does
-  not establish that `csg.run()`'s allocations are scope-lifetime (freed
-  before the composition closes) rather than structures that outlive it. That
-  is a code question about the CSG kernel's internals, and it should be
-  answered before any arena is placed there — a bump arena rewound at scope
-  exit is only correct for allocations that die inside the scope.
+  where the calls are.** The measurement above sizes the opportunity in
+  allocator calls and in cumulative bytes; it does not establish that
+  `csg.run()`'s allocations are scope-lifetime (freed before the composition
+  closes) rather than structures that outlive it. That is a code question
+  about the CSG kernel's internals, and it should be answered before any arena
+  is placed there — a bump arena rewound at scope exit is only correct for
+  allocations that die inside the scope.
+- **Trustworthy byte columns**, which need pointer-ownership tracking in
+  `onFree` and a retained figure derived from returned geometry rather than
+  from what is live at scope exit. Both are described above. Until then the
+  count columns are the load-bearing ones.
 - **A whole-process peak-vs-retained figure for D3D**, comparable to
   Arty_Z7's 60×. See the caveat above: this instrument cannot produce one.
 - **Whether an AP214-side `GeometryResidency` analogue is wanted at all.**
@@ -490,4 +572,10 @@ it by default:
 - The instrument itself now covers the solid-sweep and CSG call graphs, and
   every scope names its kind, so the "zero scoped faces" failure mode cannot
   recur silently on those paths. `src/ifc/alloc_telemetry_coverage.test.ts`
-  pins the placements.
+  pins the placements by matching each function body, not by grepping for the
+  enum name.
+- Two defects in the instrument's **byte** accounting — untracked allocation
+  ownership in `onFree`, and reusable global scratch counted as retained —
+  are now documented and, for the first, quantified per path by a clamp
+  counter. The **count** columns are unaffected, and they are what the
+  conclusions above rest on.

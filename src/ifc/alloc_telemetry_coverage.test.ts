@@ -51,34 +51,97 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
   const telemetrySource =
     conwayGeomSource('conway_geometry/structures/alloc_telemetry.cpp')
 
+  /**
+   * Slice the body of a C++ function out of a source file by brace matching
+   * from its signature.
+   *
+   * Matching the signature and the scope construction *together* is the whole
+   * point: an earlier version of this suite asserted on the bare enum token,
+   * which meant deleting the `AllocTelemetryScope` and leaving any mention of
+   * `AllocSite::ExtrudeSolid` anywhere in the file still passed. That is
+   * exactly the blind spot the suite exists to prevent, so it has to read the
+   * function body rather than the file.
+   *
+   * @param source File text to search.
+   * @param signature Literal text that opens the function, up to and
+   *   including the character before its opening brace.
+   * @return {string} The function body, braces included.
+   */
+  function functionBody(source: string, signature: string): string {
+    const start = source.indexOf(signature)
+
+    expect(start).toBeGreaterThanOrEqual(0)
+
+    const open = source.indexOf('{', start + signature.length)
+
+    expect(open).toBeGreaterThanOrEqual(0)
+
+    let depth = 0
+
+    for (let where = open; where < source.length; ++where) {
+      if (source[where] === '{') {
+        depth += 1
+      } else if (source[where] === '}') {
+        depth -= 1
+
+        if (depth === 0) {
+          return source.slice(open, where + 1)
+        }
+      }
+    }
+
+    throw new Error(`unbalanced braces after "${signature}"`)
+  }
+
   test('Extrude() — the IfcExtrudedAreaSolid sweep — opens a scope', () => {
-    expect(geometryUtilsSource)
-        .toContain('conway::AllocSite::ExtrudeSolid')
+    const body = functionBody(geometryUtilsSource, 'inline Geometry Extrude(')
+
+    expect(body).toContain(
+        'conway::AllocTelemetryScope telemetryScope(\n    conway::AllocSite::ExtrudeSolid )')
+    // The cap ring buffers and the earcut call are tagged separately inside
+    // that scope; without the split, the arena-backable part of an extrusion
+    // cannot be told from the mesh growth that has to be retained.
+    expect(body).toContain('conway::AllocSite::ExtrudeCap')
+    expect(body).toContain('conway::AllocSite::Earcut')
   })
 
   test('the other solid sweep, Sweep()/SweepCircular(), opens a scope', () => {
-    // Two entry points, so two constructions — a single one would leave the
-    // revolved/swept-disk half of the sweep family unmeasured.
-    expect(
-        (geometryUtilsSource.match(/conway::AllocSite::SweepSolid/g) ?? [])
-            .length)
-        .toBe(2)
+    // Two entry points, so each needs its own construction — asserting a count
+    // of two across the file would pass with both of them inside one function.
+    for (const signature of [
+      'inline Geometry Sweep(', 'inline Geometry SweepCircular(',
+    ]) {
+      expect(functionBody(geometryUtilsSource, signature))
+          .toContain(
+              'conway::AllocTelemetryScope telemetryScope(\n    conway::AllocSite::SweepSolid )')
+    }
   })
 
   test('BoolSubtract — the CSG/boolean entry point — opens a scope', () => {
-    expect(processorSource)
+    const body = functionBody(
+        processorSource, 'Geometry ConwayGeometryProcessor::BoolSubtract(')
+
+    expect(body)
         .toContain('AllocTelemetryScope telemetryScope( AllocSite::CsgBoolean )')
+    // Operand conditioning and the kernel have opposite memory shapes, so
+    // they are tagged apart; merged, neither can be judged for arena backing.
+    expect(body).toContain('AllocSite::CsgOperandPrep')
+    expect(body).toContain('AllocSite::CsgKernel')
   })
 
   test('the two face scopes name their kind rather than defaulting', () => {
     // Every scope kind must be explicit: an unnamed scope would bucket its
     // units under `other` and blend two populations with different natural
     // units (a face, a whole solid) into one average.
-    expect(
-        (processorSource.match(
-            /AllocTelemetryScope telemetryScope\( AllocSite::AdvancedFace \)/g)
-          ?? []).length)
-        .toBe(2)
+    for (const signature of [
+      'void ConwayGeometryProcessor::AddFaceToGeometry(',
+      'void ConwayGeometryProcessor::AddFaceToGeometrySimple(',
+    ]) {
+      expect(functionBody(processorSource, signature))
+          .toContain(
+              'AllocTelemetryScope telemetryScope( AllocSite::AdvancedFace )')
+    }
+
     expect(processorSource).not.toContain('AllocTelemetryScope telemetryScope;')
   })
 
