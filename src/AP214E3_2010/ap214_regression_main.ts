@@ -21,6 +21,7 @@ import Environment from '../utilities/environment'
 import { ExtractResult } from '../core/shared_constants'
 import { CanonicalMeshType } from '../core/canonical_mesh'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import { placementDigests } from './ap214_placement_digest'
 import { Console } from 'console'
 
 
@@ -495,12 +496,28 @@ function doWork() {
           // (ID,Hash,Type,Operand 1,Operand2,Void) so the same diff/bless
           // tooling applies. STEP digests cover final meshes and memoized
           // curves; AP214 has no void/CSG-operand columns to fill.
+          //
+          // `Placement` is the one AP214-only column (conway#583), appended
+          // rather than folded into `Hash` so the two axes stay separable: a
+          // row that moves only in `Placement` is geometry that tessellated
+          // identically and landed somewhere else, which the six shared
+          // columns are structurally blind to. See
+          // design/new/step-regression.md §"The placement column" for why
+          // STEP needs the second axis and IFC does not have one yet, and
+          // ap214_placement_digest.ts for what goes into the value.
           const csvLines: [number | string, string][] = []
+
+          // Keyed by mesh local id, which is what the mesh rows below are
+          // keyed by too. Computed from the scene rather than the geometry
+          // store: the same definition can be placed many times, and the
+          // multiset of those placements is the value.
+          const placements = placementDigests( extraction.scene )
 
           const csvPath       = `${outputPath}.csv`
           const csvFileHandle = await fsPromises.open( csvPath, 'w' )
 
-          await csvFileHandle.write( `ID,Hash,Type,Operand 1,Operand2,Void\n` )
+          await csvFileHandle.write(
+              `ID,Hash,Type,Operand 1,Operand2,Void,Placement\n` )
 
           for ( const mesh of model.geometry ) {
 
@@ -517,7 +534,13 @@ function doWork() {
             const typeName =
               element !== void 0 ? EntityTypesAP214[element.type] : ''
 
-            csvLines.push([rowID, `${rowID},${hash},${typeName},,,FALSE\n`])
+            // Empty for a definition the scene never placed; every placed
+            // definition has a hash, so identity placement and no placement
+            // stay distinguishable.
+            const placement = placements.get( mesh.localID ) ?? ''
+
+            csvLines.push(
+                [rowID, `${rowID},${hash},${typeName},,,FALSE,${placement}\n`])
           }
 
           for ( const [curveItem, objContents] of model.curves.objs() ) {
@@ -527,8 +550,10 @@ function doWork() {
 
             const rowID = curveItem.expressID ?? curveItem.toString()
 
+            // Curves are memoized per definition and never enter the scene
+            // graph, so they have no placement to report.
             csvLines.push([rowID,
-              `${rowID},${hash},${EntityTypesAP214[curveItem.type]},,,\n`])
+              `${rowID},${hash},${EntityTypesAP214[curveItem.type]},,,,\n`])
           }
 
           csvLines.sort( ( a, b ) => {
