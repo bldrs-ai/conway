@@ -4669,6 +4669,17 @@ export class AP214GeometryExtraction {
                       `produced ${untrimmed!.getPointsSize()} non-finite ` +
                       'point(s), discarding it.' )
 
+                  // extractCurve's own untrimmed call (above) already
+                  // memoised this exact object into this.curves under the
+                  // BASIS curve's localID before returning it — deleting
+                  // the native object without also removing that entry
+                  // leaves a dangling reference: the next basis-curve
+                  // untrimmed extraction (another edge on the same curve,
+                  // or the regression digest's curves.objs() traversal)
+                  // would retrieve an already-deleted Embind object instead
+                  // of re-extracting. Drop the cache entry first so the
+                  // next lookup re-extracts (and re-rejects) honestly.
+                  this.curves.delete( edgeCurve.localID )
                   untrimmed!.delete()
                 }
 
@@ -5003,6 +5014,20 @@ export class AP214GeometryExtraction {
       // delta, and (per trackFaceAccounting's doc) staged tessellation has
       // to be flushed in between so the "after" read is not measuring
       // work this face merely enqueued.
+      //
+      // The "before" read needs the same flush FIRST: a shell mixes plain
+      // `face`s (extractFace -> addOrStageFaceSimple, staged, no flush of
+      // its own) with advanced_faces into this same buffer via extractFaces,
+      // so an earlier simple face in the shell can still have a staged job
+      // outstanding when this face's baseline is read. Without flushing
+      // here, that job lands together with THIS face's own staged job at
+      // the flush below, and its triangles inflate the delta - a
+      // zero-triangle advanced face reads as accounted for because of
+      // triangles a DIFFERENT, earlier face produced.
+      if ( this.trackFaceAccounting ) {
+        this.finalizeStagedFaces()
+      }
+
       const beforeTriangleCount =
         this.trackFaceAccounting ? geometry.getTriangleCount() : 0
 
@@ -5593,10 +5618,17 @@ export class AP214GeometryExtraction {
 
     if ( !isTransformFinite( transform ) ) {
 
+      // The express ID goes through Logger.error's own parameter, not
+      // interpolated into the message: Logger dedups on message text, so
+      // baking a per-call express ID into the string would make every
+      // record a distinct "first occurrence" and defeat that — the whole
+      // point of the record parameter is letting many AXIS2_PLACEMENT_3D
+      // failures collapse into one counted family (findLogIndex, logger.ts).
       Logger.error(
-          `AXIS2_PLACEMENT_3D #${expressID ?? 'unknown'} produced a ` +
-          'non-finite transform (NaN/Inf basis column) - a non-finite, ' +
-          'zero-length, or axis-parallel direction ratio.' )
+          'AXIS2_PLACEMENT_3D produced a non-finite transform (NaN/Inf ' +
+          'basis column) - a non-finite, zero-length, or axis-parallel ' +
+          'direction ratio.',
+          expressID )
     }
 
     return transform
@@ -6054,6 +6086,15 @@ export class AP214GeometryExtraction {
     // Declared here, outside the block that populates it, so makeThunk's
     // closure — defined before that block — can see it.
     const ownerOverrideByRepLocalID = new Map<number, number>()
+
+    // conway#597 review: memoises resolvePdsLocalID's outcome per SOURCE
+    // representation (present once resolution for that source has run, even
+    // when the outcome was undefined/ambiguous) so a source reachable via
+    // several plain-SRR edges is resolved exactly once, from itself, seeing
+    // every edge's target together — not once per edge from that edge's
+    // own target alone, which let a later edge silently overwrite an
+    // earlier one's entry and bypassed the equidistant-ambiguity refusal.
+    const sourceOwnerResolution = new Map<number, number | undefined>()
 
     const makeThunk = (
         representation: shape_representation,
@@ -6699,17 +6740,34 @@ export class AP214GeometryExtraction {
         // it only to item attribution, leaving the occurrence-path seed
         // (`owningLocalID` above, and everything derived from it for
         // children) untouched.
-        const resolvedOwnerLocalID = resolvePdsLocalID( targetShape.localID )
+        //
+        // Resolved from sourceShape, not targetShape (review finding):
+        // targetShape is only THIS edge's one neighbour, so resolving from
+        // it can never see a second edge into the same source with a
+        // different PDS at the same distance — the exact case the
+        // ambiguity refusal exists for. Resolving from sourceShape walks
+        // repAdjacency's full (already-built) neighbour set for it, so a
+        // source reached by two SDR-bound targets is judged once, together.
+        // Memoised per source so a source reached by several edges is
+        // resolved (and, on ambiguity, warned about) exactly once rather
+        // than once per edge with a later edge silently overwriting an
+        // earlier one's entry.
+        if ( !sourceOwnerResolution.has( sourceShape.localID ) ) {
 
-        if ( resolvedOwnerLocalID !== void 0 ) {
-          ownerOverrideByRepLocalID.set( sourceShape.localID, resolvedOwnerLocalID )
-        } else {
-          Logger.warning(
-              `SHAPE_REPRESENTATION_RELATIONSHIP #${shapeRelationship.expressID} ` +
-              'has no SDR-bound representation reachable from either side ' +
-              '(absent, or ambiguously more than one); selection under ' +
-              'it will surface the relationship\'s own express id rather ' +
-              'than the owning part\'s.' )
+          const resolvedOwnerLocalID = resolvePdsLocalID( sourceShape.localID )
+
+          sourceOwnerResolution.set( sourceShape.localID, resolvedOwnerLocalID )
+
+          if ( resolvedOwnerLocalID !== void 0 ) {
+            ownerOverrideByRepLocalID.set( sourceShape.localID, resolvedOwnerLocalID )
+          } else {
+            Logger.warning(
+                `Representation #${sourceShape.expressID} has no SDR-bound ` +
+                'representation reachable (absent, or ambiguously more ' +
+                'than one at the same distance); selection under it will ' +
+                'surface a SHAPE_REPRESENTATION_RELATIONSHIP\'s express id ' +
+                'rather than the owning part\'s.' )
+          }
         }
 
         const sourceID = sourceShape.localID

@@ -64,4 +64,29 @@ describe( 'DiagnosticTally', () => {
 
     expect( key ).toBe( `warning: ${'x'.repeat( keyMessageLength )}` )
   } )
+
+  // Two FULL messages that only differ after the truncation point are two
+  // distinct Logger entries (Logger dedups on the untruncated message) that
+  // collide onto one report key by construction — the key is a deliberate
+  // truncation, so this collision is intended. What must not happen is one
+  // colliding entry's callback overwriting the other's occurrences: summing
+  // their independent counts (3 + 2) must read 5, not whichever of the two
+  // was reported to this proxy most recently.
+  test( 'sums colliding entries that share a truncated key but differ after it', () => {
+
+    const keyMessageLength = 120
+    const prefix = 'x'.repeat( keyMessageLength )
+    const messageA = `${prefix} - variant A`
+    const messageB = `${prefix} - variant B`
+
+    Logger.warning( messageA, 1 )
+    Logger.warning( messageA, 2 )
+    Logger.warning( messageA, 3 )
+    Logger.warning( messageB, 4 )
+    Logger.warning( messageB, 5 )
+
+    const counts = new Map( tally.entries() )
+
+    expect( counts.get( `warning: ${prefix}` ) ).toBe( 5 )
+  } )
 } )
