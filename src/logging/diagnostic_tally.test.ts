@@ -89,4 +89,26 @@ describe( 'DiagnosticTally', () => {
 
     expect( counts.get( `warning: ${prefix}` ) ).toBe( 5 )
   } )
+
+  // Logger.compressLogs() (run by getErrors() and displayLogs(true)) rebuilds
+  // Logger.logs from scratch, merging by message+level - the SAME entry's
+  // count carries over, but as a FRESH LogEntry object. A tracker keyed on
+  // object identity would miss that swap on the entry's next repeat and
+  // read the whole carried-over count as a brand-new delta: 1 (first call)
+  // + 2 (post-compression repeat, counted from zero instead of from 1)
+  // reports 3, when only 2 occurrences ever happened.
+  test( 'survives a compressLogs() pass in between (getErrors/displayLogs) without double-counting', () => {
+
+    Logger.warning( 'face contributed no geometry', 1 )
+
+    // Forces Logger.compressLogs(), which replaces the buffered LogEntry
+    // with a new object of the same message+level and the same count.
+    Logger.getErrors()
+
+    Logger.warning( 'face contributed no geometry', 2 )
+
+    const counts = new Map( tally.entries() )
+
+    expect( counts.get( 'warning: face contributed no geometry' ) ).toBe( 2 )
+  } )
 } )

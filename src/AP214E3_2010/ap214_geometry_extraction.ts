@@ -6768,12 +6768,19 @@ export class AP214GeometryExtraction {
           if ( resolvedOwnerLocalID !== void 0 ) {
             ownerOverrideByRepLocalID.set( sourceShape.localID, resolvedOwnerLocalID )
           } else {
+            // The express ID goes through Logger.warning's own parameter,
+            // not interpolated into the message: Logger dedups on message
+            // text, so baking a per-source express ID into the string would
+            // make every ambiguous source a distinct "first occurrence" and
+            // defeat that — the same fix as conway#592's placement
+            // diagnostic (this file, getAxis2Placement3D).
             Logger.warning(
-                `Representation #${sourceShape.expressID} has no SDR-bound ` +
-                'representation reachable (absent, or ambiguously more ' +
-                'than one at the same distance); selection under it will ' +
-                'surface a SHAPE_REPRESENTATION_RELATIONSHIP\'s express id ' +
-                'rather than the owning part\'s.' )
+                'Representation has no SDR-bound representation reachable ' +
+                '(absent, or ambiguously more than one at the same ' +
+                'distance); selection under it will surface a ' +
+                'SHAPE_REPRESENTATION_RELATIONSHIP\'s express id rather ' +
+                'than the owning part\'s.',
+                sourceShape.expressID )
           }
         }
 

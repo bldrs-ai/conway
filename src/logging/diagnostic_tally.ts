@@ -30,14 +30,25 @@ const KEY_MESSAGE_LENGTH = 120
  * the latest entry's `count` under the shared key would make the second
  * entry's callback silently overwrite the first's, losing its occurrences
  * rather than combining them (a 3-count and a 2-count colliding entry would
- * report 2, not 5) — so this tracks each entry's own last-seen count
- * (keyed by the `LogEntry` object's identity, stable across its repeats)
- * and sums that entry's DELTA into the shared key on every call, rather
- * than overwriting the key with one entry's absolute count.
+ * report 2, not 5) — so this tracks each entry's own last-seen count and
+ * sums that entry's DELTA into the shared key on every call, rather than
+ * overwriting the key with one entry's absolute count.
+ *
+ * The per-entry tracking key is the entry's own untruncated `level: message`
+ * — NOT the `LogEntry` object's identity. `Logger.compressLogs()` (run by
+ * `getErrors()` and `displayLogs(true)`) replaces every buffered entry with
+ * a FRESH object that carries the same `count` forward (it merges by
+ * `message`+`level`, same as `findLogIndex`, and rebuilds `Logger.logs` from
+ * scratch); an identity-keyed tracker would miss that new object entirely on
+ * its first post-compression repeat and treat the carried-over count as a
+ * brand-new delta from zero — 1 warning, `getErrors()`, then the same
+ * warning again would report 3, not 2. Keying on the same message+level
+ * identity Logger itself uses for both dedup and compression survives that
+ * object swap for free.
  */
 export default class DiagnosticTally implements LoggingProxy {
   private counts = new Map<string, number>()
-  private lastSeenCount = new WeakMap<LogEntry, number>()
+  private lastSeenCount = new Map<string, number>()
 
   /**
    * LoggingProxy callback — Logger invokes this on every occurrence of
@@ -54,11 +65,14 @@ export default class DiagnosticTally implements LoggingProxy {
 
     // This entry's own increment since we last saw it — not its absolute
     // count, which a colliding sibling entry under the same truncated key
-    // would otherwise clobber.
-    const previousCount = this.lastSeenCount.get(entry) ?? 0
+    // would otherwise clobber. Keyed on the untruncated message (see the
+    // class doc) so a post-compressLogs() fresh LogEntry object for the
+    // same message is still recognised as the same entry.
+    const entryKey = `${entry.level}: ${entry.message}`
+    const previousCount = this.lastSeenCount.get(entryKey) ?? 0
     const delta = entry.count - previousCount
 
-    this.lastSeenCount.set(entry, entry.count)
+    this.lastSeenCount.set(entryKey, entry.count)
     this.counts.set(key, (this.counts.get(key) ?? 0) + delta)
   }
 
