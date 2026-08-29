@@ -10,11 +10,6 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { CanonicalMeshType } from '../core/canonical_mesh'
 import { advanced_face } from './AP214E3_2010_gen'
 
-/* eslint-disable no-magic-numbers -- express IDs and the known-good sphere
-   grid's triangle count are quantities of this fixture, not of the code
-   under test; naming them would move the evidence away from the assertions
-   that rest on it. */
-
 /**
  * A single ADVANCED_FACE whose one boundary EDGE_CURVE is a closed CIRCLE
  * (edge_start === edge_end, a vertex-to-itself closed edge) placed by a
