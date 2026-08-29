@@ -340,6 +340,37 @@ function isWholeCurveEdge(
 
 
 /**
+ * Scan every sample of a 3D CurveObject for a non-finite coordinate.
+ *
+ * A degenerate AXIS2_PLACEMENT_3D basis (conway#592) makes the untrimmed
+ * whole-curve recovery below (conway#492) sample the same bad placement
+ * that produced the original degenerate trim, so a full complement of
+ * points comes back that are all NaN. The point-COUNT gate the recovery
+ * already applies can't see that — NaN points still outnumber the
+ * collapsed trim — so this is a separate, necessary check (conway#591).
+ *
+ * @param curveObject The curve whose samples to check.
+ * @return {boolean} True only if every sample's x, y, and z are finite.
+ */
+export function isCurveFinite( curveObject: CurveObject ): boolean {
+
+  for ( let i = 0; i < curveObject.getPointsSize(); ++i ) {
+
+    const point = curveObject.get3d( i )
+
+    if ( !Number.isFinite( point.x ) ||
+         !Number.isFinite( point.y ) ||
+         !Number.isFinite( point.z ) ) {
+
+      return false
+    }
+  }
+
+  return true
+}
+
+
+/**
  * Check every component of a native 4x4 transform for a non-finite value.
  *
  * GetAxis2Placement3D (conway-geom) normalises its axis references with no
@@ -4588,9 +4619,20 @@ export class AP214GeometryExtraction {
                     edgeCurve, true, true,
                     { exist: false, start: void 0, end: void 0 } )
 
-                const recovered =
+                const untrimmedLarger =
                   untrimmed !== void 0 &&
                   untrimmed.getPointsSize() > curve.getPointsSize()
+
+                // Point count alone isn't proof the recovery is good: a
+                // degenerate placement (conway#592) makes the untrimmed
+                // re-extraction sample the SAME bad basis that produced the
+                // collapsed trim, and that comes back as a full complement of
+                // NaN points which still passes the count check. Confirming
+                // every recovered point is finite is what tells the two
+                // cases apart (conway#591) — only accept the recovery once
+                // both hold.
+                const recovered =
+                  untrimmedLarger && isCurveFinite( untrimmed! )
 
                 if ( recovered ) {
 
@@ -4610,6 +4652,24 @@ export class AP214GeometryExtraction {
                   // this its native allocation is unreachable.
                   curve.delete()
                   curve = untrimmed
+                } else if ( untrimmedLarger ) {
+
+                  // The recovery produced more points than the trim, but they
+                  // aren't usable - distinct message from the one above so
+                  // errors.csv keeps the two families apart (the split
+                  // geometry_utils.h's no-basis branch uses for the same
+                  // reason). Stay on the original (loud) collapsed-trim path:
+                  // the caller below still sees `curve` at its degenerate
+                  // point count, which is what makes the failure visible
+                  // downstream instead of silently substituting NaN.
+                  Logger.warning(
+                      `Whole-curve trim on edge #${edgeElement.expressID} ` +
+                      `(${EntityTypesAP214[edgeCurve.type]}) resolved to ` +
+                      `${curve.getPointsSize()} point(s); untrimmed recovery ` +
+                      `produced ${untrimmed!.getPointsSize()} non-finite ` +
+                      'point(s), discarding it.' )
+
+                  untrimmed!.delete()
                 }
 
                 // Memoise under the edge either way. The adjacent face's
