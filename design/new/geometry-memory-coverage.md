@@ -597,8 +597,26 @@ wrong quantity.
 **The right quantity now exists.** conway#653 asked for cumulative bytes
 *restricted to allocations that die inside the scope*, and that is what
 `died-in-scope` is: allocated inside the unit and released inside it, which is
-exactly what a bump arena rewound at scope exit would have held and no more.
-The report histograms it (`died<`), per scope kind and per site.
+what a bump arena rewound at scope exit would have held and no more.
+
+**Subject to the same condition as `foreignFrees` above: it is the arena
+requirement only when `unownedAllocs == 0` for that scope kind, and it fails
+*low*.** The mechanism is the one described there, arriving at a different
+column. `died` is credited from the ownership table, so an allocation the table
+refused is never in it — and when such an allocation is freed inside the scope,
+the free is booked foreign and its bytes reach neither `died` nor `escaped`. A
+degraded run therefore **understates** the arena requirement, which is the
+dangerous direction: sizing an arena from it would undersize it. The
+conway-geom suite pins exactly this, deliberately — its no-table test allocates
+sixteen blocks, frees every one of them inside the scope, and asserts
+`diedBytes == 0`. Check `unowned` is zero before quoting a `died` figure.
+
+**How it is reported, precisely.** The `died<` histogram is **per scope kind**
+— one distribution per kind, bucketing each unit's total died bytes. The
+per-site breakdown carries `died=` as a **scalar total** for that site, not a
+distribution; there is no per-site histogram. So "which sites within a kind
+account for the arena-eligible bytes" is answerable, and "how those bytes are
+distributed across units *within one site*" is not.
 
 What that looks like on a public fixture, as a shape rather than a result —
 `nema-23-76mm.step`, 344 advanced-BREP faces:

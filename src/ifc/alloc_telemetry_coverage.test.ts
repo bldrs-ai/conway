@@ -94,6 +94,23 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
   }
 
   /**
+   * C++ source with its comments removed, so an assertion about code cannot be
+   * satisfied — or defeated — by prose.
+   *
+   * The ordering assertions below check that nothing returns before a counter
+   * increments, and the comment explaining *why* legitimately contains the
+   * word "returns" (dlmalloc's behaviour on an oversized request). Stripping
+   * first is what lets the check be a blunt "no return here" rather than a
+   * fragile pattern that has to dodge English.
+   *
+   * @param source C++ text.
+   * @return {string} The same text with block and line comments blanked.
+   */
+  function stripComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  }
+
+  /**
    * Every brace-matched block opening with `signature`, not just the first.
    *
    * `functionBody` takes the first match, which is fine for a function
@@ -308,25 +325,41 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
       // seeing every wrapped call. That understates exactly the paths under
       // memory pressure. Ordering is the property, so index comparison is the
       // assertion.
-      const allocBody = functionBody(telemetrySource, 'inline void onAlloc(')
-      const allocCounter = allocBody.indexOf('g_loadAllocCalls.fetch_add')
-      const allocNullTest = allocBody.indexOf('if (ptr == nullptr)')
-      const allocScopeTest = allocBody.indexOf('if (!tls.active)')
+      // "The named early returns come after the counter" is necessary but NOT
+      // sufficient, and asserting only that is vacuous in a way worth spelling
+      // out: inserting a DIFFERENTLY SPELLED early return above the counter —
+      // `if (!ptr) { return; }` — leaves the original `if (ptr == nullptr)`
+      // still below it, so the ordering check passes while the census is fully
+      // defeated. Measured: with that one line added to each function, this
+      // suite was 13/13 green.
+      //
+      // So the real property is stronger and simpler — *nothing returns before
+      // the counter increments* — and it is asserted on comment-stripped text
+      // so the prose above each counter cannot satisfy or break it.
+      for (const [signature, counter, extra] of [
+        ['inline void onAlloc(', 'g_loadAllocCalls.fetch_add',
+          'g_loadAllocFailed.fetch_add'],
+        ['inline void onFreeSized(', 'g_loadFreeCalls.fetch_add',
+          'g_loadFreeNull.fetch_add'],
+      ]) {
+        const body = stripComments(functionBody(telemetrySource, signature))
+        const at = body.indexOf(counter)
 
-      expect(allocCounter).toBeGreaterThanOrEqual(0)
-      expect(allocNullTest).toBeGreaterThan(allocCounter)
-      expect(allocScopeTest).toBeGreaterThan(allocCounter)
-      expect(allocBody).toContain('g_loadAllocFailed.fetch_add')
+        expect(at).toBeGreaterThanOrEqual(0)
 
-      const freeBody = functionBody(telemetrySource, 'inline void onFreeSized(')
-      const freeCounter = freeBody.indexOf('g_loadFreeCalls.fetch_add')
-      const freeNullTest = freeBody.indexOf('if (ptr == nullptr)')
-      const freeScopeTest = freeBody.indexOf('if (!tls.active)')
+        // Nothing — of any spelling — bails out before the census.
+        expect(body.slice(0, at)).not.toContain('return')
 
-      expect(freeCounter).toBeGreaterThanOrEqual(0)
-      expect(freeNullTest).toBeGreaterThan(freeCounter)
-      expect(freeScopeTest).toBeGreaterThan(freeCounter)
-      expect(freeBody).toContain('g_loadFreeNull.fetch_add')
+        // And the two early returns that DO exist are still below it, so the
+        // counter has not simply been hoisted above a body that no longer has
+        // them.
+        expect(body.indexOf('if (ptr == nullptr)')).toBeGreaterThan(at)
+        expect(body.indexOf('if (!tls.active)')).toBeGreaterThan(at)
+
+        // The call that produced nothing is carried in its own term rather
+        // than folded into a byte or classification column.
+        expect(body).toContain(extra)
+      }
     })
 
     test('the realloc wrapper defers accounting and guards its null', () => {
