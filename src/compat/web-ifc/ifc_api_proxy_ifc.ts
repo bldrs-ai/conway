@@ -3608,6 +3608,240 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Serve a whole-model ask on a deferred model whose pump has just been
+   * drained to completion: rebuild the per-entity cache (or absorb the
+   * stragglers into it), hand every entity to the callback, and account
+   * for whatever a `GEOMETRY_BUDGET_MB` eviction took out from under the
+   * walk.
+   *
+   * Shared verbatim by the synchronous {@link streamAllMeshes} and the
+   * async {@link streamAllMeshesAsync}. Those two differ in exactly one
+   * thing — which pump they drain through, and so whether they can page a
+   * windowed source — and single-sourcing everything after the drain is
+   * deliberate: the throw/warn accounting here is the part of #638's
+   * contract a second copy would drift from silently, and a consumer that
+   * feature-detects its way onto the async entry point must get the same
+   * semantics for the same model, not a second implementation of them.
+   *
+   * The caller owns the budget suspension around the drain and this call;
+   * see the reasoning at each call site.
+   *
+   * @param meshCallback Receives one whole-model FlatMesh per entity.
+   * @param degraded Whether this model has ever evicted under a budget,
+   * sampled by the caller BEFORE it suspended that budget.
+   * @param entryPoint The public method being served, for the messages.
+   */
+  private serveDeferredWholeModel_(
+      meshCallback: (mesh: FlatMesh) => void,
+      degraded: boolean,
+      entryPoint: string ): void {
+
+    // Placed instances the re-walk could not resolve, which on this path
+    // is the ONLY signal that anything was lost: evicted geometry is
+    // deleted from the store, so those placements never reach the
+    // rebuilt map and the livePlacements filter below cannot see them.
+    // Zero on the retaining path, where that filter is the signal.
+    let unresolvedInstances = 0
+
+    if (this.streamingConsumer_) {
+      // Nothing was accumulated to absorb stragglers into: this open
+      // declared the caller the owner of the stream. Rebuild the whole
+      // model from the live scene instead — same placements, one walk,
+      // and it throws rather than serving an empty model when the
+      // natives are gone.
+      unresolvedInstances = this.recaptureWholeModel_(entryPoint)
+    } else {
+      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+    }
+
+    const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
+      this.model
+
+    let droppedInstances = 0
+    let droppedEntities = 0
+    let servedEntities = 0
+
+    meshMap.forEach((mesh) => {
+
+      if (degraded) {
+
+        const live = livePlacements(mesh[1], geometryMaterialTransformMap)
+
+        droppedInstances += mesh[1].geometries.size() - live.length
+
+        if (live.length === 0) {
+          ++droppedEntities
+          return
+        }
+      }
+
+      ++servedEntities
+      vectorFlatMesh.push(mesh[1])
+      meshCallback(mesh[1])
+    })
+
+    if (this.streamingConsumer_) {
+
+      // Served nothing, and the re-walk found instances it could not
+      // resolve: the geometry behind them is gone. What must NOT throw is
+      // a model that genuinely has no geometry — nothing parked, nothing
+      // to serve — where empty is the right answer and classic returns it
+      // too.
+      //
+      // `unresolvedInstances` is the whole signal today; `degraded` is a
+      // failsafe that is NOT independently reachable, and saying so is
+      // the point of this paragraph. Eviction removes geometry from the
+      // store and never touches the scene, which is append-only
+      // (IfcSceneBuilder.nodeCount's contract) — so every instance an
+      // eviction costs us is an instance the walk parks, and there is no
+      // state today in which the model evicted but the walk parked
+      // nothing. It is kept because it costs a boolean read and it fails
+      // in the safe direction: any future path that removes geometry
+      // WITHOUT leaving a parked node behind would otherwise reintroduce
+      // exactly the silent empty model this guard exists to prevent. No
+      // test pins it, and none can, because the state cannot be
+      // constructed through the public API.
+      //
+      // What this deliberately does NOT key on is droppedEntities, the
+      // way the retaining path below does. That counter is fed by the
+      // livePlacements filter, which can only ever see placements that
+      // reached the rebuilt map — and evicted ones never do, because
+      // eviction deletes the mesh from the store rather than leaving a
+      // dead handle in it. Keying on it made this throw unreachable and
+      // let a fully-evicted model return silently empty: measured at a
+      // 1-byte budget on mapped_shared_representation.ifc as 0 placements
+      // served, "0 instance(s) across 0 entit(ies)" logged, no throw.
+      if (servedEntities === 0 && (unresolvedInstances > 0 || degraded)) {
+
+        throw new Error(
+            `${entryPoint}: this model was opened with ` +
+            `STREAMING_CONSUMER, so conway kept no reference to the ` +
+            `meshes the pump delivered — the caller owns them — and the ` +
+            `re-walk that serves a late whole-model ask resolved none of ` +
+            `the model (${unresolvedInstances} placed instance(s) ` +
+            `unresolved), because a GEOMETRY_BUDGET_MB eviction has ` +
+            `already freed the geometry behind them. Nothing can be ` +
+            `served. Copy at delivery, raise the budget, or open without ` +
+            `STREAMING_CONSUMER.` )
+      }
+
+      // Partial loss is a warning, matching the retaining path, but the
+      // number comes from the re-walk rather than the filter — see above
+      // for why the filter reads zero here however much was lost.
+      if (unresolvedInstances > 0) {
+        Logger.warning(
+            `[geometry budget] ${entryPoint} re-walked a ` +
+            `STREAMING_CONSUMER model that evicted under a budget: ` +
+            `${unresolvedInstances} placed instance(s) could not be ` +
+            `resolved because their geometry was freed, and are missing ` +
+            `from the ${servedEntities} entit(ies) this call served. ` +
+            `Pump ExtractGeometryBatch and copy at delivery to receive ` +
+            `everything.`)
+      }
+
+    } else if (degraded) {
+
+      // One line for the whole call, not one per dropped instance: this
+      // fires on a path that may drop thousands, and a per-instance log
+      // would bury the fact that anything was dropped at all.
+      Logger.warning(
+          `[geometry budget] ${entryPoint} served a model that evicted ` +
+          `under a budget: ${droppedInstances} instance(s) across ` +
+          `${droppedEntities} entit(ies) were dropped because their ` +
+          `geometry was freed. Pump ExtractGeometryBatch and copy at ` +
+          `delivery to receive everything.`)
+    }
+  }
+
+  /**
+   * Async twin of {@link streamAllMeshes} (conway#660): the whole-model ask
+   * for a model whose source is **windowed**, where the synchronous one
+   * cannot go.
+   *
+   * The sync entry point drains through `extractGeometryBatch`, which
+   * refuses an external source outright — *"ExtractGeometryBatch is
+   * synchronous and cannot page a windowed source"* — so on a model opened
+   * through {@link IfcApiProxyIfc.createFromStore} the late whole-model ask
+   * was unreachable however the model was opened, flag or no flag. That is
+   * the gap this closes, and it closes it in the one place it existed: the
+   * DRAIN. Everything after the drain is
+   * {@link serveDeferredWholeModel_}, shared with the sync path.
+   *
+   * **What the re-walk does for geometry a window would have to page back,
+   * verified rather than assumed.** It does not page anything, and it does
+   * not need to. The walk resolves each scene node through
+   * `IfcSceneBuilder.resolveGeometryNode_`, which reads
+   * `node.model.geometry.getByLocalID(...)` — the in-memory geometry store —
+   * and never touches the byte source. So the source being windowed is
+   * irrelevant to the re-walk: what a fully drained windowed model can serve
+   * is exactly what a fully drained buffered one can, and the only thing
+   * that removes geometry from under either is `GEOMETRY_BUDGET_MB`
+   * eviction, which is reported here identically for both. Re-extracting an
+   * evicted product through the window would NOT help: extraction files the
+   * result under a fresh localID, so the scene node that parked still
+   * resolves nothing while a new node emits the same instance again — the
+   * measured "21 placements against classic's 16" in
+   * {@link streamAllMeshes}' degraded note is that path.
+   *
+   * Safe on a resident source (the async pump's prefetch is a no-op there)
+   * and on a non-deferred model, which has no pump and is delegated to the
+   * sync entry point.
+   *
+   * @param meshCallback Receives one whole-model FlatMesh per entity.
+   * @return {Promise<void>} Resolves once every entity has been delivered.
+   */
+  async streamAllMeshesAsync(
+      meshCallback: (mesh: FlatMesh) => void ): Promise<void> {
+
+    // No pump to drain, so nothing here can page anything: the classic walk
+    // and the released-model replay are already whole-model answers, and
+    // both read the geometry store rather than the source.
+    if (!this.deferredMode_) {
+
+      this.streamAllMeshes(meshCallback)
+      return
+    }
+
+    // The budget cannot hold across a whole-model ask, for the reasons the
+    // sync entry point sets out at length — the peak during this call is the
+    // unbudgeted peak, which is what asking for every mesh at once means.
+    // Sampled before the suspension, because everEvicted is what tells the
+    // accounting below whether anything was already lost.
+    const residency = this.model[0].geometryResidency
+    const suspendedBudgetBytes = residency.budgetBytes
+    const degraded = residency.everEvicted
+
+    residency.setBudgetBytes(0)
+
+    try {
+
+      const noCallback = void 0
+
+      // The one line that differs from the sync path. Each call pages the
+      // batch's product closures in before extracting them, so a source that
+      // is a moving window over an external store is drained the same way
+      // Share drains it.
+      while ((await this.extractGeometryBatchAsync(
+          DEFERRED_DRAIN_BATCH, noCallback)).remaining > 0) {
+        // draining
+      }
+
+      this.serveDeferredWholeModel_(
+          meshCallback, degraded, 'StreamAllMeshesAsync')
+
+    } finally {
+
+      // In a finally for the same reason as the sync path: meshCallback is
+      // the CALLER's code, and an early return through it would leave the
+      // model permanently unbudgeted with nothing to signal it.
+      if (Number.isFinite(suspendedBudgetBytes)) {
+        residency.setBudgetBytes(suspendedBudgetBytes)
+        residency.evictToBudget()
+      }
+    }
+  }
+
+  /**
    *
    * @param modelID
    * @param meshCallback
@@ -3666,7 +3900,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       // emits the same instances again (21 placements against classic's 16
       // on the shared-representation fixture). Rather than hand out dangling
       // handles, this delivers what is still resident and drops the rest —
-      // see the filter below. Properly serving this combination needs the
+      // see the livePlacements filter in serveDeferredWholeModel_, which is
+      // what this flag feeds. Properly serving this combination needs the
       // meshes re-keyed onto re-extracted geometry, which is follow-up work.
       const degraded = residency.everEvicted
 
@@ -3681,121 +3916,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           // draining
         }
 
-        // Placed instances the re-walk could not resolve, which on this path
-        // is the ONLY signal that anything was lost: evicted geometry is
-        // deleted from the store, so those placements never reach the
-        // rebuilt map and the livePlacements filter below cannot see them.
-        // Zero on the retaining path, where that filter is the signal.
-        let unresolvedInstances = 0
-
-        if (this.streamingConsumer_) {
-          // Nothing was accumulated to absorb stragglers into: this open
-          // declared the caller the owner of the stream. Rebuild the whole
-          // model from the live scene instead — same placements, one walk,
-          // and it throws rather than serving an empty model when the
-          // natives are gone.
-          unresolvedInstances = this.recaptureWholeModel_('StreamAllMeshes')
-        } else {
-          this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
-        }
-
-        const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
-          this.model
-
-        let droppedInstances = 0
-        let droppedEntities = 0
-        let servedEntities = 0
-
-        meshMap.forEach((mesh) => {
-
-          if (degraded) {
-
-            const live = livePlacements(mesh[1], geometryMaterialTransformMap)
-
-            droppedInstances += mesh[1].geometries.size() - live.length
-
-            if (live.length === 0) {
-              ++droppedEntities
-              return
-            }
-          }
-
-          ++servedEntities
-          vectorFlatMesh.push(mesh[1])
-          meshCallback(mesh[1])
-        })
-
-        if (this.streamingConsumer_) {
-
-          // Served nothing, and the re-walk found instances it could not
-          // resolve: the geometry behind them is gone. What must NOT throw is
-          // a model that genuinely has no geometry — nothing parked, nothing
-          // to serve — where empty is the right answer and classic returns it
-          // too.
-          //
-          // `unresolvedInstances` is the whole signal today; `degraded` is a
-          // failsafe that is NOT independently reachable, and saying so is
-          // the point of this paragraph. Eviction removes geometry from the
-          // store and never touches the scene, which is append-only
-          // (IfcSceneBuilder.nodeCount's contract) — so every instance an
-          // eviction costs us is an instance the walk parks, and there is no
-          // state today in which the model evicted but the walk parked
-          // nothing. It is kept because it costs a boolean read and it fails
-          // in the safe direction: any future path that removes geometry
-          // WITHOUT leaving a parked node behind would otherwise reintroduce
-          // exactly the silent empty model this guard exists to prevent. No
-          // test pins it, and none can, because the state cannot be
-          // constructed through the public API.
-          //
-          // What this deliberately does NOT key on is droppedEntities, the
-          // way the retaining path below does. That counter is fed by the
-          // livePlacements filter, which can only ever see placements that
-          // reached the rebuilt map — and evicted ones never do, because
-          // eviction deletes the mesh from the store rather than leaving a
-          // dead handle in it. Keying on it made this throw unreachable and
-          // let a fully-evicted model return silently empty: measured at a
-          // 1-byte budget on mapped_shared_representation.ifc as 0 placements
-          // served, "0 instance(s) across 0 entit(ies)" logged, no throw.
-          if (servedEntities === 0 && (unresolvedInstances > 0 || degraded)) {
-
-            throw new Error(
-                `StreamAllMeshes: this model was opened with ` +
-                `STREAMING_CONSUMER, so conway kept no reference to the ` +
-                `meshes the pump delivered — the caller owns them — and the ` +
-                `re-walk that serves a late whole-model ask resolved none of ` +
-                `the model (${unresolvedInstances} placed instance(s) ` +
-                `unresolved), because a GEOMETRY_BUDGET_MB eviction has ` +
-                `already freed the geometry behind them. Nothing can be ` +
-                `served. Copy at delivery, raise the budget, or open without ` +
-                `STREAMING_CONSUMER.` )
-          }
-
-          // Partial loss is a warning, matching the retaining path, but the
-          // number comes from the re-walk rather than the filter — see above
-          // for why the filter reads zero here however much was lost.
-          if (unresolvedInstances > 0) {
-            Logger.warning(
-                `[geometry budget] StreamAllMeshes re-walked a ` +
-                `STREAMING_CONSUMER model that evicted under a budget: ` +
-                `${unresolvedInstances} placed instance(s) could not be ` +
-                `resolved because their geometry was freed, and are missing ` +
-                `from the ${servedEntities} entit(ies) this call served. ` +
-                `Pump ExtractGeometryBatch and copy at delivery to receive ` +
-                `everything.`)
-          }
-
-        } else if (degraded) {
-
-          // One line for the whole call, not one per dropped instance: this
-          // fires on a path that may drop thousands, and a per-instance log
-          // would bury the fact that anything was dropped at all.
-          Logger.warning(
-              `[geometry budget] StreamAllMeshes served a model that evicted ` +
-              `under a budget: ${droppedInstances} instance(s) across ` +
-              `${droppedEntities} entit(ies) were dropped because their ` +
-              `geometry was freed. Pump ExtractGeometryBatch and copy at ` +
-              `delivery to receive everything.`)
-        }
+        // Everything past the drain is shared with streamAllMeshesAsync —
+        // see serveDeferredWholeModel_ for why the two entry points must not
+        // grow separate copies of this accounting.
+        this.serveDeferredWholeModel_(meshCallback, degraded, 'StreamAllMeshes')
 
       } finally {
 
