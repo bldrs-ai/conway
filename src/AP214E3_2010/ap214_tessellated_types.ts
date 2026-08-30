@@ -107,6 +107,9 @@ const TESSELLATED_TYPE_IDS: readonly EntityTypesAP214[] =
 const TESSELLATED_TYPE_NAME_BY_ID: ReadonlyMap< number, string > =
   new Map( TESSELLATED_TYPE_NAMES.map( ( [ name, typeID ] ) => [ typeID as number, name ] ) )
 
+const TESSELLATED_TYPE_ID_BY_NAME: ReadonlyMap< string, EntityTypesAP214 > =
+  new Map( TESSELLATED_TYPE_NAMES )
+
 /**
  * Inherited-attribute count (`representation_item.name`) and inheritance depth
  * shared by every shadow entity hanging off `geometric_representation_item`.
@@ -136,6 +139,28 @@ export function ap214TypeName( type: EntityTypesAP214 ): string {
   const generatedName = EntityTypesAP214[ type ] as string | undefined
 
   return generatedName ?? TESSELLATED_TYPE_NAME_BY_ID.get( type ) ?? `UNKNOWN_TYPE_${type}`
+}
+
+
+/**
+ * Resolve a STEP keyword to a type id, shadow types included — the inverse of
+ * {@link ap214TypeName}, and the lookup any user-supplied type name has to go
+ * through.
+ *
+ * The generated enum's forward mapping alone silently answers `undefined` for
+ * a shadow keyword, so the CLI's `--types TESSELLATED_SOLID` filtered its own
+ * argument away and reported zero rows for a model whose every row it had just
+ * printed as TESSELLATED_SOLID under `--express_ids`.
+ *
+ * @param name The STEP keyword; case-insensitive, as the CLI has always been.
+ * @return {EntityTypesAP214 | undefined} The type id, if the keyword is known.
+ */
+export function ap214TypeByName( name: string ): EntityTypesAP214 | undefined {
+
+  const upperCaseName = name.toLocaleUpperCase()
+
+  return EntityTypesAP214[ upperCaseName as keyof typeof EntityTypesAP214 ] ??
+    TESSELLATED_TYPE_ID_BY_NAME.get( upperCaseName )
 }
 
 

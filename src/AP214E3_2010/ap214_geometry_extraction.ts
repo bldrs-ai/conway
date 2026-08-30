@@ -4244,6 +4244,14 @@ export class AP214GeometryExtraction {
       const coordinateBuffer = conwayModel.nativeParseBuffer()
       const triangleBuffer   = conwayModel.nativeParseBuffer()
 
+      // Declared out here so the finally can release it: unlike the parse
+      // buffers there is no pool to hand it back to, and `appendGeometry`
+      // takes its operand by const reference and COPIES the vertex and
+      // triangle vectors (Geometry::AppendGeometry), so nothing downstream
+      // owns this one. Without the delete each coordinate-list group leaks a
+      // whole duplicate mesh in the wasm heap for the life of the load.
+      let groupGeometry: GeometryObject | undefined
+
       try {
 
         // COORDINATES_LIST slot 2 is `points`, already in the
@@ -4264,13 +4272,15 @@ export class AP214GeometryExtraction {
         wasmHeapView( this.wasmModule, Uint8Array, trianglePointer, triangleText.length )
             .set( triangleText )
 
-        const groupGeometry = conwayModel.nativeGeometry()
+        groupGeometry = conwayModel.nativeGeometry()
 
         groupGeometry.extractVerticesAndTriangles( coordinateBuffer, triangleBuffer )
 
         geometry.appendGeometry( groupGeometry )
 
       } finally {
+
+        groupGeometry?.delete()
 
         conwayModel.freeParseBuffer( coordinateBuffer )
         conwayModel.freeParseBuffer( triangleBuffer )
