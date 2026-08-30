@@ -29,7 +29,7 @@ import { AP214SceneBuilder } from '../../AP214E3_2010/ap214_scene_builder'
 import { AP214GeometryExtraction } from '../../AP214E3_2010/ap214_geometry_extraction'
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
 import { AP214Properties } from './ap214_properties'
-import { EntityTypesAP214Count } from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import { EntityTypesAP214ExtendedCount } from '../../AP214E3_2010/ap214_tessellated_types'
 import { ProgressTracker } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
 import {
@@ -1230,7 +1230,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const [model, scene] = this.model
     // TODO(nickcastel50): This is absolutely horrid but I don't know a better way yet.
     // This implementation also kills our lazy loading...
-    for (let typeIndex = 0; typeIndex < EntityTypesAP214Count; ++typeIndex) {
+    // Extended count, not the generated one: the AP242 shadow types
+    // (ap214_tessellated_types.ts) are allocated past the generated enum, so
+    // stopping at EntityTypesAP214Count would drop every TESSELLATED_SOLID /
+    // COORDINATES_LIST record from GetLineIDsWithType(0).
+    for (let typeIndex = 0; typeIndex < EntityTypesAP214ExtendedCount; ++typeIndex) {
 
       const results = model.typeIDs(typeIndex)
       const arr = Array.from(results)

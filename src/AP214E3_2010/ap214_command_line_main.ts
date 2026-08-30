@@ -2,6 +2,7 @@ import { exit } from 'process'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import { ap214TypeName } from './ap214_tessellated_types'
 import yargs from 'yargs/yargs'
 import fs from 'fs'
 import StepEntityBase from '../step/step_entity_base'
@@ -228,7 +229,7 @@ async function doWork() {
               IterableIterator<StepEntityBase<EntityTypesAP214>>
 
               for (const element of elements) {
-                const elementTypeID = EntityTypesAP214[element.type]
+                const elementTypeID = ap214TypeName(element.type)
 
                 console.log(
                   fields.reduce((previous, current, currentIndex) => {

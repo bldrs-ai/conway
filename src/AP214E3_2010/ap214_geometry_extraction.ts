@@ -153,6 +153,13 @@ import {
   view_volume,
 } from './AP214E3_2010_gen'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import {
+  ap214TypeName,
+  complex_triangulated_face,
+  coordinates_list,
+  tessellated_shape_representation,
+  tessellated_solid,
+} from './ap214_tessellated_types'
 import { AP214MaterialCache } from './ap214_material_cache'
 import AP214ModelCurves from './ap214_model_curves'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
@@ -164,6 +171,28 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 // Fewest points a bound can have and still span a plane, which is what
 // GetBasisFromCoplanarPoints needs downstream.
 const MINIMUM_BOUND_POINTS = 3
+
+/**
+ * Render flat triangle indices as the STEP array text
+ * `Geometry::ExtractTriangles` parses — `((a,b,c),(a,b,c),...)`, 1-based.
+ *
+ * The text form is not a detour: it is the interface `extractVerticesAndTriangles`
+ * exposes, and it is what lets a hand-written AP242 face set reach the same
+ * native ingestion IFC's `IfcTriangulatedFaceSet` uses without a wasm change.
+ *
+ * @param indices Flat triangle indices, three per triangle.
+ * @return {string} The STEP array text.
+ */
+function triangleTupleText( indices: number[] ): string {
+
+  const tuples: string[] = []
+
+  for ( let where = 0; where + 2 < indices.length; where += 3 ) {
+    tuples.push( `(${indices[ where ]},${indices[ where + 1 ]},${indices[ where + 2 ]})` )
+  }
+
+  return `(${tuples.join( ',' )})`
+}
 
 // Ceiling on how finely one span of a pcurve's parameter curve is sampled
 // when it is pushed through an angular surface parameterization. Nothing in
@@ -3955,6 +3984,17 @@ export class AP214GeometryExtraction {
   public readonly geometryTypeCounts = new Map<string, number>()
 
   /**
+   * True while the walk is iterating the items of a
+   * `tessellated_shape_representation` — the one context a TESSELLATED_SOLID
+   * is part shape in (see the gate in extractRepresentationItem).
+   *
+   * Set and restored around that one item loop, so every other route into
+   * extractRepresentationItem (a mapped item, a styled item, a plain
+   * SHAPE_REPRESENTATION's items) sees it false and skips the solid.
+   */
+  private inTessellatedShapeRepresentation_ = false
+
+  /**
    * Increment the geometry-type breakdown counter for a type name.
    *
    * @param name The entity type name.
@@ -3989,10 +4029,30 @@ export class AP214GeometryExtraction {
       from instanceof placement ||
       from instanceof advanced_face ||
       from instanceof face ||
+      from instanceof coordinates_list ||
       from instanceof cartesian_point ) {
-      
+
       return // skip these types, not 3D geometry or top level types
 
+    }
+
+    // test-models#62: a TESSELLATED_SOLID renders only when the walk reached
+    // it as an item of a TESSELLATED_SHAPE_REPRESENTATION. Three chains reach
+    // the one in nist_ftc_08_asme1_ap242-e1-tg.stp and only that one is the
+    // part shape:
+    //
+    //   #106 TESSELLATED_SHAPE_REPRESENTATION -> #11436   <- render this
+    //   #11451 SHAPE_REPRESENTATION -> #11436             <- PMI association
+    //   #25231 SHAPE_REPRESENTATION -> #25216 TESSELLATED_SHELL
+    //
+    // The middle one is the 'shape for associated data' idiom: a SHAPE_ASPECT
+    // pointing a PROPERTY_DEFINITION at the same solid. Rendering it as well
+    // double-places the mesh — model.geometry memoizes by localID, but
+    // scene.addGeometry is called again regardless — which is why this gate
+    // sits BEFORE the memoization check below rather than beside the dispatch.
+    if ( from instanceof tessellated_solid && !this.inTessellatedShapeRepresentation_ ) {
+
+      return
     }
 
     const foundGeometry = this.model.geometry.getByLocalID(from.localID)
@@ -4020,9 +4080,13 @@ export class AP214GeometryExtraction {
     // Geometry-type breakdown for the load report (issue #301 follow-up):
     // after the memoization early-return, so each unique geometry
     // definition counts once regardless of occurrence instancing.
-    this.countGeometryType(EntityTypesAP214[from.type])
+    this.countGeometryType(ap214TypeName(from.type))
 
-    if ( from instanceof boolean_result ) {
+    if ( from instanceof tessellated_solid ) {
+
+      this.extractTessellatedSolid( from )
+
+    } else if ( from instanceof boolean_result ) {
 
       // also handles AP214BooleanClippingResult
       this.extractBooleanResult( from )
@@ -4053,13 +4117,175 @@ export class AP214GeometryExtraction {
 
     } else  {
 
-      Logger.warning( `Unsupported type: ${EntityTypesAP214[from.type]} ` +
+      Logger.warning( `Unsupported type: ${ap214TypeName(from.type)} ` +
       `expressID: ${from.expressID}`)
     }
     
     if ( !isMappedItem) {
       this.scene.addGeometry( from.localID, owningElementLocalID )
     }
+  }
+
+  /**
+   * Reify one COMPLEX_TRIANGULATED_FACE's strips and fans into flat triangle
+   * indices, resolved through `pnindex` to 1-based positions in the face's
+   * coordinates list.
+   *
+   * Two rules, both measured against
+   * `nist_ftc_08_asme1_ap242-e1-tg.stp`'s own declared per-vertex normals:
+   *
+   *  - STRIP WINDING ALTERNATES. Triangle k of a strip is
+   *    `(s[k], s[k+1], s[k+2])` for even k and `(s[k+1], s[k], s[k+2])` for
+   *    odd k. Taking every triangle in strip order instead agrees with the
+   *    file's normals on only 960 of 1729 triangles; alternating agrees on
+   *    1729 of 1729. Getting it wrong turns half the surface inside out in a
+   *    way that still looks like a solid.
+   *  - `pnindex` IS AN INDIRECTION, not decoration. Strip and fan values are
+   *    1-based indices into `pnindex`, whose values are in turn 1-based
+   *    indices into the coordinates list. It is present on every face of that
+   *    file; when a face omits it, the strip values address the coordinates
+   *    list directly.
+   *
+   * Fans are `(f[0], f[k], f[k+1])` — no alternation, they share the hub.
+   *
+   * @param face The face to triangulate.
+   * @param into Receives the triangles, three 1-based coordinate indices each.
+   * @return {number[]} `into`.
+   */
+  public static triangulateComplexFace(
+      face: complex_triangulated_face,
+      into: number[] = [] ): number[] {
+
+    const pointIndices = face.pnindex
+
+    const resolve = pointIndices.length > 0 ?
+      ( value: number ) => pointIndices[ value - 1 ] :
+      ( value: number ) => value
+
+    for ( const strip of face.triangle_strips ) {
+
+      for ( let where = 0; where + 2 < strip.length; ++where ) {
+
+        const first  = resolve( strip[ where ] )
+        const second = resolve( strip[ where + 1 ] )
+        const third  = resolve( strip[ where + 2 ] )
+
+        if ( ( where & 1 ) === 0 ) {
+          into.push( first, second, third )
+        } else {
+          into.push( second, first, third )
+        }
+      }
+    }
+
+    for ( const fan of face.triangle_fans ) {
+
+      const hub = resolve( fan[ 0 ] )
+
+      for ( let where = 1; where + 1 < fan.length; ++where ) {
+        into.push( hub, resolve( fan[ where ] ), resolve( fan[ where + 1 ] ) )
+      }
+    }
+
+    return into
+  }
+
+  /**
+   * Extract geometry from an AP242 TESSELLATED_SOLID (test-models#62).
+   *
+   * The faces are grouped by the coordinates list they index into (in
+   * practice one list per solid — all 272 faces of the NIST -tg part share
+   * `#111`), and each group becomes a single wasm call: the coordinates
+   * list's points attribute goes across as raw STEP text via
+   * `extractParseBuffer`, and the triangles as synthesised STEP-array text in
+   * a second parse buffer. `Geometry::ExtractVertices` / `ExtractTriangles`
+   * parse array text and decrement the 1-based indices; they are entirely
+   * schema-agnostic, which is why this needs no C++ or wasm change — it is
+   * the same pair of calls IFC's `IfcTriangulatedFaceSet` path makes.
+   *
+   * Per-vertex normals are dropped, exactly as that IFC path drops them:
+   * `Geometry` stores positions only and shades faceted.
+   *
+   * @param from The solid to extract.
+   */
+  extractTessellatedSolid( from: tessellated_solid ) {
+
+    const conwayModel = this.conwayModel
+    const geometry    = conwayModel.nativeGeometry()
+
+    const faceGroups = new Map< number, [ coordinates_list, complex_triangulated_face[] ] >()
+
+    for ( const face of from.items ) {
+
+      const faceCoordinates = face.coordinates
+      let   group           = faceGroups.get( faceCoordinates.localID )
+
+      if ( group === void 0 ) {
+
+        group = [ faceCoordinates, [] ]
+        faceGroups.set( faceCoordinates.localID, group )
+      }
+
+      group[ 1 ].push( face )
+    }
+
+    for ( const [ faceCoordinates, faces ] of faceGroups.values() ) {
+
+      const triangleIndices: number[] = []
+
+      for ( const face of faces ) {
+        AP214GeometryExtraction.triangulateComplexFace( face, triangleIndices )
+      }
+
+      if ( triangleIndices.length === 0 ) {
+        continue
+      }
+
+      const coordinateBuffer = conwayModel.nativeParseBuffer()
+      const triangleBuffer   = conwayModel.nativeParseBuffer()
+
+      try {
+
+        // COORDINATES_LIST slot 2 is `points`, already in the
+        // `((x,y,z),(x,y,z),...)` form ExtractVertices parses.
+        if ( !faceCoordinates.extractParseBuffer(
+            2, 1, 2, coordinateBuffer, this.wasmModule, true ) ) {
+
+          continue
+        }
+
+        const triangleText = new TextEncoder().encode( triangleTupleText( triangleIndices ) )
+
+        // resize() can grow the wasm heap, so the destination view is taken
+        // after it rather than off a cached HEAPU8 (same reason as #485 in
+        // StepEntityBase.extractParseBuffer).
+        const trianglePointer = triangleBuffer.resize( triangleText.length )
+
+        wasmHeapView( this.wasmModule, Uint8Array, trianglePointer, triangleText.length )
+            .set( triangleText )
+
+        const groupGeometry = conwayModel.nativeGeometry()
+
+        groupGeometry.extractVerticesAndTriangles( coordinateBuffer, triangleBuffer )
+
+        geometry.appendGeometry( groupGeometry )
+
+      } finally {
+
+        conwayModel.freeParseBuffer( coordinateBuffer )
+        conwayModel.freeParseBuffer( triangleBuffer )
+      }
+    }
+
+    const canonicalMesh: CanonicalMesh = {
+      type: CanonicalMeshType.BUFFER_GEOMETRY,
+      geometry: geometry,
+      localID: from.localID,
+      model: this.model,
+      temporary: false,
+    }
+
+    this.model.geometry.add( canonicalMesh )
   }
 
   /**
@@ -6217,7 +6443,28 @@ export class AP214GeometryExtraction {
         // `representation.items` is a dereferencing getter, so keep it
         // untouched when this slice carries no items at all — the
         // pre-slicing code never read it in that case either.
-        const items = includeItems ? representation.items : []
+        //
+        // It also THROWS, on a representation holding an item type the AP214
+        // schema has no id for: #25231 in nist_ftc_08_asme1_ap242-e1-tg.stp
+        // holds a TESSELLATED_SHELL. Letting that escape from here skipped
+        // the transform unwind at the bottom of this thunk, so the root
+        // transform this thunk pushed stayed current and the NEXT root
+        // composed onto it — which is how the tessellated part in that file
+        // came out 1000x too small, its own mm->m root scale multiplied by
+        // the leaked one (test-models#62; the two roots are #25231 and #106,
+        // adjacent in the free-root scan). Capture, unwind, then rethrow at
+        // the end so the demand pump still reports it exactly as before.
+        let items: representation_item[] = []
+        let deferredItemsError: unknown = void 0
+
+        if ( includeItems ) {
+          try {
+            items = representation.items
+          } catch ( ex ) {
+            deferredItemsError = ex
+          }
+        }
+
         const itemStart = slice?.itemStart ?? 0
         const itemEnd = Math.min( slice?.itemEnd ?? items.length, items.length )
 
@@ -6249,60 +6496,75 @@ export class AP214GeometryExtraction {
         // instead of as silently misplaced geometry two ranges later.
         const verifySliceNeutrality = slice?.itemStart !== void 0
 
-        for ( let itemIndex = itemStart; itemIndex < itemEnd; ++itemIndex ) {
+        // test-models#62: the one context in which a TESSELLATED_SOLID is
+        // part shape rather than a PMI association is as an item of a
+        // TESSELLATED_SHAPE_REPRESENTATION. Saved and restored rather than
+        // simply cleared, because a thunk runs its children before its own
+        // items and a child thunk is what this one is nested inside.
+        const enclosingTessellatedRepresentation = this.inTessellatedShapeRepresentation_
 
-          const item = items[ itemIndex ]
-          const depthBeforeItem = verifySliceNeutrality ? this.scene.stackLength : 0
+        this.inTessellatedShapeRepresentation_ =
+          representation instanceof tessellated_shape_representation
 
-          try {
-            if ( item instanceof placement ) {
-              this.extractPlacement( item, mappedItem )
-              continue
-            }
+        try {
+          for ( let itemIndex = itemStart; itemIndex < itemEnd; ++itemIndex ) {
 
-            if ( item instanceof styled_item ) {
-              this.extractStyledItemWithProcessing( item, itemOwningLocalID )
-              continue
-            }
+            const item = items[ itemIndex ]
+            const depthBeforeItem = verifySliceNeutrality ? this.scene.stackLength : 0
 
-            if ( item instanceof mapped_item ) {
-              this.extractMappedItem( item, itemOwningLocalID )
-            } else {
-              this.extractRepresentationItem( item, itemOwningLocalID )
-              const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
-              if ( styledItemLocalID !== void 0 ) {
-                const styledItem =
-                  model.getElementByLocalID( styledItemLocalID ) as styled_item
-                this.extractStyledItem( styledItem, item )
+            try {
+              if ( item instanceof placement ) {
+                this.extractPlacement( item, mappedItem )
+                continue
               }
-            }
-          } catch ( ex ) {
-            // Recoverable: the item is skipped and the walk continues, so this
-            // is quiet for the same reason the stack-mismatch guard below is.
-            // A prefix extraction (parse-time preview channel) hits dangling
-            // records BY CONSTRUCTION, and an ungated stack per item turned an
-            // otherwise-healthy Arty load into four red console errors
-            // (conway#580).
-            if ( !this.quietRecoverableLogging ) {
-              if (ex instanceof Error) {
-                // Stack included for the same reason extractFaces includes it:
-                // this family's message is the same string for every occurrence
-                // ("Value in select must be populated" accounts for all 274 in
-                // the NIST AP242 set), so without a stack there is nothing to
-                // tell one occurrence from another or say WHICH select failed.
-                Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
+
+              if ( item instanceof styled_item ) {
+                this.extractStyledItemWithProcessing( item, itemOwningLocalID )
+                continue
+              }
+
+              if ( item instanceof mapped_item ) {
+                this.extractMappedItem( item, itemOwningLocalID )
               } else {
-                Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+                this.extractRepresentationItem( item, itemOwningLocalID )
+                const styledItemLocalID = this.materials.styledItemMap.get(item.localID)
+                if ( styledItemLocalID !== void 0 ) {
+                  const styledItem =
+                    model.getElementByLocalID( styledItemLocalID ) as styled_item
+                  this.extractStyledItem( styledItem, item )
+                }
               }
-            }
-          } finally {
+            } catch ( ex ) {
+              // Recoverable: the item is skipped and the walk continues, so this
+              // is quiet for the same reason the stack-mismatch guard below is.
+              // A prefix extraction (parse-time preview channel) hits dangling
+              // records BY CONSTRUCTION, and an ungated stack per item turned an
+              // otherwise-healthy Arty load into four red console errors
+              // (conway#580).
+              if ( !this.quietRecoverableLogging ) {
+                if (ex instanceof Error) {
+                  // Stack included for the same reason extractFaces includes it:
+                  // this family's message is the same string for every occurrence
+                  // ("Value in select must be populated" accounts for all 274 in
+                  // the NIST AP242 set), so without a stack there is nothing to
+                  // tell one occurrence from another or say WHICH select failed.
+                  Logger.error( `Error processing representation item: \n\t${ex.name}\n\t${ex.message}\n\t${ex.stack}\n\texpressID: #${item.expressID}` )
+                } else {
+                  Logger.error(`Unknown exception processing representation item (${ex}) expressID: #${item.expressID}`)
+                }
+              }
+            } finally {
 
-            if ( verifySliceNeutrality && !( item instanceof placement ) &&
-                this.scene.stackLength !== depthBeforeItem &&
-                !this.quietRecoverableLogging ) {
-              Logger.error( `Representation item left transform state inside a sliced range expressID: #${item.expressID}` )
+              if ( verifySliceNeutrality && !( item instanceof placement ) &&
+                  this.scene.stackLength !== depthBeforeItem &&
+                  !this.quietRecoverableLogging ) {
+                Logger.error( `Representation item left transform state inside a sliced range expressID: #${item.expressID}` )
+              }
             }
           }
+        } finally {
+
+          this.inTessellatedShapeRepresentation_ = enclosingTessellatedRepresentation
         }
 
         while ( this.scene.stackLength > entryTransformDepth ) {
@@ -6312,6 +6574,10 @@ export class AP214GeometryExtraction {
         if( ( this.scene.stackLength !== entryTransformDepth ||
             this.scene.currentParent !== currentParent ) && !this.quietRecoverableLogging ) {
           Logger.error( `Stack length mismatch after processing shape_representation  ${this.scene.currentParent} ${currentParent} expressID: #${representation.expressID}` )
+        }
+
+        if ( deferredItemsError !== void 0 ) {
+          throw deferredItemsError
         }
       }
     }
@@ -6881,10 +7147,18 @@ export class AP214GeometryExtraction {
         }
       }
 
+      // tessellated_shape_representation is named explicitly even though it
+      // extends shape_representation: model.types reads each class's static
+      // `query`, which the generated shape_representation's cannot mention
+      // (test-models#62). Without it a TSR that is only the TARGET of a
+      // shape_representation_relationship — the AP242-correct binding for a
+      // tessellated part, e.g. #25121 in nist_ftc_08...-tg.stp — gets tree
+      // children but never a thunk, so its items are never walked.
       const shapeRepresentations = model.types(
         shape_representation,
         advanced_brep_shape_representation,
-        geometrically_bounded_wireframe_shape_representation)
+        geometrically_bounded_wireframe_shape_representation,
+        tessellated_shape_representation)
 
       for ( const shapeRepresentation of shapeRepresentations ) {
         let treeNode = treeMap.get( shapeRepresentation.localID )
@@ -6896,6 +7170,27 @@ export class AP214GeometryExtraction {
         // This is only for completely free geometry nodes.
         if ( ( treeNode.parents ?? 0 ) !== 0 || treeNode.thunk !== void 0 || treeNode.processed === true ) {
           continue        
+        }
+
+        // conway#597's PDS resolution applies to a free root too, and a
+        // tessellated part is the case that needs it: the AP242 binding is a
+        // plain shape_representation_relationship whose rep_1 is the
+        // TESSELLATED_SHAPE_REPRESENTATION and whose rep_2 is the SDR-bound
+        // SHAPE_REPRESENTATION (#25121 in nist_ftc_08...-tg.stp), so the loop
+        // above registers the override for rep_2 — the edge's source — while
+        // the TSR carrying the geometry is the target and stays a free root.
+        // Without this its mesh reports the TSR's own express id instead of
+        // the owning part's PDS, and hangs off no product node in the tree.
+        // Silent on failure by design: a free root that reaches no SDR-bound
+        // representation is the ordinary standalone case, not the ambiguity
+        // the source-side loop warns about.
+        if ( !ownerOverrideByRepLocalID.has( shapeRepresentation.localID ) ) {
+
+          const resolvedOwnerLocalID = resolvePdsLocalID( shapeRepresentation.localID )
+
+          if ( resolvedOwnerLocalID !== void 0 ) {
+            ownerOverrideByRepLocalID.set( shapeRepresentation.localID, resolvedOwnerLocalID )
+          }
         }
 
         const mappedTreeNode = treeNode

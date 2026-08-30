@@ -20,7 +20,7 @@ import Logger from '../logging/logger'
 import Environment from '../utilities/environment'
 import { ExtractResult } from '../core/shared_constants'
 import { CanonicalMeshType } from '../core/canonical_mesh'
-import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import { ap214TypeName } from './ap214_tessellated_types'
 import { Console } from 'console'
 
 
@@ -515,7 +515,7 @@ function doWork() {
             const element = model.getElementByLocalID( mesh.localID )
             const rowID = element?.expressID ?? mesh.localID
             const typeName =
-              element !== void 0 ? EntityTypesAP214[element.type] : ''
+              element !== void 0 ? ap214TypeName(element.type) : ''
 
             csvLines.push([rowID, `${rowID},${hash},${typeName},,,FALSE\n`])
           }
@@ -528,7 +528,7 @@ function doWork() {
             const rowID = curveItem.expressID ?? curveItem.toString()
 
             csvLines.push([rowID,
-              `${rowID},${hash},${EntityTypesAP214[curveItem.type]},,,\n`])
+              `${rowID},${hash},${ap214TypeName(curveItem.type)},,,\n`])
           }
 
           csvLines.sort( ( a, b ) => {
