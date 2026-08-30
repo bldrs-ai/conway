@@ -733,19 +733,35 @@ spread thin enough (largest single site 4.3 MB) that it was not chased.
   terms, and the run in §8 is one env var away from PSB.
 - ~~**Does geometry parallelise better or worse than parse?**~~ **Answered in
   §11, on D3D itself: comparable at N=2 (0.885 vs parse's 0.94) and much worse
-  at N=4 (0.552 vs 0.857)**, on a box calibrated at 0.981 (register-bound) and
-  0.951 (bandwidth-bound) at N=4 across five brackets. §6's worry about N
+  at N=4 (0.46–0.56 vs 0.857)**, on a box calibrated at 0.983 (register-bound)
+  and 0.966 (bandwidth-bound, on a working set derived from this box's L3) at
+  N=4 across three brackets. §6's worry about N
   workers sharing one 4 GiB linear memory does not apply to the shape that
   ships: with separate module instances per worker — what a no-COEP production
   has anyway — per-worker wasm memory *falls* with N (D3D 611 → 207 MB each at
   N=4) and total wasm grew 1.36×.
   **What is now open in its place:** why 60.7 % of D3D's product worklist
   resolves no mapping source, and whether that is reducible; why sharding
-  changes 247 of D3D's 46,166 geometries (§11.5), which is a correctness
-  defect rather than a performance one; and — new from §11.4 — whether the
-  whole-model demand prep every worker repeats can be hoisted and handed to
-  them, since on models under ~5 s of geometry it is the largest term and no
-  partition change touches it.
+  changes at least 247 of D3D's 46,166 geometries (§11.5), which is a
+  correctness defect rather than a performance one; and — from §11.4 —
+  whether the worklists *and dispatch keys* can be computed once and handed
+  to the workers, since on models under ~5 s of geometry the key pass alone
+  is 52–68 % of sharded prep and no partition change touches it.
+- **Do the shards rebuild shared geometry *below* the representation?**
+  Untested, and it is the one hypothesis §11's retractions do not exclude.
+  `dupWork` is keyed on emitted `geometryExpressID`s, so profiles, boolean
+  operands, void/master geometry and mapped-item sources — the exact class
+  `geometry_dispatch.ts` says the key cannot see — are invisible to it
+  (§11.6). §11.4 reports per-geometry slowdowns of **1.33× on MB-Khaya and
+  2.29× on Schependomlaan with `dupWork` 1.00**, and this box's `stream`
+  ceiling at N=4 is 0.966 with four processes reaching 3.8× of a possible 4×
+  of memory bandwidth (§11.2) — so contention does not plausibly account for
+  2.29×. A shard rebuilding shared sub-representation geometry produces
+  exactly that signature. This is the hypothesis that would resurrect the
+  retracted "+77 % on MB-Khaya", and nothing in §11 tests it. What would: a
+  `CanonicalMesh`-level construction counter inside the geometry pipeline,
+  summed per shard against the single worker's, which is the same
+  unique-only accumulation `dupWork` already does one level up.
 - **Why did geometry take 4,256 s here against 104.7 s in §0?** Still open,
   but **§11.7 eliminates the leading candidate.** Both of those are browser
   runs; §11 ran the *same source shape as the slow one* — materialised, not
@@ -774,9 +790,10 @@ is exactly the alternative it was used to eliminate.
 
 The harness now counts the work itself as well as the time: geometries
 built and vertex floats built, summed over shards, against the single
-worker's own totals (`dupWork` / `dupVerts`), plus the whole-model demand prep
-every worker repeats (`dupPrep`). Re-measured on the same box, same models,
-same mode:
+worker's own totals (`dupWork` / `dupVerts`), plus the first-batch window
+that contains worklist prep (`dupFirstBatch`, called `dupPrep` in the second
+draft and renamed here — §11.1 and §11.4 say why). Re-measured on the same
+box, same models, same mode:
 
 | model, N=4 | `dupWall` (the old "duplication") | **`dupWork`** | what the old number was |
 |---|---:|---:|---|
@@ -793,21 +810,30 @@ So, plainly:
   assets on D3D at N=4** under this dispatch key, and 1.48 is near 1.38, not
   near 2.03. The 2.03 had no in-repo counterpart and should have been chased
   at the time.
-- **Retracted.** "Measured here: +77 % on MB-Khaya and +103 % on D3D" against
-  #394's predicted +40 %. MB-Khaya rebuilds **nothing** — its four shards
-  build 5,600 geometries between them, which is exactly what one worker
-  builds. Same for Schependomlaan. The correction comment was not "low by
-  half"; on three of four models it was high, and #394's prediction is not
-  contradicted by anything measured here.
+- **Retracted, scoped.** "Measured here: +77 % on MB-Khaya and +103 % on D3D"
+  against #394's predicted +40 %. MB-Khaya rebuilds **no emitted geometry** —
+  its four shards build 5,600 geometry IDs between them, exactly what one
+  worker builds. Same for Schependomlaan. The correction comment was not "low
+  by half"; on three of four models it was high, and #394's prediction is not
+  contradicted by anything measured here. **The scope is load-bearing:**
+  `dupWork` counts geometry that reaches a placed ID, and this repo's own
+  dispatch code says the sharing that survives its key lives *below* that
+  (§11.6). "Rebuilds nothing" is one level up from what the counter measures.
 - **Retracted.** "97 % of D3D's N=4 loss is duplication and 3 % is
   imbalance." The real split is **72 % duplication, 12 % per-geometry
-  slowdown, 9 % replicated demand prep, 7 % imbalance** (§11.4).
+  slowdown, 9 % the first-batch window, 7 % imbalance** (§11.4) — where the
+  middle two are one measured quantity split by a cut, and only their sum
+  (21 %) is measured.
 - **Retracted.** "The missing 50 points are algorithmic, and nothing about
   this box explains them." A register-bound spin loop is *by construction*
   blind to a memory ceiling, so it never could have supported that. With a
-  bandwidth-bound kernel and with the harness's own replicated-parse control,
-  the box explains **about 5 of the 45 points** D3D loses at N=4 (4–9 across
-  three repetitions) — a minority, but not zero (§11.2).
+  bandwidth-bound kernel and with the harness's own `open` and prep-probe
+  contention controls, the box explains **about 5 of the 45 points** D3D
+  loses at N=4 (4–9 across three repetitions) — a minority, but not zero
+  (§11.2). The second draft's *quantity* for the kernel gap ("three points of
+  ceiling") is dropped in this round: it was half the spread of its own
+  samples, and on a working set that was 1.6 % **under** this box's L3 rather
+  than orders of magnitude past it (§11.2).
 - **Unchanged.** §2's assumed 0.80 at N=4 still does not hold, the memory
   result in §11.7 stands to the megabyte, and SKYLARK250 still does not shard.
 
@@ -851,16 +877,37 @@ distinction the first draft did not have:
 | reported | what it is | what it can and cannot say |
 |---|---|---|
 | `dupWall` | Σ shard geometry **wall** time ÷ T₁ | how much shard-time the partition spent. Cannot say why. |
-| `dupWork`, `dupVerts` | geometries and vertex floats **built**, Σ over shards ÷ the single worker's | whether the shards did more *work*. Immune to speed. |
-| `dupPrep` | first-batch time, Σ over shards ÷ the single worker's | whole-model demand prep, which every worker repeats in full |
+| `dupWork`, `dupVerts` | geometries and vertex floats **built**, Σ over shards ÷ the single worker's | whether the shards did more *work* — of the kind that reaches a placed geometry ID. Immune to speed. See §11.6 for what it cannot see. |
+| `dupFirstBatch` | first-batch **wall** time, Σ over shards ÷ the single worker's | how much longer the window containing worklist prep took. A **mixture**, and it has `dupWall`'s exposure exactly. |
 
-`dupPrep` is there because the first `ExtractGeometryBatch` call is where
-`ensureDemandWorklists_` runs — the `IfcProduct` walk,
-`aggregateTargetLocalIDs()` over every `IfcRelAggregates`, and
-`computeDispatchKeys` over the resulting worklist. **A shard does not shrink
-any of it**, and it sits inside the window that gets read as geometry. It is
-a third thing summed shard time can be, and neither of the other two can see
-it.
+`dupFirstBatch` is reported because the first `ExtractGeometryBatch` call is
+where `ensureDemandWorklists_` runs. **It is named for the window, not for a
+mechanism, because this round found it is not one** — the second draft
+reported it as `dupPrep` and read it as "the same prep, N times", and it is
+four things at once:
+
+- **Replicated prep.** `collectDemandCandidates_` — the `IfcProduct` walk and
+  `aggregateTargetLocalIDs()` over every `IfcRelAggregates`. A shard does not
+  shrink this, and every worker does all of it. This is the part the name
+  claimed.
+- **A dispatch-key pass that only a sharded worker runs at all.**
+  `ensureDemandWorklists_` returns early at `this.shard_ === void 0`
+  (`ifc_api_proxy_ifc.ts:2280`), so **the N=1 reference in the denominator
+  computes not one dispatch key.** Every N>1 worker additionally runs
+  `geometryDispatchKey` over every worklist product *and* every
+  `IfcRelAggregates` (`:2298-2313`), then filters both lists. Dividing shard
+  work by a reference that is a strict subset of it is not a replication
+  factor, and this term is not something an unsharded pool of N would pay —
+  it exists because sharding exists.
+- **One batch of 64 products of real geometry**, on both sides of the ratio
+  and in different proportions.
+- **Contention**, because it is wall time — the identical exposure the row
+  above caveats for `dupWall`, and the second draft's table put this row
+  beside it with no such caveat.
+
+`--prep-probe` separates them by measurement rather than by argument, and
+§11.4 reports what it found. The ratio itself is kept, under a name that
+claims only what it times.
 
 **Proof the work happened.** A timing line cannot distinguish a fast run from
 a skipped one, so every run reports the geometry it actually built, by
@@ -880,38 +927,89 @@ model_03-2-101_123.ifc`, Tekla Structures 2023, IFC4, 223,990,340 bytes =
 
 ### 11.2 Box calibration — and what a spin loop cannot calibrate
 
-Five brackets, run immediately before and immediately after each block of
-geometry runs, N separate **processes**. Two kernels now, because one of them
-was being asked a question it cannot answer:
+Brackets run immediately before and immediately after each block of geometry
+runs, N separate **processes**. Two kernels now, because one of them was
+being asked a question it cannot answer:
 
 - **`spin`** — register-bound integer loop, no allocation, no memory traffic.
   Same instrument as M2's (which read 0.995 / 0.969 on its box).
-- **`stream`** — sequential reads over a **256 MiB per-process** working set,
-  far past any last-level cache, so it is bound by DRAM bandwidth. **New
+- **`stream`** — sequential reads over a per-process working set sized past
+  this box's last-level cache, so it is bound by DRAM bandwidth. **New
   here.** The spin loop never touches memory, so it is *by construction*
   incapable of detecting a memory-bandwidth ceiling; the first draft used it
   to rule one out anyway.
 
-| bracket | `spin` N=2 | `spin` N=4 | `stream` N=2 | `stream` N=4 |
-|---|---:|---:|---:|---:|
-| before the model sweep | 0.999 | 0.982 | 0.963 | 0.951 |
-| after the model sweep | 0.989 | 0.971 | 0.957 | 0.980 |
-| before D3D | 0.997 | 0.981 | 0.981 | 0.935 |
-| after D3D | 0.993 | 0.981 | 0.983 | 0.923 |
-| after SKYLARK250 | 0.992 | 0.983 | 0.980 | 0.958 |
-| **median** | **0.993** | **0.981** | **0.980** | **0.951** |
+**The `stream` kernel's stated justification was false, and the working set is
+now derived rather than asserted.** It was fixed at 256 MiB, justified as
+"far larger than any last-level cache … one to two orders of magnitude below
+this". This box reports **L3 = 266,240 K = 260 MiB, shared across cpus 0-3**
+(`/sys/devices/system/cpu/cpu0/cache/index3`), so the buffer sat **1.6 %
+under** the cache it claimed to be two orders of magnitude above. The number
+survived anyway, but by measurement rather than by the margin — swept at N=1:
 
-Idle box throughout — load average 0.6–4.1 at each bracket (the higher
+| working set | GB/s per process |
+|---:|---:|
+| 64 MiB | **11.62** (cache-resident) |
+| 256 MiB | 5.63 |
+| 1,024 MiB | 5.51 |
+| 2,048 MiB | 5.50 |
+
+Flat from 256 MiB to 2 GiB, so 256 MiB was already DRAM-bound on this box —
+the reported 260 MiB L3 is almost certainly the *host's* whole shared cache
+seen from a guest, not a share four cores can hold. `spin_calibrate.mjs` now
+reads the cache from sysfs, sizes the working set at **4× it or 1 GiB,
+whichever is larger** (1,040 MiB here), prints the ratio and the achieved
+GB/s on every run, and **refuses** rather than reporting a cache-resident
+number as a bandwidth ceiling. `--stream-mib` overrides it, which is how the
+table above was taken.
+
+**The numbers below are on the corrected kernel and are not comparable to the
+second draft's**, which used the 256 MiB one. Three brackets around this
+round's runs:
+
+| bracket | `spin` N=1 median | `spin` N=2 | `spin` N=4 | `stream` N=2 | `stream` N=4 |
+|---|---:|---:|---:|---:|---:|
+| before | 19,555 ms | 0.996 | 0.983 | 1.002 | 0.970 |
+| between | 19,427 ms | 0.991 | 0.981 | 0.980 | 0.966 |
+| after | 19,553 ms | 0.996 | 0.987 | 0.982 | 0.947 |
+| **median** | **19,553 ms** | **0.996** | **0.983** | **0.982** | **0.966** |
+
+**The absolute median column is restored, and it is not decoration.** It is
+the only cross-session *level* control this method has: `spin()` and
+`ITERATIONS = 3_000_000_000` are byte-identical across every commit on this
+branch, so the milliseconds are directly comparable between sessions where
+the efficiency ratios — `base ÷ median(table[N])` — are invariant to how fast
+the box is and cannot speak to level at all. The second draft deleted the
+column and then used the ratios to argue about level; §11.3 has the
+consequence. Session 1's column, for comparison: 20,745 / 20,860 / 20,914 /
+20,782 ms.
+
+Idle box throughout — load average 0.6–3.0 at each bracket (the higher
 readings are the previous block's decay, taken before the first timed spin),
-no swap, 14.4 GB or more free. The children now start behind a **ready/go
+no swap, 12 GB or more free. The children start behind a **ready/go
 barrier**, so fork and Node boot are outside the timed window; without it the
 first child spins uncontended for the whole boot skew and the ceiling comes
 out optimistic by about the same order as the deficit being measured.
 
-**The box is not neutral, and the spin loop could not have told us.** At N=4 a
-register-bound loop gives back 98.1 % and a DRAM-bound one gives back 95.1 %.
-Three points of ceiling exist that the first draft's instrument was
-structurally unable to see.
+**A spin loop cannot see a memory-bandwidth ceiling. On this box there is
+barely one to see, and the second draft over-read its own samples.** That
+draft put the gap at "three points of ceiling the first draft's instrument was
+structurally unable to see" — 0.030, from five `stream` N=4 readings of 0.951
+/ 0.980 / 0.935 / 0.923 / 0.958, a spread of **0.057**, one of which read N=4
+*above* its own N=2, which is not physical for a bandwidth-bound kernel. The
+quantity was half the spread of the samples it came from. On the corrected
+kernel the gap is **1.7 points** (`spin` 0.983 against `stream` 0.966) with
+the `stream` row itself spread 0.023 — still not resolved above its own
+noise. **The qualitative point stands and matters** (a register-bound loop
+gives no licence to rule out a memory ceiling); **the number does not**, in
+either draft.
+
+The mechanism is visible in the bandwidth column: 5.60 GB/s per process at
+N=1 and 5.30 at N=4, so **four processes deliver 21.2 GB/s against one's
+5.6 — 3.8× of a possible 4×.** This box's memory system is nowhere near
+saturated by four cores, which is what a 260 MiB host L3 implies about the
+rest of the host. That bounds how much of §11.4's per-geometry slowdown
+memory bandwidth can be — see §11.6.
 
 **A third calibration, and the most relevant one, is inside the harness
 already.** The `open` phase is *identical work in every worker* — each opens
@@ -938,10 +1036,28 @@ to 9 depending on the repetition. The remaining ~40 are algorithmic. That is a
 weaker claim than "nothing about this box explains them", and it is the one
 the evidence supports.
 
+**A fourth control, added in this round, agrees with the third.**
+`--prep-probe` runs N workers through the identical *unsharded* worklist
+build — same code path, same work, no shard — so its inflation over N times
+one worker is contention and nothing else. At N=4 it reads **1.27× on D3D**,
+against the `open` control's 1.24× on the same model, and 1.31–1.89× on the
+small models where `open` reads 1.25–2.0×. Two independent slices of real
+conway work, taken years apart in the load, bracket this box's contention on
+conway at **1.24–1.31× at N=4** on the model that matters.
+
 ### 11.3 The numbers
 
 Payload digest off (see §11.8). Median of three repetitions per model, full
-spread in parentheses.
+spread in parentheses. **Read the spreads as the range of three samples, not
+as an interval anything falls inside.** A fourth repetition of every model,
+taken while fixing round 2, landed outside the quoted spread on three of the
+four: D3D 0.880 / 0.460 (against 0.873–0.908 and 0.530–0.562), Schependomlaan
+0.741 / 0.325 (0.664–0.678, 0.284–0.303), Snowdon 0.759 / 0.418
+(0.669–0.782, 0.396–0.447), MB-Khaya 0.723 / 0.469 (0.724–0.755,
+0.477–0.479). The *conclusions* are unmoved — the ordering across models, the
+N=2-banks-most-of-N=4 shape and every `dupWork` are identical — but a
+three-sample range on this box understates the variance by roughly a factor
+of two.
 
 | model | file | geometry T₁ | N=2 efficiency | N=4 efficiency | runs |
 |---|---:|---:|---|---|---:|
@@ -958,20 +1074,63 @@ shard, so its efficiency is 1/N by construction and no timing precision
 changes it. Its absolute `T₁` (25.8 s against the first draft's 36.8 s) should
 be trusted least of any number here.
 
-**A level shift against the first draft, reported rather than smoothed
-over.** D3D's `T₁` reads **36.0 s** here (39.9 / 35.7 / 36.0 across three
-invocations, the first cold) against **49.7 s** in the previous session, and
-its efficiencies come out correspondingly better (0.885 / 0.552 against 0.864
-/ 0.476). The calibration brackets do *not* show a faster box — this
-session's `spin` medians are marginally **worse** (0.981 vs 0.984–0.990 at
-N=4) — so the shift is not explained by anything measured. Two candidates,
-neither confirmed: cross-session variance on a shared host, and the old
-`spin_calibrate.mjs` leaking children on a failed sweep (it had no cleanup
-path; fixed in §11.8), which would have left spinners running at full tilt
-through a later measurement. **Every ratio in this section is computed within
-one invocation against that invocation's own `T₁`**, so the ratios do not
-depend on the level; the absolute seconds do, and should not be compared
-across sessions.
+**A level shift against the first draft — and the current level is the
+reproducible one.** D3D's `T₁` reads **36.0 s** here (39.9 / 35.7 / 36.0
+across three invocations, the first cold) against **49.7 s** in session 1,
+and its efficiencies come out correspondingly better (0.885 / 0.552 against
+0.864 / 0.476).
+
+**The second draft's control for this was invalid and is withdrawn.** It
+argued the box was not faster because "this session's `spin` medians are
+marginally worse (0.981 vs 0.984–0.990 at N=4)". Those are **efficiency
+ratios** — `base ÷ median(table[N])` — which are invariant to how fast the
+box is: a box 40 % faster reports identical efficiency. The argument cannot
+bear on a level question **by construction**, which is the same class of error
+that killed `dupWall` in round 1, made two sections later.
+
+**The absolute data existed and the rewrite deleted it.** `spin()` and
+`ITERATIONS` are byte-identical between `0c9312a4` and this commit and the
+script has always printed `median=…ms`; session 1's §11.2 recorded exactly
+that column. Restored in §11.2, and it answers the question the ratios could
+not: **`spin` N=1 medians 19,427–19,555 ms now against 20,745–20,914 ms in
+session 1 — this box is about 6.5 % faster than it was.**
+
+Everything else was run down in this round, and most of it is ruled out:
+
+| candidate | verdict | evidence |
+|---|---|---|
+| the instrument diff touched the timed region | ruled out | inside `tGeometry`…`geometryMs` the diff adds a `Number.isInteger` guard per placement and one `performance.now()` per batch (~750 calls) |
+| the `wasmHeapByteLength` refresh perturbs timing | ruled out | read after `geometryMs` is taken, not inside it |
+| the `open`/geometry boundary moved | ruled out | identical in both commits |
+| the reference path shares work it used to repeat | ruled out | this PR changes no `src/` file at all |
+| `--expose-gc` (the one documented invocation difference) | **ruled out, measured** | D3D N=1: 37.0 s with it, 37.2 s without |
+| host memory-bandwidth contention in session 1 | largely ruled out, measured | two saturating DRAM streamers on 2 of 4 cores cost D3D N=1 **+4.6 %** (37.2 → 38.9 s) |
+| scalar CPU speed | **bounded, measured** | `spin` N=1 median 19,553 ms today against session 1's ~20,820 ms: the box is **6.5 % faster** |
+| 49.7 s was the outlier | **supported** | eight independent N=1 readings now — 39.9 / 35.7 / 36.0 in the sweeps, 37.2 / 37.0 / 38.9 in the review, 35.9 and 34.3 while fixing this round. **49.7 s has never reproduced**, and it was a median of *two* samples against an N=4 spread of 0.438–0.478 |
+
+Provenance: the `--expose-gc`, DRAM-streamer and three-reading rows were
+measured in the round-2 review of this section; the `spin` column, the two
+newest `T₁` readings and the diff audit were re-taken here.
+
+So: **the current level reproduces and the old one does not.** Of the 38 %
+gap (49.7 ÷ 36.0 = 1.38), box speed accounts for 6.5 points; on today's
+silicon session 1's own work would have read about 38 s, not 49.7 s. The
+remaining ~30 % is still unexplained, with cross-session variance on a shared
+host and session 1's leaked `spin_calibrate.mjs` children (it had no cleanup
+path; fixed in §11.8) the surviving candidates. **Every ratio in this section
+is computed within one invocation against that invocation's own `T₁`**, so
+the ratios do not depend on the level; the absolute seconds do, and should
+not be compared across sessions.
+
+**D3D's N=4 efficiency is looser than the three-run spread says.** A fourth
+full sweep, taken while fixing this round, reads **0.460** — below the
+0.530–0.562 quoted above. Its N=4 makespan is ordinary (18.6 s against the
+median run's 18.1 s); what moved is `T₁`, which came out at **34.3 s**, the
+fastest recorded. Efficiency is `T₁ ÷ (N × Tₙ)`, so most of D3D's
+repetition-to-repetition spread at N=4 is `T₁` variance rather than anything
+about the pool. Read the N=4 figure as **~0.46–0.56**, and the planning
+numbers built on 0.552 as the optimistic end of that — which is the same
+direction §11.5 and §11.6 already point.
 
 **D3D is the row that matters** — §0's load, 89.92 % geometry, the production
 shape. Its N=2 efficiency of 0.885 is the best in the set, and its N=4 of
@@ -1020,25 +1179,90 @@ confirms it: **133,887 / 142,491 / 143,736 / 142,253** placements per shard, a
 `geometry_dispatch.ts` cannot see, SKYLARK250 sits on it, and **D3D does
 not**.
 
-### 11.4 Where the points go: duplication, then contention, then prep, then imbalance
+### 11.4 Where the points go: duplication, then contention, then the first-batch window, then imbalance
 
-The harness reports summed shard time, summed shard *work*, and summed shard
-*prep*, and the four terms separate cleanly. Everything below is D3D at N=4,
-from the repetition whose efficiency **is** the median of the three
-(`T₁ = 39.9 s`, so the terms and the headline number are one self-consistent
-run rather than four separately-medianed ones):
+The harness reports summed shard time, summed shard *work*, and the summed
+first-batch window, and the four terms separate cleanly. Everything below is
+D3D at N=4, from the repetition whose efficiency **is** the median of the
+three (`T₁ = 39.9 s`, so the terms and the headline number are one
+self-consistent run rather than four separately-medianed ones):
 
 | term | measured | efficiency after it | cost | share of the loss |
 |---|---:|---:|---:|---:|
 | perfect N=4 | — | 1.000 | — | — |
 | **duplicated geometry** | `dupWork` **1.48×** (68,192 built vs 46,166) | 0.677 | **0.323** | **72 %** |
 | **per-geometry slowdown** | **1.09×** (0.922 ms vs 0.847 ms each) | 0.622 | 0.055 | 12 % |
-| **replicated demand prep** | 5.8 s summed vs 0.8 s (`dupPrep` 7.6×) | 0.581 | 0.041 | 9 % |
+| **the first-batch window** | residual **1.07×** — 5.8 s summed vs 0.8 s of window, decomposed below | 0.581 | 0.041 | 9 % |
 | **imbalance** | 18.1 / 17.3 / 16.5 / 16.8 s | **0.552** | 0.029 | 7 % |
 
 The three repetitions agree on the largest term to the third decimal —
 `dupWork` is **1.48× in every one** — and spread the smaller ones: slowdown
-costs 0.043–0.089, prep 0.033–0.041, imbalance 0.024–0.037.
+costs 0.043–0.089, the window 0.033–0.041, imbalance 0.024–0.037.
+
+**Three things about this table's arithmetic, since it is the load-bearing
+one.**
+
+1. **It closes exactly.** 0.323 + 0.055 + 0.041 + 0.029 = 0.448, which is
+   1.000 − 0.552 to the last digit, and the shares sum to 100 %. No residual
+   is parked on a favoured term.
+2. **It is multiplicative and order-dependent.** Each factor divides what the
+   one above it left, so the term applied first collects the largest absolute
+   cost for a given ratio. Duplication is applied first and takes 72 %; the
+   same three ratios in a different order would apportion differently. The
+   ordering is the causal one (a shard first decides *what* to build, then
+   how fast it goes), not a neutral choice.
+3. **Terms 2 and 3 are one measured quantity split by a cut, not two
+   measurements.** Both hinge on where `firstBatchMs` cuts the geometry
+   phase: the slowdown term is per-geometry cost *outside* the first batch,
+   and term 3 is what is left over inside it. Term 3's 0.041 is a pure
+   residual — `dupWall ÷ (dupWork × slowdown)` — and is **not** derived from
+   the `dupFirstBatch` figure the second draft displayed beside it. Together
+   they are **0.096 of 0.448, 21 % of the loss, and only their sum is
+   measured.**
+
+**What is actually inside that window.** `--prep-probe` (new here) pumps a
+batch of 0 — the pump floors it at one product — at four levels, so the
+window's contents are measured instead of named. Medians of three, D3D:
+
+| level | N=1 | N=2 summed | N=4 summed |
+|---|---:|---:|---:|
+| one unsharded worker (`collectDemandCandidates_` only) | **0.477 s** | — | — |
+| N unsharded workers — the same work, concurrently | — | 0.973 s | 2.428 s |
+| N sharded workers — adds the dispatch-key pass | — | 1.191 s | 2.989 s |
+| one unsharded worker at the sweep's batch of 64 | 0.724 s | — | — |
+
+Which decomposes as:
+
+| model, N=4 | replicated prep | contention on it | **shard-only key pass** | geometry in the N=1 window |
+|---|---:|---:|---:|---:|
+| **D3D** | 1.908 s (64 %) | 0.520 s (17 %) | **0.561 s (19 %)** | 0.247 s of 0.724 s (**34 %**) |
+| Snowdon IFC4 | 0.121 s (21 %) | 0.108 s (19 %) | **0.349 s (60 %)** | 0.153 s of 0.183 s (**84 %**) |
+| MB-Khaya | 0.118 s (37 %) | 0.036 s (11 %) | **0.166 s (52 %)** | 0.154 s of 0.184 s (**84 %**) |
+| Schependomlaan | 0.080 s (23 %) | 0.033 s (9 %) | **0.238 s (68 %)** | 0.033 s of 0.053 s (**62 %**) |
+
+(A fifth level applies a shard of *one* and must land on the first:
+`setGeometryShard` normalises `count === 1` back to unsharded
+(`ifc_api_proxy_ifc.ts:2680`). It does — 0.95× on D3D, 0.97× on
+Schependomlaan, 0.96× on MB-Khaya, 1.13× on Snowdon, where the level is
+30 ms and the spread is the timer — which is what proves the key-pass column
+is the sharded **branch** rather than the cost of making the call.)
+
+**So the second draft's third term was mostly not what it was called.** On
+three of four models **more than half** of the sharded prep is the
+dispatch-key pass — work the N=1 reference in the denominator never performs,
+and which exists only because sharding exists. On D3D it is 19 %, with
+replicated prep genuinely dominant at 64 %; on the small models replicated
+prep is the *minority* term. And the ratio the second draft reported —
+`dupFirstBatch`, 7.6× on D3D and **10.2–15.7× on the small models** — is not
+a replication factor at all: four workers cannot replicate anything 15.7
+times. The rest is the geometry batch, and it is charged asymmetrically: the
+numerator is N shards each pumping 64 products, the denominator is one worker
+pumping 64, so the geometry alone contributes about N× before prep is
+counted. That contamination is 34 % of the reference window on D3D — 64 of
+47,791 worklist products, where the second draft's "tight upper bound" is
+fair — but **84 % on Snowdon and MB-Khaya and 62 % on Schependomlaan**, whose
+worklists are two orders of magnitude smaller. Those are exactly the models
+where the second draft made prep the headline lever.
 
 The first draft assigned 97 % of this to duplication and 3 % to imbalance. It
 was right that duplication dominates and right that a work-stealing queue
@@ -1047,21 +1271,21 @@ will not fix it — **but the number was 2.03× wall, and the work is 1.48×.**
 The same decomposition on the other models is where the first draft goes from
 overstated to wrong:
 
-| model, N=4 | `dupWall` | `dupWork` | per-geometry slowdown | prep summed / T₁ | imbalance |
-|---|---:|---:|---:|---:|---:|
-| **D3D** | 1.72× | **1.48×** | 1.09× | 5.8 s / 39.9 s | 0.029 |
-| Snowdon IFC4 | 1.84× | **1.05×** | 1.32× | 2.2 s / 4.4 s | 0.127 |
-| MB-Khaya | 1.94× | **1.00×** | 1.33× | 1.8 s / 2.6 s | 0.020 |
-| Schependomlaan | 3.17× | **1.00×** | 2.29× | 1.1 s / 1.4 s | 0.034 |
+| model, N=4 | `dupWall` | `dupWork` | per-geometry slowdown | first-batch window summed / T₁ | of which replicated prep | imbalance |
+|---|---:|---:|---:|---:|---:|---:|
+| **D3D** | 1.72× | **1.48×** | 1.09× | 5.8 s / 39.9 s | 1.9 s (**4.8 % of T₁**) | 0.029 |
+| Snowdon IFC4 | 1.84× | **1.05×** | 1.32× | 2.2 s / 4.4 s | 0.12 s (**2.8 %**) | 0.127 |
+| MB-Khaya | 1.94× | **1.00×** | 1.33× | 1.8 s / 2.6 s | 0.12 s (**4.5 %**) | 0.020 |
+| Schependomlaan | 3.17× | **1.00×** | 2.29× | 1.1 s / 1.4 s | 0.08 s (**5.7 %**) | 0.034 |
 
-**On three of the four models, nothing is rebuilt.** Their shards build
-exactly the geometries one worker builds — 5,600 on MB-Khaya, 4,761 on
-Schependomlaan, to the unit — and their `dupWall` is entirely (a) whole-model
-demand prep that every worker repeats, which on Schependomlaan is **79 % of
-`T₁` summed across four shards**, and (b) each shard running slower per unit
-of work. Neither is fixed by a better partition, and **the lever the first
-draft named — a partition that sees sub-representation sharing, or a shared
-geometry cache — would buy those three models nothing at all.**
+**On three of the four models, no *emitted* geometry is rebuilt.** Their
+shards build exactly the geometry IDs one worker builds — 5,600 on MB-Khaya,
+4,761 on Schependomlaan, to the unit — so their `dupWall` is (a) the
+first-batch window, decomposed above, and (b) each shard running slower per
+unit of work. §11.6 says what "no emitted geometry" does and does not
+exclude; a partition that sees sub-representation sharing is *not* ruled out
+by these counters, and on Schependomlaan's 2.29× per-unit slowdown it remains
+an untested candidate.
 
 Two consequences for planning, restated:
 
@@ -1069,12 +1293,21 @@ Two consequences for planning, restated:
    of an available 0.448 — and it is still not a scheduling problem: better
    balance is worth 0.029. That part of the first draft survives, at 72 %
    rather than 97 %.
-2. **On models under ~5 s of geometry, the lever is demand prep, not the
-   partition.** Prep is whole-model work done N times; it grows with N by
-   construction and no partition change touches it. Hoisting it — computing
-   worklists and dispatch keys once and handing them to the workers — is a
-   different piece of work from anything §11 previously pointed at, and on
-   Schependomlaan it is most of the loss.
+2. **On models under ~5 s of geometry, hoisting the worklists and dispatch
+   keys is still the right lever — but not for the reason the second draft
+   gave.** That draft said prep is "whole-model work done N times; it grows
+   with N by construction", that "a shard does not shrink any of it", and
+   that an unsharded pool would pay it too. **Measured, most of it is the
+   opposite:** on all three small models the largest prep-side term is the
+   **shard-only dispatch-key pass** (52–68 % of sharded prep, and 17 % of
+   `T₁` on Schependomlaan against replicated prep's 5.7 %), which exists only
+   because sharding exists and which an unsharded pool would not pay at all.
+   Replicated prep is a **3–6 % of `T₁`** term everywhere, D3D included.
+   **The lever is unchanged** — "computing worklists *and dispatch keys* once
+   and handing them to the workers" names both halves, and the key pass is
+   the half that actually dominates — but the case for it is now "sharding
+   imposes a fixed per-worker cost the partition cannot amortise", not
+   "every worker repeats the reference's prep".
 
 **A rule from the first draft that does not survive.** It said "duplication
 caps efficiency at `1/dup` before balance is considered at all". That assumes
@@ -1090,11 +1323,34 @@ operands, void geometry — where an attribute walk cannot see. Its published
 figure is **D3D duplicated assets 83,177 round-robin → 81,639 with this key**,
 and `ifc_api_proxy_ifc.ts` prices the key's residue at **+38.1 % on D3D at
 N=4**. `dupWork` measures **+48 %** on the same model, key and worker count.
-Those are the same finding from two directions, differing by the ~10 % the
-harness counts as separate geometries where the asset counter counts assets,
-plus the 264 divergent encodings of §11.5. **The 2.03× of the first draft had
-no such counterpart, and that mismatch was the signal it was the wrong
-quantity.**
+
+**Same direction, populations not reconciled** — and the second draft said
+more than that. It called them "the same finding from two directions,
+differing by the ~10 % the harness counts as separate geometries where the
+asset counter counts assets, plus the 264 divergent encodings of §11.5".
+Neither half of that holds up. The asset counter's percentages are against an
+N=1 base of about **59,116 assets** (83,177 is +40.7 % of it), stated nowhere;
+this harness's N=1 base is **46,166 geometry IDs**. The two populations are
+**28 % apart, four times the 7-point ratio gap being explained**, and the
+"~10 %" was asserted rather than derived. The 264 divergent encodings are
+264/68,192 = **0.39 %** and cannot move a 7-point gap at all. They are also
+different instruments (`m3_affinity_spike.mjs` against this harness).
+
+The gap does look systematic rather than random, which is a lead rather than
+a reconciliation: on MB-Khaya the same table's base is **7,193 assets**
+against this harness's **5,600** emitted geometry IDs — a ratio of 1.284,
+against D3D's 59,116/46,166 = **1.280**. Two models agreeing to four decimal
+places says the two counters differ by a definition, not by noise. Nobody has
+found the definition.
+
+So the honest statement is the weaker one: **two instruments counting
+different populations both find D3D rebuilding a large minority of its
+geometry under this key at N=4, +38 % and +48 %, and the difference between
+them is not accounted for.** That is enough to retain D3D's duplication
+claim — which is what this evidence is load-bearing for, since §11 retracts
+duplication on every other model — and not enough to call them the same
+measurement. **The 2.03× of the first draft had no counterpart of any kind in
+the repo, and that mismatch was the signal it was the wrong quantity.**
 
 What §5 did *not* predict is the 60.7 % keyless share on D3D. Conway names it
 in a warning printed by every shard:
@@ -1152,17 +1408,42 @@ of a *smaller and better-localised* defect:
   were set differences and would both have read 0 for a partition where every
   shard did everything.
 
-So the defect is: **247 of 46,166 geometries (0.54 %) come out with different
-topology under a four-way shard, and everything else about the output is
-exact.** Four things pin it down as real rather than instrument noise:
+**Scope, before the four points: these runs compare sizes, not bytes.** Every
+number in §11.2–§11.7 is from `NO_PAYLOAD_DIGEST=1` runs (§11.3, §11.8), where
+`digested` is `''` and a payload entry is `id:vertexFloats:indexCount:` — so
+the comparison is **size-for-size**, exactly as `scripts/README.md` says. The
+second draft said here that Snowdon's rebuilds "come out byte-identical",
+which these runs cannot show; corrected above. Two consequences, and they run
+opposite ways:
+
+- **"247 built differently" is a lower bound.** Any geometry with identical
+  vertex and index counts but different coordinates is invisible in every
+  number in §11.2–§11.7. The 247 are the ones whose *topology* changed;
+  the undetected population is unmeasured, not measured at zero.
+- **"Everything else about the output is exact" is exact about sizes.**
+  Placements are compared losslessly (entity, geometry ID, colour and the
+  full-precision transform — `transformKey` is base64 of the raw
+  `Float64Array`), so that half is byte-exact. The geometry payloads are not.
+
+§11.5's inference from the counts — *the vertex and index counts differ, so
+this is different topology rather than the same topology with different
+values* — is sound for the 247 it detects and **silent about the population
+it cannot see**. The digest-on mode is what closes that, and it was not run
+here because its per-shard SHA-256 rides on the duplication term §11.4
+measures (§11.8).
+
+So the defect is: **at least 247 of 46,166 geometries (0.54 %) come out with
+different topology under a four-way shard, and everything else the instrument
+can see about the output is exact.** Four things pin it down as real rather
+than instrument noise:
 
 - **It does not happen on the other models.** MB-Khaya, Schependomlaan and
   Snowdon report `OK` with identical vertex, triangle and by-ID geometry
   counts at every N, in exactly the runs that report `FAIL` on D3D. Snowdon
   is the instructive one: its `dupWork` is 1.05, so its shards **do** rebuild
-  shared geometry — and every rebuild comes out byte-identical, so the union
-  still matches. Duplication and divergence are independent axes, and only
-  the corrected instrument reports both.
+  shared geometry — and every rebuild comes out **the same size**, so the
+  union still matches. Duplication and divergence are independent axes, and
+  only the corrected instrument reports both.
 - **N=1 is deterministic** — 3,204,498 / 2,452,715 / 46,166 across every
   invocation in two sessions.
 - **The divergence is deterministic too**, and reproduces exactly: 181 at N=2
@@ -1212,11 +1493,42 @@ configuration does not have. Combined with §11.5's optimism, **0.552 should be
 read as "at best" rather than "about".**
 
 **The per-geometry slowdown term is a residual, not a mechanism.** §11.4
-computes it as what is left of summed shard time after duplication and prep
-are removed, so it collects memory-bandwidth contention, cache pressure,
-scheduler effects and anything else that makes a shard slower per unit of
-work. The `stream` calibration and the `open` control (§11.2) both bound it
-from outside and agree with its size; neither identifies it.
+computes it as what is left of summed shard time after duplication and the
+first-batch window are removed, so it collects memory-bandwidth contention,
+cache pressure, scheduler effects and anything else that makes a shard slower
+per unit of work. The `stream` calibration and the `open` control (§11.2)
+both bound it from outside; neither identifies it. On D3D at 1.09× they agree
+with its size. **On Schependomlaan at 2.29× they do not** — this box's
+`stream` ceiling at N=4 is 0.966 and its four processes deliver 3.8× of a
+possible 4× of memory bandwidth (§11.2), so a 2.29× per-unit slowdown is far
+outside what contention on this box explains. §10 carries that as an open
+item.
+
+**`dupWork` counts *emitted* geometry, and the duplication this repo predicts
+lives below that.** `payloads` is keyed on `placed.geometryExpressID` from
+the FlatMeshes a shard emits. Profiles, boolean operands, void and master
+geometry and mapped-item sources are intermediate `CanonicalMesh`es that
+never surface as a placed ID, so a shard that rebuilds one of those is
+invisible to this counter. `src/ifc/geometry_dispatch.ts:40-44` says exactly
+this about the key it implements: *"the sharing lives BELOW the
+representation — a profile swept along different directrices, boolean
+operands, void geometry — where an attribute walk cannot see it."* **So
+`dupWork` is a lower bound, blind to precisely the class of duplication this
+repo's own dispatch code names**, and "`dupWork` 1.00, so this model rebuilds
+nothing" should be read as **rebuilds no emitted geometry**. §11.4's
+retraction is warranted at the level the counter measures and over-reaches
+one level up; §10 carries the untested alternative.
+
+**Two things about `dupWork` do hold, and they are worth keeping straight
+from the caveat above.** It is immune to round 1's failure: per-shard totals
+accumulate over unique geometries only (the `payloads` map guards re-entry),
+the reference comes from the identical `reduce` over the forced N=1 run, no
+harness bookkeeping is counted on either side, and non-integer geometry IDs
+are excluded and then thrown on rather than silently bucketed. And
+`dupWork = 1.00` **together with** a matching union is a rigorous proof that
+the shards' emitted-geometry sets are pairwise disjoint: Σ|setᵢ| = |∪ setᵢ|
+holds if and only if they are. That is a strong statement about the
+partition; it is simply a statement about *emitted* geometry.
 
 **A correction to the earlier draft of this section, recorded so the next
 person does not repeat it.** An earlier draft claimed D3D was "not in
@@ -1316,14 +1628,31 @@ how loose a cross-record comparison is.
 
 ```sh
 # box calibration, before and after — N processes; both kernels, because the
-# register-bound one cannot see a memory-bandwidth ceiling
+# register-bound one cannot see a memory-bandwidth ceiling. The stream working
+# set is now derived from this box's last-level cache; the run prints the
+# ratio and refuses if it cannot clear 4x.
 node scripts/spin_calibrate.mjs --workers 1,2,4 --runs 3
 
+# the plateau check behind §11.2's table — sweep the working set and read the
+# GB/s column; past the cache it stops changing
+for mib in 64 256 1024 2048; do
+  node scripts/spin_calibrate.mjs --workers 1 --runs 1 --kernel stream \
+    --stream-mib $mib
+done
+
 # efficiency, per model; NO_PAYLOAD_DIGEST=1 removes the harness's own
-# per-shard SHA-256, which rides on the duplication term it is measuring
+# per-shard SHA-256, which rides on the duplication term it is measuring —
+# and makes the union check size-for-size rather than byte-for-byte (§11.5)
 NO_PAYLOAD_DIGEST=1 node --max-old-space-size=12288 \
   scripts/m3_worker_pool.mjs /home/user/test-models-private/ifc/ryuga/D3D.ifc \
   --workers 2,4
+
+# what the first-batch window is made of: replicated prep, contention on it,
+# and the dispatch-key pass only a sharded worker runs (§11.4). Cheap — it
+# opens and preps, it does not pump.
+node --max-old-space-size=12288 scripts/m3_worker_pool.mjs \
+  /home/user/test-models-private/ifc/ryuga/D3D.ifc --workers 2,4 \
+  --prep-probe --runs 3
 ```
 
 There is no `--expose-gc`. The first draft prescribed it in both this block
@@ -1340,12 +1669,24 @@ turned it into a 1.15× win. It now kills its children on a failed sweep, which
 it did not before; a sweep that threw used to leave four reparented processes
 spinning at full tilt through whatever ran next.
 
-`m3_worker_pool.mjs` was corrected here in the ways §11's lede lists —
-`dupWork`/`dupVerts`/`dupPrep` beside `dupWall`, by-ID geometry counting,
+`m3_worker_pool.mjs` was corrected across two rounds. Round 1:
+`dupWork`/`dupVerts` beside `dupWall`, by-ID geometry counting,
 two-directional and duplicate-aware union reporting, `wasmHeapByteLength`, an
 honestly-labelled sweep RSS, and an assertion in place of the silently-skipped
-proof line. The previous commit's message has the full list and the reasoning
-for each.
+proof line. Round 2: `dupPrep` renamed to `dupFirstBatch` because it is a
+window rather than a mechanism, and `--prep-probe` added to decompose that
+window by measurement. `spin_calibrate.mjs` in round 2 derives its stream
+working set from sysfs instead of asserting a margin it did not have, and
+refuses a cache-resident run. The commit messages have the full list and the
+reasoning for each.
+
+**Numbers from before round 2 are not all reproducible on today's scripts.**
+The `stream` rows in the second draft's §11.2 used the 256 MiB kernel;
+`--stream-mib 256` reproduces them. Everything else — efficiencies,
+`dupWork`, the union counts — is unchanged by round 2's edits, and D3D's
+were re-run here to confirm it: `dupWork` 1.48×, 68,192 built against 46,166,
+247 built differently, 285 encodings not in the reference and 21 of the
+reference's not reproduced, all identical to the digit.
 
 The digest-on set from the first draft is retained as the conservative
 reading, though it predates the corrections and its `dup` column should be
