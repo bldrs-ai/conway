@@ -30,7 +30,7 @@ import { IDENTITY_MAT4, LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y,
   TRANSLATION_Z, composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
-import { ProgressTracker } from '../../core/progress'
+import { ProgressTracker, yieldToEventLoop } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
@@ -282,6 +282,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   private shard_?: { index: number, count: number }
 
   private demandCursor_ = 0
+
+  /**
+   * Tail of the async pump's serialisation chain — resolved when no pump
+   * call holds the lock, otherwise pending until the current one releases.
+   *
+   * The pump body reads `demandCursor_`, awaits a prefetch, and only then
+   * writes the cursor back, so two overlapping calls would select the same
+   * batch and could write the cursor backward. Every entry into that body
+   * queues behind this. See extractGeometryBatchAsync for the full account
+   * and for why conway#660 is what made it reachable.
+   */
+  private pumpChain_: Promise<void> = Promise.resolve()
 
   /** Wall-clock split of the store-backed batch pump (profile script). */
   private readonly extractProfile_ = {
@@ -2155,6 +2167,66 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       meshCallback?: (mesh: FlatMesh) => void ):
       Promise<{extracted: number, remaining: number}> {
 
+    // Serialised, because the pump body below is NOT re-entrant across its
+    // awaits and this is the only place that can enforce it.
+    //
+    // The body selects its batch — `productEnd` and `batchIDs` off
+    // `demandCursor_` — synchronously, then awaits the prefetch, and only
+    // assigns `this.demandCursor_ = productEnd` after extracting. Two calls
+    // in flight therefore both read the SAME un-advanced cursor and extract
+    // the same products, duplicating scene nodes so that a later whole-model
+    // re-walk serves each of them twice; and each then writes its own saved
+    // `productEnd`, so the later finisher can move the cursor BACKWARD over
+    // ground a call that started after it already covered, leaving those
+    // products to be extracted a second time as well. Measured unlocked on
+    // data/mapped_shared_representation.ifc with two overlapping calls: both
+    // returned `{extracted: 4, remaining: 12}` for the SAME four products,
+    // and the whole-model ask afterwards served 20 placements against the
+    // model's true 16.
+    //
+    // That was latent while `ExtractGeometryBatchAsync` was the only door
+    // into this body and a consumer awaited each call before the next.
+    // conway#660 adds a second door — `streamAllMeshesAsync` drains through
+    // this same pump — and a consumer reaching for a whole-model ask while
+    // its own batch pump is still in flight is an ordinary thing to do
+    // (Share's degraded end-of-load fires from an error handler, not from
+    // inside the pump loop). So overlapping calls QUEUE here rather than
+    // interleave: each waits for the previous to finish before it reads the
+    // cursor, which is what makes the cursor monotonic.
+    //
+    // `previous` only ever resolves — the release is in a `finally` — so one
+    // call's rejection cannot wedge the chain for every later call.
+    const previous = this.pumpChain_
+
+    let release: () => void = () => { /* replaced below, before any await */ }
+
+    this.pumpChain_ = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    await previous
+
+    try {
+      return await this.pumpGeometryBatchAsync_(batchSize, meshCallback)
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * The body behind {@link extractGeometryBatchAsync}, which holds the pump
+   * lock across this whole call. Never call it directly: it reads and writes
+   * `demandCursor_` across an await and is not safe to re-enter.
+   *
+   * @param batchSize Max products to extract this call (min 1).
+   * @param meshCallback Receives each newly-extracted product's mesh.
+   * @return {Promise<object>} `{extracted, remaining}`.
+   */
+  private async pumpGeometryBatchAsync_(
+      batchSize: number,
+      meshCallback?: (mesh: FlatMesh) => void ):
+      Promise<{extracted: number, remaining: number}> {
+
     if (!this.deferredMode_) {
       return {extracted: 0, remaining: 0}
     }
@@ -3817,13 +3889,29 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const noCallback = void 0
 
-      // The one line that differs from the sync path. Each call pages the
+      // The line that differs from the sync path. Each call pages the
       // batch's product closures in before extracting them, so a source that
       // is a moving window over an external store is drained the same way
       // Share drains it.
-      while ((await this.extractGeometryBatchAsync(
-          DEFERRED_DRAIN_BATCH, noCallback)).remaining > 0) {
-        // draining
+      //
+      // The yield before each batch is what makes the `async` on this method
+      // mean something on a RESIDENT deferred source, where the pump has no
+      // real I/O to await: it would otherwise reach only microtasks (the
+      // pump lock, the worklist check), which do not let timers or I/O run,
+      // so an awaiting consumer would be starved exactly as the sync entry
+      // point starves it. Placed before the batch rather than after, so the
+      // caller gets the promise back before any extraction runs, and so a
+      // single-batch model still yields once.
+      for ( ; ; ) {
+
+        await yieldToEventLoop()
+
+        const { remaining } = await this.extractGeometryBatchAsync(
+            DEFERRED_DRAIN_BATCH, noCallback)
+
+        if (remaining === 0) {
+          break
+        }
       }
 
       this.serveDeferredWholeModel_(

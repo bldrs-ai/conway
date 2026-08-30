@@ -30,7 +30,7 @@ import { AP214GeometryExtraction } from '../../AP214E3_2010/ap214_geometry_extra
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
 import { AP214Properties } from './ap214_properties'
 import { EntityTypesAP214Count } from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
-import { ProgressTracker } from '../../core/progress'
+import { ProgressTracker, yieldToEventLoop } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
@@ -1805,13 +1805,44 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const noCallback = void 0
     const unbudgeted = void 0
 
-    // Unbudgeted for the same reason the sync drain is: this loop runs to
-    // completion before anything can be served, so yielding mid-drain would
-    // be pure overhead. The public extractGeometryBatch keeps its frame
-    // budget.
-    while (this.pumpDemandUnits_(
-        DEFERRED_DRAIN_BATCH_AP214, noCallback, unbudgeted).remaining > 0) {
-      // draining
+    // Bounded batches with an event-loop yield between them, so the `async`
+    // on this method means something. An async function runs synchronously
+    // until its first await, so a drain with no awaits in it would not even
+    // hand the caller a promise until the whole model was extracted — an
+    // awaiting consumer would be starved exactly as it is by the sync
+    // StreamAllMeshes, while being told otherwise by the signature.
+    //
+    // Each call stays UNBUDGETED, matching the sync drain rather than the
+    // public extractGeometryBatch, and that is deliberate on two counts.
+    // The output has to be identical to the sync drain's — the parity tests
+    // compare them placement for placement — and passing a wall-clock
+    // budget also switches the pump to flushing staged faces per unit
+    // instead of keeping one staged batch (see extractDemandUnitBatch),
+    // which is where staging's throughput actually comes from. So the bound
+    // is the batch COUNT, the same DEFERRED_DRAIN_BATCH_AP214 the sync
+    // drain uses and the same size the IFC async pump drains at.
+    //
+    // What that buys, stated exactly: the block is bounded to one drain
+    // batch rather than to the whole model. It is not frame-bounded — a
+    // batch of expensive units still overruns a frame — and a consumer that
+    // needs frame-level responsiveness pumps extractGeometryBatch itself,
+    // which carries AP214_PUMP_BATCH_BUDGET_MS.
+    //
+    // The yield goes BEFORE each batch rather than between them, which is
+    // what makes the first one matter: it returns the promise to the caller
+    // before any extraction runs at all, instead of after the first 256
+    // units. It also means a model small enough to drain in a single batch
+    // still yields once, so the guarantee does not depend on model size.
+    for ( ; ; ) {
+
+      await yieldToEventLoop()
+
+      const { remaining } = this.pumpDemandUnits_(
+          DEFERRED_DRAIN_BATCH_AP214, noCallback, unbudgeted)
+
+      if (remaining === 0) {
+        break
+      }
     }
 
     this.serveDeferredWholeModel_(meshCallback, 'StreamAllMeshesAsync')

@@ -342,6 +342,55 @@ describe.each( [
 } )
 
 
+describe.each( [
+  [ 'IFC', () => ifcFixture ],
+  [ 'AP214/STEP', () => stepFixture ],
+] )( 'StreamAllMeshesAsync yields to the event loop on %s',
+( _format, fixture ) => {
+
+  test( 'the drain yields before it extracts, so the signature is not a lie',
+      async () => {
+
+        // An async function runs SYNCHRONOUSLY until its first await, so a
+        // drain containing no event-loop yield would not hand the caller a
+        // promise until the whole model had been extracted — an awaiting
+        // consumer starved exactly as the sync StreamAllMeshes starves it,
+        // while the signature said otherwise. Microtasks do not fix that:
+        // the pump lock and the worklist check are microtask awaits, and a
+        // microtask checkpoint does not let timers or I/O run.
+        //
+        // The probe is a setImmediate scheduled BEFORE the ask: it is a
+        // macrotask, so it can only run ahead of the ask's resolution if the
+        // drain actually crossed an event-loop task boundary. A drain that
+        // awaited nothing, or only microtasks, settles during the current
+        // task's microtask drain and leaves this false.
+        //
+        // A timer is the WRONG probe here and was tried first: `setInterval`
+        // at 0 ms recorded zero ticks across a measured 74 ms drain, because
+        // yieldToEventLoop posts through MessageChannel — deliberately, so
+        // background tabs do not clamp it — and those tasks keep cycling
+        // without the timers phase getting a turn. Zero ticks there means
+        // "timers were starved", not "nothing yielded", which is exactly the
+        // wrong conclusion.
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const ownedID = await api.OpenModelStreamed( fixture(), DEFERRED_OWNED )
+
+        let crossedATask = false
+
+        setImmediate( () => {
+          crossedATask = true
+        } )
+
+        await streamAllAsync( api, ownedID )
+
+        expect( crossedATask ).toBe( true )
+      }, 240000 )
+} )
+
+
 describe( 'StreamAllMeshesAsync on a WINDOWED source (IFC only — ' +
   'store-backed opens are IFC-only)', () => {
 
@@ -437,6 +486,83 @@ describe( 'StreamAllMeshesAsync on a WINDOWED source (IFC only — ' +
         expect( asSortedKeys( await streamAllAsync( api, windowedID ) ) )
             .toEqual( asSortedKeys( reference ) )
       }, 240000 )
+
+  test( 'overlapping async pump calls queue instead of extracting the same ' +
+    'products twice',
+  async () => {
+
+    // The pump body selects its batch — productEnd and batchIDs off
+    // demandCursor_ — synchronously, awaits the prefetch, and only then
+    // writes the cursor back. Two calls in flight therefore read the SAME
+    // un-advanced cursor and extract the same products, duplicating scene
+    // nodes so a later whole-model re-walk serves each twice; and each
+    // writes its own saved productEnd, so the later finisher can move the
+    // cursor BACKWARD over ground a call that started after it already
+    // covered.
+    //
+    // conway#660 is what makes this reachable: streamAllMeshesAsync is a
+    // second door into this same pump, and asking for the whole model while
+    // a batch pump is still in flight is an ordinary thing for a consumer
+    // to do (Share's degraded end-of-load fires from an error handler, not
+    // from inside its pump loop).
+    //
+    // Two concurrent pump calls are the direct, deterministic form of that
+    // hazard, and what this pins. Measured against a build with the lock
+    // removed: both calls returned {extracted: 4, remaining: 12} for the
+    // SAME four products, 8 placements were delivered of which only 4 were
+    // distinct, and the whole-model ask afterwards served 20 against this
+    // model's true 16.
+    //
+    // What is pinned vs reasoned, stated plainly: this pins the pump's
+    // serialisation, which is where the corruption lives. It does NOT force
+    // the specific interleaving of a pump call against a whole-model ask —
+    // that composes with the same lock, but it cannot be forced here
+    // because InMemoryStepByteStore resolves its reads within a microtask,
+    // so an in-test pump call finishes before the ask's leading
+    // event-loop yield returns. Against a real store, whose prefetch spans
+    // many tasks, that overlap is ordinary.
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const reference = await bufferedRetainingReference( api, ifcFixture )
+
+    expect( reference.length ).toBeGreaterThan( 0 )
+
+    const ownedID = await api.OpenModelStream(
+        new InMemoryStepByteStore( ifcFixture ), DEFERRED_OWNED )
+
+    const delivered: Placement[] = []
+
+    const collect = ( mesh: FlatMesh ): void => {
+      delivered.push( ...placements( mesh ) )
+    }
+
+    // Both issued before either is awaited: the second enters while the
+    // first is suspended on its prefetch.
+    const [ firstCall, secondCall ] = await Promise.all( [
+      api.ExtractGeometryBatchAsync( ownedID, BATCH, collect ),
+      api.ExtractGeometryBatchAsync( ownedID, BATCH, collect ),
+    ] )
+
+    // The second call must have advanced PAST the first rather than
+    // repeating it, so the two together cover twice one batch's work.
+    expect( secondCall.remaining )
+        .toBeLessThan( firstCall.remaining )
+
+    // ...and nothing was delivered twice.
+    const deliveredKeys = asSortedKeys( delivered )
+
+    expect( deliveredKeys.length ).toBe( new Set( deliveredKeys ).size )
+
+    // Finish the drain and ask for the whole model: a duplicated extraction
+    // or a cursor that moved backward both show up here as a served set
+    // that no longer matches the model's true content.
+    await drainAsync( api, ownedID )
+
+    expect( asSortedKeys( await streamAllAsync( api, ownedID ) ) )
+        .toEqual( asSortedKeys( reference ) )
+  }, 240000 )
 
   test( 'total eviction throws rather than serving an empty model',
       async () => {
