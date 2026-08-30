@@ -48,6 +48,40 @@ DATA;
 #635=MEASURE_REPRESENTATION_ITEM('volume measure',VOLUME_MEASURE(14644822.6361138),#16);
 #636=MEASURE_REPRESENTATION_ITEM('wetted area measure',AREA_MEASURE(807080.802199914),#16);
 
+/* AP242-only property chains that the interim AP214 loader cannot type, and
+   that used to abort the whole property + spatial-structure build
+   (bldrs-ai/test-models#61). Copied from
+   test-models/step/nist/NIST-PMI-STEP-Files/nist_ctc_01_asme1_ap242-e1.stp
+   at the same express ids.
+
+   1. INTEGER_REPRESENTATION_ITEM has no AP214 class, so resolving #4319's
+      items throws from extractBufferElement(). */
+#4334=PROPERTY_DEFINITION('attribute validation property','',#4368);
+#4304=PROPERTY_DEFINITION_REPRESENTATION(#4334,#4319);
+#4319=REPRESENTATION('',(#4270,#4271,#4272,#4273,#4274),#4351);
+#4270=INTEGER_REPRESENTATION_ITEM('part user attributes',3.);
+#4271=INTEGER_REPRESENTATION_ITEM('text user attributes',3.);
+#4272=INTEGER_REPRESENTATION_ITEM('integer user attributes',0.);
+#4273=INTEGER_REPRESENTATION_ITEM('real user attributes',0.);
+#4274=INTEGER_REPRESENTATION_ITEM('boolean user attributes',0.);
+
+/* 2. #4344's definition is the complex PMI draughting model #13, which is
+      outside AP214's characterized_definition SELECT, so the
+      property_definition.definition getter throws before the items are ever
+      reached. #13 is trimmed: its real items list is 47 PMI entities this
+      fixture does not carry, replaced by one item already present — the
+      complex type is what the SELECT narrowing rejects, not the contents. */
+#4314=PROPERTY_DEFINITION_REPRESENTATION(#4344,#4329);
+#4344=PROPERTY_DEFINITION('pmi validation property','',#13);
+#4329=REPRESENTATION('',(#4281),#4351);
+#4281=INTEGER_REPRESENTATION_ITEM('number of annotations',23.);
+#13=(
+CHARACTERIZED_OBJECT(*,*)
+CHARACTERIZED_REPRESENTATION()
+DRAUGHTING_MODEL()
+REPRESENTATION('MBD_0',(#4346),#4351)
+);
+
 #4351=( GEOMETRIC_REPRESENTATION_CONTEXT(3)
   GLOBAL_UNIT_ASSIGNED_CONTEXT((#16))
   REPRESENTATION_CONTEXT('Context','3D') );

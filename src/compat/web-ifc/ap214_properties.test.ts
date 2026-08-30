@@ -174,6 +174,49 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     expect( resolved.get( 'Company' ) ).toBe( 'ACME' )
   } )
 
+  test( 'an AP242-only property representation is skipped, not fatal', async () => {
+
+    // bldrs-ai/test-models#61: the NIST AP242 PMI files route through the
+    // interim AP214 loader, which carries no class for the AP242-only
+    // entities two of their property chains reference — the fixture's
+    // `#4304 → #4319` (INTEGER_REPRESENTATION_ITEM items) and
+    // `#4314 → #4344 → #13` (a complex draughting model outside AP214's
+    // characterized_definition SELECT). Both getters threw out through
+    // AP214PropertyExtraction, so the whole properties + spatial-structure
+    // build died and Share showed "Could not read full model structure."
+    // The two untypeable chains must now be skipped while everything
+    // representable still comes through.
+    const surface = compatSurfaceFor( 'data/nist-ctc-properties.step' )
+
+    // getSpatialStructure is the call Share makes, and buildIndexes() runs the
+    // property walk on its way to the tree — so the untypeable chains killed
+    // the structure too, which is what the issue's screenshot is showing.
+    const root = await surface.getSpatialStructure() as any
+
+    expect( root.type ).toBe( 'product_structure' )
+
+    const psets = await surface.getPropertySets( CTC_PRODUCT_DEFINITION_EXPRESS_ID )
+    const resolved = new Map<string, string | number>()
+
+    for ( const pset of psets ) {
+      for ( const ref of pset.HasProperties ) {
+        const prop = await surface.getItemProperties( ref.value ) as any
+
+        resolved.set( prop.Name.value, prop.NominalValue.value )
+      }
+    }
+
+    expect( resolved.get( 'Modeled By' ) ).toBe( 'Engineer' )
+    expect( resolved.get( 'CAGE Code' ) ).toBe( '64JW1' )
+    expect( resolved.get( 'Company' ) ).toBe( 'ACME' )
+    expect( resolved.get( 'volume measure' ) ).toBe( 14644822.6361138 )
+    expect( resolved.get( 'wetted area measure' ) ).toBe( 807080.802199914 )
+
+    // The untypeable rows are dropped rather than surfacing as blanks.
+    expect( resolved.has( 'part user attributes' ) ).toBe( false )
+    expect( resolved.has( 'number of annotations' ) ).toBe( false )
+  } )
+
   test( 'getPropertySets is empty for an element with no properties', async () => {
 
     const surface = compatSurfaceFor( 'data/as1-assembly.step' )
