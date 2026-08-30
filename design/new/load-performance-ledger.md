@@ -167,19 +167,22 @@ named.** It is not a shared wasm heap — each worker has its own linear memory,
 which *shrinks* with N (611 MB → 207 MB each on D3D). It is mostly
 **duplicated work**: geometry shared below the representation level gets
 rebuilt in every shard that touches it, and the shards build **1.48× as many
-geometries** as one worker does on D3D at N=4. That is **70 %** of the loss.
+geometries** as one worker does on D3D at N=4. That is **72 %** of the loss.
 
 Memory bandwidth is *not* eliminated, though, which an earlier draft of §11
 claimed on the strength of a register-bound spin loop that by construction
 cannot see it. Measured against a bandwidth-bound kernel and against the
-harness's own replicated-parse control, the box accounts for roughly
-**8 of the 45 points** lost at N=4 — a minority, but not nothing.
+harness's own `open` and prep-probe contention controls, the box accounts
+for about **5 of the 45 points** lost at N=4 (4–9 across repetitions) — a
+minority, but not nothing.
 
 The root cause of the duplication on D3D is sharper than "an imperfect key":
 **60.7 % of its product worklist (29,031 of 47,791) resolves no mapping source
 at all**, so most of the production model is sharded positionally. §11.4 has
 the full decomposition — and note that on the three smaller models the shards
-rebuild **nothing at all**, so this mechanism is D3D's, not the corpus's.
+rebuild **no emitted geometry at all**, so this mechanism is D3D's, not the
+corpus's. (Sharing *below* the emitted level is what `dupWork` cannot see and
+what §10 carries as open.)
 
 
 ## 3. The wall moved, and it is memory
