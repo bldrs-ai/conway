@@ -276,6 +276,28 @@ async function bufferedRetainingReference(
 
 
 /**
+ * Let the event loop turn over a couple of times.
+ *
+ * `setImmediate` rather than a timer, for the reason the yield test spells
+ * out: `yieldToEventLoop` posts through `MessageChannel`, and those tasks
+ * cycle without the timers phase getting a turn, so a timer can sit
+ * unserviced through an entire drain.
+ *
+ * @return {Promise<void>} Resolved after two event-loop turns.
+ */
+async function settle(): Promise< void > {
+
+  await new Promise< void >( ( resolve ) => {
+    setImmediate( resolve )
+  } )
+
+  await new Promise< void >( ( resolve ) => {
+    setImmediate( resolve )
+  } )
+}
+
+
+/**
  * The live geometry residency behind an open IFC model.
  *
  * Reached through the proxy because the budget's *effective* state — as
@@ -641,6 +663,79 @@ describe( 'StreamAllMeshesAsync coordinates budget changes (IFC only — ' +
     expect( after.length ).toBe( whole.length - dropped )
   }, 240000 )
 
+  test( 'a second ask cannot discard a budget the first one already ' +
+    'acknowledged',
+  async () => {
+
+    // The ask chain's real guarantee, pinned rather than reasoned about.
+    //
+    // `budgetSuspendedForAsk_` and `pendingBudgetBytes_` are instance
+    // fields, so they have exactly one owner only because asks are
+    // serialised. Without that, a second ask starting while the first is
+    // still draining runs its own `pendingBudgetBytes_ = void 0` and
+    // **throws away a budget the first ask already told the caller it would
+    // apply** — SetGeometryBudget returned that value as "what will be in
+    // force", and then it silently is not.
+    //
+    // Made deterministic by holding the first ask's drain open: the pump is
+    // stubbed to block on its first call, which parks ask1 inside its
+    // suspension window with the field set, exactly where a second ask does
+    // the damage. White-box, in keeping with the rest of this suite.
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed( ifcFixture, DEFERRED )
+    const passthrough = api.getPassthrough( modelID ) as IfcApiProxyIfc
+
+    let releaseHold: () => void = () => { /* replaced below */ }
+
+    const held = new Promise< void >( ( resolve ) => {
+      releaseHold = resolve
+    } )
+
+    const realPump =
+      passthrough.extractGeometryBatchAsync.bind( passthrough )
+
+    let firstPumpCall = true
+
+    passthrough.extractGeometryBatchAsync = async (
+        batchSize: number, callback?: ( mesh: FlatMesh ) => void ) => {
+
+      if ( firstPumpCall ) {
+        firstPumpCall = false
+        await held
+      }
+
+      return realPump( batchSize, callback )
+    }
+
+    const ask1 = streamAllAsync( api, modelID )
+
+    // Let ask1 reach the held pump call, so it is parked mid-drain with the
+    // deferral window open.
+    await settle()
+
+    // Deferred and acknowledged: the caller is told 1 byte will be in force.
+    expect( api.SetGeometryBudget( modelID, 1 / BYTES_PER_MIB )?.budgetBytes )
+        .toBe( 1 )
+
+    // The second ask, issued while the first is still holding.
+    const ask2 = streamAllAsync( api, modelID )
+
+    await settle()
+
+    releaseHold()
+
+    await Promise.all( [ ask1, ask2 ] )
+
+    // The acknowledged value survived and took effect. Without the ask
+    // chain, ask2 clears the pending field on its way in, both asks restore
+    // their own (infinite) snapshots, and this reads Infinity — the budget
+    // the caller was promised never arrives.
+    expect( residencyOf( api, modelID ).budgetBytes ).toBe( 1 )
+  }, 240000 )
+
   test( 'overlapping whole-model asks each answer for the whole model and ' +
     'leave the budget intact',
   async () => {
@@ -653,14 +748,16 @@ describe( 'StreamAllMeshesAsync coordinates budget changes (IFC only — ' +
     // snapshot says nothing was ever evicted. `askChain_` serialises them
     // so exactly one owns that state at a time.
     //
-    // Pinned vs reasoned, stated plainly: this pins the OUTCOME — both asks
-    // answer for the whole model, and the budget in force before them is in
-    // force after. It does NOT distinguish the serialisation itself, and
-    // reverting `askChain_` leaves it green, because which ask finishes last
-    // decides whether the wrong snapshot is the one that gets restored and
-    // this fixture happens to finish them in the safe order. The lock's
-    // ordering guarantee is therefore reasoned from the field lifetimes
-    // above, not pinned here.
+    // What THIS test pins is the outcome under natural scheduling — both
+    // asks answer for the whole model, and the budget in force before them
+    // is in force after. It does not by itself distinguish the
+    // serialisation: reverting `askChain_` leaves it green, because which
+    // ask finishes last decides whether the wrong snapshot is restored and
+    // this fixture happens to finish them in the safe order.
+    //
+    // The discriminator lives in the test above, which holds the first ask's
+    // drain open so the ordering is forced rather than hoped for. Keep both:
+    // that one pins the guarantee, this one covers the ordinary path.
     const api = new IfcAPI()
 
     await api.Init()

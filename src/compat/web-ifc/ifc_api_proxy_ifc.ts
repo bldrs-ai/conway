@@ -3358,6 +3358,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * Takes effect at the next pump batch, so lowering it mid-load does not
    * stall the current one freeing memory.
    *
+   * **Where "the next pump batch" is, precisely.** Each pump call evicts
+   * exactly once, and that eviction precedes all of the call's extraction
+   * and delivery — on the resident path it is the first thing the call does,
+   * and on the async path it follows the pump lock and the worklist build
+   * but still runs before any product is extracted or any mesh handed over.
+   * So a budget landing while a pump call is suspended on either of those
+   * awaits is honoured by that same call's eviction, and a consumer never
+   * receives geometry from a batch that was evicted after it was delivered:
+   * #654's copy window — everything call N delivers stays resident until
+   * call N+1 begins — holds on both source types.
+   *
    * **Deferred while a whole-model ask is running** (`StreamAllMeshesAsync`).
    * That ask suspends the budget for its whole duration — asking for every
    * mesh at once means accepting the unbudgeted peak — and decides, from a
@@ -3376,7 +3387,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * of the value it suspended — the caller's latest request wins, and it
    * takes effect a moment later than usual rather than being dropped. The
    * returned `budgetBytes` is therefore what WILL be in force, not what is
-   * in force this instant; `liveBytes` is current.
+   * in force this instant.
+   *
+   * **And `liveBytes` reads 0 for the duration of an ask**, which is not a
+   * measurement of anything. Suspending the budget goes through
+   * `setBudgetBytes( 0 )`, and that clears the residency's bookkeeping
+   * outright — with no budget the accounting can only go stale, and a stale
+   * eviction order would free the wrong things if a budget were set later.
+   * The real resident figure comes back after the ask, when restoring a
+   * finite budget reseeds from the stores.
    *
    * The synchronous entry points need no such coordination: they cannot
    * yield, so nothing can call this between their drain and their serving.
@@ -3384,7 +3403,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param bytes The ceiling; non-finite or non-positive disables eviction.
    * @return {{budgetBytes: number, liveBytes: number}} The budget now in
    * force — or, during a whole-model ask, the one that will be — and what is
-   * currently accounted resident.
+   * currently accounted resident, which is 0 during an ask (see above).
    */
   public setGeometryBudget( bytes: number ): { budgetBytes: number, liveBytes: number } {
 
@@ -3961,97 +3980,119 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     await previousAsk
 
-    // The budget cannot hold across a whole-model ask, for the reasons the
-    // sync entry point sets out at length — the peak during this call is the
-    // unbudgeted peak, which is what asking for every mesh at once means.
-    // Sampled before the suspension, because everEvicted is what tells the
-    // accounting below whether anything was already lost.
-    const residency = this.model[0].geometryResidency
-    const suspendedBudgetBytes = residency.budgetBytes
-    const degraded = residency.everEvicted
-
-    // From here until serving completes, budget state and that snapshot must
-    // stay coherent, so setGeometryBudget defers instead of applying — see
-    // there for what a mid-drain budget change did before this existed.
-    this.budgetSuspendedForAsk_ = true
-    this.pendingBudgetBytes_ = void 0
-
-    residency.setBudgetBytes(0)
-
+    // Nothing between registering on the chain and this `try`, and nothing
+    // in its `finally` but the release — the same shape as the pump lock, and
+    // for the same reason. Everything the ask does to shared state happens
+    // inside, so any throw still reaches releaseAsk(). Get this wrong and the
+    // failure is not a lost call but a wedged proxy: an unresolved chain
+    // hangs every later ask, and a `budgetSuspendedForAsk_` stuck true makes
+    // setGeometryBudget defer forever while REPORTING the value as applied.
     try {
 
-      const noCallback = void 0
+      // The budget cannot hold across a whole-model ask, for the reasons the
+      // sync entry point sets out at length — the peak during this call is
+      // the unbudgeted peak, which is what asking for every mesh at once
+      // means. Sampled before the suspension, because everEvicted is what
+      // tells the accounting below whether anything was already lost.
+      const residency = this.model[0].geometryResidency
+      const suspendedBudgetBytes = residency.budgetBytes
+      const degraded = residency.everEvicted
 
-      // The line that differs from the sync path. Each call pages the
-      // batch's product closures in before extracting them, so a source that
-      // is a moving window over an external store is drained the same way
-      // Share drains it.
-      //
-      // The yield before each batch is what makes the `async` on this method
-      // mean something on a RESIDENT deferred source, where the pump has no
-      // real I/O to await: it would otherwise reach only microtasks (the
-      // pump lock, the worklist check), which do not let timers or I/O run,
-      // so an awaiting consumer would be starved exactly as the sync entry
-      // point starves it. Placed before the batch rather than after, so the
-      // caller gets the promise back before any extraction runs, and so a
-      // single-batch model still yields once.
-      for ( ; ; ) {
+      // From here until serving completes, budget state and that snapshot
+      // must stay coherent, so setGeometryBudget defers instead of applying
+      // — see there for what a mid-drain budget change did before this
+      // existed. Inside the inner try/finally below, so the deferral window
+      // is closed and the budget put back however this call leaves.
+      this.budgetSuspendedForAsk_ = true
+      this.pendingBudgetBytes_ = void 0
 
-        await yieldToEventLoop()
+      residency.setBudgetBytes(0)
 
-        const { remaining } = await this.extractGeometryBatchAsync(
-            DEFERRED_DRAIN_BATCH, noCallback)
+      try {
 
-        if (remaining === 0) {
-          break
+        const noCallback = void 0
+
+        // The line that differs from the sync path. Each call pages the
+        // batch's product closures in before extracting them, so a source
+        // that is a moving window over an external store is drained the same
+        // way Share drains it.
+        //
+        // The yield before each batch is what makes the `async` on this
+        // method mean something on a RESIDENT deferred source, where the
+        // pump has no real I/O to await: it would otherwise reach only
+        // microtasks (the pump lock, the worklist check), which do not let
+        // timers or I/O run, so an awaiting consumer would be starved
+        // exactly as the sync entry point starves it. Placed before the
+        // batch rather than after, so the caller gets the promise back
+        // before any extraction runs, and so a single-batch model still
+        // yields once.
+        for ( ; ; ) {
+
+          await yieldToEventLoop()
+
+          const { remaining } = await this.extractGeometryBatchAsync(
+              DEFERRED_DRAIN_BATCH, noCallback)
+
+          if (remaining === 0) {
+            break
+          }
+        }
+
+        // Re-read rather than reusing the pre-drain snapshot alone, so the
+        // filter decision is made on POST-drain state.
+        //
+        // Defence in depth behind the deferral above, and the two were
+        // measured separately rather than assumed to overlap. With the
+        // deferral in place this cannot fire: the budget stays suspended for
+        // the whole drain, `evictToBudget` is a no-op while disabled, and
+        // eviction is the only thing that sets `everEvicted`. Revert the
+        // deferral alone and it becomes live — a mid-drain
+        // `SetGeometryBudget( 1 byte )` on a partially pumped retaining
+        // model then evicts, and this re-read is what runs the
+        // live-placement filter so the freed placement is dropped instead of
+        // delivered (measured: 15 placements served rather than 16, and no
+        // freed handle). Revert both and the freed handle reaches the
+        // callback (measured: 16 served, 1 with a deleted native) — the
+        // embind abort of SHARE-1NK.
+        //
+        // So the deferral is what keeps the answer COMPLETE, and this is
+        // what keeps it SAFE if anything ever evicts during a drain anyway.
+        // OR-ed, never replaced, so a model already degraded on entry stays
+        // degraded.
+        const degradedNow = degraded || residency.everEvicted
+
+        this.serveDeferredWholeModel_(
+            meshCallback, degradedNow, 'StreamAllMeshesAsync')
+
+      } finally {
+
+        // In a finally for the same reason as the sync path: meshCallback is
+        // the CALLER's code, and an early return through it would leave the
+        // model permanently unbudgeted with nothing to signal it.
+        //
+        // Cleared FIRST, so that even if putting the budget back throws the
+        // deferral window is shut — a stuck-true flag would make every later
+        // setGeometryBudget defer forever while reporting the value as
+        // applied. This whole block sits inside the ask lock's try, so a
+        // throw here still reaches releaseAsk().
+        this.budgetSuspendedForAsk_ = false
+
+        // A budget requested during the ask wins over the one suspended on
+        // the way in — it is the caller's latest word, and deferring it was
+        // this method's doing, not the caller's. `resume` carries the
+        // normalised value either way, so the finite test below reads "is
+        // there a budget to put back" for both.
+        const resume = this.pendingBudgetBytes_ ?? suspendedBudgetBytes
+
+        this.pendingBudgetBytes_ = void 0
+
+        if (Number.isFinite(resume)) {
+          residency.setBudgetBytes(resume)
+          residency.evictToBudget()
         }
       }
 
-      // Re-read rather than reusing the pre-drain snapshot alone, so the
-      // filter decision is made on POST-drain state.
-      //
-      // Defence in depth behind the deferral above, and the two were
-      // measured separately rather than assumed to overlap. With the
-      // deferral in place this cannot fire: the budget stays suspended for
-      // the whole drain, `evictToBudget` is a no-op while disabled, and
-      // eviction is the only thing that sets `everEvicted`. Revert the
-      // deferral alone and it becomes live — a mid-drain
-      // `SetGeometryBudget( 1 byte )` on a partially pumped retaining model
-      // then evicts, and this re-read is what runs the live-placement filter
-      // so the freed placement is dropped instead of delivered (measured: 15
-      // placements served rather than 16, and no freed handle). Revert both
-      // and the freed handle reaches the callback (measured: 16 served, 1
-      // with a deleted native) — the embind abort of SHARE-1NK.
-      //
-      // So the deferral is what keeps the answer COMPLETE, and this is what
-      // keeps it SAFE if anything ever evicts during a drain anyway. OR-ed,
-      // never replaced, so a model already degraded on entry stays degraded.
-      const degradedNow = degraded || residency.everEvicted
-
-      this.serveDeferredWholeModel_(
-          meshCallback, degradedNow, 'StreamAllMeshesAsync')
-
     } finally {
-
-      // In a finally for the same reason as the sync path: meshCallback is
-      // the CALLER's code, and an early return through it would leave the
-      // model permanently unbudgeted with nothing to signal it.
-      this.budgetSuspendedForAsk_ = false
-
-      // A budget requested during the ask wins over the one suspended on the
-      // way in — it is the caller's latest word, and deferring it was this
-      // method's doing, not the caller's. `resume` carries the normalised
-      // value either way, so the finite test below reads "is there a budget
-      // to put back" for both.
-      const resume = this.pendingBudgetBytes_ ?? suspendedBudgetBytes
-
-      this.pendingBudgetBytes_ = void 0
-
-      if (Number.isFinite(resume)) {
-        residency.setBudgetBytes(resume)
-        residency.evictToBudget()
-      }
-
       releaseAsk()
     }
   }
