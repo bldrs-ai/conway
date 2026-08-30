@@ -203,6 +203,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   /** Was this model opened without extraction (DEFER_GEOMETRY)? */
   private deferredMode_: boolean = false
 
+  /**
+   * Did the open declare the caller the owner of the pumped mesh stream
+   * (STREAMING_CONSUMER)? When true the delta capture hands each FlatMesh to
+   * the callback and keeps nothing: meshMap and vectorFlatMesh stay empty
+   * for the model's whole pumped life, and a late whole-model ask is served
+   * by re-walking the scene (see recaptureWholeModel_).
+   *
+   * Deliberately ANDed with deferredMode_ at the one place it is set: on a
+   * classic open there is no pump, so there is no accumulation the flag
+   * could suppress, and letting it be true there would only give
+   * streamAllMeshes a branch it can never need.
+   */
+  private streamingConsumer_: boolean = false
+
+  /**
+   * The array behind model[4]'s hand-rolled Vector<FlatMesh>. Held so
+   * recaptureWholeModel_ can truncate the spine — Vector has push but no
+   * clear, and a re-walk that appends to whatever a previous one left would
+   * make LoadAllGeometry return each entity once per call.
+   */
+  private readonly flatMeshArray_: FlatMesh[]
+
   /** Parse/load tracker — deferred opens resume it for the Geometry phase. */
   private progressTracker_?: ProgressTracker
 
@@ -419,6 +441,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.conwaywasm = loadState.conwaywasm
     this.conwayGeometry_ = loadState.conwayGeometry
     this.deferredMode_ = loadState.deferred === true
+
+    // Only a deferred open has a pump, and only a pump accumulates — see
+    // streamingConsumer_ for why the AND lives here rather than at each use.
+    this.streamingConsumer_ =
+      this.deferredMode_ && settings?.STREAMING_CONSUMER === true
+
     this.progressTracker_ = loadState.tracker
 
     const statistics = Logger.getStatistics(modelID)
@@ -519,6 +547,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
 
     const coordinationMatrix: glmatrix.mat4 = glmatrix.mat4.create()
+
+    this.flatMeshArray_ = flatMeshArray
 
     this.model = [
       model,
@@ -2269,9 +2299,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // instances vanish from the model with no error. On the
     // shared-representation fixture at a 2 KiB budget that path delivered 3
     // placements against classic's 16.
+    //
+    // STREAMING_CONSUMER makes that capture a no-op — there is no meshMap to
+    // save anything into — so it is skipped rather than run for its side
+    // effect of advancing the scene cursor, which the only whole-model path
+    // on such a model rewinds to zero anyway (recaptureWholeModel_).
+    //
+    // Note what is NOT being claimed: that nothing is lost. Under a budget,
+    // geometry evicted before a no-callback drain finishes is unrecoverable
+    // on this contract exactly as it is here, and the re-walk does not get
+    // it back — it reports it, and throws when that accounts for the whole
+    // model. Skipping the capture is not what loses it; having no cache to
+    // capture INTO is, and that is the contract the caller opted into.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
-    } else if (this.model[0].geometryResidency.enabled) {
+    } else if (this.model[0].geometryResidency.enabled &&
+        !this.streamingConsumer_) {
       this.streamNewMeshes_(() => { /* capture into meshMap */ })
     }
 
@@ -3168,9 +3211,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // instances vanish from the model with no error. On the
     // shared-representation fixture at a 2 KiB budget that path delivered 3
     // placements against classic's 16.
+    //
+    // STREAMING_CONSUMER makes that capture a no-op — there is no meshMap to
+    // save anything into — so it is skipped rather than run for its side
+    // effect of advancing the scene cursor, which the only whole-model path
+    // on such a model rewinds to zero anyway (recaptureWholeModel_).
+    //
+    // Note what is NOT being claimed: that nothing is lost. Under a budget,
+    // geometry evicted before a no-callback drain finishes is unrecoverable
+    // on this contract exactly as it is here, and the re-walk does not get
+    // it back — it reports it, and throws when that accounts for the whole
+    // model. Skipping the capture is not what loses it; having no cache to
+    // capture INTO is, and that is the contract the caller opted into.
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
-    } else if (this.model[0].geometryResidency.enabled) {
+    } else if (this.model[0].geometryResidency.enabled &&
+        !this.streamingConsumer_) {
       this.streamNewMeshes_(() => { /* capture into meshMap */ })
     }
 
@@ -3190,26 +3246,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
   }
 
-  /**
-   * Walk the scene and emit every not-yet-captured placed instance as
-   * per-entity DELTA FlatMeshes — the incremental core of
-   * streamAllMeshes with identical placed-geometry math, processed in
-   * walk order exactly once per instance (per-entity watermarks). An
-   * entity re-emits with only its NEW instances when shared/mapped
-   * geometry attributes more to it in later batches; consumers render
-   * deltas additively (the shared meshMap still accumulates each
-   * entity's FULL vector, so getFlatMesh stays whole-model correct).
-   *
-   * Also fixes a latent multi-call bug: the derived coordination
-   * matrix is remembered (demandCoordination_), so later batches place
-   * with the SAME coordination the first batch established
-   * (streamAllMeshes never needed this — it runs once). It is NOT
-   * exposed through getCoordinationMatrix, which keeps the classic
-   * identity contract consumers stamp onto assembled models.
-   *
-   * @param meshCallback Receives one delta FlatMesh per entity that
-   * gained instances this call.
-   */
   /**
    * Set the resident-geometry budget, in bytes, after the open.
    *
@@ -3235,8 +3271,36 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     return { budgetBytes: residency.budgetBytes, liveBytes: residency.liveBytes }
   }
 
+  /**
+   * Walk the scene and emit every not-yet-captured placed instance as
+   * per-entity DELTA FlatMeshes — the incremental core of
+   * streamAllMeshes with identical placed-geometry math, processed in
+   * walk order exactly once per instance (per-entity watermarks). An
+   * entity re-emits with only its NEW instances when shared/mapped
+   * geometry attributes more to it in later batches; consumers render
+   * deltas additively (the shared meshMap accumulates each entity's FULL
+   * vector so getFlatMesh stays whole-model correct — unless `retain` is
+   * off, which is the STREAMING_CONSUMER contract; see that parameter).
+   *
+   * Also fixes a latent multi-call bug: the derived coordination
+   * matrix is remembered (demandCoordination_), so later batches place
+   * with the SAME coordination the first batch established
+   * (streamAllMeshes never needed this — it runs once). It is NOT
+   * exposed through getCoordinationMatrix, which keeps the classic
+   * identity contract consumers stamp onto assembled models.
+   *
+   * @param meshCallback Receives one delta FlatMesh per entity that
+   * gained instances this call.
+   * @param retain Whether to file each placement into the cumulative
+   * meshMap/vectorFlatMesh as well as delivering it. Defaults to the
+   * inverse of streamingConsumer_, which is the whole of the
+   * STREAMING_CONSUMER contract; recaptureWholeModel_ is the one caller
+   * that forces it true on such a model, to rebuild the cache for a late
+   * whole-model ask.
+   */
   private streamNewMeshes_(
-      meshCallback: (mesh: FlatMesh) => void ): void {
+      meshCallback: (mesh: FlatMesh) => void,
+      retain: boolean = !this.streamingConsumer_ ): void {
 
     // Released models: the scene's natives are freed — nothing new can
     // exist to capture, and walking would touch freed objects.
@@ -3395,29 +3459,38 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         flatTransformation: newTransformArr,
       }
 
-      let mesh = meshMap.get(entity.expressID)
+      // The cumulative per-entity cache, and the bulk of what
+      // STREAMING_CONSUMER exists to not build: every placement ever
+      // pumped, kept for the lifetime of the model against the chance
+      // that someone later asks for the whole thing. The delta below is
+      // a separate array, so skipping this costs the callback nothing —
+      // the consumer receives exactly the same stream either way.
+      if (retain) {
 
-      if (mesh === void 0) {
+        let mesh = meshMap.get(entity.expressID)
 
-        const placedArray = new Array<PlacedGeometry>()
-        const placedVector: Vector<PlacedGeometry> = {
-          get: (index: number) => placedArray[index] ?? placed,
-          size: () => placedArray.length,
-          push: (parameter: PlacedGeometry) => {
-            placedArray.push(parameter)
-          },
+        if (mesh === void 0) {
+
+          const placedArray = new Array<PlacedGeometry>()
+          const placedVector: Vector<PlacedGeometry> = {
+            get: (index: number) => placedArray[index] ?? placed,
+            size: () => placedArray.length,
+            push: (parameter: PlacedGeometry) => {
+              placedArray.push(parameter)
+            },
+          }
+          const flatMesh: FlatMesh = {
+            geometries: placedVector,
+            expressID: entity.expressID,
+          }
+
+          mesh = [placedVector, flatMesh]
+          meshMap.set(entity.expressID, mesh)
         }
-        const flatMesh: FlatMesh = {
-          geometries: placedVector,
-          expressID: entity.expressID,
-        }
 
-        mesh = [placedVector, flatMesh]
-        meshMap.set(entity.expressID, mesh)
+        mesh[0].push(placed)
+        mesh[1].geometries = mesh[0]
       }
-
-      mesh[0].push(placed)
-      mesh[1].geometries = mesh[0]
 
       let delta = deltas.get(entity.expressID)
       if (delta === void 0) {
@@ -3440,9 +3513,98 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
       const deltaMesh: FlatMesh = {geometries: placedVector, expressID}
 
-      vectorFlatMesh.push(deltaMesh)
+      // The second spine over the same graph (conway#638): one entry per
+      // delta mesh, never dropped. Read only by loadAllGeometry's return
+      // value, which a streaming consumer is not using — it took delivery
+      // through the callback below instead.
+      if (retain) {
+        vectorFlatMesh.push(deltaMesh)
+      }
+
       meshCallback(deltaMesh)
     }
+  }
+
+  /**
+   * Re-materialise the whole-model per-entity meshes on a
+   * STREAMING_CONSUMER model, which by contract has kept none.
+   *
+   * Re-walks with the DELTA capture from instance zero rather than with the
+   * classic walk at the bottom of streamAllMeshes, and the difference is
+   * load-bearing: the classic walk seeds its coordination from `model[5]`,
+   * which a deferred open never writes, so it would place every instance in
+   * an identity frame while the placements the consumer already received are
+   * in the frame `demandCoordination_` holds. streamNewMeshes_ seeds from
+   * that field, so what this rebuilds is what was streamed.
+   *
+   * Clearing first is what makes the ask idempotent. On the retaining path a
+   * second StreamAllMeshes re-pushes every instance into the still-populated
+   * cache and doubles every triangle count (documented from the consumer
+   * side in Share's IfcItemsMap.js:274-283); here each call starts from an
+   * empty map and instance zero, so the second returns exactly what the
+   * first did.
+   *
+   * The cost is honest and worth stating: a model that is asked for the
+   * whole stream ends up holding the cache the contract was avoiding. That
+   * is the price of the ask, paid at the moment of the ask rather than on
+   * every load against the chance of one.
+   *
+   * **A re-walk does not recover evicted geometry, and this is how the
+   * caller finds that out.** `GEOMETRY_BUDGET_MB` eviction deletes the mesh
+   * from the model's geometry store (`IfcModelGeometry.delete`), so the walk
+   * resolves nothing for that scene node, parks it, and the placement never
+   * enters the rebuilt map at all — it is missing rather than present-and-
+   * dead. That makes the retaining path's `livePlacements` filter blind here
+   * (it can only see placements that made it into the map, and all of those
+   * are live), which is why the count this returns, not that filter, is what
+   * streamAllMeshes reports and throws on.
+   *
+   * @param entryPoint The public method being served, for the error message.
+   * @return {number} Scene nodes the re-walk could not resolve — placed
+   * instances whose geometry is gone, and so missing from what the rebuilt
+   * map can serve. Zero on a healthy model.
+   */
+  private recaptureWholeModel_( entryPoint: string ): number {
+
+    // The natives a re-walk would read are freed. There is no cache to fall
+    // back on — that is the contract — so say so instead of walking an empty
+    // scene and returning a model with no geometry in it.
+    if (this.released_) {
+
+      throw new Error(
+          `${entryPoint}: this model was opened with STREAMING_CONSUMER, so ` +
+          `conway kept no reference to the meshes the pump delivered — the ` +
+          `caller owns them — and ReleaseModelGeometry has since freed the ` +
+          `natives a re-walk would need. Nothing can be served. Copy at ` +
+          `delivery, or open without STREAMING_CONSUMER if a whole-model ` +
+          `ask after release is required.` )
+    }
+
+    this.model[2].clear()
+
+    // Rewind the delta cursor so the walk starts at instance zero. The
+    // parked-node map goes with it: those nodes are below the cursor now
+    // and the walk yields them again on its own, so leaving their retry
+    // counts behind would only expire nodes early on a second ask.
+    this.demandSceneCursor_ = 0
+    this.demandPendingNodes_.clear()
+
+    this.streamNewMeshes_(() => { /* rebuilding the cache, not delivering */ },
+        true)
+
+    // Truncated AFTER the walk, not before: retaining also pushes each delta
+    // into the spine, and the caller (streamAllMeshes / loadAllGeometry) then
+    // pushes one entry per whole-model entity on top. Emptying it here leaves
+    // the caller's own pass as the only writer, so LoadAllGeometry returns
+    // each entity exactly once however many times it is asked.
+    this.flatMeshArray_.length = 0
+
+    // The parked map was emptied above and this walk is the only thing that
+    // has written to it since, so its size IS the number of instances this
+    // re-walk could not resolve. The drain has already run to completion by
+    // the time anything calls this, so a node still unresolved here is not
+    // waiting on extraction — its geometry is gone.
+    return this.demandPendingNodes_.size
   }
 
   /**
@@ -3470,6 +3632,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // populate) the shared meshMap — re-running the classic walk would
     // push every instance a second time. Pump any remainder to
     // completion and serve the accumulated full per-entity meshes.
+    //
+    // Under STREAMING_CONSUMER there is no such accumulation, by contract,
+    // and the drain below is followed by a full re-walk instead — see
+    // recaptureWholeModel_.
     if (this.deferredMode_) {
 
       // A budget cannot hold across this call, and pretending otherwise
@@ -3514,13 +3680,31 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             DEFERRED_DRAIN_BATCH, noCallback).remaining > 0) {
           // draining
         }
-        this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+
+        // Placed instances the re-walk could not resolve, which on this path
+        // is the ONLY signal that anything was lost: evicted geometry is
+        // deleted from the store, so those placements never reach the
+        // rebuilt map and the livePlacements filter below cannot see them.
+        // Zero on the retaining path, where that filter is the signal.
+        let unresolvedInstances = 0
+
+        if (this.streamingConsumer_) {
+          // Nothing was accumulated to absorb stragglers into: this open
+          // declared the caller the owner of the stream. Rebuild the whole
+          // model from the live scene instead — same placements, one walk,
+          // and it throws rather than serving an empty model when the
+          // natives are gone.
+          unresolvedInstances = this.recaptureWholeModel_('StreamAllMeshes')
+        } else {
+          this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+        }
 
         const [, , meshMap, geometryMaterialTransformMap, vectorFlatMesh] =
           this.model
 
         let droppedInstances = 0
         let droppedEntities = 0
+        let servedEntities = 0
 
         meshMap.forEach((mesh) => {
 
@@ -3536,14 +3720,75 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
             }
           }
 
+          ++servedEntities
           vectorFlatMesh.push(mesh[1])
           meshCallback(mesh[1])
         })
 
-        // One line for the whole call, not one per dropped instance: this
-        // fires on a path that may drop thousands, and a per-instance log
-        // would bury the fact that anything was dropped at all.
-        if (degraded) {
+        if (this.streamingConsumer_) {
+
+          // Served nothing, and the re-walk found instances it could not
+          // resolve: the geometry behind them is gone. What must NOT throw is
+          // a model that genuinely has no geometry — nothing parked, nothing
+          // to serve — where empty is the right answer and classic returns it
+          // too.
+          //
+          // `unresolvedInstances` is the whole signal today; `degraded` is a
+          // failsafe that is NOT independently reachable, and saying so is
+          // the point of this paragraph. Eviction removes geometry from the
+          // store and never touches the scene, which is append-only
+          // (IfcSceneBuilder.nodeCount's contract) — so every instance an
+          // eviction costs us is an instance the walk parks, and there is no
+          // state today in which the model evicted but the walk parked
+          // nothing. It is kept because it costs a boolean read and it fails
+          // in the safe direction: any future path that removes geometry
+          // WITHOUT leaving a parked node behind would otherwise reintroduce
+          // exactly the silent empty model this guard exists to prevent. No
+          // test pins it, and none can, because the state cannot be
+          // constructed through the public API.
+          //
+          // What this deliberately does NOT key on is droppedEntities, the
+          // way the retaining path below does. That counter is fed by the
+          // livePlacements filter, which can only ever see placements that
+          // reached the rebuilt map — and evicted ones never do, because
+          // eviction deletes the mesh from the store rather than leaving a
+          // dead handle in it. Keying on it made this throw unreachable and
+          // let a fully-evicted model return silently empty: measured at a
+          // 1-byte budget on mapped_shared_representation.ifc as 0 placements
+          // served, "0 instance(s) across 0 entit(ies)" logged, no throw.
+          if (servedEntities === 0 && (unresolvedInstances > 0 || degraded)) {
+
+            throw new Error(
+                `StreamAllMeshes: this model was opened with ` +
+                `STREAMING_CONSUMER, so conway kept no reference to the ` +
+                `meshes the pump delivered — the caller owns them — and the ` +
+                `re-walk that serves a late whole-model ask resolved none of ` +
+                `the model (${unresolvedInstances} placed instance(s) ` +
+                `unresolved), because a GEOMETRY_BUDGET_MB eviction has ` +
+                `already freed the geometry behind them. Nothing can be ` +
+                `served. Copy at delivery, raise the budget, or open without ` +
+                `STREAMING_CONSUMER.` )
+          }
+
+          // Partial loss is a warning, matching the retaining path, but the
+          // number comes from the re-walk rather than the filter — see above
+          // for why the filter reads zero here however much was lost.
+          if (unresolvedInstances > 0) {
+            Logger.warning(
+                `[geometry budget] StreamAllMeshes re-walked a ` +
+                `STREAMING_CONSUMER model that evicted under a budget: ` +
+                `${unresolvedInstances} placed instance(s) could not be ` +
+                `resolved because their geometry was freed, and are missing ` +
+                `from the ${servedEntities} entit(ies) this call served. ` +
+                `Pump ExtractGeometryBatch and copy at delivery to receive ` +
+                `everything.`)
+          }
+
+        } else if (degraded) {
+
+          // One line for the whole call, not one per dropped instance: this
+          // fires on a path that may drop thousands, and a per-instance log
+          // would bury the fact that anything was dropped at all.
           Logger.warning(
               `[geometry budget] StreamAllMeshes served a model that evicted ` +
               `under a budget: ${droppedInstances} instance(s) across ` +
@@ -3714,6 +3959,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Deliberately NOT routed through recaptureWholeModel_ under
+   * STREAMING_CONSUMER. This entry point has no deferred branch at all — it
+   * runs the classic walk on a deferred model today, seeding coordination
+   * from model[5] — so it is already wrong there for reasons that predate
+   * and are wider than this contract, and gating it here would only hide
+   * that behind a flag. Under the contract meshMap is at least empty when it
+   * starts, so its walk builds a clean set rather than doubling a cached
+   * one. Fixing the deferred coordination seed here is separate work.
    *
    * @param modelID
    * @param types
@@ -3887,6 +4140,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @return {Vector<FlatMesh>}
    */
   loadAllGeometry(): Vector<FlatMesh> {
+
+    // A STREAMING_CONSUMER model has no cached meshes to hand back, and the
+    // classic walk below cannot build them: it seeds coordination from
+    // model[5], which a deferred open never writes. Route the whole ask
+    // through streamAllMeshes, which drains the pump, re-walks with the
+    // frame the stream actually used, and throws if the natives are gone.
+    // It leaves one entry per entity in the spine, which is what this
+    // returns.
+    if (this.streamingConsumer_) {
+
+      this.streamAllMeshes(() => { /* the spine is the return value */ })
+
+      return this.model[4]
+    }
+
     const [model,
       scene,
       meshMap,
@@ -4100,6 +4368,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // eslint-disable-next-line no-unused-vars
     const [model, scene, meshMap] = this.model
 
+    // Empty is the STEADY state under STREAMING_CONSUMER, not the
+    // not-loaded-yet state it means elsewhere, so this fires on the FIRST
+    // single-mesh ask on such a model and the re-walk it routes into (see
+    // loadAllGeometry) is what serves it. That re-walk repopulates the map,
+    // so subsequent asks are cache hits again — the contract stops conway
+    // paying for the cache on every load, not from ever building one when a
+    // caller asks for something only the cache can answer.
     if (meshMap.size <= 0) {
 
       this.loadAllGeometry()

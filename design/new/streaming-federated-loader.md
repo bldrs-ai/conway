@@ -676,6 +676,66 @@ Deliberately small first step; each has a measurable exit.
   pump call N delivered is resident until call N+1 begins, at the price of
   a transient overshoot of up to one batch.
 
+    **Implementation, third landed piece — a streaming-consumer ownership
+  contract (2026-08-29, conway#638).** The budget above bounds *native*
+  bytes. The JS side had its own, larger problem: a deferred open builds
+  each `PlacedGeometry` once and files that one object into **three**
+  pointer spines — the model's cumulative per-entity `meshMap`, its
+  `vectorFlatMesh`, and whatever the embedder keeps from the mesh
+  callback. Measured on a D3D load that graph is **475 MB** of V8 heap,
+  the largest single bucket, and dropping any one spine alone frees only
+  ~4.4 MB, because the other two keep the same graph alive (4.4 MB is
+  the *predicted* size of one 562 351-entry spine at 8 B, so that number
+  confirms the model rather than refuting it). A consumer that assembles
+  every batch as it lands — Share's incremental batched builder — never
+  reads the two conway holds.
+
+    `STREAMING_CONSUMER` (a `DEFER_GEOMETRY`-only open setting, default
+  off, both proxies) lets the caller say so: the pump hands each delta
+  `FlatMesh` to the callback and keeps no reference, so neither conway
+  spine grows. **It drops JS pointer spines and nothing else** — the
+  natives are owned by the geometry store and freed only by eviction or
+  `ReleaseModelGeometry`, so the copy-window guarantee above is
+  untouched, as is the trailing zero-work pump call that trims the final
+  batch. The retention was never load-bearing for Share's empty-pump
+  fallback, which the issue text originally claimed: that fallback fires
+  only when the pump produced *nothing*, and in that case `meshMap` was
+  empty going in and a fresh scene walk serves it.
+
+    What is load-bearing is a late whole-model ask. `StreamAllMeshes`,
+  `LoadAllGeometry` and `GetFlatMesh` on such a model **re-walk the live
+  scene** rather than replaying a cache that no longer exists — with the
+  delta capture, not the classic walk, because only the delta capture
+  seeds coordination from the frame the stream actually used. Because the
+  re-walk clears and restarts at instance zero, it is *idempotent*, which
+  incidentally closes the latent doubling bug a second `StreamAllMeshes`
+  has on the retaining path (Share's `IfcItemsMap.js:274-283`).
+
+    **A re-walk does not recover evicted geometry, and the reporting had
+  to be rebuilt around that.** Eviction deletes the mesh from the store
+  (`IfcModelGeometry.delete`), so the walk resolves nothing for that scene
+  node, parks it, and the placement is *absent* from the rebuilt map
+  rather than present-and-dead. The retaining path's `livePlacements`
+  filter therefore reads zero however much was lost — it can only see
+  placements that made it into the map, and all of those are live. The
+  first version of this shipped a throw keyed on that filter, which made
+  it unreachable: at a 1-byte budget on `mapped_shared_representation.ifc`
+  the model served **0 placements, logged "0 across 0", and did not
+  throw** — the exact silent-empty failure the contract exists to
+  prevent, in Share's own production config. The signal is instead the
+  count of instances the re-walk **parked**: partial loss warns with that
+  count, total loss (nothing resolved) **throws and names the contract**,
+  as does any whole-model ask after `ReleaseModelGeometry`. A model that
+  genuinely has no geometry still returns empty, quietly, as classic does.
+
+    **Scope.** The synchronous whole-model entry points drain through the
+  synchronous pump, which refuses a windowed source outright. So on a
+  model opened over an external store — Share's configuration — the late
+  whole-model ask is not reachable through `StreamAllMeshes` at all. That
+  predates this contract and is identical with and without it; it is noted
+  because the contract's promise about that ask is otherwise easy to read
+  as broader than it is.
+
   **PSB.ifc at batch 8 — the size Share pumps at:**
 
   | budget | live | wasm peak | delta meshes | geometry |
