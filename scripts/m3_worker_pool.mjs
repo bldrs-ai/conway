@@ -30,7 +30,10 @@
  * `--prep-probe` skips the pump entirely and reports what the first-batch
  * window is made of — replicated demand prep, contention on it, the
  * dispatch-key pass only a sharded worker runs, and the geometry batch that
- * rides along inside the window. See `runPrepProbe`.
+ * rides along inside the window. The geometry is removed **per worker**,
+ * against that worker's own products, because a sharded worker's first
+ * product is not the unsharded reference's first product; see `prepProbe`
+ * and `runPrepProbe`.
  *
  * D3D needs `--max-old-space-size=12288`; nothing here calls `gc()`, so
  * `--expose-gc` buys nothing and is deliberately not in that line.
@@ -49,6 +52,16 @@ const REPO_ROOT = path.resolve( fileURLToPath( new URL( '.', import.meta.url ) )
 const DEFAULT_WORKERS = [ 1, 2, 4 ]
 const BATCH_SIZE = 64
 const MS_PER_S = 1000
+// Geometry-only calls each prep-probe worker makes after its timed first
+// call, so the geometry inside that window can be subtracted using the same
+// worker's own products (see `prepProbe`). Five rather than one because the
+// subtraction takes their MEDIAN: per-product extraction cost is skewed, and
+// a single sample would hand one expensive product straight into the prep
+// figure. Their spread is what the reported error bars are built from.
+const PROBE_TAIL_CALLS = 5
+// Below this the estimate has no error bar, and a prep figure with no error
+// bar is what the previous round published.
+const MIN_TAIL_SAMPLES = 2
 
 
 /**
@@ -105,51 +118,137 @@ function groupPayloadsById( entries ) {
 
 
 /**
- * One worker, prep only: how long the worklist build costs at this level.
+ * One worker, prep only — and the geometry that cannot be kept out of it.
  *
- * Exists because `dupFirstBatch` is a mixture and the ledger used to read it
- * as one mechanism. Three levels answer what the ratio cannot, and two more
- * bound the instrument:
+ * `pumpGeometryBatch_` floors its budget at one product
+ * (`ifc_api_proxy_ifc.ts:3007` — `Math.max(batchSize, 1)`), so there is no
+ * call that runs `ensureDemandWorklists_` and extracts nothing: every window
+ * this probe can time is prep PLUS at least one product of real geometry.
+ * That geometry has to come back out, and the only sound place to subtract
+ * it is INSIDE the same worker.
  *
- *  - **one unsharded worker** — `ensureDemandWorklists_` takes its
- *    `shard_ === void 0` early return, so this is `collectDemandCandidates_`
- *    and nothing else: the `IfcProduct` walk plus `aggregateTargetLocalIDs()`.
- *    This is the part every worker genuinely repeats, sharded or not, and it
- *    is the denominator `dupFirstBatch` divides by.
- *  - **N unsharded workers** — the same work, N times, concurrently. Over N
- *    times the line above, that is contention and only contention.
- *  - **N sharded workers** — identical except for the one branch under test,
- *    which adds `geometryDispatchKey` over every worklist product AND every
- *    `IfcRelAggregates` plus two filters. Over the line above, that is the
- *    shard-only key pass — work that exists only because sharding does.
+ * So: one timed call, which builds the worklists and pumps `batch` products,
+ * then up to `PROBE_TAIL_CALLS` more timed calls of the same size, which pump
+ * `batch` more products each and run no prep at all — `ensureDemandWorklists_`
+ * returns at its `demandProducts_ !== void 0` guard. `prepMs` is the first
+ * call minus the median of those, so the geometry is cancelled against *this
+ * worker's own worklist*.
  *
- * A fourth level applies a shard of ONE and must land on the first:
- * `setGeometryShard` normalises `count === 1` to unsharded
- * (`ifc_api_proxy_ifc.ts:2680`), so it is a null control proving the key-pass
- * figure is the sharded BRANCH rather than the cost of making the call.
+ * **That is the whole point, and the first version of this probe got it
+ * wrong.** The levels do not share a worklist: `demandProducts_` is the
+ * FILTERED list on a sharded worker, so shard *i*'s first product is not the
+ * unsharded worklist's first product — it is the first product that survives
+ * shard *i*'s filter, and N shards extract N *different* products where N
+ * unsharded workers all extract the same one. Subtracting one
+ * configuration's summed window from another's therefore leaves
+ * `Σ_shards g(shard's first product) − N × g(the whole worklist's first
+ * product)` inside what gets reported as the dispatch-key pass. Per-product
+ * extraction cost is heterogeneous by orders of magnitude, and §11.4
+ * measured the small models' window as 84 % geometry, so that residue could
+ * be the entire signal there.
  *
- * The batch is 0, which `pumpGeometryBatch_` floors at one product
- * (`Math.max(batchSize, 1)`). That is the smallest geometry the pump can be
- * asked for — 64x below the sweep's `BATCH_SIZE`, which matters most on the
- * small models, where 64 products is a large fraction of the whole worklist.
- * A fifth level re-runs the unsharded case at the sweep's own `BATCH_SIZE`,
- * so how much of the sweep's window is geometry rather than prep is measured
- * here too rather than argued about — on the small models it is most of it.
+ * The cancellation is not exact — the estimate's bias is
+ * `g(first product) − median(g(the next few))`, since no two products cost
+ * the same — so `tailMs` comes back with the estimate and the caller sizes
+ * the bias from the observed spread and prints it as an error bar rather
+ * than implying there is none.
+ *
+ * **`prepMs` is "what the first call does that later calls do not", which is
+ * a superset of the worklist build.** One-time warmup on the extraction path
+ * — wasm scratch, the first trip through `extractProductGeometryByLocalID`,
+ * JIT — lands in it too, and no instrument outside `src/` can separate the
+ * two. It is charged identically at every level, so it cancels in the two
+ * differences below (contention, key pass); what it does is inflate the
+ * absolute replicated-prep term, which is the conservative direction for
+ * §11.4's conclusion 2.
+ *
+ * A tail call whose `extracted` differs from the first call's is dropped and
+ * ends the tail: that means the product worklist ran out and the pump has
+ * moved on to the rel-aggregates pass, which is different work and would
+ * bias the subtraction by an unknown amount rather than by a product's cost.
  *
  * @param {object} api The opened `IfcAPI`.
  * @param {number} modelID The open model.
- * @param {object} task `{index, count, shard}`.
+ * @param {object} task `{index, count, shard, batch}`.
  * @param {number} openMs What the open before it cost.
- * @return {object} What this level cost.
+ * @return {object} What this level cost, prep separated from geometry.
  */
 function prepProbe( api, modelID, task, openMs ) {
 
-  const tPrep = performance.now()
-  const { extracted } =
-    api.ExtractGeometryBatch( modelID, task.batch ?? 0, () => {} )
-  const prepMs = performance.now() - tPrep
+  const batch = task.batch ?? 0
+  const tWindow = performance.now()
+  const { extracted } = api.ExtractGeometryBatch( modelID, batch, () => {} )
+  const windowMs = performance.now() - tWindow
+  const tailMs = []
 
-  return { index: task.index, openMs, prepMs, extracted }
+  for ( let call = 0; call < PROBE_TAIL_CALLS; ++call ) {
+
+    const tTail = performance.now()
+    const tail = api.ExtractGeometryBatch( modelID, batch, () => {} )
+    const elapsed = performance.now() - tTail
+
+    if ( tail.extracted !== extracted ) {
+      break
+    }
+
+    tailMs.push( elapsed )
+  }
+
+  // Two comparable calls minimum, not one. A single sample would produce a
+  // point estimate with a zero-width error bar, and a zero error bar here
+  // asserts exactly the thing this rewrite exists to stop asserting: that
+  // the geometry cancelled exactly.
+  const geometryMs = tailMs.length >= MIN_TAIL_SAMPLES ? median( tailMs ) : void 0
+
+  return {
+    index: task.index,
+    openMs,
+    windowMs,
+    tailMs,
+    // Undefined rather than 0 where the tail is empty: a 0 here would report
+    // the uncorrected window as if it were prep, which is the exact defect
+    // this rewrite exists to remove. The caller refuses instead.
+    prepMs: geometryMs === void 0 ? void 0 : windowMs - geometryMs,
+    geometryMs,
+    extracted,
+  }
+}
+
+
+/**
+ * @param {number[]} samples At least one, any order.
+ * @return {number} The lower median — the same pick the repetition chooser
+ * below makes, so a median-of-medians never lands between two samples.
+ */
+function median( samples ) {
+
+  const sorted = [ ...samples ].sort( ( a, b ) => a - b )
+
+  return sorted[ ( sorted.length - 1 ) >> 1 ]
+}
+
+
+/**
+ * How far a worker's geometry samples reach from their own median.
+ *
+ * This is the error bar on that worker's `prepMs`: the subtraction removes
+ * the median of the tail, and the product it is standing in for could
+ * plausibly have cost anything the tail spans. One-sided max rather than
+ * half the range, because the distribution is not symmetric — one expensive
+ * product among cheap ones is the shape to expect.
+ *
+ * @param {number[]} tailMs That worker's geometry-only calls.
+ * @return {number} The uncertainty in ms, 0 where there is nothing to say.
+ */
+function spread( tailMs ) {
+
+  if ( tailMs.length < 2 ) {
+    return 0
+  }
+
+  const mid = median( tailMs )
+
+  return Math.max( Math.max( ...tailMs ) - mid, mid - Math.min( ...tailMs ) )
 }
 
 
@@ -171,6 +270,15 @@ function prepProbe( api, modelID, task, openMs ) {
  * to "prep every worker repeats" attributes sharding's own overhead to a
  * lever that predates it, which is what the second draft of §11.4 did.
  *
+ * **The arithmetic is only sound because every level's geometry is removed
+ * per worker first** (see `prepProbe`). The third draft subtracted whole
+ * windows across configurations, which left a difference of *different
+ * products' geometry* inside the key-pass term; that is the finding this
+ * version answers. Two things are reported so it cannot be papered over
+ * again: a per-worker error bar summed from the tail spreads, and the
+ * envelope of each derived term over the repetitions. A term smaller than
+ * either is printed as NOT RESOLVED rather than as a number.
+ *
  * @param {number[]} sweep Worker counts, ascending, starting at 1.
  * @param {Function} runPool `(count, mode, shardOf, batch) => Promise<object[]>`.
  * @param {number} runs Repetitions per level; the median summed one wins.
@@ -179,12 +287,18 @@ function prepProbe( api, modelID, task, openMs ) {
 async function runPrepProbe( sweep, runPool, runs ) {
 
   console.log(
-      `prep probe: ${runs} repetition(s) per level, median reported. A batch ` +
-      'of 0 is\n  floored at one product by the pump, so those windows are ' +
-      'ensureDemandWorklists_\n  plus one product of geometry.' )
+      `prep probe: ${runs} repetition(s) per level, median reported, envelope ` +
+      'over the\n  repetitions in brackets. Each worker times one call that ' +
+      `builds its worklists and\n  pumps a batch, then up to ` +
+      `${PROBE_TAIL_CALLS} more calls of the same batch that pump only ` +
+      'geometry;\n  prep is the first minus the median of those, so the ' +
+      "geometry cancels against that\n  worker's OWN products. +/- is the " +
+      'summed spread of those geometry calls — the\n  residual the ' +
+      'cancellation cannot remove. A batch of 0 is floored at one product by ' +
+      '\n  the pump.' )
 
   /**
-   * One level, repeated, reduced to the median of its summed prep.
+   * One level, repeated; every repetition kept, the median summed one picked.
    *
    * Median of the SUM across workers rather than of each worker separately:
    * the sum is the quantity every ratio below is built from, and taking
@@ -193,7 +307,8 @@ async function runPrepProbe( sweep, runPool, runs ) {
    * @param {number} count How many workers.
    * @param {Function} [shardOf] Descriptor per worker index.
    * @param {number} [batch] Batch size to pump, default 0.
-   * @return {Promise<object>} `{summed, perWorker}` at the median repetition.
+   * @return {Promise<object>} `{chosen, lo, hi}` — the median repetition, and
+   * the summed prep envelope over all of them.
    */
   async function level( count, shardOf, batch ) {
 
@@ -202,16 +317,87 @@ async function runPrepProbe( sweep, runPool, runs ) {
     for ( let run = 0; run < runs; ++run ) {
 
       const results = await runPool( count, 'prep', shardOf, batch )
+      const uncorrected = results.filter( ( r ) => r.prepMs === void 0 )
+
+      // Refused rather than reported: with no geometry-only call to subtract,
+      // this level's "prep" would be the raw window, which is the quantity
+      // that made the third draft's key pass wrong. A model too small to
+      // spare a few products past the first batch needs a smaller batch.
+      if ( uncorrected.length > 0 ) {
+
+        throw new Error(
+            `prep probe: ${uncorrected.length} of ${count} worker(s) at ` +
+            `batch=${batch ?? 0} could not run ${MIN_TAIL_SAMPLES} ` +
+            'comparable geometry-only calls — their product worklist ran out ' +
+            'inside the first batches, so the geometry cannot be cancelled ' +
+            'out of the window and no split of it would mean anything' )
+      }
 
       samples.push( {
         summed: results.reduce( ( sum, r ) => sum + r.prepMs, 0 ),
+        geometry: results.reduce( ( sum, r ) => sum + r.geometryMs, 0 ),
+        uncertainty: results.reduce( ( sum, r ) => sum + spread( r.tailMs ), 0 ),
+        // The uncorrected first-batch window, kept because the two N=1
+        // levels below are differenced rather than tail-corrected — see the
+        // batch-BATCH_SIZE report.
+        windowSummed: results.reduce( ( sum, r ) => sum + r.windowMs, 0 ),
         perWorker: results.map( ( r ) => r.prepMs ),
       } )
     }
 
-    samples.sort( ( a, b ) => a.summed - b.summed )
+    const ordered = [ ...samples ].sort( ( a, b ) => a.summed - b.summed )
+    const windows = samples.map( ( sample ) => sample.windowSummed )
 
-    return samples[ ( samples.length - 1 ) >> 1 ]
+    return {
+      chosen: ordered[ ( ordered.length - 1 ) >> 1 ],
+      lo: ordered[ 0 ].summed,
+      hi: ordered[ ordered.length - 1 ].summed,
+      // The window envelope is its own, not the prep envelope shifted: the
+      // repetition with the smallest prep is not necessarily the one with
+      // the smallest window.
+      windowLo: Math.min( ...windows ),
+      windowHi: Math.max( ...windows ),
+    }
+  }
+
+  /**
+   * A derived term, with everything needed to say whether it is real.
+   *
+   * The envelope is deliberately the worst case in each direction over the
+   * observed repetitions rather than a paired difference: run *r* of one
+   * level and run *r* of another were not taken together, so pairing them by
+   * index would invent a correlation. It is wide, and it is honest about
+   * three or five samples on a shared box.
+   *
+   * @param {object} above The larger level.
+   * @param {object} below The level it is measured over.
+   * @return {object} `{value, lo, hi, error}`, all in ms.
+   */
+  function over( above, below ) {
+
+    return {
+      value: above.chosen.summed - below.chosen.summed,
+      lo: above.lo - below.hi,
+      hi: above.hi - below.lo,
+      error: above.chosen.uncertainty + below.chosen.uncertainty,
+    }
+  }
+
+  /**
+   * @param {object} term From `over`.
+   * @param {number} whole What it is a share of.
+   * @return {string} The term, its envelope, its error bar and its share —
+   * or a refusal where the envelope or the error bar covers zero.
+   */
+  function report( term, whole ) {
+
+    const resolved =
+      Math.abs( term.value ) > term.error && term.lo > 0 === term.hi > 0
+
+    return `${toS( term.value )}s ` +
+      `[${toS( term.lo )}..${toS( term.hi )}] +/-${toS( term.error )} ` +
+      ( resolved ? `(${percent( term.value, whole )})` :
+        '(NOT RESOLVED: smaller than its own spread)' )
   }
 
   const unsharded = await level( 1, () => void 0 )
@@ -219,21 +405,47 @@ async function runPrepProbe( sweep, runPool, runs ) {
   const withBatch = await level( 1, () => void 0, BATCH_SIZE )
 
   console.log(
-      `level=unsharded    workers=1 batch=0  prep=${toS( unsharded.summed )}s` +
-      '  (collectDemandCandidates_ only: no dispatch key is computed at all)' )
+      `level=unsharded    workers=1 batch=0  prep=${toS( unsharded.chosen.summed )}s ` +
+      `[${toS( unsharded.lo )}..${toS( unsharded.hi )}] ` +
+      `+/-${toS( unsharded.chosen.uncertainty )}  (worklist build with no ` +
+      'dispatch key computed at all, plus\n                   whatever the ' +
+      'first extraction call warms up; the one product of geometry\n' +
+      `                   is out — it measured ${toS( unsharded.chosen.geometry )}s)` )
   console.log(
-      `level=shard-of-1   workers=1 batch=0  prep=${toS( shardOfOne.summed )}s` +
-      `  (${( shardOfOne.summed / unsharded.summed ).toFixed( 2 )}x) -> ` +
-      'NULL CONTROL: setGeometryShard normalises count 1 to unsharded, so ' +
-      'this must\n                   match the line above. It is here to ' +
-      'prove the key-pass figure below is the sharded BRANCH and not the ' +
-      'cost of calling SetGeometryShard.' )
+      `level=shard-of-1   workers=1 batch=0  prep=${toS( shardOfOne.chosen.summed )}s ` +
+      `[${toS( shardOfOne.lo )}..${toS( shardOfOne.hi )}] ` +
+      `+/-${toS( shardOfOne.chosen.uncertainty )}  ` +
+      `(${( shardOfOne.chosen.summed / unsharded.chosen.summed ).toFixed( 2 )}x) -> ` +
+      'NULL CONTROL: setGeometryShard normalises count 1 to\n                   ' +
+      'unsharded, so this must match the line above. It is here to prove the\n' +
+      '                   key-pass figure below is the sharded BRANCH and not ' +
+      'the cost of\n                   calling SetGeometryShard.' )
+  // Differenced against the batch-0 window, NOT tail-corrected like every
+  // other line here — and that is not an inconsistency, it is the same rule.
+  // Differencing is sound exactly when both sides pump the same products,
+  // and these two levels are one unsharded worker on one worklist where the
+  // batch-0 call is a PREFIX of this one, so the difference is precisely
+  // products 1..BATCH_SIZE-1 of that shared worklist. It is the condition
+  // that fails between a sharded level and an unsharded one, which is why
+  // those are corrected per worker instead. The tail cannot stand in here:
+  // it measures the NEXT BATCH_SIZE products, and on D3D those cost 0.008 s
+  // against the first batch's 0.278 s — a worklist is not homogeneous along
+  // its length, only comparable to itself at the same offset.
+  const referenceWindow = withBatch.chosen.windowSummed
+  const inWindow = referenceWindow - unsharded.chosen.windowSummed
+
   console.log(
       `level=unsharded    workers=1 batch=${BATCH_SIZE} ` +
-      `prep=${toS( withBatch.summed )}s  (${( withBatch.summed /
-        unsharded.summed ).toFixed( 2 )}x) -> the sweep's own reference ` +
-      `window; ${toS( withBatch.summed - unsharded.summed )}s of it is ` +
-      `${BATCH_SIZE} products of geometry` )
+      `window=${toS( referenceWindow )}s ` +
+      `[${toS( withBatch.windowLo )}..${toS( withBatch.windowHi )}] -> the ` +
+      "sweep's own " +
+      `reference window.\n                   Of it, ${toS( inWindow )}s ` +
+      `(${percent( inWindow, referenceWindow )}) is the ${BATCH_SIZE - 1} ` +
+      'products of geometry this level\n                   pumps that the ' +
+      'batch-0 level does not — differenced, because these two levels ARE\n' +
+      '                   the same worker on the same worklist and the batch-0 ' +
+      'call is a prefix of\n                   this one. That is the condition ' +
+      'the sharded levels do not meet.' )
 
   for ( const count of sweep ) {
 
@@ -251,26 +463,44 @@ async function runPrepProbe( sweep, runPool, runs ) {
     // probe exists to undo.
     const replicatedAtN = await level( count, () => void 0 )
     const shards = await level( count, void 0 )
-    const replicated = count * unsharded.summed
-    const contention = replicatedAtN.summed - replicated
-    const keyPass = shards.summed - replicatedAtN.summed
+    // N x a level rather than a level of its own, so its envelope scales with
+    // it: the same worker count is what makes it comparable to the two above.
+    const replicatedLevel = {
+      chosen: {
+        summed: count * unsharded.chosen.summed,
+        uncertainty: count * unsharded.chosen.uncertainty,
+      },
+      lo: count * unsharded.lo,
+      hi: count * unsharded.hi,
+    }
+    const contention = over( replicatedAtN, replicatedLevel )
+    const keyPass = over( shards, replicatedAtN )
+    const whole = shards.chosen.summed
 
     console.log(
         `level=unsharded    workers=${count} batch=0  ` +
-        `per-worker=${replicatedAtN.perWorker.map( toS ).join( '/' )}s ` +
-        `summed=${toS( replicatedAtN.summed )}s  ` +
-        `(${( replicatedAtN.summed / replicated ).toFixed( 2 )}x N x the ` +
-        'single worker: contention on the replicated prep alone)' )
+        `per-worker=${replicatedAtN.chosen.perWorker.map( toS ).join( '/' )}s ` +
+        `summed=${toS( replicatedAtN.chosen.summed )}s ` +
+        `[${toS( replicatedAtN.lo )}..${toS( replicatedAtN.hi )}] ` +
+        `+/-${toS( replicatedAtN.chosen.uncertainty )}  ` +
+        `(${( replicatedAtN.chosen.summed / replicatedLevel.chosen.summed )
+          .toFixed( 2 )}x N x the single worker:\n                   ` +
+        'contention on the replicated prep alone)' )
     console.log(
         `level=shards       workers=${count} batch=0  ` +
-        `per-shard=${shards.perWorker.map( toS ).join( '/' )}s ` +
-        `summed=${toS( shards.summed )}s` )
+        `per-shard=${shards.chosen.perWorker.map( toS ).join( '/' )}s ` +
+        `summed=${toS( whole )}s [${toS( shards.lo )}..${toS( shards.hi )}] ` +
+        `+/-${toS( shards.chosen.uncertainty )}` )
     console.log(
-        `                   of that: replicated prep ${toS( replicated )}s ` +
-        `(${percent( replicated, shards.summed )}), contention on it ` +
-        `${toS( contention )}s (${percent( contention, shards.summed )}), ` +
-        `shard-only key pass ${toS( keyPass )}s ` +
-        `(${percent( keyPass, shards.summed )})` )
+        '                   replicated prep     ' +
+        `${toS( replicatedLevel.chosen.summed )}s ` +
+        `[${toS( replicatedLevel.lo )}..${toS( replicatedLevel.hi )}] ` +
+        `+/-${toS( replicatedLevel.chosen.uncertainty )} ` +
+        `(${percent( replicatedLevel.chosen.summed, whole )})` )
+    console.log(
+        `                   contention on it    ${report( contention, whole )}` )
+    console.log(
+        `                   shard-only key pass ${report( keyPass, whole )}` )
   }
 }
 
@@ -394,7 +624,11 @@ async function runWorker( task ) {
   // unsharded workers and N sharded workers, plus one unsharded worker at
   // BATCH_SIZE — so replicated prep, contention on it, the shard-only key
   // pass and the geometry riding inside the window are each measured rather
-  // than summed into one ratio.
+  // than summed into one ratio. The geometry comes out of every level
+  // through follow-up calls in the SAME worker, not by differencing one
+  // configuration's window against another's: `demandProducts_` is the
+  // filtered list on a sharded worker, so the two configurations do not
+  // extract the same products and that difference does not cancel.
   let firstBatchMs = 0
   let batches = 0
 
@@ -593,7 +827,7 @@ if ( !isMainThread ) {
   const argv = process.argv.slice( 2 )
   const usage =
     'usage: m3_worker_pool.mjs <model> [--workers 1,2,4] ' +
-    '[--prep-probe [--runs 3]]'
+    '[--prep-probe [--runs 5]]'
 
   /**
    * Give up with a usage line rather than measure the wrong thing.
@@ -640,7 +874,11 @@ if ( !isMainThread ) {
     refuse( '--runs needs a value' )
   }
 
-  const probeRuns = runsFlag >= 0 ? Number( argv[ runsFlag + 1 ] ) : 3
+  // Five, not three. Round 3 quoted spreads of three and a fourth repetition
+  // landed outside them on three of four models (ledger §11.3), so three is
+  // known on this box to understate the variance rather than merely to be
+  // few.
+  const probeRuns = runsFlag >= 0 ? Number( argv[ runsFlag + 1 ] ) : 5
 
   if ( !Number.isInteger( probeRuns ) || probeRuns < 1 ) {
     refuse( `--runs must be a positive integer; got ${argv[ runsFlag + 1 ]}` )
@@ -903,7 +1141,10 @@ if ( !isMainThread ) {
     // denominator takes `ensureDemandWorklists_`'s unsharded early return, so
     // it never computes a key; the ratio is therefore NOT "the same prep, N
     // times", and reading it as replication overcharges replication by
-    // whatever the key pass costs. `--prep-probe` splits it.
+    // whatever the key pass costs. `--prep-probe` splits it — and splits it
+    // per worker, because the shards and the unsharded reference do not pump
+    // the same products, so the split cannot be done by differencing this
+    // ratio's own terms either.
     const totalFirstBatch =
       results.reduce( ( sum, r ) => sum + r.firstBatchMs, 0 )
     const totalWork = results.reduce( ( sum, r ) => sum + r.payloads.length, 0 )
