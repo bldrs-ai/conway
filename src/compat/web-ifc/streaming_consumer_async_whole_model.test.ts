@@ -32,6 +32,8 @@ import { beforeAll, describe, expect, test } from '@jest/globals'
 import Logger, { LogLevel } from '../../logging/logger'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcAPI } from './ifc_api'
+import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
+import { isNativeDeleted } from './native_geometry_liveness'
 
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
@@ -273,6 +275,63 @@ async function bufferedRetainingReference(
 }
 
 
+/**
+ * The live geometry residency behind an open IFC model.
+ *
+ * Reached through the proxy because the budget's *effective* state — as
+ * against what `SetGeometryBudget` reports — is what the coordination tests
+ * below are about, and only the residency has it.
+ *
+ * @param api The API instance owning the model.
+ * @param modelID The open model.
+ * @return {object} The model's GeometryResidency.
+ */
+function residencyOf( api: IfcAPI, modelID: number ):
+  { budgetBytes: number, everEvicted: boolean } {
+
+  const passthrough = api.getPassthrough( modelID )
+
+  if ( !( passthrough instanceof IfcApiProxyIfc ) ) {
+    throw new Error( 'expected the IFC proxy for the open model' )
+  }
+
+  return passthrough.model[ 0 ].geometryResidency
+}
+
+
+/**
+ * Whether any placement on a mesh points at a native that has been freed.
+ *
+ * This is the failure the budget coordination exists to prevent: a FlatMesh
+ * whose geometry the consumer cannot touch, because reading it aborts inside
+ * embind (see isNativeDeleted's doc comment, and Sentry SHARE-1NK).
+ *
+ * @param api The API instance owning the model.
+ * @param modelID The open model.
+ * @param mesh The mesh as delivered to a callback.
+ * @return {number} How many of its placements have a freed native.
+ */
+function freedPlacements(
+    api: IfcAPI, modelID: number, mesh: FlatMesh ): number {
+
+  const passthrough = api.getPassthrough( modelID ) as IfcApiProxyIfc
+
+  let freed = 0
+
+  for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+
+    const entry = passthrough.model[ 3 ].get(
+        mesh.geometries.get( where ).geometryExpressID )
+
+    if ( isNativeDeleted( entry?.[ 0 ] ) ) {
+      ++freed
+    }
+  }
+
+  return freed
+}
+
+
 beforeAll( () => {
   ifcFixture = new Uint8Array( fs.readFileSync( IFC_FIXTURE ) )
   stepFixture = new Uint8Array( fs.readFileSync( STEP_FIXTURE ) )
@@ -388,6 +447,245 @@ describe.each( [
 
         expect( crossedATask ).toBe( true )
       }, 240000 )
+} )
+
+
+describe( 'StreamAllMeshesAsync coordinates budget changes (IFC only — ' +
+  'AP214 has no geometry residency)', () => {
+
+  // A whole-model ask suspends the geometry budget for its whole duration
+  // and decides, from a snapshot taken before the drain, whether it must
+  // filter freed placements out of what it serves. Those two pieces of state
+  // have to stay coherent from drain start until serving completes, and the
+  // drain now yields to the event loop, so a handler CAN run in between and
+  // call SetGeometryBudget.
+  //
+  // Measured across three builds, on a partially pumped retaining model with
+  // a 1-byte budget set mid-drain, against this fixture's true 16 placements:
+  //
+  //   coordination + failsafe : budget Infinity during serving, 16 served, 0 freed
+  //   failsafe only           : budget 1 during serving, 15 served, 0 freed
+  //   neither                 : budget 1 during serving, 16 served, 1 FREED
+  //
+  // So the deferral is what keeps the answer complete, and the post-drain
+  // re-read of everEvicted is what keeps it safe if anything evicts anyway.
+
+  /**
+   * Run the ask with a budget change forced into the middle of its drain.
+   *
+   * The scheduling is what makes this deterministic. The ask suspends on its
+   * serialisation chain and then on its per-batch event-loop yield, so a
+   * `setImmediate` scheduled at call time lands after the suspension is in
+   * force and before the drain finishes — which the returned
+   * `budgetAtChange` confirms rather than assumes: Infinity there means the
+   * change really did land inside the ask's suspension window.
+   *
+   * @param api The API instance owning the model.
+   * @param modelID The partially pumped retaining model.
+   * @param bytes The budget to request mid-drain.
+   * @return {Promise<object>} What the ask saw and served.
+   */
+  async function askWithBudgetChangeMidDrain(
+      api: IfcAPI, modelID: number, bytes: number ): Promise< {
+        budgetAtChange: number,
+        budgetDuringServing: number,
+        evictedDuringServing: boolean,
+        served: Placement[],
+        freedAtDelivery: number,
+      } > {
+
+    const residency = residencyOf( api, modelID )
+    const served: Placement[] = []
+
+    let budgetAtChange = Number.NaN
+    let budgetDuringServing = Number.NaN
+    let evictedDuringServing = false
+    let sampled = false
+    let freedAtDelivery = 0
+
+    const asked = api.StreamAllMeshesAsync( modelID, ( mesh ) => {
+
+      // Sampled inside the callback: that runs during serving, before the
+      // ask's `finally` puts any budget back, so it is the only place the
+      // in-flight state is observable.
+      if ( !sampled ) {
+        sampled = true
+        budgetDuringServing = residency.budgetBytes
+        evictedDuringServing = residency.everEvicted
+      }
+
+      freedAtDelivery += freedPlacements( api, modelID, mesh )
+      served.push( ...placements( mesh ) )
+    } )
+
+    setImmediate( () => {
+      budgetAtChange = residency.budgetBytes
+      api.SetGeometryBudget( modelID, bytes )
+    } )
+
+    await asked
+
+    return {
+      budgetAtChange,
+      budgetDuringServing,
+      evictedDuringServing,
+      served,
+      freedAtDelivery,
+    }
+  }
+
+  test( 'a budget set mid-drain is deferred, and the ask still serves the ' +
+    'whole model with live handles',
+  async () => {
+
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const reference = await bufferedRetainingReference( api, ifcFixture )
+
+    expect( reference.length ).toBeGreaterThan( 0 )
+
+    const modelID = await api.OpenModelStreamed( ifcFixture, DEFERRED )
+
+    // Partially pumped, so geometry from EARLIER batches is resident and in
+    // the cumulative cache when the mid-drain budget arrives. That is the
+    // geometry a resumed eviction frees out from under the ask.
+    await api.ExtractGeometryBatchAsync(
+        modelID, 2, () => { /* delivery is not what this pins */ } )
+
+    const outcome =
+      await askWithBudgetChangeMidDrain( api, modelID, 1 / BYTES_PER_MIB )
+
+    // The change really did land inside the suspension window — otherwise
+    // everything below would be pinning nothing.
+    expect( outcome.budgetAtChange ).toBe( Number.POSITIVE_INFINITY )
+
+    // The invariant: budget state and the degraded snapshot are stable from
+    // drain start until serving completes.
+    expect( outcome.budgetDuringServing ).toBe( Number.POSITIVE_INFINITY )
+    expect( outcome.evictedDuringServing ).toBe( false )
+
+    // Nothing freed reached the callback...
+    expect( outcome.freedAtDelivery ).toBe( 0 )
+
+    // ...and nothing was lost either: the ask still answers for the whole
+    // model, which is what the suspension is FOR. Without the deferral this
+    // serves one placement fewer.
+    expect( asSortedKeys( outcome.served ) )
+        .toEqual( asSortedKeys( reference ) )
+  }, 240000 )
+
+  test( 'the deferred budget takes effect once the ask completes, and the ' +
+    'next ask reports the loss with exact counts',
+  async () => {
+
+    // Deferring must not mean dropping: the caller asked for a budget and
+    // has to get one, a moment later than usual.
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed( ifcFixture, DEFERRED )
+
+    await api.ExtractGeometryBatchAsync(
+        modelID, 2, () => { /* delivery is not what this pins */ } )
+
+    const whole =
+      ( await askWithBudgetChangeMidDrain( api, modelID, 1 / BYTES_PER_MIB ) )
+          .served
+
+    expect( whole.length ).toBeGreaterThan( 0 )
+
+    const residency = residencyOf( api, modelID )
+
+    // Applied on the way out, and it bit.
+    expect( residency.budgetBytes ).toBe( 1 )
+    expect( residency.everEvicted ).toBe( true )
+
+    // The next ask therefore sees a genuinely degraded model and must say
+    // so, with the real numbers rather than a silent short answer.
+    const logged: string[] = []
+
+    Logger.clearLogs()
+    Logger.setLogLevel( LogLevel.WARNING )
+    Logger.setSink( ( _level, message ) => {
+      logged.push( message )
+    } )
+
+    let after: Placement[]
+
+    try {
+      after = await streamAllAsync( api, modelID )
+    } finally {
+      Logger.setSink()
+      Logger.setLogLevel( LogLevel.INFO )
+      Logger.clearLogs()
+    }
+
+    const warned = logged.find( ( line ) =>
+      line.includes( 'StreamAllMeshesAsync served a model that evicted' ) )
+
+    expect( warned ).toBeDefined()
+
+    const reported = /: (\d+) instance\(s\) across/.exec( warned! )
+
+    expect( reported ).not.toBeNull()
+
+    const dropped = Number( reported![ 1 ] )
+
+    expect( dropped ).toBeGreaterThan( 0 )
+
+    // The identity, not merely "fewer": what it served plus what it says it
+    // dropped is the whole model.
+    expect( after.length ).toBe( whole.length - dropped )
+  }, 240000 )
+
+  test( 'overlapping whole-model asks each answer for the whole model and ' +
+    'leave the budget intact',
+  async () => {
+
+    // Each ask snapshots the budget to restore on its way out, and sets the
+    // instance-level deferral state the tests above depend on. Two running
+    // at once would each snapshot the OTHER's suspended (infinite) value and
+    // share one `pendingBudgetBytes_`, so the first to finish could
+    // re-enable eviction underneath the one still draining — whose own
+    // snapshot says nothing was ever evicted. `askChain_` serialises them
+    // so exactly one owns that state at a time.
+    //
+    // Pinned vs reasoned, stated plainly: this pins the OUTCOME — both asks
+    // answer for the whole model, and the budget in force before them is in
+    // force after. It does NOT distinguish the serialisation itself, and
+    // reverting `askChain_` leaves it green, because which ask finishes last
+    // decides whether the wrong snapshot is the one that gets restored and
+    // this fixture happens to finish them in the safe order. The lock's
+    // ordering guarantee is therefore reasoned from the field lifetimes
+    // above, not pinned here.
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const reference = await bufferedRetainingReference( api, ifcFixture )
+
+    const modelID = await api.OpenModelStreamed( ifcFixture, DEFERRED )
+
+    expect( api.SetGeometryBudget( modelID, 4 )?.budgetBytes )
+        .toBe( 4 * BYTES_PER_MIB )
+
+    const [ first, second ] = await Promise.all( [
+      streamAllAsync( api, modelID ),
+      streamAllAsync( api, modelID ),
+    ] )
+
+    // Both answered for the whole model...
+    expect( asSortedKeys( first ) ).toEqual( asSortedKeys( reference ) )
+    expect( asSortedKeys( second ) ).toEqual( asSortedKeys( reference ) )
+
+    // ...and the budget that was in force before them is in force after,
+    // rather than one ask having restored the other's suspension.
+    expect( residencyOf( api, modelID ).budgetBytes )
+        .toBe( 4 * BYTES_PER_MIB )
+  }, 240000 )
 } )
 
 
