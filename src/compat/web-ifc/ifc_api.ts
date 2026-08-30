@@ -108,16 +108,23 @@ export interface Loadersettings {
    * model. A consumer that needs every placement should copy at delivery
    * from the pump, which is what the budget's own contract already says.
    *
-   * **Scope: the sync `StreamAllMeshes` cannot serve a windowed source.**
-   * On a model opened over an external store (`OpenModelStream`), the
-   * synchronous whole-model entry points drain through the synchronous pump,
-   * which refuses a windowed source outright — *"ExtractGeometryBatch is
-   * synchronous and cannot page a windowed source"*. That predates this
-   * setting and is identical with and without it, but it means the late
-   * whole-model ask described above is reachable on a resident source only.
-   * Share pumps `ExtractGeometryBatchAsync` over a store, so on Share's
-   * configuration the ask is not available at all — which is consistent with
-   * this setting, whose premise is that the consumer already has the stream.
+   * **Scope: on a windowed source the ask is async
+   * ({@link StreamAllMeshesAsync}).** The synchronous whole-model entry
+   * points drain through the synchronous pump, which refuses an external
+   * source outright — *"ExtractGeometryBatch is synchronous and cannot page
+   * a windowed source"*. That predates this setting, is identical with and
+   * without it, and is unchanged: `StreamAllMeshes` on a model opened with
+   * `OpenModelStream` still throws. `StreamAllMeshesAsync` (conway#660) is
+   * the entry point that serves such a model — it drains through
+   * `ExtractGeometryBatchAsync`, which pages each batch's product closures
+   * in, and then serves the identical re-walk with the identical accounting.
+   * Share pumps the async pump over a store, so that is the entry point a
+   * windowed Share load reaches for.
+   *
+   * The re-walk itself is unaffected by windowing either way: it resolves
+   * scene nodes against the model's geometry STORE, never against the byte
+   * source, so what a fully drained windowed model can serve is exactly what
+   * a fully drained resident one can. Paging is a property of the drain.
    *
    * Ignored on a non-deferred open, which has no pump and no accumulation to
    * suppress.
@@ -1226,6 +1233,59 @@ export class IfcAPI {
     if (result !== void 0) {
 
       result.streamAllMeshes(meshCallback)
+    }
+
+    Logger.displayLogs()
+    Logger.clearLogs()
+    Logger.printStatistics(modelID)
+  }
+
+  /**
+   * Conway extension (conway#660): async twin of {@link StreamAllMeshes},
+   * and the ONLY whole-model ask a **windowed** deferred model can answer.
+   *
+   * `StreamAllMeshes` drains a deferred model through the synchronous pump,
+   * which refuses an external source — *"ExtractGeometryBatch is synchronous
+   * and cannot page a windowed source"* — so on a model opened with
+   * {@link OpenModelStream} it throws before serving anything. This drains
+   * through {@link ExtractGeometryBatchAsync} instead, paging each batch's
+   * product closures in, and then serves exactly what the sync entry point
+   * would have served on the same model: the same placements, the same
+   * `STREAMING_CONSUMER` re-walk, the same budget accounting (partial loss
+   * warns with the unresolved count, total loss throws), and the same loud
+   * throw once `ReleaseModelGeometry` has freed the natives.
+   *
+   * **What it does not do is recover geometry.** The re-walk that serves the
+   * ask reads the model's geometry store, not the byte source, so paging is
+   * a property of the DRAIN only — anything a `GEOMETRY_BUDGET_MB` eviction
+   * already freed is reported as missing rather than fetched back, exactly
+   * as on a resident source. A consumer that needs every placement copies at
+   * delivery from the pump.
+   *
+   * Safe on a resident source and on a non-deferred model, both of which are
+   * served by the synchronous path internally. Feature-detect with
+   * `typeof api.StreamAllMeshesAsync === 'function'`.
+   *
+   * @param modelID handle retrieved by OpenModelStream / OpenModelStreamed
+   * @param meshCallback receives one whole-model FlatMesh per entity
+   * @return {Promise<void>} resolves once every entity has been delivered
+   */
+  async StreamAllMeshesAsync(
+      modelID: number,
+      meshCallback: (mesh: FlatMesh) => void ): Promise<void> {
+
+    const result = this.models.get(modelID)
+
+    if (result !== void 0) {
+
+      // Passthroughs predating conway#660 (and any future non-conway one)
+      // have no async twin; the sync entry point is the whole of what they
+      // can do, and on a resident source it is equivalent.
+      if (result.streamAllMeshesAsync !== void 0) {
+        await result.streamAllMeshesAsync(meshCallback)
+      } else {
+        result.streamAllMeshes(meshCallback)
+      }
     }
 
     Logger.displayLogs()

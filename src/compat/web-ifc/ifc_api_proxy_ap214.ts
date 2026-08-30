@@ -30,7 +30,7 @@ import { AP214GeometryExtraction } from '../../AP214E3_2010/ap214_geometry_extra
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
 import { AP214Properties } from './ap214_properties'
 import { EntityTypesAP214ExtendedCount } from '../../AP214E3_2010/ap214_tessellated_types'
-import { ProgressTracker } from '../../core/progress'
+import { ProgressTracker, yieldToEventLoop } from '../../core/progress'
 import { formatModelLine } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
@@ -1738,6 +1738,121 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
   }
 
   /**
+   * Serve a whole-model ask on a deferred model whose pump has just been
+   * drained to completion. The AP214 twin of the IFC proxy's method of the
+   * same name, and shorter for the same reason its `recaptureWholeModel_`
+   * is: this proxy has no geometry residency, so there is no eviction to
+   * account for and no partial-loss warning to emit — the only way the
+   * natives go missing is `ReleaseModelGeometry`, which the re-walk throws
+   * on.
+   *
+   * Shared verbatim by {@link streamAllMeshes} and
+   * {@link streamAllMeshesAsync} so the two cannot drift; see the IFC twin
+   * for why that matters.
+   *
+   * @param meshCallback Receives one whole-model FlatMesh per entity.
+   * @param entryPoint The public method being served, for the messages.
+   */
+  private serveDeferredWholeModel_(
+      meshCallback: (mesh: FlatMesh) => void,
+      entryPoint: string ): void {
+
+    if (this.streamingConsumer_) {
+      // Nothing was accumulated to absorb stragglers into: this open
+      // declared the caller the owner of the stream. Rebuild the whole
+      // model from the live scene instead — same placements, one walk,
+      // and it throws rather than serving an empty model when the natives
+      // are gone.
+      this.recaptureWholeModel_(entryPoint)
+    } else {
+      this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
+    }
+
+    const [, , meshMap, , vectorFlatMesh] = this.model
+
+    meshMap.forEach((mesh) => {
+      vectorFlatMesh.push(mesh[1])
+      meshCallback(mesh[1])
+    })
+  }
+
+  /**
+   * Async twin of {@link streamAllMeshes} (conway#660), for format parity
+   * with the IFC proxy's entry point of the same name: a consumer that
+   * feature-detects `StreamAllMeshesAsync` and drives it must get the same
+   * answer on a STEP model as on an IFC one, rather than finding the method
+   * absent and silently falling back.
+   *
+   * **It cannot page a windowed source, and on this format nothing needs
+   * it to.** AP214 geometry runs off a thunk tree with no async pump —
+   * `extractGeometryBatch` here has no async twin — and a store-backed open
+   * is IFC-only (`IfcApiModelPassthroughFactory.fromStore` logs
+   * *"Store-backed open is IFC-only"* and returns undefined for every other
+   * format), so a windowed AP214 model is not reachable through the public
+   * API at all. The drain below is therefore the same synchronous one
+   * {@link streamAllMeshes} runs, awaited only so the signature matches.
+   * The asymmetry is stated here rather than hidden because the IFC twin's
+   * whole point is the windowed drain.
+   *
+   * @param meshCallback Receives one whole-model FlatMesh per entity.
+   * @return {Promise<void>} Resolves once every entity has been delivered.
+   */
+  async streamAllMeshesAsync(
+      meshCallback: (mesh: FlatMesh) => void ): Promise<void> {
+
+    if (!this.deferredMode_) {
+
+      this.streamAllMeshes(meshCallback)
+      return
+    }
+
+    const noCallback = void 0
+    const unbudgeted = void 0
+
+    // Bounded batches with an event-loop yield between them, so the `async`
+    // on this method means something. An async function runs synchronously
+    // until its first await, so a drain with no awaits in it would not even
+    // hand the caller a promise until the whole model was extracted — an
+    // awaiting consumer would be starved exactly as it is by the sync
+    // StreamAllMeshes, while being told otherwise by the signature.
+    //
+    // Each call stays UNBUDGETED, matching the sync drain rather than the
+    // public extractGeometryBatch, and that is deliberate on two counts.
+    // The output has to be identical to the sync drain's — the parity tests
+    // compare them placement for placement — and passing a wall-clock
+    // budget also switches the pump to flushing staged faces per unit
+    // instead of keeping one staged batch (see extractDemandUnitBatch),
+    // which is where staging's throughput actually comes from. So the bound
+    // is the batch COUNT, the same DEFERRED_DRAIN_BATCH_AP214 the sync
+    // drain uses and the same size the IFC async pump drains at.
+    //
+    // What that buys, stated exactly: the block is bounded to one drain
+    // batch rather than to the whole model. It is not frame-bounded — a
+    // batch of expensive units still overruns a frame — and a consumer that
+    // needs frame-level responsiveness pumps extractGeometryBatch itself,
+    // which carries AP214_PUMP_BATCH_BUDGET_MS.
+    //
+    // The yield goes BEFORE each batch rather than between them, which is
+    // what makes the first one matter: it returns the promise to the caller
+    // before any extraction runs at all, instead of after the first 256
+    // units. It also means a model small enough to drain in a single batch
+    // still yields once, so the guarantee does not depend on model size.
+    for ( ; ; ) {
+
+      await yieldToEventLoop()
+
+      const { remaining } = this.pumpDemandUnits_(
+          DEFERRED_DRAIN_BATCH_AP214, noCallback, unbudgeted)
+
+      if (remaining === 0) {
+        break
+      }
+    }
+
+    this.serveDeferredWholeModel_(meshCallback, 'StreamAllMeshesAsync')
+  }
+
+  /**
    *
    * @param meshCallback
    */
@@ -1778,23 +1893,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         // draining
       }
 
-      if (this.streamingConsumer_) {
-        // Nothing was accumulated to absorb stragglers into: this open
-        // declared the caller the owner of the stream. Rebuild the whole
-        // model from the live scene instead — same placements, one walk,
-        // and it throws rather than serving an empty model when the natives
-        // are gone.
-        this.recaptureWholeModel_('StreamAllMeshes')
-      } else {
-        this.streamNewMeshes_(() => { /* absorb stragglers into meshMap */ })
-      }
-
-      const [, , meshMap, , vectorFlatMesh] = this.model
-
-      meshMap.forEach((mesh) => {
-        vectorFlatMesh.push(mesh[1])
-        meshCallback(mesh[1])
-      })
+      this.serveDeferredWholeModel_(meshCallback, 'StreamAllMeshes')
 
       return
     }

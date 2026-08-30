@@ -728,13 +728,45 @@ Deliberately small first step; each has a measurable exit.
   as does any whole-model ask after `ReleaseModelGeometry`. A model that
   genuinely has no geometry still returns empty, quietly, as classic does.
 
-    **Scope.** The synchronous whole-model entry points drain through the
-  synchronous pump, which refuses a windowed source outright. So on a
-  model opened over an external store — Share's configuration — the late
-  whole-model ask is not reachable through `StreamAllMeshes` at all. That
-  predates this contract and is identical with and without it; it is noted
-  because the contract's promise about that ask is otherwise easy to read
-  as broader than it is.
+    **Scope: on a windowed source the ask is `StreamAllMeshesAsync`
+  (conway#660).** The synchronous whole-model entry points drain through
+  the synchronous pump, which refuses a windowed source outright, so
+  `StreamAllMeshes` on a model opened over an external store throws before
+  serving anything. That predates this contract, is identical with and
+  without it, and is deliberately left alone. What #660 added is the async
+  entry point beside it: `StreamAllMeshesAsync` drains through
+  `ExtractGeometryBatchAsync` — the pump that pages each batch's product
+  closures — and then runs the *same* post-drain code the sync path runs
+  (`serveDeferredWholeModel_`, single-sourced in both proxies), so the
+  re-walk, the idempotence, the partial-loss warning, the total-loss throw
+  and the post-release throw are the same behaviour reached by a drain
+  that can page. It matters because GitHub/OPFS `File` loads take the
+  windowed open by default, i.e. the large models that motivated this work
+  are exactly the ones the sync ask could not serve.
+
+    **Where the paging does and does not happen — the part worth being
+  precise about.** Only the drain pages. The re-walk resolves each scene
+  node through `IfcSceneBuilder.resolveGeometryNode_`, which reads
+  `node.model.geometry.getByLocalID(...)` — the in-memory geometry store —
+  and never touches the byte source, so windowing is invisible to it. Two
+  consequences, both load-bearing for a consumer deciding whether to keep
+  its own copy: a fully drained windowed model serves *exactly* what a
+  fully drained resident one serves, with no boundary between them; and
+  geometry a `GEOMETRY_BUDGET_MB` eviction already freed is **not** paged
+  back by the ask on either — it is reported missing, by the same parked-
+  node count as above. Re-extracting the evicted product through the
+  window would not fix that: extraction files the result under a fresh
+  localID, so the parked scene node still resolves nothing while a new
+  node re-emits the instance (the measured "21 placements against
+  classic's 16" behind the degraded note). So the contract Share can rely
+  on is *"the same stream the pump delivered, or an exact account of what
+  is missing"* — not recovery.
+
+    AP214 gets the entry point for format parity, and it is synchronous
+  underneath: that proxy has no async pump, and a store-backed open is
+  IFC-only (`IfcApiModelPassthroughFactory.fromStore` refuses every other
+  format), so a windowed AP214 model is not reachable through the public
+  API at all.
 
   **PSB.ifc at batch 8 — the size Share pumps at:**
 
