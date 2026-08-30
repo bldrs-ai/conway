@@ -5393,11 +5393,20 @@ export class AP214GeometryExtraction {
           const { pointer, length } = result
 
           // Use them in your WASM call
-          const bound3D: Bound3DObject = this.wasmModule.createSimpleBound3D(
+          // Through conwayModel, not wasmModule: the wrapper types
+          // closedByConstruction as required, and that is the ONLY place a
+          // missing argument is caught - embind does no arity check and would
+          // convert the absent bool to false, silently dropping closure.
+          // See bldrs-ai/conway-geom#195.
+          const bound3D: Bound3DObject = this.conwayModel.createSimpleBound3D(
             pointer,
             length,
             bound.orientation,
             bound.type === EntityTypesAP214.FACE_OUTER_BOUND ? 0 : 1,
+            // A poly loop IS a closed polygon and does not repeat its head.
+            // Passed explicitly rather than re-derived on the wasm side, so the
+            // closure fact crosses the boundary with the entity that knows it.
+            true,
           )
 
           // Push your result somewhere (push_back copies, so free the
