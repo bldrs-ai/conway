@@ -176,6 +176,11 @@ harness's own `open` and prep-probe contention controls, the box accounts
 for about **5 of the 45 points** lost at N=4 (4–9 across repetitions) — a
 minority, but not nothing.
 
+§11's prep-side split has since been corrected a second time: the shard-only
+dispatch-key pass is **23 % of sharded prep on D3D and 69 % on
+Schependomlaan**, and on Snowdon and MB-Khaya it is **not resolvable** from
+outside `src/` at all. §11.4 leads with why.
+
 The root cause of the duplication on D3D is sharper than "an imperfect key":
 **60.7 % of its product worklist (29,031 of 47,791) resolves no mapping source
 at all**, so most of the production model is sharded positionally. §11.4 has
@@ -748,8 +753,12 @@ spread thin enough (largest single site 4.3 MB) that it was not chased.
   changes at least 247 of D3D's 46,166 geometries (§11.5), which is a
   correctness defect rather than a performance one; and — from §11.4 —
   whether the worklists *and dispatch keys* can be computed once and handed
-  to the workers, since on models under ~5 s of geometry the key pass alone
-  is 52–68 % of sharded prep and no partition change touches it.
+  to the workers, since where the term resolves the key pass alone is 69 % of
+  sharded prep on Schependomlaan and 23 % on D3D and no partition change
+  touches it. (On Snowdon and MB-Khaya it does not resolve — §11.4 — so a
+  fourth open question is an in-`src/` timer for `ensureDemandWorklists_`,
+  since the first-batch window on those models is 82–83 % geometry and no
+  external instrument can see past it.)
 - **Do the shards rebuild shared geometry *below* the representation?**
   Untested, and it is the one hypothesis §11's retractions do not exclude.
   `dupWork` is keyed on emitted `geometryExpressID`s, so profiles, boolean
@@ -837,6 +846,17 @@ So, plainly:
   ceiling") is dropped in this round: it was half the spread of its own
   samples, and on a working set that was 1.6 % **under** this box's L3 rather
   than orders of magnitude past it (§11.2).
+- **Retracted, narrowed.** "On all three small models the largest prep-side
+  term is the shard-only dispatch-key pass, 52–68 % of sharded prep." That
+  came from subtracting the unsharded pool's summed first-batch window from
+  the sharded pool's, and the two do not pump the same products — a sharded
+  worker's `demandProducts_` is the filtered worklist, so its first product
+  is not the reference's (§11.4). Re-measured with the geometry removed
+  per worker, the key pass is **23 % of sharded prep on D3D and 69 % on
+  Schependomlaan**, both resolved in two sessions and at both N; on **Snowdon
+  and MB-Khaya it does not clear its own error bar** and is withdrawn rather
+  than restated. The lever's direction survives; its evidence on the small
+  models is one model, not three.
 - **Unchanged.** §2's assumed 0.80 at N=4 still does not hold, the memory
   result in §11.7 stands to the megabyte, and SKYLARK250 still does not shard.
 
@@ -909,8 +929,12 @@ four things at once:
   beside it with no such caveat.
 
 `--prep-probe` separates them by measurement rather than by argument, and
-§11.4 reports what it found. The ratio itself is kept, under a name that
-claims only what it times.
+§11.4 reports what it found — including where the separation **fails**, which
+on two of the four models it does: the pump floors a batch of 0 at one
+product, so the smallest window the probe can time still contains geometry,
+and where that one product costs more than the term being separated the split
+is not resolvable from outside `src/`. The ratio itself is kept, under a name
+that claims only what it times.
 
 **Proof the work happened.** A timing line cannot distinguish a fast run from
 a skipped one, so every run reports the geometry it actually built, by
@@ -1039,14 +1063,18 @@ to 9 depending on the repetition. The remaining ~40 are algorithmic. That is a
 weaker claim than "nothing about this box explains them", and it is the one
 the evidence supports.
 
-**A fourth control, added in this round, agrees with the third.**
-`--prep-probe` runs N workers through the identical *unsharded* worklist
-build — same code path, same work, no shard — so its inflation over N times
-one worker is contention and nothing else. At N=4 it reads **1.27× on D3D**,
-against the `open` control's 1.24× on the same model, and 1.31–1.89× on the
-small models where `open` reads 1.25–2.0×. Two independent slices of real
-conway work, taken years apart in the load, bracket this box's contention on
-conway at **1.24–1.31× at N=4** on the model that matters.
+**A fourth control agrees with the third.** `--prep-probe` runs N workers
+through the identical *unsharded* worklist build — same code path, same work,
+no shard — so its inflation over N times one worker is contention and nothing
+else. On the corrected instrument (§11.4: the geometry is now subtracted per
+worker, so this ratio is prep against prep rather than window against window)
+it reads **1.35× on D3D at N=4**, against the `open` control's 1.24× on the
+same model, and 1.51–2.57× on the small models where `open` reads 1.25–2.0×.
+Two independent slices of real conway work, taken years apart in the load,
+bracket this box's contention on conway at **1.24–1.35× at N=4** on the model
+that matters. (The third draft published 1.27× and 1.31–1.89× here, from the
+uncorrected windows; the direction is unchanged and the bracket widens by
+four points.)
 
 ### 11.3 The numbers
 
@@ -1223,49 +1251,124 @@ one.**
    they are **0.096 of 0.448, 21 % of the loss, and only their sum is
    measured.**
 
-**What is actually inside that window.** `--prep-probe` (new here) pumps a
-batch of 0 — the pump floors it at one product — at four levels, so the
-window's contents are measured instead of named. Medians of three, D3D:
+**What is actually inside that window — and a correction to the third draft's
+answer.** `--prep-probe` pumps a batch of 0 — the pump floors it at one
+product — at four levels, so the window's contents are measured instead of
+named. **The third draft's split of it was wrong, and the numbers below
+replace it.** That draft subtracted one configuration's summed window from
+another's: `keyPass = shards.summed − replicatedAtN.summed`. Both sides
+contain geometry, and it does not cancel, because the two sides do not pump
+the same products. `pumpGeometryBatch_` floors a batch of 0 at one product
+and then reads `demandProducts_[0]` (`ifc_api_proxy_ifc.ts:3007`), and
+`demandProducts_` is the **filtered** worklist on a sharded worker. So N
+unsharded workers all extract the *same* first product of the whole worklist,
+while N shards each extract the first product *of their own filter* — N
+different ones. The published figure was therefore
 
-| level | N=1 | N=2 summed | N=4 summed |
-|---|---:|---:|---:|
-| one unsharded worker (`collectDemandCandidates_` only) | **0.477 s** | — | — |
-| N unsharded workers — the same work, concurrently | — | 0.973 s | 2.428 s |
-| N sharded workers — adds the dispatch-key pass | — | 1.191 s | 2.989 s |
-| one unsharded worker at the sweep's batch of 64 | 0.724 s | — | — |
+```
+key pass  +  ( Σ_shards g(that shard's first product)
+              − N × g(the whole worklist's first product) )
+```
 
-Which decomposes as:
+reported as if the bracket were zero. It is not: per-product extraction cost
+is skewed, and this same probe measures the first-batch window as 82–83 %
+geometry on Snowdon and MB-Khaya — the two models the third draft gave a
+52–60 % key-pass share.
 
-| model, N=4 | replicated prep | contention on it | **shard-only key pass** | geometry in the N=1 window |
-|---|---:|---:|---:|---:|
-| **D3D** | 1.908 s (64 %) | 0.520 s (17 %) | **0.561 s (19 %)** | 0.247 s of 0.724 s (**34 %**) |
-| Snowdon IFC4 | 0.121 s (21 %) | 0.108 s (19 %) | **0.349 s (60 %)** | 0.153 s of 0.183 s (**84 %**) |
-| MB-Khaya | 0.118 s (37 %) | 0.036 s (11 %) | **0.166 s (52 %)** | 0.154 s of 0.184 s (**84 %**) |
-| Schependomlaan | 0.080 s (23 %) | 0.033 s (9 %) | **0.238 s (68 %)** | 0.033 s of 0.053 s (**62 %**) |
+The probe now removes the geometry **inside each worker**: every worker times
+one call that builds its worklists and pumps its batch, then up to five more
+calls of the same batch that pump only geometry, and reports the first minus
+the median of those. The subtraction is against that worker's *own* products,
+so the mismatch cancels by construction rather than by hope. What it cannot
+cancel — the first product is still one draw, and no two products cost the
+same — is carried as an explicit error bar from the spread of those calls,
+and **a term smaller than its own error bar, or whose envelope over the
+repetitions crosses zero, is printed and reported here as NOT RESOLVED rather
+than as a number.** Two consequences the tables below carry: `prep` is now
+"what the first call does that later calls do not", which includes one-time
+extraction-path warmup as well as the worklist build (nothing outside `src/`
+can separate them, and it inflates the *replicated* term, not the key pass);
+and on two of the four models the split no longer resolves at all.
+
+Re-measured: **two sessions, nine repetitions per level on the small models
+and five on D3D**, with `spin_calibrate` run before and after (spin 0.965 →
+0.987, stream 0.973 → 0.962 at N=4 — an idle, stable box). The two sessions
+agree to within 0.015 s on every resolved term. Medians of the second
+session, envelope over its repetitions in brackets:
+
+| model | level | N=1 | N=2 summed | N=4 summed |
+|---|---|---:|---:|---:|
+| **D3D** | unsharded (`collectDemandCandidates_` only) | **0.426 s** | 0.926 s | 2.305 s |
+| | sharded — adds the dispatch-key pass | — | 1.153 s | 2.990 s |
+| Snowdon | unsharded | 0.030 s | 0.072 s | 0.304 s |
+| | sharded | — | 0.176 s | 0.555 s |
+| MB-Khaya | unsharded | 0.027 s | 0.051 s | 0.170 s |
+| | sharded | — | 0.114 s | 0.245 s |
+| Schependomlaan | unsharded | 0.021 s | 0.043 s | 0.128 s |
+| | sharded | — | 0.133 s | 0.414 s |
+
+Which decomposes as — at N=4, and **only where it resolves**:
+
+| model, N=4 | replicated prep | contention on it | **shard-only key pass** | key-pass envelope | error bar | geometry in the N=1 batch-64 window |
+|---|---:|---:|---:|---:|---:|---:|
+| **D3D** | 1.704 s (57 %) | 0.601 s (20 %) | **0.685 s (23 %)** | 0.397–0.944 s | ±0.010 s | 0.289 s of 0.715 s (**40 %**) |
+| Schependomlaan | 0.084 s (20 %) | 0.043 s (10 %) | **0.286 s (69 %)** | 0.171–0.411 s | ±0.012 s | 0.034 s of 0.056 s (**61 %**) |
+| Snowdon IFC4 | 0.118 s (21 %) | *not resolved* | ***not resolved*** | 0.119–0.472 s | ±0.628 s | 0.147 s of 0.177 s (**83 %**) |
+| MB-Khaya | 0.107 s (44 %) | *not resolved* | ***not resolved*** | −0.072–0.208 s | ±0.307 s | 0.138 s of 0.168 s (**82 %**) |
+
+At N=2 the same two models resolve and the same two do not: D3D's key pass is
+**0.227 s, 20 % of sharded prep** (0.141–0.296, ±0.001) and Schependomlaan's
+is **0.091 s, 68 %** (0.054–0.111, ±0.006). Snowdon does not resolve at either
+N. MB-Khaya at N=2 resolves in one session (0.063 s, 55 %) and not in the
+other (0.037 s), which is itself the answer: two nine-repetition sessions that
+disagree by 70 % of the smaller estimate are not measuring the term, and it
+is carried as unresolved.
+
+**Why the small models do not resolve, stated plainly.** The instrument's
+floor is the cost of *one product of geometry*, times the number of workers,
+because that is what the per-worker subtraction is standing in for. On D3D
+that floor is microseconds against a 0.685 s term — the four workers' geometry
+calls span ±0.010 s in total — so the split is clean. On Snowdon a single
+product's extraction ranges over ±0.111 s at N=1 and the four-worker sum
+spans ±0.628 s, against a 0.251 s point estimate. **The signal is smaller
+than one product.** No number of repetitions fixes that: the same shard
+always extracts the same first product, so the bias is systematic per
+configuration rather than something averaging removes. Resolving it needs an
+instrument inside `src/` that can time `ensureDemandWorklists_` without
+pumping, and this PR deliberately changes no `src/` file.
 
 (A fifth level applies a shard of *one* and must land on the first:
 `setGeometryShard` normalises `count === 1` back to unsharded
-(`ifc_api_proxy_ifc.ts:2680`). It does — 0.95× on D3D, 0.97× on
-Schependomlaan, 0.96× on MB-Khaya, 1.13× on Snowdon, where the level is
-30 ms and the spread is the timer — which is what proves the key-pass column
-is the sharded **branch** rather than the cost of making the call.)
+(`ifc_api_proxy_ifc.ts:2680`). It does — 1.00× on D3D, 0.93× on
+Schependomlaan, 0.93× on MB-Khaya, 1.02× on Snowdon — which is what proves
+the key-pass column is the sharded **branch** rather than the cost of making
+the call.)
 
-**So the second draft's third term was mostly not what it was called.** On
-three of four models **more than half** of the sharded prep is the
-dispatch-key pass — work the N=1 reference in the denominator never performs,
-and which exists only because sharding exists. On D3D it is 19 %, with
-replicated prep genuinely dominant at 64 %; on the small models replicated
-prep is the *minority* term. And the ratio the second draft reported —
-`dupFirstBatch`, 7.6× on D3D and **10.2–15.7× on the small models** — is not
-a replication factor at all: four workers cannot replicate anything 15.7
-times. The rest is the geometry batch, and it is charged asymmetrically: the
-numerator is N shards each pumping 64 products, the denominator is one worker
-pumping 64, so the geometry alone contributes about N× before prep is
-counted. That contamination is 34 % of the reference window on D3D — 64 of
-47,791 worklist products, where the second draft's "tight upper bound" is
-fair — but **84 % on Snowdon and MB-Khaya and 62 % on Schependomlaan**, whose
-worklists are two orders of magnitude smaller. Those are exactly the models
-where the second draft made prep the headline lever.
+**The geometry column is differenced, and that is not a relapse.** It comes
+from the batch-64 window minus the batch-0 window, both one unsharded worker
+on one worklist, where the batch-0 call is a **prefix** of the batch-64 one —
+so the difference is exactly products 1–63 of a worklist both sides share.
+That is the condition the sharded levels fail, and it is why they are
+corrected per worker instead. It also cannot be done with the tail: a
+worklist is not homogeneous along its length, and on D3D the first 64
+products cost 0.289 s where the next 64 cost 0.008 s.
+
+**So the second draft's third term was mostly not what it was called — and
+the third draft's replacement was right about D3D and Schependomlaan and
+unsupported about the other two.** Where it resolves, the dispatch-key pass
+is real and it is not small: **69 % of sharded prep on Schependomlaan** and
+**23 % on D3D**, work the N=1 reference in the denominator never performs and
+which exists only because sharding exists. On Snowdon and MB-Khaya the
+published 60 % and 52 % are **withdrawn**; the point estimates fell to 45 %
+and 31 % and neither clears its own spread. And the ratio the second draft
+reported — `dupFirstBatch`, 7.6× on D3D and **10.2–15.7× on the small
+models** — is still not a replication factor at all: four workers cannot
+replicate anything 15.7 times. The rest of that ratio is the geometry batch,
+charged asymmetrically (N shards each pumping 64 products against one worker
+pumping 64), and it is **40 % of the reference window on D3D** but **82–83 %
+on Snowdon and MB-Khaya and 61 % on Schependomlaan** — the models whose
+worklists are two orders of magnitude smaller, and the ones the second draft
+made prep the headline lever for.
 
 The first draft assigned 97 % of this to duplication and 3 % to imbalance. It
 was right that duplication dominates and right that a work-stealing queue
@@ -1276,10 +1379,15 @@ overstated to wrong:
 
 | model, N=4 | `dupWall` | `dupWork` | per-geometry slowdown | first-batch window summed / T₁ | of which replicated prep | imbalance |
 |---|---:|---:|---:|---:|---:|---:|
-| **D3D** | 1.72× | **1.48×** | 1.09× | 5.8 s / 39.9 s | 1.9 s (**4.8 % of T₁**) | 0.029 |
-| Snowdon IFC4 | 1.84× | **1.05×** | 1.32× | 2.2 s / 4.4 s | 0.12 s (**2.8 %**) | 0.127 |
-| MB-Khaya | 1.94× | **1.00×** | 1.33× | 1.8 s / 2.6 s | 0.12 s (**4.5 %**) | 0.020 |
-| Schependomlaan | 3.17× | **1.00×** | 2.29× | 1.1 s / 1.4 s | 0.08 s (**5.7 %**) | 0.034 |
+| **D3D** | 1.72× | **1.48×** | 1.09× | 5.8 s / 39.9 s | 1.70 s (**4.3 % of T₁**) | 0.029 |
+| Snowdon IFC4 | 1.84× | **1.05×** | 1.32× | 2.2 s / 4.4 s | 0.12 s (**2.7 %**) | 0.127 |
+| MB-Khaya | 1.94× | **1.00×** | 1.33× | 1.8 s / 2.6 s | 0.11 s (**4.1 %**) | 0.020 |
+| Schependomlaan | 3.17× | **1.00×** | 2.29× | 1.1 s / 1.4 s | 0.08 s (**6.0 %**) | 0.034 |
+
+(The replicated-prep column is the corrected per-worker estimate above, and
+it moves by at most 0.2 s: unlike the key pass, this term was never the one
+the third draft's subtraction damaged — its two sides are both unsharded and
+both pump the same first product, so the geometry did cancel there.)
 
 **On three of the four models, no *emitted* geometry is rebuilt.** Their
 shards build exactly the geometry IDs one worker builds — 5,600 on MB-Khaya,
@@ -1296,21 +1404,28 @@ Two consequences for planning, restated:
    of an available 0.448 — and it is still not a scheduling problem: better
    balance is worth 0.029. That part of the first draft survives, at 72 %
    rather than 97 %.
-2. **On models under ~5 s of geometry, hoisting the worklists and dispatch
-   keys is still the right lever — but not for the reason the second draft
-   gave.** That draft said prep is "whole-model work done N times; it grows
-   with N by construction", that "a shard does not shrink any of it", and
-   that an unsharded pool would pay it too. **Measured, most of it is the
-   opposite:** on all three small models the largest prep-side term is the
-   **shard-only dispatch-key pass** (52–68 % of sharded prep, and 17 % of
-   `T₁` on Schependomlaan against replicated prep's 5.7 %), which exists only
-   because sharding exists and which an unsharded pool would not pay at all.
-   Replicated prep is a **3–6 % of `T₁`** term everywhere, D3D included.
-   **The lever is unchanged** — "computing worklists *and dispatch keys* once
-   and handing them to the workers" names both halves, and the key pass is
-   the half that actually dominates — but the case for it is now "sharding
-   imposes a fixed per-worker cost the partition cannot amortise", not
-   "every worker repeats the reference's prep".
+2. **Hoisting the worklists and dispatch keys is still the right lever, and
+   still not for the reason the second draft gave — but the evidence for it
+   on the small models is now one model, not three.** That draft said prep
+   is "whole-model work done N times; it grows with N by construction", that
+   "a shard does not shrink any of it", and that an unsharded pool would pay
+   it too. Where the split resolves, the opposite holds: the largest
+   prep-side term is the **shard-only dispatch-key pass**, which exists only
+   because sharding exists and which an unsharded pool would not pay at all
+   — **69 % of sharded prep and 20 % of `T₁` on Schependomlaan** (against
+   replicated prep's 6.0 %), and **23 % of sharded prep on D3D**. Both are
+   resolved in two independent sessions and at both N. **The third draft's
+   "52–68 % on all three small models" is withdrawn:** on Snowdon and
+   MB-Khaya the term does not clear its own error bar in either session, and
+   its point estimates dropped to 45 % and 31 %. Replicated prep is a
+   **2.7–6.0 % of `T₁`** term everywhere, D3D included — that part is
+   unchanged, and it is the term the correction did not touch.
+   **The lever's direction is unchanged** — "computing worklists *and
+   dispatch keys* once and handing them to the workers" names both halves,
+   and where it can be measured the key pass is the half that dominates —
+   but the case for it now rests on Schependomlaan and D3D, and on the two
+   models where prep is 82–83 % geometry the honest statement is that this
+   instrument cannot see the term at all.
 
 **A rule from the first draft that does not survive.** It said "duplication
 caps efficiency at `1/dup` before balance is considered at all". That assumes
@@ -1651,11 +1766,14 @@ NO_PAYLOAD_DIGEST=1 node --max-old-space-size=12288 \
   --workers 2,4
 
 # what the first-batch window is made of: replicated prep, contention on it,
-# and the dispatch-key pass only a sharded worker runs (§11.4). Cheap — it
-# opens and preps, it does not pump.
+# and the dispatch-key pass only a sharded worker runs (§11.4). Each worker
+# subtracts the geometry using its OWN products (five geometry-only follow-up
+# calls), because the shards and the unsharded control do not pump the same
+# products; a term smaller than the resulting error bar prints as NOT
+# RESOLVED. Nearly free — it opens and preps, it does not pump the model.
 node --max-old-space-size=12288 scripts/m3_worker_pool.mjs \
   /home/user/test-models-private/ifc/ryuga/D3D.ifc --workers 2,4 \
-  --prep-probe --runs 3
+  --prep-probe --runs 5
 ```
 
 There is no `--expose-gc`. The first draft prescribed it in both this block
@@ -1672,13 +1790,18 @@ turned it into a 1.15× win. It now kills its children on a failed sweep, which
 it did not before; a sweep that threw used to leave four reparented processes
 spinning at full tilt through whatever ran next.
 
-`m3_worker_pool.mjs` was corrected across two rounds. Round 1:
+`m3_worker_pool.mjs` was corrected across three rounds. Round 1:
 `dupWork`/`dupVerts` beside `dupWall`, by-ID geometry counting,
 two-directional and duplicate-aware union reporting, `wasmHeapByteLength`, an
 honestly-labelled sweep RSS, and an assertion in place of the silently-skipped
 proof line. Round 2: `dupPrep` renamed to `dupFirstBatch` because it is a
 window rather than a mechanism, and `--prep-probe` added to decompose that
-window by measurement. `spin_calibrate.mjs` in round 2 derives its stream
+window by measurement. Round 3: `--prep-probe`'s decomposition rebuilt,
+because subtracting one configuration's window from another's does not
+cancel the geometry when the two configurations pump different products
+(§11.4) — it now subtracts per worker, carries an error bar, refuses to
+print a term smaller than that bar, and defaults to five repetitions rather
+than three. `spin_calibrate.mjs` in round 2 derives its stream
 working set from sysfs instead of asserting a margin it did not have, and
 refuses a cache-resident run. The commit messages have the full list and the
 reasoning for each.
