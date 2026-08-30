@@ -25,7 +25,12 @@
  * `VmHWM` it reports is a cumulative high-water mark over the whole sweep
  * rather than a per-N peak — see `peakRssMb`.
  *
- *   node scripts/m3_worker_pool.mjs <model> [--workers 1,2,4]
+ *   node scripts/m3_worker_pool.mjs <model> [--workers 1,2,4] [--prep-probe]
+ *
+ * `--prep-probe` skips the pump entirely and reports what the first-batch
+ * window is made of — replicated demand prep, contention on it, the
+ * dispatch-key pass only a sharded worker runs, and the geometry batch that
+ * rides along inside the window. See `runPrepProbe`.
  *
  * D3D needs `--max-old-space-size=12288`; nothing here calls `gc()`, so
  * `--expose-gc` buys nothing and is deliberately not in that line.
@@ -100,6 +105,202 @@ function groupPayloadsById( entries ) {
 
 
 /**
+ * One worker, prep only: how long the worklist build costs at this level.
+ *
+ * Exists because `dupFirstBatch` is a mixture and the ledger used to read it
+ * as one mechanism. Three levels answer what the ratio cannot, and two more
+ * bound the instrument:
+ *
+ *  - **one unsharded worker** — `ensureDemandWorklists_` takes its
+ *    `shard_ === void 0` early return, so this is `collectDemandCandidates_`
+ *    and nothing else: the `IfcProduct` walk plus `aggregateTargetLocalIDs()`.
+ *    This is the part every worker genuinely repeats, sharded or not, and it
+ *    is the denominator `dupFirstBatch` divides by.
+ *  - **N unsharded workers** — the same work, N times, concurrently. Over N
+ *    times the line above, that is contention and only contention.
+ *  - **N sharded workers** — identical except for the one branch under test,
+ *    which adds `geometryDispatchKey` over every worklist product AND every
+ *    `IfcRelAggregates` plus two filters. Over the line above, that is the
+ *    shard-only key pass — work that exists only because sharding does.
+ *
+ * A fourth level applies a shard of ONE and must land on the first:
+ * `setGeometryShard` normalises `count === 1` to unsharded
+ * (`ifc_api_proxy_ifc.ts:2680`), so it is a null control proving the key-pass
+ * figure is the sharded BRANCH rather than the cost of making the call.
+ *
+ * The batch is 0, which `pumpGeometryBatch_` floors at one product
+ * (`Math.max(batchSize, 1)`). That is the smallest geometry the pump can be
+ * asked for — 64x below the sweep's `BATCH_SIZE`, which matters most on the
+ * small models, where 64 products is a large fraction of the whole worklist.
+ * A fifth level re-runs the unsharded case at the sweep's own `BATCH_SIZE`,
+ * so how much of the sweep's window is geometry rather than prep is measured
+ * here too rather than argued about — on the small models it is most of it.
+ *
+ * @param {object} api The opened `IfcAPI`.
+ * @param {number} modelID The open model.
+ * @param {object} task `{index, count, shard}`.
+ * @param {number} openMs What the open before it cost.
+ * @return {object} What this level cost.
+ */
+function prepProbe( api, modelID, task, openMs ) {
+
+  const tPrep = performance.now()
+  const { extracted } =
+    api.ExtractGeometryBatch( modelID, task.batch ?? 0, () => {} )
+  const prepMs = performance.now() - tPrep
+
+  return { index: task.index, openMs, prepMs, extracted }
+}
+
+
+/**
+ * The prep probe: what the first-batch window is actually made of.
+ *
+ * Prints the levels and the arithmetic between them, because the sweep's
+ * `dupFirstBatch` ratio cannot distinguish them and was read as if it could:
+ *
+ *   summed prep at N  =  N x one unsharded worker    (replicated prep)
+ *                     +  N unsharded workers - that  (contention)
+ *                     +  N sharded workers - those   (shard-only key pass)
+ *
+ * Every term on the right is a measured level, not a residual: the first is
+ * what an unsharded pool of N would also pay; the second is what running them
+ * together costs, which the `open` control in ledger §11.2 independently
+ * brackets; and the third exists ONLY because sharding exists, since the
+ * unsharded reference computes not one dispatch key. Charging that third term
+ * to "prep every worker repeats" attributes sharding's own overhead to a
+ * lever that predates it, which is what the second draft of §11.4 did.
+ *
+ * @param {number[]} sweep Worker counts, ascending, starting at 1.
+ * @param {Function} runPool `(count, mode, shardOf, batch) => Promise<object[]>`.
+ * @param {number} runs Repetitions per level; the median summed one wins.
+ * @return {Promise<void>} When every level has been reported.
+ */
+async function runPrepProbe( sweep, runPool, runs ) {
+
+  console.log(
+      `prep probe: ${runs} repetition(s) per level, median reported. A batch ` +
+      'of 0 is\n  floored at one product by the pump, so those windows are ' +
+      'ensureDemandWorklists_\n  plus one product of geometry.' )
+
+  /**
+   * One level, repeated, reduced to the median of its summed prep.
+   *
+   * Median of the SUM across workers rather than of each worker separately:
+   * the sum is the quantity every ratio below is built from, and taking
+   * medians per worker first would mix repetitions inside one figure.
+   *
+   * @param {number} count How many workers.
+   * @param {Function} [shardOf] Descriptor per worker index.
+   * @param {number} [batch] Batch size to pump, default 0.
+   * @return {Promise<object>} `{summed, perWorker}` at the median repetition.
+   */
+  async function level( count, shardOf, batch ) {
+
+    const samples = []
+
+    for ( let run = 0; run < runs; ++run ) {
+
+      const results = await runPool( count, 'prep', shardOf, batch )
+
+      samples.push( {
+        summed: results.reduce( ( sum, r ) => sum + r.prepMs, 0 ),
+        perWorker: results.map( ( r ) => r.prepMs ),
+      } )
+    }
+
+    samples.sort( ( a, b ) => a.summed - b.summed )
+
+    return samples[ ( samples.length - 1 ) >> 1 ]
+  }
+
+  const unsharded = await level( 1, () => void 0 )
+  const shardOfOne = await level( 1, () => ( { index: 0, count: 1 } ) )
+  const withBatch = await level( 1, () => void 0, BATCH_SIZE )
+
+  console.log(
+      `level=unsharded    workers=1 batch=0  prep=${toS( unsharded.summed )}s` +
+      '  (collectDemandCandidates_ only: no dispatch key is computed at all)' )
+  console.log(
+      `level=shard-of-1   workers=1 batch=0  prep=${toS( shardOfOne.summed )}s` +
+      `  (${( shardOfOne.summed / unsharded.summed ).toFixed( 2 )}x) -> ` +
+      'NULL CONTROL: setGeometryShard normalises count 1 to unsharded, so ' +
+      'this must\n                   match the line above. It is here to ' +
+      'prove the key-pass figure below is the sharded BRANCH and not the ' +
+      'cost of calling SetGeometryShard.' )
+  console.log(
+      `level=unsharded    workers=1 batch=${BATCH_SIZE} ` +
+      `prep=${toS( withBatch.summed )}s  (${( withBatch.summed /
+        unsharded.summed ).toFixed( 2 )}x) -> the sweep's own reference ` +
+      `window; ${toS( withBatch.summed - unsharded.summed )}s of it is ` +
+      `${BATCH_SIZE} products of geometry` )
+
+  for ( const count of sweep ) {
+
+    if ( count < 2 ) {
+      continue
+    }
+
+    // N workers doing the SAME prep with no shard applied — the control that
+    // makes the split measured rather than subtracted. It is the sharded
+    // level in every respect except the one branch under test, so the
+    // difference between them is the shard-only key pass at this N, and the
+    // difference between it and N x the single uncontended worker is
+    // contention on the replicated part. Without it the growth from N=1 to
+    // N=4 has to be attributed by assumption, which is the error this whole
+    // probe exists to undo.
+    const replicatedAtN = await level( count, () => void 0 )
+    const shards = await level( count, void 0 )
+    const replicated = count * unsharded.summed
+    const contention = replicatedAtN.summed - replicated
+    const keyPass = shards.summed - replicatedAtN.summed
+
+    console.log(
+        `level=unsharded    workers=${count} batch=0  ` +
+        `per-worker=${replicatedAtN.perWorker.map( toS ).join( '/' )}s ` +
+        `summed=${toS( replicatedAtN.summed )}s  ` +
+        `(${( replicatedAtN.summed / replicated ).toFixed( 2 )}x N x the ` +
+        'single worker: contention on the replicated prep alone)' )
+    console.log(
+        `level=shards       workers=${count} batch=0  ` +
+        `per-shard=${shards.perWorker.map( toS ).join( '/' )}s ` +
+        `summed=${toS( shards.summed )}s` )
+    console.log(
+        `                   of that: replicated prep ${toS( replicated )}s ` +
+        `(${percent( replicated, shards.summed )}), contention on it ` +
+        `${toS( contention )}s (${percent( contention, shards.summed )}), ` +
+        `shard-only key pass ${toS( keyPass )}s ` +
+        `(${percent( keyPass, shards.summed )})` )
+  }
+}
+
+
+/**
+ * @param {number} ms A duration.
+ * @return {string} It, in seconds, to milliseconds.
+ *
+ * Three decimals, not the sweep's one: the small models' whole demand prep is
+ * tens of milliseconds, and at 0.1 s resolution the terms this probe exists
+ * to separate all print as 0.0.
+ */
+function toS( ms ) {
+
+  return ( ms / MS_PER_S ).toFixed( 3 )
+}
+
+
+/**
+ * @param {number} part A term.
+ * @param {number} whole What it is a share of.
+ * @return {string} The share, as a percentage.
+ */
+function percent( part, whole ) {
+
+  return `${( 100 * part / whole ).toFixed( 0 )} %`
+}
+
+
+/**
  * One worker: open, claim a shard, pump it dry, report what it delivered.
  *
  * Reports per-placement digests rather than a count, so the union check can
@@ -134,8 +335,17 @@ async function runWorker( task ) {
 
   const openMs = performance.now() - tOpen
 
-  if ( task.count > 1 ) {
-    api.SetGeometryShard( modelID, { index: task.index, count: task.count } )
+  // The descriptor is passed in rather than derived from `task.count`,
+  // because the prep probe needs configurations the efficiency sweep cannot
+  // express: N workers with NO shard (the control that separates contention
+  // from the sharded branch) and a shard of one (a null control —
+  // `setGeometryShard` normalises `count === 1` back to unsharded).
+  if ( task.shard !== void 0 ) {
+    api.SetGeometryShard( modelID, task.shard )
+  }
+
+  if ( task.mode === 'prep' ) {
+    return prepProbe( api, modelID, task, openMs )
   }
 
   const placements = []
@@ -160,18 +370,31 @@ async function runWorker( task ) {
   let unidentifiedGeometries = 0
   const tGeometry = performance.now()
   // The FIRST batch call is where `ensureDemandWorklists_` runs (see
-  // `ifc_api_proxy_ifc.ts:extractGeometryBatch`), and demand prep is
-  // whole-model work that a shard does not shrink: the product walk over
-  // every `IfcProduct`, `aggregateTargetLocalIDs()` scanning every
-  // `IfcRelAggregates`, and `computeDispatchKeys` over the resulting
-  // worklist. Every worker in the pool does ALL of it, so it is replicated N
-  // times inside a window that gets read as geometry — which is a third
-  // thing summed shard time can be, alongside rebuilt geometry and
-  // contention, and the one that neither `dupWall` nor `dupWork` can see.
+  // `ifc_api_proxy_ifc.ts:extractGeometryBatch`), so this is the window that
+  // contains demand prep — and it is named for the window rather than for
+  // the prep, because it is NOT the same prep in every worker:
   //
-  // It is an UPPER bound: the same call also extracts its own batch of
-  // BATCH_SIZE products. That overstates prep by one batch of geometry,
-  // which is tight wherever prep is the term worth naming.
+  //  - `ensureDemandWorklists_` returns early at `this.shard_ === void 0`
+  //    (`ifc_api_proxy_ifc.ts:2280`). The unsharded N=1 reference therefore
+  //    computes **not one dispatch key**. Every N>1 worker additionally runs
+  //    `geometryDispatchKey` over every worklist product AND over every
+  //    `IfcRelAggregates` (`:2298-2313`), then filters both lists. That work
+  //    exists only because sharding exists; an unsharded pool would not pay
+  //    it, and dividing it by a reference that never did it is not
+  //    "the same prep, N times".
+  //  - What IS replicated is `collectDemandCandidates_`: the `IfcProduct`
+  //    walk and `aggregateTargetLocalIDs()` over every `IfcRelAggregates`.
+  //    A shard does not shrink that, and every worker does all of it.
+  //  - It is WALL time, with the same exposure `dupWall` has: it cannot
+  //    separate work from contention.
+  //  - It also contains one batch of BATCH_SIZE products of real geometry.
+  //
+  // `--prep-probe` separates all four: it runs the same call with a batch of
+  // 0 (which the pump floors at one product) at one unsharded worker, N
+  // unsharded workers and N sharded workers, plus one unsharded worker at
+  // BATCH_SIZE — so replicated prep, contention on it, the shard-only key
+  // pass and the geometry riding inside the window are each measured rather
+  // than summed into one ratio.
   let firstBatchMs = 0
   let batches = 0
 
@@ -368,7 +591,9 @@ if ( !isMainThread ) {
 } else {
 
   const argv = process.argv.slice( 2 )
-  const usage = 'usage: m3_worker_pool.mjs <model> [--workers 1,2,4]'
+  const usage =
+    'usage: m3_worker_pool.mjs <model> [--workers 1,2,4] ' +
+    '[--prep-probe [--runs 3]]'
 
   /**
    * Give up with a usage line rather than measure the wrong thing.
@@ -387,11 +612,13 @@ if ( !isMainThread ) {
   // `2,4`. It happens to fail loudly at readFileSync today, so no wrong
   // number was ever produced by it, but the failure names the wrong thing.
   const workersFlag = argv.indexOf( '--workers' )
+  const runsFlag = argv.indexOf( '--runs' )
   // -1 when the flag is absent, NOT `workersFlag + 1` — that is 0, which
   // would filter out argv[0] and reject the one-argument invocation.
   const workersValueAt = workersFlag >= 0 ? workersFlag + 1 : -1
+  const runsValueAt = runsFlag >= 0 ? runsFlag + 1 : -1
   const positional = argv.filter( ( value, at ) =>
-    !value.startsWith( '--' ) && at !== workersValueAt )
+    !value.startsWith( '--' ) && at !== workersValueAt && at !== runsValueAt )
 
   if ( positional.length !== 1 ) {
     refuse( positional.length === 0 ? 'no model given' :
@@ -406,6 +633,26 @@ if ( !isMainThread ) {
 
   const counts = workersFlag >= 0 ?
     argv[ workersFlag + 1 ].split( ',' ).map( Number ) : DEFAULT_WORKERS
+  // A bare flag, so the positional filter above already skips it.
+  const prepProbeOnly = argv.includes( '--prep-probe' )
+
+  if ( runsFlag >= 0 && argv[ runsFlag + 1 ] === void 0 ) {
+    refuse( '--runs needs a value' )
+  }
+
+  const probeRuns = runsFlag >= 0 ? Number( argv[ runsFlag + 1 ] ) : 3
+
+  if ( !Number.isInteger( probeRuns ) || probeRuns < 1 ) {
+    refuse( `--runs must be a positive integer; got ${argv[ runsFlag + 1 ]}` )
+  }
+
+  // Refused rather than ignored: --runs on the pump sweep would look like it
+  // set the repetition count the ledger's medians come from, and it does not
+  // — those are separate invocations of the whole script.
+  if ( runsFlag >= 0 && !prepProbeOnly ) {
+    refuse( '--runs applies to --prep-probe only; the pump sweep is repeated ' +
+      'by re-invoking the script' )
+  }
 
   if ( counts.length === 0 ||
        counts.some( ( count ) => !Number.isInteger( count ) || count < 1 ) ) {
@@ -426,11 +673,20 @@ if ( !isMainThread ) {
   let referenceWork
   let referenceVertexFloats
 
-  for ( const count of sweep ) {
+  const resolvedPath = path.resolve( REPO_ROOT, filePath )
 
-    const started = performance.now()
+  /**
+   * N workers, started together, awaited together.
+   *
+   * @param {number} count How many workers.
+   * @param {string} [mode] `'prep'` for the prep probe, omitted for the pump.
+   * @param {object} [shardOf] `(index, count) => descriptor | undefined`.
+   * @param {number} [batch] Batch size, for the prep probe only.
+   * @return {Promise<object[]>} Each worker's report, in spawn order.
+   */
+  function runPool( count, mode, shardOf, batch ) {
 
-    const results = await Promise.all(
+    return Promise.all(
         Array.from( { length: count }, ( _, index ) =>
           new Promise( ( resolve, reject ) => {
 
@@ -439,7 +695,16 @@ if ( !isMainThread ) {
               // is what gets --max-old-space-size to the shards. (Nothing
               // here calls gc(), so there is no --expose-gc to pass on
               // either — it used to be in the usage line and was inert.)
-              workerData: { filePath: path.resolve( REPO_ROOT, filePath ), index, count },
+              workerData: {
+                filePath: resolvedPath,
+                index,
+                count,
+                mode,
+                shard: shardOf === void 0 ?
+                  ( count > 1 ? { index, count } : void 0 ) :
+                  shardOf( index, count ),
+                batch,
+              },
             } )
 
             worker.on( 'message', ( message ) => {
@@ -449,6 +714,18 @@ if ( !isMainThread ) {
 
             worker.on( 'error', reject )
           } ) ) )
+  }
+
+  if ( prepProbeOnly ) {
+    await runPrepProbe( sweep, runPool, probeRuns )
+    process.exit( process.exitCode ?? 0 )
+  }
+
+  for ( const count of sweep ) {
+
+    const started = performance.now()
+
+    const results = await runPool( count )
 
     const wallMs = performance.now() - started
 
@@ -618,11 +895,15 @@ if ( !isMainThread ) {
     // shards each did their own share and simply ran slower, which is
     // contention and wants a completely different fix.
     const totalGeometry = results.reduce( ( sum, r ) => sum + r.geometryMs, 0 )
-    // `dupPrep` is the third term: whole-model demand prep, replicated per
-    // worker, and it is duplicated WORK that `dupWork` cannot count because
-    // it produces no geometry. It rises with N by construction — N workers,
-    // N preps — so on a model where prep is a large share of T1 it caps
-    // efficiency on its own, and no partition change touches it.
+    // `dupFirstBatch` is the third term, and it is named for the window it
+    // times rather than for a mechanism, because it is a MIXTURE: replicated
+    // demand prep, the dispatch-key pass that only a sharded worker runs at
+    // all, one batch of BATCH_SIZE products of geometry, and — being wall
+    // time — contention, exactly as `dupWall` is. The N=1 reference in its
+    // denominator takes `ensureDemandWorklists_`'s unsharded early return, so
+    // it never computes a key; the ratio is therefore NOT "the same prep, N
+    // times", and reading it as replication overcharges replication by
+    // whatever the key pass costs. `--prep-probe` splits it.
     const totalFirstBatch =
       results.reduce( ( sum, r ) => sum + r.firstBatchMs, 0 )
     const totalWork = results.reduce( ( sum, r ) => sum + r.payloads.length, 0 )
@@ -649,14 +930,14 @@ if ( !isMainThread ) {
         `eff=${( referenceGeometry / ( slowestGeometry * count ) ).toFixed( 3 )}, ` +
         `dupWall=${( totalGeometry / referenceGeometry ).toFixed( 2 )}x, ` +
         `dupWork=${( totalWork / referenceWork ).toFixed( 2 )}x, ` +
-        `dupPrep=${( totalFirstBatch / referenceFirstBatch ).toFixed( 2 )}x, ` +
+        `dupFirstBatch=${( totalFirstBatch / referenceFirstBatch ).toFixed( 2 )}x, ` +
         `dupVerts=${( totalVertexFloats / referenceVertexFloats ).toFixed( 2 )}x) ` +
         `instances=${union.length} (duplicated ${duplicatePlacements}) ` +
         `per-shard=${results.map( ( r ) => r.placements.length ).join( '/' )} ` +
         `shard-geometry=${results.map( ( r ) =>
           ( r.geometryMs / MS_PER_S ).toFixed( 1 ) ).join( '/' )}s ` +
         `shard-built=${results.map( ( r ) => r.payloads.length ).join( '/' )} ` +
-        `shard-prep=${results.map( ( r ) =>
+        `shard-firstBatch=${results.map( ( r ) =>
           ( r.firstBatchMs / MS_PER_S ).toFixed( 1 ) ).join( '/' )}s ` +
         `wasm=${wasmMb.join( '/' )}MB v8=${v8Mb.join( '/' )}MB(instant) ` +
         `sweepPeakRss=${sweepPeakRss === void 0 ? 'n/a' :
