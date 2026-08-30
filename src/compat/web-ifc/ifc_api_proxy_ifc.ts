@@ -3727,23 +3727,35 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         if (this.streamingConsumer_) {
 
-          // Served nothing, and something was lost on the way: either the
-          // re-walk parked instances whose geometry is gone, or the model
-          // evicted at all. Both conditions, not just the first, because
-          // `everEvicted` also covers a model whose every scene node was
-          // freed before the walk could even park it. What must NOT throw is
-          // a model that genuinely has no geometry — no eviction, nothing
-          // parked, nothing to serve — where empty is the right answer and
-          // classic returns it too.
+          // Served nothing, and the re-walk found instances it could not
+          // resolve: the geometry behind them is gone. What must NOT throw is
+          // a model that genuinely has no geometry — nothing parked, nothing
+          // to serve — where empty is the right answer and classic returns it
+          // too.
           //
-          // This deliberately does NOT key on droppedEntities the way the
-          // retaining path below does. That counter is fed by the
+          // `unresolvedInstances` is the whole signal today; `degraded` is a
+          // failsafe that is NOT independently reachable, and saying so is
+          // the point of this paragraph. Eviction removes geometry from the
+          // store and never touches the scene, which is append-only
+          // (IfcSceneBuilder.nodeCount's contract) — so every instance an
+          // eviction costs us is an instance the walk parks, and there is no
+          // state today in which the model evicted but the walk parked
+          // nothing. It is kept because it costs a boolean read and it fails
+          // in the safe direction: any future path that removes geometry
+          // WITHOUT leaving a parked node behind would otherwise reintroduce
+          // exactly the silent empty model this guard exists to prevent. No
+          // test pins it, and none can, because the state cannot be
+          // constructed through the public API.
+          //
+          // What this deliberately does NOT key on is droppedEntities, the
+          // way the retaining path below does. That counter is fed by the
           // livePlacements filter, which can only ever see placements that
           // reached the rebuilt map — and evicted ones never do, because
           // eviction deletes the mesh from the store rather than leaving a
           // dead handle in it. Keying on it made this throw unreachable and
-          // let a fully-evicted model return silently empty, which is the
-          // exact failure the contract exists to prevent.
+          // let a fully-evicted model return silently empty: measured at a
+          // 1-byte budget on mapped_shared_representation.ifc as 0 placements
+          // served, "0 instance(s) across 0 entit(ies)" logged, no throw.
           if (servedEntities === 0 && (unresolvedInstances > 0 || degraded)) {
 
             throw new Error(

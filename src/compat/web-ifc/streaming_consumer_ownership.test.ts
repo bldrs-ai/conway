@@ -27,6 +27,7 @@ import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
+import Logger, { LogLevel } from '../../logging/logger'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
@@ -206,6 +207,40 @@ function streamAll( api: IfcAPI, modelID: number ): Placement[] {
   } )
 
   return served
+}
+
+
+/**
+ * Run a whole-model ask with the log sink captured.
+ *
+ * The partial-loss path's ONLY output to a consumer is a warning line — the
+ * placements it lost are simply not in what it returns — so the line has to
+ * be asserted on directly, not inferred from a count. Logger echoes to the
+ * sink immediately, which matters here because StreamAllMeshes clears the
+ * buffer on its way out.
+ *
+ * @param api The API instance owning the model.
+ * @param modelID The open model.
+ * @return {object} What was served, and every line the call logged.
+ */
+function streamAllCapturingLogs( api: IfcAPI, modelID: number ):
+  { served: Placement[], logged: string[] } {
+
+  const logged: string[] = []
+
+  Logger.clearLogs()
+  Logger.setLogLevel( LogLevel.WARNING )
+  Logger.setSink( ( _level, message ) => {
+    logged.push( message )
+  } )
+
+  try {
+    return { served: streamAll( api, modelID ), logged }
+  } finally {
+    Logger.setSink()
+    Logger.setLogLevel( LogLevel.INFO )
+    Logger.clearLogs()
+  }
 }
 
 
@@ -424,13 +459,35 @@ describe( 'STREAMING_CONSUMER under a geometry budget (IFC only — AP214 has ' 
 
         drain( api, ownedID )
 
-        const partial = streamAll( api, ownedID )
+        const { served: partial, logged } = streamAllCapturingLogs( api, ownedID )
 
         // Partial loss is a warning, not a throw: something is still there
         // to hand back, and refusing to hand it back would be worse than the
         // silence this contract is fixing.
         expect( partial.length ).toBeGreaterThan( 0 )
         expect( partial.length ).toBeLessThan( whole.length )
+
+        // The warning is the ONLY thing that tells a consumer it received a
+        // partial model — the lost placements are simply absent from what
+        // came back — so assert the line exists and that the number in it is
+        // the real loss, not merely that it is non-zero. This is the exact
+        // assertion the round-1 code would have failed: it reported "0
+        // instance(s) across 0 entit(ies)" while losing 13 of 16, and
+        // `whole.length - 0 === 16` is not the 3 that was served.
+        const warned = logged.find( ( line ) =>
+          line.includes( 'StreamAllMeshes re-walked a STREAMING_CONSUMER' ) )
+
+        expect( warned ).toBeDefined()
+
+        const reported =
+          /(\d+) placed instance\(s\) could not be resolved/.exec( warned! )
+
+        expect( reported ).not.toBeNull()
+
+        const unresolved = Number( reported![ 1 ] )
+
+        expect( unresolved ).toBeGreaterThan( 0 )
+        expect( partial.length ).toBe( whole.length - unresolved )
       }, 240000 )
 } )
 
