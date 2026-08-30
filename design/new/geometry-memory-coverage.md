@@ -20,7 +20,10 @@ reading the function body, not by trusting a comment or a commit message — or
 **[inferred]** — reasoned from adjacent code without a direct read of the
 executing path. Nothing here is asserted from memory of a previous audit.
 Pinned revision: `conway-geom@6d7c054` (submodule HEAD as checked out for
-this audit, 2026-08-28).
+this audit, 2026-08-28). The instrument sections were updated against
+`conway-geom@8d1692a` (conway-geom#198, the conway#653 work) on 2026-08-30;
+where a claim describes the instrument rather than the geometry code, that is
+the revision it was read from.
 
 ## Verified: the arena is at four sites, not two
 
@@ -388,125 +391,259 @@ geometry stage 31.6 s of a 35.3 s load.
    and 16.76 GB of gross bytes in one load are large in absolute terms, four
    orders of magnitude above the path item 3 named.
 
-**Not established:**
+**Not established *by this D3D run*, and still not:**
 
-- **That CSG is *the* largest lever.** That is a ranking claim and it needs a
-  load-wide denominator this instrument does not have. An unscoped path could
-  be larger; nothing here rules it out.
-- **Any share-of-load percentage**, for the same reason.
-- **Every byte quantity derived from `tls.liveBytes`** — per-unit peak,
-  retained, and any ratio between them. See below.
+- **That CSG is *the* largest lever.** That is a ranking claim, it needs a
+  load-wide denominator, and the D3D run predates the one conway#653 built. The
+  instrument can answer it now; **this measurement cannot**, because it has not
+  been re-run. An unscoped path could be larger and nothing here rules it out.
+- **Any share-of-load percentage** for D3D, for the same reason.
+- **Every byte quantity derived from `tls.liveBytes` as it stood then** —
+  per-unit peak, retained, and any ratio between them.
 
-### Derived byte quantities are not established, for two named reasons
+The three retractions above are properties of **this run**, not of the
+instrument. conway#653 (conway-geom#198, merged as `8d1692a`) added the
+machinery all three were missing; what it did **not** do is re-run D3D. The
+next section gives the verdict on each retracted claim: which are now
+*measurable* — and would be *measured* by a re-run — and which stay retracted
+as stated no matter how often the instrument is run.
 
-Both were raised in review of conway#651 / conway-geom#192 and verified against
-source. They are recorded rather than deleted so the numbers are not
-re-derived by the next reader.
+### Verdict on each named retraction, after conway#653
 
-**1. The instrument does not track allocation ownership.** `onFree`
-(`alloc_telemetry.cpp`) subtracts *every* free that happens inside a scope from
-the in-scope live counter, including frees of memory allocated **before** the
-scope began. It cannot tell the two apart, because it never recorded which
-pointers it handed out. So `liveBytes` — and therefore the per-unit peak and
-the retained figure at scope exit — is corrupted whenever a pre-scope free
-lands inside a unit.
+The five retractions below were each recorded with their mechanism rather than
+deleted, precisely so this table could be written against them. "Now
+measurable" means the instrument can produce the quantity; it does **not** mean
+a number exists, because **D3D has not been re-run** (see
+[Still owed](#still-unmeasured-and-what-it-would-take)).
 
-The instrument counts the clamp firings, and on D3D they are 878,666 in
-`csg_boolean` and zero in the other three kinds. **Zero is not an
-all-clear, and an earlier revision of this section was wrong to grade the
-columns "usable" on that basis.** A pre-scope free *smaller* than what is
-currently live is subtracted silently, with no clamp and no other signal.
-Concrete cases exist on paths reporting zero: `Extrude(IfcProfile profile)`
-takes its profile **by value**, so the copy is made before the scope opens and
-`profile.curve.Add2d()` can reallocate that copy inside it; a face scope grows
-caller-owned `Geometry` vectors the same way. So the clamp counter proves the
-defect *fires* in CSG; it proves nothing about the other three.
+| # | Retracted claim | Verdict | Why |
+|---|---|---|---|
+| 1 | `peak:retained` ratios (1.4×–3.7×) | **Now measurable** | `onFree` subtracts only pointers the scope allocated. `liveBytes` is uncorrupted, so peak and the (renamed) `escaped` figure are real quantities. |
+| 2 | "Zero clamps ⇒ usable" per-path grading | **Obsolete, and the grading was wrong** | There is nothing left to grade: the clamp heuristic is gone. `foreignFrees` is a census of genuinely foreign frees **when `unownedAllocs == 0`** — see the qualification below, which is not a formality on a path that can exhaust the table. |
+| 3 | Retained figures generally (global `VertexWelder`) | **Still retracted, and NOT separable by arithmetic on the current tags** | Three things defeat the obvious "subtract `vertex_weld`" fix, and all three are in the merged code — see below. Unit output needs an *additional tag*, not a subtraction. |
+| 4 | "98.1 % of compositions under 256 KiB ⇒ arena-shaped" | **Still retracted as stated; superseded** | Live peak was the wrong distribution and remains so. The right one now exists — the `died` histogram — and it is a different number, not a corrected version of this one. |
+| 5 | "~4 MB covers 93 %" (cumulative bytes) | **Still retracted as stated; superseded** | Cumulative in-scope volume is still a superset of the arena-eligible subset. `died` **is** that subset, so the question is answerable — by a new measurement, not by reinterpreting this one. |
+| — | "CSG is 98.8 % of allocator traffic" | **Now measurable** | A load-wide denominator exists. The 98.8 % figure itself stays retracted: it was a share of the instrumented subtotal. |
 
-**Consequence: no scope kind's peak or retained figure is trustworthy**, and
-the report no longer prints a peak:retained ratio on any of them. The fix is
-pointer-ownership tracking — subtract a free only if this scope allocated that
-pointer.
+Two things are worth stating plainly because the shape of this document's
+history invites the opposite reading. **Rows 3, 4 and 5 do not become true.**
+They were claims about quantities that were the wrong quantities; the fix
+supplies different quantities. And **no row yields a number until D3D is
+re-run** — the machinery landing and the measurement existing are separate
+events, and conflating them would be this document's own signature error one
+more time.
 
-**2. Retained also counts reusable global scratch.** `Geometry.cpp:30`
-declares a file-scope `VertexWelder welder;` whose containers are
-`clear()`/`resize()`/`reserve()`d in `weld()` and **never** `shrink_to_fit`, so
-capacity grown inside a scope is still live at scope close and is booked as
-retained *output*. `CSGMesher::reset()` has the same shape. The retained figure
-therefore depends on which unit last grew the cache.
+### Derived byte quantities: what ownership and lifetime established
 
-How far this one reaches was settled by measuring rather than reading, because
-`welder.weld()` has two call sites and only one is CSG-specific:
-`Geometry::Cleanup()` (`:400`) and `Geometry::Reify()` (`:103`). The welder is
-tagged `AllocSite::VertexWeld`, and on D3D it fires **3,972,812 times under
-`csg_boolean` and zero times under the other three kinds** — `Reify` is reached
-from the data getters (`GetVertexData`, `GetIndexData`, `GetVertexDataSize`,
-`GeometryToObj`), which the binding layer calls after the geometry function has
-returned, so its weld lands in no scope at all. This defect is CSG-only; defect
-1 is not, which is why the verdict above is "no kind is trustworthy" rather
-than "CSG is not".
+Both defects below were raised in review of conway#651 / conway-geom#192 and
+verified against source. They are kept, with their mechanisms, because the
+numbers they retracted must not be re-derived by the next reader — and because
+the fix for each is now in the tree and it is worth being exact about what it
+did and did not reach.
 
-Deriving retained bytes from the returned geometry, rather than from what is
-live at scope exit, would fix this one.
+**1. The instrument did not track allocation ownership.** `onFree` subtracted
+*every* free that happened inside a scope from the in-scope live counter,
+including frees of memory allocated **before** the scope began, because it never
+recorded which pointers it handed out. So `liveBytes` — and therefore per-unit
+peak and the retained figure at scope exit — was corrupted whenever a pre-scope
+free landed inside a unit. On D3D the clamp fired 878,666 times in
+`csg_boolean` and zero times in the other three kinds, and an earlier revision
+of this section graded those three "usable" on that basis. **That grading was
+wrong**: a pre-scope free *smaller* than what is currently live was subtracted
+silently, with no clamp and no signal, and concrete cases exist on paths
+reporting zero — `Extrude(IfcProfile profile)` takes its profile **by value**,
+so the copy predates the scope and `profile.curve.Add2d()` can reallocate it
+inside.
 
-**What survives.** Allocator **call counts**. They are computed in `onAlloc`
-alone, accumulate monotonically, never touch `liveBytes`, and need neither
-ownership nor lifetime information to mean what they say. Their only caveat is
-the in-scope restriction stated above.
+**Fixed (conway-geom#198).** Every in-scope allocation goes into a per-thread
+pointer table, and a free is subtracted only when *this scope activation*
+allocated that pointer. Frees it does not own are counted as `foreign` and never
+subtracted, which turns the old clamp counter — a lower bound that could only
+see the frees large enough to drive the counter negative — into a census. The
+clamp is structurally impossible and its columns are gone from the report.
 
-Cumulative bytes is uncorrupted in the same way, but it is **not** a
-substitute: as the next section sets out, it is total in-scope allocation
-*volume*, a superset of anything an arena could hold. It is printed as a raw
-diagnostic and no conclusion here rests on it.
+**The census claim has one condition, and it must be checked before quoting
+`foreignFrees`: it holds only when `unownedAllocs == 0` for that scope kind.**
+Ownership is recorded by *inserting the pointer into the table*, so an
+allocation the table refused — because it was full, or could not be allocated
+at all — is not in it. If the current scope then frees that pointer, `tableFind`
+misses and the free is booked **foreign**, even though the scope itself made the
+allocation. So on a run reporting nonzero `unowned`, `foreignFrees` is an upper
+bound on genuinely-foreign frees, not a census, and the excess is bounded by the
+unowned allocations that were freed in-scope. Both fixtures measured so far
+report `unowned 0`, which is why the numbers quoted in this document are
+unaffected — but D3D is the run most likely to exhaust a per-thread table, and
+it is the run not yet done.
 
-**The common cause, worth stating once.** Five separate review findings
-narrowed a byte quantity on this page — `onFree` clamping, the global welder's
-capacity, the live-peak distribution, zero-clamps-as-an-all-clear, and
-cumulative volume — and every one reduces to the same sentence: **a byte figure
-is meaningless without allocation ownership and lifetime, and this instrument
-tracks neither.** Counts need neither. That asymmetry is why every conclusion
-here is stated in counts, and why the byte columns are printed but disowned.
+The mechanism is not merely argued. On `nema-23-76mm.step`, `advanced_face`
+reports **54 foreign frees**, and that is a path which reported **zero clamped
+frees** under the old instrument. The silent case was real, on a path that had
+been graded clean.
 
-### Arena sizing is not answerable by this instrument
+**2. `escaped` still counts reusable global scratch, and no arithmetic on the
+current tags removes it.** `Geometry.cpp:30` declares a file-scope
+`VertexWelder welder;` whose containers are `clear()`/`resize()`/`reserve()`d in
+`weld()` and **never** `shrink_to_fit`, so capacity grown inside a scope is
+genuinely still live at scope close. Ownership and lifetime classify that
+correctly — it *did* escape the scope — but "escaped" means **not freed inside
+this scope**, not "this unit's output".
 
-This section has been wrong twice and is now a retraction rather than a
-result. Both retractions are kept because each names a distinct trap.
+An earlier revision of this section said the per-site split makes the welder's
+contribution *subtractable*, so that `escaped − vertex_weld` would give unit
+output. **That is wrong on the CSG path**, for three independent reasons, each
+read from the merged source rather than inferred:
+
+1. **The welder is not the only persistent cache.** `CSGMesher::reset()`
+   (`conway_geometry/csg/csg_mesher.cpp:999`) is twenty-odd `clear()` calls with
+   **no `shrink_to_fit` anywhere in the file**, exactly the welder's shape. And
+   the mesher is not per-composition: `CSGMesher charter_;` is a member of
+   `CSG` (`conway_geometry/csg/csg.h:62`), so its capacity persists across
+   compositions by design.
+2. **That cache has no tag of its own.** `csg.run()` is wrapped in a single
+   `AllocTagScope kernelTag( AllocSite::CsgKernel )`, and the result mesh is
+   filled inside that same scope. So `csg_kernel`'s bytes conflate three
+   different things — the mesher's persistent cache growth, the returned
+   `Geometry` that must outlive the composition, and genuine transients — with
+   nothing distinguishing them.
+3. **The printed per-site escaped figure is an upper bound, not a value.** The
+   report computes it as `bytes − died`, so any allocation the ownership table
+   refused inflates it (it can never be credited to `died`). That is why the
+   column is labelled `escaped<=` rather than `escaped`.
+
+**So the remedy is an additional tag — separating the CSG kernel's persistent
+cache and its returned geometry from its transients — not a subtraction.**
+Until that exists, `csg_boolean`'s escaped bytes cannot be read as unit output
+by any arithmetic this instrument supports.
+
+For scale on where the welder lands: on D3D it fires **3,972,812 times under
+`csg_boolean` and zero times under the other three kinds** (`Reify` is reached
+from the data getters after the geometry function has returned, so its weld
+lands in no scope at all). Both cache defects are CSG-path defects; defect 1 was
+not.
+
+**What always survived.** Allocator **call counts**. They are computed in
+`onAlloc` alone, accumulate monotonically, never touch `liveBytes`, and need
+neither ownership nor lifetime to mean what they say. That asymmetry is why
+every conclusion in this document is stated in counts, and it is unchanged.
+
+### The report, and the identities it prints
+
+Reading the instrument's output correctly matters more now that it prints
+quantities that bound something. The current format:
+
+```
+allocs(calls=N failed=F ok=N-F bytes=B) frees(calls=M null=K bytes=C)
+scope <kind>: allocCalls(total=.. avg=.. max=.. failed=..) = X.XXX% of load-wide successful allocs
+  lifetime: died-in-scope(calls=.. bytes=.. avg=.. max=..)  escaped(bytes=.. avg=.. max=..)
+  volume:   cumulativeBytes(..) = died .. + escaped .. + unowned .. (.. allocs)
+  unowned(table-full)=..   [only when nonzero]
+  unowned(no-table)=..     [only when nonzero]
+  livePeak(..)  [ownership-tracked; not arena capacity]
+  frees(calls=.. bytes=.. null=..) of which foreign(frees=.. bytes=..)
+  site <name>: allocs (%) bytes  died=..  escaped<=..
+  died< / peak< / alloc<  histograms
+```
+
+Five identities hold exactly, and all five are asserted by conway-geom#198's
+native known-answer suite:
+
+```
+cumulativeBytes == ownedBytes        + unownedBytes
+ownedBytes      == diedBytes         + escapedBytes
+allocCalls      == ownedAllocs       + unownedAllocs
+unownedAllocs   == unownedFullAllocs + unownedNoTableAllocs
+freeCalls       == diedCalls         + foreignFrees
+```
+
+`failedAllocs` (an allocation call that returned null) and `nullFrees`
+(`free(nullptr)`) sit deliberately **outside** all five: each is a real wrapped
+call that moved no bytes and produced nothing to classify, so folding either in
+would inflate a number the identities rest on. Both were added because review
+found the counters filtering them out, which made a census of *calls* silently
+a census of *successes* — understating exactly the paths allocating hardest
+under memory pressure.
+
+**The two `unowned` lines mean opposite things and carry opposite remedies**,
+and conflating them was a real defect (the report used to print the first
+message for both):
+
+- `unowned(table-full)` — the ownership table hit its capacity. **Raise**
+  `CONWAY_ALLOC_TELEMETRY_TABLE_BITS` and re-run.
+- `unowned(no-table)` — the per-thread table could not be allocated at all
+  (the wasm build links `-s ABORTING_MALLOC=0`). Lifetime classification is
+  **unavailable** for those allocations; counts, cumulative bytes and the
+  load-wide denominator remain valid. **Lower** the table bits, or relieve the
+  memory pressure. Raising it asks for the allocation that just failed.
+
+### Arena sizing is answerable now — by `died`, on a run nobody has done
+
+This section has been wrong twice, and both retractions are kept because each
+names a distinct trap.
 
 **First attempt.** It cited "98.1 % of boolean compositions peak under
-256 KiB" as evidence that CSG transients are arena-shaped. Wrong
-distribution: `ScratchArena` makes deallocation a no-op until the enclosing
-scope rewinds, so the live peak — the most a unit held at once — is not what
-an arena must hold.
+256 KiB". Wrong distribution: `ScratchArena` makes deallocation a no-op until
+the enclosing scope rewinds, so the live peak — the most a unit held at once —
+is not what an arena must hold.
 
-**Second attempt.** It replaced that with cumulative bytes allocated per unit,
-measured them, and quoted "**~4 MB covers 93 % of compositions**" as the
-arena-sizing constraint. **That is also withdrawn.** Cumulative in-scope bytes
-is a *superset* of the arena-eligible subset, and on this path a large one: it
-includes the `Geometry` that `csg.run()` returns — which by definition must
-outlive the composition — and the global `VertexWelder`'s capacity, which
-persists across units by design. Neither can live in an arena rewound at scope
-exit. So the figure is **total in-scope allocation volume, not required arena
-capacity**, and it bounds the arena in neither direction: it overstates by
-including what must escape, and it is confined to instrumented scopes.
+**Second attempt.** It replaced that with cumulative bytes per unit and quoted
+"~4 MB covers 93 % of compositions". Also wrong: cumulative in-scope bytes is a
+*superset* of the arena-eligible subset, including the `Geometry` that
+`csg.run()` returns — which must outlive the composition by definition — and
+the global `VertexWelder`'s capacity, which persists across units by design.
 
-**What would answer it.** Arena sizing needs cumulative bytes *restricted to
-allocations that die inside the scope*. That is a lifetime classification, and
-it sits on top of the pointer-ownership tracking the peak and retained columns
-already need — the same two fixes, in the same place. Until both exist this
-instrument can say **where the allocator calls are**, and nothing about what an
-arena there would cost.
+**Both stay retracted.** Neither is a number that becomes correct; each was the
+wrong quantity.
 
-The numbers are still recorded, because they are raw and uncorrupted and
-deleting them would only invite recomputation. For `csg_boolean` on D3D, total
-in-scope allocation volume per composition averages 2.73 MB with a maximum of
-85 MB; for `extrude_solid`, 100 % of swept solids are under 32 KiB. Read those
-as volume. They are not arena capacity and no recommendation in this doc rests
-on them.
+**The right quantity now exists.** conway#653 asked for cumulative bytes
+*restricted to allocations that die inside the scope*, and that is what
+`died-in-scope` is: allocated inside the unit and released inside it, which is
+what a bump arena rewound at scope exit would have held and no more.
 
+**Subject to the same condition as `foreignFrees` above: it is the arena
+requirement only when `unownedAllocs == 0` for that scope kind, and it fails
+*low*.** The mechanism is the one described there, arriving at a different
+column. `died` is credited from the ownership table, so an allocation the table
+refused is never in it — and when such an allocation is freed inside the scope,
+the free is booked foreign and its bytes reach neither `died` nor `escaped`. A
+degraded run therefore **understates** the arena requirement, which is the
+dangerous direction: sizing an arena from it would undersize it. The
+conway-geom suite pins exactly this, deliberately — its no-table test allocates
+sixteen blocks, frees every one of them inside the scope, and asserts
+`diedBytes == 0`. Check `unowned` is zero before quoting a `died` figure.
+
+**How it is reported, precisely.** The `died<` histogram is **per scope kind**
+— one distribution per kind, bucketing each unit's total died bytes. The
+per-site breakdown carries `died=` as a **scalar total** for that site, not a
+distribution; there is no per-site histogram. So "which sites within a kind
+account for the arena-eligible bytes" is answerable, and "how those bytes are
+distributed across units *within one site*" is not.
+
+What that looks like on a public fixture, as a shape rather than a result —
+`nema-23-76mm.step`, 344 advanced-BREP faces:
+
+| Quantity | Value |
+|---|---:|
+| Total in-scope volume | 92.38 MB |
+| **Died in scope (arena-eligible)** | **82.09 MB (88.9 %)** |
+| Escaped | 10.29 MB |
+| Live peak (max, one unit) | 8.42 MB |
+| `died` under 256 KiB | 76.45 % of units |
+| `died` under 2 MiB | 100 % of units |
+
+Note how far apart the three candidate quantities are on one path: 88.9 % of
+volume is arena-eligible, but the live peak's maximum is an order of magnitude
+off the per-unit `died` figures. Sizing from either of the retracted
+distributions would have given a different answer, which is the whole point.
+
+**This says nothing about CSG on D3D.** It is a STEP model with no CSG at all.
+The D3D re-run is owed and is the only thing that answers the question item 3
+actually asks.
 ### One comparison this does *not* license
 
-There is **no** peak-to-retained ratio to compare against the 60× quoted for
-Arty_Z7, because this instrument no longer offers one — see the two ownership
-defects above. Even if it did, the denominators differ: a per-scope ratio
+There is still **no** comparison to make against the 60× quoted for Arty_Z7,
+and ownership does not create one. The instrument can now produce an honest
+per-scope peak and an honest `escaped` figure, but the denominators differ in
+kind: a per-scope ratio
 accumulates only inside instrumented scopes, whereas the Arty_Z7 60× is a
 whole-process figure (~75 MB retained under a ~4.5 GB heap peak) covering
 everything a load holds. A whole-process ratio for D3D would need the perf
@@ -516,8 +653,8 @@ What can be said, on counts alone: 43,185,966 allocator calls in CSG
 composition and 16.76 GB of gross bytes cycled through the allocator by the
 kernel, in a load whose peak wasm heap is 610.9 MB. That is real churn of the
 kind the arena was built to remove. Whether it is the *most* such churn in the
-load is exactly the ranking question the missing load-wide denominator leaves
-open.
+load is the ranking question the load-wide denominator answers — on a run that
+has one. This D3D run does not.
 
 ## Still unmeasured, and what it would take
 
@@ -529,26 +666,11 @@ open.
   about the CSG kernel's internals, and it should be answered before any arena
   is placed there — a bump arena rewound at scope exit is only correct for
   allocations that die inside the scope.
-- **A load-wide allocator-call denominator.** This is the single missing
-  measurement that would turn "CSG is *a* major lever" into a ranking, and it
-  is the reason no share-of-load percentage appears in this doc. It needs a
-  counter outside every `AllocTelemetryScope` — the wrappers already see every
-  allocation and simply decline to count the unscoped ones. Without it, an
-  unscoped path being larger than CSG cannot be excluded.
-- **Any byte-level claim at all**, which needs two things this instrument does
-  not have:
-  1. **Allocation ownership** — record which pointers a scope handed out, so
-     `onFree` subtracts only its own. Without it, peak and retained are
-     corrupted on every path, silently and with no signal.
-  2. **Lifetime classification** — separate allocations that die inside the
-     scope from those that must outlive it (the returned `Geometry`, the
-     persistent welder capacity). Without it there is no arena-eligible
-     subset, so no arena can be sized.
-
-  Together these are the prerequisite for any byte number here to bound
-  anything, and they are a distinct piece of work from "measure the per-path
-  allocation profile". Allocator-call counts depend on neither, which is why
-  this doc's conclusions survive without them.
+- **The D3D re-run itself.** This is now the binding constraint on almost
+  everything else on this page. The instrument gained ownership, lifetime and a
+  denominator in conway#653; **no D3D number in this document was produced by
+  that instrument.** Until it is re-run, every verdict in the table above is
+  "measurable", never "measured".
 - **A whole-process peak-vs-retained figure for D3D**, comparable to
   Arty_Z7's 60×. See the caveat above: this instrument cannot produce one.
 - **Whether an AP214-side `GeometryResidency` analogue is wanted at all.**
@@ -557,6 +679,50 @@ open.
   transient shape than IFC's per-product extraction pattern. That's a
   measurement question for whoever picks up the budget-coverage gap, not
   answered here.
+
+### Two limits the instrument still has, and they are new
+
+Neither of these was lifted by conway#653; both were *discovered* by it, and
+both are the kind of thing this document exists to state before someone quotes
+a number that rests on them.
+
+**1. The load-wide denominator is not reproducible on small models.** It counts
+every wrapped call, which correctly includes the runtime's own traffic — module
+bring-up, the filesystem shim, the pthread pool — and that traffic is
+scheduling-dependent. Measured on `aggregate_master_voids.ifc` (25 KB), three
+runs of one binary:
+
+| Run | Load-wide alloc calls | `csg_boolean` in-scope | Share |
+|---|---:|---:|---:|
+| 1 | 2,710 | 1,113 | 41.1 % |
+| 2 | 4,260 | 1,113 | 26.1 % |
+| 3 | 3,108 | 1,113 | 35.8 % |
+
+The in-scope count is **identical every time**; all of the variance is in the
+unscoped remainder. On a fixture whose own work dominates the runtime's,
+the counter is exact — `nema-23-76mm.step` reported 316,607 load-wide and
+224,779 in-scope, **bit-identical across three runs**.
+
+**So a share is only meaningful when the load's own traffic dominates**, and it
+must be quoted with the run it came from. Whether this is a small-N property or
+specific to the MT node build's worker pool is **not separable on the current
+public corpus** — every IFC fixture in `data/` is under 25 KB. On D3D (43 M
+in-scope calls) a few thousand calls of runtime noise would be immaterial, but
+that is reasoning, not measurement.
+
+**2. `escaped` means "not freed inside this scope" — it does not mean
+"output".** The distinction is the whole of retraction 3 and it survives the
+fix. A persistent cache that grows inside a unit and never shrinks (the global
+`VertexWelder`; `CSGMesher::reset()`) escapes that unit by the only definition
+lifetime classification has, while being reusable scratch rather than the
+unit's product. The per-site split narrows *where* such caches sit, but on the
+CSG path it does not make them subtractable: the CSG kernel holds a second
+persistent cache (`CSGMesher`, a member of `CSG`) that shares the
+`csg_kernel` tag with the returned geometry, and the printed per-site escaped
+figure is an upper bound whenever any allocation went unowned. Getting unit
+output there needs **another tag**, not arithmetic — see defect 2 above. No
+version of this instrument can classify scratch versus output without being
+told which allocations are caches.
 
 ## The policy
 
@@ -644,18 +810,26 @@ it by default:
   written; item 2 has since **measured it and found it misdirected**. The path
   item 3 named makes 2,464 allocator calls on D3D; CSG composition makes
   43,185,966. That refutes the target without settling the ranking — "largest
-  lever" remains unproven in either direction, because no load-wide
-  denominator exists.
+  lever" remains unproven in either direction, because the D3D run predates the
+  load-wide denominator that would settle it.
 - The instrument itself now covers the solid-sweep and CSG call graphs, and
   every scope names its kind, so the "zero scoped faces" failure mode cannot
   recur silently on those paths. `src/ifc/alloc_telemetry_coverage.test.ts`
   pins the placements by matching each function body, not by grepping for the
   enum name.
 - Two defects in the instrument's **byte** accounting — untracked allocation
-  ownership in `onFree` (corrupts *peak*), and reusable global scratch counted
-  as retained (corrupts *retained*) — are documented and, crucially, their
-  reach is now measured rather than assumed: a clamp counter for the first, an
-  `AllocSite::VertexWeld` tag for the second. Both land on `csg_boolean` and
-  neither reaches the other three scope kinds on D3D. The **count** and
-  **cumulative-byte** columns are unaffected everywhere, and they are what the
-  conclusions above rest on.
+  ownership in `onFree` (corrupted *peak*), and reusable global scratch counted
+  as retained (corrupted *retained*) — were documented with their mechanisms
+  rather than deleted, and **conway#653 has since fixed the first and made the
+  second *narrower*, though not yet separable on the CSG path**. See the [verdict
+  table](#verdict-on-each-named-retraction-after-conway653) for what that does
+  to each retracted claim, and note the distinction it turns on: the machinery
+  landing and the measurement existing are separate events. **D3D has not been
+  re-run.** The **count** columns were unaffected throughout, and they are what
+  every conclusion above rests on.
+- conway#653 also added the load-wide denominator and the `died`/`escaped`
+  lifetime split, which between them make ranking and arena sizing *answerable*
+  — and surfaced two new limits in doing so: the denominator is not
+  reproducible on models whose runtime traffic dominates their own, and
+  `escaped` means "not freed in this scope", not "output". Both are stated
+  under [Still unmeasured](#still-unmeasured-and-what-it-would-take).
