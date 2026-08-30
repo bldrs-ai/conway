@@ -119,18 +119,21 @@ geometry is 89.92 % of the load
 ```
 
 **This table was assumed; §11 has now measured it, and the assumption was
-optimistic by about a factor of two.** Both rows are kept — the assumed one so
+optimistic by about 1.45× at N=4.** Both rows are kept — the assumed one so
 the correction is legible, the measured one because it is what should be
-planned against.
+planned against. *(The measured rows were themselves corrected once — an
+earlier draft of §11 read 0.864 / 0.476 off a harness whose duplication
+factor was wall time reported as CPU. §11's lede has the retraction; these
+are the numbers from the corrected instrument.)*
 
 | configuration | efficiency | geometry | total | speedup |
 |---|---|---:|---:|---:|
 | ~~geometry N=4~~ | ~~0.80 assumed~~ | ~~32.7 s~~ | ~~44.5 s~~ | ~~2.62×~~ |
 | ~~geometry N=8~~ | ~~0.65 assumed~~ | ~~20.1 s~~ | ~~31.9 s~~ | ~~3.65×~~ |
 | ~~geometry N=4 + parse N=4~~ | ~~0.80 / 0.857 assumed~~ | — | ~~37.8 s~~ | ~~**3.08×**~~ |
-| geometry N=2 | **0.864 measured on D3D** (§11) | 60.6 s | 72.3 s | **1.61×** |
-| geometry N=4 | **0.476 measured on D3D** (§11) | 55.0 s | 66.7 s | **1.75×** |
-| geometry N=4 + parse N=4 | 0.476 / 0.857 | 55.0 s | 59.9 s | **1.94×** |
+| geometry N=2 | **0.885 measured on D3D** (§11) | 59.1 s | 70.9 s | **1.64×** |
+| geometry N=4 | **0.552 measured on D3D** (§11) | 47.4 s | 59.2 s | **1.97×** |
+| geometry N=4 + parse N=4 | 0.552 / 0.857 | 47.4 s | 52.3 s | **2.23×** |
 | geometry N=8 | **unmeasurable here** — 4-core box; §11.6 | — | — | — |
 
 These are measured **on D3D itself**, not transferred from another model —
@@ -138,17 +141,20 @@ which matters, because §11.3's SKYLARK250 result (1/N efficiency, no partition
 at all) shows the model-to-model spread on this axis runs the whole way down.
 
 **Read the first two rows together before planning anything.** Going from two
-workers to four moves geometry 60.6 s → 55.0 s: **5.6 seconds of a 116-second
-load, 4.8 %.** Efficiency more than halves across that step (0.864 → 0.476)
-because duplicated work grows with N, so nearly the entire available win is
-already banked at N=2 — and N=2 needs two wasm instances and 4.0 GB rather
-than four and 6.2 GB (§11.7).
+workers to four moves geometry 59.1 s → 47.4 s: **11.7 seconds of a
+116-second load, 10.1 %.** Efficiency falls by 38 % across that step
+(0.885 → 0.552), so **N=2 banks 80 % of everything N=4 offers** — on two wasm
+instances and 4.0 GB rather than four and 6.2 GB (§11.7). *(An earlier draft
+put the N=2→N=4 step at 4.8 % and called the efficiency fall a halving. Both
+came from the pre-correction efficiencies; the conclusion is the same and the
+margin behind it is twice as wide.)*
 
 Both bounds on these numbers point the same way, so they are ceilings rather
 than midpoints: the partition measured **does not reproduce the
-single-worker output on D3D** (§11.5 — 285 geometries differ at N=4, and a
-fix makes shards see more, not less), and the load path measured has **no
-contended provider** where a windowed one would (§11.6).
+single-worker output on D3D** (§11.5 — 247 of its 46,166 geometries come out
+with different topology at N=4, and a fix makes shards see more, not less),
+and the load path measured has **no contended provider** where a windowed one
+would (§11.6).
 
 The assumed numbers were borrowed from the *parse* measurements, on the
 reasoning that parse sharding degraded from 0.94 at N=2 to 0.857 at N=4 while a
@@ -156,18 +162,24 @@ register-bound spin loop held 0.97 — a memory-bandwidth signature — and that
 geometry, being compute-heavy with a small working set, was plausibly a
 *better* scaler.
 
-**At N=4 it is a worse one, and the mechanism is not the one either guess
-named.** It is neither memory bandwidth nor a shared wasm heap: four
-independent box calibrations bracketing these runs read 0.984–0.990 at N=4,
-and each worker has its own linear memory, which *shrinks* with N (611 MB →
-207 MB each on D3D). It is **duplicated work** — geometry shared below the
-representation level gets rebuilt in every shard that touches it, at 2.03× the
-total CPU on D3D at N=4, and 97 % of D3D's loss is that rather than imbalance.
+**At N=4 it is a worse one, and the dominant term is the one neither guess
+named.** It is not a shared wasm heap — each worker has its own linear memory,
+which *shrinks* with N (611 MB → 207 MB each on D3D). It is mostly
+**duplicated work**: geometry shared below the representation level gets
+rebuilt in every shard that touches it, and the shards build **1.48× as many
+geometries** as one worker does on D3D at N=4. That is **70 %** of the loss.
 
-The root cause on D3D is sharper than "an imperfect key": **60.7 % of its
-product worklist (29,031 of 47,791) resolves no mapping source at all**, so
-most of the production model is sharded positionally. §11.4 has the
-decomposition.
+Memory bandwidth is *not* eliminated, though, which an earlier draft of §11
+claimed on the strength of a register-bound spin loop that by construction
+cannot see it. Measured against a bandwidth-bound kernel and against the
+harness's own replicated-parse control, the box accounts for roughly
+**8 of the 45 points** lost at N=4 — a minority, but not nothing.
+
+The root cause of the duplication on D3D is sharper than "an imperfect key":
+**60.7 % of its product worklist (29,031 of 47,791) resolves no mapping source
+at all**, so most of the production model is sharded positionally. §11.4 has
+the full decomposition — and note that on the three smaller models the shards
+rebuild **nothing at all**, so this mechanism is D3D's, not the corpus's.
 
 
 ## 3. The wall moved, and it is memory
@@ -720,20 +732,24 @@ spread thin enough (largest single site 4.3 MB) that it was not chased.
   PSB is 0.594 % and four times the size — comparing the two separates the
   terms, and the run in §8 is one env var away from PSB.
 - ~~**Does geometry parallelise better or worse than parse?**~~ **Answered in
-  §11, on D3D itself: comparable at N=2 (0.864 vs parse's 0.94) and much worse
-  at N=4 (0.476 vs 0.857)**, on a box calibrated at 0.984–0.990 across four
-  brackets. §6's worry about N workers sharing one 4 GiB linear memory does
-  not apply to the shape that ships: with separate module instances per worker
-  — what a no-COEP production has anyway — per-worker wasm memory *falls* with
-  N (D3D 611 → 207 MB each at N=4) and total wasm grew 1.36×.
-  **What is now open in its place:** why 60.7 % of D3D's products resolve no
-  mapping source, and whether that is reducible; and why sharding changes 285
-  of D3D's geometries (§11.5), which is a correctness defect rather than a
-  performance one.
+  §11, on D3D itself: comparable at N=2 (0.885 vs parse's 0.94) and much worse
+  at N=4 (0.552 vs 0.857)**, on a box calibrated at 0.981 (register-bound) and
+  0.951 (bandwidth-bound) at N=4 across five brackets. §6's worry about N
+  workers sharing one 4 GiB linear memory does not apply to the shape that
+  ships: with separate module instances per worker — what a no-COEP production
+  has anyway — per-worker wasm memory *falls* with N (D3D 611 → 207 MB each at
+  N=4) and total wasm grew 1.36×.
+  **What is now open in its place:** why 60.7 % of D3D's product worklist
+  resolves no mapping source, and whether that is reducible; why sharding
+  changes 247 of D3D's 46,166 geometries (§11.5), which is a correctness
+  defect rather than a performance one; and — new from §11.4 — whether the
+  whole-model demand prep every worker repeats can be hoisted and handed to
+  them, since on models under ~5 s of geometry it is the largest term and no
+  partition change touches it.
 - **Why did geometry take 4,256 s here against 104.7 s in §0?** Still open,
   but **§11.7 eliminates the leading candidate.** Both of those are browser
   runs; §11 ran the *same source shape as the slow one* — materialised, not
-  windowed — in Node and got **49.7 s**, i.e. 86× faster than §8 and 2.1×
+  windowed — in Node and got **36.0 s**, i.e. 118× faster than §8 and 2.9×
   faster than §0's windowed browser load. So "materialised rather than
   windowed" is not what costs 4,256 s, and nothing here inverts
   `memory-residency.md`. The cost is browser-side and specific to that
@@ -747,49 +763,78 @@ spread thin enough (largest single site 4.3 MB) that it was not chased.
   `Invalid typed array length` errors rather than an out-of-memory message.
   Worth knowing before a user finds it.
 
-## 11. Geometry parallel efficiency, measured — and §2's 0.80 does not hold
+## 11. Geometry parallel efficiency, measured — with a correction to this section's own first draft
 
-**Answer first, on D3D itself: geometry's parallel efficiency is 0.86 at N=2
-and 0.48 at N=4.** §2's assumed 0.80 at N=4 is wrong by a factor of 1.7. The
-projected whole-load speedup from parallelising geometry falls from **2.62× to
-1.75×**.
+**Read the correction before the numbers.** The first version of this section
+reported a **duplication factor of 2.03× on D3D at N=4** and built its whole
+mechanism claim on it. That number was **summed shard *wall* time**, printed
+under a comment calling it CPU. A wall ratio cannot separate "each shard did
+twice the work" from "each shard ran twice as slow under contention" — which
+is exactly the alternative it was used to eliminate.
 
-The sharper planning consequence is in the *shape* of the curve rather than
-its level. Efficiency more than halves between N=2 and N=4, so on D3D's
-104.7 s of geometry:
+The harness now counts the work itself as well as the time: geometries
+built and vertex floats built, summed over shards, against the single
+worker's own totals (`dupWork` / `dupVerts`), plus the whole-model demand prep
+every worker repeats (`dupPrep`). Re-measured on the same box, same models,
+same mode:
 
-- N=2 takes it to **60.6 s**
-- N=4 takes it to **55.0 s**
+| model, N=4 | `dupWall` (the old "duplication") | **`dupWork`** | what the old number was |
+|---|---:|---:|---|
+| **D3D** | 1.72× | **1.48×** | real duplication, overstated by a third |
+| MB-Khaya | 1.94× | **1.00×** | **not duplication at all** |
+| Schependomlaan | 3.17× | **1.00×** | **not duplication at all** |
+| Snowdon IFC4 | 1.84× | **1.05×** | **not duplication at all** |
 
-**Doubling from two workers to four buys 5.6 seconds of a 116-second load —
-4.8 %.** Whatever a geometry pool is worth, essentially all of it is available
-at N=2, and the machinery that makes N=4 work (four wasm instances, 6.2 GB of
-device memory, a merged scene, asset-keyed delta capture) is being paid for a
-twentieth of the load. That is the number to take into #635.
+So, plainly:
 
-The mechanism is not either of the two §2 guessed at. It is not memory
-bandwidth and it is not a shared wasm heap. It is **duplicated work**, and on
-D3D conway itself names the cause in a warning printed by every shard:
+- **Retained, corrected.** D3D *does* rebuild geometry under sharding. The
+  factor is **1.48×**, not 2.03×. That reconciles with the repo's own figure
+  from the other side: `ifc_api_proxy_ifc.ts` records **+38.1 % duplicated
+  assets on D3D at N=4** under this dispatch key, and 1.48 is near 1.38, not
+  near 2.03. The 2.03 had no in-repo counterpart and should have been chased
+  at the time.
+- **Retracted.** "Measured here: +77 % on MB-Khaya and +103 % on D3D" against
+  #394's predicted +40 %. MB-Khaya rebuilds **nothing** — its four shards
+  build 5,600 geometries between them, which is exactly what one worker
+  builds. Same for Schependomlaan. The correction comment was not "low by
+  half"; on three of four models it was high, and #394's prediction is not
+  contradicted by anything measured here.
+- **Retracted.** "97 % of D3D's N=4 loss is duplication and 3 % is
+  imbalance." The real split is **72 % duplication, 12 % per-geometry
+  slowdown, 9 % replicated demand prep, 7 % imbalance** (§11.4).
+- **Retracted.** "The missing 50 points are algorithmic, and nothing about
+  this box explains them." A register-bound spin loop is *by construction*
+  blind to a memory ceiling, so it never could have supported that. With a
+  bandwidth-bound kernel and with the harness's own replicated-parse control,
+  the box explains **about 5 of the 45 points** D3D loses at N=4 (4–9 across
+  three repetitions) — a minority, but not zero (§11.2).
+- **Unchanged.** §2's assumed 0.80 at N=4 still does not hold, the memory
+  result in §11.7 stands to the megabyte, and SKYLARK250 still does not shard.
 
-```
-[shard 0/4] 29031 of 47791 products have no placement key, so sharding is
-mostly positional and shared geometry will be rebuilt per shard.
-```
+**Answer first, on D3D itself, on the corrected instrument: geometry's
+parallel efficiency is 0.885 at N=2 and 0.552 at N=4.** The projected
+whole-load speedup from parallelising geometry is **1.97× at N=4**, against
+§2's assumed 2.62×.
 
-**60.7 % of D3D's product worklist has no mapping-source key at all.** For
-those products `geometryDispatchKey` falls back to the product's own
-`localID`, which is parse-order — so more than half of the production model is
-sharded *positionally*, and positional sharding on a model with shared
-assemblies rebuilds the shared geometry in every shard that touches it.
-Measured: **2.03× the total CPU at N=4.**
+The planning shape survives the correction and is milder than the first draft
+said. On D3D's 104.7 s of browser geometry:
+
+- N=2 takes it to **59.1 s**
+- N=4 takes it to **47.4 s**
+
+**Doubling from two workers to four buys 11.7 seconds of a 116-second load —
+10.1 %**, where the first draft said 4.8 %. N=2 still banks **80 %** of
+everything N=4 offers, on two wasm instances and 4.0 GB rather than four and
+6.2 GB (§11.7), so the recommendation into #635 is the same one; the margin
+behind it is twice as wide as reported.
 
 ### 11.1 What was measured, and on what
 
-`scripts/m3_worker_pool.mjs` (instrumented here — see §11.8). N
-`worker_threads`, each with **its own `IfcAPI`, its own wasm instance and its
-own linear memory** — deliberately the no-SharedArrayBuffer shape, because
-Share's `netlify.toml` omits COEP on purpose (§6) and the MT/SAB build is not
-what production could ship. Each worker opens the model, claims a shard with
+`scripts/m3_worker_pool.mjs` (fixed here — see §11.8). N `worker_threads`,
+each with **its own `IfcAPI`, its own wasm instance and its own linear
+memory** — deliberately the no-SharedArrayBuffer shape, because Share's
+`netlify.toml` omits COEP on purpose (§6) and the MT/SAB build is not what
+production could ship. Each worker opens the model, claims a shard with
 `SetGeometryShard`, and pumps to completion.
 
 Sharding is `geometryDispatchKey` / `shardOfDispatchKey` exactly as
@@ -800,178 +845,335 @@ Efficiency is `T₁ / (N × Tₙ)` over the **geometry phase only** (`open`
 excluded, so parse and file read are not diluting it), with `Tₙ` the slowest
 shard — makespan, which is what wall clock actually becomes.
 
+**Three duplication factors, and they are not interchangeable.** This is the
+distinction the first draft did not have:
+
+| reported | what it is | what it can and cannot say |
+|---|---|---|
+| `dupWall` | Σ shard geometry **wall** time ÷ T₁ | how much shard-time the partition spent. Cannot say why. |
+| `dupWork`, `dupVerts` | geometries and vertex floats **built**, Σ over shards ÷ the single worker's | whether the shards did more *work*. Immune to speed. |
+| `dupPrep` | first-batch time, Σ over shards ÷ the single worker's | whole-model demand prep, which every worker repeats in full |
+
+`dupPrep` is there because the first `ExtractGeometryBatch` call is where
+`ensureDemandWorklists_` runs — the `IfcProduct` walk,
+`aggregateTargetLocalIDs()` over every `IfcRelAggregates`, and
+`computeDispatchKeys` over the resulting worklist. **A shard does not shrink
+any of it**, and it sits inside the window that gets read as geometry. It is
+a third thing summed shard time can be, and neither of the other two can see
+it.
+
 **Proof the work happened.** A timing line cannot distinguish a fast run from
-a skipped one, so every run reports the geometry it actually built, deduped
-across shards:
+a skipped one, so every run reports the geometry it actually built, by
+geometry ID across shards:
 
 | | D3D, this harness at N=1 | D3D, §0's browser load |
 |---|---:|---:|
 | vertices | **3,204,498** | 3,204,852 |
 | triangles | **2,452,715** | 2,453,022 |
-| unique geometries | 46,166 | — |
+| unique geometries by ID | 46,166 | — |
 
-**0.011 % apart on both counts**, and byte-identical across four separate
-invocations. The run is real, and it is the same model: `FILE_NAME` reads
-`D3D_POE 03-2-101_123_0002_18.0_Tekla model_03-2-101_123.ifc`, Tekla
-Structures 2023, IFC4, 223,990,340 bytes = 213.6 MiB.
+**0.011 % apart on both counts**, and identical across every N=1 invocation in
+both measurement sessions. The run is real, and it is the same model:
+`FILE_NAME` reads `D3D_POE 03-2-101_123_0002_18.0_Tekla
+model_03-2-101_123.ifc`, Tekla Structures 2023, IFC4, 223,990,340 bytes =
+213.6 MiB.
 
-### 11.2 Box calibration
+### 11.2 Box calibration — and what a spin loop cannot calibrate
 
-A register-bound integer spin loop, N separate **processes**, no allocation and
-no memory traffic, run immediately before and immediately after each block of
-geometry runs. Same instrument as M2's (which read 0.995 / 0.969 on its box).
+Five brackets, run immediately before and immediately after each block of
+geometry runs, N separate **processes**. Two kernels now, because one of them
+was being asked a question it cannot answer:
 
-| bracket | N=2 | N=4 | N=1 / N=2 / N=4 medians |
-|---|---:|---:|---|
-| before the model sweep | 0.997 | 0.990 | 20 745 / 20 802 / 20 956 ms |
-| after the model sweep | 0.997 | 0.987 | 20 860 / 20 932 / 21 134 ms |
-| before D3D | 1.003 | 0.988 | 20 914 / 20 860 / 21 168 ms |
-| after D3D | 0.991 | 0.984 | 20 782 / 20 971 / 21 111 ms |
+- **`spin`** — register-bound integer loop, no allocation, no memory traffic.
+  Same instrument as M2's (which read 0.995 / 0.969 on its box).
+- **`stream`** — sequential reads over a **256 MiB per-process** working set,
+  far past any last-level cache, so it is bound by DRAM bandwidth. **New
+  here.** The spin loop never touches memory, so it is *by construction*
+  incapable of detecting a memory-bandwidth ceiling; the first draft used it
+  to rule one out anyway.
 
-Idle box throughout — load average 0.02–1.9 at each bracket, no swap, 12.8 GB
-or more free. Four independent brackets agree to 0.012 at N=2 and 0.006 at
-N=4. **The hardware gives back 98.4–99.0 % at N=4; geometry gives back 48 %.
-The missing 50 points are algorithmic, and nothing about this box explains
-them.** This box is *better* than M2's at N=4 (≈0.986 vs 0.969), so the
-geometry number is measured against a stricter ceiling than parse was, not a
-more forgiving one.
+| bracket | `spin` N=2 | `spin` N=4 | `stream` N=2 | `stream` N=4 |
+|---|---:|---:|---:|---:|
+| before the model sweep | 0.999 | 0.982 | 0.963 | 0.951 |
+| after the model sweep | 0.989 | 0.971 | 0.957 | 0.980 |
+| before D3D | 0.997 | 0.981 | 0.981 | 0.935 |
+| after D3D | 0.993 | 0.981 | 0.983 | 0.923 |
+| after SKYLARK250 | 0.992 | 0.983 | 0.980 | 0.958 |
+| **median** | **0.993** | **0.981** | **0.980** | **0.951** |
+
+Idle box throughout — load average 0.6–4.1 at each bracket (the higher
+readings are the previous block's decay, taken before the first timed spin),
+no swap, 14.4 GB or more free. The children now start behind a **ready/go
+barrier**, so fork and Node boot are outside the timed window; without it the
+first child spins uncontended for the whole boot skew and the ceiling comes
+out optimistic by about the same order as the deficit being measured.
+
+**The box is not neutral, and the spin loop could not have told us.** At N=4 a
+register-bound loop gives back 98.1 % and a DRAM-bound one gives back 95.1 %.
+Three points of ceiling exist that the first draft's instrument was
+structurally unable to see.
+
+**A third calibration, and the most relevant one, is inside the harness
+already.** The `open` phase is *identical work in every worker* — each opens
+the whole file, with no shard applied at all — so any wall inflation at N is
+pure contention on a real conway workload:
+
+| model | `open` N=1 | N=2 | N=4 | N=4 inflation |
+|---|---:|---:|---:|---:|
+| **D3D** | **3.8 s** | **3.8 s** | **4.7 s** | **1.24×** |
+| SKYLARK250 | 4.1 s | 4.4 s | 5.1 s | 1.24× |
+| Snowdon IFC4 | 0.8 s | 0.8 s | 1.0 s | 1.25× |
+| Schependomlaan | 0.7 s | 0.8 s | 1.2 s | 1.71× |
+| MB-Khaya | 0.4 s | 0.4 s | 0.8 s | 2.0× |
+
+(The two multi-second rows are the trustworthy ones; the sub-second ones are
+at the harness's 0.1 s print resolution.) **Four concurrent workers doing
+identical conway work take 1.24× as long as one** — an effective ceiling of
+**0.81**, not 0.98. So the honest statement is: this box gives back somewhere
+between 0.81 and 0.98 at N=4 depending on how memory-hungry the kernel is,
+and §11.4 measures where geometry actually falls in that range: **1.09× per
+geometry on D3D at N=4** (1.07–1.15 across three repetitions), i.e. an
+effective 0.92. **About 5 of the 45 points D3D loses at N=4 are the box**, 4
+to 9 depending on the repetition. The remaining ~40 are algorithmic. That is a
+weaker claim than "nothing about this box explains them", and it is the one
+the evidence supports.
 
 ### 11.3 The numbers
 
-Payload digest off (see §11.8 for why, and for the digest-on set). Median
-first, full spread in parentheses.
+Payload digest off (see §11.8). Median of three repetitions per model, full
+spread in parentheses.
 
 | model | file | geometry T₁ | N=2 efficiency | N=4 efficiency | runs |
 |---|---:|---:|---|---|---:|
-| **D3D (IFC4, Tekla)** | **213.6 MB** | **49.7 s** | **0.864** (0.863–0.865) | **0.476** (0.438–0.478) | 2 / 3 |
-| MB-Khaya (IFC2X3, Archicad) | 31.4 MB | 3.5 s | 0.764 (0.741–0.775) | 0.471 (0.450–0.517) | 3 / 3 |
-| Schependomlaan | 47.0 MB | 1.8 s | 0.686 (0.681–0.688) | 0.347 (0.322–0.375) | 3 / 3 |
-| Snowdon Towers (IFC4, Revit) | 79.3 MB | 5.9 s | 0.743 (0.724–0.776) | 0.468 (0.451–0.475) | 3 / 3 |
-| SKYLARK250 design-kit | 381.7 MB | 36.8 s | 0.522 | 0.252 | 1 / 1 |
+| **D3D (IFC4, Tekla)** | **213.6 MB** | **36.0 s** | **0.885** (0.873–0.908) | **0.552** (0.530–0.562) | 3 / 3 |
+| MB-Khaya (IFC2X3, Archicad) | 31.4 MB | 2.6 s | 0.724 (0.724–0.755) | 0.478 (0.477–0.479) | 3 / 3 |
+| Schependomlaan | 47.0 MB | 1.4 s | 0.665 (0.664–0.678) | 0.295 (0.284–0.303) | 3 / 3 |
+| Snowdon Towers (IFC4, Revit) | 79.3 MB | 4.4 s | 0.734 (0.669–0.782) | 0.425 (0.396–0.447) | 3 / 3 |
+| SKYLARK250 design-kit¹ | 381.7 MB | 25.8 s | 0.552 | 0.292 | 1 / 1 |
 
-Spreads are tight — no configuration spans more than 0.07, and D3D's N=2 spans
-0.002. This is not a noisy measurement being over-read.
+¹ One run, and the only one in this table not taken on a quiet box — a few
+seconds of unrelated smoke runs overlapped its N=1 phase. It is kept because
+its result is structural rather than timed: every placement lands in one
+shard, so its efficiency is 1/N by construction and no timing precision
+changes it. Its absolute `T₁` (25.8 s against the first draft's 36.8 s) should
+be trusted least of any number here.
 
-**D3D is the row that matters** (§0's load, 89.92 % geometry, the production
-shape) and it is the reason the earlier draft of this section should not be
-trusted where it extrapolated: D3D's N=2 efficiency of 0.864 is *better* than
-any of the small models, while its N=4 of 0.476 sits right in the middle of
-them. Extrapolating the small-model median (0.74 at N=2) to D3D would have
-understated N=2 by 0.12 and, more importantly, would have hidden the collapse
-between N=2 and N=4 that is this section's main planning result.
+**A level shift against the first draft, reported rather than smoothed
+over.** D3D's `T₁` reads **36.0 s** here (39.9 / 35.7 / 36.0 across three
+invocations, the first cold) against **49.7 s** in the previous session, and
+its efficiencies come out correspondingly better (0.885 / 0.552 against 0.864
+/ 0.476). The calibration brackets do *not* show a faster box — this
+session's `spin` medians are marginally **worse** (0.981 vs 0.984–0.990 at
+N=4) — so the shift is not explained by anything measured. Two candidates,
+neither confirmed: cross-session variance on a shared host, and the old
+`spin_calibrate.mjs` leaking children on a failed sweep (it had no cleanup
+path; fixed in §11.8), which would have left spinners running at full tilt
+through a later measurement. **Every ratio in this section is computed within
+one invocation against that invocation's own `T₁`**, so the ratios do not
+depend on the level; the absolute seconds do, and should not be compared
+across sessions.
+
+**D3D is the row that matters** — §0's load, 89.92 % geometry, the production
+shape. Its N=2 efficiency of 0.885 is the best in the set, and its N=4 of
+0.552 is also the best. Extrapolating from the small models would still have
+been wrong, in the same direction as before.
 
 **SKYLARK250 is not a data point on the same curve; it is a different
-failure.** It did not shard at all: 2,924 placements, and at both N=2 and N=4
-**every one landed in shard 0** — the other workers opened the model, found
-nothing to do, and exited. 0.252 at N=4 is exactly 1/N, the signature of no
-parallelism rather than of bad parallelism. Its geometry hangs off
-`IfcRelAggregates`, of which the model has **two**, and aggregate targets are
-excluded from the product worklist and dispatched on the *relationship's* key
-(`ifc_api_proxy_ifc.ts:2362-2364`). Two aggregates is a hard ceiling of two
-shards, and one of them carries essentially everything.
+failure**, and the corrected instrument makes that sharper rather than
+softer. It did not shard at all: 2,924 placements, and at both N=2 and N=4
+**every one landed in shard 0** — `per-shard=2924/0` and `2924/0/0/0`, with
+`shard-built` the same shape. Its `dupWork` is **1.00** and its `dupWall` at
+N=4 is **0.86**, i.e. below
+one: the single working shard ran slightly *faster* than the reference,
+because the other three workers had nothing to do and never contended. 0.292
+at N=4 is 1/N, the signature of no parallelism rather than of bad
+parallelism. Its geometry hangs off `IfcRelAggregates`, of which the model has
+**two**, and aggregate targets are excluded from the product worklist and
+dispatched on the *relationship's* key (`ifc_api_proxy_ifc.ts:2362-2364`).
+Two aggregates is a hard ceiling of two shards, and one of them carries
+essentially everything.
 
 **D3D does not have that problem**, which was worth checking because it would
 have outranked the efficiency number. Probed directly:
 
-| model | products | distinct product keys | `IfcRelAggregates` | aggregates per shard, N=4 |
-|---|---:|---:|---:|---|
-| D3D | 229,320 | 204,794 | **27,766** | 6 872 / 7 051 / 6 870 / 6 973 |
-| Snowdon IFC4 | 7,115 | 4,106 | 86 | 30 / 18 / 17 / 21 |
-| MB-Khaya | 2,872 | 2,384 | 28 | 4 / 7 / 7 / 10 |
-| SKYLARK250 | 2,000 | 2,000 | **2** | 1 / 1 / 0 / 0 |
+| model | `IfcProduct` total | in the demand **product worklist** | distinct product keys | `IfcRelAggregates` | aggregates per shard, N=4 |
+|---|---:|---:|---:|---:|---|
+| D3D | 229,320 | **47,791** | 204,794 | **27,766** | 6 872 / 7 051 / 6 870 / 6 973 |
+| Snowdon IFC4 | 7,115 | — | 4,106 | 86 | 30 / 18 / 17 / 21 |
+| MB-Khaya | 2,872 | — | 2,384 | 28 | 4 / 7 / 7 / 10 |
+| SKYLARK250 | 2,000 | — | 2,000 | **2** | 1 / 1 / 0 / 0 |
+
+**The two D3D product counts are different populations, and dividing one by
+the other means nothing.** `collectDemandCandidates_` builds the product
+worklist as `model.types(IfcProduct)` **minus** `aggregateTargetLocalIDs()`
+(`ifc_api_proxy_ifc.ts`), because aggregate targets are extracted by the
+rel-aggregates pass instead, on the relationship's key. So D3D's 229,320
+products are 47,791 worklist products plus **181,529 aggregate targets**
+reached through the 27,766 relationships. The keyless share quoted below —
+and everywhere in this section — is a share of the **47,791**, which is the
+population `geometryDispatchKey` is called on and the one
+`parallel-load-pipeline.md` §5 means by "the model with 47 k products".
 
 D3D's occupancy is genuinely balanced in both axes, and the delivered work
 confirms it: **133,887 / 142,491 / 143,736 / 142,253** placements per shard, a
 7 % spread. So aggregate count is a real partition floor that
 `geometry_dispatch.ts` cannot see, SKYLARK250 sits on it, and **D3D does
-not** — D3D's loss is duplication, not floor.
+not**.
 
-### 11.4 Where the points go: duplication, then imbalance
+### 11.4 Where the points go: duplication, then contention, then prep, then imbalance
 
-The harness reports summed shard CPU as well as makespan, and the two separate
-cleanly. Duplication caps efficiency at `1/dup` before balance is considered
-at all.
+The harness reports summed shard time, summed shard *work*, and summed shard
+*prep*, and the four terms separate cleanly. Everything below is D3D at N=4,
+from the repetition whose efficiency **is** the median of the three
+(`T₁ = 39.9 s`, so the terms and the headline number are one self-consistent
+run rather than four separately-medianed ones):
 
-| model, N=4 | duplication (Σ shard CPU ÷ T₁) | ceiling that implies | measured | gap = imbalance |
+| term | measured | efficiency after it | cost | share of the loss |
 |---|---:|---:|---:|---:|
-| **D3D** | **2.03×** | **0.493** | **0.476** | **0.017** |
-| MB-Khaya | 1.77× | 0.565 | 0.471 | 0.094 |
-| Schependomlaan | 2.61× | 0.383 | 0.347 | 0.036 |
-| Snowdon IFC4 | 1.68× | 0.595 | 0.468 | 0.127 |
+| perfect N=4 | — | 1.000 | — | — |
+| **duplicated geometry** | `dupWork` **1.48×** (68,192 built vs 46,166) | 0.677 | **0.323** | **72 %** |
+| **per-geometry slowdown** | **1.09×** (0.922 ms vs 0.847 ms each) | 0.622 | 0.055 | 12 % |
+| **replicated demand prep** | 5.8 s summed vs 0.8 s (`dupPrep` 7.6×) | 0.581 | 0.041 | 9 % |
+| **imbalance** | 18.1 / 17.3 / 16.5 / 16.8 s | **0.552** | 0.029 | 7 % |
 
-At N=2 duplication is 1.15× on D3D and 1.17–1.38× on the others; at N=4 it is
-1.68–2.61×. **It grows with N, and it is the dominant term at both.**
+The three repetitions agree on the largest term to the third decimal —
+`dupWork` is **1.48× in every one** — and spread the smaller ones: slowdown
+costs 0.043–0.089, prep 0.033–0.041, imbalance 0.024–0.037.
 
-**D3D is the cleanest case in the set: 97 % of its N=4 loss is duplication and
-3 % is imbalance.** Its four shards ran 25.2/24.7/23.3/24.2 s — near-perfect
-balance — and still returned 0.476, because balance cannot help when the same
-geometry is being built twice. Schependomlaan makes the same point
-independently at 1.4/1.4/1.2/1.2 s for 0.347.
+The first draft assigned 97 % of this to duplication and 3 % to imbalance. It
+was right that duplication dominates and right that a work-stealing queue
+will not fix it — **but the number was 2.03× wall, and the work is 1.48×.**
 
-Two consequences for planning:
+The same decomposition on the other models is where the first draft goes from
+overstated to wrong:
 
-1. **This is not a scheduling problem and a work-stealing queue will not fix
-   it.** On D3D better balance is worth 0.017. Removing duplication is worth
-   the other half of the load. The lever is a partition that sees
-   sub-representation sharing — or a geometry cache shared across workers,
-   which separate module instances, the only shape available without COEP,
-   structurally cannot have.
-2. **Efficiency will keep falling as N rises**, because duplication rose
-   monotonically from N=2 to N=4 on every model. Whatever N=8 is, it is below
-   the naive extrapolation. It was not measured — see §11.6.
+| model, N=4 | `dupWall` | `dupWork` | per-geometry slowdown | prep summed / T₁ | imbalance |
+|---|---:|---:|---:|---:|---:|
+| **D3D** | 1.72× | **1.48×** | 1.09× | 5.8 s / 39.9 s | 0.029 |
+| Snowdon IFC4 | 1.84× | **1.05×** | 1.32× | 2.2 s / 4.4 s | 0.127 |
+| MB-Khaya | 1.94× | **1.00×** | 1.33× | 1.8 s / 2.6 s | 0.020 |
+| Schependomlaan | 3.17× | **1.00×** | 2.29× | 1.1 s / 1.4 s | 0.034 |
 
-`parallel-load-pipeline.md` §5 predicted this shape and named the limit:
-`geometryDispatchKey` removes duplication at the *representation* level, and
-the sharing that remains lives below it — profiles, boolean operands, void
-geometry — where an attribute walk cannot see. #394's correction comment
-priced that residue at +15 % CPU on PSB and +40 % on MB-Khaya at N=4.
-Measured here: **+77 % on MB-Khaya and +103 % on D3D.** The correction comment
-had the right shape and was low by half.
+**On three of the four models, nothing is rebuilt.** Their shards build
+exactly the geometries one worker builds — 5,600 on MB-Khaya, 4,761 on
+Schependomlaan, to the unit — and their `dupWall` is entirely (a) whole-model
+demand prep that every worker repeats, which on Schependomlaan is **79 % of
+`T₁` summed across four shards**, and (b) each shard running slower per unit
+of work. Neither is fixed by a better partition, and **the lever the first
+draft named — a partition that sees sub-representation sharing, or a shared
+geometry cache — would buy those three models nothing at all.**
 
-What §5 did *not* predict is the 60.7 % keyless share on D3D. That is not the
-residue of an imperfect key; it is the key not applying to most of the model.
-**Any work on this should start by finding out why 29,031 of 47,791 products
-resolve no mapping source**, because a partition that cannot see 60 % of the
-worklist is not going to be fixed by refining the 40 % it can.
+Two consequences for planning, restated:
 
-### 11.5 Sharding changes D3D's output, and that is a defect
+1. **On D3D, removing duplication is still the biggest single lever** — 0.323
+   of an available 0.448 — and it is still not a scheduling problem: better
+   balance is worth 0.029. That part of the first draft survives, at 72 %
+   rather than 97 %.
+2. **On models under ~5 s of geometry, the lever is demand prep, not the
+   partition.** Prep is whole-model work done N times; it grows with N by
+   construction and no partition change touches it. Hoisting it — computing
+   worklists and dispatch keys once and handing them to the workers — is a
+   different piece of work from anything §11 previously pointed at, and on
+   Schependomlaan it is most of the loss.
+
+**A rule from the first draft that does not survive.** It said "duplication
+caps efficiency at `1/dup` before balance is considered at all". That assumes
+per-unit cost is constant, and it is not: **D3D at N=2 measures `dupWork`
+1.23× and efficiency 0.885, which is above the 0.814 that rule would cap it
+at**, because each shard's smaller working set makes it **10 % faster per
+geometry** than the single worker. Duplication is a term, not a ceiling.
+
+`parallel-load-pipeline.md` §5 predicted the *shape* on D3D and named the
+limit: `geometryDispatchKey` removes duplication at the *representation*
+level, and the sharing that remains lives below it — profiles, boolean
+operands, void geometry — where an attribute walk cannot see. Its published
+figure is **D3D duplicated assets 83,177 round-robin → 81,639 with this key**,
+and `ifc_api_proxy_ifc.ts` prices the key's residue at **+38.1 % on D3D at
+N=4**. `dupWork` measures **+48 %** on the same model, key and worker count.
+Those are the same finding from two directions, differing by the ~10 % the
+harness counts as separate geometries where the asset counter counts assets,
+plus the 264 divergent encodings of §11.5. **The 2.03× of the first draft had
+no such counterpart, and that mismatch was the signal it was the wrong
+quantity.**
+
+What §5 did *not* predict is the 60.7 % keyless share on D3D. Conway names it
+in a warning printed by every shard:
+
+```
+[shard 0/4] 29031 of 47791 products have no placement key, so sharding is
+mostly positional and shared geometry will be rebuilt per shard.
+```
+
+**60.7 % of D3D's product worklist** — of the 47,791, not of the 229,320 —
+**has no mapping-source key at all.** For those products `geometryDispatchKey`
+falls back to the product's own `localID`, which is parse-order, so more than
+half of the production model is sharded *positionally*. That is consistent
+with a 1.48× rebuild and it remains the thing to chase: **a partition that
+cannot see 60 % of the worklist is not going to be fixed by refining the 40 %
+it can.**
+
+### 11.5 Sharding changes D3D's geometry — 247 of 46,166, and nothing is lost
 
 At N=2 and N=4 on D3D the union check **fails**, deterministically and
-identically across repetitions:
+identically across repetitions. The first draft reported this at the level of
+the harness's payload *strings*, which double-counts: an entry is
+`id:vertexFloats:indexCount:digest`, so one geometry two shards built
+differently is two members of that set. Counted by geometry **ID**, and in
+**both** directions:
 
-| configuration | placements | missing | extra | payload entries not in the reference | unique geometries | vertices |
-|---|---:|---:|---:|---:|---:|---:|
-| N=1 (reference) | 562,367 | — | — | — | 46,166 | 3,204,498 |
-| N=2 | 562,367 | 0 | 0 | **188** | 46,317 | 3,230,586 |
-| N=4 | 562,367 | 0 | 0 | **285** | 46,430 | 3,256,938 |
+| configuration | placements | missing | extra | **duplicated** | geometry IDs | IDs the reference never built | IDs no shard reproduced | **IDs built differently** | payload encodings | encodings not in the reference | reference encodings not reproduced |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| N=1 (reference) | 562,367 | — | — | — | 46,166 | — | — | — | 46,166 | — | — |
+| N=2 | 562,367 | 0 | 0 | **0** | **46,166** | **0** | **0** | **181** | 46,317 | 188 | **37** |
+| N=4 | 562,367 | 0 | 0 | **0** | **46,166** | **0** | **0** | **247** | 46,430 | 285 | **21** |
 
-**Every placement is correct** — same count, nothing lost, nothing duplicated,
-identical express IDs, colours and transforms. What differs is the *geometry
-behind* some of them: at N=4, 285 entries carry vertex or index counts the
-single-worker load never produced, and the model ends with 264 more unique
-geometries and 1.6 % more vertices.
+Three corrections to the first draft's reading of this, all in the direction
+of a *smaller and better-localised* defect:
 
-Four things pin this down as real rather than instrument noise:
+- **Retracted: "the model ends with 264 more unique geometries and 1.6 % more
+  vertices."** It ends with **the same 46,166 geometries**. Nothing is lost,
+  nothing is invented — every geometry ID the single worker builds is built
+  by some shard, and no shard builds an ID the single worker did not.
+  Vertices come out at 3,201,959 against 3,204,498, **0.08 % fewer**, and even
+  that is an artifact of which encoding the harness picks for a divergent ID,
+  so the honest statement is "unchanged to within a tenth of a percent". The
+  "+264 geometries / +1.6 % vertices" was the string set being read as the
+  model.
+- **New, and it was invisible before.** The old counter was one-directional —
+  it counted only entries the reference lacked — so a pool that *lost*
+  geometry would have reported zero. Counted both ways, **37 reference
+  encodings at N=2 and 21 at N=4 are never reproduced by any shard.** Since no
+  *ID* is missing, these are the reference's version of a geometry that came
+  out differently, not a hole; but the counter that would have shown a hole
+  now exists.
+- **New.** Placements are exact at every N and, now that duplicates are
+  counted rather than inferred from set differences, **provably not
+  duplicated**: `missing 0, extra 0, duplicated 0`. The old missing/extra pair
+  were set differences and would both have read 0 for a partition where every
+  shard did everything.
 
-- **It does not happen on the other models.** MB-Khaya at N=2 builds
-  297,418 vertices / 251,242 triangles / 5,600 geometries, identical to its
-  N=1 load; Schependomlaan likewise at 251,444 / 169,706 / 4,761, and that one
-  through the digest path, so the bytes match too. The harness reports "OK" on
-  those in exactly the runs that report "FAIL" on D3D. Whatever this is, it is
-  a property of D3D's geometry, not of the instrument.
+So the defect is: **247 of 46,166 geometries (0.54 %) come out with different
+topology under a four-way shard, and everything else about the output is
+exact.** Four things pin it down as real rather than instrument noise:
 
-- **N=1 is deterministic.** Four separate invocations produced
-  3,204,498 / 2,452,715 / 46,166 to the vertex.
-- **The divergence is deterministic too**, and reproduces exactly: 188 at N=2
-  and 285 at N=4 in both repetitions.
-- **It scales with N** — more shards, more divergence — which is the signature
-  of a shard-visibility effect, not of floating-point jitter. The counts
-  differ, so this is different *topology*, not the same topology with
-  different values.
+- **It does not happen on the other models.** MB-Khaya, Schependomlaan and
+  Snowdon report `OK` with identical vertex, triangle and by-ID geometry
+  counts at every N, in exactly the runs that report `FAIL` on D3D. Snowdon
+  is the instructive one: its `dupWork` is 1.05, so its shards **do** rebuild
+  shared geometry — and every rebuild comes out byte-identical, so the union
+  still matches. Duplication and divergence are independent axes, and only
+  the corrected instrument reports both.
+- **N=1 is deterministic** — 3,204,498 / 2,452,715 / 46,166 across every
+  invocation in two sessions.
+- **The divergence is deterministic too**, and reproduces exactly: 181 at N=2
+  and 247 at N=4 in all three repetitions.
+- **It scales with N** — the signature of a shard-visibility effect, not of
+  floating-point jitter. The counts differ, so this is different *topology*,
+  not the same topology with different values.
 
-The likely area is the interaction between shard membership and the
-void/boolean handling that `ifc_api_proxy_ifc.ts` documents around
-`aggregateTargetLocalIDs` and master rel-voids: a shard that cannot see the
+The likely area is unchanged: the interaction between shard membership and
+the void/boolean handling that `ifc_api_proxy_ifc.ts` documents around
+`aggregateTargetLocalIDs` and master rel-voids — a shard that cannot see the
 voiding element produces the uncut solid. That is a hypothesis from the shape
 of the evidence, **not something measured here**, and it should be run down
 before any of this ships.
@@ -981,15 +1183,19 @@ Two consequences worth stating plainly:
 1. **The efficiency numbers in §11.3 are measured on a partition that does not
    reproduce the single-worker output on D3D.** A corrected partition has to
    make shards see more, not less, so if anything it does *more* work per
-   shard. **0.476 is therefore an optimistic bound, not a midpoint.**
+   shard. **0.552 is therefore an optimistic bound, not a midpoint.** (The
+   defect is 0.54 % of geometries, so the correction it implies is small —
+   which the first draft could not say, because it thought the model had
+   gained 264 geometries and 1.6 % of its vertices.)
 2. **This had never been detectable.** The union check's failure path carried
    a latent bug since #536: `process` in that script is an ESM *namespace*
    (`import * as process`), whose properties are read-only, so
    `process.exitCode = 1` threw a `TypeError` and killed the run before it
-   printed a single timing. Every prior "OK" was real, but the first genuine
-   mismatch — D3D's — surfaced as a crash with no numbers. Fixed here (assign
-   through `globalThis`, report before flagging, and print what actually
-   differs).
+   printed a single timing. Fixed in the previous commit on this branch. **The
+   same trap was still live in `spin_calibrate.mjs`** and was found by running
+   it: `node:process` exports `argv`, `env`, `exit`, `exitCode` and `hrtime`
+   by name but **not `on` or `send`**, so the new IPC barrier `TypeError`d in
+   the child on first use. Both now go through `globalThis.process`.
 
 ### 11.6 What this does not say
 
@@ -1002,14 +1208,21 @@ run and §2's N=8 row is marked unmeasurable rather than left looking pending.
 no windowed provider, no store-backed open. Its bias is *favourable* to
 parallelism: every worker holds a private copy and contends with no one for
 I/O, where a shared windowed provider would add a contended resource this
-configuration does not have. Combined with §11.5's optimism, **0.476 should be
+configuration does not have. Combined with §11.5's optimism, **0.552 should be
 read as "at best" rather than "about".**
 
+**The per-geometry slowdown term is a residual, not a mechanism.** §11.4
+computes it as what is left of summed shard time after duplication and prep
+are removed, so it collects memory-bandwidth contention, cache pressure,
+scheduler effects and anything else that makes a shard slower per unit of
+work. The `stream` calibration and the `open` control (§11.2) both bound it
+from outside and agree with its size; neither identifies it.
+
 **A correction to the earlier draft of this section, recorded so the next
-person does not repeat it.** It claimed D3D was "not in `test-models/`, not
-anywhere on the filesystem" and extrapolated 0.47 to D3D from four other
-models. **That was wrong, and the search was the thing at fault.** There are
-**two** model clones on this box:
+person does not repeat it.** An earlier draft claimed D3D was "not in
+`test-models/`, not anywhere on the filesystem" and extrapolated 0.47 to D3D
+from four other models. **That was wrong, and the search was the thing at
+fault.** There are **two** model clones on this box:
 
 | path | size | contains |
 |---|---:|---|
@@ -1017,28 +1230,41 @@ models. **That was wrong, and the search was the thing at fault.** There are
 | `/home/user/test-models-private` | 3.9 GB | the private, LFS-backed corpus — **`ifc/ryuga/D3D.ifc`**, and the `sp-*` set |
 
 A `find` rooted at the public clone reports D3D missing and looks conclusive.
-**Check both roots.** The extrapolation this forced was exactly the inference
-§11.3's SKYLARK250 result says is unsafe, and measuring D3D changed the
-headline: its N=2 efficiency is 0.12 higher than the extrapolated value, and
-the N=2→N=4 collapse that §11's lede now leads with was invisible without it.
+**Check both roots.**
 
 ### 11.7 Memory is not the wall, and Node is not the slow path
 
 **Memory.** §4 asked for this before anything got built, and the trap — that N
-instances multiply D3D's peak and OOM — **does not materialise.**
+instances multiply D3D's peak and OOM — **does not materialise.** These
+numbers reproduce the first draft's to within a percent on a corrected
+instrument (the wasm figure now goes through `wasmHeapByteLength`, which
+cannot lag a growth step behind the real heap — #485):
 
 | model | RSS N=1 | RSS N=2 | RSS N=4 | ×N=4 | wasm N=1 | wasm N=2 | wasm N=4 | ×N=4 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| **D3D** | **3 045 MB** | **4 008 MB** | **6 220 MB** | **2.04×** | **611 MB** | **716 MB** | **828 MB** | **1.36×** |
-| MB-Khaya | 590 MB | 830 MB | 1 348 MB | 2.28× | 102 MB | 130 MB | 198 MB | 1.94× |
-| Schependomlaan | 475 MB | 822 MB | 1 528 MB | 3.22× | 74 MB | 100 MB | 165 MB | 2.23× |
-| Snowdon IFC4 | 635 MB | 978 MB | 1 757 MB | 2.77× | 209 MB | 245 MB | 298 MB | 1.43× |
+| **D3D** | **3 045 MB** | **4 020 MB** | **6 208 MB** | **2.04×** | **611 MB** | **716 MB** | **828 MB** | **1.36×** |
+| MB-Khaya | 589 MB | 845 MB | 1 336 MB | 2.27× | 102 MB | 130 MB | 198 MB | 1.94× |
+| Schependomlaan | 481 MB | 819 MB | 1 537 MB | 3.20× | 74 MB | 100 MB | 165 MB | 2.23× |
+| Snowdon IFC4 | 639 MB | 1 004 MB | 1 636 MB | 2.56× | 209 MB | 245 MB | 298 MB | 1.43× |
+
+**The RSS column is a cumulative sweep high-water mark, not a per-N peak.**
+`VmHWM` never falls; the whole sweep runs N=1 → 2 → 4 in one process; and the
+main thread holds the reference union (562,367 placement strings on D3D) and
+the reference payloads throughout. So the N=4 row is the peak of a process
+that has already run two pools and is still carrying the first one's output.
+The direction is pessimistic — a per-N figure is at or below what is printed —
+so nothing in this subsection's conclusion depends on the difference, but a
+true per-N number needs one worker count per process invocation and was not
+taken. **The V8 column is not a peak either**: `used_heap_size` is one
+instantaneous reading after the pump.
 
 **Per-worker wasm memory falls with N, and on D3D it falls almost
 perfectly: 611 MB at N=1 → 358 MB each at N=2 → 207 MB each at N=4.** Each
 shard's working set is a fraction of the model's, so the linear memory each
 instance grows to is a fraction too. D3D's *total* wasm across four workers is
-828 MB against 611 MB for one — a 1.36× multiplier, not 4×.
+828 MB against 611 MB for one — a 1.36× multiplier, not 4×. (This is also the
+direct mechanism behind §11.4's finding that D3D's shards run **faster per
+geometry at N=2** than the single worker does.)
 
 This inverts §6's stated worry. §6 reasoned about N workers sharing **one**
 4 GiB memory on the MT build and concluded per-shard transient multiplies
@@ -1046,9 +1272,9 @@ inside a fixed ceiling. With separate instances — the shape production can
 actually have — each worker gets its own 4 GiB budget *and* needs a third of
 it. **Per-worker headroom improves with N.**
 
-D3D at N=4 peaked at **6.2 GB** total process RSS on a 16 GB box with no swap,
-and did not come close to failing. What grows near-linearly is the V8 side
-(D3D 1,693 MB → ~1,876 MB → ~2,167 MB) plus a per-worker Node floor.
+D3D at N=4 drove the sweep to **6.2 GB** of process RSS on a 16 GB box with no
+swap, and did not come close to failing. What grows near-linearly is the V8
+side (D3D 1,693 MB → ~1,881 MB → ~2,173 MB) plus a per-worker Node floor.
 
 So: **memory does not gate geometry parallelism at N=4 — the partition does.**
 That reorders #635. What memory still gates is device class: 6.2 GB is fine on
@@ -1066,15 +1292,16 @@ as the slow one*:
 |---|---|---|---:|
 | §0 | Chromium | OPFS store-backed, windowed | 104.7 s |
 | §8 | Chromium | HTTP fetch, materialised, not windowed | **4,256 s** |
-| §11 | Node | `readFileSync`, materialised, not windowed | **49.7 s** |
+| §11 | Node | `readFileSync`, materialised, not windowed | **36.0 s** |
 
 **§10's leading candidate does not survive this.** If the materialised,
 non-windowed source were what costs 4,256 s, the Node run of that same shape
-would be slow too; it is 86× faster, and 2.1× faster than the windowed browser
-load. So the 4,256 s is not a property of "materialised rather than windowed"
-— it is something browser-side and specific to that configuration, and §8
-names a plausible one in passing: its main thread was starved so hard that an
-in-page sampler got 21 readings in 19 s and then nothing for 72 minutes.
+would be slow too; it is 118× faster, and 2.9× faster than the windowed
+browser load. So the 4,256 s is not a property of "materialised rather than
+windowed" — it is something browser-side and specific to that configuration,
+and §8 names a plausible one in passing: its main thread was starved so hard
+that an in-page sampler got 21 readings in 19 s and then nothing for 72
+minutes.
 
 The practical consequence for this section is the one the brief warned about,
 and it resolves the other way: **Node is not a 40×-slow path for D3D
@@ -1082,20 +1309,26 @@ geometry, so measuring efficiency here is not measuring the wrong thing.**
 The caveat that remains is the honest one — the browser figures come from
 other sessions and possibly another box, so this is a comparison across
 records rather than a controlled A/B, and it locates the cost rather than
-identifying it.
+identifying it. §11.3's own 38 % cross-session shift in `T₁` is a reminder of
+how loose a cross-record comparison is.
 
 ### 11.8 Reproducing this
 
 ```sh
-# box calibration, before and after — N processes, register-bound, no memory
+# box calibration, before and after — N processes; both kernels, because the
+# register-bound one cannot see a memory-bandwidth ceiling
 node scripts/spin_calibrate.mjs --workers 1,2,4 --runs 3
 
 # efficiency, per model; NO_PAYLOAD_DIGEST=1 removes the harness's own
 # per-shard SHA-256, which rides on the duplication term it is measuring
-NO_PAYLOAD_DIGEST=1 node --expose-gc --max-old-space-size=12288 \
+NO_PAYLOAD_DIGEST=1 node --max-old-space-size=12288 \
   scripts/m3_worker_pool.mjs /home/user/test-models-private/ifc/ryuga/D3D.ifc \
   --workers 2,4
 ```
+
+There is no `--expose-gc`. The first draft prescribed it in both this block
+and the script's own usage line, and nothing in the script calls `gc()`;
+it has been dropped from both rather than left looking load-bearing.
 
 `spin_calibrate.mjs` is committed rather than re-derived per investigation:
 M2 established the practice of calibrating the box and left no artifact, and
@@ -1103,20 +1336,21 @@ the practice is worth nothing if the next measurement reinvents the kernel and
 gets a subtly different one. Run it **immediately before and after** the thing
 being measured, not once a session — an earlier M2 run on a contended box
 reported D3D as a net loss at every N, and re-measurement on an idle box
-turned it into a 1.15× win.
+turned it into a 1.15× win. It now kills its children on a failed sweep, which
+it did not before; a sweep that threw used to leave four reparented processes
+spinning at full tilt through whatever ran next.
 
-`m3_worker_pool.mjs` gained four things here, all of which the D3D run needed:
-the duplication factor and per-shard geometry times (§11.4 is not derivable
-without them), per-worker wasm/V8 heaps and kernel `VmHWM` (§11.7),
-`NO_PAYLOAD_DIGEST=1`, and the geometry-built line (§11.1) — because a timing
-line cannot distinguish a fast run from a skipped one, and D3D's two-minute
-run needed to prove itself against a 70-minute expectation. Plus the union
-check's crash fix (§11.5).
+`m3_worker_pool.mjs` was corrected here in the ways §11's lede lists —
+`dupWork`/`dupVerts`/`dupPrep` beside `dupWall`, by-ID geometry counting,
+two-directional and duplicate-aware union reporting, `wasmHeapByteLength`, an
+honestly-labelled sweep RSS, and an assertion in place of the silently-skipped
+proof line. The previous commit's message has the full list and the reasoning
+for each.
 
-The digest-on set, kept because it is the conservative reading and because the
-gap between the two bounds the instrument, is: MB-Khaya 0.727 / 0.422,
-Schependomlaan 0.723 / 0.322, Snowdon 0.764 / 0.450 at N=2 / N=4. **The digest
-costs at most 0.05 of efficiency**, most of it on the models with the highest
-duplication, exactly as expected — a shared geometry that two shards both
-build is also one that two shards both hash. Every number in §11.3–§11.7 is
-from the digest-off runs.
+The digest-on set from the first draft is retained as the conservative
+reading, though it predates the corrections and its `dup` column should be
+read as `dupWall`: MB-Khaya 0.727 / 0.422, Schependomlaan 0.723 / 0.322,
+Snowdon 0.764 / 0.450 at N=2 / N=4. **The digest costs at most 0.05 of
+efficiency**, most of it on the models with the highest wall inflation — a
+shared geometry that two shards both build is also one that two shards both
+hash. Every number in §11.2–§11.7 is from the digest-off runs.

@@ -563,14 +563,19 @@ attributions, not observations.
 
 Evidence *(verified)*, `scripts/m3_worker_pool.mjs`:
 
-- `:78` `await api.Init()` — and `tOpen = performance.now()` is taken on
-  the **next** line, `:80`. So `Init()` is **outside** both `openMs` and
+- `await api.Init()` runs in `runWorker`, and `tOpen = performance.now()`
+  is taken *after* it. So `Init()` is **outside** both `openMs` and
   `geometryMs`. There is no timer around it anywhere in the file.
-- The parent's `wall` (`:208`, `:232`) spans `new Worker(...)` through the
-  last `message` — so it includes worker spawn, module import, `Init()`,
-  **and** the per-geometry SHA-256 payload hashing the harness does inside
-  each worker for its union check (`:134-150`), plus the `postMessage` of
-  every placement string.
+- The parent's `wall` spans `new Worker(...)` through the last `message`
+  — so it includes worker spawn, module import, `Init()`, **and** the
+  per-geometry SHA-256 payload hashing the harness does inside each worker
+  for its union check, plus the `postMessage` of every placement string.
+  (`NO_PAYLOAD_DIGEST=1` drops the hashing; the ledger's §11 numbers are
+  taken that way, the #536 ones quoted below are not.)
+
+*(Line numbers were cited here and have been removed: the script was
+substantially reworked for load-performance-ledger.md §11 and every one of
+them had drifted. The named functions are stable; the offsets were not.)*
 
 So the #536 claim *"worker startup and wasm init dominate a 4 s geometry
 stage"* is derived from a residual that also contains a full SHA-256 pass
