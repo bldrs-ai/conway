@@ -27,6 +27,7 @@ import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
+import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
@@ -51,15 +52,28 @@ const STEP_FIXTURE = 'data/nema-23-76mm.step'
 /** Products (IFC) / scaled units (AP214) per pump call. */
 const BATCH = 4
 
+/* MB is the API's unit and bytes are the engine's, so a budget small enough
+ * to bind on a fixture this size has to be expressed as a fraction. */
+const BYTES_PER_MIB = 1024 * 1024
+
 let ifcFixture: Uint8Array
 let stepFixture: Uint8Array
 
 
-/** One delivered placement, flattened to something comparable by value. */
+/**
+ * One delivered placement, flattened to something comparable by value.
+ *
+ * Every field a consumer renders from is here, not just the identifying
+ * ones: colour comes off the material and `occurrencePath` off the AP214
+ * scene walk, so both are things a re-walk could plausibly get wrong while
+ * still agreeing on which geometry goes where.
+ */
 interface Placement {
   expressID: number
   geometryExpressID: number
   flatTransformation: number[]
+  color: number[]
+  occurrencePath?: readonly number[]
 }
 
 
@@ -81,6 +95,9 @@ function placements( mesh: FlatMesh ): Placement[] {
       expressID: mesh.expressID,
       geometryExpressID: placed.geometryExpressID,
       flatTransformation: [ ...placed.flatTransformation ],
+      color: [ placed.color.x, placed.color.y, placed.color.z, placed.color.w ],
+      occurrencePath: placed.occurrencePath === void 0 ?
+        void 0 : [ ...placed.occurrencePath ],
     } )
   }
 
@@ -107,6 +124,34 @@ function drain( api: IfcAPI, modelID: number ): Placement[] {
   for ( ; ; ) {
 
     const { extracted, remaining } = api.ExtractGeometryBatch(
+        modelID, BATCH, ( mesh ) => {
+          delivered.push( ...placements( mesh ) )
+        } )
+
+    if ( remaining === 0 && extracted === 0 ) {
+      break
+    }
+  }
+
+  return delivered
+}
+
+
+/**
+ * Async twin of {@link drain}, for a model opened over an external store.
+ *
+ * @param api The API instance owning the model.
+ * @param modelID The deferred model to drain.
+ * @return {Promise<Placement[]>} Every placement delivered, in order.
+ */
+async function drainAsync(
+    api: IfcAPI, modelID: number ): Promise< Placement[] > {
+
+  const delivered: Placement[] = []
+
+  for ( ; ; ) {
+
+    const { extracted, remaining } = await api.ExtractGeometryBatchAsync(
         modelID, BATCH, ( mesh ) => {
           delivered.push( ...placements( mesh ) )
         } )
@@ -176,7 +221,9 @@ function asSortedKeys( all: Placement[] ): string[] {
 
   return all.map( ( placement ) =>
     `${placement.expressID}/${placement.geometryExpressID}/` +
-    `${placement.flatTransformation.join( ',' )}` ).sort()
+    `${placement.flatTransformation.join( ',' )}/` +
+    `${placement.color.join( ',' )}/` +
+    `${placement.occurrencePath?.join( '.' ) ?? '-'}` ).sort()
 }
 
 
@@ -304,5 +351,156 @@ describe.each( [
         const served = streamAll( api, retainingID )
 
         expect( served.length ).toBeGreaterThan( 0 )
+      }, 240000 )
+} )
+
+
+describe( 'STREAMING_CONSUMER under a geometry budget (IFC only — AP214 has ' +
+  'no geometry residency)', () => {
+
+  // Share's production configuration is DEFER_GEOMETRY + GEOMETRY_BUDGET_MB
+  // together, and it is the combination that breaks the contract's promise
+  // in the least visible way: eviction DELETES the mesh from the store
+  // (IfcModelGeometry.delete), so the re-walk that serves a late whole-model
+  // ask resolves nothing for that scene node, parks it, and the placement is
+  // absent from the rebuilt map rather than sitting in it with a dead
+  // handle. The retaining path's livePlacements filter therefore reads zero
+  // losses however much was lost — which is exactly how the first version of
+  // this work shipped a throw that could never fire.
+
+  test( 'total eviction throws rather than serving an empty model',
+      async () => {
+
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const ownedID = await api.OpenModelStreamed( ifcFixture, DEFERRED_OWNED )
+
+        // One byte: nothing survives a pump call, so by the end of the drain
+        // the model's whole geometry store has been evicted.
+        expect( api.SetGeometryBudget( ownedID, 1 / BYTES_PER_MIB )
+            ?.budgetBytes ).toBe( 1 )
+
+        const delivered = drain( api, ownedID )
+
+        // The pump still DELIVERED — the copy window is intact, this is a
+        // model that streamed correctly and then lost its natives — so the
+        // throw below is about the late ask, not about a broken load.
+        expect( delivered.length ).toBeGreaterThan( 0 )
+
+        expect( () => streamAll( api, ownedID ) )
+            .toThrow( /STREAMING_CONSUMER/ )
+
+        // ...and it names what it could not resolve, rather than the "0
+        // instance(s) across 0 entit(ies)" the filter-based count reported.
+        expect( () => streamAll( api, ownedID ) )
+            .toThrow( /[1-9][0-9]* placed instance\(s\) unresolved/ )
+      }, 240000 )
+
+  test( 'partial eviction serves what survived and does not throw',
+      async () => {
+
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        // The unbudgeted reference: what a late whole-model ask returns when
+        // nothing was evicted. Without it "served fewer" is unanchored.
+        const wholeID = await api.OpenModelStreamed( ifcFixture, DEFERRED_OWNED )
+
+        drain( api, wholeID )
+
+        const whole = streamAll( api, wholeID )
+
+        expect( whole.length ).toBeGreaterThan( 0 )
+
+        const ownedID = await api.OpenModelStreamed( ifcFixture, DEFERRED_OWNED )
+
+        // 2 KiB binds on this fixture (the existing budget suite pins that an
+        // unbudgeted drain holds more) without evicting everything.
+        expect( api.SetGeometryBudget( ownedID, 2048 / BYTES_PER_MIB )
+            ?.budgetBytes ).toBe( 2048 )
+
+        drain( api, ownedID )
+
+        const partial = streamAll( api, ownedID )
+
+        // Partial loss is a warning, not a throw: something is still there
+        // to hand back, and refusing to hand it back would be worse than the
+        // silence this contract is fixing.
+        expect( partial.length ).toBeGreaterThan( 0 )
+        expect( partial.length ).toBeLessThan( whole.length )
+      }, 240000 )
+} )
+
+
+describe( 'STREAMING_CONSUMER on the pump and entry points Share drives ' +
+  '(IFC only)', () => {
+
+  test( 'the async pump over an external store retains nothing either',
+      async () => {
+
+        // ExtractGeometryBatchAsync over a windowed source is the pump Share
+        // actually drives, and it is a separate code path from the sync one
+        // with its own capture call. A contract honoured on only one of them
+        // is a contract that silently does not apply.
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const retainingID = await api.OpenModelStream(
+            new InMemoryStepByteStore( ifcFixture ), DEFERRED )
+
+        const reference = await drainAsync( api, retainingID )
+
+        expect( reference.length ).toBeGreaterThan( 0 )
+        expect( retained( api, retainingID ).meshMap ).toBeGreaterThan( 0 )
+
+        const ownedID = await api.OpenModelStream(
+            new InMemoryStepByteStore( ifcFixture ), DEFERRED_OWNED )
+
+        expect( api.getPassthrough( ownedID )!.sourceIsExternal ).toBe( true )
+
+        const owned = await drainAsync( api, ownedID )
+
+        expect( asSortedKeys( owned ) ).toEqual( asSortedKeys( reference ) )
+        expect( retained( api, ownedID ) )
+            .toEqual( { meshMap: 0, vectorFlatMesh: 0 } )
+      }, 240000 )
+
+  test( 'GetFlatMesh on a flagged model is served by the re-walk',
+      async () => {
+
+        // GetFlatMesh is named in the setting's docstring as one of the
+        // entry points the re-walk serves, and it reaches it by a different
+        // route from StreamAllMeshes: its `meshMap.size <= 0` test means
+        // "not loaded yet" everywhere else and means "steady state" here.
+        //
+        // IFC only: AP214's getFlatMesh looks up an expressID against a map
+        // its own capture keys by localID, so it returns the dummy on that
+        // proxy with and without this flag. Pre-existing and out of scope.
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const retainingID = await api.OpenModelStreamed( ifcFixture, DEFERRED )
+
+        const delivered = drain( api, retainingID )
+        const subject = delivered[ 0 ].expressID
+
+        const reference = placements( api.GetFlatMesh( retainingID, subject ) )
+
+        expect( reference.length ).toBeGreaterThan( 0 )
+
+        const ownedID = await api.OpenModelStreamed( ifcFixture, DEFERRED_OWNED )
+
+        drain( api, ownedID )
+
+        expect( retained( api, ownedID ).meshMap ).toBe( 0 )
+
+        expect( asSortedKeys( placements(
+            api.GetFlatMesh( ownedID, subject ) ) ) )
+            .toEqual( asSortedKeys( reference ) )
       }, 240000 )
 } )

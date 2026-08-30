@@ -96,10 +96,28 @@ export interface Loadersettings {
    * **A late whole-model ask still works, until the natives are gone.**
    * `StreamAllMeshes`, `LoadAllGeometry` and `GetFlatMesh` on such a model
    * re-walk the live scene rather than replaying a cache, which costs a walk
-   * but returns the same placements the pump delivered. Once the geometry has
-   * been released — or evicted in its entirety under a budget — there is
-   * nothing left to walk, and those entry points throw a descriptive error
-   * naming this contract rather than silently returning an empty model.
+   * but returns the same placements the pump delivered.
+   *
+   * **What a budget does to that ask.** The re-walk reads the geometry store,
+   * and `GEOMETRY_BUDGET_MB` eviction deletes from it, so an evicted
+   * placement is not recovered by the re-walk — it is simply absent from
+   * what the ask returns. Partial loss is served with a warning naming the
+   * count of unresolved instances; total loss — nothing resolved at all —
+   * throws a descriptive error naming this contract, as does a whole-model
+   * ask after `ReleaseModelGeometry`. What never happens is a silent empty
+   * model. A consumer that needs every placement should copy at delivery
+   * from the pump, which is what the budget's own contract already says.
+   *
+   * **Scope: the sync `StreamAllMeshes` cannot serve a windowed source.**
+   * On a model opened over an external store (`OpenModelStream`), the
+   * synchronous whole-model entry points drain through the synchronous pump,
+   * which refuses a windowed source outright — *"ExtractGeometryBatch is
+   * synchronous and cannot page a windowed source"*. That predates this
+   * setting and is identical with and without it, but it means the late
+   * whole-model ask described above is reachable on a resident source only.
+   * Share pumps `ExtractGeometryBatchAsync` over a store, so on Share's
+   * configuration the ask is not available at all — which is consistent with
+   * this setting, whose premise is that the consumer already has the stream.
    *
    * Ignored on a non-deferred open, which has no pump and no accumulation to
    * suppress.

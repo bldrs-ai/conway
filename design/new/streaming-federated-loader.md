@@ -709,10 +709,32 @@ Deliberately small first step; each has a measurable exit.
   seeds coordination from the frame the stream actually used. Because the
   re-walk clears and restarts at instance zero, it is *idempotent*, which
   incidentally closes the latent doubling bug a second `StreamAllMeshes`
-  has on the retaining path (Share's `IfcItemsMap.js:274-283`). Once the
-  natives are genuinely gone — released, or evicted in their entirety —
-  those entry points **throw and name the contract** rather than
-  returning a model with no geometry in it.
+  has on the retaining path (Share's `IfcItemsMap.js:274-283`).
+
+    **A re-walk does not recover evicted geometry, and the reporting had
+  to be rebuilt around that.** Eviction deletes the mesh from the store
+  (`IfcModelGeometry.delete`), so the walk resolves nothing for that scene
+  node, parks it, and the placement is *absent* from the rebuilt map
+  rather than present-and-dead. The retaining path's `livePlacements`
+  filter therefore reads zero however much was lost — it can only see
+  placements that made it into the map, and all of those are live. The
+  first version of this shipped a throw keyed on that filter, which made
+  it unreachable: at a 1-byte budget on `mapped_shared_representation.ifc`
+  the model served **0 placements, logged "0 across 0", and did not
+  throw** — the exact silent-empty failure the contract exists to
+  prevent, in Share's own production config. The signal is instead the
+  count of instances the re-walk **parked**: partial loss warns with that
+  count, total loss (nothing resolved) **throws and names the contract**,
+  as does any whole-model ask after `ReleaseModelGeometry`. A model that
+  genuinely has no geometry still returns empty, quietly, as classic does.
+
+    **Scope.** The synchronous whole-model entry points drain through the
+  synchronous pump, which refuses a windowed source outright. So on a
+  model opened over an external store — Share's configuration — the late
+  whole-model ask is not reachable through `StreamAllMeshes` at all. That
+  predates this contract and is identical with and without it; it is noted
+  because the contract's promise about that ask is otherwise easy to read
+  as broader than it is.
 
   **PSB.ifc at batch 8 — the size Share pumps at:**
 

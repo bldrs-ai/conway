@@ -1694,7 +1694,10 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * whole-model ask idempotent.
    *
    * AP214 has no geometry residency, so the only way the natives go missing
-   * here is ReleaseModelGeometry — the one case this throws on.
+   * here is ReleaseModelGeometry — the one case this throws on. The IFC twin
+   * returns a count of instances its re-walk could not resolve, for the
+   * eviction case; there is no analogue here, and this walk has no
+   * park-and-retry arm to count, so it returns nothing.
    *
    * @param entryPoint The public method being served, for the error message.
    */
