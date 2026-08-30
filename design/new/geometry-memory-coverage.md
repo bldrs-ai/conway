@@ -419,8 +419,8 @@ a number exists, because **D3D has not been re-run** (see
 | # | Retracted claim | Verdict | Why |
 |---|---|---|---|
 | 1 | `peak:retained` ratios (1.4×–3.7×) | **Now measurable** | `onFree` subtracts only pointers the scope allocated. `liveBytes` is uncorrupted, so peak and the (renamed) `escaped` figure are real quantities. |
-| 2 | "Zero clamps ⇒ usable" per-path grading | **Obsolete, and the grading was wrong** | There is nothing left to grade: ownership is known for *every* free, so the clamp heuristic is gone. `foreignFrees` is a census, not a lower bound. |
-| 3 | Retained figures generally (global `VertexWelder`) | **Still retracted as stated; the corrected quantity is now separable** | `escaped` still counts the welder's grown capacity, because the welder genuinely does not free it. What is new is the **per-site** lifetime split, so `vertex_weld`'s escaped bytes can be *subtracted* to get unit output. The instrument does not do that subtraction for you. |
+| 2 | "Zero clamps ⇒ usable" per-path grading | **Obsolete, and the grading was wrong** | There is nothing left to grade: the clamp heuristic is gone. `foreignFrees` is a census of genuinely foreign frees **when `unownedAllocs == 0`** — see the qualification below, which is not a formality on a path that can exhaust the table. |
+| 3 | Retained figures generally (global `VertexWelder`) | **Still retracted, and NOT separable by arithmetic on the current tags** | Three things defeat the obvious "subtract `vertex_weld`" fix, and all three are in the merged code — see below. Unit output needs an *additional tag*, not a subtraction. |
 | 4 | "98.1 % of compositions under 256 KiB ⇒ arena-shaped" | **Still retracted as stated; superseded** | Live peak was the wrong distribution and remains so. The right one now exists — the `died` histogram — and it is a different number, not a corrected version of this one. |
 | 5 | "~4 MB covers 93 %" (cumulative bytes) | **Still retracted as stated; superseded** | Cumulative in-scope volume is still a superset of the arena-eligible subset. `died` **is** that subset, so the question is answerable — by a new measurement, not by reinterpreting this one. |
 | — | "CSG is 98.8 % of allocator traffic" | **Now measurable** | A load-wide denominator exists. The 98.8 % figure itself stays retracted: it was a share of the instrumented subtotal. |
@@ -462,26 +462,64 @@ subtracted, which turns the old clamp counter — a lower bound that could only
 see the frees large enough to drive the counter negative — into a census. The
 clamp is structurally impossible and its columns are gone from the report.
 
+**The census claim has one condition, and it must be checked before quoting
+`foreignFrees`: it holds only when `unownedAllocs == 0` for that scope kind.**
+Ownership is recorded by *inserting the pointer into the table*, so an
+allocation the table refused — because it was full, or could not be allocated
+at all — is not in it. If the current scope then frees that pointer, `tableFind`
+misses and the free is booked **foreign**, even though the scope itself made the
+allocation. So on a run reporting nonzero `unowned`, `foreignFrees` is an upper
+bound on genuinely-foreign frees, not a census, and the excess is bounded by the
+unowned allocations that were freed in-scope. Both fixtures measured so far
+report `unowned 0`, which is why the numbers quoted in this document are
+unaffected — but D3D is the run most likely to exhaust a per-thread table, and
+it is the run not yet done.
+
 The mechanism is not merely argued. On `nema-23-76mm.step`, `advanced_face`
 reports **54 foreign frees**, and that is a path which reported **zero clamped
 frees** under the old instrument. The silent case was real, on a path that had
 been graded clean.
 
-**2. `escaped` still counts reusable global scratch, and that is not a defect
-to fix — it is a limit to read correctly.** `Geometry.cpp:30` declares a
-file-scope `VertexWelder welder;` whose containers are
-`clear()`/`resize()`/`reserve()`d in `weld()` and **never** `shrink_to_fit`, so
-capacity grown inside a scope is genuinely still live at scope close.
-`CSGMesher::reset()` has the same shape. Ownership and lifetime classify that
+**2. `escaped` still counts reusable global scratch, and no arithmetic on the
+current tags removes it.** `Geometry.cpp:30` declares a file-scope
+`VertexWelder welder;` whose containers are `clear()`/`resize()`/`reserve()`d in
+`weld()` and **never** `shrink_to_fit`, so capacity grown inside a scope is
+genuinely still live at scope close. Ownership and lifetime classify that
 correctly — it *did* escape the scope — but "escaped" means **not freed inside
 this scope**, not "this unit's output".
 
-What is new is that the split is now available **per site**, so the welder's
-contribution can be subtracted rather than guessed at. On D3D the welder fires
-**3,972,812 times under `csg_boolean` and zero times under the other three
-kinds** (`Reify` is reached from the data getters after the geometry function
-has returned, so its weld lands in no scope at all). This defect was CSG-only;
-defect 1 was not.
+An earlier revision of this section said the per-site split makes the welder's
+contribution *subtractable*, so that `escaped − vertex_weld` would give unit
+output. **That is wrong on the CSG path**, for three independent reasons, each
+read from the merged source rather than inferred:
+
+1. **The welder is not the only persistent cache.** `CSGMesher::reset()`
+   (`conway_geometry/csg/csg_mesher.cpp:999`) is twenty-odd `clear()` calls with
+   **no `shrink_to_fit` anywhere in the file**, exactly the welder's shape. And
+   the mesher is not per-composition: `CSGMesher charter_;` is a member of
+   `CSG` (`conway_geometry/csg/csg.h:62`), so its capacity persists across
+   compositions by design.
+2. **That cache has no tag of its own.** `csg.run()` is wrapped in a single
+   `AllocTagScope kernelTag( AllocSite::CsgKernel )`, and the result mesh is
+   filled inside that same scope. So `csg_kernel`'s bytes conflate three
+   different things — the mesher's persistent cache growth, the returned
+   `Geometry` that must outlive the composition, and genuine transients — with
+   nothing distinguishing them.
+3. **The printed per-site escaped figure is an upper bound, not a value.** The
+   report computes it as `bytes − died`, so any allocation the ownership table
+   refused inflates it (it can never be credited to `died`). That is why the
+   column is labelled `escaped<=` rather than `escaped`.
+
+**So the remedy is an additional tag — separating the CSG kernel's persistent
+cache and its returned geometry from its transients — not a subtraction.**
+Until that exists, `csg_boolean`'s escaped bytes cannot be read as unit output
+by any arithmetic this instrument supports.
+
+For scale on where the welder lands: on D3D it fires **3,972,812 times under
+`csg_boolean` and zero times under the other three kinds** (`Reify` is reached
+from the data getters after the geometry function has returned, so its weld
+lands in no scope at all). Both cache defects are CSG-path defects; defect 1 was
+not.
 
 **What always survived.** Allocator **call counts**. They are computed in
 `onAlloc` alone, accumulate monotonically, never touch `liveBytes`, and need
@@ -659,10 +697,14 @@ that is reasoning, not measurement.
 fix. A persistent cache that grows inside a unit and never shrinks (the global
 `VertexWelder`; `CSGMesher::reset()`) escapes that unit by the only definition
 lifetime classification has, while being reusable scratch rather than the
-unit's product. The per-site split makes it *separable* — subtract
-`vertex_weld`'s escaped bytes — but the instrument does not classify
-scratch-versus-output for you, and no future version can without being told
-which allocations are caches.
+unit's product. The per-site split narrows *where* such caches sit, but on the
+CSG path it does not make them subtractable: the CSG kernel holds a second
+persistent cache (`CSGMesher`, a member of `CSG`) that shares the
+`csg_kernel` tag with the returned geometry, and the printed per-site escaped
+figure is an upper bound whenever any allocation went unowned. Getting unit
+output there needs **another tag**, not arithmetic — see defect 2 above. No
+version of this instrument can classify scratch versus output without being
+told which allocations are caches.
 
 ## The policy
 
@@ -761,7 +803,7 @@ it by default:
   ownership in `onFree` (corrupted *peak*), and reusable global scratch counted
   as retained (corrupted *retained*) — were documented with their mechanisms
   rather than deleted, and **conway#653 has since fixed the first and made the
-  second separable**. See the [verdict
+  second *narrower*, though not yet separable on the CSG path**. See the [verdict
   table](#verdict-on-each-named-retraction-after-conway653) for what that does
   to each retracted claim, and note the distinction it turns on: the machinery
   landing and the measurement existing are separate events. **D3D has not been

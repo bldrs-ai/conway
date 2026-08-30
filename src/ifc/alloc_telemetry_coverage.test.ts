@@ -93,6 +93,51 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
     throw new Error(`unbalanced braces after "${signature}"`)
   }
 
+  /**
+   * Every brace-matched block opening with `signature`, not just the first.
+   *
+   * `functionBody` takes the first match, which is fine for a function
+   * definition and wrong for a guard: `if (ptr != nullptr)` can legitimately
+   * appear more than once in one function, and an assertion anchored on the
+   * first occurrence passes while the block it was written about disappears.
+   * Callers assert that *some* block contains what they care about, which ties
+   * the guard to the statement it guards instead of to its position.
+   *
+   * @param source File or function text to search.
+   * @param signature Literal text opening each block, up to the character
+   *   before its opening brace.
+   * @return {string[]} Each matching block, braces included, in source order.
+   */
+  function blocksOpening(source: string, signature: string): string[] {
+    const bodies: string[] = []
+
+    for (let at = source.indexOf(signature); at >= 0;
+      at = source.indexOf(signature, at + signature.length)) {
+      const open = source.indexOf('{', at + signature.length)
+
+      if (open < 0) {
+        continue
+      }
+
+      let depth = 0
+
+      for (let where = open; where < source.length; ++where) {
+        if (source[where] === '{') {
+          depth += 1
+        } else if (source[where] === '}') {
+          depth -= 1
+
+          if (depth === 0) {
+            bodies.push(source.slice(open, where + 1))
+            break
+          }
+        }
+      }
+    }
+
+    return bodies
+  }
+
   test('Extrude() — the IfcExtrudedAreaSolid sweep — opens a scope', () => {
     const body = functionBody(geometryUtilsSource, 'inline Geometry Extrude(')
 
@@ -301,11 +346,17 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
       // And the guard that keeps the null-free census honest in the other
       // direction: realloc(nullptr, n) is a malloc, so it must NOT reach the
       // free accounting, which now counts free(nullptr) as a real call.
-      const guard = body.indexOf('if (ptr != nullptr)')
-      const accounting = body.indexOf('onFreeSized(ptr, oldSize)')
+      //
+      // Asserted as "some `if (ptr != nullptr)` block CONTAINS the accounting
+      // call", not as an index comparison. `ptr != nullptr` already appears
+      // earlier in this function (the ternary computing oldSize), so a
+      // refactor of that ternary into an `if` would satisfy a first-occurrence
+      // index check while the real guard vanished — leaving the test green on
+      // exactly the regression it exists to catch.
+      const guarded = blocksOpening(body, 'if (ptr != nullptr)')
+        .filter((block) => block.includes('onFreeSized(ptr, oldSize)'))
 
-      expect(guard).toBeGreaterThanOrEqual(0)
-      expect(accounting).toBeGreaterThan(guard)
+      expect(guarded).toHaveLength(1)
 
       // free(nullptr) IS a wrapped call, so the free wrapper deliberately does
       // not guard. The two together are the property; asserting only one lets
@@ -331,14 +382,36 @@ describe('allocation telemetry covers the solid-sweep and CSG call graphs', () =
         expect(telemetrySource).toContain(counter)
       }
 
-      // The remedies, asserted by direction rather than by full sentence: the
+      // The remedies, asserted by direction rather than by full sentence (the
       // strings are split across literals in the fprintf, and the direction is
-      // the part that was wrong.
-      expect(telemetrySource).toContain('unowned(table-full)=')
-      expect(telemetrySource)
-          .toContain(' raise CONWAY_ALLOC_TELEMETRY_TABLE_BITS and re-run')
-      expect(telemetrySource).toContain('unowned(no-table)=')
-      expect(telemetrySource).toContain(' load-wide denominator remain valid. LOWER')
+      // the part that was wrong) — but each one scoped to ITS OWN reporting
+      // block. Asserting that both labels and both remedies merely exist
+      // somewhere in the file passes with the two fprintf bodies swapped,
+      // which is precisely the misleading-remedy regression this test exists
+      // to prevent: the reader under memory pressure would be told to raise
+      // the table size, i.e. to ask for more of the allocation that just
+      // failed.
+      const RAISE = ' raise CONWAY_ALLOC_TELEMETRY_TABLE_BITS and re-run'
+      const LOWER = ' load-wide denominator remain valid. LOWER'
+
+      const fullBlocks = blocksOpening(
+          telemetrySource, 'if (unownedFullAllocs != 0)')
+      const noTableBlocks = blocksOpening(
+          telemetrySource, 'if (unownedNoTableAllocs != 0)')
+
+      expect(fullBlocks).toHaveLength(1)
+      expect(noTableBlocks).toHaveLength(1)
+
+      // A full table wants a bigger one.
+      expect(fullBlocks[0]).toContain('unowned(table-full)=')
+      expect(fullBlocks[0]).toContain(RAISE)
+      expect(fullBlocks[0]).not.toContain(LOWER)
+
+      // A table that could not be allocated wants a smaller one; telling the
+      // reader to raise it here is the defect.
+      expect(noTableBlocks[0]).toContain('unowned(no-table)=')
+      expect(noTableBlocks[0]).toContain(LOWER)
+      expect(noTableBlocks[0]).not.toContain(RAISE)
     })
 
     test('no column prints a quantity the coverage doc retracted', () => {
