@@ -28,6 +28,3 @@
 # IFC4X3_RC2. Tracked by #280 (IFC 4.3 support).
 KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
 
-# AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF, parsed as AP214. Tracked by
-# #480. Also the largest single error source in the public baseline (272 rows).
-nist_ftc_08_asme1_ap242-e1-tg.stp
