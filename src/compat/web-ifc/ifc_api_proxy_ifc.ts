@@ -65,7 +65,12 @@ import { releaseScratchParsingBuffer } from '../../step/parsing/step_deserializa
 import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
-import { IFC4X3_WEBIFC_TYPE_CODES, originalIfc4x3Keyword } from '../../ifc/ifc4x3_supertype_aliases'
+import {
+  IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE,
+  IFC4X3_WEBIFC_TYPE_CODES,
+  checkIfc4x3Provenance,
+  ifc4x3KeywordScanRange,
+} from '../../ifc/ifc4x3_supertype_aliases'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
@@ -1950,11 +1955,39 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * NOT entities it merely references — recursive flattening across
    * references needs each referenced record ensured in turn.
    *
+   * Also pre-pages the small keyword window `checkIfc4x3Provenance`
+   * (`ifc4x3_supertype_aliases.ts`) needs to tell a genuine
+   * `IfcBuildingStorey`/`IfcBuildingElementProxy` from an IFC4X3 alias
+   * hit — codex's #706 follow-up (P2): without this, a spilled/windowed
+   * model that only pages a record's own range leaves that window
+   * nonresident, and the scan answers `'unknown'` even for a record this
+   * WOULD have resolved correctly had the bytes been there. A no-op for
+   * every entity that isn't one of the two candidate types (see
+   * `ifc4x3KeywordScanRange`), so this costs nothing for the other ~900.
+   * Consumers that skip this method still get the safe (never
+   * corrupting) `'unknown'` fallback in `webIfcTypeOf_` — this only
+   * improves the CORRECT-label rate for the well-behaved async path.
+   *
    * @param expressID The record's express ID.
    * @return {Promise<void>} Resolves when resident.
    */
   async ensureLineResident(expressID: number): Promise<void> {
-    await this.model[0].ensureResidentByExpressID(expressID)
+
+    const [model] = this.model
+
+    await model.ensureResidentByExpressID(expressID)
+
+    const element = model.getElementByExpressID(expressID)
+
+    if (element === void 0) {
+      return
+    }
+
+    const range = ifc4x3KeywordScanRange(model, element.localID, element.type)
+
+    if (range !== void 0) {
+      await model.ensureResidentRange(range[0], range[1])
+    }
   }
 
   /**
@@ -2040,13 +2073,20 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * converter a real `IfcFacilityPart`/`IfcRoad`/`IfcPavement`/`IfcKerb`
    * argument tape to decode against the WRONG type's field layout, silently
    * misreading trailing attributes (codex's review of #706; see the block
-   * comment on `originalIfc4x3Keyword` in `ifc4x3_supertype_aliases.ts` for
-   * the reproduced case). `originalIfc4x3Keyword` recovers the distinction
-   * losslessly for those two types only (a cheap no-op for everything
-   * else); when it fires, this returns one of
-   * `IFC4X3_WEBIFC_TYPE_CODES` instead — a code `FromRawLineData` has no
-   * converter for, so `getLine` falls back to the raw, unconverted
-   * argument tape rather than confidently misreading it as the wrong type.
+   * comment on `checkIfc4x3Provenance` in `ifc4x3_supertype_aliases.ts`
+   * for the reproduced case).
+   *
+   * `checkIfc4x3Provenance` establishes which of three things is true —
+   * confirmed aliased, confirmed genuine, or unknown — and unknown is
+   * NOT treated as genuine (codex's #706 follow-up, P2: doing that
+   * reopened the same corruption on a spilled/windowed model whose
+   * keyword window hadn't been paged). Confirmed-aliased exports one of
+   * `IFC4X3_WEBIFC_TYPE_CODES`; unknown exports
+   * `IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE`. Both are codes
+   * `FromRawLineData` has no converter for, so `getLine` falls back to
+   * the raw, unconverted argument tape rather than confidently
+   * misreading it as the wrong type — only confirmed-genuine reaches the
+   * real converter.
    *
    * @param model The model `element` belongs to.
    * @param element The record to classify.
@@ -2054,13 +2094,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private webIfcTypeOf_(model: IfcStepModel, element: { localID: number, type: number }): number {
 
-    const keyword = originalIfc4x3Keyword(model, element.localID, element.type)
+    const provenance = checkIfc4x3Provenance(model, element.localID, element.type)
 
-    if (keyword !== void 0) {
-      return IFC4X3_WEBIFC_TYPE_CODES[keyword]
+    switch (provenance.status) {
+      case 'aliased':
+        return IFC4X3_WEBIFC_TYPE_CODES[provenance.keyword]
+      case 'unknown':
+        return IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE
+      case 'genuine':
+        return shimIfcEntityReverseMap[element.type]
     }
-
-    return shimIfcEntityReverseMap[element.type]
   }
 
   /**

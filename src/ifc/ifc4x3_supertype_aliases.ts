@@ -113,7 +113,9 @@ export class Ifc4X3AliasedTypeIndex implements TypeIndex<EntityTypesIfc> {
  * generated `IfcBuildingStorey`/`IfcBuildingElementProxy` classes) answers
  * that IFC4 type and nothing else; there is no side channel carrying "this
  * was really IFCROAD" forward, because the alias is resolved at the keyword
- * lookup itself, before any localID exists to key a side table on.
+ * lookup itself, before any localID exists to key a side table on. (A
+ * localID-keyed side table populated from THAT call site was considered —
+ * see the "provenance capture" note below for why it was not used.)
  *
  * That is harmless for extraction and the spatial tree (issue #280's
  * target) — every reader there wants "an IfcObjectDefinition"/"an
@@ -133,15 +135,77 @@ export class Ifc4X3AliasedTypeIndex implements TypeIndex<EntityTypesIfc> {
  * Since `USE_WEBIFC_SHIM=true` is Share's real build, this is the path an
  * actual property panel reads — codex's review of #706 caught it (P1).
  *
- * {@link originalIfc4x3Keyword} recovers the distinction the ONLY way
- * left after indexing: by reading the keyword text straight back off the
+ * {@link checkIfc4x3Provenance} recovers the distinction the ONLY way left
+ * after indexing: by reading the keyword text straight back off the
  * source, backward from the record's own address, via
- * `StepModelBase.rawBytesIfResident` — a read-only, best-effort recovery
- * that answers "can't tell" (`undefined`) rather than guessing wrong on a
- * spilled/windowed source that hasn't paged the keyword in.
+ * `StepModelBase.rawBytesIfResident` — a read-only, synchronous,
+ * best-effort recovery.
+ *
+ * **Provenance capture, considered and rejected (codex's #706 follow-up,
+ * P2, option (b)):** could `Ifc4X3AliasedTypeIndex.get()` record the alias
+ * decision itself, keyed by something available at that call site, instead
+ * of reconstructing it later? No localID exists yet there (`get()` fires
+ * during keyword lookup, before the record's local ID is assigned), and
+ * the only thing available is the keyword's OWN byte offset — which does
+ * NOT correlate 1:1 with the record it belongs to: `get()` is ALSO the
+ * call site `step_parser.ts` uses for an INLINE typed value inside the
+ * SAME record's attribute list (`IFCROADPARTTYPEENUM(.ROADSEGMENT.)` on
+ * `IfcFacilityPart` — reproduced: it fires a second `get()` call between
+ * the outer record's own lookup and its `pushEntry`). A queue correlating
+ * "the Nth alias hit" to "the Nth record indexed" is wrong on exactly the
+ * records this table covers. The only sound version threads `expressID`
+ * through `step_parser.ts`'s generic `TypeIndex.get()` call — a shared,
+ * heavily-used core interface serving STEP/AP214 too — for an IFC4X3-only
+ * need. Not attempted as disproportionate to the fix; see AGENTS.md on
+ * keeping a diff minimal and scoped.
+ *
+ * **Paging the preceding range, considered and partially used (option
+ * (a)):** the residency mismatch codex named is real (reproduced below) —
+ * `ensureResidentByExpressID`/`ensureLineResident` page only a record's
+ * OWN `[address, address+length)`, never bytes before it, so on a
+ * spilled/windowed model the keyword can be nonresident even once the
+ * record itself is paged in. Paging it INSIDE the scan itself would make
+ * `checkIfc4x3Provenance` async, which `getRawLineData`/`getLine` (the web-ifc-
+ * compatible surface, synchronous by contract, matching upstream web-ifc)
+ * cannot become without a breaking API change — not attempted, same
+ * reasoning as above. Widening the SHARED `ensureResidentByLocalID` to
+ * always page a margin before every record was also rejected: it is the
+ * hot per-record residency path for every STEP/IFC/AP214 read, and the
+ * benefit is IFC4X3-alias-specific. Instead, {@link ifc4x3KeywordScanRange}
+ * is exposed so `IfcApiProxyIfc.ensureLineResident` — the compat layer's
+ * OWN existing async residency hook, already documented as "call this
+ * before a synchronous read on a spilled source" and already scoped to
+ * IFC — can pre-page the keyword window too, for the two candidate types
+ * only. That fixes resolution for every consumer that follows the
+ * documented sequencing (which real streaming/windowed loads do).
+ *
+ * **The backstop, and the part that is NOT optional:** a consumer that
+ * skips `ensureLineResident`, or a keyword whose neighbourhood genuinely
+ * can't be parsed (long whitespace runs and STEP `/* *\/` comments are
+ * both legal there and neither is recognized by this scanner's plain
+ * character-class walk — `step_parser.ts`'s own `whitespace()` treats
+ * comments as whitespace-equivalent via `commentParser`, which this
+ * intentionally does NOT replicate, so a comment there reads as "not a
+ * `(`" and correctly falls to `unknown` rather than misparsing), still
+ * must not resolve to "confirmed genuine" by default. Reproduced: spilling
+ * `KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc` to a 32-byte-chunked external
+ * store and paging ONLY the target record's own range (exactly what
+ * `ensureResidentByExpressID` does) makes this scanner answer `undefined`
+ * for a real `IfcFacilityPart` — indistinguishable, under the OLD two-
+ * valued `originalIfc4x3Keyword` contract, from a genuine
+ * `IfcBuildingStorey`, which sent `webIfcTypeOf_` straight back to the
+ * borrowed converter and reopened the exact corruption #706 fixed, on
+ * precisely the large/windowed/spilled models where it is hardest to
+ * notice. {@link checkIfc4x3Provenance} therefore returns a THIRD,
+ * explicit `'unknown'` outcome the caller must treat as unsafe — see
+ * `IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE`.
  */
 const ALIAS_TARGET_TYPES: ReadonlySet<EntityTypesIfc> = new Set(
     IFC4X3_SUPERTYPE_ALIASES.values() )
+
+/** The real IFC4 keyword for each alias TARGET type, for a strict match. */
+const GENUINE_KEYWORD_BY_TARGET_TYPE: ReadonlyMap<EntityTypesIfc, string> = new Map(
+    [ ...ALIAS_TARGET_TYPES ].map( ( entityType ) => [ entityType, EntityTypesIfc[ entityType ] ] ) )
 
 /**
  * Bytes read backward from a record's address, searching for its keyword.
@@ -161,7 +225,7 @@ const isStepWhitespace = ( c: string ): boolean =>
 const isIdentifierChar = ( c: string ): boolean => /[A-Za-z0-9_]/.test( c )
 
 /**
- * Model surface {@link originalIfc4x3Keyword} needs — the subset of
+ * Model surface {@link checkIfc4x3Provenance} needs — the subset of
  * `IfcStepModel` (`StepModelBase`) it reads, kept narrow so this stays
  * testable without constructing a full model.
  */
@@ -171,26 +235,25 @@ export interface Ifc4X3KeywordSourceModel {
 }
 
 /**
- * Recover a record's real IFC4X3 keyword if {@link IFC4X3_SUPERTYPE_ALIASES}
- * mapped it onto `resolvedType` at parse time — `undefined` for a record
- * that genuinely IS `resolvedType`, that isn't one of the two alias target
- * types at all, or whose keyword bytes can't be read back right now.
- *
- * Fast-exits before touching the source for every entity that isn't even a
- * candidate (`resolvedType` not an alias target) — the overwhelming
- * majority of a typical model, so this costs nothing on the hot property
- * -read path for ordinary IFC4 entities.
+ * The byte range {@link checkIfc4x3Provenance} needs resident to give a
+ * definite answer for `localID` — `undefined` when `resolvedType` isn't
+ * even a candidate (every ordinary IFC4 entity), so a caller can use this
+ * to decide whether pre-paging is worth doing at all. See
+ * `IfcApiProxyIfc.ensureLineResident`, the one real consumer: it pages
+ * this range (cheaply — two entity types out of ~900, not a hot path)
+ * ahead of a synchronous `getLine`, the same "ensure before you read"
+ * sequencing it already does for the record's own range.
  *
  * @param model The model `localID` belongs to.
- * @param localID The record to check.
+ * @param localID The record that might need its keyword window paged.
  * @param resolvedType The type conway resolved it to (an entity's `.type`).
- * @return {string | undefined} The real keyword (e.g. `'IFCROAD'`), or
- * undefined per the cases above.
+ * @return {[number, number] | undefined} `[address, length]` to page, or
+ * undefined when there is nothing worth pre-paging.
  */
-export function originalIfc4x3Keyword(
-    model: Ifc4X3KeywordSourceModel,
+export function ifc4x3KeywordScanRange(
+    model: Pick<Ifc4X3KeywordSourceModel, 'recordAddress'>,
     localID: number,
-    resolvedType: EntityTypesIfc ): string | undefined {
+    resolvedType: EntityTypesIfc ): [ number, number ] | undefined {
 
   if ( !ALIAS_TARGET_TYPES.has( resolvedType ) ) {
     return void 0
@@ -203,10 +266,82 @@ export function originalIfc4x3Keyword(
   }
 
   const start = Math.max( 0, address - KEYWORD_SCAN_WINDOW )
-  const bytes = model.rawBytesIfResident( start, address - start )
 
-  if ( bytes === void 0 || bytes.length === 0 ) {
-    return void 0
+  return start === address ? void 0 : [ start, address - start ]
+}
+
+/**
+ * The three things {@link checkIfc4x3Provenance} can establish about a
+ * record whose resolved type is an alias target:
+ *
+ * - `'aliased'` — confirmed: the source keyword is one of
+ *   {@link IFC4X3_SUPERTYPE_ALIASES}'s four. `keyword` names which.
+ * - `'genuine'` — confirmed: the source keyword IS `resolvedType`'s own
+ *   real IFC4 name (e.g. `'IFCBUILDINGSTOREY'`) — a real IFC4 entity that
+ *   happens to share a type with this alias's targets, not an alias hit.
+ * - `'unknown'` — NOT confirmed either way (bytes unresident, or the
+ *   scan couldn't parse what precedes the record). Callers MUST NOT treat
+ *   this as `'genuine'` — that is the exact regression codex's #706
+ *   follow-up (P2) named. Route it to a converter-less sentinel instead
+ *   (see `IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE`): a real entity losing its
+ *   converted property view is a visible, debuggable degradation; silently
+ *   misreading an aliased one's fields is not.
+ */
+export type Ifc4x3Provenance =
+  | { readonly status: 'aliased', readonly keyword: string }
+  | { readonly status: 'genuine' }
+  | { readonly status: 'unknown' }
+
+/**
+ * Establish whether a record whose resolved type is an alias target
+ * ({@link IFC4X3_SUPERTYPE_ALIASES}'s two IFC4 targets) really is that
+ * IFC4 type, or is one of the four IFC4X3 keywords this table aliased
+ * onto it — see {@link Ifc4x3Provenance} for the three-way result and its
+ * safety contract, and the block comment above this section for why a
+ * two-valued "keyword, or nothing" contract (this function's previous
+ * shape) was the actual bug codex's #706 follow-up (P2) found.
+ *
+ * Fast-exits before touching the source for every entity that isn't even
+ * a candidate (`resolvedType` not an alias target) — the overwhelming
+ * majority of a typical model, so this costs nothing on the hot property
+ * -read path for ordinary IFC4 entities. For a genuine record of one of
+ * the two target types, this DOES read `resolvedType`'s own name back
+ * from the source to distinguish `'genuine'` from `'unknown'` — cheap
+ * (bytes usually already resident) but not free; still only paid by the
+ * two candidate types.
+ *
+ * @param model The model `localID` belongs to.
+ * @param localID The record to check.
+ * @param resolvedType The type conway resolved it to (an entity's `.type`).
+ * @return {Ifc4x3Provenance} The established provenance — callers that
+ * only care about alias targets at all can check `ALIAS_TARGET_TYPES` (or
+ * simply call this and branch) before calling.
+ */
+export function checkIfc4x3Provenance(
+    model: Ifc4X3KeywordSourceModel,
+    localID: number,
+    resolvedType: EntityTypesIfc ): Ifc4x3Provenance {
+
+  if ( !ALIAS_TARGET_TYPES.has( resolvedType ) ) {
+    return { status: 'genuine' }
+  }
+
+  const range = ifc4x3KeywordScanRange( model, localID, resolvedType )
+
+  // No margin to scan (record sits at the very start of the source) is
+  // not itself inconclusive — there is nothing there but the keyword,
+  // same as any other case; fall through to the read below with a
+  // zero-length range, which the byte-availability check handles.
+  const [ start, length ] = range ?? [ model.recordAddress( localID ), 0 ]
+
+  if ( start === void 0 ) {
+    return { status: 'unknown' }
+  }
+
+  const bytes = model.rawBytesIfResident( start, length )
+
+  if ( bytes === void 0 ) {
+    return { status: 'unknown' }
   }
 
   const text = WINDOW_DECODER.decode( bytes )
@@ -214,13 +349,15 @@ export function originalIfc4x3Keyword(
   // Walk backward: optional whitespace, the '(' that opens the record's
   // attribute list (address is defined as right after it — see
   // step_parser.ts's parseInlineElement/the top-level record loop), more
-  // optional whitespace, then the keyword itself.
+  // optional whitespace, then the keyword itself. Deliberately NOT
+  // comment-aware (see the block comment above) — a comment in either gap
+  // makes this fall to 'unknown', not misparse.
   let i = text.length - 1
 
   while ( i >= 0 && isStepWhitespace( text[ i ] ) ) { --i }
 
   if ( i < 0 || text[ i ] !== '(' ) {
-    return void 0
+    return { status: 'unknown' }
   }
 
   --i
@@ -232,28 +369,71 @@ export function originalIfc4x3Keyword(
 
   const keyword = text.slice( i + 1, keywordEnd ).toUpperCase()
 
-  return IFC4X3_SUPERTYPE_ALIASES.has( keyword ) ? keyword : void 0
+  if ( IFC4X3_SUPERTYPE_ALIASES.has( keyword ) ) {
+    return { status: 'aliased', keyword }
+  }
+
+  if ( keyword === GENUINE_KEYWORD_BY_TARGET_TYPE.get( resolvedType ) ) {
+    return { status: 'genuine' }
+  }
+
+  // Read something, but it matched neither the four aliases nor
+  // resolvedType's own name — stay conservative rather than guess.
+  return { status: 'unknown' }
 }
 
-/**
- * Synthetic web-ifc "type" codes for the four keywords
- * {@link IFC4X3_SUPERTYPE_ALIASES} covers, used ONLY by the compat layer
- * (`ifc_api_proxy_ifc.ts`'s `getRawLineData`) once {@link originalIfc4x3Keyword}
- * has told it a record is one of these. Deliberately NOT real web-ifc type
- * hashes (which are all unsigned CRC32-style values, i.e. always positive —
- * none of these entities have one, since web-ifc has never heard of
- * IFC4X3) and deliberately NOT `-1`: `IfcApiProxyIfc.getLine` special-cases
- * exactly `-1` as "no type at all" and drops the record, while any OTHER
- * value with no `FromRawLineData` entry hits its normal
- * "no converter — return the raw, unconverted argument tape" fallback,
- * which is what these want: safer than confidently misreading the
- * argument tape as some other type's fields (codex's review of #706 — see
- * the block comment above), and strictly better than dropping the record
- * outright. `280` for the issue this all traces back to.
- */
 export const IFC4X3_WEBIFC_TYPE_CODES: Readonly<Record<string, number>> = {
   IFCROAD: -280001,
   IFCFACILITYPART: -280002,
   IFCPAVEMENT: -280003,
   IFCKERB: -280004,
 }
+
+/**
+ * Reverse of {@link IFC4X3_WEBIFC_TYPE_CODES}: synthetic web-ifc type
+ * code -> real IFC4X3 keyword. Derived, never hand-duplicated, so the two
+ * tables cannot drift.
+ *
+ * Consumed by `getIfcType` (`properties.ts`'s `Properties` — `IfcAPI`'s
+ * shared, schema-agnostic instance — and `ifc_properties.ts`'s
+ * `IfcProperties`, the per-model passthrough) so the TYPE LABEL Share
+ * renders for one of these entities (`entityTypeName()` in
+ * `itemProperties.jsx`, via `prettyType()`) is the real keyword —
+ * `'IFCROAD'` -> "Road", `'IFCFACILITYPART'` -> "Facility Part" — rather
+ * than falling through to Share's generic empty/'Element' label. Before
+ * this table existed, `IfcTypesMap[type]` (the plain web-ifc-derived
+ * lookup both implementations otherwise use) had no entry at all for a
+ * synthetic sentinel and answered `undefined` — verified directly against
+ * `IfcTypesMap[-280001]` before this change existed.
+ *
+ * Read-direction only: this is consulted from a numeric TYPE CODE to a
+ * NAME, the same direction `IfcTypesMap` itself is read in throughout the
+ * compat layer (`ifc_properties.ts`, `properties.ts`) — nothing in conway
+ * reads `IfcTypesMap`/`IfcElements` the other way (name -> code), so
+ * adding these four keyword strings as `getIfcType` outputs cannot feed a
+ * consumer that tries to round-trip a name back to a code conway would
+ * then have to recognize.
+ */
+export const IFC4X3_WEBIFC_TYPE_NAMES: Readonly<Record<number, string>> =
+  Object.fromEntries(
+      Object.entries( IFC4X3_WEBIFC_TYPE_CODES ).map(
+          ( [ keyword, code ] ) => [ code, keyword ] ) )
+
+/**
+ * Synthetic web-ifc "type" code for a record whose resolved type is an
+ * alias target ({@link IFC4X3_SUPERTYPE_ALIASES}'s two IFC4 targets) but
+ * whose provenance {@link checkIfc4x3Provenance} could NOT establish
+ * (`{status: 'unknown'}`) — a nonresident keyword window on a
+ * spilled/windowed source, or a comment/whitespace shape the scan can't
+ * parse. Distinct from every entry in {@link IFC4X3_WEBIFC_TYPE_CODES}
+ * (those are for a CONFIRMED alias hit) and, like them, has no
+ * `FromRawLineData` entry and is not `-1`, so `getLine` falls back to the
+ * raw, unconverted argument tape — the same safe behaviour a confirmed
+ * alias gets, for the same reason: a converter for the WRONG type is
+ * worse than no converter. Deliberately absent from
+ * {@link IFC4X3_WEBIFC_TYPE_NAMES} too — `getIfcType` should answer
+ * "don't know" (falls through to `IfcTypesMap`, which has no entry
+ * either) rather than confidently label an unconfirmed record, mirroring
+ * the property-read side's refusal to guess.
+ */
+export const IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE = -280099

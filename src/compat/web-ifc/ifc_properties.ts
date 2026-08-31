@@ -14,6 +14,7 @@ import { IfcApiProxyIfc } from './ifc_api_proxy_ifc';
 import { IncludeProperties, Node, PropertiesPassthrough } from './properties_passthrough';
 
 import { IfcElements, IfcTypesMap } from './types-map'
+import { IFC4X3_WEBIFC_TYPE_NAMES } from '../../ifc/ifc4x3_supertype_aliases'
 
 
 interface pName {
@@ -64,7 +65,10 @@ export class IfcProperties implements PropertiesPassthrough {
   }
 
   getIfcType(type: number) {
-    return IfcTypesMap[type]
+    // Synthetic IFC4X3 sentinel codes (issue #280) first — IfcTypesMap,
+    // web-ifc's own table, has no entry for them at all (see
+    // ifc4x3_supertype_aliases.ts's IFC4X3_WEBIFC_TYPE_NAMES doc comment).
+    return IFC4X3_WEBIFC_TYPE_NAMES[type] ?? IfcTypesMap[type]
   }
 
   /**
