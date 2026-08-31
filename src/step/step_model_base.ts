@@ -1503,9 +1503,64 @@ implements Iterable<BaseEntity>, Model {
       return multiElements?.find( where => where instanceof type ) as O | undefined
     }
 
-    let entity = element.entity as BaseEntity | undefined
+    const memoized = element.entity as BaseEntity | undefined
 
-    if (entity === void 0 && element.typeID !== void 0) {
+    if ( memoized !== void 0 ) {
+
+      // conway#606. The memo records the entity, never the type a caller
+      // asked for, and ANY earlier read populates it — including the
+      // untyped `getElementByLocalID`. So the type test below, which used
+      // to be the only one in this method, ran on a memo MISS only: a
+      // typed lookup of an already-materialised record returned the cached
+      // object through the `as O` cast without checking it at all, and
+      // callers of `extractElement` got an entity of the wrong class where
+      // their own declared field type says otherwise. Memoization defaults
+      // to on, so this was the ordinary path, not a corner.
+      //
+      // `instanceof` is the same predicate the construct below applies,
+      // not a second opinion on it. `element.entity` for a single-mapped
+      // record is only ever `new schema.constructors[ element.typeID ]`
+      // (here, or in `getElementByLocalID`), and for an instance of that
+      // constructor `entity instanceof type` holds exactly when
+      // `type === constructorRead || constructorRead.prototype instanceof
+      // type` does — the first disjunct is the instance's own prototype,
+      // the second its strict ancestors, and together they are its whole
+      // prototype chain. It is also what the multi-mapping branch above
+      // has always used to pick a variant.
+      //
+      // One record breaks that "only ever `schema.constructors`" rule and
+      // is worth naming, because it is the single place where a memo hit
+      // and a memo miss can still disagree. A type-0 external-mapping
+      // container reaching HERE (rather than the multi-mapping branch)
+      // holds an `externalMappingType` instance, since that is what
+      // `getElementByLocalID` builds for type 0, while the construct path
+      // below reads `schema.constructors[ 0 ]`, which is `undefined`. It
+      // is reachable: the parser mints type 0 for a complex instance and
+      // normally attaches a `multiMapping`, but a degenerate `#5=();`
+      // leaves that undefined and lands here — verified by parsing one.
+      // So a cold lookup answers `undefined` where a warm one answers the
+      // mapping object. The divergence is confined to a `type` argument of
+      // `StepEntityBase` / `StepExternalMapping` / `<Schema>StepExternalMapping`,
+      // none of which any generated getter passes; for every schema type a
+      // caller can actually name, both answers are `undefined`, because
+      // that class descends from `StepEntityBase` alone. Left as it is
+      // rather than special-cased: guarding it would add a branch for a
+      // query nothing issues, and the warm answer is the truthful one.
+      //
+      // A mismatch therefore returns `undefined` rather than falling
+      // through to reconstruct: the fall-through would call the same
+      // constructor and fail the same test, so it could only build the
+      // rejected class again. The eviction/churn trade the issue raises is
+      // not reachable — a record has one schema type, so "read as two
+      // different types" cannot produce two different memo tenants — and
+      // not evicting keeps referential equality for the holders that asked
+      // for a type this record actually is.
+      return ( memoized instanceof type ? memoized : void 0 ) as O | undefined
+    }
+
+    let entity: BaseEntity | undefined
+
+    if (element.typeID !== void 0) {
 
       const elementTypeID = element.typeID
 
@@ -1520,7 +1575,7 @@ implements Iterable<BaseEntity>, Model {
         entity = new constructorRead(localID, element, this )
 
         if ( this.elementMemoization ) {
-          element.entity = entity!
+          element.entity = entity
         }
       }
     }
