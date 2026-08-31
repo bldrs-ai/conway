@@ -23,10 +23,12 @@ common enough to justify surfacing ephemeral pickable nodes in the tree?
    different shapes: MCAD multibody parts whose solids carry meaningful *names*
    (the NEMA case), and large *anonymous* solid dumps (ECAD merged-component
    products, tessellated surface soup) that carry no navigable semantics.
-   **Implemented: an opt-in layer of ephemeral solid-level nodes beneath each
-   multibody product** — named solids surface with their file names, small
-   unnamed sets get positional labels, oversized all-unnamed sets are
-   suppressed (with the count reported), and per-face styling stays pick-only.
+   **Implemented: a layer of ephemeral solid-level nodes beneath each
+   multibody product** (on by default since conway#628) — named solids
+   surface with their file names, small unnamed sets get positional labels,
+   oversized all-unnamed sets are suppressed (with the count reported), and
+   per-face styling stays pick-only. Each such node, and the geometry under
+   it, is keyed by an occurrence path ending in the solid's own express id.
 
 ## Q1 — the NEMA file: genuine non-product geometry
 
@@ -135,10 +137,23 @@ anonymous solid dumps do not.**
 
 ## Implemented: the ephemeral solid layer
 
+> **Updated by conway#628 (test-models-private#98).** The layer is now
+> **on by default**, its per-product hard cap is gone, and a solid node's
+> occurrence path ends with the solid's own express id. What forced all
+> three: `BLSN_007.stp`, a 281 MB Rhino 7 / ST-DEVELOPER hull export that is
+> **one product, zero NAUOs, zero CDSRs and 2,268 individually named
+> bodies** — the multibody pattern as the *entire* model rather than a
+> detail of one part in an assembly. With the layer opt-in, Share got a
+> one-node tree; with a shared path per body, all 1,884 hull solids were one
+> selection; with a 256 cap, seven eighths of them would have had no node
+> even so, while Autodesk's viewer lists every one. See
+> §"conway#628: identity below the product" below for the resulting rules.
+
 `AP214ProductStructureExtraction.extractProductStructure` and the compat
-surface's `getSpatialStructure` now take an opt-in
-(`ProductStructureOptions.includeSolids` /
-`SpatialStructureOptions.includeSolids`, default **off**):
+surface's `getSpatialStructure` take a
+`ProductStructureOptions.includeSolids` /
+`SpatialStructureOptions.includeSolids` option (default **true**; pass
+`false` for a products-only outline):
 
 - **What becomes a node**: each solid representation item
   (`manifold_solid_brep` — covering `brep_with_voids` / `faceted_brep` —
@@ -152,23 +167,33 @@ surface's `getSpatialStructure` now take an opt-in
   owning product/occurrence node, so Share can render them lighter-weight
   (selectable-but-not-product). Name from the solid's own name when meaningful
   (`Boss-Extrude7`), else a positional fallback (`Solid 3 of 10`).
-- **Identity**: `(occurrencePath, solid expressID)` — the path (NAUO-only,
-  inherited from the parent occurrence) disambiguates instances of a multibody
-  part used twice; the solid's express id is stable in-file, satisfying the
-  permalink requirement from the occurrence-identity work.
+- **Identity**: the `occurrencePath` alone — the parent occurrence's NAUO
+  chain (which disambiguates instances of a multibody part used twice) plus
+  the solid's own express id as a final segment (which disambiguates the
+  bodies of one instance). The express id is stable in-file, satisfying the
+  permalink requirement from the occurrence-identity work. This was the
+  `(occurrencePath, expressID)` *pair* until conway#628; a pair is not what
+  the scene stamps on a mesh, so a pick could not be resolved by path
+  comparison alone.
 - **Pick ⇄ tree round-trip is nearly free**: the geometry pipeline already
   emits one canonical mesh keyed by the solid's own localID, so an ephemeral
   node maps 1:1 onto an existing pickable scene mesh.
-- **Heuristics** (the survey's two shapes, encoded):
+- **Heuristics** (the survey's two shapes, encoded), all-or-nothing per
+  product:
   - a product with fewer than 2 solids gets no children — the product node
     already maps 1:1 onto its body (as1, jet engine, … are unchanged);
   - an *all-unnamed* set larger than `maxUnnamedSolidsPerProduct`
     (default 32) is suppressed entirely — anonymous dumps carry no navigable
-    semantics (Arty's mega-products, DSA2's shells);
-  - a hard cap `maxSolidsPerProduct` (default 256) bounds any single node's
-    children;
-  - both suppressions report the count via the node's `droppedSolids`, so a
-    consumer can render an "N more…" affordance instead of silently truncating.
+    semantics (Arty's mega-products, DSA2's shells) — and reports the count
+    via the node's `droppedSolids`, so a consumer can render an "N more…"
+    affordance instead of silently truncating;
+  - a *named* set is emitted in full however large it is. The 256-solid
+    `maxSolidsPerProduct` cap that used to bound it is gone: partial
+    emission is not a smaller tree but a broken one, because the geometry
+    walk stamps a per-body path for the same set the tree emits, so the
+    capped-off bodies keep paths that resolve to no node. Either every body
+    of a product is addressable or the product node is what a pick on any of
+    them resolves to.
 - **Not nodes**: per-face styling (254 styled faces on NEMA, 28,674 on DSA2)
   stays hover/pick-only. Named `shape_aspect`s (MBD datums, e.g. `MBD_A` in
   the NIST PMI files) are a worthwhile *future* second ephemeral kind, behind
@@ -181,12 +206,62 @@ Verified against the survey corpus with `includeSolids: true`:
 | NEMA 23 | 6 (unchanged) | 10 named bodies under the motor occurrence | 0 |
 | Arty Z7 | 124 (unchanged) | 13 (small multibody components) | 1,189 across the 2 mega-products |
 | DSA2 | 1 (unchanged) | 0 | 28,674 on the single root |
+| BLSN_007 | 1 (unchanged) | 2,268 named hull bodies (1,884 breps + 384 shells) | 0 |
 
 Hermetic coverage lives in `data/ap214-multibody-part.step` +
 `ap214_product_structure_extraction.test.ts` (named multibody, per-occurrence
 duplication, single-solid gate, transformation-relationship exclusion,
-unnamed-soup suppression, cap overflow) and `ap214_properties.test.ts`
-(compat-surface opt-in and identity-row resolution).
+unnamed-soup suppression, all-or-nothing emission, tree/geometry identity-set
+agreement) and `ap214_properties.test.ts` (compat-surface default + opt-out,
+identity-row resolution, and the arbitrary-entity fallback for a body with no
+node of its own).
+
+
+## conway#628: identity below the product
+
+BLSN_007 broke the layer's two standing assumptions at once — that the
+product tree is the interesting part of a STEP file, and that a body's
+identity is a *pair* the consumer assembles rather than something conway
+emits. Three rules came out of it. They are stated in terms of what a
+consumer can rely on, because that is what makes them testable.
+
+**1. The occurrence path is the whole selection key.** Every geometry
+instance the scene emits carries one, and it equals the path of the tree
+node that instance belongs to. The path is NAUO ids, ending in the body's
+own express id when the body is individually addressable. Nothing else is
+ever a segment — in particular a plain `shape_representation_relationship`
+is not, because it binds a part to its own detail representation and the
+tree has no node for it. (It used to be one: NEMA motor bodies carried
+`[14107, 6611]`, a NAUO followed by a relationship, which resolved to no
+node and was the *same* path for all ten bodies.)
+
+**2. One decision, read by both sides.**
+`identityBearingSolidExpressIDs()` names the bodies that get their own
+segment; `extractProductStructure` emits a node for exactly that set, and
+`AP214GeometryExtraction.prepareDemandExtraction` consults it in its item
+loop. This is why the heuristics above are all-or-nothing: any rule that
+emits a node for some of a product's bodies and not others makes the
+suppressed bodies' paths unresolvable. `ap214_product_structure_extraction.test.ts`
+pins the two sides against each other directly.
+
+**3. An SDR-bound representation is never the child of a plain relationship
+edge.** BLSN_007 writes the same kind of relation both ways round — three
+edges as `(product rep, detail rep)` and 308 as `(detail rep, product rep)`.
+Read literally, those 308 make the product's own representation a child of
+308 free wireframe representations, so it becomes 308 walk roots and the
+whole model is re-walked and re-placed once per root: **698,544 scene nodes
+for 2,268 bodies, sharing 616 paths**. The geometry walk therefore orients
+such an edge by SDR-boundness (the SDR-bound side is the shape *of* a part,
+so it is the parent) — but only when the relationship carries no
+transformation, since reversing a placement without evidence would move
+geometry, and a duplicated placement is the lesser failure. After the fix:
+2,268 scene nodes, 2,268 distinct paths, 2,268 tree leaves, paths equal.
+`data/ap214-inverted-srr-multibody.step` is that shape reduced to three
+bodies and three inverted edges.
+
+None of this changes tessellation: the regression digest is one row per
+canonical mesh, so BLSN_007's 2,268-row baseline is byte-identical across
+the change (verified), as are as1, NEMA and the multibody fixture.
 
 ## Reproducing the survey
 

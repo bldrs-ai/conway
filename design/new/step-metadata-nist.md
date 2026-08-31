@@ -391,6 +391,26 @@ occurrence id must be threaded into the scene's instance map so a
 viewport pick returns the *same* id the tree node carries (bidirectional
 selection).
 
+**Below the product, the path continues with the body** (conway#628). A
+multibody part's bodies share every NAUO segment, so a NAUO-only path
+cannot tell them apart — and there are files with nothing *but* that
+distinction: BLSN_007, a 281 MB Rhino hull export, is one product, zero
+NAUOs and 2,268 individually named `MANIFOLD_SOLID_BREP`s. So an
+individually addressable body appends **its own express id** as the path's
+last segment, on the tree node and on the geometry instance alike. Which
+bodies are addressable is one decision, taken by
+`AP214ProductStructureExtraction.identityBearingSolidExpressIDs` and read by
+both sides — see `design/new/step-nonproduct-semantics.md`.
+
+**What is never a segment: a representation relationship.** A plain
+`shape_representation_relationship` binds a part to its own detail
+representation (the SolidWorks multibody idiom); it is indirection inside
+one part, not an occurrence of anything, and the tree has no node for it.
+Its express id used to appear mid-path, which made every such path
+unresolvable — `[14107, 6611]` on the NEMA motor named a NAUO and then a
+relationship, and matched no node. Paths are NAUOs, optionally ending in a
+body.
+
 **Share generalization flag.** Share's permalink is already a *path*
 (`/1/42/123` = parent chain), but its internal selection key is a scalar
 `expressID`. A scalar cannot distinguish instances; an occurrence **path**

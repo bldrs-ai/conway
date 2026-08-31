@@ -9,6 +9,7 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { ExtractResult } from '../core/shared_constants'
 import { AP214Properties } from '../compat/web-ifc/ap214_properties'
 import { IfcApiProxyAP214 } from '../compat/web-ifc/ifc_api_proxy_ap214'
+import { manifold_solid_brep } from './AP214E3_2010_gen/manifold_solid_brep.gen'
 import { product_definition_shape } from './AP214E3_2010_gen/product_definition_shape.gen'
 
 
@@ -253,8 +254,10 @@ describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () =
   const SCREW_NAUOS = [ 14108, 14109, 14110, 14111 ]
   const MOTOR_MULTIBODY_SRR = 6611
   const SCREW_MULTIBODY_SRR = 10234
+  const MOTOR_BODY_COUNT = 10
 
   let nemaScene: AP214SceneBuilder
+  let nemaModel: ReturnType<AP214StepParser['parseDataToModel']>[1]
 
   beforeAll( async () => {
 
@@ -266,6 +269,7 @@ describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () =
     const [ , parsed ] = parser.parseDataToModel( buffer )
 
     expect( parsed ).not.toBe( void 0 )
+    nemaModel = parsed
 
     const [ result, sceneBuilder ] =
       new AP214GeometryExtraction( conwayGeometry, parsed! ).extractAP214GeometryData()
@@ -290,24 +294,50 @@ describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () =
 
   test( 'a part reused across NAUOs instances once per NAUO (the four screws)', () => {
 
+    // The screw is a SINGLE-solid part, so nothing distinguishes its body from
+    // the part: its path is just the NAUO's, one per occurrence.
     const screwPaths = [ ...nemaScene.geometryOccurrences() ]
         .map( ( [ , path ] ) => path )
-        .filter( ( path ) => path[ path.length - 1 ] === SCREW_MULTIBODY_SRR )
+        .filter( ( path ) => SCREW_NAUOS.includes( path[ 0 ] ) )
 
     expect( screwPaths.map( ( p ) => JSON.stringify( p ) ).sort() ).toEqual(
-        SCREW_NAUOS.map( ( nauo ) => JSON.stringify( [ nauo, SCREW_MULTIBODY_SRR ] ) ) )
+        SCREW_NAUOS.map( ( nauo ) => JSON.stringify( [ nauo ] ) ) )
   } )
 
-  test( 'the multibody motor solids all carry the motor occurrence prefix', () => {
+  test( 'each multibody motor body is its own selection under the motor occurrence', () => {
 
+    // Changed by conway#628 (test-models-private#98), deliberately. Every body
+    // of the motor used to carry the SAME path — the NAUO plus the multibody
+    // relationship's own express id (#6611) — so the ten bodies were one
+    // selection, and that path matched no product-structure node either (the
+    // relationship is not an occurrence and has no node). Now each body ends
+    // its path with its own express id, which is exactly what the tree's
+    // solid node for it carries.
     const motorPaths = [ ...nemaScene.geometryOccurrences() ]
         .map( ( [ , path ] ) => path )
         .filter( ( path ) => path[ 0 ] === MOTOR_NAUO )
 
     expect( motorPaths.length ).toBeGreaterThan( 1 )
 
+    const bodyIDs = new Set<number>()
+
     for ( const path of motorPaths ) {
-      expect( path ).toEqual( [ MOTOR_NAUO, MOTOR_MULTIBODY_SRR ] )
+      expect( path.length ).toBe( 2 )
+      expect( path[ 0 ] ).toBe( MOTOR_NAUO )
+      expect( path[ 1 ] ).not.toBe( MOTOR_MULTIBODY_SRR )
+      bodyIDs.add( path[ 1 ] )
+    }
+
+    // Per-face styled geometry (the NEMA export has 254 styled faces) is added
+    // as children of its body's scene node and shares that body's path, so
+    // count DISTINCT bodies rather than nodes.
+    expect( bodyIDs.size ).toBe( MOTOR_BODY_COUNT )
+
+    // ...and every one of them is a manifold_solid_brep in the file — the
+    // segment is the body's own identity, not a synthesised index.
+    for ( const bodyID of bodyIDs ) {
+      expect( nemaModel!.getElementByExpressID( bodyID ) )
+          .toBeInstanceOf( manifold_solid_brep )
     }
   } )
 
@@ -338,7 +368,7 @@ describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () =
   test( 'a picked multibody screw solid reports the screw\'s own PDS, not the SRR (conway#597)', () => {
 
     const screwOwners = [ ...nemaScene.geometryOccurrences() ]
-        .filter( ( [ , path ] ) => path[ path.length - 1 ] === SCREW_MULTIBODY_SRR )
+        .filter( ( [ , path ] ) => SCREW_NAUOS.includes( path[ 0 ] ) )
         .map( ( [ owner ] ) => owner )
 
     expect( screwOwners.length ).toBe( SCREW_NAUOS.length )
@@ -347,6 +377,140 @@ describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () =
       expect( owner ).toBeInstanceOf( product_definition_shape )
       expect( owner?.expressID ).toBe( SCREW_PDS_EXPRESS_ID )
       expect( owner?.expressID ).not.toBe( SCREW_MULTIBODY_SRR )
+    }
+  } )
+
+  test( 'no multibody relationship id survives in any occurrence path', () => {
+
+    // The other half of conway#628: a plain shape_representation_relationship
+    // binds a part to its own detail representation, so it is not an
+    // occurrence of anything and the product-structure tree has no node for
+    // it. Leaving its id in the path made every such path unresolvable.
+    const relationshipIDs = [ MOTOR_MULTIBODY_SRR, SCREW_MULTIBODY_SRR ]
+
+    for ( const [ , path ] of nemaScene.geometryOccurrences() ) {
+      for ( const segment of path ) {
+        expect( relationshipIDs ).not.toContain( segment )
+      }
+    }
+  } )
+
+  test( 'every geometry path is a tree node\'s path', async () => {
+
+    // The reconciliation the whole scheme exists for, on the multibody shape:
+    // paths as a SET rather than a multiset, because a per-face styled export
+    // (254 styled faces here) adds a scene node per face UNDER its body's
+    // node, sharing that body's path by design.
+    const props =
+      new AP214Properties( { StepModel: nemaModel! } as unknown as IfcApiProxyAP214 )
+    const treePaths = leafOccurrencePaths( await props.getSpatialStructure() as any )
+        .map( ( path ) => JSON.stringify( path ) )
+
+    const geometryPaths = [ ...nemaScene.geometryOccurrences() ]
+        .map( ( [ , path ] ) => JSON.stringify( path ) )
+
+    expect( geometryPaths.length ).toBeGreaterThan( 0 )
+    expect( [ ...new Set( geometryPaths ) ].sort() ).toEqual( treePaths.slice().sort() )
+  } )
+} )
+
+
+/**
+ * The BLSN_007 shape, reduced (test-models-private#98): ONE product, no NAUO
+ * and no context_dependent_shape_representation anywhere, every body named
+ * individually inside one child representation — and the relationships binding
+ * that child written in BOTH argument orders, three of them inverted.
+ *
+ * Read literally, an inverted edge makes the product's own SDR-bound
+ * representation the CHILD of a free wireframe representation, so each one
+ * becomes a separate walk root and the entire model is re-walked and re-placed
+ * once per root. On the real 281 MB export that is 2,268 bodies emitted as
+ * 698,544 scene nodes sharing 616 paths; here it is 3 bodies as 9 nodes
+ * sharing 3. Either way every body of the hull answers to the same path, which
+ * is the defect the issue reports as "all parts a single selection".
+ */
+describe( 'AP214 inverted-SRR multibody occurrence geometry (BLSN_007 shape)', () => {
+
+  const INVERTED_FIXTURE = 'data/ap214-inverted-srr-multibody.step'
+  const BODY_COUNT = 3
+  // eslint-disable-next-line no-magic-numbers
+  const BODY_EXPRESS_IDS = [ 401, 402, 403 ]
+  const BODY_NAMES = [ 'brep_0', 'brep_1', 'Hauptkoerper' ]
+
+  let invertedScene: AP214SceneBuilder
+  let invertedModel: ReturnType<AP214StepParser['parseDataToModel']>[1]
+
+  beforeAll( async () => {
+
+    const parser = AP214StepParser.Instance
+    const buffer = new ParsingBuffer( fs.readFileSync( INVERTED_FIXTURE ) )
+
+    expect( parser.parseHeader( buffer )[1] ).toBe( ParseResult.COMPLETE )
+
+    const [ , parsed ] = parser.parseDataToModel( buffer )
+
+    expect( parsed ).not.toBe( void 0 )
+    invertedModel = parsed
+
+    const [ result, sceneBuilder ] =
+      new AP214GeometryExtraction( conwayGeometry, parsed! ).extractAP214GeometryData()
+
+    expect( result ).toBe( ExtractResult.COMPLETE )
+    invertedScene = sceneBuilder
+  } )
+
+  test( 'each body is placed exactly once, not once per inverted relationship', () => {
+
+    const occurrences = [ ...invertedScene.geometryOccurrences() ]
+
+    // Three inverted edges used to make three walk roots, so every body was
+    // placed three times: 9 nodes for 3 bodies. Counting nodes is the check —
+    // path uniqueness alone would pass a walk that placed one body 3x and
+    // dropped the other two.
+    expect( occurrences.length ).toBe( BODY_COUNT )
+  } )
+
+  test( 'each body carries its own unique occurrence path', () => {
+
+    const paths = [ ...invertedScene.geometryOccurrences() ]
+        .map( ( [ , path ] ) => path )
+
+    // One segment, the body's own express id: there is no NAUO in this file to
+    // prefix it with, and the relationship ids that used to appear here
+    // (`[701,500]`) name nothing selectable.
+    expect( paths.map( ( path ) => JSON.stringify( path ) ).sort() ).toEqual(
+        BODY_EXPRESS_IDS.map( ( id ) => JSON.stringify( [ id ] ) ).sort() )
+  } )
+
+  test( 'the tree names one node per body, and the paths match the scene', async () => {
+
+    const props =
+      new AP214Properties( { StepModel: invertedModel! } as unknown as IfcApiProxyAP214 )
+    const root = await props.getSpatialStructure() as any
+
+    expect( root.Name.value ).toBe( 'Document' )
+    expect( root.children.length ).toBe( BODY_COUNT )
+    expect( root.children.map( ( node: any ) => node.Name.value ) ).toEqual( BODY_NAMES )
+
+    for ( const node of root.children ) {
+      expect( node.type ).toBe( 'solid' )
+      expect( node.ephemeral ).toBe( true )
+    }
+
+    const geometryPaths = [ ...invertedScene.geometryOccurrences() ]
+        .map( ( [ , path ] ) => JSON.stringify( path ) )
+    const treePaths = leafOccurrencePaths( root ).map( ( path ) => JSON.stringify( path ) )
+
+    expect( geometryPaths.slice().sort() ).toEqual( treePaths.slice().sort() )
+  } )
+
+  test( 'a picked body reports the owning product\'s PDS (conway#597 unchanged)', () => {
+
+    const PDS_EXPRESS_ID = 301
+
+    for ( const [ owner ] of invertedScene.geometryOccurrences() ) {
+      expect( owner ).toBeInstanceOf( product_definition_shape )
+      expect( owner?.expressID ).toBe( PDS_EXPRESS_ID )
     }
   } )
 } )
