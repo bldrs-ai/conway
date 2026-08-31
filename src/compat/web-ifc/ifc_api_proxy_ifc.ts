@@ -65,6 +65,7 @@ import { releaseScratchParsingBuffer } from '../../step/parsing/step_deserializa
 import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
+import { IFC4X3_WEBIFC_TYPE_CODES, originalIfc4x3Keyword } from '../../ifc/ifc4x3_supertype_aliases'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
@@ -2030,6 +2031,39 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * The web-ifc "type" code to export for a record's `RawLineData` —
+   * `shimIfcEntityReverseMap[element.type]` normally, EXCEPT for a record
+   * `Ifc4X3AliasedTypeIndex` (issue #280) mapped onto `IfcBuildingStorey`
+   * or `IfcBuildingElementProxy` because conway has no real IFC4X3 schema.
+   * For those, `element.type` is the borrowed IFC4 type, not the record's
+   * real one — exporting it as-is would hand `getLine`'s `FromRawLineData`
+   * converter a real `IfcFacilityPart`/`IfcRoad`/`IfcPavement`/`IfcKerb`
+   * argument tape to decode against the WRONG type's field layout, silently
+   * misreading trailing attributes (codex's review of #706; see the block
+   * comment on `originalIfc4x3Keyword` in `ifc4x3_supertype_aliases.ts` for
+   * the reproduced case). `originalIfc4x3Keyword` recovers the distinction
+   * losslessly for those two types only (a cheap no-op for everything
+   * else); when it fires, this returns one of
+   * `IFC4X3_WEBIFC_TYPE_CODES` instead — a code `FromRawLineData` has no
+   * converter for, so `getLine` falls back to the raw, unconverted
+   * argument tape rather than confidently misreading it as the wrong type.
+   *
+   * @param model The model `element` belongs to.
+   * @param element The record to classify.
+   * @return {number} The web-ifc type code to export.
+   */
+  private webIfcTypeOf_(model: IfcStepModel, element: { localID: number, type: number }): number {
+
+    const keyword = originalIfc4x3Keyword(model, element.localID, element.type)
+
+    if (keyword !== void 0) {
+      return IFC4X3_WEBIFC_TYPE_CODES[keyword]
+    }
+
+    return shimIfcEntityReverseMap[element.type]
+  }
+
+  /**
    *
    * @param modelID
    * @param expressID
@@ -2046,6 +2080,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (element !== void 0) {
       const lineArguments = element.extractLineArguments()
+      const webIfcType = this.webIfcTypeOf_(model, element)
 
       const parsingBuffer = new ParsingBuffer(lineArguments)
       if (element.expressID !== void 0) {
@@ -2053,7 +2088,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         if (result_[1] === ParseResult.COMPLETE) {
           const rawLineData: RawLineData = {
             ID: expressID,
-            type: shimIfcEntityReverseMap[element.type],
+            type: webIfcType,
             arguments: result_[0],
           }
 
@@ -2065,7 +2100,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const rawLineData: RawLineData = {
         ID: expressID,
-        type: shimIfcEntityReverseMap[element.type],
+        type: webIfcType,
         arguments: args,
       }
 

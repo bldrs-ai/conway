@@ -742,6 +742,45 @@ implements Iterable<BaseEntity>, Model {
   }
 
   /**
+   * Read raw source bytes if the range happens to already be resident —
+   * used by consumers that need bytes NOT covered by any record's own
+   * `address`/`length` (which bound its attribute list only), e.g. the
+   * type keyword immediately preceding it. `recordAddress`/`recordLength`
+   * expose the pieces a normal extraction needs; this is the escape hatch
+   * for the one compat-layer case that needs the bytes just before them
+   * (see `ifc4x3_supertype_aliases.ts`'s `originalIfc4x3Keyword` — the
+   * web-ifc `getLine` path needs to tell a genuine `IfcBuildingStorey`
+   * from an IFC4X3 `IfcRoad`/`IfcFacilityPart` conway's schema-less alias
+   * (issue #280) mapped onto that same IFC4 type, and nothing survives
+   * past parsing to make that distinction otherwise).
+   *
+   * Never throws: a spilled/windowed source that hasn't paged the range
+   * in yet answers `undefined`, same as "can't tell" — callers must not
+   * treat that as "definitely not a match".
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range in bytes.
+   * @return {Uint8Array | undefined} The bytes, or undefined if not resident.
+   */
+  public rawBytesIfResident( address: number, length: number ): Uint8Array | undefined {
+
+    if ( length <= 0 ) {
+      return new Uint8Array( 0 )
+    }
+
+    try {
+
+      const acquisition = this.bufferProvider_.acquire( address, length )
+      const base         = acquisition.offset
+
+      return acquisition.buffer.subarray( address - base, address - base + length )
+    } catch {
+
+      return void 0
+    }
+  }
+
+  /**
    * Pin an arbitrary source span (e.g. a faceset's packed Faces[] run).
    *
    * @param address Absolute start.
