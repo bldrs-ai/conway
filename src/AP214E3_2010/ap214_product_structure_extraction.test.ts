@@ -39,6 +39,26 @@ function extractStructure(
 }
 
 /**
+ * Parse a hermetic fixture and compute the solid-identity set the tree and the
+ * geometry walk both read.
+ *
+ * @param path The fixture path.
+ * @return {Set<number>} Express ids of the identity-bearing solids.
+ */
+function extractIdentitySet( path: string ): Set<number> {
+
+  const bufferInput = new ParsingBuffer( fs.readFileSync( path ) )
+
+  expect( parser.parseHeader( bufferInput )[1] ).toBe( ParseResult.COMPLETE )
+
+  const [ , model ] = parser.parseDataToModel( bufferInput )
+
+  expect( model ).not.toBe( void 0 )
+
+  return new AP214ProductStructureExtraction( model! ).identityBearingSolidExpressIDs()
+}
+
+/**
  * Parse the hermetic as1 assembly fixture and extract its product structure.
  *
  * @return {ProductStructureNode[]} The extracted assembly forest.
@@ -193,9 +213,14 @@ function solidChildren( node: ProductStructureNode ): ProductStructureNode[] {
 
 describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
 
-  test( 'is off by default: no solid nodes anywhere', () => {
+  test( 'is on by default, and opting out drops every solid node', () => {
 
-    const root = extractStructure( MULTIBODY_FIXTURE )[0]
+    const defaulted = extractStructure( MULTIBODY_FIXTURE )[0]
+    const widget = defaulted.children.find( ( node ) => node.name === 'widget' )!
+
+    expect( solidChildren( widget ).length ).toBe( WIDGET_SOLID_COUNT )
+
+    const root = extractStructure( MULTIBODY_FIXTURE, { includeSolids: false } )[0]
 
     const stack = [ root ]
 
@@ -233,10 +258,18 @@ describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
         expect( solid.children.length ).toBe( 0 )
         expect( solid.productDefinitionExpressID )
             .toBe( widget.productDefinitionExpressID )
-        // A solid is not an occurrence: it inherits the parent's NAUO-only
-        // path, and (path, expressID) is the selection identity.
-        expect( solid.occurrencePath ).toEqual( widget.occurrencePath )
+        // The solid's own express id is the path's last segment: the NAUO
+        // prefix alone is shared by every body of the part, so a path without
+        // it selects all three bodies at once (the BLSN_007 defect).
+        expect( solid.occurrencePath )
+            .toEqual( [ ...widget.occurrencePath, solid.expressID ] )
       }
+
+      // ...and that makes each body's path unique, which is what a scalar
+      // expressID plus a shared path cannot express.
+      const paths = solids.map( ( solid ) => JSON.stringify( solid.occurrencePath ) )
+
+      expect( new Set( paths ).size ).toBe( solids.length )
     }
 
     // The same part type under two occurrences repeats the same solid ids —
@@ -283,18 +316,53 @@ describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
         .toEqual( [ 'Solid 1 of 3', 'Solid 2 of 3', 'Solid 3 of 3' ] )
   } )
 
-  test( 'caps per-product solids and reports the overflow', () => {
+  test( 'suppression is all-or-nothing: a named set is never partly emitted', () => {
 
+    // BLSN_007 is 2,268 named hull bodies under one product, and the layer
+    // used to hard-cap a product at 256 children. A partial emission is not a
+    // smaller tree, it is a broken one: the bodies past the cap keep their own
+    // occurrence paths in the scene (the geometry walk reads the same
+    // identity set) and those paths then resolve to no node at all. So the
+    // only two outcomes are "every body of the product" and "none of them",
+    // and a named set is always the former however large it is.
     const root = extractStructure( MULTIBODY_FIXTURE,
-        { includeSolids: true, maxSolidsPerProduct: 2 } )[0]
+        { includeSolids: true, maxUnnamedSolidsPerProduct: 1 } )[0]
 
     const widget = root.children.find( ( node ) => node.name === 'widget' )!
     const solids = solidChildren( widget )
 
-    expect( solids.length ).toBe( 2 )
-    expect( widget.droppedSolids ).toBe( WIDGET_SOLID_COUNT - 2 )
-    // Truncated, not renumbered: positions stay stable under the cap.
-    expect( solids.map( ( solid ) => solid.name ) ).toEqual( [ 'Body1', 'Body2' ] )
+    // Two named bodies and one unnamed, against a limit of 1 unnamed: the
+    // named ones keep the whole set addressable.
+    expect( solids.length ).toBe( WIDGET_SOLID_COUNT )
+    expect( widget.droppedSolids ).toBe( void 0 )
+  } )
+
+  test( 'the identity set is exactly the emitted solid nodes', () => {
+
+    // The invariant the geometry walk depends on: it stamps a per-body
+    // occurrence segment for precisely the solids this set names, so any
+    // divergence from the emitted nodes is a mesh whose path matches no node.
+    const buffer = new ParsingBuffer( fs.readFileSync( MULTIBODY_FIXTURE ) )
+
+    expect( parser.parseHeader( buffer )[1] ).toBe( ParseResult.COMPLETE )
+
+    const [ , model ] = parser.parseDataToModel( buffer )
+    const identity =
+      new AP214ProductStructureExtraction( model! ).identityBearingSolidExpressIDs()
+
+    const roots = new AP214ProductStructureExtraction( model! ).extractProductStructure()
+    const emitted = new Set<number>()
+    const walk = ( node: ProductStructureNode ) => {
+      if ( node.type === 'solid' ) {
+        emitted.add( node.expressID )
+      }
+      node.children.forEach( walk )
+    }
+
+    roots.forEach( walk )
+
+    expect( emitted.size ).toBeGreaterThan( 0 )
+    expect( [ ...identity ].sort() ).toEqual( [ ...emitted ].sort() )
   } )
 } )
 
@@ -337,5 +405,70 @@ describe( 'AP214ProductStructureExtraction labels for products with no name', ()
     // '' lets a consumer substitute a type label; '   ' would render as a blank
     // NavTree row. nist_stc_09_asme1_ap242-e3 is this case for real.
     expect( root.name ).toBe( '' )
+  } )
+} )
+
+
+const RECOVERABLE_FIXTURE = 'data/ap214-recoverable-scan-records.step'
+// eslint-disable-next-line no-magic-numbers
+const HEALTHY_BODY_IDS = [ 401, 402, 403 ]
+const HEALTHY_BODY_COUNT = 3
+
+/**
+ * The solid-identity scan runs on EVERY load now (the tree and the geometry
+ * walk both read it), so a reference getter it fails to contain fails the whole
+ * model rather than skipping one record — conway#683 review. The geometry walk
+ * has always contained these per record; without the matching containment in
+ * `indexSolids` this fixture's three bad records each abort
+ * `prepareDemandExtraction`, and `extractProductStructure` throws too.
+ *
+ * Verified against a revert of the containment: `identityBearingSolidExpressIDs`
+ * throws `DanglingReferenceError: Reference to #900 is not in the index`, and
+ * with #502 removed it throws `Value in STEP was incorrectly typed` on #450's
+ * items — i.e. both arms of this suite go red, and so does the whole load.
+ */
+describe( 'AP214ProductStructureExtraction contains bad records in the solid scan', () => {
+
+  test( 'a dangling relationship, an unreadable item list and a bad name do not fail the scan', () => {
+
+    const identity =
+      extractIdentitySet( RECOVERABLE_FIXTURE )
+
+    // #502 (dangling #900) and #450 (holds a TESSELLATED_SHELL, a type the
+    // AP214 enum has no id for) are skipped; #400's bodies still come through.
+    expect( [ ...identity ].sort( ( a, b ) => a - b ) ).toEqual( HEALTHY_BODY_IDS )
+  } )
+
+  test( 'a body whose name getter throws keeps its identity, losing only the label', () => {
+
+    const root = extractStructure( RECOVERABLE_FIXTURE )[0]
+    const solids = solidChildren( root )
+
+    expect( solids.length ).toBe( HEALTHY_BODY_COUNT )
+
+    // #403's name slot is `$` on a mandatory attribute, so the getter throws.
+    // A label is cosmetic and identity is not: it degrades to the positional
+    // name, and its occurrence path is still its own.
+    const unnamed = solids.find( ( solid ) => solid.expressID === HEALTHY_BODY_IDS[2] )!
+
+    expect( unnamed.name ).toBe( 'Solid 3 of 3' )
+    expect( unnamed.occurrencePath ).toEqual( [ HEALTHY_BODY_IDS[2] ] )
+  } )
+
+  test( 'a representation whose items throw contributes to NEITHER side', () => {
+
+    // Coherence: #450's `tess_body_0` is a perfectly good brep, but its
+    // representation's item list cannot be read, so the scan skips the whole
+    // representation. It must therefore get no tree node AND no body path
+    // segment — a body addressable on one side only is a path that resolves to
+    // nothing (or a node that highlights nothing).
+    const identity = extractIdentitySet( RECOVERABLE_FIXTURE )
+    const root = extractStructure( RECOVERABLE_FIXTURE )[0]
+
+    const TESS_REP_BODY_ID = 451
+
+    expect( identity.has( TESS_REP_BODY_ID ) ).toBe( false )
+    expect( solidChildren( root ).map( ( solid ) => solid.expressID ) )
+        .not.toContain( TESS_REP_BODY_ID )
   } )
 } )

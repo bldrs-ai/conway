@@ -36,10 +36,15 @@ export type IncludeProperties = boolean | 'names'
 export interface SpatialStructureOptions {
 
   /**
-   * STEP (AP214/AP242) only: surface ephemeral solid-level nodes beneath
-   * multibody products — pickable bodies that carry identity in the file but
-   * no product semantics (`type: 'solid'`, `ephemeral: true`). Ignored by the
-   * IFC surface. See `design/new/step-nonproduct-semantics.md`.
+   * STEP (AP214/AP242) only, default **true**: surface solid-level nodes
+   * beneath multibody products — pickable bodies that carry identity in the
+   * file but no product semantics (`type: 'solid'`, `ephemeral: true`).
+   * Ignored by the IFC surface.
+   *
+   * Pass `false` for a products-only outline. The scene stamps each such body
+   * with its own occurrence path either way, so with the layer off those paths
+   * resolve to no node — only do it for a consumer that does no path→node
+   * lookup. See `design/new/step-nonproduct-semantics.md`.
    */
   includeSolids?: boolean
 }

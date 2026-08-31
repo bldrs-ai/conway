@@ -12,6 +12,7 @@ zero, twice attached to the wrong seam, and never survived the session.
 | Tool | Answers |
 |---|---|
 | [`model_report.mjs`](model_report.mjs) | Which entities produced bad geometry, and at which stage of the pipeline |
+| [`occurrence_report.mjs`](occurrence_report.mjs) | Whether a click selects one thing — how many placements each body got, whether their occurrence paths are unique, and whether those paths are the product-structure tree's |
 | [`../render_glb.cjs`](../render_glb.cjs) | What does the output actually look like (zero-dependency software rasterizer, deterministic, pair mode for before/after) |
 | [`../visual_diff_report.cjs`](../visual_diff_report.cjs) | Which regression models changed appearance in this PR |
 | The STEP / IFC CLI mains | Query entities by express ID, and export GLB/GLTF/OBJ to feed the renderer |
@@ -32,7 +33,18 @@ Then:
 node scripts/debug/model_report.mjs Right_Hand.step
 node scripts/debug/model_report.mjs haus.ifc --stage mesh --top 40
 node scripts/debug/model_report.mjs part.step --limit 0.25 --json | jq .
+
+node scripts/debug/occurrence_report.mjs BLSN_007.stp        # STEP selection identity
 ```
+
+`occurrence_report.mjs` answers the *other* "looks wrong": the render is
+right and the selection is not — a click highlights the whole model, or a
+NavTree node highlights nothing. Both halves of that come from conway (the
+scene's per-instance occurrence path, and `getSpatialStructure`'s node
+paths) and neither is checkable alone, which is how BLSN_007 shipped with
+2,268 bodies placed 308 times each under 616 shared paths while its tree
+showed one product and its meshes looked fine
+(test-models-private#98 / conway#628).
 
 To see it, export a GLB and rasterize it. The CLI mains take the model
 directly; `yarn cli` / `yarn step` are the same entry points bundled, and

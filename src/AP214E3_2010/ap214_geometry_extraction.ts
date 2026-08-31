@@ -163,6 +163,9 @@ import {
 import { AP214MaterialCache } from './ap214_material_cache'
 import AP214ModelCurves from './ap214_model_curves'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
+import {
+  AP214ProductStructureExtraction,
+} from './ap214_product_structure_extraction'
 import { AP214SceneBuilder, AP214SceneTransform } from './ap214_scene_builder'
 import AP214StepModel from './ap214_step_model'
 
@@ -6330,6 +6333,27 @@ export class AP214GeometryExtraction {
 
     const treeMap = new Map<number, MappedSceneNode>()
 
+    // Local ids of the solid-level bodies that are individually addressable —
+    // the ones whose own express id extends the occurrence path of the
+    // geometry under them, so two bodies of one multibody part are two
+    // selections rather than one (BLSN_007: 2,268 named hull bodies — 1,884
+    // breps and 384 shells — under a single product with no NAUO anywhere in
+    // the file). The product-structure extractor owns the decision and emits a
+    // tree node for exactly this set; reading it from there rather than
+    // re-deriving it here is what keeps "the mesh's path" and "the node's
+    // path" the same thing.
+    const solidOccurrenceLocalIDs = new Set<number>()
+
+    for ( const solidExpressID of
+      new AP214ProductStructureExtraction( model ).identityBearingSolidExpressIDs() ) {
+
+      const solidLocalID = model.getElementByExpressID( solidExpressID )?.localID
+
+      if ( solidLocalID !== void 0 ) {
+        solidOccurrenceLocalIDs.add( solidLocalID )
+      }
+    }
+
     // conway#597: representation localID → the PDS a pick under it should
     // report, populated by the plain shape_representation_relationship loop
     // further down and consulted here by makeThunk's item-attribution calls
@@ -6405,8 +6429,28 @@ export class AP214GeometryExtraction {
               // Malformed PDS.definition — fall through to the express-id fallback.
               occurrenceExpressID = void 0
             }
-            occurrenceExpressID ??= this.model.getExpressIDByLocalID( childOwningLocalID )
-            this.scene.pushOccurrence( occurrenceExpressID ?? childOwningLocalID )
+
+            // A plain shape_representation_relationship is NOT an occurrence:
+            // it binds a representation with no SDR of its own (a multibody
+            // advanced_brep_shape_representation, a tessellated rep) to the
+            // SDR-bound representation of the SAME part. This edge used to
+            // contribute its own express id as a path segment, which put an
+            // id the product-structure tree has no node for in the middle of
+            // every such path — so a NEMA motor body's mesh path
+            // ([14107, 6611]) matched no node, and every body of the part
+            // shared the one path. The bodies are told apart by the per-item
+            // segment pushed in the item loop below instead, which is the
+            // segment the tree also emits.
+            if ( occurrenceExpressID === void 0 &&
+                !( owningElement instanceof shape_representation_relationship ) ) {
+
+              occurrenceExpressID =
+                this.model.getExpressIDByLocalID( childOwningLocalID ) ?? childOwningLocalID
+            }
+
+            if ( occurrenceExpressID !== void 0 ) {
+              this.scene.pushOccurrence( occurrenceExpressID )
+            }
 
             try {
               // A sliced unit that reaches deeper than this level supplies
@@ -6425,7 +6469,9 @@ export class AP214GeometryExtraction {
               }
             }
 
-            this.scene.popOccurrence()
+            if ( occurrenceExpressID !== void 0 ) {
+              this.scene.popOccurrence()
+            }
 
             while ( this.scene.stackLength > enterChildStackDepth ) {
               this.scene.popTransform()
@@ -6522,6 +6568,20 @@ export class AP214GeometryExtraction {
             const item = items[ itemIndex ]
             const depthBeforeItem = verifySliceNeutrality ? this.scene.stackLength : 0
 
+            // An individually addressable body (see solidOccurrenceLocalIDs)
+            // ends its geometry's occurrence path with its own express id, so
+            // the path is unique per body and equal to the path of the tree
+            // node the product-structure extractor emits for it. Bodies of a
+            // single-solid part, and the bodies of an anonymous solid dump the
+            // tree deliberately suppresses, are not in the set: their geometry
+            // keeps the owning product's path, which is the node a pick on
+            // them should resolve to.
+            const itemCarriesOccurrence = solidOccurrenceLocalIDs.has( item.localID )
+
+            if ( itemCarriesOccurrence ) {
+              this.scene.pushOccurrence( item.expressID ?? item.localID )
+            }
+
             try {
               if ( item instanceof placement ) {
                 this.extractPlacement( item, mappedItem )
@@ -6564,6 +6624,10 @@ export class AP214GeometryExtraction {
                 }
               }
             } finally {
+
+              if ( itemCarriesOccurrence ) {
+                this.scene.popOccurrence()
+              }
 
               if ( verifySliceNeutrality && !( item instanceof placement ) &&
                   this.scene.stackLength !== depthBeforeItem &&
@@ -7005,7 +7069,49 @@ export class AP214GeometryExtraction {
 
         try {
           sourceShape = shapeRelationship.rep_2
-          targetShape = shapeRelationship.rep_1;
+          targetShape = shapeRelationship.rep_1
+
+          /* An SDR-bound representation is the shape OF a part; a plain
+           * relationship binding it to a representation with no SDR of its own
+           * is that part reaching its own detail geometry, so the SDR-bound
+           * side is the parent whichever way round the exporter wrote the
+           * arguments. BLSN_007 (Rhino 7 / ST-DEVELOPER) writes BOTH: three
+           * edges as (product rep, detail rep) and 308 as (detail rep, product
+           * rep) for the same kind of relation. Read literally, those 308 make
+           * the product's own representation a CHILD of 308 free wireframe
+           * representations, so it becomes 308 walk roots and every solid in
+           * the model is placed 308 times — 698,544 scene nodes for 2,268
+           * bodies, all of them duplicate placements of each other.
+           *
+           * Only reorient a relationship carrying no transformation. A
+           * transformation-bearing one places the child in the parent's frame,
+           * and reversing which side is the parent without evidence about what
+           * the exporter meant would move geometry; there is none of that here
+           * (the 308 are bare relationships), and moving geometry is a much
+           * worse failure than a duplicated placement.
+           *
+           * SINGLE HOP, DELIBERATELY. The test is `pdsLocalIDByRep` on each
+           * side — is THIS representation directly SDR-bound — not the
+           * transitive reachability `resolvePdsLocalID` (defined just above)
+           * computes over repAdjacency. So an inverted chain two or more edges long is left
+           * as written. No file we have exercises that shape (BLSN_007's 308
+           * are all one hop off the product representation), and a guard for
+           * a state nothing can be shown to produce is a speculative defense.
+           * Transitive orientation is also not a drop-in: past one hop BOTH
+           * sides usually reach some PDS, so "which side is SDR-bound" stops
+           * being a decision and becomes a distance comparison with its own
+           * ambiguity rules — the ones resolvePdsLocalID already refuses to
+           * guess at. If a real file ever needs it, that function is the
+           * machinery to build on, and it needs a fixture first.
+           */
+          if ( shapeRelationship.findVariant(
+              representation_relationship_with_transformation ) === void 0 &&
+              pdsLocalIDByRep.has( sourceShape.localID ) &&
+              !pdsLocalIDByRep.has( targetShape.localID ) ) {
+
+            sourceShape = shapeRelationship.rep_1
+            targetShape = shapeRelationship.rep_2
+          }
 
           [transform, isContinue] =
             this.doTransforms(shapeRelationship, sourceShape, targetShape, owningLocalID)
@@ -7020,18 +7126,20 @@ export class AP214GeometryExtraction {
         }
 
         // conway#597: `owningLocalID` above (the relationship's own
-        // localID) still drives occurrence-path threading exactly as
-        // before — the NEMA multibody fixture's occurrence path
-        // deliberately ends with the SRR's own express id to disambiguate
-        // a multibody solid set from other items under the same NAUO (see
+        // localID) is the edge's identity for the walk, but it is NOT an
+        // occurrence-path segment — conway#628 removed that. A plain
+        // relationship binds a part to its own detail representation, so
+        // it names nothing selectable and the product-structure tree has no
+        // node for it; a multibody solid set is disambiguated by each
+        // body's OWN express id as the path's last segment instead (see
+        // makeThunk's child and item loops, and
         // ap214_occurrence_geometry.test.ts). What conway#597 asks for is
-        // narrower: the express id a *pick* surfaces (relatedElementLocalId)
-        // should be the owning part's PDS, not the relationship's. Record
-        // that resolution separately, keyed by the representation whose
-        // OWN items (sourceShape's) will be attributed — makeThunk applies
-        // it only to item attribution, leaving the occurrence-path seed
-        // (`owningLocalID` above, and everything derived from it for
-        // children) untouched.
+        // narrower and still stands: the express id a *pick* surfaces
+        // (relatedElementLocalId) should be the owning part's PDS, not the
+        // relationship's. Record that resolution separately, keyed by the
+        // representation whose OWN items (sourceShape's) will be
+        // attributed — makeThunk applies it only to item attribution,
+        // leaving occurrence-path threading untouched.
         //
         // Resolved from sourceShape, not targetShape (review finding):
         // targetShape is only THIS edge's one neighbour, so resolving from

@@ -59,20 +59,11 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     }
   } )
 
-  test( 'getSpatialStructure surfaces the ephemeral solid layer on opt-in only', async () => {
+  test( 'getSpatialStructure surfaces the solid layer by default, opt-out drops it', async () => {
 
     const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
 
-    const plainRoot = await surface.getSpatialStructure() as any
-    const collectTypes = ( node: any, into: Set<string> ): Set<string> => {
-      into.add( node.type )
-      node.children.forEach( ( child: any ) => collectTypes( child, into ) )
-      return into
-    }
-
-    expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
-
-    const root = await surface.getSpatialStructure( void 0, { includeSolids: true } ) as any
+    const root = await surface.getSpatialStructure() as any
     const widget = root.children.find( ( node: any ) => node.Name.value === 'widget' )
     const solids = widget.children.filter( ( node: any ) => node.type === 'solid' )
 
@@ -81,13 +72,27 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     for ( const solid of solids ) {
       expect( solid.ephemeral ).toBe( true )
       expect( solid.Name.type ).toBe( 1 )
-      expect( solid.occurrencePath ).toEqual( widget.occurrencePath )
+      // The body's own express id ends the path, so each body of the part is
+      // its own selection rather than all of them sharing the part's path.
+      expect( solid.occurrencePath )
+          .toEqual( [ ...widget.occurrencePath, solid.expressID ] )
     }
 
     // A solid id resolves to its own identity row, like any tree node.
     const item = await surface.getItemProperties( solids[0].expressID ) as any
 
     expect( item.Name.value ).toBe( solids[0].Name.value )
+
+    // The opt-out is still honoured, for a consumer that wants the outline.
+    const plainRoot =
+      await surface.getSpatialStructure( void 0, { includeSolids: false } ) as any
+    const collectTypes = ( node: any, into: Set<string> ): Set<string> => {
+      into.add( node.type )
+      node.children.forEach( ( child: any ) => collectTypes( child, into ) )
+      return into
+    }
+
+    expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
   } )
 
   test( 'getItemProperties returns a {value}-wrapped identity for a node', async () => {
@@ -231,17 +236,19 @@ describe( 'getItemProperties arbitrary-entity fallback (anonymous geometry)', ()
 
   test( 'resolves a non-tree solid id to its STEP type and body name', async () => {
 
-    // Body1 (#431) is a solid inside the widget product's representation —
-    // never a tree node unless the ephemeral solid layer is requested, so it
-    // exercises the express-id-index fallback a picked anonymous piece takes.
+    // PinBody (#434) is the pin product's ONLY solid, so the solid layer gives
+    // it no node of its own (the pin's product node already maps 1:1 onto it)
+    // — which is exactly the pick with no tree identity this fallback serves.
+    // Body1 (#431) used to stand here; since the layer became the default it
+    // is a tree node, and a tree node resolves to its identity row instead.
     const surface = compatSurfaceFor( 'data/ap214-multibody-part.step' )
-    const solidExpressId = 431
+    const solidExpressId = 434
 
     const item: any = await surface.getItemProperties( solidExpressId )
 
     expect( item.expressID ).toBe( solidExpressId )
     expect( item.type ).toBe( 'MANIFOLD_SOLID_BREP' )
-    expect( item.Name.value ).toBe( 'Body1' )
+    expect( item.Name.value ).toBe( 'PinBody' )
   } )
 
   test( 'resolves an anonymous face id to its STEP type (label seed for #387)', async () => {

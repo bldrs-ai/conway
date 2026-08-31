@@ -62,9 +62,18 @@ export interface ProductStructureNode {
   occurrenceExpressID?: number
 
   /**
-   * Ordered occurrence path (NAUO express ids) from the top-level occurrence to
-   * this node. Empty for roots. Disambiguates instances of the same part — e.g.
-   * `[3810, 1921, 1910]` vs `[6217, 1921, 1910]` for the two bolts in `as1`.
+   * Ordered occurrence path from the top-level occurrence to this node: NAUO
+   * express ids, plus — on a `'solid'` node — the solid's own express id as a
+   * final segment. Empty for roots. Disambiguates instances of the same part
+   * (`[3810, 1921, 1910]` vs `[6217, 1921, 1910]` for the two bolts in `as1`)
+   * and the bodies of one multibody part (`[14107, 14084]` vs `[14107, 14085]`
+   * for two NEMA motor bodies).
+   *
+   * The path alone is the selection key: every leaf node's path is unique, and
+   * each geometry instance the scene emits carries the path of the leaf it
+   * belongs to. Representation-relationship ids are never segments — a plain
+   * `shape_representation_relationship` is representation indirection inside
+   * one part, not an occurrence of it.
    */
   occurrencePath: number[]
 
@@ -75,7 +84,7 @@ export interface ProductStructureNode {
    */
   shapeRepresentationIds: number[]
 
-  /** Child occurrence nodes (and, when opted in, ephemeral solid nodes). */
+  /** Child occurrence nodes, plus the solid nodes of a multibody part. */
   children: ProductStructureNode[]
 
   /**
@@ -87,8 +96,8 @@ export interface ProductStructureNode {
   ephemeral?: boolean
 
   /**
-   * Number of this node's solids suppressed by the ephemeral-layer limits
-   * (unnamed-soup suppression or the per-product cap), so a consumer can
+   * Number of this node's solids suppressed by the unnamed-soup gate (the
+   * only limit left — see {@link ProductStructureOptions}), so a consumer can
    * render an "N more…" affordance instead of silently truncating.
    */
   droppedSolids?: number
@@ -100,21 +109,21 @@ export interface ProductStructureNode {
 export interface ProductStructureOptions {
 
   /**
-   * Surface an ephemeral layer of solid-level nodes beneath each multibody
-   * product (default false). A product only gets solid children when its shape
-   * representation holds at least two solids — a single-solid product already
-   * maps 1:1 onto its node — and an all-unnamed set larger than
-   * {@link maxUnnamedSolidsPerProduct} is suppressed as meaningless "solid
-   * soup" (the DSA2 case: 28k unnamed single-face shells under one product).
+   * Surface a layer of solid-level nodes beneath each multibody product
+   * (default **true**). A product only gets solid children when it holds at
+   * least two solids — a single-solid product already maps 1:1 onto its node —
+   * and an all-unnamed set larger than {@link maxUnnamedSolidsPerProduct} is
+   * suppressed as meaningless "solid soup" (the DSA2 case: 28k unnamed
+   * single-face shells under one product).
+   *
+   * Passing `false` drops the layer, and with it the per-solid occurrence-path
+   * segments' counterpart in the tree: the scene still stamps them (geometry
+   * extraction reads {@link identityBearingSolidExpressIDs}, which is not
+   * conditioned on this option), so every body of a multibody part resolves to
+   * a path with no node. Turn it off only for a consumer that wants a
+   * products-only outline and does no path→node lookups.
    */
   includeSolids?: boolean
-
-  /**
-   * Hard cap on emitted solid children per product occurrence
-   * (default {@link DEFAULT_MAX_SOLIDS_PER_PRODUCT}); overflow is reported via
-   * {@link ProductStructureNode.droppedSolids}.
-   */
-  maxSolidsPerProduct?: number
 
   /**
    * When a product's solids are *all* unnamed and outnumber this (default
@@ -122,12 +131,18 @@ export interface ProductStructureOptions {
    * large anonymous solid dumps (ECAD merged-component products, tessellated
    * surface soup) carry no navigable semantics. Named solids are never
    * suppressed by this limit.
+   *
+   * The suppression is all-or-nothing on purpose. A partial cap (this layer
+   * carried a 256-solid one until BLSN_007, a 2,268-body Rhino hull export)
+   * emits nodes for some of a product's bodies and not others, so the
+   * suppressed bodies' geometry carries occurrence paths that resolve to no
+   * node at all — and it silently truncates a NavTree an MCAD viewer shows in
+   * full. All-or-nothing keeps the tree and the scene stamping the same
+   * decision: either every body of the product is addressable, or the product
+   * node itself is what a pick on any of them resolves to.
    */
   maxUnnamedSolidsPerProduct?: number
 }
-
-/** Default hard cap on emitted solid children per product occurrence. */
-export const DEFAULT_MAX_SOLIDS_PER_PRODUCT = 256
 
 /** Default suppression threshold for a product whose solids are all unnamed. */
 export const DEFAULT_MAX_UNNAMED_SOLIDS_PER_PRODUCT = 32
@@ -199,8 +214,8 @@ export class AP214ProductStructureExtraction {
   private readonly shapeRepsByProductDef_ = new Map<number, number[]>()
   private readonly solidsByProductDef_ = new Map<number, ProductSolid[]>()
   private readonly solidIdsByProductDef_ = new Map<number, Set<number>>()
-  private includeSolids_ = false
-  private maxSolidsPerProduct_ = DEFAULT_MAX_SOLIDS_PER_PRODUCT
+  private solidsIndexed_ = false
+  private includeSolids_ = true
   private maxUnnamedSolidsPerProduct_ = DEFAULT_MAX_UNNAMED_SOLIDS_PER_PRODUCT
 
   /**
@@ -220,19 +235,15 @@ export class AP214ProductStructureExtraction {
    * Build the product-structure tree.
    *
    * @param options Optional {@link ProductStructureOptions}; pass
-   * `{ includeSolids: true }` to add the ephemeral solid layer beneath
-   * multibody products.
+   * `{ includeSolids: false }` to drop the solid layer beneath multibody
+   * products.
    * @return {ProductStructureNode[]} The roots of the assembly forest. A
    * single-part file yields one root; a multi-level assembly (e.g. `as1`) yields
    * one root whose descendants are the NAUO occurrences.
    */
   public extractProductStructure( options?: ProductStructureOptions ): ProductStructureNode[] {
 
-    this.includeSolids_ = options?.includeSolids ?? false
-    this.maxSolidsPerProduct_ =
-      options?.maxSolidsPerProduct ?? DEFAULT_MAX_SOLIDS_PER_PRODUCT
-    this.maxUnnamedSolidsPerProduct_ =
-      options?.maxUnnamedSolidsPerProduct ?? DEFAULT_MAX_UNNAMED_SOLIDS_PER_PRODUCT
+    this.applyOptions( options )
 
     this.indexProductDefinitions()
     this.indexAssemblyUsages()
@@ -263,6 +274,76 @@ export class AP214ProductStructureExtraction {
     }
 
     return roots
+  }
+
+  /**
+   * The solids that carry their own occurrence-path segment — the express ids
+   * the *geometry* walk stamps onto each body's scene node, and the same set
+   * {@link extractProductStructure} turns into `'solid'` tree nodes.
+   *
+   * This exists so the two sides cannot drift: the tree and the scene must
+   * agree exactly on which bodies are individually addressable, or a picked
+   * mesh's occurrence path resolves to no tree node (and a NavTree node
+   * highlights nothing). `AP214GeometryExtraction.prepareDemandExtraction`
+   * calls this once per model and consults the result in its item loop; see
+   * `design/new/step-nonproduct-semantics.md`.
+   *
+   * Cheap relative to the geometry walk: one pass over the SDRs, the plain
+   * shape-representation relationships and the reached representations' items.
+   *
+   * @param options Optional {@link ProductStructureOptions}; only the solid
+   * limits are read, and they must match whatever the tree is built with.
+   * @return {Set<number>} Express ids of the identity-bearing solids.
+   */
+  public identityBearingSolidExpressIDs( options?: ProductStructureOptions ): Set<number> {
+
+    this.applyOptions( options )
+    this.indexSolids()
+
+    const identityBearing = new Set<number>()
+
+    for ( const solids of this.solidsByProductDef_.values() ) {
+
+      if ( !this.solidsCarryIdentity( solids ) ) {
+        continue
+      }
+
+      for ( const solid of solids ) {
+        identityBearing.add( solid.expressID )
+      }
+    }
+
+    return identityBearing
+  }
+
+  /**
+   * Apply (and default) the extraction options.
+   *
+   * @param options The caller's options, if any.
+   */
+  private applyOptions( options?: ProductStructureOptions ): void {
+
+    this.includeSolids_ = options?.includeSolids ?? true
+    this.maxUnnamedSolidsPerProduct_ =
+      options?.maxUnnamedSolidsPerProduct ?? DEFAULT_MAX_UNNAMED_SOLIDS_PER_PRODUCT
+  }
+
+  /**
+   * Whether one product's solids are individually addressable — the single
+   * decision the tree layer and the geometry stamping both read, so they
+   * cannot disagree about which bodies have identity.
+   *
+   * @param solids The product's solids, in file order.
+   * @return {boolean} True when every one of them gets its own identity.
+   */
+  private solidsCarryIdentity( solids: ProductSolid[] ): boolean {
+
+    if ( solids.length < MIN_SOLIDS_FOR_EPHEMERAL ) {
+      return false
+    }
+
+    return solids.some( ( solid ) => isMeaningfulName( solid.name ) ) ||
+      solids.length <= this.maxUnnamedSolidsPerProduct_
   }
 
   /**
@@ -361,8 +442,43 @@ export class AP214ProductStructureExtraction {
    * collect the solid items. Transformation-bearing relationship variants are
    * assembly placements (parent rep ↔ child rep), so following them would leak
    * every child part's solids into its parent assembly; they are skipped.
+   *
+   * **Every dereference here is contained per record**, matching the geometry
+   * walk's behavior on the same entities (`prepareDemandExtraction`'s plain-SRR
+   * and SDR loops, and makeThunk's `representation.items` capture): a bad
+   * record skips, and the rest of the model still indexes. This is not
+   * defensive dressing — two concrete shapes reach it and both used to fail
+   * the WHOLE model load once this scan became unconditional:
+   *
+   *  - a dangling reference (`srr.rep_1`, `sdr.definition`, …) throws
+   *    `DanglingReferenceError`. Mid-parse PREFIX models — the streamed
+   *    preview channel calls `prepareDemandExtraction` on one
+   *    (`streamed_preview_channel.ts`) — have a truncated tail by
+   *    construction, so this is their normal state, not corruption.
+   *  - `representation.items` throws `'Value in STEP was incorrectly typed'`
+   *    when a representation holds an item type the AP214 schema has no id for
+   *    (the enum carries no tessellated entities at all): #25231 in
+   *    `nist_ftc_08_asme1_ap242-e1-tg.stp` holds a TESSELLATED_SHELL, the case
+   *    makeThunk documents.
+   *
+   * `items` is read all-or-nothing per representation rather than per item:
+   * a half-enumerated body list is not a smaller answer, it is a wrong one.
+   * Because the tree and the geometry walk both read this one result (see
+   * {@link identityBearingSolidExpressIDs}), a skipped representation
+   * contributes no solids to EITHER side, so its bodies get no node and no
+   * body path segment — they keep the owning product's path, exactly as a
+   * deliberately suppressed set does, and the path-equality invariant holds.
    */
   private indexSolids(): void {
+
+    // Both public entry points index solids, and a caller may use one
+    // instance for both; the walk below is a full-model sweep, so make the
+    // second call free rather than merely idempotent (addSolid dedups).
+    if ( this.solidsIndexed_ ) {
+      return
+    }
+
+    this.solidsIndexed_ = true
 
     const relatedRepsByRepId = new Map<number, representation[]>()
 
@@ -386,12 +502,21 @@ export class AP214ProductStructureExtraction {
 
       const srr = element as shape_representation_relationship
 
-      if ( srr.findVariant( representation_relationship_with_transformation ) !== void 0 ) {
+      let rep1: representation | undefined
+      let rep2: representation | undefined
+
+      try {
+        if ( srr.findVariant( representation_relationship_with_transformation ) !== void 0 ) {
+          continue
+        }
+
+        rep1 = srr.rep_1
+        rep2 = srr.rep_2
+      } catch {
+        // Malformed/dangling relationship record — skip this edge, as the
+        // geometry walk's own plain-SRR loop does.
         continue
       }
-
-      const rep1 = srr.rep_1
-      const rep2 = srr.rep_2
 
       if ( rep1 === void 0 || rep2 === void 0 ) {
         continue
@@ -407,8 +532,17 @@ export class AP214ProductStructureExtraction {
 
       const sdr = element as shape_definition_representation
 
-      const productDefId = AP214ProductStructureExtraction.resolveProductDefinitionId( sdr.definition )
-      const usedRep = sdr.used_representation
+      let productDefId: number | undefined
+      let usedRep: representation | undefined
+
+      try {
+        productDefId = AP214ProductStructureExtraction.resolveProductDefinitionId( sdr.definition )
+        usedRep = sdr.used_representation
+      } catch {
+        // Malformed/dangling SDR record — skip it, as the geometry walk's own
+        // shape_definition_representation loop does.
+        continue
+      }
 
       if ( productDefId === void 0 || usedRep === void 0 ) {
         continue
@@ -417,7 +551,21 @@ export class AP214ProductStructureExtraction {
       const reps = [ usedRep, ...( relatedRepsByRepId.get( usedRep.expressID ?? -1 ) ?? [] ) ]
 
       for ( const rep of reps ) {
-        for ( const item of rep.items ) {
+
+        let items: readonly representation_item[]
+
+        try {
+          items = rep.items
+        } catch {
+          // A representation holding an item type AP214 has no id for, or a
+          // dangling item reference. All-or-nothing per representation: its
+          // bodies get no identity on either side, so they stay part of the
+          // owning product's selection rather than half of them becoming
+          // addressable.
+          continue
+        }
+
+        for ( const item of items ) {
 
           if ( !isSolidItem( item ) || item.expressID === void 0 ) {
             continue
@@ -425,7 +573,12 @@ export class AP214ProductStructureExtraction {
 
           this.addSolid( productDefId, {
             expressID: item.expressID,
-            name: item.name,
+            // `name` is a mandatory STEP string attribute, so the getter
+            // throws on the `$`/mistyped slot exporters do emit. A body's
+            // label is cosmetic and its identity is not: degrade to unnamed
+            // rather than dropping the body, the same trade labelCandidate
+            // makes for node labels.
+            name: AP214ProductStructureExtraction.labelCandidate( () => item.name ),
             representationId: rep.expressID,
           } )
         }
@@ -553,11 +706,10 @@ export class AP214ProductStructureExtraction {
   }
 
   /**
-   * Append this node's ephemeral solid children, applying the layer's
-   * heuristics (see {@link ProductStructureOptions}): nothing for a
-   * single-solid product, full suppression for oversized all-unnamed sets,
-   * and the hard per-product cap — suppressed/overflow counts are surfaced
-   * via {@link ProductStructureNode.droppedSolids}.
+   * Append this node's solid children, applying the layer's heuristics (see
+   * {@link ProductStructureOptions}): nothing for a single-solid product, full
+   * suppression for oversized all-unnamed sets — the suppressed count is
+   * surfaced via {@link ProductStructureNode.droppedSolids}.
    *
    * @param node The product/occurrence node to attach solid children to.
    */
@@ -569,23 +721,14 @@ export class AP214ProductStructureExtraction {
       return
     }
 
-    const hasNamedSolid = solids.some( ( solid ) => isMeaningfulName( solid.name ) )
-
-    if ( !hasNamedSolid && solids.length > this.maxUnnamedSolidsPerProduct_ ) {
+    if ( !this.solidsCarryIdentity( solids ) ) {
       node.droppedSolids = solids.length
       return
     }
 
-    let emitted = solids
+    for ( let index = 0; index < solids.length; ++index ) {
 
-    if ( solids.length > this.maxSolidsPerProduct_ ) {
-      emitted = solids.slice( 0, this.maxSolidsPerProduct_ )
-      node.droppedSolids = solids.length - emitted.length
-    }
-
-    for ( let index = 0; index < emitted.length; ++index ) {
-
-      const solid = emitted[ index ]
+      const solid = solids[ index ]
 
       node.children.push( {
         expressID: solid.expressID,
@@ -593,9 +736,14 @@ export class AP214ProductStructureExtraction {
         name: isMeaningfulName( solid.name ) ?
           solid.name : `Solid ${index + 1} of ${solids.length}`,
         productDefinitionExpressID: node.productDefinitionExpressID,
-        // A solid is not an occurrence: the path stays NAUO-only, and the
-        // selection identity is the (occurrencePath, expressID) pair.
-        occurrencePath: [ ...node.occurrencePath ],
+        // The solid's own express id extends the parent's NAUO path: two
+        // bodies of one multibody part share every NAUO segment, so without
+        // this last segment the path cannot tell them apart — which is what
+        // collapsed BLSN_007's 2,268 hull bodies onto two selections (one
+        // per child representation). The geometry
+        // walk appends the same segment for the same set of solids (see
+        // identityBearingSolidExpressIDs), so mesh path == node path.
+        occurrencePath: [ ...node.occurrencePath, solid.expressID ],
         shapeRepresentationIds:
           solid.representationId !== void 0 ? [ solid.representationId ] : [],
         children: [],
