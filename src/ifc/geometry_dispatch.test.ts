@@ -523,3 +523,203 @@ describe( 'demand prep yield', () => {
     api.CloseModel( modelID )
   }, 240000 )
 } )
+
+
+/* The lever conway#640's closing experiment runs on. Named here rather than
+ * imported because the engine keeps it private on purpose — a test that had
+ * to import it could not also prove it is reachable from the environment,
+ * which is the whole interface. */
+const PERMUTE_ENV = 'CONWAY_PERMUTE_WORKLIST'
+
+/* The largest fixture in `data/` by product count — seven products and
+ * three rel-aggregates, enough that a shuffle is an observation rather than
+ * a coin toss, and enough to shard two ways with both halves non-empty. */
+const PERMUTE_FIXTURE = 'data/index.ifc'
+
+
+/**
+ * Build one model's worklists with the lever set to `seed`, and report what
+ * order they came out in.
+ *
+ * The variable is set around the open and restored after it, because the
+ * engine reads it at worklist-build time and nothing else in the suite may
+ * inherit it.
+ *
+ * @param seed The seed, or undefined to leave the lever off.
+ * @return {Promise<object>} The adopted product and aggregate worklists.
+ */
+async function worklistsUnderSeed( seed: string | undefined ):
+    Promise< { products: number[], aggregates: number[] } > {
+
+  const previous = process.env[ PERMUTE_ENV ]
+
+  if ( seed === void 0 ) {
+    delete process.env[ PERMUTE_ENV ]
+  } else {
+    process.env[ PERMUTE_ENV ] = seed
+  }
+
+  try {
+
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const { modelID, passthrough } =
+      await openDeferred( api, PERMUTE_FIXTURE, false )
+
+    passthrough.ensureDemandWorklists_()
+
+    const products = [ ...( passthrough.demandProducts_ ?? [] ) ]
+    const aggregates = ( passthrough.demandAggregates_ ?? [] )
+        .map( ( relAggregate ) => relAggregate.localID )
+
+    api.CloseModel( modelID )
+
+    return { products, aggregates }
+
+  } finally {
+
+    if ( previous === void 0 ) {
+      delete process.env[ PERMUTE_ENV ]
+    } else {
+      process.env[ PERMUTE_ENV ] = previous
+    }
+  }
+}
+
+
+/**
+ * One shard's product worklist under a given lever setting.
+ *
+ * @param seed The seed, or undefined for off.
+ * @param index Which shard to narrow to.
+ * @param count How many shards the partition has.
+ * @return {Promise<number[]>} The products that shard kept.
+ */
+async function shardProductsUnderSeed(
+    seed: string | undefined,
+    index: number,
+    count: number ): Promise< number[] > {
+
+  const previous = process.env[ PERMUTE_ENV ]
+
+  if ( seed === void 0 ) {
+    delete process.env[ PERMUTE_ENV ]
+  } else {
+    process.env[ PERMUTE_ENV ] = seed
+  }
+
+  try {
+
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const { modelID, passthrough } =
+      await openDeferred( api, PERMUTE_FIXTURE, false )
+
+    expect( api.SetGeometryShard( modelID, { index, count } ) ).toBe( true )
+
+    passthrough.ensureDemandWorklists_()
+
+    const kept = [ ...( passthrough.demandProducts_ ?? [] ) ]
+
+    api.CloseModel( modelID )
+
+    return kept
+
+  } finally {
+
+    if ( previous === void 0 ) {
+      delete process.env[ PERMUTE_ENV ]
+    } else {
+      process.env[ PERMUTE_ENV ] = previous
+    }
+  }
+}
+
+
+describe( 'the demand worklist permutation lever', () => {
+
+  test( 'unset, the worklist is the model\'s own order', async () => {
+
+    // The default has to be free, not merely cheap: every load in Share and
+    // every digest in the regression corpus goes through this site.
+    // `collectDemandCandidates_` walks the type index, so an unpermuted
+    // worklist is ascending local IDs — which a shuffle of any size breaks.
+    const { products, aggregates } = await worklistsUnderSeed( void 0 )
+
+    // The fixture has to carry enough products for "the order changed" to
+    // be a real observation below — on a worklist of one or two it would
+    // pass or fail by luck. This one holds seven.
+    expect( products.length ).toBeGreaterThan( 4 )
+
+    for ( let where = 1; where < products.length; ++where ) {
+      expect( products[ where ] ).toBeGreaterThan( products[ where - 1 ] )
+    }
+
+    for ( let where = 1; where < aggregates.length; ++where ) {
+      expect( aggregates[ where ] ).toBeGreaterThan( aggregates[ where - 1 ] )
+    }
+  }, 240000 )
+
+  test( 'a seed reorders the worklist and changes nothing else', async () => {
+
+    // The property the experiment rests on. If a seeded run dropped or
+    // added a product, a divergence in the built geometry would say nothing
+    // about order — it would just be a different model.
+    const plain = await worklistsUnderSeed( void 0 )
+    const permuted = await worklistsUnderSeed( '1' )
+
+    expect( [ ...permuted.products ].sort( ( a, b ) => a - b ) )
+        .toEqual( plain.products )
+    expect( [ ...permuted.aggregates ].sort( ( a, b ) => a - b ) )
+        .toEqual( plain.aggregates )
+
+    expect( permuted.products ).not.toEqual( plain.products )
+  }, 240000 )
+
+  test( 'a seed names one permutation, and two seeds name two', async () => {
+
+    // A run record cites a seed, so the seed has to be enough to reproduce
+    // the run — and two seeds have to actually differ, or a null result
+    // would mean "the lever did nothing" rather than "order does not
+    // matter".
+    const first = await worklistsUnderSeed( '7' )
+    const again = await worklistsUnderSeed( '7' )
+    const other = await worklistsUnderSeed( '8' )
+
+    expect( again.products ).toEqual( first.products )
+    expect( again.aggregates ).toEqual( first.aggregates )
+
+    expect( other.products ).not.toEqual( first.products )
+  }, 240000 )
+
+  test( 'a value that is not a number leaves the lever off', async () => {
+
+    // Reached by a shell that exported the variable with a word, or with
+    // nothing. Permuting on a seed of NaN would make the run unreproducible
+    // in exactly the situation where reproducibility is the point.
+    const plain = await worklistsUnderSeed( void 0 )
+
+    expect( ( await worklistsUnderSeed( 'yes' ) ).products )
+        .toEqual( plain.products )
+    expect( ( await worklistsUnderSeed( '' ) ).products )
+        .toEqual( plain.products )
+  }, 240000 )
+
+  test( 'a shard keeps its own products, permuted or not', async () => {
+
+    // Membership is what a shard is; order is what the lever changes. A
+    // shard whose set moved would mean the lever is changing the partition,
+    // and then no comparison against an unsharded reference would hold.
+    const plain = await shardProductsUnderSeed( void 0, 0, 2 )
+    const permuted = await shardProductsUnderSeed( '3', 0, 2 )
+
+    expect( plain.length ).toBeGreaterThan( 1 )
+    expect( [ ...permuted ].sort( ( a, b ) => a - b ) ).toEqual( plain )
+    expect( permuted ).not.toEqual( plain )
+  }, 240000 )
+} )
+
