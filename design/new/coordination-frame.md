@@ -203,6 +203,15 @@ Two traps the accessor's doc comment states and the tests pin:
   convention. Identity is returned only when nothing was composed at all:
   recentring off, a shard with no supplied frame, or no geometry emitted
   yet.
+- **Every walk composes under the same frame, not just the first.** More
+  than one classic walk of a live model is legal (`StreamAllMeshes` and
+  then `LoadAllGeometry`), and each has its own local. Those locals seed
+  from the persisted frame, because the derivation guard — correctly —
+  stops a second walk re-anchoring, and seeding identity there made it
+  emit raw source coordinates while the accessor went on reporting the
+  real frame (conway#703). Accessor and emission agreeing is what makes
+  the inverse above true of any placement, not just one from the first
+  walk.
 - **The durable walk is the authority.** A deferred open that adopted its
   preview channel's frame reports that adopted frame from the moment it
   opens — truthfully, since the preview payloads were composed under it —
@@ -219,7 +228,8 @@ Two traps the accessor's doc comment states and the tests pin:
 | The cross-format claim — `index.ifc` and `index.step` render in the same world box | Share: `src/Containers/indexStepLogo.spec.ts` |
 | A supplied frame is applied exactly, a different one moves the model, and N shards under one frame union to the single instance's placements | `src/compat/web-ifc/geometry_shard_coordination.test.ts` |
 | `inverse(GetAppliedCoordinationMatrix)` maps a rendered point back to the fixture's authored LV95 coordinates; zero translation but non-identity frame near the origin; exact identity with recentring off; stable across batches; classic and deferred agree | `src/compat/web-ifc/coordination_baked_geometry.test.ts` |
-| The same classic/deferred agreement on the AP214 arm | `src/compat/web-ifc/ap214_streamed_open.test.ts` |
+| A second classic walk of one live model composes under the frame the first derived, and its placements still invert to the authored coordinates (conway#703) | `src/compat/web-ifc/coordination_baked_geometry.test.ts` |
+| The same classic/deferred agreement, and the same second-walk rule, on the AP214 arm | `src/compat/web-ifc/ap214_streamed_open.test.ts` |
 
 The cross-format claim is pinned Share-side rather than here because
 through this surface the AP214 arm reports its placements at the origin

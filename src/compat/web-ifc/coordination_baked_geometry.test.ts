@@ -640,6 +640,184 @@ describe( 'GetAppliedCoordinationMatrix (Share#1634)', () => {
     expect( api.GetCoordinationMatrix( classicID ) ).toEqual( [ ...IDENTITY_MAT4 ] )
     expect( api.GetCoordinationMatrix( deferredID ) ).toEqual( [ ...IDENTITY_MAT4 ] )
   }, 120000 )
+
+  test( 'a second classic walk composes under the frame the first derived',
+      async () => {
+
+        // conway#703. More than one classic walk of one live model is
+        // legal, and the second used to seed its coordination local from
+        // the model tuple's identity while the `_isCoordinated` guard —
+        // correctly — stopped it re-deriving. So it re-emitted the
+        // fixture's raw LV95 coordinates, ~2.6e6 m out, in the same
+        // session that had just emitted them recentred.
+        //
+        // It belongs in this describe block because of what the accessor
+        // made of it: with the frame persisted,
+        // GetAppliedCoordinationMatrix reports the FIRST walk's real
+        // frame while the second walk's placements carry none, so
+        // `inverse(A) * rendered` — the contract this block exists to
+        // state — silently returns a point 2.6e6 m from the authored one.
+        // Before the accessor the two were accidentally consistent, both
+        // identity, which is why nothing caught it earlier.
+        const modelID = api.OpenModel( buffer, { ...SETTINGS } )
+
+        expect( modelID ).toBeGreaterThanOrEqual( 0 )
+
+        const firstWalk = new Map< number, number[] >()
+
+        api.StreamAllMeshes( modelID, ( mesh ) => {
+          firstWalk.set( mesh.expressID,
+              [ ...mesh.geometries.get( 0 ).flatTransformation ] )
+        } )
+
+        expect( firstWalk.size ).toBe( SOURCE_BOXES.size )
+
+        const applied = api.GetAppliedCoordinationMatrix( modelID )
+
+        expect( applied[ 12 ] ).toBeCloseTo( -GRID_EASTING, 6 )
+
+        // The second walk of the same live model.
+        const secondWalk =
+          new Map< number, { geometryExpressID: number, transform: number[] } >()
+
+        api.StreamAllMeshes( modelID, ( mesh ) => {
+
+          const geometries = mesh.geometries
+
+          // The per-entity vector is CUMULATIVE across walks — each walk
+          // appends its own placement — so the last entry is this walk's.
+          // Asserted rather than assumed: if that accumulation ever
+          // changes shape this test would otherwise quietly start
+          // comparing the first walk with itself.
+          expect( geometries.size() ).toBe( 2 )
+
+          const placed = geometries.get( geometries.size() - 1 )
+
+          secondWalk.set( mesh.expressID, {
+            geometryExpressID: placed.geometryExpressID,
+            transform: [ ...placed.flatTransformation ],
+          } )
+        } )
+
+        expect( secondWalk.size ).toBe( firstWalk.size )
+
+        for ( const [ expressID, first ] of firstWalk ) {
+
+          // Parity over the whole transform, not just its magnitude: the
+          // two walks run the same composition over the same inputs, so
+          // anything short of bit-equality means they disagreed about the
+          // frame.
+          expect( secondWalk.get( expressID )!.transform ).toEqual( first )
+        }
+
+        // ...and the accessor still describes what the SECOND walk
+        // emitted. This is the half that fails on the accessor's own
+        // terms rather than on parity: a placement from walk two, mapped
+        // back through inverse(A), has to land on the authored
+        // coordinates exactly as one from walk one does.
+        const inverse = invertAffine( applied )
+
+        for ( const [ expressID, second ] of secondWalk ) {
+
+          const source = SOURCE_BOXES.get( expressID )!
+
+          const authoredMin = [ Infinity, Infinity, Infinity ]
+          const authoredMax = [ -Infinity, -Infinity, -Infinity ]
+
+          for ( const position of
+            uploadedPositions( modelID, second.geometryExpressID ) ) {
+
+            const authored = transformPoint( inverse,
+                transformPoint( second.transform, position ) )
+
+            for ( let axis = 0; axis < 3; ++axis ) {
+              authoredMin[ axis ] = Math.min( authoredMin[ axis ], authored[ axis ] )
+              authoredMax[ axis ] = Math.max( authoredMax[ axis ], authored[ axis ] )
+            }
+          }
+
+          for ( let axis = 0; axis < 3; ++axis ) {
+            expect( authoredMin[ axis ] ).toBeCloseTo( source.min[ axis ], 3 )
+            expect( authoredMax[ axis ] ).toBeCloseTo( source.max[ axis ], 3 )
+          }
+        }
+      }, 120000 )
+
+  test( 'LoadAllGeometry after StreamAllMeshes composes under the same frame',
+      async () => {
+
+        // conway#703's literal repro, and the second of the three classic
+        // seed sites: `loadAllGeometry` has its own local, so fixing
+        // `streamAllMeshes` alone would leave this path emitting raw LV95
+        // coordinates.
+        //
+        // Two things about this path are pre-existing defects rather than
+        // anything this change introduces, and the assertions below are
+        // shaped around both rather than resting on either:
+        //
+        //  - `loadAllGeometry`'s `return` sits INSIDE its scene walk, so
+        //    it emits one geometry and returns. Only that entity gains a
+        //    second placement today, which is why this asserts over
+        //    whatever gained one and requires at least one, rather than
+        //    over all four.
+        //  - the `Vector<FlatMesh>` it returns cannot be read: the shim's
+        //    `get` bounds-checks against a different (empty) array and so
+        //    always returns the dummy. Hence GetFlatMesh below, which
+        //    reads the model's own mesh map.
+        const modelID = api.OpenModel( buffer, { ...SETTINGS } )
+
+        const firstWalk = new Map< number, number[] >()
+
+        api.StreamAllMeshes( modelID, ( mesh ) => {
+          firstWalk.set( mesh.expressID,
+              [ ...mesh.geometries.get( 0 ).flatTransformation ] )
+        } )
+
+        expect( firstWalk.size ).toBe( SOURCE_BOXES.size )
+
+        const applied = api.GetAppliedCoordinationMatrix( modelID )
+
+        expect( applied[ 12 ] ).toBeCloseTo( -GRID_EASTING, 6 )
+
+        api.LoadAllGeometry( modelID )
+
+        const inverse = invertAffine( applied )
+        let compared = 0
+
+        for ( const [ expressID, first ] of firstWalk ) {
+
+          const geometries = api.GetFlatMesh( modelID, expressID ).geometries
+
+          if ( geometries.size() < 2 ) {
+            continue
+          }
+
+          ++compared
+
+          const placed = geometries.get( geometries.size() - 1 )
+
+          expect( [ ...placed.flatTransformation ] ).toEqual( first )
+
+          const source = SOURCE_BOXES.get( expressID )!
+
+          for ( const position of
+            uploadedPositions( modelID, placed.geometryExpressID ) ) {
+
+            const authored = transformPoint( inverse,
+                transformPoint( [ ...placed.flatTransformation ], position ) )
+
+            for ( let axis = 0; axis < 3; ++axis ) {
+              expect( authored[ axis ] )
+                  .toBeGreaterThanOrEqual( source.min[ axis ] - 1e-3 )
+              expect( authored[ axis ] )
+                  .toBeLessThanOrEqual( source.max[ axis ] + 1e-3 )
+            }
+          }
+        }
+
+        // Nothing re-emitted means nothing was tested.
+        expect( compared ).toBeGreaterThan( 0 )
+      }, 120000 )
 } )
 
 describe( 'normalizeWithCentreF64', () => {
