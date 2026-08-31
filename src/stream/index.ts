@@ -50,7 +50,22 @@ export {
   StepBufferProvider,
   WindowedStepBufferProvider,
 } from '../step/step_buffer_provider'
-export { StepIndexColumns, ColumnarIndexSink } from '../step/parsing/columnar_index'
+export { StepIndexColumns, StepIndexShard, ColumnarIndexSink } from '../step/parsing/columnar_index'
+export {
+  buildColumnarIndexShardedAsync,
+  compareIndexColumns,
+  inProcessShardRunner,
+  mergeIndexShards,
+  resolveShardCount,
+  MAX_DERIVED_SHARD_COUNT,
+  MIN_BYTES_PER_SHARD,
+  ShardStop,
+  ShardJob,
+  ShardOutcome,
+  ShardRunner,
+  ShardedColumnarIndexResult,
+  ShardedIndexOptions,
+} from '../step/parsing/sharded_index_builder'
 export {
   serializeIndexSidecar,
   serializeIndexSidecarFromColumns,

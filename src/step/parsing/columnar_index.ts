@@ -55,6 +55,53 @@ export interface StepIndexColumns<TypeIDType> {
 }
 
 
+/**
+ * One shard's **unassembled** top-level state, as {@link
+ * ColumnarIndexSink.packShard} hands it out: the four columns trimmed to the
+ * rows this shard pushed, the entries it retained (keyed by its own
+ * shard-local localID), and its own sorted-express-ID verdict.
+ *
+ * Deliberately not a {@link StepIndexColumns}: there is no inline range and
+ * no `count`, because a shard must not unfold its own inline entities — the
+ * unfold is global over the merged retained set. See `packShard`'s comment
+ * for what goes wrong if it does.
+ *
+ * Every field is structured-cloneable and the four columns are transferable,
+ * so this crosses a worker boundary as-is.
+ */
+export interface StepIndexShard<TypeIDType> {
+
+  /** Record start offsets, file-absolute. Length is `topLevelCount`. */
+  address: Uint32Array
+
+  /** Record byte lengths. Length is `topLevelCount`. */
+  length: Uint32Array
+
+  /** Type IDs, −1 for "no concrete type". Length is `topLevelCount`. */
+  typeID: Int32Array
+
+  /** Express IDs. Length is `topLevelCount`. */
+  expressID: Uint32Array
+
+  /** Top-level records this shard indexed. */
+  topLevelCount: number
+
+  /**
+   * Entries with inline entities and/or a multi-mapping, keyed by
+   * SHARD-LOCAL localID and in ascending localID order — the merge re-keys
+   * them by adding the shard's base and relies on that order.
+   */
+  retained: [ number, StepIndexEntry<TypeIDType> ][]
+
+  /**
+   * Whether express IDs were non-decreasing WITHIN this shard. A shard's
+   * scan restarts from 0, so it is blind to a descent across a seam; the
+   * merge re-derives the seams from the first/last rows of each column.
+   */
+  expressIdsSorted: boolean
+}
+
+
 /** Type sentinel for "no concrete type" in the typeID column. */
 export const COLUMN_UNDEFINED_TYPE = -1
 
@@ -199,6 +246,41 @@ implements StepIndexSink<TypeIDType> {
   }
 
   /**
+   * Hand out this sink's top-level state **unassembled** — the four columns
+   * trimmed to the rows actually pushed, plus the retained entries and the
+   * sorted flag. This is what one shard of a sharded index build produces
+   * (see {@link import('./sharded_index_builder').buildColumnarIndexShardedAsync});
+   * {@link import('./sharded_index_builder').mergeIndexShards} concatenates
+   * the top-level ranges and then runs the unfold ONCE over the union.
+   *
+   * It cannot be `finalize()` instead, and the reason is the whole hazard of
+   * the merge: the inline range is not per-shard concatenable. `assemble_`
+   * unfolds breadth-first over the *entire* retained set, so N per-shard
+   * unfolds put children in a different order than one global unfold — a
+   * difference worth 21 % of D3D's rows and 0.6 % of PSB's, and one that
+   * shows up as a silently reordered index rather than as an error.
+   *
+   * The columns are freshly allocated (not views on the segments), so they
+   * are safe to hand to `postMessage` as transfers.
+   *
+   * @return {StepIndexShard} The shard's unassembled top-level state.
+   */
+  public packShard(): StepIndexShard<TypeIDType> {
+
+    const rows = this.count_
+
+    return {
+      address: concatColumn( this.segments_, 'address', rows, rows ),
+      length: concatColumn( this.segments_, 'length', rows, rows ),
+      typeID: concatTypeIDColumn( this.segments_, rows, rows ),
+      expressID: concatColumn( this.segments_, 'expressID', rows, rows ),
+      topLevelCount: rows,
+      retained: [ ...this.retained_ ],
+      expressIdsSorted: this.expressIdsSorted_,
+    }
+  }
+
+  /**
    * Shared assembly behind {@link snapshot} and {@link finalize} — pure
    * over the sink's current state.
    *
@@ -208,54 +290,16 @@ implements StepIndexSink<TypeIDType> {
 
     const topLevel = this.count_
 
-    // Unfold inline entities exactly as StepModelBase does over the object
-    // array: scan in localID order appending children, then keep scanning
-    // the appended region (children of children follow all first-level
-    // children). Only retained entries can contribute — simple records have
-    // no children by construction.
-    const unfolded: StepIndexEntryBase<TypeIDType>[] = []
-
-    for ( const entry of this.retained_.values() ) {
-      if ( entry.inlineEntities !== void 0 ) {
-        unfolded.push( ...entry.inlineEntities )
-      }
-    }
-
-    for ( let where = 0; where < unfolded.length; ++where ) {
-
-      const inlineEntities = unfolded[ where ].inlineEntities
-
-      if ( inlineEntities !== void 0 ) {
-        unfolded.push( ...inlineEntities )
-      }
-    }
+    const unfolded = unfoldInlineEntities( this.retained_.values() )
 
     const count = topLevel + unfolded.length
 
     const address = concatColumn( this.segments_, 'address', topLevel, count )
     const length = concatColumn( this.segments_, 'length', topLevel, count )
-
-    const typeID = new Int32Array( count )
-
-    for ( let segment = 0; segment * SEGMENT_ROWS < topLevel; ++segment ) {
-      const rows = Math.min( SEGMENT_ROWS, topLevel - segment * SEGMENT_ROWS )
-      typeID.set(
-          this.segments_[ segment ].typeID.subarray( 0, rows ),
-          segment * SEGMENT_ROWS )
-    }
-
+    const typeID = concatTypeIDColumn( this.segments_, topLevel, count )
     const expressID = concatColumn( this.segments_, 'expressID', topLevel, topLevel )
 
-    for ( let where = 0; where < unfolded.length; ++where ) {
-
-      const entry = unfolded[ where ]
-      const row = topLevel + where
-
-      address[ row ] = entry.address
-      length[ row ] = entry.length
-      typeID[ row ] =
-        entry.typeID === void 0 ? COLUMN_UNDEFINED_TYPE : ( entry.typeID as number )
-    }
+    writeInlineRows( unfolded, topLevel, address, length, typeID )
 
     let complexEntries: Map<number, StepIndexEntry<TypeIDType>> | undefined
 
@@ -281,6 +325,78 @@ implements StepIndexSink<TypeIDType> {
 
 
 /**
+ * Unfold retained entries' inline entities into the order the inline column
+ * range uses — exactly as `StepModelBase` does over the object array: scan in
+ * localID order appending children, then keep scanning the appended region
+ * (children of children follow *all* first-level children). Only retained
+ * entries can contribute; simple records have no children by construction.
+ *
+ * Shared rather than inlined because the sharded builder's merge has to
+ * reproduce this order over the *union* of the shards' retained entries, and
+ * the two must not drift: a divergence here reorders the inline range and
+ * every consumer that resolves an inline reference by localID follows it,
+ * silently. One implementation, two callers.
+ *
+ * @param retained The retained entries, in ascending localID order.
+ * @return {StepIndexEntryBase[]} The inline entities, in unfold order.
+ */
+export function unfoldInlineEntities<TypeIDType>(
+    retained: Iterable<StepIndexEntryBase<TypeIDType>> ):
+    StepIndexEntryBase<TypeIDType>[] {
+
+  const unfolded: StepIndexEntryBase<TypeIDType>[] = []
+
+  for ( const entry of retained ) {
+    if ( entry.inlineEntities !== void 0 ) {
+      unfolded.push( ...entry.inlineEntities )
+    }
+  }
+
+  for ( let where = 0; where < unfolded.length; ++where ) {
+
+    const inlineEntities = unfolded[ where ].inlineEntities
+
+    if ( inlineEntities !== void 0 ) {
+      unfolded.push( ...inlineEntities )
+    }
+  }
+
+  return unfolded
+}
+
+
+/**
+ * Write the unfolded inline entities into the inline tail of columns already
+ * sized to `firstInlineElement + unfolded.length`. Shared with the sharded
+ * merge for the same reason {@link unfoldInlineEntities} is.
+ *
+ * @param unfolded The inline entities in unfold order.
+ * @param firstInlineElement Row the inline range starts at.
+ * @param address The address column, sized to the full count.
+ * @param length The length column, sized to the full count.
+ * @param typeID The type column, sized to the full count.
+ */
+export function writeInlineRows<TypeIDType>(
+    unfolded: readonly StepIndexEntryBase<TypeIDType>[],
+    firstInlineElement: number,
+    address: Uint32Array,
+    length: Uint32Array,
+    typeID: Int32Array ): void {
+
+  for ( let where = 0; where < unfolded.length; ++where ) {
+
+    const entry = unfolded[ where ]
+    const row = firstInlineElement + where
+
+    address[ row ] = entry.address
+    length[ row ] = entry.length
+    typeID[ row ] =
+      entry.typeID === void 0 ? COLUMN_UNDEFINED_TYPE : ( entry.typeID as number )
+  }
+}
+
+
+/**
  * Clone an index entry (and its multiMapping sub-entries, which models
  * also stamp) down to the persistent index fields.
  *
@@ -300,7 +416,7 @@ implements StepIndexSink<TypeIDType> {
  * @param entry The retained entry to clone.
  * @return {StepIndexEntryBase} A fresh holder with persistent fields only.
  */
-function cloneIndexEntry<TypeIDType>(
+export function cloneIndexEntry<TypeIDType>(
     entry: StepIndexEntryBase<TypeIDType> ): StepIndexEntryBase<TypeIDType> {
 
   const clone: StepIndexEntryBase<TypeIDType> = {
@@ -351,6 +467,34 @@ function concatColumn(
     const valid = Math.min( SEGMENT_ROWS, rows - segment * SEGMENT_ROWS )
     result.set(
         segments[ segment ][ column ].subarray( 0, valid ),
+        segment * SEGMENT_ROWS )
+  }
+
+  return result
+}
+
+
+/**
+ * {@link concatColumn} for the signed type column — separate only because
+ * `typeID` is an `Int32Array` and the others are `Uint32Array`.
+ *
+ * @param segments The growth segments.
+ * @param rows Valid rows across the segments.
+ * @param finalLength Length of the final array (≥ rows; the tail is for
+ * inline rows filled by the caller).
+ * @return {Int32Array} The concatenated column.
+ */
+function concatTypeIDColumn(
+    segments: ColumnSegment[],
+    rows: number,
+    finalLength: number ): Int32Array {
+
+  const result = new Int32Array( finalLength )
+
+  for ( let segment = 0; segment * SEGMENT_ROWS < rows; ++segment ) {
+    const valid = Math.min( SEGMENT_ROWS, rows - segment * SEGMENT_ROWS )
+    result.set(
+        segments[ segment ].typeID.subarray( 0, valid ),
         segment * SEGMENT_ROWS )
   }
 
