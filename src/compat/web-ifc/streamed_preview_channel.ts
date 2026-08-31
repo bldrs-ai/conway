@@ -15,8 +15,14 @@ import * as glmatrix from 'gl-matrix'
 import {
   composeTransformF64,
   deriveCoordinationF64,
+  LARGE_COORDINATE_BUDGET_M,
   NORMALIZE_MAT_F64,
 } from './coordination_f64'
+import {
+  exceedsLargeCoordinateBudget,
+  normalizeWithCentreF64,
+  placementMagnitudeM,
+} from './geometry_recentre'
 import { DanglingPlacementError } from '../../ifc/dangling_placement_error'
 import { formatPreviewLine } from '../../core/progress_log'
 import Logger from '../../logging/logger'
@@ -466,6 +472,10 @@ export class StreamedPreviewChannel {
    */
   private meshesEmitted_ = 0
   private emittedBytes_ = 0
+
+  /** Latch for the "recentre did not recentre" report — see
+   * {@link reportLargeCoordinate_}. */
+  private largeCoordinateReported_ = false
 
   /* Units a tick attempted and could not extract, and how many of those were
    * specifically waiting on a placement chain the prefix does not hold yet.
@@ -1046,7 +1056,9 @@ export class StreamedPreviewChannel {
         localID: number,
         geometry: {
           getPoint( index: number ): Vector3,
+          getVertexCount(): number,
           normalize(): Vector3,
+          clearReification?(): void,
           GetVertexData(): number,
           GetVertexDataSize(): number,
           GetIndexData(): number,
@@ -1093,10 +1105,15 @@ export class StreamedPreviewChannel {
         nativePt = geometry.geometry.getPoint(0)
       }
 
-      // normalize() recenters the geometry buffer (side effect) and returns
-      // the local centre; only the per-leaf recenter path (IFC) applies it —
-      // AP214 shares one buffer and composes bare (issue #308).
-      const center = recenter ? geometry.geometry.normalize() : undefined
+      // Recenters the geometry buffer (side effect) and MEASURES the local
+      // centre; only the per-leaf recenter path (IFC) applies it — AP214
+      // shares one buffer and composes bare (issue #308). normalize()'s own
+      // return value is (0,0,0) on the pinned wasm and its float32
+      // reification goes stale across the shift, which is why this goes
+      // through geometry_recentre rather than calling it directly: the
+      // vertexData copied out below is that reification.
+      const center =
+        recenter ? normalizeWithCentreF64(geometry.geometry) : undefined
 
       const geometryExpressID =
         generation.geometryExpressID(geometry.localID) as number
@@ -1115,6 +1132,8 @@ export class StreamedPreviewChannel {
 
       const newTransform =
           composeTransformF64(coordination, geometryTransform, center)
+
+      this.reportLargeCoordinate_(newTransform, geometry.geometry)
 
       const payload: PreviewMeshPayload = {
         expressID: entity.expressID,
@@ -1163,6 +1182,36 @@ export class StreamedPreviewChannel {
     }
 
     return emitted
+  }
+
+  /**
+   * Report — once for the whole channel — that a preview placement escaped
+   * LARGE_COORDINATE_BUDGET_M while COORDINATE_TO_ORIGIN was on.
+   *
+   * The preview is the first thing a user sees, so a frame that failed to
+   * recentre shows up here before the durable walk gets anywhere near it.
+   * Latched because every payload on such a model is over budget.
+   *
+   * @param transform The composed placement about to be emitted.
+   * @param geometry The geometry it draws — empty geometry is exempt (see
+   * exceedsLargeCoordinateBudget).
+   */
+  private reportLargeCoordinate_(
+      transform: ArrayLike<number>,
+      geometry: { getVertexCount(): number }): void {
+
+    if (this.largeCoordinateReported_ || !this.coordinateToOrigin ||
+        !exceedsLargeCoordinateBudget(transform, geometry)) {
+      return
+    }
+
+    this.largeCoordinateReported_ = true
+
+    Logger.warning(
+        `[preview] COORDINATE_TO_ORIGIN did not recentre this model: a ` +
+        `placement is ${Math.round(placementMagnitudeM(transform))}m from ` +
+        `the origin, past the ${LARGE_COORDINATE_BUDGET_M}m float32 budget. ` +
+        `Expect visible jitter.`)
   }
 
   /**
