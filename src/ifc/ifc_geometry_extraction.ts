@@ -4326,49 +4326,54 @@ export class IfcGeometryExtraction {
               isSpace,
               true)
 
-          // Two sources feed styledItemLocalID and they must bind differently.
+          // Three style sources, tried in IFC precedence order: an explicit
+          // IfcStyledItem on geometry outranks anything derived from a
+          // material association, so the material path is the last resort.
+          // They also bind differently, which is why this is a chain of
+          // branches rather than one `??`.
           //
-          // A direct styledItemMap hit is an IfcStyledItem pointing at THIS
-          // representation item, so extractStyledItem's `from.Item` branch binds
-          // it to the mapped body — correct, since the style travels with the
-          // shared geometry and every product mapping it wants that style.
+          // 1. A direct styledItemMap hit is an IfcStyledItem pointing at THIS
+          //    representation item, so extractStyledItem's `from.Item` branch
+          //    binds it to the mapped body — correct, since the style travels
+          //    with the shared geometry and every product mapping it wants it.
           //
-          // The extractMaterialStyle fallback is per-product: it walks
-          // IfcRelAssociatesMaterial -> IfcMaterialDefinitionRepresentation,
-          // whose IfcStyledItem carries `Item = $`. With neither an Item nor a
-          // representationItem argument, extractStyledItem reaches no binding
-          // branch at all and the geometry ended up with no material
-          // (bldrs-ai/test-models-private#61 — mapped doors/windows/MEP). It
-          // must not be bound to representationItem.localID to fix that: a
-          // representation map is shared across products, so that would leak
-          // one product's material onto every other instance of the same body.
-          // It goes through the per-node override instead, keyed on the owning
-          // product — localIDs are unique across entities, so a product's ID
-          // cannot collide with a geometry key, and the parent-styled branch
-          // below already uses non-geometry localIDs as override keys the same
-          // way. IfcSceneBuilder.resolveGeometryNode_ consults the override
-          // ahead of the geometry's own assignment, so each product resolves
-          // its own material off the one shared body.
+          // 2. Otherwise a styled item on the IfcMappedItem itself or on one of
+          //    its mapped ancestors, bound (and overridden) on that mapped
+          //    item's localID. Still an explicit item style, so it must be
+          //    tried before the material association — checking the material
+          //    first silently inverted this precedence
+          //    (codex finding on bldrs-ai/conway#684): for a product that has
+          //    both, the product material won and the mapped item's own style
+          //    was never applied.
+          //
+          // 3. Last, extractMaterialStyle: IfcRelAssociatesMaterial ->
+          //    IfcMaterialDefinitionRepresentation, whose IfcStyledItem carries
+          //    `Item = $`. With neither an Item nor a representationItem
+          //    argument, extractStyledItem reaches no binding branch at all and
+          //    the geometry ended up with no material at all
+          //    (bldrs-ai/test-models-private#61 — mapped doors/windows/MEP). It
+          //    must not be bound to representationItem.localID to fix that: a
+          //    representation map is shared across products, so that would leak
+          //    one product's material onto every other instance of the same
+          //    body. It goes through the per-node override instead, keyed on
+          //    the owning product — localIDs are unique across entities, so a
+          //    product's ID cannot collide with a geometry key, the same way
+          //    case 2 keys its override on a mapped item's localID.
+          //
+          // IfcSceneBuilder.resolveGeometryNode_ consults the override ahead of
+          // the geometry's own assignment, so each product resolves its own
+          // style off the one shared body.
           const directStyledItemLocalID =
             this.materials.styledItemMap.get(representationItem.localID)
 
-          const styledItemLocalID =
-            directStyledItemLocalID ?? this.extractMaterialStyle(owningElement)
-
           let materialOverrideID: number | undefined = void 0
 
-          if (styledItemLocalID !== undefined) {
+          if (directStyledItemLocalID !== void 0) {
 
-            const styledItem = this.model.getElementByLocalID(styledItemLocalID) as IfcStyledItem
+            const styledItem =
+              this.model.getElementByLocalID(directStyledItemLocalID) as IfcStyledItem
 
-            const surfaceStyleID = this.extractStyledItem(styledItem)
-
-            if (directStyledItemLocalID === void 0 && surfaceStyleID !== void 0) {
-
-              this.materials.addGeometryMapping(owningElement.localID, surfaceStyleID)
-
-              materialOverrideID = owningElement.localID
-            }
+            this.extractStyledItem(styledItem)
 
           } else {
             // get material from parent
@@ -4394,6 +4399,25 @@ export class IfcGeometryExtraction {
               this.extractStyledItem(styledItemParent, styleParent)
 
               materialOverrideID = styleParent.localID
+
+            } else {
+
+              const materialStyledItemLocalID = this.extractMaterialStyle(owningElement)
+
+              if (materialStyledItemLocalID !== void 0) {
+
+                const styledItem =
+                  this.model.getElementByLocalID(materialStyledItemLocalID) as IfcStyledItem
+
+                const surfaceStyleID = this.extractStyledItem(styledItem)
+
+                if (surfaceStyleID !== void 0) {
+
+                  this.materials.addGeometryMapping(owningElement.localID, surfaceStyleID)
+
+                  materialOverrideID = owningElement.localID
+                }
+              }
             }
           }
 

@@ -33,6 +33,9 @@ DATA;
       must keep working; it is here so a regression in the direct path
       cannot hide behind the mapped path's new override.
 
+   4. #4000 is the precedence conflict — a material association AND its own
+      styled item on the IfcMappedItem. See the block beside it below.
+
    All colour components are exact binary fractions (0.75, 0.25, 0.125,
    ...) so the extracted doubles compare equal to the literals in the
    test without an epsilon, and none of them is 0.8 — the default the
@@ -118,7 +121,44 @@ DATA;
 #3022=IFCSURFACESTYLE('ShadingGreenStyle',.BOTH.,(#3021));
 #3023=IFCSTYLEDITEM(#3012,(#3022),$);
 
+/* Precedence conflict (codex finding on bldrs-ai/conway#684). #4000 has BOTH
+   a material association (#600, purple) AND its own IfcStyledItem hung on the
+   IfcMappedItem #4012 (teal). IFC ranks an explicit item style above styling
+   derived from a material, so the teal must win.
+
+   This is the case a `styledItemMap.get(item) ?? extractMaterialStyle(product)`
+   chain gets wrong: the material lookup succeeds, so the branch that looks for
+   a style on the mapped item (or its ancestors) never runs, and the product
+   material paints over an explicit style. #4000 maps the same #300 as #1000
+   and #2000, so all three resolve different styles off one shared body. */
+#600=IFCMATERIAL('ShadingPurple',$,$);
+#601=IFCCOLOURRGB($,0.875,0.125,0.5);
+#602=IFCSURFACESTYLESHADING(#601,$);
+#603=IFCSURFACESTYLE('ShadingPurpleStyle',.BOTH.,(#602));
+#604=IFCPRESENTATIONSTYLEASSIGNMENT((#603));
+#605=IFCSTYLEDITEM($,(#604),$);
+#606=IFCSTYLEDREPRESENTATION(#20,$,$,(#605));
+#607=IFCMATERIALDEFINITIONREPRESENTATION($,$,(#606),#600);
+
+#4000=IFCBUILDINGELEMENTPROXY('7777777777shadingD0004',$,'MappedItemStyled',$,$,#4001,#4010,$,$);
+#4001=IFCLOCALPLACEMENT($,#4002);
+#4002=IFCAXIS2PLACEMENT3D(#4003,$,$);
+#4003=IFCCARTESIANPOINT((30.,0.,0.));
+#4010=IFCPRODUCTDEFINITIONSHAPE($,$,(#4011));
+#4011=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#4012));
+#4012=IFCMAPPEDITEM(#300,#4013);
+#4013=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#4014,1.,$);
+#4014=IFCCARTESIANPOINT((0.,0.,0.));
+/* The style that must win: Item is the IfcMappedItem, not the mapped body —
+   IfcMappedItem is an IfcRepresentationItem, so this is legal and it is the
+   only way to style one instance of a shared map explicitly. */
+#4020=IFCCOLOURRGB($,0.375,0.75,0.625);
+#4021=IFCSURFACESTYLESHADING(#4020,$);
+#4022=IFCSURFACESTYLE('ShadingTealStyle',.BOTH.,(#4021));
+#4023=IFCSTYLEDITEM(#4012,(#4022),$);
+
 #9000=IFCRELASSOCIATESMATERIAL('0relAssocMaterialRed01',$,$,$,(#1000),#400);
 #9001=IFCRELASSOCIATESMATERIAL('0relAssocMaterialBlu02',$,$,$,(#2000),#500);
+#9002=IFCRELASSOCIATESMATERIAL('0relAssocMaterialPur03',$,$,$,(#4000),#600);
 ENDSEC;
 END-ISO-10303-21;
