@@ -100,6 +100,26 @@ function main() {
 
 
 /**
+ * Which shard the pump would place a product in.
+ *
+ * Keyed on the EFFECTIVE dispatch key: an aggregate target is extracted only
+ * by the rel-aggregates pass, which `adoptShardedWorklists_` shards by the
+ * relating object's key rather than the product's own. On a model where
+ * almost every placement is an aggregate target, using `product.k` here
+ * attributes almost every placer to the wrong shard (codex review, PR #698).
+ * A product table written before that column existed carries only the own
+ * key, and degrades to the old meaning rather than to NaN.
+ *
+ * @param {object} product The product-table row.
+ * @param {number} shardCount How many shards.
+ * @return {number} The shard index.
+ */
+function effectiveShard( product, shardCount ) {
+  return Math.abs( product.ek ?? product.k ) % shardCount
+}
+
+
+/**
  * How many geometries in a population have at least one placer of each kind.
  *
  * The voiding columns come from the shared reporter, so this script and
@@ -131,7 +151,7 @@ function perGeometryRates( title, ids, reference, products, shardCount ) {
 
     const voided = placers.filter( ( product ) => product.v === 1 )
     const shardsTouched = new Set(
-        placers.map( ( product ) => Math.abs( product.k ) % shardCount ) )
+        placers.map( ( product ) => effectiveShard( product, shardCount ) ) )
 
     const mixed = voided.length > 0 && voided.length < placers.length
 
@@ -188,7 +208,7 @@ function mechanismTest( ids, reference, shards, products, shardCount ) {
     for ( const product of placers ) {
 
       if ( product.v === 1 ) {
-        voidedShards.add( Math.abs( product.k ) % shardCount )
+        voidedShards.add( effectiveShard( product, shardCount ) )
       }
     }
 

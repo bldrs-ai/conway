@@ -250,6 +250,29 @@ function dumpProductTable( api, modelID, outDir ) {
     }
   }
 
+  // The key the PUMP actually places a product by, which for an aggregate
+  // target is not the product's own. `adoptShardedWorklists_` shards the
+  // rel-aggregates worklist by the RELATING OBJECT's key, and an aggregate
+  // target is extracted only by that pass — so on a model where 96.6 % of
+  // placements are aggregate targets, keying the analysis on `product.k`
+  // attributes almost every placer to the wrong shard (codex review, PR
+  // #698). One level, matching the pump: the aggregates worklist keys on the
+  // relating object directly, not on the root of a nest.
+  const effectiveKeys = new Map()
+
+  for ( const relAggregate of model.types( gen.IfcRelAggregates ) ) {
+
+    const relatingLocalID =
+      dispatch.relatingLocalIDOf( model, relAggregate.localID )
+    const key = dispatch.geometryDispatchKey( model, relatingLocalID )
+
+    for ( const related of
+      readOrUndefined( () => relAggregate.RelatedObjects ) ?? [] ) {
+
+      effectiveKeys.set( related.localID, key )
+    }
+  }
+
   const lines = []
   let described = 0
 
@@ -262,6 +285,10 @@ function dumpProductTable( api, modelID, outDir ) {
       e: product.expressID,
       l: localID,
       k: key,
+      // The effective key falls back to the own key for a product the
+      // aggregates pass does not own, which is what the pump uses for it.
+      ek: aggregateTargets.has( localID ) ?
+        effectiveKeys.get( localID ) ?? key : key,
       r: keyResolution( gen, product, localID, key ),
       a: aggregateTargets.has( localID ) ? 1 : 0,
       v: voidedElements.has( localID ) ? 1 : 0,
@@ -508,6 +535,13 @@ function report( outDir, shardCount ) {
   const invented = []
   const builtByCount = new Map()
 
+  // EVERY payload any shard produced for an ID, not one of them. Retaining
+  // the first shard's record and marking later disagreements as `split` made
+  // `differing` depend on which shard happened to be retained: an ID whose
+  // shard-0 payload matched the reference while shard 1's differed was
+  // counted only as a split, while the reverse ordering was counted as a
+  // divergence — so the headline count was an undercount by an amount
+  // decided by shard index (codex review, PR #698).
   const sharded = new Map()
 
   for ( const shardGeometry of shards ) {
@@ -519,12 +553,9 @@ function report( outDir, shardCount ) {
       const existing = sharded.get( id )
 
       if ( existing === void 0 ) {
-        sharded.set( id, record )
-      } else if ( existing.p !== record.p ) {
-        // Two shards built one geometry two different ways. That is a
-        // separate fact from "differs from the reference" and is counted as
-        // such below.
-        existing.split = true
+        sharded.set( id, { payloads: new Set( [ record.p ] ), o: record.o } )
+      } else {
+        existing.payloads.add( record.p )
       }
     }
   }
@@ -538,7 +569,8 @@ function report( outDir, shardCount ) {
       continue
     }
 
-    if ( built.p !== record.p ) {
+    // Divergent when ANY shard that built it disagrees with the reference.
+    if ( [ ...built.payloads ].some( ( payload ) => payload !== record.p ) ) {
       differing.push( id )
     }
   }
@@ -550,7 +582,10 @@ function report( outDir, shardCount ) {
     }
   }
 
-  const splits = [ ...sharded.values() ].filter( ( record ) => record.split === true )
+  // Two shards built one geometry two different ways — a separate fact from
+  // "differs from the reference", and still reported as such.
+  const splits =
+    [ ...sharded.values() ].filter( ( record ) => record.payloads.size > 1 )
 
   console.log( '' )
   console.log( `reference geometries      ${reference.size.toLocaleString( 'en-US' )}` )

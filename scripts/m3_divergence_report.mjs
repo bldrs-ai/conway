@@ -210,7 +210,12 @@ export function profile( title, ids, reference, products ) {
       counts.aggregateTarget += product.a
       counts.voided += product.v
       counts.opening += product.x
-      keys.add( product.k )
+
+      // The key the pump places by, not the product's own — they differ for
+      // every aggregate target (codex review, PR #698). A table written
+      // before that column existed has only the own key, which is what it
+      // recorded, so it degrades to the old meaning rather than to NaN.
+      keys.add( product.ek ?? product.k )
     }
 
     if ( keys.size > 1 ) {
