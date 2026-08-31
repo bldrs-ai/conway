@@ -1268,6 +1268,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
   }
 
   /**
+   * The classic web-ifc coordination matrix, held at identity on purpose
+   * — consumers stamp it onto the assembled model, so returning the real
+   * recentre here would apply it twice. For the frame this instance
+   * actually composed into its placements, see
+   * {@link getAppliedCoordination}.
    *
    * @param modelID
    * @return {Array<number>}
@@ -1282,14 +1287,71 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
 
   /**
-   * The coordination frame actually applied to emitted placements —
-   * the derived (or validated adopted) recenter, identity when no
-   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   * The coordination frame this instance actually composed into the
+   * placements it emitted — derived, or an adopted preview frame the
+   * durable walk has since validated; identity while nothing has been
+   * composed.
    *
-   * @return {Array<number>} column-major mat4
+   * Unlike the IFC proxy there is no supplied-frame case to carve out of
+   * that: this arm implements no `setCoordinationFrame`, so
+   * `IfcAPI.SetCoordinationFrame` returns false for a STEP model and
+   * nothing can populate the frame ahead of the first placement.
+   *
+   * Every emit site (classic `streamAllMeshes` / `loadAllGeometry`, and
+   * the deferred `streamNewMeshes_`) writes `demandCoordination_` at the
+   * moment it derives, which is what makes the classic and deferred
+   * opens report the same frame for the same model.
+   *
+   * The AP214 composition omits the per-leaf `translate(geomCentre)` the
+   * IFC path carries — one shared vertex buffer per mapped body, so
+   * nothing is recentred per instance (#308) — but that factor sits to
+   * the right of the frame either way, so the inverse a consumer applies
+   * is the same on both paths.
+   *
+   * The contract this satisfies — composition order, the
+   * `world = inverse(A) * rendered` inverse, and when identity is owed —
+   * is stated on `IfcAPI.GetAppliedCoordinationMatrix`.
+   *
+   * @return {Array<number>} column-major mat4, a fresh array; `identity`
+   * is a mutable field, so the copy is what keeps a caller from editing
+   * this instance's own zero frame.
    */
   getAppliedCoordination(): Array<number> {
     return [...(this.demandCoordination_ ?? this.identity)]
+  }
+
+
+  /**
+   * The frame a classic walk composes under: whatever this model has
+   * already derived, and only failing that the model tuple's identity
+   * seed.
+   *
+   * The classic walks derive a frame only while `_isCoordinated` is
+   * false, which is right — a model must not re-anchor halfway through
+   * its life — but they used to seed their local from `model[5]`'s
+   * identity regardless. So a SECOND walk of one live model
+   * (`streamAllMeshes` and then `loadAllGeometry`, both legal on a
+   * classic open) skipped the derivation AND started from identity,
+   * composing every placement without the recentre while
+   * {@link getAppliedCoordination} went on reporting the real frame:
+   * emitted geometry and accessor answer disagreeing precisely on the
+   * georeferenced models where the difference is large (#703). Before
+   * the accessor existed the two were accidentally consistent, both
+   * identity, which is why this surfaced only now.
+   *
+   * Skipping the re-derivation was never the bug; seeding identity was.
+   * Reading the persisted frame here is what keeps
+   * `world = inverse(A) * rendered` true for every walk rather than only
+   * the first.
+   *
+   * `demandCoordination_` is undefined until something derives, so a
+   * first walk still starts from the identity seed and emits exactly
+   * what it did before this existed.
+   *
+   * @return {ArrayLike<number>} The frame to seed a classic walk with.
+   */
+  private classicCoordinationSeed_(): ArrayLike<number> {
+    return this.demandCoordination_ ?? this.model[5]
   }
 
   /**
@@ -1904,7 +1966,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
@@ -1942,6 +2004,12 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
         if (!this._isCoordinated && this.settings?.COORDINATE_TO_ORIGIN) {
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+          // Persisted for getAppliedCoordination (Share#1634): without
+          // this the classic walk composes under a frame only its local
+          // knows, and the accessor reports identity for a model that
+          // was in fact recentred — while the deferred pump, which does
+          // persist, reports the truth for the same file.
+          this.demandCoordination_ = Array.from(coordinationMatrix)
           this._isCoordinated = true
         }
 
@@ -2082,7 +2150,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity, occurrencePath]
@@ -2121,6 +2189,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
           Logger.info('Setting up coordinationMatrix')
           coordinationMatrix = deriveCoordinationF64(
               geometryTransform, nativePt!, this.NormalizeMat, this.linearScalingFactor)
+          // Persisted for getAppliedCoordination (Share#1634) — see the
+          // sibling site in streamAllMeshes.
+          this.demandCoordination_ = Array.from(coordinationMatrix)
           this._isCoordinated = true
         }
 

@@ -2331,6 +2331,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * The classic web-ifc coordination matrix, held at identity on purpose
+   * — consumers stamp it onto the assembled model, so returning the real
+   * recentre here would apply it twice. For the frame this instance
+   * actually composed into its placements, see
+   * {@link getAppliedCoordination}.
    *
    * @param modelID
    * @return {Array<number>}
@@ -2351,14 +2356,69 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
-   * The coordination frame actually applied to emitted placements —
-   * the derived (or validated adopted) recenter, identity when no
-   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   * The coordination frame this instance actually composed into the
+   * placements it emitted — derived, supplied, or an adopted preview
+   * frame the durable walk has since validated; identity while nothing
+   * has been composed and nothing handed in.
    *
-   * @return {Array<number>} column-major mat4
+   * "Handed in" is the exception to the emitted-placements reading, and
+   * it is deliberate: {@link setCoordinationFrame} stores its matrix at
+   * call time, so a supplied frame reports from that moment rather than
+   * from the first placement composed under it. M3's pool needs exactly
+   * that — a worker is asked which frame it will apply, not which one it
+   * has finished applying — and a supplied frame is final, so the early
+   * answer is never revised.
+   *
+   * Every emit site (classic `streamAllMeshes` /
+   * `streamAllMeshesWithTypes` / `loadAllGeometry`, and the deferred
+   * `streamNewMeshes_`) writes `demandCoordination_` at the moment it
+   * derives, which is what makes the classic and deferred opens report
+   * the same frame for the same model.
+   *
+   * The contract this satisfies — composition order, the
+   * `world = inverse(A) * rendered` inverse, and when identity is owed —
+   * is stated on `IfcAPI.GetAppliedCoordinationMatrix`.
+   *
+   * @return {Array<number>} column-major mat4, a fresh array; `identity`
+   * is a mutable field, so the copy is what keeps a caller from editing
+   * this instance's own zero frame.
    */
   getAppliedCoordination(): Array<number> {
     return [...(this.demandCoordination_ ?? this.identity)]
+  }
+
+
+  /**
+   * The frame a classic walk composes under: whatever this model has
+   * already derived, and only failing that the model tuple's identity
+   * seed.
+   *
+   * The classic walks derive a frame only while `_isCoordinated` is
+   * false, which is right — a model must not re-anchor halfway through
+   * its life — but they used to seed their local from `model[5]`'s
+   * identity regardless. So a SECOND walk of one live model
+   * (`streamAllMeshes` and then `loadAllGeometry`, both legal on a
+   * classic open) skipped the derivation AND started from identity,
+   * composing every placement without the recentre while
+   * {@link getAppliedCoordination} went on reporting the real frame:
+   * emitted geometry and accessor answer disagreeing precisely on the
+   * georeferenced models where the difference is 2.6e6 m (#703). Before
+   * the accessor existed the two were accidentally consistent, both
+   * identity, which is why this surfaced only now.
+   *
+   * Skipping the re-derivation was never the bug; seeding identity was.
+   * Reading the persisted frame here is what keeps
+   * `world = inverse(A) * rendered` true for every walk rather than only
+   * the first.
+   *
+   * `demandCoordination_` is undefined until something derives, so a
+   * first walk still starts from the identity seed and emits exactly
+   * what it did before this existed.
+   *
+   * @return {ArrayLike<number>} The frame to seed a classic walk with.
+   */
+  private classicCoordinationSeed_(): ArrayLike<number> {
+    return this.demandCoordination_ ?? this.model[5]
   }
 
   /**
@@ -4717,7 +4777,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
@@ -4879,7 +4939,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     const conwayTypesArray: number[] = []
     types.forEach((type) => {
@@ -5063,7 +5123,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
