@@ -160,27 +160,41 @@ async function runChild( phase, filePath ) {
     }
   }
 
-  const { serializeIndexSidecar, deserializeIndexSidecar, hashSource, sidecarMatchesSource } =
-    await import( '../compiled/src/step/parsing/index_sidecar.js' )
+  const {
+    serializeIndexSidecarFromColumns, deserializeIndexSidecarToColumns,
+    hashSource, sidecarMatchesSource,
+  } = await import( '../compiled/src/step/parsing/index_sidecar.js' )
 
+  // v2 carries the WHOLE index, `[0, count)` — the inline range included —
+  // so the round-trip is checked against the columns, not against the
+  // top-level element array v1 stopped at (conway#541).
   const hash = hashSource( resident.bytes )
-  const blob = serializeIndexSidecar( streamed.elements, resident.bytes.byteLength, hash )
-  const decoded = deserializeIndexSidecar( blob )
+  const blob = serializeIndexSidecarFromColumns(
+      columnar.columns, resident.bytes.byteLength, hash )
+  const decoded = deserializeIndexSidecarToColumns( blob )
 
-  let sidecarOK = decoded.elements.length === streamed.elements.length &&
+  const source = columnar.columns
+  const restored = decoded.columns
+
+  let sidecarOK = restored.count === source.count &&
+    restored.firstInlineElement === source.firstInlineElement &&
+    ( restored.complexEntries?.size ?? 0 ) === ( source.complexEntries?.size ?? 0 ) &&
     sidecarMatchesSource( decoded, resident.bytes.byteLength, hash )
 
   if ( sidecarOK ) {
-    for ( let i = 0; i < decoded.elements.length; ++i ) {
-      const a = streamed.elements[ i ]
-      const b = decoded.elements[ i ]
-      if ( a.address !== b.address || a.length !== b.length ||
-          ( a.typeID ?? -1 ) !== ( b.typeID ?? -1 ) || a.expressID !== b.expressID ) {
+    for ( let i = 0; i < source.count; ++i ) {
+      if ( source.address[ i ] !== restored.address[ i ] ||
+          source.length[ i ] !== restored.length[ i ] ||
+          source.typeID[ i ] !== restored.typeID[ i ] ||
+          ( i < source.firstInlineElement &&
+            source.expressID[ i ] !== restored.expressID[ i ] ) ) {
         sidecarOK = false
         break
       }
     }
   }
+
+  const inlineRows = source.count - source.firstInlineElement
 
   // Handshake must also refuse a mutated source.
   const mutated = resident.bytes.slice( 0, Math.min( resident.bytes.length, 1 << 20 ) )
@@ -190,6 +204,7 @@ async function runChild( phase, filePath ) {
   console.log( JSON.stringify( {
     records: resident.elements.length, identical, columnsIdentical, firstDiff,
     sidecarBytes: blob.byteLength, sidecarOK, handshakeRejects: rejects,
+    inlineRows,
   } ) )
 }
 

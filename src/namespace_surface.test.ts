@@ -13,6 +13,7 @@ describe( 'plane namespace surface', () => {
   test( 'stream exposes the fixed-memory open plane', () => {
     expect( typeof stream.openStreamedIfcModel ).toBe( 'function' )
     expect( typeof stream.openStreamedIfcModelFromStore ).toBe( 'function' )
+    expect( typeof stream.openIfcModelFromIndex ).toBe( 'function' )
     expect( typeof stream.BufferByteSource ).toBe( 'function' )
     expect( typeof stream.StoreByteSource ).toBe( 'function' )
     expect( typeof stream.SyncAccessHandleByteSource ).toBe( 'function' )
@@ -20,8 +21,15 @@ describe( 'plane namespace surface', () => {
     expect( typeof stream.WindowedStepBufferProvider ).toBe( 'function' )
     expect( typeof stream.serializeIndexSidecarFromColumns ).toBe( 'function' )
     expect( typeof stream.deserializeIndexSidecarToColumns ).toBe( 'function' )
+    expect( typeof stream.serializeIndexSidecar ).toBe( 'function' )
     expect( typeof stream.sidecarMatchesSource ).toBe( 'function' )
+    expect( typeof stream.sidecarMatchesSourceLength ).toBe( 'function' )
     expect( typeof stream.hashSource ).toBe( 'function' )
+    expect( typeof stream.HashingByteSource ).toBe( 'function' )
+
+    // A value, not a function — and the one embedders have to branch on, so
+    // an accidental bump is worth a failing test rather than a surprise.
+    expect( stream.SIDECAR_VERSION ).toBe( 2 )
     expect( typeof stream.StreamingRecordDispatcher ).toBe( 'function' )
     expect( typeof stream.PrefixTypeIndex ).toBe( 'function' )
     expect( typeof stream.ColumnarIndexSink ).toBe( 'function' )

@@ -37,6 +37,7 @@ import {
 } from '../../core/wasm_heap'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import IfcStepParser from '../../ifc/ifc_step_parser'
+import { openIfcModelFromIndex } from '../../ifc/ifc_stream_open'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
 import {
@@ -763,6 +764,34 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Index-first open (conway#541): take the entity index the caller
+   * already has — a sidecar built by a coordinator's parse, or persisted
+   * from a previous visit — and skip the parse entirely. Everything after
+   * the index is the store-backed open, unchanged.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @return {Promise<IfcApiProxyIfc>} The constructed proxy.
+   */
+  public static async createFromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyIfc> {
+
+    const loadState = await IfcApiProxyIfc.parseColumnarFromIndex(
+        modelID, store, sidecar, new ConwayGeometry(wasmModule), settings,
+        settings?.DEFER_GEOMETRY === true )
+
+    return new IfcApiProxyIfc(modelID, new Uint8Array( 0 ), wasmModule, settings, loadState)
+  }
+
+
+  /**
    * Log + record the header parse result on the model statistics.
    *
    * @param result0 The header parse result.
@@ -1214,110 +1243,47 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
-   * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
-   * source stays in `store`, parse windows are filled through it, and
-   * the model never holds a resident copy. During parse a bounded
-   * prefix extract pages product closures from the store and emits
-   * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
-   * the index exists, spatial-structure AABB plates go out too.
-   * Deferred opens page prep closures before prepareDemandExtraction;
-   * non-deferred opens drain the demand pump with per-product residency.
+   * The half of a store-backed open that is **index-agnostic**: everything
+   * from a constructed model onward — demand prep, the spatial-structure
+   * imposters, and either the deferred hand-off or the full
+   * product/aggregate extraction.
+   *
+   * Shared verbatim by {@link parseColumnarFromStore} (index built by
+   * parsing) and {@link parseColumnarFromIndex} (index restored from a
+   * sidecar), because the only thing that differs between them is where the
+   * columns came from — the seam this issue turned out to need is exactly
+   * the one `sink.finalize()` already marked. Keeping one body is the
+   * point: an index-first open that diverged here would be a second
+   * extraction path with no CI coverage (conway#541).
    *
    * @param modelID The model ID being opened.
-   * @param store External store holding the source bytes.
    * @param conwaywasm The conway geometry wasm wrapper.
-   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param model The model over the windowed store.
+   * @param stepHeader The STEP header (statistics / the load report).
+   * @param allTimeStart Open start timestamp.
+   * @param tracker The progress tracker, if any.
+   * @param settings Loader settings.
    * @param deferGeometry Skip extraction (Share demand pump).
-   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   * @param previewCoordinationMatrix The frame a parse-time preview channel
+   * latched, when one ran. An index-first open has no parse and therefore
+   * never has one — `imposterCoordination` then lets the imposter walk
+   * derive an equivalent frame itself.
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail
+   * needs.
    */
-  private static async parseColumnarFromStore(
+  private static async finishWindowedOpen(
       modelID: number,
-      store: StepExternalByteStore,
       conwaywasm: ConwayGeometry,
-      settings?: Loadersettings,
-      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
-
-    const tracker = IfcApiProxyIfc.makeTracker(settings)
-    const allTimeStart = Date.now()
-    const parser = IfcStepParser.Instance
-    const fileSize = store.byteLength
-
-    Logger.createStatistics(modelID)
+      model: IfcStepModel,
+      stepHeader: StepHeader,
+      allTimeStart: number,
+      tracker: ProgressTracker | undefined,
+      settings: Loadersettings | undefined,
+      deferGeometry: boolean,
+      previewCoordinationMatrix: number[] | undefined ):
+      Promise<IfcProxyLoadState> {
 
     const statistics = Logger.getStatistics(modelID)
-
-    tracker?.beginPhase('dataParse', 'bytes', fileSize)
-
-    const parseTick = tracker !== void 0 ?
-      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
-
-    const parseStartTime = Date.now()
-
-    // Live sink so the store preview channel can snapshot a prefix
-    // mid-parse without a resident source buffer.
-    const sink = new ColumnarIndexSink< EntityTypesIfc >()
-    const storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
-      new StorePreviewChannel(
-          store,
-          sink,
-          conwaywasm,
-          settings.COORDINATE_TO_ORIGIN === true,
-          settings.ON_PREVIEW_MESH ) : void 0
-
-    const parseProgress = async ( cursorBytes: number ): Promise< void > => {
-      parseTick?.( cursorBytes )
-      await storePreview?.maybeTickAsync()
-    }
-
-    // One windowed pass: header comes out of the same slide as the
-    // data block so we do not hold a second 16 MiB prefix copy.
-    let result
-    let stepHeader
-
-    try {
-      ( { result, header: stepHeader } = await buildIndexStreamingAsync(
-          new StoreByteSource( store ),
-          parser,
-          STORE_PARSE_POOL_BYTES,
-          void 0,
-          sink,
-          parseProgress ) )
-
-      if ( storePreview !== void 0 ) {
-        await storePreview.flushAsync()
-      }
-    } finally {
-      storePreview?.stop()
-    }
-
-    const columns = sink.finalize()
-
-    // Parse window is out of scope; drop the module scratch in case a
-    // numeric read during the slide left it pointed at that 16 MiB view.
-    releaseScratchParsingBuffer()
-
-    IfcApiProxyIfc.reportHeaderParseResult(
-        result, new ParsingBuffer( new Uint8Array( 0 ) ), modelID )
-
-    const modelInfo = extractModelInfo(stepHeader, fileSize)
-
-    Logger.info(formatModelLine(modelInfo))
-    settings?.ON_MODEL_INFO?.(modelInfo)
-
-    const parseEndTime = Date.now()
-
-    tracker?.endPhase(fileSize)
-
-    if (result !== ParseResult.COMPLETE) {
-      Logger.warning(`[OpenModelStream]: streamed parse result ${result}`)
-      statistics?.setLoadStatus('PARSE_FAIL')
-      throw new Error( 'Streamed parse did not complete' )
-    }
-
-    const provider = new WindowedStepBufferProvider( store )
-    const model = new IfcStepModel( void 0, columns, provider )
-
-    statistics?.setParseTime(parseEndTime - parseStartTime)
 
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
 
@@ -1338,7 +1304,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         await emitSpatialStructureImposters(
             model,
             settings.ON_PREVIEW_MESH,
-            imposterCoordination( settings, storePreview?.coordinationMatrix ),
+            imposterCoordination( settings, previewCoordinationMatrix ),
             conwayGeometry.getLinearScalingFactor() )
       } catch {
         // Spatial imposters must never break a store-backed open.
@@ -1352,7 +1318,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
-        previewCoordinationMatrix: storePreview?.coordinationMatrix,
+        previewCoordinationMatrix: previewCoordinationMatrix,
         allTimeStart,
         stepHeader,
         model,
@@ -1476,6 +1442,221 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       conwayGeometry,
       geometryTimeInMs: endTime - startTime,
     }
+  }
+
+
+  /**
+   * The index-first twin of {@link parseColumnarFromStore}: restore the
+   * columns from a sidecar instead of building them, then hand off to the
+   * shared {@link finishWindowedOpen}.
+   *
+   * Three things this path does NOT have, each deliberate:
+   *
+   *  - **no cold-parse fallback.** A bad sidecar throws out to
+   *    `IfcApiModelPassthroughFactory.fromIndex`, which returns `undefined`
+   *    so `OpenModelFromIndex` reports `-1`; the caller then chooses
+   *    `OpenModelStream`. Re-parsing silently here would spend exactly the
+   *    cost the caller asked to avoid, and hide a stale index behind a slow
+   *    success.
+   *  - **no preview channel.** `StorePreviewChannel` snapshots a *live*
+   *    parse; there is none, so there is no preview and no derived
+   *    coordination frame. Fine for a worker (it takes the coordinator's
+   *    via `SetCoordinationFrame`), which is also why index-first must not
+   *    silently become the coordinator's own path.
+   *  - **no whole-file hash by default.** See `index_sidecar.ts`
+   *    §"The trust gate": the length check is the distribution gate, and
+   *    `VERIFY_INDEX_SOURCE_HASH` opts into the full one for a persisted
+   *    sidecar.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param deferGeometry Skip extraction (Share demand pump).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail
+   * needs.
+   */
+  private static async parseColumnarFromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const fileSize = store.byteLength
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    // Reported as the dataParse phase because that is the phase it
+    // replaces — a consumer's progress UI should see the index arriving
+    // where it used to see the parse, not a gap. It is one step, so it
+    // opens and closes around the restore rather than ticking.
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const restoreStartTime = Date.now()
+
+    const opened = await openIfcModelFromIndex( store, sidecar, {
+      verifySourceHash: settings?.VERIFY_INDEX_SOURCE_HASH === true,
+    } )
+
+    const restoreEndTime = Date.now()
+
+    const model = opened.model
+
+    if ( model === void 0 ) {
+      statistics?.setLoadStatus('INDEX_RESTORE_FAIL')
+      throw new Error( 'Index-first open produced no model' )
+    }
+
+    const stepHeader = opened.header
+
+    // The header comes off a bounded prefix read rather than the parse, so
+    // the Model line is real on this path too — a blank one would only ever
+    // show up here, the path with no CI coverage.
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.endPhase(fileSize)
+
+    statistics?.setParseTime(restoreEndTime - restoreStartTime)
+
+    return await IfcApiProxyIfc.finishWindowedOpen(
+        modelID,
+        conwaywasm,
+        model,
+        stepHeader,
+        allTimeStart,
+        tracker,
+        settings,
+        deferGeometry,
+        void 0 )
+  }
+
+
+  /**
+   * Windowed-from-birth twin of parseColumnarAndExtractAsync: the
+   * source stays in `store`, parse windows are filled through it, and
+   * the model never holds a resident copy. During parse a bounded
+   * prefix extract pages product closures from the store and emits
+   * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
+   * the index exists, spatial-structure AABB plates go out too.
+   * Deferred opens page prep closures before prepareDemandExtraction;
+   * non-deferred opens drain the demand pump with per-product residency.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings (ON_PROGRESS is honored).
+   * @param deferGeometry Skip extraction (Share demand pump).
+   * @return {Promise<IfcProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarFromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<IfcProxyLoadState> {
+
+    const tracker = IfcApiProxyIfc.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const parser = IfcStepParser.Instance
+    const fileSize = store.byteLength
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const parseTick = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+
+    // Live sink so the store preview channel can snapshot a prefix
+    // mid-parse without a resident source buffer.
+    const sink = new ColumnarIndexSink< EntityTypesIfc >()
+    const storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
+      new StorePreviewChannel(
+          store,
+          sink,
+          conwaywasm,
+          settings.COORDINATE_TO_ORIGIN === true,
+          settings.ON_PREVIEW_MESH ) : void 0
+
+    const parseProgress = async ( cursorBytes: number ): Promise< void > => {
+      parseTick?.( cursorBytes )
+      await storePreview?.maybeTickAsync()
+    }
+
+    // One windowed pass: header comes out of the same slide as the
+    // data block so we do not hold a second 16 MiB prefix copy.
+    let result
+    let stepHeader
+
+    try {
+      ( { result, header: stepHeader } = await buildIndexStreamingAsync(
+          new StoreByteSource( store ),
+          parser,
+          STORE_PARSE_POOL_BYTES,
+          void 0,
+          sink,
+          parseProgress ) )
+
+      if ( storePreview !== void 0 ) {
+        await storePreview.flushAsync()
+      }
+    } finally {
+      storePreview?.stop()
+    }
+
+    const columns = sink.finalize()
+
+    // Parse window is out of scope; drop the module scratch in case a
+    // numeric read during the slide left it pointed at that 16 MiB view.
+    releaseScratchParsingBuffer()
+
+    IfcApiProxyIfc.reportHeaderParseResult(
+        result, new ParsingBuffer( new Uint8Array( 0 ) ), modelID )
+
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(fileSize)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStream]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const provider = new WindowedStepBufferProvider( store )
+    const model = new IfcStepModel( void 0, columns, provider )
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    return await IfcApiProxyIfc.finishWindowedOpen(
+        modelID,
+        conwaywasm,
+        model,
+        stepHeader,
+        allTimeStart,
+        tracker,
+        settings,
+        deferGeometry,
+        storePreview?.coordinationMatrix )
   }
 
 
