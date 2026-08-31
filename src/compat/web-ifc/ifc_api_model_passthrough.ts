@@ -11,6 +11,15 @@ export interface IfcApiModelPassthrough {
   loadAllGeometry(): Vector<FlatMesh>
   streamAllMeshesWithTypes(types: number[], meshCallback: (mesh: FlatMesh) => void): void
   streamAllMeshes(meshCallback: (mesh: FlatMesh) => void): void
+
+  /**
+   * Async twin of streamAllMeshes (conway#660) — drains a deferred model's
+   * pump through the ASYNC pump before serving, so a windowed source can be
+   * paged. Optional, and feature-detected with typeof: the sync entry point
+   * refuses a windowed source outright, so this is the only whole-model ask
+   * such a model can answer. See IfcApiProxyIfc.streamAllMeshesAsync.
+   */
+  streamAllMeshesAsync?(meshCallback: (mesh: FlatMesh) => void): Promise<void>
   /**
    * Deferred-mode batch pump (IFC proxies opened with DEFER_GEOMETRY) —
    * see IfcApiProxyIfc.extractGeometryBatch.

@@ -2,6 +2,7 @@ import { exit } from 'process'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ParseResult } from '../step/parsing/step_parser'
 import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import { ap214TypeByName, ap214TypeName } from './ap214_tessellated_types'
 import yargs from 'yargs/yargs'
 import fs from 'fs'
 import StepEntityBase from '../step/step_entity_base'
@@ -110,7 +111,7 @@ async function doWork() {
 
       const expressIDs = (argv['express_ids'] as number[] | undefined)
       const types = (argv['types'] as string[] | undefined)?.map((value) => {
-        return EntityTypesAP214[value.toLocaleUpperCase() as keyof typeof EntityTypesAP214]
+        return ap214TypeByName(value)
       }).filter((value) => value !== void 0)
       const fields = (argv['fields'] as string[] | undefined) ??
             ['expressID', 'type', 'localID']
@@ -228,7 +229,7 @@ async function doWork() {
               IterableIterator<StepEntityBase<EntityTypesAP214>>
 
               for (const element of elements) {
-                const elementTypeID = EntityTypesAP214[element.type]
+                const elementTypeID = ap214TypeName(element.type)
 
                 console.log(
                   fields.reduce((previous, current, currentIndex) => {

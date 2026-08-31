@@ -8,6 +8,7 @@ import {
   ExtractedPropertyMap,
 } from '../../AP214E3_2010/ap214_property_extraction'
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import { ap214TypeName } from '../../AP214E3_2010/ap214_tessellated_types'
 import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import {
@@ -232,7 +233,7 @@ export class AP214Properties {
 
       return {
         expressID: id,
-        type: EntityTypesAP214[ element.type ],
+        type: ap214TypeName( element.type ),
         Name: valueHandle( itemName ),
       }
     }

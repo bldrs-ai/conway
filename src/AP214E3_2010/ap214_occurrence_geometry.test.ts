@@ -9,6 +9,7 @@ import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { ExtractResult } from '../core/shared_constants'
 import { AP214Properties } from '../compat/web-ifc/ap214_properties'
 import { IfcApiProxyAP214 } from '../compat/web-ifc/ifc_api_proxy_ap214'
+import { product_definition_shape } from './AP214E3_2010_gen/product_definition_shape.gen'
 
 
 /**
@@ -307,6 +308,45 @@ describe( 'AP214 NEMA 23 occurrence geometry (parent-first CDSR ordering)', () =
 
     for ( const path of motorPaths ) {
       expect( path ).toEqual( [ MOTOR_NAUO, MOTOR_MULTIBODY_SRR ] )
+    }
+  } )
+
+  // conway#597: the motor and screw solids sit behind a plain (non-CDSR)
+  // SHAPE_REPRESENTATION_RELATIONSHIP with no SDR of its own — the
+  // SolidWorks multibody pattern — so the express id a pick on them
+  // surfaces (the `owner` half of geometryOccurrences(), independent of
+  // the occurrence path checked above) used to be the SRR's own express
+  // id (6611 / 10234) rather than the owning part's PDS.
+  const MOTOR_PDS_EXPRESS_ID = 8846
+  const SCREW_PDS_EXPRESS_ID = 8736
+
+  test( 'a picked multibody motor solid reports the motor\'s own PDS, not the SRR (conway#597)', () => {
+
+    const motorOwners = [ ...nemaScene.geometryOccurrences() ]
+        .filter( ( [ , path ] ) => path[ 0 ] === MOTOR_NAUO )
+        .map( ( [ owner ] ) => owner )
+
+    expect( motorOwners.length ).toBeGreaterThan( 1 )
+
+    for ( const owner of motorOwners ) {
+      expect( owner ).toBeInstanceOf( product_definition_shape )
+      expect( owner?.expressID ).toBe( MOTOR_PDS_EXPRESS_ID )
+      expect( owner?.expressID ).not.toBe( MOTOR_MULTIBODY_SRR )
+    }
+  } )
+
+  test( 'a picked multibody screw solid reports the screw\'s own PDS, not the SRR (conway#597)', () => {
+
+    const screwOwners = [ ...nemaScene.geometryOccurrences() ]
+        .filter( ( [ , path ] ) => path[ path.length - 1 ] === SCREW_MULTIBODY_SRR )
+        .map( ( [ owner ] ) => owner )
+
+    expect( screwOwners.length ).toBe( SCREW_NAUOS.length )
+
+    for ( const owner of screwOwners ) {
+      expect( owner ).toBeInstanceOf( product_definition_shape )
+      expect( owner?.expressID ).toBe( SCREW_PDS_EXPRESS_ID )
+      expect( owner?.expressID ).not.toBe( SCREW_MULTIBODY_SRR )
     }
   } )
 } )
