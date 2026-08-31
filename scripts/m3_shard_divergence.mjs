@@ -475,8 +475,18 @@ function runOne( task ) {
 
   return new Promise( ( resolve, reject ) => {
 
+    // The permutation lever is stripped, not inherited. This probe's whole
+    // claim is that divergence is a pure function of shard MEMBERSHIP, and a
+    // CONWAY_PERMUTE_WORKLIST left exported in the shell — realistic now
+    // that the sibling probe drives it — would shuffle the reference and
+    // every shard and quietly invalidate that (codex review, PR #698).
+    const environment = { ...process.env }
+
+    delete environment[ 'CONWAY_PERMUTE_WORKLIST' ]
+
     const worker = new Worker( fileURLToPath( import.meta.url ), {
       workerData: task,
+      env: environment,
       resourceLimits: { maxOldGenerationSizeMb: 12288 },
     } )
 

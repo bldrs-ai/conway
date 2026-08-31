@@ -93,6 +93,22 @@ async function main() {
       .map( ( seed ) => seed.trim() )
       .filter( ( seed ) => seed.length > 0 )
 
+  // A seed the engine will not accept is the worst possible input here: the
+  // run would be labelled `seedyes`, walk the identity order, and report
+  // zero divergences as a clean experimental result — the "a probe that
+  // never fires looks exactly like a clean model" trap, stated in AGENTS.md
+  // (codex review, PR #698). worklistPermutationSeed accepts a finite
+  // number and nothing else, so this rejects exactly what it would ignore.
+  for ( const seed of seeds ) {
+
+    if ( !Number.isFinite( Number( seed ) ) ) {
+
+      throw new Error(
+          `seed '${seed}' is not a number, so the engine's lever would ` +
+          'ignore it and the run would silently be an identity run' )
+    }
+  }
+
   const outDir = optionOf( argv, '--out' ) ??
     path.join( REPO_ROOT, 'scratch', 'worklist-permutation' )
 

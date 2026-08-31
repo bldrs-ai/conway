@@ -224,7 +224,12 @@ export function profile( title, ids, reference, products ) {
 
   for ( const id of ids ) {
 
-    const owners = reference.get( id )?.o ?? []
+    // DISTINCT placing entities. The recorder only de-duplicates against the
+    // previous placement, so an entity that emits a geometry, yields to
+    // another, and emits it again appears twice — and then every column
+    // below would count it twice while the heading says "entity" (codex
+    // review, PR #698).
+    const owners = [ ...new Set( reference.get( id )?.o ?? [] ) ]
     const keys = new Set()
 
     if ( owners.length > 1 ) {
@@ -263,7 +268,7 @@ export function profile( title, ids, reference, products ) {
 
   console.log( '' )
   console.log( `${title}: ${counts.geometries.toLocaleString( 'en-US' )} geometries, ` +
-    `${counts.owners.toLocaleString( 'en-US' )} placements ` +
+    `${counts.owners.toLocaleString( 'en-US' )} distinct placing entities ` +
     `(${counts.ownersResolved.toLocaleString( 'en-US' )} resolved to a product)` )
   console.log( `  key mapped   ${rate( counts[ KEY_MAPPED ] )}` )
   console.log( `  key shape    ${rate( counts[ KEY_SHAPE ] )}` )
