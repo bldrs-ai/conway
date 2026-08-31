@@ -1,5 +1,12 @@
 import { ByteSource, ReadableByteSource, StoreByteSource } from '../step/parsing/byte_source'
 import { ColumnarIndexSink, StepIndexColumns } from '../step/parsing/columnar_index'
+import {
+  deserializeIndexSidecarToColumns,
+  sidecarMatchesSource,
+  sidecarMatchesSourceLength,
+} from '../step/parsing/index_sidecar'
+import { HashingByteSource } from '../step/parsing/source_hash'
+import ParsingBuffer from '../parsing/parsing_buffer'
 import { RecordEventHandler } from '../step/parsing/record_event'
 import {
   buildColumnarIndexStreaming,
@@ -71,6 +78,18 @@ export interface StreamedIfcOpen {
    * The columnar index the model was built from. Hand to
    * `serializeIndexSidecarFromColumns` (with a source hash) to produce the
    * revisit sidecar — the columns ARE the sidecar payload (M7 identity).
+   *
+   * **Check `result === ParseResult.COMPLETE` first.** These columns are
+   * populated even when the parse stopped short: a truncated or malformed
+   * file yields the rows indexed before the failure, and `model` is
+   * withheld while `columns` is not. Those rows are a prefix in substance
+   * but carry no `indexIsPrefix` flag — `ColumnarIndexSink.finalize()` sets
+   * it only for an explicit `snapshot()` — so nothing downstream, including
+   * the sidecar writer's own prefix guard, can tell them from a whole
+   * index. `data/index.ifc` truncated to 60 % serialises happily and
+   * restores as complete, 167 rows where the file has 287. conway#628
+   * tracks closing that at the source; until then the check is the
+   * caller's.
    */
   columns: StepIndexColumns<EntityTypesIfc>
 
@@ -81,6 +100,18 @@ export interface StreamedIfcOpen {
 
 // eslint-disable-next-line no-magic-numbers
 const DEFAULT_STREAM_POOL_BYTES = 1024 * 1024
+
+// The header prefix an index-first open reads. 64 KiB is the same slice the
+// store-backed open already pulls for format detection, so the common case
+// costs one read of bytes the caller has in hand anyway. A header longer
+// than that is legal STEP (a large FILE_DESCRIPTION), so the open grows the
+// prefix once before it refuses — a valid model must not be turned away by
+// the size of a buffer, least of all on the path with no CI coverage.
+// eslint-disable-next-line no-magic-numbers
+export const HEADER_PREFIX_BYTES = 64 * 1024
+
+// eslint-disable-next-line no-magic-numbers
+export const HEADER_PREFIX_RETRY_BYTES = 4 * 1024 * 1024
 
 
 /**
@@ -237,4 +268,138 @@ export function openStreamedIfcModelFromStore(
     } ): Promise<StreamedIfcOpen> {
 
   return openStreamedIfcModelAsync( new StoreByteSource( store ), store, options )
+}
+
+
+/**
+ * Options for an index-first IFC open.
+ */
+export interface IndexFirstIfcOpenOptions {
+
+  /** Windowed provider chunk size (default: provider's). */
+  chunkBytes?: number
+
+  /** Windowed provider LRU cap in chunks (default: provider's). */
+  maxResidentChunks?: number
+
+  /**
+   * Re-read the whole store to verify the sidecar's source hash, rather
+   * than checking `byteLength` alone (the default).
+   *
+   * Off is right for **distribution** — a coordinator that hashed the
+   * bytes during its own parse, handing the index to consumers addressing
+   * the same store within one session; verifying there would re-read the
+   * file per consumer, which is the N-way I/O a shared index exists to
+   * remove. On is right for **revisit**, where a persisted sidecar may
+   * describe a file that has since changed. See `index_sidecar.ts`
+   * §"The trust gate".
+   */
+  verifySourceHash?: boolean
+}
+
+
+/**
+ * Open a windowed IFC model **from a prebuilt index** instead of parsing
+ * one: the sidecar supplies the entity index, and the model reads source
+ * bytes on demand through the same windowed provider a streamed open uses.
+ *
+ * This is the whole point of the sidecar. Everything after the index —
+ * `WindowedStepBufferProvider` → `IfcStepModel` → demand residency — is
+ * index-agnostic and identical to {@link openStreamedIfcModelFromStore};
+ * only the way the index is obtained differs. A worker in a geometry pool
+ * therefore consumes the coordinator's index rather than re-parsing the
+ * whole model, which is what makes such a pool pay at all (conway#541).
+ *
+ * **No internal cold-parse fallback, deliberately.** A mismatched or
+ * unreadable sidecar throws; it does not quietly re-parse the file. Silently
+ * spending a full parse is exactly the cost the caller asked to avoid, and
+ * hiding a stale sidecar behind a slow success makes the mismatch
+ * unobservable. Callers that want the fallback take it explicitly — the
+ * compat surface's `OpenModelFromIndex` returns `-1` so a worker can fall
+ * back to `OpenModelStream`.
+ *
+ * The STEP header is parsed from a bounded prefix of `store` (the sidecar
+ * carries the index, not the header), so the load report's `Model` line is
+ * real on this path rather than blank.
+ *
+ * @param store The random-access store holding the source bytes.
+ * @param sidecar The serialised index (see `serializeIndexSidecarFromColumns`).
+ * @param options See {@link IndexFirstIfcOpenOptions}.
+ * @return {Promise<StreamedIfcOpen>} The model + header, columns, diagnostics.
+ */
+export async function openIfcModelFromIndex(
+    store: StepExternalByteStore,
+    sidecar: Uint8Array,
+    options?: IndexFirstIfcOpenOptions ): Promise<StreamedIfcOpen> {
+
+  const restored = deserializeIndexSidecarToColumns<EntityTypesIfc>( sidecar )
+
+  if ( !sidecarMatchesSourceLength( restored, store.byteLength ) ) {
+    throw new Error(
+        `Sidecar was built against ${restored.sourceByteLength} bytes but ` +
+        `the store holds ${store.byteLength}` )
+  }
+
+  if ( options?.verifySourceHash === true ) {
+
+    // Chunked through the same hasher the coordinator folds into its parse,
+    // rather than materialising the file to call `hashSource` — the digest is
+    // identical either way, and a windowed open must not need the whole file
+    // resident to check its own index.
+    const hashed =
+      await new HashingByteSource( new StoreByteSource( store ) ).finishAsync()
+
+    if ( !sidecarMatchesSource( restored, store.byteLength, hashed ) ) {
+      throw new Error( 'Sidecar hash does not match the store contents' )
+    }
+  }
+
+  let prefixLength = Math.min( store.byteLength, HEADER_PREFIX_BYTES )
+
+  let [ header, headerResult ] =
+    IfcStepParser.Instance.parseHeader(
+        new ParsingBuffer( await store.read( 0, prefixLength ) ) )
+
+  // Retried on ANY non-COMPLETE result, not on some "truncated" one:
+  // `parseHeader` runs off the end of a short buffer into its ordinary
+  // `syntaxError()` returns (step_parser.ts — it never reports INCOMPLETE),
+  // so a header that simply did not fit is indistinguishable from a
+  // malformed one at this point. The retry is bounded and only happens on
+  // the path that was about to throw, so the cost of being unable to tell
+  // them apart is one read of at most 4 MiB on a failing open.
+  if ( headerResult !== ParseResult.COMPLETE &&
+    prefixLength < store.byteLength ) {
+
+    prefixLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
+
+    ;( [ header, headerResult ] =
+      IfcStepParser.Instance.parseHeader(
+          new ParsingBuffer( await store.read( 0, prefixLength ) ) ) )
+  }
+
+  if ( headerResult !== ParseResult.COMPLETE ) {
+    // The length check passed but the bytes are not the file the index
+    // describes (or not a STEP file at all). Loud, because the alternative
+    // is a model built over an index that addresses someone else's bytes.
+    throw new Error(
+        `Index-first open could not parse a STEP header from the first ` +
+        `${prefixLength} bytes (result ${headerResult})` )
+  }
+
+  const provider = new WindowedStepBufferProvider(
+      store, options?.chunkBytes, options?.maxResidentChunks )
+
+  return {
+    model: new IfcStepModel( void 0, restored.columns, provider ),
+    result: ParseResult.COMPLETE,
+    header,
+    columns: restored.columns,
+    stats: {
+      pool: 0,
+      windowBytes: prefixLength,
+      slides: 0,
+      maxRecordLen: 0,
+      bytesRead: prefixLength,
+    },
+  }
 }

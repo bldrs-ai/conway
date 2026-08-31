@@ -48,9 +48,11 @@ export {
   openStreamedIfcModel,
   openStreamedIfcModelAsync,
   openStreamedIfcModelFromStore,
+  openIfcModelFromIndex,
   ifcPrefixTypeIndex,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
+  IndexFirstIfcOpenOptions,
 } from './ifc/ifc_stream_open'
 export {
   buildColumnarIndexStreaming,
@@ -89,11 +91,17 @@ export {
   ShardedIndexOptions,
 } from './step/parsing/sharded_index_builder'
 export {
+  serializeIndexSidecar,
   serializeIndexSidecarFromColumns,
   deserializeIndexSidecarToColumns,
   sidecarMatchesSource,
+  sidecarMatchesSourceLength,
   hashSource,
+  SIDECAR_VERSION,
+  DecodedSidecarColumns,
+  SidecarSourceIdentity,
 } from './step/parsing/index_sidecar'
+export { HashingByteSource } from './step/parsing/source_hash'
 export { StreamingRecordDispatcher, RecordHandler } from './step/parsing/streaming_record_dispatcher'
 export { PrefixTypeIndex } from './step/parsing/prefix_type_index'
 export { StepTypeIndexer } from './step/indexing/step_type_indexer'
