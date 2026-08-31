@@ -39,6 +39,26 @@ function extractStructure(
 }
 
 /**
+ * Parse a hermetic fixture and compute the solid-identity set the tree and the
+ * geometry walk both read.
+ *
+ * @param path The fixture path.
+ * @return {Set<number>} Express ids of the identity-bearing solids.
+ */
+function extractIdentitySet( path: string ): Set<number> {
+
+  const bufferInput = new ParsingBuffer( fs.readFileSync( path ) )
+
+  expect( parser.parseHeader( bufferInput )[1] ).toBe( ParseResult.COMPLETE )
+
+  const [ , model ] = parser.parseDataToModel( bufferInput )
+
+  expect( model ).not.toBe( void 0 )
+
+  return new AP214ProductStructureExtraction( model! ).identityBearingSolidExpressIDs()
+}
+
+/**
  * Parse the hermetic as1 assembly fixture and extract its product structure.
  *
  * @return {ProductStructureNode[]} The extracted assembly forest.
@@ -385,5 +405,70 @@ describe( 'AP214ProductStructureExtraction labels for products with no name', ()
     // '' lets a consumer substitute a type label; '   ' would render as a blank
     // NavTree row. nist_stc_09_asme1_ap242-e3 is this case for real.
     expect( root.name ).toBe( '' )
+  } )
+} )
+
+
+const RECOVERABLE_FIXTURE = 'data/ap214-recoverable-scan-records.step'
+// eslint-disable-next-line no-magic-numbers
+const HEALTHY_BODY_IDS = [ 401, 402, 403 ]
+const HEALTHY_BODY_COUNT = 3
+
+/**
+ * The solid-identity scan runs on EVERY load now (the tree and the geometry
+ * walk both read it), so a reference getter it fails to contain fails the whole
+ * model rather than skipping one record — conway#683 review. The geometry walk
+ * has always contained these per record; without the matching containment in
+ * `indexSolids` this fixture's three bad records each abort
+ * `prepareDemandExtraction`, and `extractProductStructure` throws too.
+ *
+ * Verified against a revert of the containment: `identityBearingSolidExpressIDs`
+ * throws `DanglingReferenceError: Reference to #900 is not in the index`, and
+ * with #502 removed it throws `Value in STEP was incorrectly typed` on #450's
+ * items — i.e. both arms of this suite go red, and so does the whole load.
+ */
+describe( 'AP214ProductStructureExtraction contains bad records in the solid scan', () => {
+
+  test( 'a dangling relationship, an unreadable item list and a bad name do not fail the scan', () => {
+
+    const identity =
+      extractIdentitySet( RECOVERABLE_FIXTURE )
+
+    // #502 (dangling #900) and #450 (holds a TESSELLATED_SHELL, a type the
+    // AP214 enum has no id for) are skipped; #400's bodies still come through.
+    expect( [ ...identity ].sort( ( a, b ) => a - b ) ).toEqual( HEALTHY_BODY_IDS )
+  } )
+
+  test( 'a body whose name getter throws keeps its identity, losing only the label', () => {
+
+    const root = extractStructure( RECOVERABLE_FIXTURE )[0]
+    const solids = solidChildren( root )
+
+    expect( solids.length ).toBe( HEALTHY_BODY_COUNT )
+
+    // #403's name slot is `$` on a mandatory attribute, so the getter throws.
+    // A label is cosmetic and identity is not: it degrades to the positional
+    // name, and its occurrence path is still its own.
+    const unnamed = solids.find( ( solid ) => solid.expressID === HEALTHY_BODY_IDS[2] )!
+
+    expect( unnamed.name ).toBe( 'Solid 3 of 3' )
+    expect( unnamed.occurrencePath ).toEqual( [ HEALTHY_BODY_IDS[2] ] )
+  } )
+
+  test( 'a representation whose items throw contributes to NEITHER side', () => {
+
+    // Coherence: #450's `tess_body_0` is a perfectly good brep, but its
+    // representation's item list cannot be read, so the scan skips the whole
+    // representation. It must therefore get no tree node AND no body path
+    // segment — a body addressable on one side only is a path that resolves to
+    // nothing (or a node that highlights nothing).
+    const identity = extractIdentitySet( RECOVERABLE_FIXTURE )
+    const root = extractStructure( RECOVERABLE_FIXTURE )[0]
+
+    const TESS_REP_BODY_ID = 451
+
+    expect( identity.has( TESS_REP_BODY_ID ) ).toBe( false )
+    expect( solidChildren( root ).map( ( solid ) => solid.expressID ) )
+        .not.toContain( TESS_REP_BODY_ID )
   } )
 } )

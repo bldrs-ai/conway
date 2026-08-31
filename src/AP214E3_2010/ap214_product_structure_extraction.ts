@@ -442,6 +442,32 @@ export class AP214ProductStructureExtraction {
    * collect the solid items. Transformation-bearing relationship variants are
    * assembly placements (parent rep ↔ child rep), so following them would leak
    * every child part's solids into its parent assembly; they are skipped.
+   *
+   * **Every dereference here is contained per record**, matching the geometry
+   * walk's behavior on the same entities (`prepareDemandExtraction`'s plain-SRR
+   * and SDR loops, and makeThunk's `representation.items` capture): a bad
+   * record skips, and the rest of the model still indexes. This is not
+   * defensive dressing — two concrete shapes reach it and both used to fail
+   * the WHOLE model load once this scan became unconditional:
+   *
+   *  - a dangling reference (`srr.rep_1`, `sdr.definition`, …) throws
+   *    `DanglingReferenceError`. Mid-parse PREFIX models — the streamed
+   *    preview channel calls `prepareDemandExtraction` on one
+   *    (`streamed_preview_channel.ts`) — have a truncated tail by
+   *    construction, so this is their normal state, not corruption.
+   *  - `representation.items` throws `'Value in STEP was incorrectly typed'`
+   *    when a representation holds an item type the AP214 schema has no id for
+   *    (the enum carries no tessellated entities at all): #25231 in
+   *    `nist_ftc_08_asme1_ap242-e1-tg.stp` holds a TESSELLATED_SHELL, the case
+   *    makeThunk documents.
+   *
+   * `items` is read all-or-nothing per representation rather than per item:
+   * a half-enumerated body list is not a smaller answer, it is a wrong one.
+   * Because the tree and the geometry walk both read this one result (see
+   * {@link identityBearingSolidExpressIDs}), a skipped representation
+   * contributes no solids to EITHER side, so its bodies get no node and no
+   * body path segment — they keep the owning product's path, exactly as a
+   * deliberately suppressed set does, and the path-equality invariant holds.
    */
   private indexSolids(): void {
 
@@ -476,12 +502,21 @@ export class AP214ProductStructureExtraction {
 
       const srr = element as shape_representation_relationship
 
-      if ( srr.findVariant( representation_relationship_with_transformation ) !== void 0 ) {
+      let rep1: representation | undefined
+      let rep2: representation | undefined
+
+      try {
+        if ( srr.findVariant( representation_relationship_with_transformation ) !== void 0 ) {
+          continue
+        }
+
+        rep1 = srr.rep_1
+        rep2 = srr.rep_2
+      } catch {
+        // Malformed/dangling relationship record — skip this edge, as the
+        // geometry walk's own plain-SRR loop does.
         continue
       }
-
-      const rep1 = srr.rep_1
-      const rep2 = srr.rep_2
 
       if ( rep1 === void 0 || rep2 === void 0 ) {
         continue
@@ -497,8 +532,17 @@ export class AP214ProductStructureExtraction {
 
       const sdr = element as shape_definition_representation
 
-      const productDefId = AP214ProductStructureExtraction.resolveProductDefinitionId( sdr.definition )
-      const usedRep = sdr.used_representation
+      let productDefId: number | undefined
+      let usedRep: representation | undefined
+
+      try {
+        productDefId = AP214ProductStructureExtraction.resolveProductDefinitionId( sdr.definition )
+        usedRep = sdr.used_representation
+      } catch {
+        // Malformed/dangling SDR record — skip it, as the geometry walk's own
+        // shape_definition_representation loop does.
+        continue
+      }
 
       if ( productDefId === void 0 || usedRep === void 0 ) {
         continue
@@ -507,7 +551,21 @@ export class AP214ProductStructureExtraction {
       const reps = [ usedRep, ...( relatedRepsByRepId.get( usedRep.expressID ?? -1 ) ?? [] ) ]
 
       for ( const rep of reps ) {
-        for ( const item of rep.items ) {
+
+        let items: readonly representation_item[]
+
+        try {
+          items = rep.items
+        } catch {
+          // A representation holding an item type AP214 has no id for, or a
+          // dangling item reference. All-or-nothing per representation: its
+          // bodies get no identity on either side, so they stay part of the
+          // owning product's selection rather than half of them becoming
+          // addressable.
+          continue
+        }
+
+        for ( const item of items ) {
 
           if ( !isSolidItem( item ) || item.expressID === void 0 ) {
             continue
@@ -515,7 +573,12 @@ export class AP214ProductStructureExtraction {
 
           this.addSolid( productDefId, {
             expressID: item.expressID,
-            name: item.name,
+            // `name` is a mandatory STEP string attribute, so the getter
+            // throws on the `$`/mistyped slot exporters do emit. A body's
+            // label is cosmetic and its identity is not: degrade to unnamed
+            // rather than dropping the body, the same trade labelCandidate
+            // makes for node labels.
+            name: AP214ProductStructureExtraction.labelCandidate( () => item.name ),
             representationId: rep.expressID,
           } )
         }

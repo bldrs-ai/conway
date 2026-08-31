@@ -244,6 +244,15 @@ emits a node for some of a product's bodies and not others makes the
 suppressed bodies' paths unresolvable. `ap214_product_structure_extraction.test.ts`
 pins the two sides against each other directly.
 
+Being read on every load, that scan is also held to the geometry walk's
+containment bar: a record whose getters throw — a dangling reference (the
+normal state of a mid-parse prefix model), or a representation holding an
+item type the AP214 enum has no id for, which is *every* tessellated entity
+— skips, rather than failing the model. `items` is read all-or-nothing per
+representation, so a representation that cannot be enumerated contributes
+to neither side and its bodies simply stay part of the product's selection.
+`data/ap214-recoverable-scan-records.step` carries all three shapes.
+
 **3. An SDR-bound representation is never the child of a plain relationship
 edge.** BLSN_007 writes the same kind of relation both ways round — three
 edges as `(product rep, detail rep)` and 308 as `(detail rep, product rep)`.
