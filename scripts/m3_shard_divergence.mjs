@@ -45,38 +45,19 @@ import * as process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 
+import {
+  KEY_MAPPED,
+  KEY_SELF,
+  KEY_SHAPE,
+  geometryPath,
+  profile,
+  readGeometry,
+  readProducts,
+} from './m3_divergence_report.mjs'
+
 
 const REPO_ROOT = path.resolve( fileURLToPath( new URL( '.', import.meta.url ) ), '..' )
 const BATCH_SIZE = 64
-
-
-/**
- * How a product's dispatch key resolved — the three outcomes
- * `geometryDispatchKey` can produce, kept apart because they place a product
- * for completely different reasons.
- *
- * `mapped` is the intended one: the key is a shared `MappingSource`, so every
- * instance of that block hashes to one shard. `shape` still co-locates
- * products sharing a whole representation. `self` is the total-function
- * fallback — the product's own local ID — which places it POSITIONALLY, by
- * where it happens to sit in the file, and is the outcome 60.7 % of one
- * model's worklist takes (ledger §10).
- */
-const KEY_MAPPED = 'mapped'
-const KEY_SHAPE = 'shape'
-const KEY_SELF = 'self'
-
-
-/**
- * One run's records, as a file this process can re-read without holding them.
- *
- * @param {string} outDir Where the run's files live.
- * @param {string} label The run's name — `ref`, or `shard0of4`.
- * @return {string} The geometry NDJSON path for that run.
- */
-function geometryPath( outDir, label ) {
-  return path.join( outDir, `geometry.${label}.ndjson` )
-}
 
 
 /**
@@ -500,33 +481,6 @@ function optionOf( argv, name ) {
 
 
 /**
- * Read one run's geometry records back.
- *
- * @param {string} outDir Where the run wrote.
- * @param {string} label The run.
- * @return {Map<number, object>} id to `{p, o}`.
- */
-function readGeometry( outDir, label ) {
-
-  const byId = new Map()
-  const text = fs.readFileSync( geometryPath( outDir, label ), 'utf8' )
-
-  for ( const line of text.split( '\n' ) ) {
-
-    if ( line.length === 0 ) {
-      continue
-    }
-
-    const record = JSON.parse( line )
-
-    byId.set( record.id, record )
-  }
-
-  return byId
-}
-
-
-/**
  * The join: which geometries came out differently, and what those geometries
  * have in common that the rest do not.
  *
@@ -547,20 +501,7 @@ function report( outDir, shardCount ) {
     shards.push( readGeometry( outDir, `shard${index}of${shardCount}` ) )
   }
 
-  const products = new Map()
-  const productsText =
-    fs.readFileSync( path.join( outDir, 'products.ndjson' ), 'utf8' )
-
-  for ( const line of productsText.split( '\n' ) ) {
-
-    if ( line.length === 0 ) {
-      continue
-    }
-
-    const record = JSON.parse( line )
-
-    products.set( record.e, record )
-  }
+  const products = readProducts( outDir )
 
   const differing = []
   const missing = []
@@ -637,79 +578,4 @@ function report( outDir, shardCount ) {
         splits: splits.length,
         rebuilt,
       }, void 0, 2 )}\n` )
-}
-
-
-/**
- * Describe a population of geometries by the products that place them.
- *
- * @param {string} title What this population is.
- * @param {number[]} ids The geometry IDs in it.
- * @param {Map<number, object>} reference The reference run's records.
- * @param {Map<number, object>} products The product table.
- */
-function profile( title, ids, reference, products ) {
-
-  const counts = {
-    geometries: ids.length,
-    owners: 0,
-    ownersResolved: 0,
-    [ KEY_MAPPED ]: 0,
-    [ KEY_SHAPE ]: 0,
-    [ KEY_SELF ]: 0,
-    aggregateTarget: 0,
-    voided: 0,
-    opening: 0,
-    multiOwner: 0,
-    ownersAcrossKeys: 0,
-  }
-
-  for ( const id of ids ) {
-
-    const owners = reference.get( id )?.o ?? []
-    const keys = new Set()
-
-    if ( owners.length > 1 ) {
-      ++counts.multiOwner
-    }
-
-    for ( const expressID of owners ) {
-
-      ++counts.owners
-
-      const product = products.get( expressID )
-
-      if ( product === void 0 ) {
-        continue
-      }
-
-      ++counts.ownersResolved
-      ++counts[ product.r ]
-      counts.aggregateTarget += product.a
-      counts.voided += product.v
-      counts.opening += product.x
-      keys.add( product.k )
-    }
-
-    if ( keys.size > 1 ) {
-      ++counts.ownersAcrossKeys
-    }
-  }
-
-  const rate = ( value ) => counts.ownersResolved === 0 ? 'n/a' :
-    `${( ( value / counts.ownersResolved ) * 100 ).toFixed( 1 )} %`
-
-  console.log( '' )
-  console.log( `${title}: ${counts.geometries.toLocaleString( 'en-US' )} geometries, ` +
-    `${counts.owners.toLocaleString( 'en-US' )} placements ` +
-    `(${counts.ownersResolved.toLocaleString( 'en-US' )} resolved to a product)` )
-  console.log( `  key mapped   ${rate( counts[ KEY_MAPPED ] )}` )
-  console.log( `  key shape    ${rate( counts[ KEY_SHAPE ] )}` )
-  console.log( `  key self     ${rate( counts[ KEY_SELF ] )}` )
-  console.log( `  aggregate target ${rate( counts.aggregateTarget )}` )
-  console.log( `  voided element   ${rate( counts.voided )}` )
-  console.log( `  opening element  ${rate( counts.opening )}` )
-  console.log( `  geometries with >1 placing entity  ${counts.multiOwner.toLocaleString( 'en-US' )}` )
-  console.log( `  geometries whose placers disagree on the dispatch key ` +
-    `${counts.ownersAcrossKeys.toLocaleString( 'en-US' )}` )
 }

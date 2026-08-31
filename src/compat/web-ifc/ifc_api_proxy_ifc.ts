@@ -97,6 +97,131 @@ const STORE_PARSE_POOL_BYTES = 16 * 1024 * 1024
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_MIB = 1024 * 1024
 
+/* Set to an integer seed to reorder the demand worklists after they are
+ * built. Off by default and free when unset — see permuteDemandWorklists
+ * for what it is for (conway#640). */
+const WORKLIST_PERMUTATION_ENV = 'CONWAY_PERMUTE_WORKLIST'
+
+/* xorshift32's shift triple. Named rather than inlined because they ARE
+ * the generator: change one and every seed names a different permutation,
+ * which would silently invalidate any run record that cites a seed. */
+// eslint-disable-next-line no-magic-numbers
+const XORSHIFT_SHIFT_A = 13
+// eslint-disable-next-line no-magic-numbers
+const XORSHIFT_SHIFT_B = 17
+const XORSHIFT_SHIFT_C = 5
+
+/* 2^32 — the divisor that turns the generator's uint32 into the [0, 1)
+ * fraction Fisher-Yates indexes with. */
+// eslint-disable-next-line no-magic-numbers
+const UINT32_RANGE = 4294967296
+
+/**
+ * The permutation seed this process asks for, if any.
+ *
+ * Reads the environment defensively: this module runs in the browser as
+ * well, where `process` is not defined, and an unset lever must cost
+ * nothing rather than throw.
+ *
+ * @return {number | undefined} The seed, or undefined when the lever is
+ * off or its value is not a finite number.
+ */
+function worklistPermutationSeed(): number | undefined {
+
+  const raw = typeof process === 'undefined' ?
+    void 0 : process.env[WORKLIST_PERMUTATION_ENV]
+
+  if (raw === void 0 || raw === '') {
+    return void 0
+  }
+
+  const seed = Number(raw)
+
+  return Number.isFinite(seed) ? seed : void 0
+}
+
+/**
+ * Fisher-Yates over `items`, in place, driven by a seeded xorshift32.
+ *
+ * Seeded rather than `Math.random` because the experiment this serves
+ * compares two whole model loads: an order nobody can name again is not a
+ * result, it is an anecdote.
+ *
+ * @param items The list to reorder.
+ * @param seed The permutation seed.
+ */
+function permuteInPlace<Element>(items: Element[], seed: number): void {
+
+  // xorshift32 has a fixed point at zero — seeded there it emits zero
+  // forever and the "shuffle" is the identity, which would read as a clean
+  // null result rather than as a misconfigured run.
+  let state = (seed | 0) === 0 ? 1 : seed | 0
+
+  for (let where = items.length - 1; where > 0; --where) {
+
+    state ^= state << XORSHIFT_SHIFT_A
+    state ^= state >>> XORSHIFT_SHIFT_B
+    state ^= state << XORSHIFT_SHIFT_C
+
+    const pick = Math.floor(((state >>> 0) / UINT32_RANGE) * (where + 1))
+    const held = items[where]
+
+    items[where] = items[pick]
+    items[pick] = held
+  }
+}
+
+/**
+ * Reorder worklists that are about to be adopted, under
+ * `CONWAY_PERMUTE_WORKLIST`. A no-op — not even a copy — when unset.
+ *
+ * **Why this exists (conway#640).** A sharded load builds a small
+ * population of one model's geometries differently from an unsharded one.
+ * The diagnosis localises that to extraction ORDER rather than to
+ * sharding: the geometry cache is keyed by representation-item local ID
+ * and is last-writer-wins (`ifc_model_geometry.ts` `add`), while the
+ * rel-void path writes into it a solid cut in the absolute frame of
+ * whichever product is being walked — so which product touches a shared
+ * key last decides that key's content. Sharding changes that order, but so
+ * would anything else, and the claim can only be settled by an experiment
+ * that changes ONLY the order.
+ *
+ * That is what this is, and why it runs here: after the worklists are
+ * built and after any shard has narrowed them, before anything reads them.
+ * Membership is untouched — the same products and the same relationships,
+ * walked in a different sequence — so a divergence between two seeds on
+ * one unsharded load is order-dependence with no sharding in the picture.
+ *
+ * Kept as a permanent lever rather than a throwaway patch: order
+ * dependence is not the kind of defect that stays fixed by itself, and
+ * this is the cheapest check that it has not come back.
+ *
+ * @param products The product worklist, reordered in place.
+ * @param aggregates The rel-aggregates worklist, reordered in place.
+ */
+function permuteDemandWorklists(
+    products: number[],
+    aggregates: IfcRelAggregates[]): void {
+
+  const seed = worklistPermutationSeed()
+
+  if (seed === void 0) {
+    return
+  }
+
+  // Two streams rather than one: the passes run one after the other, so a
+  // single generator would give the aggregates whatever state the products
+  // happened to leave it in — correlated with the product count, which is
+  // exactly what a second seeded run is supposed to hold fixed.
+  permuteInPlace(products, seed)
+  permuteInPlace(aggregates, seed + 1)
+
+  Logger.warning(
+      `[worklist] ${WORKLIST_PERMUTATION_ENV}=${seed}: demand worklists ` +
+      `permuted (${products.length} products, ${aggregates.length} ` +
+      'rel-aggregates). Output is not comparable to an unpermuted load.')
+}
+
 /**
  * The coordination frame spatial-structure imposters compose under.
  *
@@ -2851,6 +2976,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.releaseDemandAggregate_()
 
+    permuteDemandWorklists(products, aggregates)
+
     this.demandProducts_ = products
     this.demandAggregates_ = aggregates
     this.demandCursor_ = 0
@@ -2886,7 +3013,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let placed = 0
     let positional = 0
 
-    this.demandProducts_ = products.filter((localID, where) => {
+    const keptProducts = products.filter((localID, where) => {
 
       const key = productKeys[where]
 
@@ -2920,8 +3047,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // geometry, so getting it wrong leaves placement with almost nothing
     // to control (measured on D3D, where that mistake made every strategy
     // look identical).
-    this.demandAggregates_ = aggregates.filter((relAggregate, where) =>
+    const keptAggregates = aggregates.filter((relAggregate, where) =>
       shardOfDispatchKey(aggregateKeys[where], shard.count) === shard.index)
+
+    // After the narrowing, so the lever reorders what this shard will
+    // actually walk without touching which products that is.
+    permuteDemandWorklists(keptProducts, keptAggregates)
+
+    this.demandProducts_ = keptProducts
+    this.demandAggregates_ = keptAggregates
 
     this.releaseDemandAggregate_()
 

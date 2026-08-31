@@ -23,6 +23,8 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as process from 'node:process'
 
+import { perGeometryVoiding } from './m3_divergence_report.mjs'
+
 
 /**
  * Read an NDJSON dump.
@@ -100,6 +102,10 @@ function main() {
 /**
  * How many geometries in a population have at least one placer of each kind.
  *
+ * The voiding columns come from the shared reporter, so this script and
+ * `m3_worklist_permutation.mjs` count them one way; the shard-spanning ones
+ * are this script's own, since a permutation run has no shards to span.
+ *
  * @param {string} title The population.
  * @param {number[]} ids Its geometry IDs.
  * @param {Map<number, object>} reference The reference records.
@@ -108,9 +114,8 @@ function main() {
  */
 function perGeometryRates( title, ids, reference, products, shardCount ) {
 
-  let anyVoided = 0
-  let allVoided = 0
-  let mixedVoiding = 0
+  perGeometryVoiding( title, ids, reference, products )
+
   let acrossShards = 0
   let mixedVoidingAcrossShards = 0
 
@@ -128,19 +133,7 @@ function perGeometryRates( title, ids, reference, products, shardCount ) {
     const shardsTouched = new Set(
         placers.map( ( product ) => Math.abs( product.k ) % shardCount ) )
 
-    if ( voided.length > 0 ) {
-      ++anyVoided
-    }
-
-    if ( voided.length === placers.length ) {
-      ++allVoided
-    }
-
     const mixed = voided.length > 0 && voided.length < placers.length
-
-    if ( mixed ) {
-      ++mixedVoiding
-    }
 
     if ( shardsTouched.size > 1 ) {
       ++acrossShards
@@ -154,13 +147,8 @@ function perGeometryRates( title, ids, reference, products, shardCount ) {
   const rate = ( value ) => `${value.toLocaleString( 'en-US' )} ` +
     `(${( ( value / ids.length ) * 100 ).toFixed( 1 )} %)`
 
-  console.log( '' )
-  console.log( `${title}: ${ids.length.toLocaleString( 'en-US' )} geometries` )
-  console.log( `  at least one placer is voided        ${rate( anyVoided )}` )
-  console.log( `  every placer is voided               ${rate( allVoided )}` )
-  console.log( `  MIXED — some placers voided, some not ${rate( mixedVoiding )}` )
-  console.log( `  placers span more than one shard     ${rate( acrossShards )}` )
-  console.log( `  mixed voiding AND spanning shards    ${rate( mixedVoidingAcrossShards )}` )
+  console.log( `  placers span more than one shard      ${rate( acrossShards )}` )
+  console.log( `  mixed voiding AND spanning shards     ${rate( mixedVoidingAcrossShards )}` )
 }
 
 
