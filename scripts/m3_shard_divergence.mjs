@@ -250,14 +250,20 @@ function dumpProductTable( api, modelID, outDir ) {
     }
   }
 
-  // The key the PUMP actually places a product by, which for an aggregate
-  // target is not the product's own. `adoptShardedWorklists_` shards the
+  // The keys the PUMP actually places a product by, which for an aggregate
+  // target are not the product's own. `adoptShardedWorklists_` shards the
   // rel-aggregates worklist by the RELATING OBJECT's key, and an aggregate
   // target is extracted only by that pass — so on a model where 96.6 % of
   // placements are aggregate targets, keying the analysis on `product.k`
   // attributes almost every placer to the wrong shard (codex review, PR
   // #698). One level, matching the pump: the aggregates worklist keys on the
   // relating object directly, not on the root of a nest.
+  //
+  // A SET per product, not one key: the pump keeps every IfcRelAggregates
+  // that names a product and shards each independently, so a product related
+  // by two aggregates whose relating objects land in different shards is
+  // built in both. Collapsing that to a scalar attributed every occurrence
+  // to whichever relationship was walked last (codex review, PR #698).
   const effectiveKeys = new Map()
 
   for ( const relAggregate of model.types( gen.IfcRelAggregates ) ) {
@@ -269,7 +275,13 @@ function dumpProductTable( api, modelID, outDir ) {
     for ( const related of
       readOrUndefined( () => relAggregate.RelatedObjects ) ?? [] ) {
 
-      effectiveKeys.set( related.localID, key )
+      const existing = effectiveKeys.get( related.localID )
+
+      if ( existing === void 0 ) {
+        effectiveKeys.set( related.localID, new Set( [ key ] ) )
+      } else {
+        existing.add( key )
+      }
     }
   }
 
@@ -285,10 +297,10 @@ function dumpProductTable( api, modelID, outDir ) {
       e: product.expressID,
       l: localID,
       k: key,
-      // The effective key falls back to the own key for a product the
-      // aggregates pass does not own, which is what the pump uses for it.
+      // A product the aggregates pass does not own is placed by its own
+      // key, which is the whole list for it.
       ek: aggregateTargets.has( localID ) ?
-        effectiveKeys.get( localID ) ?? key : key,
+        [ ...( effectiveKeys.get( localID ) ?? [ key ] ) ] : [ key ],
       r: keyResolution( gen, product, localID, key ),
       a: aggregateTargets.has( localID ) ? 1 : 0,
       v: voidedElements.has( localID ) ? 1 : 0,

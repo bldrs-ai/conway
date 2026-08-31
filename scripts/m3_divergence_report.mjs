@@ -158,6 +158,42 @@ export function perGeometryVoiding( title, ids, reference, products ) {
 
 
 /**
+ * The dispatch keys the pump would place a product by.
+ *
+ * For an aggregate target that is the relating object's key, not the
+ * product's own: `adoptShardedWorklists_` shards the rel-aggregates worklist
+ * by `geometryDispatchKey(relatingLocalIDOf(...))`, and an aggregate target
+ * is extracted only by that pass. Plural because one product can be a
+ * `RelatedObject` of several `IfcRelAggregates`, and the pump keeps and
+ * shards each relationship independently — collapsing that to a scalar
+ * attributes every occurrence to whichever relationship happened to be
+ * walked last (codex review, PR #698).
+ *
+ * **Throws rather than falling back** on a product table written before the
+ * column existed. Such a table holds only the own key, which for 96.6 % of
+ * one model's placements is the known-wrong key — and silently reporting
+ * pre-fix cross-shard and mechanism counts under an effective-key heading is
+ * a worse failure than refusing to report at all.
+ *
+ * @param {object} product The product-table row.
+ * @return {number[]} Its effective dispatch keys.
+ */
+export function effectiveKeysOf( product ) {
+
+  if ( !Array.isArray( product.ek ) ) {
+
+    throw new Error(
+        'products.ndjson predates the effective-key column, so every ' +
+        'aggregate target in it is keyed the way conway#640 was mis-analysed. ' +
+        'Re-run m3_shard_divergence.mjs to regenerate the run directory ' +
+        'rather than reporting over it.' )
+  }
+
+  return product.ek
+}
+
+
+/**
  * Describe a population of geometries by the products that place them.
  *
  * Every population is reported as a rate against its own base, because the
@@ -211,11 +247,10 @@ export function profile( title, ids, reference, products ) {
       counts.voided += product.v
       counts.opening += product.x
 
-      // The key the pump places by, not the product's own — they differ for
-      // every aggregate target (codex review, PR #698). A table written
-      // before that column existed has only the own key, which is what it
-      // recorded, so it degrades to the old meaning rather than to NaN.
-      keys.add( product.ek ?? product.k )
+      // The keys the pump places by, not the product's own.
+      for ( const key of effectiveKeysOf( product ) ) {
+        keys.add( key )
+      }
     }
 
     if ( keys.size > 1 ) {

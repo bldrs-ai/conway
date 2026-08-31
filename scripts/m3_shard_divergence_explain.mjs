@@ -23,7 +23,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as process from 'node:process'
 
-import { perGeometryVoiding } from './m3_divergence_report.mjs'
+import { effectiveKeysOf, perGeometryVoiding } from './m3_divergence_report.mjs'
 
 
 /**
@@ -100,22 +100,22 @@ function main() {
 
 
 /**
- * Which shard the pump would place a product in.
+ * Every shard the pump would build a product in.
  *
- * Keyed on the EFFECTIVE dispatch key: an aggregate target is extracted only
- * by the rel-aggregates pass, which `adoptShardedWorklists_` shards by the
- * relating object's key rather than the product's own. On a model where
- * almost every placement is an aggregate target, using `product.k` here
- * attributes almost every placer to the wrong shard (codex review, PR #698).
- * A product table written before that column existed carries only the own
- * key, and degrades to the old meaning rather than to NaN.
+ * Plural on both counts: keyed on the EFFECTIVE dispatch keys rather than
+ * the product's own (an aggregate target is extracted only by the
+ * rel-aggregates pass, which shards by the relating object's key), and one
+ * product can be named by several aggregates that land in different shards.
+ * See `effectiveKeysOf`, which refuses a product table written before that
+ * column existed rather than silently reporting the pre-fix attribution.
  *
  * @param {object} product The product-table row.
  * @param {number} shardCount How many shards.
- * @return {number} The shard index.
+ * @return {number[]} The shard indices.
  */
-function effectiveShard( product, shardCount ) {
-  return Math.abs( product.ek ?? product.k ) % shardCount
+function effectiveShards( product, shardCount ) {
+  return effectiveKeysOf( product )
+      .map( ( key ) => Math.abs( key ) % shardCount )
 }
 
 
@@ -151,7 +151,7 @@ function perGeometryRates( title, ids, reference, products, shardCount ) {
 
     const voided = placers.filter( ( product ) => product.v === 1 )
     const shardsTouched = new Set(
-        placers.map( ( product ) => effectiveShard( product, shardCount ) ) )
+        placers.flatMap( ( product ) => effectiveShards( product, shardCount ) ) )
 
     const mixed = voided.length > 0 && voided.length < placers.length
 
@@ -208,7 +208,10 @@ function mechanismTest( ids, reference, shards, products, shardCount ) {
     for ( const product of placers ) {
 
       if ( product.v === 1 ) {
-        voidedShards.add( effectiveShard( product, shardCount ) )
+
+        for ( const shard of effectiveShards( product, shardCount ) ) {
+          voidedShards.add( shard )
+        }
       }
     }
 
