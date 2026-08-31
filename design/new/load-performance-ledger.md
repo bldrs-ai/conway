@@ -1921,10 +1921,21 @@ been read:
    shuffles +356→+116 MB between `Hashing` and `Parsing` (the six-run PSB
    series on conway#679) while the totals stay inside 11 MB. **Only post-GC
    readings are composition evidence.**
-2. **The heap is well under the ceiling once settled** — 1,505.6 MB against a
-   ~4,096 MB `jsHeapSizeLimit`, of which 514.9 MB is permanently committed
-   wasm (§6). §9.6's "a second model cannot be opened, and it is not close"
-   does not hold on this path.
+2. **Each bucket has its own ceiling, and folding them into one number
+   overstates the constraint.** V8 objects are 274.6 MB against the
+   ~4,096 MB `jsHeapSizeLimit` — that limit governs V8's own heap alone (item
+   3 below), so this bucket alone has ~15× headroom. wasm linear memory is
+   514.9 MB against its own, separate 32-bit ceiling (4 GiB, §6) — a
+   different budget, and the one that never gives memory back once grown.
+   External ArrayBuffers (716.1 MB) and renderer RSS (2,855.8 MB settled /
+   5,425.2 MB high-water) answer to process/device memory, not to either V8
+   limit. §9.6's "a second model cannot be opened, and it is not close" was a
+   D3D-scale reading — 2,664 MB of V8 objects alone, most of one 4,096 MB
+   `jsHeapSizeLimit`; on this load's much smaller V8 bucket that specific
+   constraint is far off, but a second model's wasm and external growth
+   would still have to clear their own, separate ceilings, which this
+   section does not measure — so no blanket second-model verdict is claimed
+   here.
 3. `usedJSHeapSize` can *exceed* `jsHeapSizeLimit` — run A read 4,466.7 MB
    against a 4,095.75 MB limit at the boundary log. Not a contradiction: the
    limit governs V8's own heap and `usedJSHeapSize` is V8 **plus** external
@@ -2092,8 +2103,9 @@ exist yet", not "it is free". Any probe of these two structures must wait on
   (655.0 MB reached of 716.1 MB). Named candidates, unmeasured: the GLB the
   cache writer exports after the load (`exportBatchedModelAsInstancedGlb` is
   16 MB of *objects* in run B's profile; its binary is not counted anywhere
-  here), and backing stores detached but not yet swept. At 4 % of the bucket
-  this is no longer the open question it was in run A.
+  here), and backing stores detached but not yet swept. At 8.5 % of the
+  bucket (61.1 / 716.1) this is no longer the open question it was in run A,
+  though it is not as small as a first read of "91 % reached" suggests.
 - **The external bucket is the least stable number here** — 1,453.0 / 1,045.0
   / 716.1 MB across three runs of the same model (§12.1). It is a derived
   quantity (`usedJSHeapSize − V8 − wasm`) resting on V8's external-memory
@@ -2198,7 +2210,7 @@ because `netlify.toml` omits COEP on purpose and `crossOriginIsolated` is
 | block | 231 MB run | replicates per worker? |
 |---|---:|---|
 | wasm linear memory | 514.9 MB | **yes, but sub-linearly.** #394 measured per-worker wasm *falling* with N on D3D (611 → 207 MB each at N=4, total 1.36×) because each instance only extracts its own shard. Budget total ≈ 1.4× the N=1 figure, not N×. |
-| conway columnar index + descriptor caches (`address_`, `length_`, `typeID_`, `expressID_`, `expressIDMap_`, `typeIndex`, vtables) | 173.3 MB | **no, if transferred.** These are exactly the `Uint32Array` columns M2's columns-from-birth produced; they are transferable, and #394's plan item 1 (the precomputed dispatch-key column) assumes the index is computed once and handed out. If instead each worker re-parses, this becomes N×173 MB and is the single worst multiplier on the page. |
+| conway columnar index + descriptor caches (`address_`, `length_`, `typeID_`, `expressID_`, `expressIDMap_`, `typeIndex`, vtables) | 173.3 MB | **no — replicates per worker regardless of transfer.** These are exactly the `Uint32Array` columns M2's columns-from-birth produced, and they are transferable, but with `crossOriginIsolated` false (no `SharedArrayBuffer`, confirmed above) a structured-clone *transfer* detaches the buffer from the sender and hands ownership to exactly one recipient — it cannot make the same 173.3 MB backing store available to all N workers. Each worker needs its own copy, whether read fresh from the OPFS sidecar or re-parsed; either way this is **≈N × 173.3 MB (≈693 MB at N=4)**, unless a partitioned-columns scheme sends each worker only its own shard's columns — unmeasured. The single worst multiplier on the page. |
 | conway `ResidencyController` and per-product descriptors | 15.1 MB of the V8 274.6 | **yes**, per worker, but each holds only its shard's products. |
 | BatchedMesh vertex/index buffers | 264.0 MB | **no** — main thread only. The scene is assembled where it is rendered. |
 | Share source-geometry copies (`instanceGeometry`) | 171.5 MB | **no** — main thread only. |
@@ -2206,12 +2218,21 @@ because `netlify.toml` omits COEP on purpose and `crossOriginIsolated` is
 | `SearchIndex` (2.7) + spatial tree (1.7) | 4.4 MB | **no** — main thread only, built after the load from one spatial-structure read. |
 | geometry payload in flight | — | **transferable.** Each worker's product geometry crosses as a detached `ArrayBuffer`, so it is moved rather than copied — but note §12.4: the main thread then makes a *second* copy of it anyway, so fixing `instanceGeometry` also removes a per-batch copy from the worker path. |
 
-**Read:** roughly **688 MB of the 231 MB run's settled 1,505.6 MB is
-worker-side and would replicate** (514.9 wasm + 173.3 conway JS index), and
-roughly **449 MB is main-thread-only** and would not. The multiplier on the replicating part is
-~1.4× at N=4 if wasm behaves as #394 measured **and** the columnar index is
-transferred rather than re-derived; it is closer to N× if it is not. That
-distinction, not the worker count, is what sets the pool's memory ceiling.
+**Read:** wasm and the columnar index are the two worker-side terms in the
+231 MB run's settled 1,505.6 MB, and they do not scale the same way. wasm
+replicates **sub-linearly** — #394 measured per-worker wasm *falling* with N
+on D3D, so at N=4 the total is ≈1.4× the single-worker 514.9 MB (≈721 MB),
+not 4×. The columnar index has the opposite shape: absent
+`SharedArrayBuffer`, a transfer hands its 173.3 MB to exactly one worker, so
+full per-worker copies put it at **≈N × 173.3 MB — ≈693 MB at N=4** — unless
+a partitioned-columns scheme (each worker holding only its own shard's
+columns) is built, which is unmeasured. Adding the **449 MB that stays
+main-thread-only** regardless of N, a full-copy N=4 pool's settled memory on
+this run projects to roughly **721 + 693 + 449 ≈ 1,863 MB** — above the
+single-worker run's own 1,505.6 MB, with the index now the *larger* of the
+two replicating terms rather than the smaller. That distinction — full
+per-worker index copies versus an unbuilt partitioned-columns scheme, not
+the worker count on its own — is what sets the pool's memory ceiling.
 
 ### 12.10 Ranked byte-levers
 
