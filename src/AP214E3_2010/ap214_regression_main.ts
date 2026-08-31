@@ -20,7 +20,7 @@ import Logger from '../logging/logger'
 import Environment from '../utilities/environment'
 import { ExtractResult } from '../core/shared_constants'
 import { CanonicalMeshType } from '../core/canonical_mesh'
-import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
+import { ap214TypeName } from './ap214_tessellated_types'
 import { Console } from 'console'
 
 
@@ -424,7 +424,9 @@ function doWork() {
         model.nullOnErrors = !strict
 
         const geomStartMs = Date.now()
-        const extraction = geometryExtraction(model)
+        // Only paid for in digest mode: the count needs trackFaceAccounting,
+        // which flushes staged tessellation per face and so serialises it.
+        const extraction = geometryExtraction(model, digest)
         const geomEndMs = Date.now()
         const geometryTimeMs = geomEndMs - geomStartMs
 
@@ -475,6 +477,20 @@ function doWork() {
           Logger.error( 'Couldn\'t extract geometry')
         } else if ( digest ) {
 
+          // conway#596: a per-model figure reported ALONGSIDE the digest,
+          // deliberately not folded into it - a face this run could not
+          // account for is worth surfacing, but the digest's own bytes stay
+          // exactly what they were before this existed, so no baseline
+          // anywhere needs re-blessing for this line to start appearing.
+          const unaccountedFaces = extraction.getUnaccountedFaceCount()
+
+          if ( unaccountedFaces !== void 0 && unaccountedFaces > 0 ) {
+            Logger.warning(
+                `${unaccountedFaces} face(s) declared by this model produced ` +
+                'no geometry anywhere (not merged into a solid mesh, not its ' +
+                'own styled mesh) - see conway#596')
+          }
+
           // Digest layout matches the IFC regression digest
           // (ID,Hash,Type,Operand 1,Operand2,Void) so the same diff/bless
           // tooling applies. STEP digests cover final meshes and memoized
@@ -499,7 +515,7 @@ function doWork() {
             const element = model.getElementByLocalID( mesh.localID )
             const rowID = element?.expressID ?? mesh.localID
             const typeName =
-              element !== void 0 ? EntityTypesAP214[element.type] : ''
+              element !== void 0 ? ap214TypeName(element.type) : ''
 
             csvLines.push([rowID, `${rowID},${hash},${typeName},,,FALSE\n`])
           }
@@ -512,7 +528,7 @@ function doWork() {
             const rowID = curveItem.expressID ?? curveItem.toString()
 
             csvLines.push([rowID,
-              `${rowID},${hash},${EntityTypesAP214[curveItem.type]},,,\n`])
+              `${rowID},${hash},${ap214TypeName(curveItem.type)},,,\n`])
           }
 
           csvLines.sort( ( a, b ) => {
@@ -554,12 +570,20 @@ function doWork() {
  * Function to extract geometry from an AP214StepModel.
  *
  * @param model
+ * @param trackFaceAccounting Whether to track the conway#596 per-model
+ * unaccounted-face count. Off by default cost (a flush-per-face that
+ * serialises staged tessellation for this extraction), so only the digest
+ * path below turns it on.
  * @return {AP214GeometryExtraction | undefined} The extraction, or undefined
  * on failure.
  */
-function geometryExtraction(model: AP214StepModel): AP214GeometryExtraction | undefined {
+function geometryExtraction(
+    model: AP214StepModel, trackFaceAccounting: boolean = false,
+): AP214GeometryExtraction | undefined {
 
   const conwayModel = new AP214GeometryExtraction(conwayGeom, model)
+
+  conwayModel.trackFaceAccounting = trackFaceAccounting
 
   const [extractionResult] = conwayModel.extractAP214GeometryData(false)
 

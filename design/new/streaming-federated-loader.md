@@ -657,12 +657,116 @@ Deliberately small first step; each has a measurable exit.
   "budgeted arena", in the production pump rather than a harness.
   `GeometryResidency` (`src/ifc/geometry_residency.ts`) holds an LRU over
   both of a model's geometry stores against a byte ceiling, evicting at
-  each batch boundary. Configured at open (`GEOMETRY_BUDGET_MB`) or after
-  (`SetGeometryBudget`), and **unlimited by default**, because eviction
-  changes a contract: an evicted asset is gone from `GetGeometry` until
-  something re-extracts it, which is safe for a consumer that copies
-  payloads at delivery (Share#1640) and unsafe for one that fetches
-  lazily later.
+  the START of each pump call. Configured at open (`GEOMETRY_BUDGET_MB`)
+  or after (`SetGeometryBudget`), and **unlimited by default**, because
+  eviction changes a contract: an evicted asset is gone from
+  `GetGeometry` until something re-extracts it, which is safe for a
+  consumer that copies payloads at delivery (Share#1640) and unsafe for
+  one that fetches lazily later.
+
+    Eviction runs at the head of a pump call, not its tail, and that is
+  load-bearing rather than incidental: "at delivery" for a real embedder
+  means *after the pump call returns* — Share's `onMeshBatch` reads the
+  delta back through `GetGeometry` once it has the batch, then yields and
+  pumps again. Tail eviction made that window a lie whenever a single
+  batch's geometry exceeded the whole budget (a 1.9 GB Revit export at
+  64 MB), freeing what the call had just delivered and handing the copy a
+  deleted embind handle — *"Cannot pass deleted object as a pointer of
+  type IfcGeometry"*, Sentry SHARE-1NK. The guarantee is now: everything
+  pump call N delivered is resident until call N+1 begins, at the price of
+  a transient overshoot of up to one batch.
+
+    **Implementation, third landed piece — a streaming-consumer ownership
+  contract (2026-08-29, conway#638).** The budget above bounds *native*
+  bytes. The JS side had its own, larger problem: a deferred open builds
+  each `PlacedGeometry` once and files that one object into **three**
+  pointer spines — the model's cumulative per-entity `meshMap`, its
+  `vectorFlatMesh`, and whatever the embedder keeps from the mesh
+  callback. Measured on a D3D load that graph is **475 MB** of V8 heap,
+  the largest single bucket, and dropping any one spine alone frees only
+  ~4.4 MB, because the other two keep the same graph alive (4.4 MB is
+  the *predicted* size of one 562 351-entry spine at 8 B, so that number
+  confirms the model rather than refuting it). A consumer that assembles
+  every batch as it lands — Share's incremental batched builder — never
+  reads the two conway holds.
+
+    `STREAMING_CONSUMER` (a `DEFER_GEOMETRY`-only open setting, default
+  off, both proxies) lets the caller say so: the pump hands each delta
+  `FlatMesh` to the callback and keeps no reference, so neither conway
+  spine grows. **It drops JS pointer spines and nothing else** — the
+  natives are owned by the geometry store and freed only by eviction or
+  `ReleaseModelGeometry`, so the copy-window guarantee above is
+  untouched, as is the trailing zero-work pump call that trims the final
+  batch. The retention was never load-bearing for Share's empty-pump
+  fallback, which the issue text originally claimed: that fallback fires
+  only when the pump produced *nothing*, and in that case `meshMap` was
+  empty going in and a fresh scene walk serves it.
+
+    What is load-bearing is a late whole-model ask. `StreamAllMeshes`,
+  `LoadAllGeometry` and `GetFlatMesh` on such a model **re-walk the live
+  scene** rather than replaying a cache that no longer exists — with the
+  delta capture, not the classic walk, because only the delta capture
+  seeds coordination from the frame the stream actually used. Because the
+  re-walk clears and restarts at instance zero, it is *idempotent*, which
+  incidentally closes the latent doubling bug a second `StreamAllMeshes`
+  has on the retaining path (Share's `IfcItemsMap.js:274-283`).
+
+    **A re-walk does not recover evicted geometry, and the reporting had
+  to be rebuilt around that.** Eviction deletes the mesh from the store
+  (`IfcModelGeometry.delete`), so the walk resolves nothing for that scene
+  node, parks it, and the placement is *absent* from the rebuilt map
+  rather than present-and-dead. The retaining path's `livePlacements`
+  filter therefore reads zero however much was lost — it can only see
+  placements that made it into the map, and all of those are live. The
+  first version of this shipped a throw keyed on that filter, which made
+  it unreachable: at a 1-byte budget on `mapped_shared_representation.ifc`
+  the model served **0 placements, logged "0 across 0", and did not
+  throw** — the exact silent-empty failure the contract exists to
+  prevent, in Share's own production config. The signal is instead the
+  count of instances the re-walk **parked**: partial loss warns with that
+  count, total loss (nothing resolved) **throws and names the contract**,
+  as does any whole-model ask after `ReleaseModelGeometry`. A model that
+  genuinely has no geometry still returns empty, quietly, as classic does.
+
+    **Scope: on a windowed source the ask is `StreamAllMeshesAsync`
+  (conway#660).** The synchronous whole-model entry points drain through
+  the synchronous pump, which refuses a windowed source outright, so
+  `StreamAllMeshes` on a model opened over an external store throws before
+  serving anything. That predates this contract, is identical with and
+  without it, and is deliberately left alone. What #660 added is the async
+  entry point beside it: `StreamAllMeshesAsync` drains through
+  `ExtractGeometryBatchAsync` — the pump that pages each batch's product
+  closures — and then runs the *same* post-drain code the sync path runs
+  (`serveDeferredWholeModel_`, single-sourced in both proxies), so the
+  re-walk, the idempotence, the partial-loss warning, the total-loss throw
+  and the post-release throw are the same behaviour reached by a drain
+  that can page. It matters because GitHub/OPFS `File` loads take the
+  windowed open by default, i.e. the large models that motivated this work
+  are exactly the ones the sync ask could not serve.
+
+    **Where the paging does and does not happen — the part worth being
+  precise about.** Only the drain pages. The re-walk resolves each scene
+  node through `IfcSceneBuilder.resolveGeometryNode_`, which reads
+  `node.model.geometry.getByLocalID(...)` — the in-memory geometry store —
+  and never touches the byte source, so windowing is invisible to it. Two
+  consequences, both load-bearing for a consumer deciding whether to keep
+  its own copy: a fully drained windowed model serves *exactly* what a
+  fully drained resident one serves, with no boundary between them; and
+  geometry a `GEOMETRY_BUDGET_MB` eviction already freed is **not** paged
+  back by the ask on either — it is reported missing, by the same parked-
+  node count as above. Re-extracting the evicted product through the
+  window would not fix that: extraction files the result under a fresh
+  localID, so the parked scene node still resolves nothing while a new
+  node re-emits the instance (the measured "21 placements against
+  classic's 16" behind the degraded note). So the contract Share can rely
+  on is *"the same stream the pump delivered, or an exact account of what
+  is missing"* — not recovery.
+
+    AP214 gets the entry point for format parity, and it is synchronous
+  underneath: that proxy has no async pump, and a store-backed open is
+  IFC-only (`IfcApiModelPassthroughFactory.fromStore` refuses every other
+  format), so a windowed AP214 model is not reachable through the public
+  API at all.
 
   **PSB.ifc at batch 8 — the size Share pumps at:**
 

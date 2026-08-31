@@ -69,6 +69,13 @@ const BYTES_PER_MIB = 1024 * 1024
  * Share#1640 already asserts — and unsafe for one that holds geometry IDs and
  * fetches lazily later. So a budget is opt-in and unlimited by default:
  * turning it on is a statement about the consumer, not just about memory.
+ *
+ * **When the callers run this.** `evictToBudget` is called at the START of
+ * each pump batch, never at its end, so everything a batch delivered
+ * survives until the next batch begins — "at delivery" has to include the
+ * gap between pump calls, because that is where an embedder's copy actually
+ * happens (Sentry SHARE-1NK). Callers that free geometry outside the pump
+ * are responsible for the same rule.
  */
 export class GeometryResidency {
 
