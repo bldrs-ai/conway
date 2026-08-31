@@ -1881,6 +1881,12 @@ export class IfcGeometryExtraction {
           newMaterial.baseColor = style.DiffuseColour !== null ?
             extractColorOrFactorMultiply(style.DiffuseColour, surfaceColor) : surfaceColor
 
+          // baseColor and legacyColor have different consumers, so both must be
+          // written: the GLB/native export path reads baseColor, while the
+          // web-ifc compat layer builds `PlacedGeometry.color` from legacyColor
+          // (ifc_api_proxy_ifc.ts, streamed_preview_channel.ts) — that is the
+          // API Share consumes. Leaving either at its constructed default hands
+          // that consumer 0.8 grey for a fully styled model.
           newMaterial.legacyColor = surfaceColor
           newMaterial.roughness = extractSpecularHighlight(style.SpecularHighlight)
           newMaterial.specular = style.SpecularColour !== null ?
@@ -1981,8 +1987,22 @@ export class IfcGeometryExtraction {
             // handling)
           }
 
-          newMaterial.baseColor =
+          const surfaceColor =
             extractColorRGBPremultiplied(style.SurfaceColour, 1 - transparency)
+
+          // Both, for the same reason as the rendering branch above: the
+          // native/GLB path reads baseColor and the web-ifc compat layer reads
+          // legacyColor. This branch used to set baseColor alone, so a model
+          // whose styles are all plain IFCSURFACESTYLESHADING (no
+          // IfcSurfaceStyleRendering — legal, and what Renga emits) exported
+          // correct GLB colours while Share rendered every placement at the
+          // 0.8-grey default and auto-coloured the model
+          // (bldrs-ai/test-models-private#61). Shading carries no diffuse
+          // factor, so the two are the same premultiplied surface colour; the
+          // rendering branch keeps legacyColor as the *undiffused* surface
+          // colour, which is the same quantity.
+          newMaterial.baseColor = surfaceColor
+          newMaterial.legacyColor = surfaceColor
 
         }
 
@@ -4306,15 +4326,52 @@ export class IfcGeometryExtraction {
               isSpace,
               true)
 
-          const styledItemLocalID =
-            this.materials.styledItemMap.get(representationItem.localID) ??
-            this.extractMaterialStyle(owningElement)
+          // Three style sources, tried in IFC precedence order: an explicit
+          // IfcStyledItem on geometry outranks anything derived from a
+          // material association, so the material path is the last resort.
+          // They also bind differently, which is why this is a chain of
+          // branches rather than one `??`.
+          //
+          // 1. A direct styledItemMap hit is an IfcStyledItem pointing at THIS
+          //    representation item, so extractStyledItem's `from.Item` branch
+          //    binds it to the mapped body — correct, since the style travels
+          //    with the shared geometry and every product mapping it wants it.
+          //
+          // 2. Otherwise a styled item on the IfcMappedItem itself or on one of
+          //    its mapped ancestors, bound (and overridden) on that mapped
+          //    item's localID. Still an explicit item style, so it must be
+          //    tried before the material association — checking the material
+          //    first silently inverted this precedence
+          //    (codex finding on bldrs-ai/conway#684): for a product that has
+          //    both, the product material won and the mapped item's own style
+          //    was never applied.
+          //
+          // 3. Last, extractMaterialStyle: IfcRelAssociatesMaterial ->
+          //    IfcMaterialDefinitionRepresentation, whose IfcStyledItem carries
+          //    `Item = $`. With neither an Item nor a representationItem
+          //    argument, extractStyledItem reaches no binding branch at all and
+          //    the geometry ended up with no material at all
+          //    (bldrs-ai/test-models-private#61 — mapped doors/windows/MEP). It
+          //    must not be bound to representationItem.localID to fix that: a
+          //    representation map is shared across products, so that would leak
+          //    one product's material onto every other instance of the same
+          //    body. It goes through the per-node override instead, keyed on
+          //    the owning product — localIDs are unique across entities, so a
+          //    product's ID cannot collide with a geometry key, the same way
+          //    case 2 keys its override on a mapped item's localID.
+          //
+          // IfcSceneBuilder.resolveGeometryNode_ consults the override ahead of
+          // the geometry's own assignment, so each product resolves its own
+          // style off the one shared body.
+          const directStyledItemLocalID =
+            this.materials.styledItemMap.get(representationItem.localID)
 
           let materialOverrideID: number | undefined = void 0
 
-          if (styledItemLocalID !== undefined) {
+          if (directStyledItemLocalID !== void 0) {
 
-            const styledItem = this.model.getElementByLocalID(styledItemLocalID) as IfcStyledItem
+            const styledItem =
+              this.model.getElementByLocalID(directStyledItemLocalID) as IfcStyledItem
 
             this.extractStyledItem(styledItem)
 
@@ -4342,6 +4399,25 @@ export class IfcGeometryExtraction {
               this.extractStyledItem(styledItemParent, styleParent)
 
               materialOverrideID = styleParent.localID
+
+            } else {
+
+              const materialStyledItemLocalID = this.extractMaterialStyle(owningElement)
+
+              if (materialStyledItemLocalID !== void 0) {
+
+                const styledItem =
+                  this.model.getElementByLocalID(materialStyledItemLocalID) as IfcStyledItem
+
+                const surfaceStyleID = this.extractStyledItem(styledItem)
+
+                if (surfaceStyleID !== void 0) {
+
+                  this.materials.addGeometryMapping(owningElement.localID, surfaceStyleID)
+
+                  materialOverrideID = owningElement.localID
+                }
+              }
             }
           }
 
