@@ -200,9 +200,18 @@ Two traps the accessor's doc comment states and the tests pin:
   zero — model-zero, above — but whose rotation and scale are still the
   `NormalizeMat` and unit scale the placements were composed under.
   Skipping the inverse on that model reads every point in the wrong axis
-  convention. Identity is returned only when nothing was composed at all:
-  recentring off, a shard with no supplied frame, or no geometry emitted
-  yet.
+  convention. Identity is returned only when nothing was composed *and*
+  nothing was handed in: recentring off, a shard with no supplied frame,
+  or no geometry emitted yet on a model nobody supplied a frame to.
+- **A supplied frame reports before it is applied.**
+  `SetCoordinationFrame` stores its matrix at call time, so
+  `GetAppliedCoordinationMatrix` returns it immediately — before the
+  worker has composed a single placement under it. That is the reading
+  M3's pool wants (which frame *will* this worker apply), and it is
+  sound because a supplied frame is final: the setter refuses to replace
+  a frame the model derived for itself, and refuses one at all after the
+  first batch. The STEP arm has no such case — it implements no
+  `setCoordinationFrame`.
 - **Every walk composes under the same frame, not just the first.** More
   than one classic walk of a live model is legal (`StreamAllMeshes` and
   then `LoadAllGeometry`), and each has its own local. Those locals seed

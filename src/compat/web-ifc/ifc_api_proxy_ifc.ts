@@ -2234,7 +2234,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * The coordination frame this instance actually composed into the
    * placements it emitted — derived, supplied, or an adopted preview
    * frame the durable walk has since validated; identity while nothing
-   * has been composed.
+   * has been composed and nothing handed in.
+   *
+   * "Handed in" is the exception to the emitted-placements reading, and
+   * it is deliberate: {@link setCoordinationFrame} stores its matrix at
+   * call time, so a supplied frame reports from that moment rather than
+   * from the first placement composed under it. M3's pool needs exactly
+   * that — a worker is asked which frame it will apply, not which one it
+   * has finished applying — and a supplied frame is final, so the early
+   * answer is never revised.
    *
    * Every emit site (classic `streamAllMeshes` /
    * `streamAllMeshesWithTypes` / `loadAllGeometry`, and the deferred

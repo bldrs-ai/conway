@@ -1292,6 +1292,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * durable walk has since validated; identity while nothing has been
    * composed.
    *
+   * Unlike the IFC proxy there is no supplied-frame case to carve out of
+   * that: this arm implements no `setCoordinationFrame`, so
+   * `IfcAPI.SetCoordinationFrame` returns false for a STEP model and
+   * nothing can populate the frame ahead of the first placement.
+   *
    * Every emit site (classic `streamAllMeshes` / `loadAllGeometry`, and
    * the deferred `streamNewMeshes_`) writes `demandCoordination_` at the
    * moment it derives, which is what makes the classic and deferred
