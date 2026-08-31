@@ -298,7 +298,7 @@ describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
 
   test( 'suppression is all-or-nothing: a named set is never partly emitted', () => {
 
-    // BLSN_007 is 1,884 named hull bodies under one product, and the layer
+    // BLSN_007 is 2,268 named hull bodies under one product, and the layer
     // used to hard-cap a product at 256 children. A partial emission is not a
     // smaller tree, it is a broken one: the bodies past the cap keep their own
     // occurrence paths in the scene (the geometry walk reads the same

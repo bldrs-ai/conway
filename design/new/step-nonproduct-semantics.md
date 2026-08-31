@@ -144,9 +144,9 @@ anonymous solid dumps do not.**
 > **one product, zero NAUOs, zero CDSRs and 2,268 individually named
 > bodies** — the multibody pattern as the *entire* model rather than a
 > detail of one part in an assembly. With the layer opt-in, Share got a
-> one-node tree; with a shared path per body, all 1,884 hull solids were one
-> selection; with a 256 cap, seven eighths of them would have had no node
-> even so, while Autodesk's viewer lists every one. See
+> one-node tree; with the path carrying no per-body segment, all 2,268 hull
+> bodies collapsed onto two selections; with a 256 cap, seven eighths of them
+> would have had no node even so, while Autodesk's viewer lists every one. See
 > §"conway#628: identity below the product" below for the resulting rules.
 
 `AP214ProductStructureExtraction.extractProductStructure` and the compat
@@ -258,6 +258,18 @@ geometry, and a duplicated placement is the lesser failure. After the fix:
 2,268 scene nodes, 2,268 distinct paths, 2,268 tree leaves, paths equal.
 `data/ap214-inverted-srr-multibody.step` is that shape reduced to three
 bodies and three inverted edges.
+
+The reorientation is **single-hop**: it asks whether each side of the edge
+is *directly* SDR-bound, not whether it can reach a PDS transitively the
+way `resolvePdsLocalID` (the conway#597 machinery) does. An inverted chain
+two or more edges long is therefore left as written. That is a decision,
+not an oversight — no file in the corpus has that shape (BLSN_007's 308
+edges are all one hop off the product representation), and past one hop
+both sides usually reach *some* PDS, so the question stops being "which
+side is SDR-bound" and becomes a distance comparison carrying the same
+equidistant ambiguity `resolvePdsLocalID` deliberately refuses to guess at.
+If a real file ever needs it, that function is what to build on, and it
+needs a fixture before it needs code.
 
 None of this changes tessellation: the regression digest is one row per
 canonical mesh, so BLSN_007's 2,268-row baseline is byte-identical across

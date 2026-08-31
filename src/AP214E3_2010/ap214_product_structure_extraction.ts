@@ -84,7 +84,7 @@ export interface ProductStructureNode {
    */
   shapeRepresentationIds: number[]
 
-  /** Child occurrence nodes (and, when opted in, ephemeral solid nodes). */
+  /** Child occurrence nodes, plus the solid nodes of a multibody part. */
   children: ProductStructureNode[]
 
   /**
@@ -96,8 +96,8 @@ export interface ProductStructureNode {
   ephemeral?: boolean
 
   /**
-   * Number of this node's solids suppressed by the ephemeral-layer limits
-   * (unnamed-soup suppression or the per-product cap), so a consumer can
+   * Number of this node's solids suppressed by the unnamed-soup gate (the
+   * only limit left — see {@link ProductStructureOptions}), so a consumer can
    * render an "N more…" affordance instead of silently truncating.
    */
   droppedSolids?: number
@@ -133,7 +133,7 @@ export interface ProductStructureOptions {
    * suppressed by this limit.
    *
    * The suppression is all-or-nothing on purpose. A partial cap (this layer
-   * carried a 256-solid one until BLSN_007, a 1,884-body Rhino hull export)
+   * carried a 256-solid one until BLSN_007, a 2,268-body Rhino hull export)
    * emits nodes for some of a product's bodies and not others, so the
    * suppressed bodies' geometry carries occurrence paths that resolve to no
    * node at all — and it silently truncates a NavTree an MCAD viewer shows in
@@ -676,7 +676,8 @@ export class AP214ProductStructureExtraction {
         // The solid's own express id extends the parent's NAUO path: two
         // bodies of one multibody part share every NAUO segment, so without
         // this last segment the path cannot tell them apart — which is what
-        // made all 1,884 hull bodies of BLSN_007 one selection. The geometry
+        // collapsed BLSN_007's 2,268 hull bodies onto two selections (one
+        // per child representation). The geometry
         // walk appends the same segment for the same set of solids (see
         // identityBearingSolidExpressIDs), so mesh path == node path.
         occurrencePath: [ ...node.occurrencePath, solid.expressID ],

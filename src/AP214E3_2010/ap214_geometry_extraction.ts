@@ -6336,11 +6336,12 @@ export class AP214GeometryExtraction {
     // Local ids of the solid-level bodies that are individually addressable —
     // the ones whose own express id extends the occurrence path of the
     // geometry under them, so two bodies of one multibody part are two
-    // selections rather than one (BLSN_007: 1,884 named hull solids under a
-    // single product with no NAUO anywhere in the file). The product-structure
-    // extractor owns the decision and emits a tree node for exactly this set;
-    // reading it from there rather than re-deriving it here is what keeps
-    // "the mesh's path" and "the node's path" the same thing.
+    // selections rather than one (BLSN_007: 2,268 named hull bodies — 1,884
+    // breps and 384 shells — under a single product with no NAUO anywhere in
+    // the file). The product-structure extractor owns the decision and emits a
+    // tree node for exactly this set; reading it from there rather than
+    // re-deriving it here is what keeps "the mesh's path" and "the node's
+    // path" the same thing.
     const solidOccurrenceLocalIDs = new Set<number>()
 
     for ( const solidExpressID of
@@ -7088,6 +7089,20 @@ export class AP214GeometryExtraction {
            * the exporter meant would move geometry; there is none of that here
            * (the 308 are bare relationships), and moving geometry is a much
            * worse failure than a duplicated placement.
+           *
+           * SINGLE HOP, DELIBERATELY. The test is `pdsLocalIDByRep` on each
+           * side — is THIS representation directly SDR-bound — not the
+           * transitive reachability `resolvePdsLocalID` (defined just above)
+           * computes over repAdjacency. So an inverted chain two or more edges long is left
+           * as written. No file we have exercises that shape (BLSN_007's 308
+           * are all one hop off the product representation), and a guard for
+           * a state nothing can be shown to produce is a speculative defense.
+           * Transitive orientation is also not a drop-in: past one hop BOTH
+           * sides usually reach some PDS, so "which side is SDR-bound" stops
+           * being a decision and becomes a distance comparison with its own
+           * ambiguity rules — the ones resolvePdsLocalID already refuses to
+           * guess at. If a real file ever needs it, that function is the
+           * machinery to build on, and it needs a fixture first.
            */
           if ( shapeRelationship.findVariant(
               representation_relationship_with_transformation ) === void 0 &&
@@ -7111,18 +7126,20 @@ export class AP214GeometryExtraction {
         }
 
         // conway#597: `owningLocalID` above (the relationship's own
-        // localID) still drives occurrence-path threading exactly as
-        // before — the NEMA multibody fixture's occurrence path
-        // deliberately ends with the SRR's own express id to disambiguate
-        // a multibody solid set from other items under the same NAUO (see
+        // localID) is the edge's identity for the walk, but it is NOT an
+        // occurrence-path segment — conway#628 removed that. A plain
+        // relationship binds a part to its own detail representation, so
+        // it names nothing selectable and the product-structure tree has no
+        // node for it; a multibody solid set is disambiguated by each
+        // body's OWN express id as the path's last segment instead (see
+        // makeThunk's child and item loops, and
         // ap214_occurrence_geometry.test.ts). What conway#597 asks for is
-        // narrower: the express id a *pick* surfaces (relatedElementLocalId)
-        // should be the owning part's PDS, not the relationship's. Record
-        // that resolution separately, keyed by the representation whose
-        // OWN items (sourceShape's) will be attributed — makeThunk applies
-        // it only to item attribution, leaving the occurrence-path seed
-        // (`owningLocalID` above, and everything derived from it for
-        // children) untouched.
+        // narrower and still stands: the express id a *pick* surfaces
+        // (relatedElementLocalId) should be the owning part's PDS, not the
+        // relationship's. Record that resolution separately, keyed by the
+        // representation whose OWN items (sourceShape's) will be
+        // attributed — makeThunk applies it only to item attribution,
+        // leaving occurrence-path threading untouched.
         //
         // Resolved from sourceShape, not targetShape (review finding):
         // targetShape is only THIS edge's one neighbour, so resolving from

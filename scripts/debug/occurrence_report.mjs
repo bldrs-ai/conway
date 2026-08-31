@@ -9,8 +9,8 @@
  *  2. that path is the path of a node in the product-structure tree.
  *
  * Both halves are emitted by conway and neither is checkable from one of them
- * alone, which is how BLSN_007 shipped with 1,884 hull bodies placed 308 times
- * each under two shared paths (conway#628 / test-models-private#98): the tree
+ * alone, which is how BLSN_007 shipped with 2,268 hull bodies placed 308 times
+ * each under 616 shared paths (conway#628 / test-models-private#98): the tree
  * looked fine (one product), the scene looked fine (real meshes), and only
  * comparing them showed 698,544 placements for 2,268 bodies.
  *
