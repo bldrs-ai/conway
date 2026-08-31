@@ -1,0 +1,124 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('surface_style_shading_mapped.ifc','2026-08-31T00:00:00',(''),(''),'','','');
+FILE_SCHEMA(('IFC4'));
+ENDSEC;
+DATA;
+/* Minimal synthetic model for bldrs-ai/test-models-private#61 — the two
+   colour paths a Renga-style export uses, neither of which index.ifc covers.
+
+   1. Every surface style here is a plain IFCSURFACESTYLESHADING with NO
+      IfcSurfaceStyleRendering. That is legal IFC4 and it is what Renga
+      emits; index.ifc only ever uses IFCSURFACESTYLERENDERING, so the
+      shading branch of extractSurfaceStyle had no fixture at all and
+      shipped without writing CanonicalMaterial.legacyColor. baseColor
+      feeds the GLB/native export, legacyColor feeds the web-ifc compat
+      layer Share consumes, so a model like this exported correct GLB
+      colours while Share saw 0.8 grey everywhere and auto-coloured it.
+
+   2. #1000 and #2000 map ONE shared IfcRepresentationMap (#300) and get
+      their colours only through IfcRelAssociatesMaterial ->
+      IfcMaterialDefinitionRepresentation, whose IfcStyledItem carries
+      `Item = $`. With no Item to bind to, extractMappedItem produced no
+      geometry->material mapping at all and both instances rendered
+      material-less. The two products deliberately carry DIFFERENT
+      materials off the same body: binding the style to the shared
+      mapped geometry would "fix" the missing colour by leaking #1000's
+      red onto #2000, so the assertions demand two distinct colours, not
+      merely two non-default ones.
+
+   3. #3000 is the control: its own, unshared body carries a direct
+      IfcStyledItem (Item = #3012). That binding path already worked and
+      must keep working; it is here so a regression in the direct path
+      cannot hide behind the mapped path's new override.
+
+   All colour components are exact binary fractions (0.75, 0.25, 0.125,
+   ...) so the extracted doubles compare equal to the literals in the
+   test without an epsilon, and none of them is 0.8 — the default the
+   bug produced. */
+#1=IFCPROJECT('0shadingStyleMapped0000',$,'SurfaceStyleShadingMapped',$,$,$,$,(#20),#10);
+#10=IFCUNITASSIGNMENT((#11));
+#11=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
+#20=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-05,#21,$);
+#21=IFCAXIS2PLACEMENT3D(#22,$,$);
+#22=IFCCARTESIANPOINT((0.,0.,0.));
+#23=IFCDIRECTION((0.,0.,1.));
+
+/* The shared asset: a 1m cube body wrapped in a representation map, so
+   both #1000 and #2000 instance the same IfcExtrudedAreaSolid (#311). */
+#300=IFCREPRESENTATIONMAP(#21,#310);
+#310=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#311));
+#311=IFCEXTRUDEDAREASOLID(#312,#316,#23,1.);
+#312=IFCRECTANGLEPROFILEDEF(.AREA.,$,#313,1.,1.);
+#313=IFCAXIS2PLACEMENT2D(#314,$);
+#314=IFCCARTESIANPOINT((0.5,0.5));
+#316=IFCAXIS2PLACEMENT3D(#22,$,$);
+
+/* Material A: shading-only style, reached only via the material
+   association below. Wiring copied from what Renga emits — note the
+   IfcStyledItem's Item is $. */
+#400=IFCMATERIAL('ShadingRed',$,$);
+#401=IFCCOLOURRGB($,0.75,0.25,0.125);
+#402=IFCSURFACESTYLESHADING(#401,$);
+#403=IFCSURFACESTYLE('ShadingRedStyle',.BOTH.,(#402));
+#404=IFCPRESENTATIONSTYLEASSIGNMENT((#403));
+#405=IFCSTYLEDITEM($,(#404),$);
+#406=IFCSTYLEDREPRESENTATION(#20,$,$,(#405));
+#407=IFCMATERIALDEFINITIONREPRESENTATION($,$,(#406),#400);
+
+/* Material B: same shape, different colour, associated to the OTHER
+   product that maps #300. */
+#500=IFCMATERIAL('ShadingBlue',$,$);
+#501=IFCCOLOURRGB($,0.125,0.375,0.875);
+#502=IFCSURFACESTYLESHADING(#501,$);
+#503=IFCSURFACESTYLE('ShadingBlueStyle',.BOTH.,(#502));
+#504=IFCPRESENTATIONSTYLEASSIGNMENT((#503));
+#505=IFCSTYLEDITEM($,(#504),$);
+#506=IFCSTYLEDREPRESENTATION(#20,$,$,(#505));
+#507=IFCMATERIALDEFINITIONREPRESENTATION($,$,(#506),#500);
+
+/* First user of the shared map, at the origin, material A. */
+#1000=IFCBUILDINGELEMENTPROXY('7777777777shadingA0001',$,'MappedRed',$,$,#1001,#1010,$,$);
+#1001=IFCLOCALPLACEMENT($,#1002);
+#1002=IFCAXIS2PLACEMENT3D(#1003,$,$);
+#1003=IFCCARTESIANPOINT((0.,0.,0.));
+#1010=IFCPRODUCTDEFINITIONSHAPE($,$,(#1011));
+#1011=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#1012));
+#1012=IFCMAPPEDITEM(#300,#1013);
+#1013=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#1014,1.,$);
+#1014=IFCCARTESIANPOINT((0.,0.,0.));
+
+/* Second user of the SAME map, 10m along +X, material B. */
+#2000=IFCBUILDINGELEMENTPROXY('7777777777shadingB0002',$,'MappedBlue',$,$,#2001,#2010,$,$);
+#2001=IFCLOCALPLACEMENT($,#2002);
+#2002=IFCAXIS2PLACEMENT3D(#2003,$,$);
+#2003=IFCCARTESIANPOINT((10.,0.,0.));
+#2010=IFCPRODUCTDEFINITIONSHAPE($,$,(#2011));
+#2011=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#2012));
+#2012=IFCMAPPEDITEM(#300,#2013);
+#2013=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#2014,1.,$);
+#2014=IFCCARTESIANPOINT((0.,0.,0.));
+
+/* Control: unshared body with a DIRECT IfcStyledItem on the solid, still
+   shading-only. Exercises extractStyledItem's `from.Item` binding. */
+#3000=IFCBUILDINGELEMENTPROXY('7777777777shadingC0003',$,'DirectGreen',$,$,#3001,#3010,$,$);
+#3001=IFCLOCALPLACEMENT($,#3002);
+#3002=IFCAXIS2PLACEMENT3D(#3003,$,$);
+#3003=IFCCARTESIANPOINT((20.,0.,0.));
+#3010=IFCPRODUCTDEFINITIONSHAPE($,$,(#3011));
+#3011=IFCSHAPEREPRESENTATION(#20,'Body','SweptSolid',(#3012));
+#3012=IFCEXTRUDEDAREASOLID(#3013,#3017,#23,1.);
+#3013=IFCRECTANGLEPROFILEDEF(.AREA.,$,#3014,1.,1.);
+#3014=IFCAXIS2PLACEMENT2D(#3015,$);
+#3015=IFCCARTESIANPOINT((0.5,0.5));
+#3017=IFCAXIS2PLACEMENT3D(#22,$,$);
+#3020=IFCCOLOURRGB($,0.625,0.5,0.25);
+#3021=IFCSURFACESTYLESHADING(#3020,$);
+#3022=IFCSURFACESTYLE('ShadingGreenStyle',.BOTH.,(#3021));
+#3023=IFCSTYLEDITEM(#3012,(#3022),$);
+
+#9000=IFCRELASSOCIATESMATERIAL('0relAssocMaterialRed01',$,$,$,(#1000),#400);
+#9001=IFCRELASSOCIATESMATERIAL('0relAssocMaterialBlu02',$,$,$,(#2000),#500);
+ENDSEC;
+END-ISO-10303-21;

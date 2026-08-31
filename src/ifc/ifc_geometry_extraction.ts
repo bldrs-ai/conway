@@ -1881,6 +1881,12 @@ export class IfcGeometryExtraction {
           newMaterial.baseColor = style.DiffuseColour !== null ?
             extractColorOrFactorMultiply(style.DiffuseColour, surfaceColor) : surfaceColor
 
+          // baseColor and legacyColor have different consumers, so both must be
+          // written: the GLB/native export path reads baseColor, while the
+          // web-ifc compat layer builds `PlacedGeometry.color` from legacyColor
+          // (ifc_api_proxy_ifc.ts, streamed_preview_channel.ts) — that is the
+          // API Share consumes. Leaving either at its constructed default hands
+          // that consumer 0.8 grey for a fully styled model.
           newMaterial.legacyColor = surfaceColor
           newMaterial.roughness = extractSpecularHighlight(style.SpecularHighlight)
           newMaterial.specular = style.SpecularColour !== null ?
@@ -1981,8 +1987,22 @@ export class IfcGeometryExtraction {
             // handling)
           }
 
-          newMaterial.baseColor =
+          const surfaceColor =
             extractColorRGBPremultiplied(style.SurfaceColour, 1 - transparency)
+
+          // Both, for the same reason as the rendering branch above: the
+          // native/GLB path reads baseColor and the web-ifc compat layer reads
+          // legacyColor. This branch used to set baseColor alone, so a model
+          // whose styles are all plain IFCSURFACESTYLESHADING (no
+          // IfcSurfaceStyleRendering — legal, and what Renga emits) exported
+          // correct GLB colours while Share rendered every placement at the
+          // 0.8-grey default and auto-coloured the model
+          // (bldrs-ai/test-models-private#61). Shading carries no diffuse
+          // factor, so the two are the same premultiplied surface colour; the
+          // rendering branch keeps legacyColor as the *undiffused* surface
+          // colour, which is the same quantity.
+          newMaterial.baseColor = surfaceColor
+          newMaterial.legacyColor = surfaceColor
 
         }
 
@@ -4306,9 +4326,34 @@ export class IfcGeometryExtraction {
               isSpace,
               true)
 
+          // Two sources feed styledItemLocalID and they must bind differently.
+          //
+          // A direct styledItemMap hit is an IfcStyledItem pointing at THIS
+          // representation item, so extractStyledItem's `from.Item` branch binds
+          // it to the mapped body — correct, since the style travels with the
+          // shared geometry and every product mapping it wants that style.
+          //
+          // The extractMaterialStyle fallback is per-product: it walks
+          // IfcRelAssociatesMaterial -> IfcMaterialDefinitionRepresentation,
+          // whose IfcStyledItem carries `Item = $`. With neither an Item nor a
+          // representationItem argument, extractStyledItem reaches no binding
+          // branch at all and the geometry ended up with no material
+          // (bldrs-ai/test-models-private#61 — mapped doors/windows/MEP). It
+          // must not be bound to representationItem.localID to fix that: a
+          // representation map is shared across products, so that would leak
+          // one product's material onto every other instance of the same body.
+          // It goes through the per-node override instead, keyed on the owning
+          // product — localIDs are unique across entities, so a product's ID
+          // cannot collide with a geometry key, and the parent-styled branch
+          // below already uses non-geometry localIDs as override keys the same
+          // way. IfcSceneBuilder.resolveGeometryNode_ consults the override
+          // ahead of the geometry's own assignment, so each product resolves
+          // its own material off the one shared body.
+          const directStyledItemLocalID =
+            this.materials.styledItemMap.get(representationItem.localID)
+
           const styledItemLocalID =
-            this.materials.styledItemMap.get(representationItem.localID) ??
-            this.extractMaterialStyle(owningElement)
+            directStyledItemLocalID ?? this.extractMaterialStyle(owningElement)
 
           let materialOverrideID: number | undefined = void 0
 
@@ -4316,7 +4361,14 @@ export class IfcGeometryExtraction {
 
             const styledItem = this.model.getElementByLocalID(styledItemLocalID) as IfcStyledItem
 
-            this.extractStyledItem(styledItem)
+            const surfaceStyleID = this.extractStyledItem(styledItem)
+
+            if (directStyledItemLocalID === void 0 && surfaceStyleID !== void 0) {
+
+              this.materials.addGeometryMapping(owningElement.localID, surfaceStyleID)
+
+              materialOverrideID = owningElement.localID
+            }
 
           } else {
             // get material from parent
