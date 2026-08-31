@@ -384,15 +384,22 @@ async function runPrepProbe( sweep, runPool, runs ) {
         geometry: results.reduce( ( sum, r ) => sum + r.geometryMs, 0 ),
         uncertainty: results.reduce( ( sum, r ) => sum + spread( r.tailMs ), 0 ),
         // The engine's own split of the same window, summed the same way.
-        // `keysMs` is undefined on every unsharded level — that build
-        // computes no keys — and summing it as 0 there is not a hidden
-        // zero: it is the level's defining property, and it is what the
-        // differenced key-pass term below is measured against.
         directSummed: results.reduce( ( sum, r ) => sum + r.directTotalMs, 0 ),
         directCandidates:
           results.reduce( ( sum, r ) => sum + r.directCandidatesMs, 0 ),
         directKeys:
           results.reduce( ( sum, r ) => sum + ( r.directKeysMs ?? 0 ), 0 ),
+        // Whether the key pass RAN, carried separately from what it cost.
+        // The engine reports `keysMs` absent rather than zero precisely so
+        // that "did not run" and "ran inside one clock tick" stay distinct,
+        // and summing the durations throws that away again: a sharded level
+        // on a small model can sum to 0 ms and is then indistinguishable
+        // from an unsharded one, which would print the sharded branch as
+        // `keys none (unsharded)` (codex round 1). So the flag travels, and
+        // the report branches on it rather than on the duration.
+        directKeyedWorkers:
+          results.filter( ( r ) => r.directKeysMs !== void 0 ).length,
+        directWorkers: results.length,
         directWalked:
           results.reduce( ( sum, r ) => sum + r.directCandidateProducts, 0 ),
         directKept: results.reduce( ( sum, r ) => sum + r.directKeptProducts, 0 ),
@@ -476,8 +483,17 @@ async function runPrepProbe( sweep, runPool, runs ) {
    */
   function directLine( chosen ) {
 
-    const keys = chosen.directKeys > 0 ?
-      `, keys ${toS( chosen.directKeys )}s` : ', keys none (unsharded)'
+    // Branching on whether the pass RAN, never on what it cost — a sharded
+    // level whose key pass fits inside one clock tick sums to 0 ms and must
+    // still read as sharded. A level with SOME keyed workers is not a
+    // configuration this probe can produce (every worker at a level takes
+    // the same shard descriptor), so it is named rather than averaged away.
+    const keys = chosen.directKeyedWorkers === 0 ?
+      ', keys none (unsharded)' :
+      `, keys ${toS( chosen.directKeys )}s` +
+        ( chosen.directKeyedWorkers === chosen.directWorkers ? '' :
+          ` [MIXED: only ${chosen.directKeyedWorkers} of ` +
+          `${chosen.directWorkers} workers ran the key pass]` )
 
     return '                   direct (engine)     ' +
       `${toS( chosen.directSummed )}s summed ` +
