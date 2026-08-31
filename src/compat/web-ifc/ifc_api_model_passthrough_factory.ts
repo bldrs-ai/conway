@@ -6,6 +6,7 @@ import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import { HEADER_PREFIX_RETRY_BYTES } from '../../ifc/ifc_stream_open'
 
 /** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
 // eslint-disable-next-line no-magic-numbers
@@ -212,6 +213,116 @@ export class IfcApiModelPassthroughFactory {
       Logger.warning(
           'Store-backed open is IFC-only; use OpenModelStreamed with a buffer ' +
           `for format ${modelFormat}` )
+    }
+  }
+
+  /**
+   * Sniff a store's format from a bounded prefix, growing the prefix once
+   * if the first read was not enough.
+   *
+   * `ModelFormatDetector` needs `FILE_SCHEMA`, which sits *after*
+   * `FILE_DESCRIPTION` — so a long header pushes it past the 64 KiB the
+   * detection read covers and the sniff comes back `undefined`. Measured on
+   * `data/index.ifc` with an 80 KiB comment injected into its header: the
+   * 64 KiB prefix detects `undefined`, a 4 MiB prefix detects IFC. Without
+   * the retry `OpenModelFromIndex` returns −1 on a perfectly good model,
+   * *before* reaching the header retry inside `openIfcModelFromIndex` —
+   * so the engine function would handle the long header and the compat API
+   * that advertises it would not (conway#541 review round 2).
+   *
+   * The second read only happens on the failure path, and is bounded by the
+   * same constant the engine open grows to, imported rather than repeated
+   * so the two cannot drift.
+   *
+   * `fromStore` reads its own 64 KiB prefix and has the same limitation —
+   * and, separately, makes that read outside its own try, so a rejecting
+   * store makes `OpenModelStream` reject rather than return −1. Both are
+   * pre-existing on a shipped path rather than introduced here, so neither
+   * is changed in this pass; both are tracked in conway#628.
+   *
+   * @param store The store to sniff.
+   * @return {Promise<ModelFormatType | undefined>} The detected format.
+   */
+  private static async detectFromStore(
+      store: StepExternalByteStore ): Promise<ModelFormatType | undefined> {
+
+    const firstLength = Math.min( store.byteLength, STORE_DETECT_PREFIX_BYTES )
+    const first = await store.read( 0, firstLength )
+    const detected = ModelFormatDetector.detect( new ParsingBuffer( first ) )
+
+    if ( detected !== void 0 || firstLength >= store.byteLength ) {
+      return detected
+    }
+
+    const retryLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
+
+    if ( retryLength <= firstLength ) {
+      return detected
+    }
+
+    return ModelFormatDetector.detect(
+        new ParsingBuffer( await store.read( 0, retryLength ) ) )
+  }
+
+
+  /**
+   * Index-first open (conway#541): the caller already holds the entity
+   * index — a sidecar a coordinator built during its own parse, or one
+   * persisted from a previous visit — so there is nothing to parse. IFC
+   * only, inheriting the store path's restriction; the format is sniffed
+   * from the same bounded prefix `fromStore` reads.
+   *
+   * **No internal fallback.** Anything wrong with the sidecar (wrong
+   * version, wrong source length, a header that will not parse) returns
+   * `undefined`, so `OpenModelFromIndex` reports `-1` and the caller
+   * chooses `OpenModelStream` explicitly. Falling back here would spend a
+   * full parse to hide the mismatch that made it necessary.
+   *
+   * @param modelID
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param wasmModule
+   * @param settings
+   * @return {Promise<IfcApiModelPassthrough | undefined>}
+   */
+  public static async fromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
+
+    // Detection is INSIDE the guard, and that placement is the contract
+    // rather than tidiness. `detectFromStore` reads the store — up to twice
+    // on the failure path — and a store read can reject: OPFS handle
+    // revoked, file truncated under us, network-backed range read failing.
+    // Outside the try that rejection escapes and `OpenModelFromIndex`
+    // rejects its promise instead of returning −1, breaking the contract
+    // stated above at exactly the moment a caller most needs the explicit
+    // `OpenModelStream` fallback (conway#541 review round 3).
+    try {
+
+      const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
+
+      if ( modelFormat !== ModelFormatType.IFC ) {
+
+        // Deliberately a different message from the catch below: both end in
+        // −1, so the log line is the only thing that separates "this is not
+        // an IFC file" from "the store would not answer".
+        Logger.warning(
+            'Index-first open is IFC-only; use OpenModelStreamed with a buffer ' +
+            `for format ${modelFormat}` )
+        return
+      }
+
+      return await IfcApiProxyIfc.createFromIndex(
+          modelID, store, sidecar, wasmModule, settings )
+    } catch ( e ) {
+
+      const message = e instanceof Error ? e.message : String( e )
+
+      Logger.warning(
+          `Index-first open failed for model ${modelID}: ${message}` )
     }
   }
 

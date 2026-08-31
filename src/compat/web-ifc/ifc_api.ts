@@ -196,6 +196,23 @@ export interface Loadersettings {
    * the budget proportionally rather than equal it.
    */
   GEOMETRY_BUDGET_MB?: number
+
+  /**
+   * Conway extension (OpenModelFromIndex only): verify the sidecar's
+   * source hash by re-reading the whole store, rather than checking its
+   * byte length alone.
+   *
+   * Default off, and that default is the design rather than a shortcut.
+   * The distribution case — a coordinator that folded the hash into its
+   * own parse handing the index to workers addressing the same store —
+   * would pay a second full read *per worker* to re-derive a digest the
+   * coordinator already took over those exact bytes, which is the N-way
+   * I/O a shared index exists to remove. Turn it on for the revisit case,
+   * where a persisted sidecar may describe a file that has since changed.
+   * See `index_sidecar.ts` §"The trust gate" for what each gate does and
+   * does not establish.
+   */
+  VERIFY_INDEX_SOURCE_HASH?: boolean
 }
 
 /* MB as the API's unit, bytes as the engine's: the budget is a number a
@@ -533,6 +550,56 @@ export class IfcAPI {
       await IfcApiModelPassthroughFactory.fromStore(
           modelIdResult,
           store,
+          this.wasmModule,
+          settings)
+
+    if ( result === void 0 ) {
+      return -1
+    }
+
+    this.models.set( modelIdResult, result )
+
+    return modelIdResult
+  }
+
+  /**
+   * Index-first open (conway extension; feature-detect with
+   * `typeof api.OpenModelFromIndex === 'function'`). Consumes a **prebuilt
+   * entity index** — a sidecar from `serializeIndexSidecarFromColumns` —
+   * instead of building one, and keeps the model windowed over `store`
+   * exactly as {@link OpenModelStream} does. Everything downstream is
+   * identical; only the parse is gone.
+   *
+   * This is what makes a geometry worker pool pay. Every worker used to
+   * `OpenModelStream` and parse the whole file itself: on PSB in Chrome
+   * that measured 3.0× *slower* overall than no pool at all, with the main
+   * thread's own untouched parse going 15.8 s → 27.7 s under the
+   * contention (conway#541). One parse, N consumers of its index, is the
+   * precondition rather than an optimisation.
+   *
+   * IFC only, inheriting the store path's restriction. Returns **-1** on
+   * any failure — including a sidecar that does not match the store — so
+   * the caller falls back to `OpenModelStream` **explicitly**. There is no
+   * internal cold-parse fallback: taking one silently would spend the
+   * whole cost the call exists to avoid and make a stale index invisible.
+   *
+   * @param store External store holding the source bytes (OPFS File).
+   * @param sidecar The serialised index.
+   * @param settings settings for loading the model
+   * @return {Promise<number>} model ID, or -1 on failure
+   */
+  async OpenModelFromIndex(
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      settings?: Loadersettings ): Promise<number> {
+
+    const modelIdResult = this.globalModelIDCounter++
+
+    const result =
+      await IfcApiModelPassthroughFactory.fromIndex(
+          modelIdResult,
+          store,
+          sidecar,
           this.wasmModule,
           settings)
 

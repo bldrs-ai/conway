@@ -128,10 +128,15 @@ describe( 'openStreamedIfcModel (Phase B3)', () => {
 
     const restored = deserializeIndexSidecarToColumns<number>( sidecar )
 
-    expect( sidecarMatchesSource(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        restored as any, bytes.byteLength, hash ) ).toBe( true )
-    expect( restored.columns.count ).toBe( open.columns.firstInlineElement )
+    // No cast: the columns decode satisfies SidecarSourceIdentity directly
+    // (conway#541 — the repo used to go through `restored as any` here).
+    expect( sidecarMatchesSource( restored, bytes.byteLength, hash ) ).toBe( true )
+
+    // v2 carries the WHOLE index, so this is `count`, not
+    // `firstInlineElement` — and index.ifc has an inline range, so the two
+    // differ and this assertion is not the same one twice.
+    expect( restored.columns.count ).toBe( open.columns.count )
+    expect( open.columns.count ).toBeGreaterThan( open.columns.firstInlineElement )
   } )
 
   test( 'rejects a store whose length disagrees with the source', () => {
