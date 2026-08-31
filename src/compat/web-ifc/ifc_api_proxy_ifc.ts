@@ -28,6 +28,11 @@ import { NodeValueHandle } from './properties_passthrough'
 import * as glmatrix from 'gl-matrix'
 import { IDENTITY_MAT4, LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y,
   TRANSLATION_Z, composeTransformF64, deriveCoordinationF64 } from './coordination_f64'
+import {
+  exceedsLargeCoordinateBudget,
+  normalizeWithCentreF64,
+  placementMagnitudeM,
+} from './geometry_recentre'
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker, yieldToEventLoop } from '../../core/progress'
@@ -428,6 +433,18 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * large-coordinate budget.
    */
   private demandCoordinationFromPreview_: boolean = false
+
+  /**
+   * Latch for the "recentre did not recentre" report, so a georeferenced
+   * model logs one line and not one per placement.
+   *
+   * COORDINATE_TO_ORIGIN exists to bring a model inside
+   * LARGE_COORDINATE_BUDGET_M; a composed placement still beyond it means
+   * the frame failed, and there is no other symptom until a user notices
+   * the render jittering. Ecobau.ifc emitted 3,691 placements at 2.9e6 m
+   * for months with nothing in the log (Share#1634).
+   */
+  private largeCoordinateReported_ = false
 
   /**
    * True when the coordination frame was HANDED to this instance rather than
@@ -2995,6 +3012,42 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
 
+  /**
+   * Report — once for the whole model — that a composed placement escaped
+   * LARGE_COORDINATE_BUDGET_M while COORDINATE_TO_ORIGIN was asking for
+   * exactly the opposite.
+   *
+   * Every emitted placement on a georeferenced model is over budget when
+   * this goes wrong, so the latch is not tidiness: unlatched, Ecobau.ifc
+   * logs 3,691 identical lines. One is enough to turn a silent
+   * render-quality defect into something greppable in a load report.
+   *
+   * @param transform The composed placement about to be emitted.
+   * @param geometry The geometry it draws — empty geometry is exempt (see
+   * exceedsLargeCoordinateBudget).
+   */
+  private reportLargeCoordinate_(
+      transform: ArrayLike<number>,
+      geometry: { getVertexCount(): number }): void {
+
+    if (this.largeCoordinateReported_ ||
+        this.settings?.COORDINATE_TO_ORIGIN !== true ||
+        !exceedsLargeCoordinateBudget(transform, geometry)) {
+      return
+    }
+
+    this.largeCoordinateReported_ = true
+
+    Logger.warning(
+        `COORDINATE_TO_ORIGIN did not recentre this model: a placement is ` +
+        `${Math.round(placementMagnitudeM(transform))}m from the origin, past ` +
+        `the ${LARGE_COORDINATE_BUDGET_M}m float32 budget. Expect visible ` +
+        `jitter; geometry at this magnitude quantizes to ` +
+        `~${(2 ** (Math.floor(Math.log2(placementMagnitudeM(transform))) - 23) * 1000)
+            .toFixed(1)}mm.`)
+  }
+
+
   private checkShardPreconditions_(): void {
 
     if (this.shard_ === void 0) {
@@ -3550,9 +3603,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         nativePt = geometry.geometry.getPoint(0)
       }
 
-      // normalize() recenters the shared geometry buffer (side effect)
-      // and returns the local centre used to place it.
-      const center = geometry.geometry.normalize()
+      // Recenters the shared geometry buffer (side effect) and MEASURES
+      // the local centre used to place it — normalize()'s own return
+      // value is (0,0,0) on the pinned wasm, and its stale float32
+      // reification is what put LV95 coordinates on the GPU
+      // (see geometry_recentre).
+      const center = normalizeWithCentreF64(geometry.geometry)
 
       const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
 
@@ -3602,6 +3658,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const newTransformArr =
           composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+      this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
 
       geometryMaterialTransformMap.set(expressID,
           [geometry.geometry, material_, newTransformArr])
@@ -4229,9 +4287,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // normalize() recenters the geometry buffer (side effect) and
-        // returns the local centre used to place it.
-        const center = geometry.geometry.normalize()
+        // Recenters the geometry buffer (side effect) and MEASURES the
+        // local centre used to place it; normalize()'s own return value
+        // is (0,0,0) on the pinned wasm (see geometry_recentre).
+        const center = normalizeWithCentreF64(geometry.geometry)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
@@ -4252,6 +4311,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         const newTransformArr =
             composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+        this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -4404,9 +4466,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // normalize() recenters the geometry buffer (side effect) and
-        // returns the local centre used to place it.
-        const center = geometry.geometry.normalize()
+        // Recenters the geometry buffer (side effect) and MEASURES the
+        // local centre used to place it; normalize()'s own return value
+        // is (0,0,0) on the pinned wasm (see geometry_recentre).
+        const center = normalizeWithCentreF64(geometry.geometry)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
@@ -4427,6 +4490,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         const newTransformArr =
             composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+        this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 
@@ -4567,9 +4633,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           nativePt = geometry.geometry.getPoint(0)
         }
 
-        // normalize() recenters the geometry buffer (side effect) and
-        // returns the local centre used to place it.
-        const center = geometry.geometry.normalize()
+        // Recenters the geometry buffer (side effect) and MEASURES the
+        // local centre used to place it; normalize()'s own return value
+        // is (0,0,0) on the pinned wasm (see geometry_recentre).
+        const center = normalizeWithCentreF64(geometry.geometry)
 
         // create PlacedGeometry
         const expressID = model.getElementByLocalID(geometry.localID)?.expressID as number
@@ -4590,6 +4657,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
         const newTransformArr =
             composeTransformF64(coordinationMatrix, geometryTransform, center)
+
+        this.reportLargeCoordinate_(newTransformArr, geometry.geometry)
+
         geometryMaterialTransformMap.set(expressID,
             [geometry.geometry, material_!, newTransformArr])
 

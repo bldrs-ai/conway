@@ -20,8 +20,14 @@ import {
   composeTransformF64,
   deriveCoordinationF64,
   IDENTITY_MAT4,
+  LARGE_COORDINATE_BUDGET_M,
   NORMALIZE_MAT_F64,
 } from './coordination_f64'
+import {
+  exceedsLargeCoordinateBudget,
+  normalizeWithCentreF64,
+  placementMagnitudeM,
+} from './geometry_recentre'
 import { emitSpatialStructureImposters } from './spatial_imposter'
 import { DanglingPlacementError } from '../../ifc/dangling_placement_error'
 import { formatPreviewLine } from '../../core/progress_log'
@@ -178,6 +184,11 @@ export class StorePreviewChannel {
 
   private readonly startedMs_ = Date.now()
   private emittedBytes_ = 0
+
+  /** Latch for the "recentre did not recentre" report — see
+   * {@link reportLargeCoordinate_}. */
+  private largeCoordinateReported_ = false
+
   private unitOrdinal_ = 0
   private lastInlineTick_ = 0
   private tickIntervalMs_ = TICK_INTERVAL_MS
@@ -851,7 +862,9 @@ export class StorePreviewChannel {
         localID: number,
         geometry: {
           getPoint( index: number ): Vector3,
+          getVertexCount(): number,
           normalize(): Vector3,
+          clearReification?(): void,
           GetVertexData(): number,
           GetVertexDataSize(): number,
           GetIndexData(): number,
@@ -899,7 +912,12 @@ export class StorePreviewChannel {
         nativePt = geometry.geometry.getPoint( 0 )
       }
 
-      const center = geometry.geometry.normalize()
+      // Recenters the geometry buffer (side effect) and MEASURES the local
+      // centre: normalize()'s own return value is (0,0,0) on the pinned
+      // wasm, and its float32 reification goes stale across the shift —
+      // which matters doubly here, since the vertexData copied out below
+      // IS that reification (see geometry_recentre).
+      const center = normalizeWithCentreF64( geometry.geometry )
       const geometryExpressID =
         active.model.getElementByLocalID( geometry.localID )?.expressID ??
         geometry.localID
@@ -916,6 +934,8 @@ export class StorePreviewChannel {
       const coordination = this.coordinationMatrix ?? glmatrix.mat4.create()
       const newTransform =
         composeTransformF64( coordination, geometryTransform, center )
+
+      this.reportLargeCoordinate_( newTransform, geometry.geometry )
 
       const payload: PreviewMeshPayload = {
         expressID: entity.expressID,
@@ -962,5 +982,36 @@ export class StorePreviewChannel {
     }
 
     return emitted
+  }
+
+
+  /**
+   * Report — once for the whole channel — that a preview placement escaped
+   * LARGE_COORDINATE_BUDGET_M while COORDINATE_TO_ORIGIN was on.
+   *
+   * Latched because every payload on such a model is over budget; one line
+   * is what makes a failed recentre visible in a load report instead of
+   * only in the render.
+   *
+   * @param transform The composed placement about to be emitted.
+   * @param geometry The geometry it draws — empty geometry is exempt (see
+   * exceedsLargeCoordinateBudget).
+   */
+  private reportLargeCoordinate_(
+      transform: ArrayLike< number >,
+      geometry: { getVertexCount(): number } ): void {
+
+    if ( this.largeCoordinateReported_ || !this.coordinateToOrigin_ ||
+        !exceedsLargeCoordinateBudget( transform, geometry ) ) {
+      return
+    }
+
+    this.largeCoordinateReported_ = true
+
+    Logger.warning(
+        `[preview] COORDINATE_TO_ORIGIN did not recentre this model: a ` +
+        `placement is ${Math.round( placementMagnitudeM( transform ) )}m from ` +
+        `the origin, past the ${LARGE_COORDINATE_BUDGET_M}m float32 budget. ` +
+        `Expect visible jitter.` )
   }
 }

@@ -60,17 +60,31 @@ export class IfcModelGeometry implements ModelGeometry {
   /**
    * Add a mesh to the geometry cache.
    *
-   * Freezes the native float vertex mirror at add time (one
-   * GetVertexData call): consumers (the compat GetGeometry surface)
-   * read float vertices whose frame must match the scene transforms,
-   * which are authored against the geometry AS CREATED. Later native
-   * mutations that keep the vertex count (normalize's centering)
-   * deliberately do NOT refresh the mirror, so every extraction path —
-   * whole-model walk, per-product demand pump, parse-time preview —
-   * serves the same creation-frame floats. Without this, paths that
-   * first read vertices only after a centering mutation serve
-   * per-geometry-shifted vertices against unshifted transforms
-   * (Share's demand-path "scatter").
+   * Builds the native float vertex mirror at add time (one GetVertexData
+   * call), for two reasons that used to be one.
+   *
+   * The surviving reason is accounting: `noteAdded` below charges the
+   * residency `getAllocationSize()`, which counts the float mirror among
+   * the native's bytes. Reifying first means a geometry is charged what it
+   * will actually cost, once, for its whole life — the budget does not
+   * then drift as consumers read.
+   *
+   * The reason that is GONE, and the note is here because the old comment
+   * asserted the opposite: this used to double as a deliberate FREEZE.
+   * Centering (`Geometry::Normalize()`) shifts the f64 vertices but, on
+   * the pinned wasm, returns a dead (0,0,0) instead of the centre, so the
+   * compat layer's emitted transform never carried the shift — and a
+   * consumer that first read floats after the shift got shifted vertices
+   * against an unshifted transform, i.e. Share's demand-path "scatter".
+   * Keeping every path on creation-frame floats made all of them
+   * consistently wrong in a way that cancelled.
+   *
+   * `compat/web-ifc/geometry_recentre.ts` removed the premise: it measures
+   * the shift `Normalize()` will not report, puts it in the transform, and
+   * calls `clearReification()` so the mirror is rebuilt from the shifted
+   * vertices. Refreshing the mirror after centering is now REQUIRED — it
+   * is what keeps a georeferenced model's vertices off 2.6e6 m, where a
+   * float32 ULP is 0.25 m (Share#1634). Do not reinstate the freeze.
    *
    * @param mesh
    */
