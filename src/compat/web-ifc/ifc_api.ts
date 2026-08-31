@@ -4,7 +4,7 @@ import { ConwayGeometry, FileHandlerFunction as FileHandlerCallback,
 import {versionString} from '../../version/version'
 import Logger, { LogLevel as ConwayLogLevel } from '../../logging/logger'
 import { ProgressCallback } from '../../core/progress'
-import { ModelInfo } from '../../core/progress_log'
+import { DemandPrepYieldLike, ModelInfo } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
 } from '../../core/wasm_heap'
@@ -1168,6 +1168,37 @@ export class IfcAPI {
     result.setGeometryShard(shard)
 
     return true
+  }
+
+  /**
+   * Conway extension (M3): what building this model's demand worklists
+   * cost — the prep window that sits inside the FIRST ExtractGeometryBatch
+   * call, measured directly instead of inferred by differencing two pump
+   * calls (conway#682).
+   *
+   * The distinction the fields carry is what a worker pool needs. Every
+   * worker runs `candidatesMs` in full over the whole model, because a
+   * shard narrows what is BUILT and not what is walked — that is the
+   * replicated term, and `keptProducts` against `candidateProducts` is how
+   * much of the walk this worker had a use for. `keysMs` is its opposite:
+   * the dispatch-key pass runs only when a shard is claimed, so an
+   * unsharded reference never performs it and cannot be the denominator
+   * for it.
+   *
+   * Wall time, and on a windowed source (`windowed: true`) the build awaits
+   * paging, so the number contains I/O rather than only compute.
+   *
+   * Render it with `formatDemandPrepLine` from `core/progress_log`, which
+   * is the canonical text form the CLI, the console and Share share.
+   *
+   * @param modelID handle from a DEFER_GEOMETRY open
+   * @return {DemandPrepYieldLike | undefined} the build's cost, or
+   * undefined for unknown models, for passthroughs with no demand
+   * worklists (AP214/STEP), and for a deferred model that has not pumped
+   * yet — the build is lazy, so there is nothing to report until it runs
+   */
+  GetDemandPrepYield( modelID: number ): DemandPrepYieldLike | undefined {
+    return this.models.get(modelID)?.demandPrepYield
   }
 
   /**

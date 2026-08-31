@@ -26,10 +26,12 @@ export {
 } from './core/progress'
 export { ModelLoadOptions } from './loaders/conway_model_loader'
 export {
+  DemandPrepYieldLike,
   LoadLogAccumulator,
   ModelInfo,
   ProgressEventLike,
   formatBar,
+  formatDemandPrepLine,
   formatMb,
   formatModelLine,
   formatSeconds,

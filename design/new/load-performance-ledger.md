@@ -1337,6 +1337,21 @@ configuration rather than something averaging removes. Resolving it needs an
 instrument inside `src/` that can time `ensureDemandWorklists_` without
 pumping, and this PR deliberately changes no `src/` file.
 
+**That instrument now exists (conway#682), and the four rows above have not
+been re-measured with it.** `ensureDemandWorklists_` times itself and reports
+through `IfcAPI.GetDemandPrepYield` — `candidatesMs` for the whole-model walk
+every worker replicates, `keysMs` for the dispatch-key pass only a sharded
+worker runs, and the candidate-versus-kept counts that make the replication
+an exact integer rather than an inference. It closes where the build ends, so
+there is no geometry inside it, no per-worker subtraction, and no error bar
+for the product that subtraction stood in for: the two `NOT RESOLVED` rows
+are resolvable by construction rather than by more repetitions.
+`scripts/m3_worker_pool.mjs --prep-probe` prints it beside the differenced
+estimate at every level. **Until a session actually re-runs the four models,
+the numbers in the tables above stand as the differenced ones they are** —
+the ledger does not inherit resolution from an instrument it has not been
+read with.
+
 (A fifth level applies a shard of *one* and must land on the first:
 `setGeometryShard` normalises `count === 1` back to unsharded
 (`ifc_api_proxy_ifc.ts:2680`). It does — 1.00× on D3D, 0.93× on

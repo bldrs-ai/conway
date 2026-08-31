@@ -3,6 +3,7 @@ import {describe, expect, test} from '@jest/globals'
 import {
   LoadLogAccumulator,
   formatBar,
+  formatDemandPrepLine,
   formatMb,
   formatModelLine,
   formatPreviewLine,
@@ -216,6 +217,76 @@ describe( 'formatPreviewLine', () => {
     } ) ).toBe(
         'Preview: no mesh, 0 meshes from 0 units, ' +
         '532 deferred (531 on placements), 0 retried' )
+  } )
+} )
+
+describe( 'formatDemandPrepLine', () => {
+
+  test( 'a sharded build shows the key pass and how much of the walk it kept',
+      () => {
+
+        // The line conway#682 exists to produce, on D3D-shaped numbers: the
+        // shard walked every one of the model's products and kept a
+        // quarter of them, so `candidates` is work all four workers did in
+        // full and `keys` is work the unsharded reference never did at all.
+        expect( formatDemandPrepLine( {
+          totalMs: 685,
+          candidatesMs: 412,
+          keysMs: 264,
+          candidateProducts: 46166,
+          candidateAggregates: 812,
+          keptProducts: 11542,
+          keptAggregates: 203,
+          shardIndex: 1,
+          shardCount: 4,
+          windowed: false,
+        } ) ).toBe(
+            'Prep: worklists 0.685s (candidates 0.412s, keys 0.264s), ' +
+            'shard 1/4 kept 11542 of 46166 products, 203 of 812 aggregates' )
+      } )
+
+  test( 'an unsharded build reports no key pass at all, rather than zero',
+      () => {
+
+        // `ensureDemandWorklists_` returns at its `shard_ === void 0` guard
+        // before computing a single dispatch key, so an unsharded load's key
+        // time is ABSENT, not zero. Printing "keys 0.000s" would read as a
+        // free pass rather than one that never ran -- and the whole point of
+        // the split is that the unsharded reference cannot be the
+        // denominator for work it does not perform (ledger 11.4).
+        expect( formatDemandPrepLine( {
+          totalMs: 412,
+          candidatesMs: 410,
+          candidateProducts: 46166,
+          candidateAggregates: 812,
+          keptProducts: 46166,
+          keptAggregates: 812,
+          windowed: false,
+        } ) ).toBe(
+            'Prep: worklists 0.412s (candidates 0.410s), ' +
+            '46166 products, 812 aggregates' )
+      } )
+
+  test( 'a windowed build says its wall time contains paging', () => {
+
+    // The async builder awaits `ensureAggregateTargetLocalIDs` and
+    // `computeDispatchKeys`, both of which page. Without the marker the
+    // number reads as compute and would be compared against a resident
+    // worker's, which is a different quantity.
+    expect( formatDemandPrepLine( {
+      totalMs: 1900,
+      candidatesMs: 1100,
+      keysMs: 700,
+      candidateProducts: 24,
+      candidateAggregates: 2,
+      keptProducts: 11,
+      keptAggregates: 1,
+      shardIndex: 0,
+      shardCount: 2,
+      windowed: true,
+    } ) ).toBe(
+        'Prep: worklists 1.900s (candidates 1.100s, keys 0.700s), ' +
+        'shard 0/2 kept 11 of 24 products, 1 of 2 aggregates, windowed' )
   } )
 } )
 
