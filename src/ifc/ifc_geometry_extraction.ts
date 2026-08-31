@@ -7459,8 +7459,19 @@ export class IfcGeometryExtraction {
       }
     }
 
+    // Every relationship prepareExtractionMaps_ sweeps has to be listed
+    // here, or its field reads throw StepBufferNotResidentError on a
+    // windowed source and handleMapPrepError_ swallows the throw in
+    // permissive mode — a sweep that silently does nothing rather than a
+    // loud failure. IfcRelDefinesByType is here for inheritTypeMaterials_;
+    // it needs no entry in the 1-hop pass below because that pass exists
+    // for relationship GETTERS, which hydrate their targets, and the
+    // type-inheritance sweep reads only the relationship's own bytes
+    // (extractReferenceLocalID / forEachReferenceInField) plus index
+    // columns (codex finding on bldrs-ai/conway#704).
     const recordOnlyTypes = [
       IfcRelAssociatesMaterial,
+      IfcRelDefinesByType,
       IfcRelVoidsElement,
       IfcStyledItem,
       IfcRelAggregates,
