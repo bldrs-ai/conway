@@ -79,6 +79,20 @@ Two more properties worth knowing before you quote a number:
 is structurally *blind* to the wasm heap — the opposite of the browser. Both
 behaviours are documented in `src/memory/memory.ts`.
 
+**Update (conway#679, Chromium 141.0.7390.37): the flag is not always the
+discriminator, and there is a second, independent trap underneath it.**
+`--enable-precise-memory-info` moved `usedJSHeapSize` by 226–256 MB for a known
+256 MiB allocation *with or without* the flag on this build — it was not what
+separated a real reading from a frozen one here, unlike on the build above.
+Pass it regardless, but verify per-build with the two-read check in §5 rather
+than trusting the flag's mere presence. The trap that did cost a debugging
+cycle: **`performance.memory` returns a snapshot object**, not a live view —
+capturing it once (`const m = performance.memory`) and reading
+`m.usedJSHeapSize` twice reports the same number no matter what happened in
+between, indistinguishable from the latch above. Re-access
+`performance.memory` itself on every read. Full run in
+[load-performance-ledger.md §12.8](load-performance-ledger.md).
+
 
 ## 3. What does not work
 

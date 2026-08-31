@@ -1836,3 +1836,579 @@ Snowdon 0.764 / 0.450 at N=2 / N=4. **The digest costs at most 0.05 of
 efficiency**, most of it on the models with the highest wall inflation — a
 shared geometry that two shards both build is also one that two shards both
 hash. Every number in §11.2–§11.7 is from the digest-off runs.
+
+
+## 12. Settled composition of a windowed conway-direct load, attributed
+
+Recorded from the conway#679 attribution run
+([report comment](https://github.com/bldrs-ai/conway/issues/679#issuecomment-5474163735)).
+§8–§9 attributed a **D3D** load: 213.6 MB file, buffered/materialised open,
+Share v1.1773, pre-#636. This section attributes an **SP-family** load —
+windowed OPFS open, `retained=no`, Share v1.1804.d740791 + conway
+`1.1583.660-g93378e5f`, i.e. with #636, #649/#654, #657, Share#1800/#1803/#1804
+all live. It supersedes §9's table as the description of *what ships*, and it
+does not reproduce §9's shape at all: **§9's three biggest items — 396 MB of
+`coincidenceKey`, 475 MB of FlatMesh spine, 131.6 MB of `SearchIndex` — are
+worth nothing, ~11 MB and 2.7 MB here.** That non-reproduction is the
+section's main result; §12.11 explains why, and it reconciles with the
+[six-run PSB series on conway#679](https://github.com/bldrs-ai/conway/issues/679#issuecomment-5473240282)
+that shows settled heap invariant at +2,196 to +2,207 MB across every build
+that was supposed to move it.
+
+**Read §12.8 before reusing any number here** — the tab is deliberately
+backgrounded during the load, for a reason that turns out to matter more than
+the memory result — **and §12.1 before quoting any external-bucket figure**,
+which varies by a factor of two with when you settle.
+
+### 12.1 The run
+
+`sp-231MB.ifc` (242,683,483 bytes, IFC4 `Design_Transfer_View`), served over
+HTTP from a local `http-server` into the GitHub fixture route, opened windowed
+through OPFS — the default path for GitHub- and upload-sourced models.
+
+```
+[conwayDirect] demand pump: batches=3885 meshes=27072 onMeshBatch=yes
+  onPreviewMesh=yes windowed=yes asyncAsk=yes retained=no
+[conwayDirect] parsed modelID=0 — vertices=5601844 triangles=3785228
+  instances=124070 parents=27072 materials=2 skippedFlatMeshes=0
+  skippedPlaced=0 skippedCoincident=0
+
+Share v1.1804.d740791, 83.070635 MB heap before load
+Preparing file download:   5.4s,    +5.3 MB heap
+Opening model:             0.1s,   +22.9 MB heap
+Parsing:                  11.6s,  +875.3 MB heap
+Geometry:                146.5s, +1103.4 MB heap, window=64.000000 MB
+Assembling render mesh:    2.3s,  -140.4 MB heap
+Total:                   156.6s, 83.07 -> 2052.69 MB heap
+```
+
+`windowed=yes asyncAsk=yes retained=no` is the regime this section describes:
+all three FlatMesh spines dropped, per #660.
+
+**Three full runs of this model on this build** (the third is the one tabled
+below, and is the cleanest — it settles after CadView's post-load work has
+finished rather than during it):
+
+| | run A | run B | run C |
+|---|---:|---:|---:|
+| `Total:` line | 2,053.9 | 2,087.0 | 2,052.7 |
+| settled `usedJSHeapSize` | 2,440.0 | 1,888.5 | **1,505.6** |
+| settled V8 | 472.2 | 328.6 | **274.6** |
+| settled external | 1,453.0 | 1,045.0 | **716.1** |
+| settled wasm | 514.9 | 514.9 | **514.9** |
+| three.js bytes, scene traversal | 449.3 | 449.3 | **449.3** |
+
+**The `Total:` line reproduces to 1.7 %, and the settled reading does not.**
+The difference between the three is *when* they settled: A measured 30 s after
+the boundary log, B after a 644 s post-load wait that ran with the tab
+foregrounded and starving, C after a 28 s post-load wait with it backgrounded.
+So "settled" is not a single state — the load keeps releasing for a while
+after `Total:` prints, and **only the wasm bucket and the three.js scene
+traversal are stable across all three**. Everything below uses run C, and any
+external-bucket figure carried out of this section should carry that spread
+with it.
+
+### 12.2 The buckets — and how much of the `Total:` line is garbage
+
+| | at `Total:` (report) | settled, post-2×GC |
+|---|---:|---:|
+| `performance.memory.usedJSHeapSize` | 2,052.7 | **1,505.6** |
+| V8 objects (`Runtime.getHeapUsage`) | — | **274.6** (18 %) |
+| External, non-wasm (used − V8 − wasm) | — | **716.1** (48 %) |
+| wasm linear memory | — | **514.9** (34 %) |
+| renderer RSS | — | 2,855.8 |
+| renderer RSS high-water during load | | 5,425.2 |
+
+**The report's `Total:` over-states settled footprint by 547 MB: the printed
+number is 1.36× the settled one.** In run A, whose reading 30 s after the
+boundary log was 4,466.7 MB against a 2,440.0 MB settled figure, two forced
+collections recovered **2,026.7 MB — 45 % of what was on screen**. The
+`Total:` line is `usedJSHeapSize` at print time with no forced collection, so
+it counts whatever the load has not yet dropped, and how much that is depends
+on where the GC happened to be.
+
+Three consequences, two of which correct how this ledger's own numbers have
+been read:
+
+1. **A `Total:` figure is not a footprint, and a stage delta is not an
+   attribution.** The stage columns are "allocated and not yet collected
+   during that stage", which is why the same file on near-identical builds
+   shuffles +356→+116 MB between `Hashing` and `Parsing` (the six-run PSB
+   series on conway#679) while the totals stay inside 11 MB. **Only post-GC
+   readings are composition evidence.**
+2. **Each bucket has its own ceiling, and folding them into one number
+   overstates the constraint.** V8 objects are 274.6 MB against the
+   ~4,096 MB `jsHeapSizeLimit` — that limit governs V8's own heap alone (item
+   3 below), so this bucket alone has ~15× headroom. wasm linear memory is
+   514.9 MB against its own, separate 32-bit ceiling (4 GiB, §6) — a
+   different budget, and the one that never gives memory back once grown.
+   External ArrayBuffers (716.1 MB) and renderer RSS (2,855.8 MB settled /
+   5,425.2 MB high-water) answer to process/device memory, not to either V8
+   limit. §9.6's "a second model cannot be opened, and it is not close" was a
+   D3D-scale reading — 2,664 MB of V8 objects alone, most of one 4,096 MB
+   `jsHeapSizeLimit`; on this load's much smaller V8 bucket that specific
+   constraint is far off, but a second model's wasm and external growth
+   would still have to clear their own, separate ceilings, which this
+   section does not measure — so no blanket second-model verdict is claimed
+   here.
+3. `usedJSHeapSize` can *exceed* `jsHeapSizeLimit` — run A read 4,466.7 MB
+   against a 4,095.75 MB limit at the boundary log. Not a contradiction: the
+   limit governs V8's own heap and `usedJSHeapSize` is V8 **plus** external
+   **plus** wasm. Never compute headroom by subtracting one from the other.
+
+### 12.3 Named blocks
+
+| block | MB | bucket | owner | lifecycle |
+|---|---:|---|---|---|
+| wasm linear memory | **514.9** | wasm | conway engine | steady state, and **unreclaimable** — pages never return (§6) |
+| BatchedMesh vertex + index buffers | **264.0** | external | three.js | steady state; 92.5 MB of it is unused capacity (§12.4) |
+| conway columnar index + descriptor caches (typed arrays) | **173.3** | external | conway JS | steady state while the model can answer property and geometry asks |
+| Share's source-geometry copies (`mesh.instanceGeometry`) | **171.5** | external | Share | **droppable after assembly** — a duplicate of the batch's own data (§12.4) |
+| V8 objects, all of them | **274.6** | V8 | mixed | §12.5 |
+| BatchedMesh per-instance tables | **13.8** | external | three.js | necessary steady state |
+| Share `SearchIndex` | **2.7** (est.) | V8 | Share | steady state, eager — and no longer a lever (§12.6) |
+| Share spatial tree (`store.rootElement`) | **1.7** (est.) | V8 | Share | steady state — NavTree and search read it |
+| external not reached by the census | **61.1** | external | — | residual, §12.7 |
+
+The three.js and Share source-copy rows are exact: a scene traversal summing
+`BufferAttribute.array.byteLength`, deduplicated by backing-buffer identity.
+The conway row comes from a **complete** reachability walk (420,040 distinct
+backing stores, 1,169.8 MB, stack exhausted rather than budget-capped). The
+walk reaches **655.0 MB of the 716.1 MB external bucket — 91 %** — so the
+residual is 61.1 MB, not the ~1 GB that a budget-capped walk suggested in
+run A.
+
+### 12.4 The geometry payload is stored twice, and the batch is a third over-sized
+
+Scene: two `BatchedMesh`es (opaque + transparent), 124,070 instances, 104,991
+unique geometries. three stores position + normal as `Float32Array`
+(24 B/vertex) and a `Uint32Array` index (4 B):
+
+| | vertices | indices | bytes (MB) |
+|---|---:|---:|---:|
+| batch **capacity** | 8,650,752 | 17,301,504 | **264.0** |
+| batch **used** | 5,601,844 | 11,355,684 | **171.5** |
+| slack (allocated, never written) | 3,048,908 | 5,945,820 | **92.5** |
+
+264.0 MB is exactly what the scene traversal measures, which is the check that
+this model of three's layout is right rather than plausible.
+
+On top of that, **the same 171.5 MB is stored a second time**, as the source
+`BufferGeometry` objects `IncrementalBatchedBuilder` builds in
+`localGeometry()` (`flatMeshToBatchedModel.js:382` — fresh position, normal
+and index arrays copied out of the wasm heap), files into `geometryCache`,
+pushes per instance into `state.instanceGeometry`, and `finalize()` slices
+onto the durable mesh as `mesh.instanceGeometry`
+(`buildBatchedConwayModel.js:144`). It is not dead code: `batchedSubset.js`
+reads it to re-bake selection, preselection and isolation meshes. It is a
+duplicate — three's own `_geometryInfo` already records each geometry's
+`vertexStart`/`vertexCount`/`indexStart`/`indexCount` inside the batch.
+
+**So 449.3 MB of external ArrayBuffers deliver 171.5 MB of geometry: 2.62×**,
+and that is 63 % of the whole external bucket. Neither half of the excess is
+an algorithm change:
+
+- **−171.5 MB:** re-bake subsets from the batch's own buffers via
+  `_geometryInfo` ranges; stop retaining `instanceGeometry`. Filed as
+  Share#1810.
+- **−92.5 MB:** `ensureCapacity_` doubles (`GROWTH = 2`) and never shrinks. The
+  pump learns `geometryTotal` from its first `ExtractGeometryBatch` return, so
+  the batch can be sized once instead of doubled into. §12.12 shows the same
+  change also fixes a correctness failure at scale. Filed as Share#1809.
+
+### 12.5 The V8 bucket is spread thin — nothing §9-shaped survives
+
+Sampling heap profiler (`HeapProfiler.startSampling`, 128 KB interval, started
+before navigation), read after forced collection. Live total **283.1 MB
+against the CDP counter's 274.6 MB** — the profile covers the whole bucket,
+same cross-check as §9.2.
+
+| site | MB |
+|---|---:|
+| `localGeometry` (the BufferGeometry/BufferAttribute *objects*; their arrays are external) | 60.5 |
+| `buildPackedTree` (three-mesh-bvh) | 20.0 |
+| `ResidencyController` | 15.1 |
+| `BatchedMesh.setGeometryAt` | 13.3 |
+| `__emval_set_property` (embind boundary) | 12.0 |
+| `computeBatchedBoundsTree` | 11.9 |
+| `computeBoundingBox` | 11.3 |
+| `Uint32Array` | 10.9 |
+| everything else | no site above 10 MB |
+
+**Nothing here resembles §9.3.** No 396 MB `coincidenceKey` (#636 removed it;
+the site does not appear at all), no 475 MB FlatMesh spine, no 131.6 MB
+`SearchIndex`. The largest single site is one eighth of D3D's largest, and the
+whole bucket is smaller than D3D's largest single item.
+
+Causal clears (`queryObjects` + `.clear()`, forced collection either side),
+against a 274.4 MB V8 / 780.3 MB external post-GC baseline. **Both buckets are
+reported**, because a `Map` of `BufferGeometry` is nearly free in V8 objects
+and expensive in ArrayBuffers, and a V8-only reading would call it free:
+
+| cleared | count | freed V8 (MB) | freed external (MB) |
+|---|---:|---:|---:|
+| every `Set` with ≥ 1,000 entries | 9 | 19.6 | 9.5 |
+| every `Map` with ≥ 1,000 entries | 13 | 2.0 | −0.0 |
+| every remaining `Set` | 14,356 | 7.6 | 0.0 |
+| every remaining `Map` | 67 | 1.6 | −1.0 |
+
+Nothing here is a lever. The largest `Map` in the heap — 104,991 entries whose
+values have the shape `{geometry, vertCount, indexCount, box, idByBatch}`, i.e.
+`IncrementalBatchedBuilder.geometryCache` identified by **value shape** rather
+than by entry count, and matching the unique-geometry count the scene
+traversal reports independently — costs 2.0 MB to clear, because its
+geometries have a second owner in `mesh.instanceGeometry` (§12.4).
+
+### 12.6 Two hypotheses tested, two nulls
+
+Both were mechanisms this investigation confirmed structurally and then
+measured. Both are worth ~nothing, and both are recorded so nobody spends a
+sprint on them.
+
+**(a) conway retains Share's open-settings object, and it pins a whole closure
+scope — and that is worth 0.4 MB.** `IfcApiProxyIfc`'s constructor does
+`this.settings = settings` and the proxy lives in `ifcAPI.models` for the
+model's life. Read back off the live model after the load:
+
+```
+ifcAPI.models<0>.settings
+  keys: COORDINATE_TO_ORIGIN, USE_FAST_BOOLS, ON_PROGRESS, ON_MODEL_INFO,
+        DEFER_GEOMETRY, GEOMETRY_BUDGET_MB, STREAMING_CONSUMER, ON_PREVIEW_MESH
+  ON_PREVIEW_MESH: function   ON_PROGRESS: function   ON_MODEL_INFO: function
+```
+
+All three callbacks are still installed. `ON_PREVIEW_MESH` and `ON_PROGRESS`
+are closures created inside `ShareIfcLoader.parse`'s try-block, and in V8 every
+closure of one scope shares **one** `Context` holding every context-allocated
+local of that scope — so those references pin `builder` (hence
+`geometryCache`), `previewGeometryCache`, `previewMaterialCache`, `aabbRing`
+and `session` for the life of the model. That is a real retention path, and
+the `geometryCache` census above is a direct observation of it.
+
+Setting all three to `undefined` and forcing collection freed **0.4 MB of V8
+and −0.9 MB of external** — nothing, within noise. Everything the scope pins
+has a second owner: `geometryCache`'s geometries are `mesh.instanceGeometry`,
+and the preview caches were already released by `session.finish()`'s disposal
+path. **A one-line end-of-load cleanup here is hygiene, not a byte lever**
+(noted alongside Share#1809, whose file this touches).
+
+**(b) `SearchIndex` is 2.7 MB, not 131.6 MB, and the §635 item is already
+closed by a change nobody attributed to it.** 14,338 `Set`s over 39,743
+members and 235,109 key characters, on a spatial tree of 17,677 nodes
+(1.7 MB). §9.3's 131.6 MB was measured when `CadView#onModel` called
+`getSpatialStructure(0, true)`, which — as that call site's own comment now
+records — "flattened and retained every spatial node's FULL attribute record,
+O(products) memory pinned for the session". It now passes `'names'`, fetching
+only the `Name`/`LongName`/`GlobalId` handles the load-time consumers read.
+**That is where the 131.6 MB went.** The index is still eager and still
+unbounded in principle, so the policy question stands on models with far
+larger spatial trees — but on this one it is 0.18 % of the settled heap and
+there is nothing to reclaim.
+
+*Instrument note: an earlier run of this same probe read `SearchIndex` as
+**zero Sets**, because it measured 30 s after the boundary log and
+`CadView#onModel`'s `getSpatialStructure → setupLookupAndParentLinks →
+initSearch` had not produced a `rootElement` yet. That zero was "it does not
+exist yet", not "it is free". Any probe of these two structures must wait on
+`store.getState().rootElement` first.*
+
+### 12.7 What is not named, and what could not be measured
+
+- **61.1 MB of the external bucket is not reached** by the reachability walk
+  (655.0 MB reached of 716.1 MB). Named candidates, unmeasured: the GLB the
+  cache writer exports after the load (`exportBatchedModelAsInstancedGlb` is
+  16 MB of *objects* in run B's profile; its binary is not counted anywhere
+  here), and backing stores detached but not yet swept. At 8.5 % of the
+  bucket (61.1 / 716.1) this is no longer the open question it was in run A,
+  though it is not as small as a first read of "91 % reached" suggests.
+- **The external bucket is the least stable number here** — 1,453.0 / 1,045.0
+  / 716.1 MB across three runs of the same model (§12.1). It is a derived
+  quantity (`usedJSHeapSize − V8 − wasm`) resting on V8's external-memory
+  accounting counter, and it keeps falling as the load finishes releasing.
+  Quote it with the settle point attached.
+- **No heap snapshot was taken.** §9.1's budget rule (~10× the V8 heap in free
+  RAM) rules it out, and the sampling profiler covers the bucket anyway.
+- **`performance.measureUserAgentSpecificMemory()` is unavailable**:
+  `crossOriginIsolated` is `false`, because `netlify.toml` deliberately omits
+  COEP (Google Picker sends `CORP: same-site`). Recorded because it closes off
+  the one independent cross-check that would partition renderer memory by type.
+- **The "drop the model from the scene" clear is inconclusive** and should not
+  be reused as written: `scene.remove()` does not drop the model, because
+  `viewer.IFC.context.items.ifcModels` still holds it. It freed −1.1 MB, which
+  measures the registry, not the geometry.
+- **`sp-946MB.ifc` was not attributed at all** — see §12.12. It does not
+  complete a correct load on this build.
+
+### 12.8 Method deviations from browser-memory-analysis.md, and instrument checks
+
+**Deviations.**
+
+1. **The tab is backgrounded for the whole load *and* for CadView's post-load
+   work.** This box has no GPU, so WebGL runs on SwiftShader in the viz
+   process; measured, its four worker threads took ~2.4 of 4 cores redrawing
+   the growing `BatchedMesh` while the renderer doing the parse got ~0.36, and
+   the renderer's main thread blocks inside WebGL calls waiting for them.
+   Backgrounding throttles rAF, three.js stops redrawing, and those cores
+   return to the work being measured. Safe for the load path, and checked
+   rather than assumed: the demand pump's `yieldToEventLoop` uses
+   `scheduler.yield` or a `MessageChannel`
+   (`conwayDirectIfcLoader.js:752`), never rAF.
+   **Two controls make this a wall-clock change and not a memory one:**
+   parse foreground **125.759 s / +889.4 MB** against backgrounded
+   **11.6–12.5 s / +865.9–879.7 MB** — 10× the speed, same allocation to
+   within 2 %; and `store.rootElement` arriving in **644 s** foregrounded
+   against **28.1 s** backgrounded.
+   *This is also a candidate answer to §10's open "why did geometry take
+   4,256 s here against 104.7 s in §0": software rasterisation of a scene that
+   grows every batch, blocking the thread doing the load. It predicts §8's run
+   was GPU-less too and that repeating it with the tab backgrounded collapses
+   the 4,256 s. Posted as a candidate mechanism on
+   [#656](https://github.com/bldrs-ai/conway/issues/656#issuecomment-5474168755);
+   untested there too.*
+2. **`--enable-precise-memory-info` was not the discriminator §2 describes**,
+   on Chromium 141.0.7390.37 in this container: a 256 MiB allocation moved
+   `usedJSHeapSize` by 226–256 MB with or without it. It was passed on every
+   run regardless. What **is** a real trap, and cost a debugging cycle:
+   `performance.memory` returns a **snapshot object**, so capturing it once
+   and reading the same object twice reports one value no matter what happened
+   in between — indistinguishable from the latched counter §2 describes.
+   Re-access `performance.memory` on every read. (Both noted in
+   [browser-memory-analysis.md](browser-memory-analysis.md) §2.)
+3. Model is `sp-231MB.ifc`, not PSB — PSB is private, and the public
+   PSB-sized file does not load (§12.12). Amplification: 2,052.7 MB at
+   `Total:` on a 231.4 MB file (8.9×), 1,505.6 MB settled (6.5×).
+
+**Instrument checks — every counter shown able to go red.**
+
+- **Bucket split**, run last so its canaries cannot pollute the reported
+  numbers: a known 512 MiB `ArrayBuffer` moved the external bucket by
+  **512.87 MB** and nothing else; a known 256 MiB `WebAssembly.Memory` moved
+  the wasm bucket by **256.00 MB** and nothing else; 3,000,000 small objects
+  moved the V8 bucket by **116.68 MB**. Three buckets, three canaries, each
+  landing in the right one.
+- **three.js byte counter**: a synthetic scene of known size — 11.0 MB
+  measured against 11.0 MB expected, and a repeat of the same backing buffer
+  returned 0, so the dedupe is real.
+- **`SearchIndex` counter**: 1,000 synthetic keys / 1,000 `Set`s / 3,000
+  members counted exactly. It also read 1,057 `Set`s on a small model, which
+  is what makes its zero in the early run diagnosable as a timing artefact
+  rather than a broken counter.
+- **Reachable-ArrayBuffer census**: a synthetic cyclic graph with buffers
+  behind a `Map`, a `Set` and a direct property — 56.0 MB measured against
+  56.0 MB expected, 3 distinct buffers.
+- **Spatial-tree walker**: a synthetic tree of 4,093 reachable objects counted
+  exactly, cycles included.
+- **`queryObjects` `Set` census**: found the probe's own 1,000-entry canary
+  `Set` in the live heap, so a zero from it would be a real zero.
+- **Cross-instrument agreement**: the sampling profiler's live total
+  (283.1 MB) is 103 % of the CDP V8 counter (274.6 MB); the scene traversal's
+  264.0 MB matches the batch capacity computed independently from three's own
+  `_maxVertexCount`/`_maxIndexCount` at 24 B and 4 B per element, to the
+  megabyte.
+- **The paste-in console probe reproduces the driver's numbers**, run against
+  the same model through a plain `page.evaluate` (which is what a DevTools
+  paste is): 198.0 / 66.0 / 13.8 / 171.5 MB for attributes, indices,
+  per-instance tables and source copies, 2.7 MB `SearchIndex`, 1.7 MB spatial
+  tree, 514.8 MB wasm, and 92.5 MB of batch slack summed across both batches
+  — every figure identical to the CDP-driven run. That is what makes it
+  usable on the real PSB tab rather than a second, unvalidated instrument.
+
+### 12.9 Per-worker versus shared, for #394
+
+What a geometry worker pool would replicate, from the table in §12.3. The
+shape assumed is the one #394's correction settled on and the one production
+can actually ship: **N workers, each with its own module instance and linear
+memory, fed transferable typed-array columns** — no `SharedArrayBuffer`,
+because `netlify.toml` omits COEP on purpose and `crossOriginIsolated` is
+`false` (confirmed again on this run).
+
+| block | 231 MB run | replicates per worker? |
+|---|---:|---|
+| wasm linear memory | 514.9 MB | **yes, but sub-linearly.** #394 measured per-worker wasm *falling* with N on D3D (611 → 207 MB each at N=4, total 1.36×) because each instance only extracts its own shard. Budget total ≈ 1.4× the N=1 figure, not N×. |
+| conway columnar index + descriptor caches (`address_`, `length_`, `typeID_`, `expressID_`, `expressIDMap_`, `typeIndex`, vtables) | 173.3 MB | **no — replicates per worker regardless of transfer.** These are exactly the `Uint32Array` columns M2's columns-from-birth produced, and they are transferable, but with `crossOriginIsolated` false (no `SharedArrayBuffer`, confirmed above) a structured-clone *transfer* detaches the buffer from the sender and hands ownership to exactly one recipient — it cannot make the same 173.3 MB backing store available to all N workers. Each worker needs its own copy, whether read fresh from the OPFS sidecar or re-parsed; either way this is **≈N × 173.3 MB (≈693 MB at N=4)**, unless a partitioned-columns scheme sends each worker only its own shard's columns — unmeasured. The single worst multiplier on the page. |
+| conway `ResidencyController` and per-product descriptors | 15.1 MB of the V8 274.6 | **yes**, per worker, but each holds only its shard's products. |
+| BatchedMesh vertex/index buffers | 264.0 MB | **no** — main thread only. The scene is assembled where it is rendered. |
+| Share source-geometry copies (`instanceGeometry`) | 171.5 MB | **no** — main thread only. |
+| BatchedMesh per-instance tables | 13.8 MB | **no** — main thread only. |
+| `SearchIndex` (2.7) + spatial tree (1.7) | 4.4 MB | **no** — main thread only, built after the load from one spatial-structure read. |
+| geometry payload in flight | — | **transferable.** Each worker's product geometry crosses as a detached `ArrayBuffer`, so it is moved rather than copied — but note §12.4: the main thread then makes a *second* copy of it anyway, so fixing `instanceGeometry` also removes a per-batch copy from the worker path. |
+
+**Read:** wasm and the columnar index are the two worker-side terms in the
+231 MB run's settled 1,505.6 MB, and they do not scale the same way. wasm
+replicates **sub-linearly** — #394 measured per-worker wasm *falling* with N
+on D3D, so at N=4 the total is ≈1.4× the single-worker 514.9 MB (≈721 MB),
+not 4×. The columnar index has the opposite shape: absent
+`SharedArrayBuffer`, a transfer hands its 173.3 MB to exactly one worker, so
+full per-worker copies put it at **≈N × 173.3 MB — ≈693 MB at N=4** — unless
+a partitioned-columns scheme (each worker holding only its own shard's
+columns) is built, which is unmeasured. Adding the **449 MB that stays
+main-thread-only** regardless of N, a full-copy N=4 pool's settled memory on
+this run projects to roughly **721 + 693 + 449 ≈ 1,863 MB** — above the
+single-worker run's own 1,505.6 MB, with the index now the *larger* of the
+two replicating terms rather than the smaller. That distinction — full
+per-worker index copies versus an unbuilt partitioned-columns scheme, not
+the worker count on its own — is what sets the pool's memory ceiling.
+
+### 12.10 Ranked byte-levers
+
+Estimated against the 231 MB run's settled **1,505.6 MB** (run C, §12.1). Amounts are what the
+measurement supports, and each row says what it rests on.
+
+| # | lever | est. MB | bucket | confidence |
+|---|---|---:|---|---|
+| 1 | Stop retaining `mesh.instanceGeometry`; re-bake subsets from the batch's own `_geometryInfo` ranges (Share#1810) | **171.5** | external | **measured** — the exact bytes, by scene traversal |
+| 2 | Size the batch once from `geometryTotal` instead of doubling into it, or trim at `finalize()` — **also fixes the §12.12 scale failure** (Share#1809) | **92.5** | external | **measured** — capacity minus used, from three's own counters |
+| 3 | Reduce wasm high-water (#394 Part A / #653) | ≤ **514.9** | wasm | the only bucket that cannot be reclaimed after the fact; #394's Node spike takes PSB 1,956 → 840 MB with a bounded pump |
+| 4 | Trim conway's retained columnar index / descriptor caches once the model is built | ≤ **173.3** | external | **sized, not scoped** — these answer property and geometry asks, so how much is genuinely required is unknown |
+| — | ~~Release `settings.ON_PREVIEW_MESH` / `ON_PROGRESS` / `ON_MODEL_INFO` to unpin the parse scope~~ | **0.4** | — | **measured null** (§12.6a). Hygiene, not a lever. |
+| — | ~~`SearchIndex` policy~~ | **2.7 total** | — | **closed** (§12.6b). The `'names'` spatial-structure fetch already took the 131.6 MB. |
+| — | ~~`coincidenceKey`~~ | — | — | shipped as #636; the site no longer appears in the profile at all |
+
+**Lever 1 alone takes the external bucket from 716.1 to 544.6 MB and the
+settled heap from 1,505.6 to 1,334.1 MB — an 11 % cut for one ownership
+change.** With lever 2 it is 1,241.6 MB, 17.5 % down, and the geometry
+amplification falls from 2.62× to 1.08× (449.3 → 185.3 MB, the geometry
+itself plus the per-instance tables). Levers 1 and 2 are filed as Share#1810
+and Share#1809 respectively — the two levers now being implemented.
+
+**What this table deliberately does not claim.** Not the FlatMesh spine: at
+~11 MB of `streamNewMeshes_` there is nothing left to take, which is #660's
+result confirmed on a second model. Not `coincidenceKey`: #636 shipped, and
+the site is absent from the profile. Not the unnamed external residual: at
+61.1 MB (§12.7) it is no longer worth a project.
+
+### 12.11 Why §9's attribution does not transfer, and what that means for the ledger
+
+conway#679 records six PSB traces spanning #636, #649/#654, #657, Share#1800,
+#1801, #1803 and #1804. Settled delta is **invariant at +2,196 to +2,207 MB
+across all six** — an 11 MB spread across every change that was supposed to
+move it. §9 attributed 871 MB of D3D's 1,236.8 MB V8 heap to two structures
+that those changes removed. Both cannot be true of the same quantity.
+
+They are not. **§9's two big items are per-placement, and D3D has 24× PSB's
+placements.**
+
+| | D3D | PSB | `sp-231MB` |
+|---|---:|---:|---:|
+| placements / instances | **562,351** | **23,454** (#394's Node spike) | **124,070** |
+| unique geometries | 192,022 | 20,178 | 104,991 |
+
+§9's own per-entry costs, applied at each model's placement count:
+
+| structure | B per placement (D3D) | D3D | PSB | `sp-231MB` |
+|---|---:|---:|---:|---:|
+| `seenPlacements` (`coincidenceKey` strings) | 739.6 | 396.7 MB | **16.5 MB** | 87.5 MB |
+| FlatMesh / PlacedGeometry spine | 885.7 | 475.0 MB | **19.8 MB** | 104.8 MB |
+| three.js per-instance tables | 8.0 | 4.3 MB | 0.2 MB | 0.9 MB |
+
+(The `sp-231MB` column is what those structures *would* cost at its placement
+count. The FlatMesh row is not what it costs today — all three spines are
+dropped on this path, and the sampler reads ~11 MB.)
+
+So the "871 MB of reclaimable transient" is worth about **36 MB on PSB** — of
+the same order as the 11 MB spread of the six-run series, and entirely
+consistent with every one of those builds reading the same total. **Answer (a),
+model-shape dependence, is sufficient on its own**; nothing about the six-run
+invariance needs a second explanation.
+
+The other two candidates are also partly true, and the measurements above
+separate them:
+
+- **(c) metric mismatch is real and large, but it is not what hides the
+  871 MB.** §12.2 measures a `Total:` line at 1.36× its own settled footprint,
+  and a reading taken 30 s later at 1.83× — so end-of-load numbers and post-GC
+  numbers are different quantities, and the six-run series is made of the
+  former. But the series is
+  *internally* consistent — six of the same metric — so the mismatch cannot
+  explain why a change of 871 MB in a *sub*-component left the total flat.
+- **(b) mid-lifecycle reachability** is what conway#660 already established
+  for the spine specifically: with retention forced back on, a post-GC census
+  found **zero** delivered placements reachable, because `captured` is a local
+  of `ShareIfcLoader.parse` in every build, pre- and post-#1800 alike. The
+  code says the same: at Share v1.1773 (`c9bf5f7`-era) `captured` was
+  destructured in `parse`, passed to the end-of-load builders and two
+  debug-gated consumers, and never stored — exactly as today. **Share#1800
+  did not bank a settled 475 MB, and could not have**; what it changed is
+  mid-load residency and the degraded-build contract.
+- Which leaves §9's 475 MB itself.
+
+  **Addendum to §9 (not a rewrite of it):** that figure was read by
+  **allocation site**, not by retainer, and its two measured retention probes
+  were a `Map` clear worth 4.4 MB and nothing else — `vectorFlatMesh` is a
+  plain `Array` and a `queryObjects` census over `Map`/`Set` prototypes cannot
+  see it. A roll-up keyed on the call stack that delivers the stream will also
+  collect everything allocated *underneath* it, which on this path includes
+  `localGeometry`'s copies. On `sp-231MB` the same sampler puts
+  `streamNewMeshes_` at ~11 MB and `localGeometry` at 60.5 MB (with
+  `localGeometry`'s ArrayBuffers a further 171.5 MB in the external bucket,
+  which the ledger's V8-only roll-up could not have seen at all). **§9.3's
+  "FlatMesh stream" row should be read as "the stream and everything
+  allocated under it", not as the wrapper objects.** §9's table itself is left
+  as measured; this is a reading note for whoever cites it next, not a
+  correction to its numbers.
+
+**The standing instruction this leaves:** stage deltas and `Total:` lines are
+GC-timing artefacts and belong in a performance log, not in a composition
+table. Only post-GC bucket reads, sampler profiles and causal clears are
+composition evidence. §0, §3 and §8's tables predate that rule and should be
+read with it.
+
+### 12.12 A hard scale ceiling found on the way: ~125k geometries per BatchedMesh
+
+Attempting the same measurement on `sp-946MB.ifc` (991,631,097 bytes) did not
+produce an attribution, because the load **degrades**. From the console:
+
+```
+IncrementalBatchedBuilder: appendPlacement_ failed; skipping placement:
+  RangeError: Maximum call stack size exceeded
+    at BatchedMesh.setGeometrySize
+    at IncrementalBatchedBuilder.ensureCapacity_
+    at IncrementalBatchedBuilder.appendPlacement_
+IncrementalBatchedBuilder: appendPlacement_ failed; skipping placement:
+  Error: THREE.BatchedMesh: Reserved space request exceeds the maximum buffer size.
+    at BatchedMesh.addGeometry
+    ... (repeats for the rest of the load)
+```
+
+Two defects, one upstream and one local, and they compound.
+
+**Upstream (three.js 0.184.0).** `BatchedMesh.setGeometrySize` computes
+
+```js
+const validRanges = [ ...this._geometryInfo ].filter( info => info.active );
+const requiredVertexLength = Math.max( ...validRanges.map( r => r.vertexStart + r.reservedVertexCount ) );
+```
+
+— a **spread of a one-entry-per-geometry array into a call**. V8 caps call
+arguments; measured on this box, `Math.max(...new Array(n))` succeeds at
+125,278 and throws `RangeError: Maximum call stack size exceeded` at 125,279
+(the exact boundary is stack-size dependent, so treat it as "order 125k", not
+a constant). So **a batch cannot be grown once it holds ~125k active
+geometries**. `sp-231MB` finished with 99,865 in its opaque batch — under the
+line, which is why it measured cleanly. `sp-946MB` crosses it.
+
+**Local (`incrementalBatchedBuilder.js`).** `ensureCapacity_` raises
+`state.maxVertices` / `state.maxIndices` **before** calling
+`setGeometrySize`, and does not roll them back if that call throws. Share's
+idea of the batch's capacity is then permanently larger than three's, so every
+later placement takes the "no growth needed" branch and calls `addGeometry`,
+which throws `Reserved space request exceeds the maximum buffer size` — for
+the rest of the load. One failed growth poisons every subsequent placement.
+
+The user-visible result is a model that renders incomplete. It is nearly
+silent: `warnBadRecord_` prints at most `MAX_BAD_RECORD_WARNINGS = 5` lines,
+and after that the only signal is `skippedPlacedGeometries` on the
+`[conwayDirect] parsed` line.
+
+**Both are fixed by the same change as lever #2 in §12.10** (filed as
+Share#1809). The pump learns `geometryTotal` from its first
+`ExtractGeometryBatch` return, so the batch can be sized once up front instead
+of doubled into: no `setGeometrySize` call after the first, no spread over
+125k ranges, and no 92.5 MB of growth slack. Failing that, `ensureCapacity_`
+must not commit its bookkeeping until `setGeometrySize` returns, and the
+builder should open a second batch rather than grow past ~100k geometries.
+
+*This is why this section's numbers come from `sp-231MB` and not from a
+PSB-sized file: on the model that was supposed to be measured, the renderer
+path does not complete a correct load at all. That is a bigger finding than
+the attribution it displaced.*
