@@ -36,6 +36,12 @@ DATA;
    4. #4000 is the precedence conflict — a material association AND its own
       styled item on the IfcMappedItem. See the block beside it below.
 
+   5. #5000 and #6000 cover type-material inheritance: a material
+      associated to the TYPE object (IfcBuildingElementProxyType) rather
+      than to the occurrence, reached through IfcRelDefinesByType. #5000
+      has ONLY the type's; #6000 has both and must keep its own. See the
+      block beside them below.
+
    All colour components are exact binary fractions (0.75, 0.25, 0.125,
    ...) so the extracted doubles compare equal to the literals in the
    test without an epsilon, and none of them is 0.8 — the default the
@@ -157,8 +163,87 @@ DATA;
 #4022=IFCSURFACESTYLE('ShadingTealStyle',.BOTH.,(#4021));
 #4023=IFCSTYLEDITEM(#4012,(#4022),$);
 
+/* Type-material inheritance (bldrs-ai/test-models-private#61, the path
+   conway#684 left out of scope). In a Renga export the material of a door or
+   window is associated to the TYPE object, never to the occurrence:
+
+     IFCRELASSOCIATESMATERIAL(...,(#5100),#700)   <- names the TYPE
+     IFCRELDEFINESBYTYPE(...,(#5000),#5100)       <- the only link to #5000
+
+   #5000 is that case, reduced: it maps the same #300 as #1000/#2000/#4000,
+   carries no styled item and no association of its own, and must still come
+   out orange. Before the fix its material lookup missed entirely — an
+   IfcTypeObject is not an IfcProduct, so the product filter that builds
+   relMaterialsMap dropped the association at #700 on the floor.
+
+   #6000 is the precedence half: it has BOTH an occurrence association
+   (cyan #800) and a type association (magenta #900) with different colours.
+   IFC makes the type's assignment a default the occurrence overrides, so the
+   cyan must win and the magenta must never be extracted.
+
+   The two IfcRelAssociatesMaterial below are deliberately ordered
+   occurrence-first, type-last: an implementation that pushed type materials
+   into the occurrence map as it swept the associations — rather than in a
+   pass strictly after it — would let #9005 clobber #9004 here, and this
+   fixture is the thing that catches that. */
+#700=IFCMATERIAL('ShadingOrange',$,$);
+#701=IFCCOLOURRGB($,0.875,0.5,0.125);
+#702=IFCSURFACESTYLESHADING(#701,$);
+#703=IFCSURFACESTYLE('ShadingOrangeStyle',.BOTH.,(#702));
+#704=IFCPRESENTATIONSTYLEASSIGNMENT((#703));
+#705=IFCSTYLEDITEM($,(#704),$);
+#706=IFCSTYLEDREPRESENTATION(#20,$,$,(#705));
+#707=IFCMATERIALDEFINITIONREPRESENTATION($,$,(#706),#700);
+
+#800=IFCMATERIAL('ShadingCyan',$,$);
+#801=IFCCOLOURRGB($,0.125,0.75,0.875);
+#802=IFCSURFACESTYLESHADING(#801,$);
+#803=IFCSURFACESTYLE('ShadingCyanStyle',.BOTH.,(#802));
+#804=IFCPRESENTATIONSTYLEASSIGNMENT((#803));
+#805=IFCSTYLEDITEM($,(#804),$);
+#806=IFCSTYLEDREPRESENTATION(#20,$,$,(#805));
+#807=IFCMATERIALDEFINITIONREPRESENTATION($,$,(#806),#800);
+
+#900=IFCMATERIAL('ShadingMagenta',$,$);
+#901=IFCCOLOURRGB($,0.75,0.125,0.625);
+#902=IFCSURFACESTYLESHADING(#901,$);
+#903=IFCSURFACESTYLE('ShadingMagentaStyle',.BOTH.,(#902));
+#904=IFCPRESENTATIONSTYLEASSIGNMENT((#903));
+#905=IFCSTYLEDITEM($,(#904),$);
+#906=IFCSTYLEDREPRESENTATION(#20,$,$,(#905));
+#907=IFCMATERIALDEFINITIONREPRESENTATION($,$,(#906),#900);
+
+/* Inherits orange from its type and nothing else. */
+#5000=IFCBUILDINGELEMENTPROXY('7777777777shadingE0005',$,'TypeInherited',$,$,#5001,#5010,$,$);
+#5001=IFCLOCALPLACEMENT($,#5002);
+#5002=IFCAXIS2PLACEMENT3D(#5003,$,$);
+#5003=IFCCARTESIANPOINT((40.,0.,0.));
+#5010=IFCPRODUCTDEFINITIONSHAPE($,$,(#5011));
+#5011=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#5012));
+#5012=IFCMAPPEDITEM(#300,#5013);
+#5013=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#5014,1.,$);
+#5014=IFCCARTESIANPOINT((0.,0.,0.));
+#5100=IFCBUILDINGELEMENTPROXYTYPE('7777777777proxyType005',$,'OrangeType',$,$,$,$,$,$,.NOTDEFINED.);
+#5101=IFCRELDEFINESBYTYPE('0relDefinesByTypeOra05',$,$,$,(#5000),#5100);
+
+/* Has its own cyan; its type says magenta. Cyan wins. */
+#6000=IFCBUILDINGELEMENTPROXY('7777777777shadingF0006',$,'TypeOverridden',$,$,#6001,#6010,$,$);
+#6001=IFCLOCALPLACEMENT($,#6002);
+#6002=IFCAXIS2PLACEMENT3D(#6003,$,$);
+#6003=IFCCARTESIANPOINT((50.,0.,0.));
+#6010=IFCPRODUCTDEFINITIONSHAPE($,$,(#6011));
+#6011=IFCSHAPEREPRESENTATION(#20,'Body','MappedRepresentation',(#6012));
+#6012=IFCMAPPEDITEM(#300,#6013);
+#6013=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#6014,1.,$);
+#6014=IFCCARTESIANPOINT((0.,0.,0.));
+#6100=IFCBUILDINGELEMENTPROXYTYPE('7777777777proxyType006',$,'MagentaType',$,$,$,$,$,$,.NOTDEFINED.);
+#6101=IFCRELDEFINESBYTYPE('0relDefinesByTypeMag06',$,$,$,(#6000),#6100);
+
 #9000=IFCRELASSOCIATESMATERIAL('0relAssocMaterialRed01',$,$,$,(#1000),#400);
 #9001=IFCRELASSOCIATESMATERIAL('0relAssocMaterialBlu02',$,$,$,(#2000),#500);
 #9002=IFCRELASSOCIATESMATERIAL('0relAssocMaterialPur03',$,$,$,(#4000),#600);
+#9003=IFCRELASSOCIATESMATERIAL('0relAssocMaterialOra04',$,$,$,(#5100),#700);
+#9004=IFCRELASSOCIATESMATERIAL('0relAssocMaterialCya05',$,$,$,(#6000),#800);
+#9005=IFCRELASSOCIATESMATERIAL('0relAssocMaterialMag06',$,$,$,(#6100),#900);
 ENDSEC;
 END-ISO-10303-21;

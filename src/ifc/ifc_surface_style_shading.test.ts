@@ -27,6 +27,14 @@
 //      behaviour change for such models (codex finding on
 //      bldrs-ai/conway#684).
 //
+//   D. A material associated to the TYPE object (IfcDoorType, and here
+//      IfcBuildingElementProxyType) instead of the occurrence never reached
+//      the occurrence at all: relMaterialsMap is filtered to IfcProduct, and
+//      a type object is an IfcTypeObject. 272 of the Renga model's 5,351
+//      placements — every window, door, light fixture and railing — resolved
+//      no material because of it. The occurrence must inherit its type's
+//      material, and its OWN association must still override it.
+//
 // Colour components and the wasm-init timeout are literals throughout, the
 // same trade the other fixture-driven suites here make.
 /* eslint-disable no-magic-numbers */
@@ -57,16 +65,31 @@ const GREEN: ColorRGBA = [0.625, 0.5, 0.25, 1]
 const TEAL: ColorRGBA = [0.375, 0.75, 0.625, 1]
 const PURPLE: ColorRGBA = [0.875, 0.125, 0.5, 1]
 
+/* ORANGE reaches #5000 only through its type object. #6000's two competing
+ * colours: CYAN is its own association, MAGENTA its type's. CYAN wins. */
+const ORANGE: ColorRGBA = [0.875, 0.5, 0.125, 1]
+const CYAN: ColorRGBA = [0.125, 0.75, 0.875, 1]
+const MAGENTA: ColorRGBA = [0.75, 0.125, 0.625, 1]
+
 /* What an unwritten CanonicalMaterial field holds — the value every placement
  * of this model's shape used to report to the compat layer. */
 const UNWRITTEN_DEFAULT: ColorRGBA = [0.8, 0.8, 0.8, 1]
 
-/** Express IDs of the four products, and of the body #1000/#2000/#4000 share. */
+/** Express IDs of the six products, and of the body all but #3000 share. */
 const MAPPED_RED_EXPRESS_ID = 1000
 const MAPPED_BLUE_EXPRESS_ID = 2000
 const DIRECT_GREEN_EXPRESS_ID = 3000
 const MAPPED_ITEM_STYLED_EXPRESS_ID = 4000
+const TYPE_INHERITED_EXPRESS_ID = 5000
+const TYPE_OVERRIDDEN_EXPRESS_ID = 6000
 const SHARED_SOLID_EXPRESS_ID = 311
+
+/** #5000's type object and the IfcMaterial that type is associated with. */
+const PROXY_TYPE_ORANGE_EXPRESS_ID = 5100
+const MATERIAL_ORANGE_EXPRESS_ID = 700
+
+/** Distinct colours the fixture expects to reach a placement. */
+const EXTRACTED_MATERIAL_COUNT = 6
 
 let extraction: IfcGeometryExtraction
 let extractResult: ExtractResult
@@ -109,7 +132,7 @@ beforeAll( async () => {
 
 describe( 'shading-only surface styles', () => {
 
-  test( 'the fixture extracts and places all four products', () => {
+  test( 'the fixture extracts and places all six products', () => {
 
     expect( extractResult ).toBe( ExtractResult.COMPLETE )
     expect( [ ...placements.keys() ].sort( ( a, b ) => a - b ) ).toEqual( [
@@ -117,6 +140,8 @@ describe( 'shading-only surface styles', () => {
       MAPPED_BLUE_EXPRESS_ID,
       DIRECT_GREEN_EXPRESS_ID,
       MAPPED_ITEM_STYLED_EXPRESS_ID,
+      TYPE_INHERITED_EXPRESS_ID,
+      TYPE_OVERRIDDEN_EXPRESS_ID,
     ] )
   } )
 
@@ -138,7 +163,7 @@ describe( 'shading-only surface styles', () => {
       material.legacyColor.every( ( value, index ) => value === UNWRITTEN_DEFAULT[ index ] ) )
 
     // Guard the guard: this only means anything if styles were extracted at all.
-    expect( extraction.materials.size ).toBe( 4 )
+    expect( extraction.materials.size ).toBe( EXTRACTED_MATERIAL_COUNT )
     expect( defaulted ).toEqual( [] )
   } )
 } )
@@ -227,5 +252,87 @@ describe( 'style precedence on a mapped item', () => {
 
     expect( extracted ).toContain( TEAL.join( ',' ) )
     expect( extracted ).not.toContain( PURPLE.join( ',' ) )
+  } )
+} )
+
+
+describe( 'material inherited from the type object', () => {
+
+  test( 'a product whose material is only on its type still resolves one', () => {
+
+    const inherited = placements.get( TYPE_INHERITED_EXPRESS_ID )
+
+    // #5000 has no styled item and no association of its own: the ONLY route
+    // to a colour is IfcRelDefinesByType -> IfcBuildingElementProxyType ->
+    // IfcRelAssociatesMaterial. Before the fix this was undefined.
+    expect( inherited?.material ).toBeDefined()
+    expect( inherited!.material!.legacyColor ).toEqual( ORANGE )
+    expect( inherited!.material!.baseColor ).toEqual( ORANGE )
+  } )
+
+  test( 'inheritance goes through the type, not "any unclaimed material"', () => {
+
+    // The type's material has to land on the product's own local ID in
+    // relMaterialsMap, the same slot a direct association fills — that is what
+    // the mapped-item path reads per product. Asserting the map entry as well
+    // as the colour rules out a placement that came out orange because some
+    // fallback painted every unresolved product with the last material seen.
+    const inheritedLocalID =
+      extraction.model.getElementByExpressID( TYPE_INHERITED_EXPRESS_ID )!.localID
+    const typeLocalID =
+      extraction.model.getElementByExpressID( PROXY_TYPE_ORANGE_EXPRESS_ID )!.localID
+    const orangeMaterialLocalID =
+      extraction.model.getElementByExpressID( MATERIAL_ORANGE_EXPRESS_ID )!.localID
+
+    expect( extraction.materials.relMaterialsMap.get( inheritedLocalID ) )
+        .toBe( orangeMaterialLocalID )
+
+    // And the type object itself is never given an entry: it has no geometry,
+    // so an entry there would only be dead weight (and would make the
+    // occurrence's "already claimed" check ambiguous if local IDs collided
+    // with a product's).
+    expect( extraction.materials.relMaterialsMap.has( typeLocalID ) ).toBe( false )
+  } )
+
+  test( 'an occurrence association overrides the type\'s', () => {
+
+    const overridden = placements.get( TYPE_OVERRIDDEN_EXPRESS_ID )
+
+    // #6000 can reach both colours — cyan off its own IfcRelAssociatesMaterial,
+    // magenta off its type's — so this only passes if precedence is applied,
+    // not because the magenta was unreachable. The fixture orders the two
+    // associations occurrence-first/type-last precisely so an implementation
+    // that let the type overwrite as it swept fails here.
+    expect( overridden?.material ).toBeDefined()
+    expect( overridden!.material!.legacyColor ).toEqual( CYAN )
+    expect( overridden!.material!.legacyColor ).not.toEqual( MAGENTA )
+    expect( overridden!.material!.baseColor ).toEqual( CYAN )
+  } )
+
+  test( 'the overridden type material is never extracted', () => {
+
+    // Same reasoning as the mapped-item precedence case: the type's material
+    // is never consulted for #6000, so magenta never becomes a
+    // CanonicalMaterial. Distinguishes "type material lost the tie-break" from
+    // "type material was applied and then overwritten".
+    const extracted = [ ...extraction.materials.materials() ].map(
+        ( material ) => material.legacyColor.join( ',' ) )
+
+    expect( extracted ).toContain( CYAN.join( ',' ) )
+    expect( extracted ).toContain( ORANGE.join( ',' ) )
+    expect( extracted ).not.toContain( MAGENTA.join( ',' ) )
+  } )
+
+  test( 'both type-material products instance the shared body', () => {
+
+    // Neither product has geometry of its own, so a colour here is a colour on
+    // one instance of the map — the same per-instance override the red/blue
+    // pair exercises, reached through a type rather than a direct association.
+    const sharedBodyLocalID = placements.get( MAPPED_RED_EXPRESS_ID )!.geometryLocalID
+
+    expect( placements.get( TYPE_INHERITED_EXPRESS_ID )!.geometryLocalID )
+        .toBe( sharedBodyLocalID )
+    expect( placements.get( TYPE_OVERRIDDEN_EXPRESS_ID )!.geometryLocalID )
+        .toBe( sharedBodyLocalID )
   } )
 } )
