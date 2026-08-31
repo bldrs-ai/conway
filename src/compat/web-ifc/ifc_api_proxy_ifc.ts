@@ -2206,6 +2206,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * The classic web-ifc coordination matrix, held at identity on purpose
+   * — consumers stamp it onto the assembled model, so returning the real
+   * recentre here would apply it twice. For the frame this instance
+   * actually composed into its placements, see
+   * {@link getAppliedCoordination}.
    *
    * @param modelID
    * @return {Array<number>}
@@ -2226,11 +2231,24 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
-   * The coordination frame actually applied to emitted placements —
-   * the derived (or validated adopted) recenter, identity when no
-   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   * The coordination frame this instance actually composed into the
+   * placements it emitted — derived, supplied, or an adopted preview
+   * frame the durable walk has since validated; identity while nothing
+   * has been composed.
    *
-   * @return {Array<number>} column-major mat4
+   * Every emit site (classic `streamAllMeshes` /
+   * `streamAllMeshesWithTypes` / `loadAllGeometry`, and the deferred
+   * `streamNewMeshes_`) writes `demandCoordination_` at the moment it
+   * derives, which is what makes the classic and deferred opens report
+   * the same frame for the same model.
+   *
+   * The contract this satisfies — composition order, the
+   * `world = inverse(A) * rendered` inverse, and when identity is owed —
+   * is stated on `IfcAPI.GetAppliedCoordinationMatrix`.
+   *
+   * @return {Array<number>} column-major mat4, a fresh array; `identity`
+   * is a mutable field, so the copy is what keeps a caller from editing
+   * this instance's own zero frame.
    */
   getAppliedCoordination(): Array<number> {
     return [...(this.demandCoordination_ ?? this.identity)]

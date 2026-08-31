@@ -18,13 +18,23 @@
 // float32 vertex buffer a consumer actually uploads, and the transform it
 // actually applies, and check both against the coordinates the fixture
 // declares.
+//
+// The same fixture is what makes this the home for the
+// GetAppliedCoordinationMatrix contract (Share#1634), in the second
+// describe: a frame is only checkable against authored coordinates on a
+// model whose authored coordinates are known and far enough from the
+// origin that a wrong frame cannot pass by coincidence.
 
 import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
 import { IfcAPI } from './ifc_api'
-import { LARGE_COORDINATE_BUDGET_M } from './coordination_f64'
+import {
+  IDENTITY_MAT4,
+  LARGE_COORDINATE_BUDGET_M,
+  NORMALIZE_MAT_F64,
+} from './coordination_f64'
 import {
   exceedsLargeCoordinateBudget,
   normalizeWithCentreF64,
@@ -101,6 +111,58 @@ function transformPoint( m: ArrayLike< number >, p: number[] ): number[] {
   ]
 }
 
+/**
+ * Invert a column-major affine 4x4 — the shape every coordination frame
+ * has (`scale * NormalizeMat * translate`, bottom row 0,0,0,1).
+ *
+ * This is the consumer's half of the accessor's contract: what a
+ * measurement or georeferenced-export path has to do with the returned
+ * matrix to get from a rendered point back to authored coordinates. It
+ * is hand-rolled rather than taken from gl-matrix deliberately —
+ * gl-matrix's `mat4` is Float32Array-backed (see coordination_f64), and
+ * float32 at LV95 magnitude quantizes at ~0.25 m, three orders coarser
+ * than the tolerance the round trip below is asserted to.
+ *
+ * @param m The frame to invert.
+ * @return {number[]} Its inverse, column-major.
+ */
+function invertAffine( m: ArrayLike< number > ): number[] {
+
+  // aRC: row R, column C of the 3x3 linear block.
+  const a00 = m[ 0 ], a01 = m[ 4 ], a02 = m[ 8 ]
+  const a10 = m[ 1 ], a11 = m[ 5 ], a12 = m[ 9 ]
+  const a20 = m[ 2 ], a21 = m[ 6 ], a22 = m[ 10 ]
+
+  const det =
+    a00 * ( a11 * a22 - a12 * a21 ) -
+    a01 * ( a10 * a22 - a12 * a20 ) +
+    a02 * ( a10 * a21 - a11 * a20 )
+
+  expect( Math.abs( det ) ).toBeGreaterThan( 0 )
+
+  const i00 = ( a11 * a22 - a12 * a21 ) / det
+  const i01 = ( a02 * a21 - a01 * a22 ) / det
+  const i02 = ( a01 * a12 - a02 * a11 ) / det
+  const i10 = ( a12 * a20 - a10 * a22 ) / det
+  const i11 = ( a00 * a22 - a02 * a20 ) / det
+  const i12 = ( a02 * a10 - a00 * a12 ) / det
+  const i20 = ( a10 * a21 - a11 * a20 ) / det
+  const i21 = ( a01 * a20 - a00 * a21 ) / det
+  const i22 = ( a00 * a11 - a01 * a10 ) / det
+
+  const tx = m[ 12 ], ty = m[ 13 ], tz = m[ 14 ]
+
+  return [
+    i00, i10, i20, 0,
+    i01, i11, i21, 0,
+    i02, i12, i22, 0,
+    -( i00 * tx + i01 * ty + i02 * tz ),
+    -( i10 * tx + i11 * ty + i12 * tz ),
+    -( i20 * tx + i21 * ty + i22 * tz ),
+    1,
+  ]
+}
+
 interface Placement {
   expressID: number
   geometryExpressID: number
@@ -109,12 +171,14 @@ interface Placement {
 
 let api: IfcAPI
 let buffer: Uint8Array
+let nearOrigin: Uint8Array
 
 beforeAll( async () => {
   api = new IfcAPI()
   await api.Init()
 
   buffer = new Uint8Array( fs.readFileSync( 'data/lv95_baked_geometry.ifc' ) )
+  nearOrigin = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
 }, 120000 )
 
 /**
@@ -317,6 +381,265 @@ describe( 'COORDINATE_TO_ORIGIN with grid coordinates baked into geometry', () =
         expect( second.flatTransformation[ 14 ] - first.flatTransformation[ 14 ] )
             .toBeCloseTo( -20, 6 )
       }, 120000 )
+} )
+
+/**
+ * Drain a deferred model, discarding the payloads.
+ *
+ * @param modelID The open deferred model.
+ * @return {number} How many batches did work.
+ */
+function drain( modelID: number ): number {
+
+  let batches = 0
+
+  for ( ; ; ) {
+
+    const { extracted, remaining } =
+      api.ExtractGeometryBatch( modelID, 1, () => { /* payload unused */ } )
+
+    if ( remaining === 0 && extracted === 0 ) {
+      return batches
+    }
+
+    ++batches
+  }
+}
+
+describe( 'GetAppliedCoordinationMatrix (Share#1634)', () => {
+
+  // The accessor exists because GetCoordinationMatrix cannot answer this:
+  // it is pinned at identity so consumers can stamp it onto an assembled
+  // model without applying the recentre twice. So every assertion here is
+  // about the OTHER question — what offset did the engine actually apply,
+  // and can a consumer undo it from the return value alone.
+  //
+  // No CloseModel anywhere in this file, deliberately: closing tears down
+  // wasm state the next open in the same IfcAPI still needs, and the
+  // symptom is not an error but a later model whose geometry all arrives
+  // at the origin — which is to say, tests that pass while measuring
+  // nothing.
+
+  test( 'its inverse maps a rendered point back to the authored coordinates',
+      async () => {
+
+        const [ modelID, placements ] = await openAndPump()
+        const applied = api.GetAppliedCoordinationMatrix( modelID )
+
+        // The frame's own contents, against the fixture rather than
+        // against a re-derivation: the recentre is the quantized LV95
+        // anchor, carried through the Z-up -> Y-up change of basis, so
+        // north ends up in +Z and the up axis picks up no offset.
+        expect( applied[ 12 ] ).toBeCloseTo( -GRID_EASTING, 6 )
+        expect( applied[ 13 ] ).toBeCloseTo( 0, 6 )
+        expect( applied[ 14 ] ).toBeCloseTo( GRID_NORTHING, 6 )
+
+        // Non-vacuous: a frame that did nothing would make the round trip
+        // below true for any implementation, including one that returned
+        // identity.
+        expect( Math.max( Math.abs( applied[ 12 ] ), Math.abs( applied[ 14 ] ) ) )
+            .toBeGreaterThan( LARGE_COORDINATE_BUDGET_M )
+
+        const inverse = invertAffine( applied )
+
+        // Guard on the helper itself, so a wrong inverse cannot be read
+        // as a wrong accessor.
+        const probe = [ 3.5, -7.25, 11.125 ]
+        const roundTrip =
+          transformPoint( inverse, transformPoint( applied, probe ) )
+
+        for ( let axis = 0; axis < 3; ++axis ) {
+          expect( roundTrip[ axis ] ).toBeCloseTo( probe[ axis ], 9 )
+        }
+
+        // The acceptance itself: emitted placement x uploaded vertex is
+        // the point on screen; inverse(applied) x that is the coordinate
+        // the file authored. Nothing else about the model is consulted —
+        // not the unit scale, not the axis convention, not the anchor.
+        for ( const placement of placements ) {
+
+          const source = SOURCE_BOXES.get( placement.expressID )!
+
+          const authoredMin = [ Infinity, Infinity, Infinity ]
+          const authoredMax = [ -Infinity, -Infinity, -Infinity ]
+
+          for ( const position of
+            uploadedPositions( modelID, placement.geometryExpressID ) ) {
+
+            const rendered =
+              transformPoint( placement.flatTransformation, position )
+            const authored = transformPoint( inverse, rendered )
+
+            for ( let axis = 0; axis < 3; ++axis ) {
+              authoredMin[ axis ] = Math.min( authoredMin[ axis ], authored[ axis ] )
+              authoredMax[ axis ] = Math.max( authoredMax[ axis ], authored[ axis ] )
+            }
+          }
+
+          for ( let axis = 0; axis < 3; ++axis ) {
+            // 1 mm, the same bound the forward assertion uses: the
+            // uploaded vertices are float32 at ~2 m (ULP ~2e-7 m) and
+            // everything after them is float64, so this is still 250x
+            // tighter than the 0.25 m quantization the recentre removes.
+            expect( authoredMin[ axis ] ).toBeCloseTo( source.min[ axis ], 3 )
+            expect( authoredMax[ axis ] ).toBeCloseTo( source.max[ axis ], 3 )
+          }
+        }
+      }, 120000 )
+
+  test( 'a near-origin model reports a frame with no offset in it', async () => {
+
+    const modelID = await api.OpenModelStreamed(
+        nearOrigin, { ...SETTINGS, DEFER_GEOMETRY: true, STREAMING_CONSUMER: true } )
+
+    expect( drain( modelID ) ).toBeGreaterThan( 0 )
+
+    const applied = api.GetAppliedCoordinationMatrix( modelID )
+
+    // Model-zero: below LARGE_COORDINATE_BUDGET_M the recentre is
+    // skipped entirely so the file keeps the coordinates it authored
+    // (COORDINATION_SNAP_M). Exact zeros, not near-zeros — the
+    // translation was never computed, it was declined.
+    expect( applied[ 12 ] ).toBe( 0 )
+    expect( applied[ 13 ] ).toBe( 0 )
+    expect( applied[ 14 ] ).toBe( 0 )
+
+    // But NOT identity, and this is the trap the doc comment warns about:
+    // the frame still carries the Z-up -> Y-up basis change and the unit
+    // scale that the placements were composed under, so a consumer that
+    // shortcuts on "no offset applied" and skips the inverse reads every
+    // point in the wrong axis convention.
+    const scale = Math.hypot( applied[ 0 ], applied[ 1 ], applied[ 2 ] )
+
+    expect( scale ).toBeGreaterThan( 0 )
+
+    for ( let element = 0; element < 16; ++element ) {
+
+      // Bottom row is unscaled; the three columns above it are the
+      // normalize matrix times the linear scaling factor.
+      const expected = ( element % 4 ) === 3 ?
+        NORMALIZE_MAT_F64[ element ] : NORMALIZE_MAT_F64[ element ] * scale
+
+      expect( applied[ element ] ).toBeCloseTo( expected, 9 )
+    }
+
+  }, 120000 )
+
+  test( 'an open without COORDINATE_TO_ORIGIN reports exact identity',
+      async () => {
+
+        // The other half of "identity when no recentre was applied": with
+        // the setting off nothing is composed at all, the placements come
+        // back in raw authored space, and identity is the truthful report
+        // — inverse(identity) x rendered is the authored point.
+        const modelID = await api.OpenModelStreamed(
+            buffer,
+            {
+              ...SETTINGS,
+              COORDINATE_TO_ORIGIN: false,
+              DEFER_GEOMETRY: true,
+              STREAMING_CONSUMER: true,
+            } )
+
+        const translations: number[][] = []
+
+        for ( ; ; ) {
+
+          const { extracted, remaining } = api.ExtractGeometryBatch(
+              modelID, 2, ( mesh ) => {
+
+                for ( let where = 0; where < mesh.geometries.size(); ++where ) {
+
+                  const t = mesh.geometries.get( where ).flatTransformation
+
+                  translations.push( [ t[ 12 ], t[ 13 ], t[ 14 ] ] )
+                }
+              } )
+
+          if ( remaining === 0 && extracted === 0 ) {
+            break
+          }
+        }
+
+        expect( api.GetAppliedCoordinationMatrix( modelID ) )
+            .toEqual( [ ...IDENTITY_MAT4 ] )
+
+        // Non-vacuous: the fixture really is georeferenced, so identity
+        // here means "nothing was applied" rather than "nothing to apply".
+        expect( translations.length ).toBe( SOURCE_BOXES.size )
+        expect( Math.max( ...translations.flat().map( Math.abs ) ) )
+            .toBeGreaterThan( LARGE_COORDINATE_BUDGET_M )
+
+      }, 120000 )
+
+  test( 'the frame is identical before and after later batches', async () => {
+
+    // Unit batches over a four-product fixture, so the frame is derived
+    // on the first one and re-read three more times. What this pins is
+    // the claim the accessor's doc makes to consumers: the value is
+    // stable for the life of the model once derived, so a measurement
+    // taken against an early read stays valid.
+    const modelID = await api.OpenModelStreamed(
+        buffer, { ...SETTINGS, DEFER_GEOMETRY: true, STREAMING_CONSUMER: true } )
+
+    const reads: number[][] = []
+
+    for ( ; ; ) {
+
+      const { extracted, remaining } =
+        api.ExtractGeometryBatch( modelID, 1, () => { /* payload unused */ } )
+
+      if ( remaining === 0 && extracted === 0 ) {
+        break
+      }
+
+      reads.push( api.GetAppliedCoordinationMatrix( modelID ) )
+    }
+
+    // Fewer than two reads and the comparison below asserts nothing.
+    expect( reads.length ).toBeGreaterThan( 1 )
+
+    for ( const read of reads ) {
+      expect( read ).toEqual( reads[ 0 ] )
+    }
+
+    // ...and what is stable is the real frame, not a stable identity.
+    expect( reads[ 0 ][ 12 ] ).toBeCloseTo( -GRID_EASTING, 6 )
+
+  }, 120000 )
+
+  test( 'the classic and deferred opens report the same frame', async () => {
+
+    // Both derive through deriveCoordinationF64, but from separate
+    // walks in separate proxies, and each records the result at its own
+    // emit site. If one of those sites stops recording, the consumer's
+    // answer to "where is this model really" depends on which open Share
+    // happened to take — which is the defect this accessor exists to
+    // remove, not one it is allowed to introduce.
+    const [ deferredID ] = await openAndPump()
+    const deferred = api.GetAppliedCoordinationMatrix( deferredID )
+
+    const classicID = api.OpenModel( buffer, { ...SETTINGS } )
+
+    expect( classicID ).toBeGreaterThanOrEqual( 0 )
+
+    api.StreamAllMeshes( classicID, () => { /* payload unused */ } )
+
+    const classic = api.GetAppliedCoordinationMatrix( classicID )
+
+    // Bit-identical, not merely close: the same derivation over the same
+    // anchor. (Even a differing anchor would agree here, since both sit
+    // inside one COORDINATION_SNAP_M cell — which is why the assertion
+    // below checks the frame is the georeferenced one rather than
+    // resting on the equality alone.)
+    expect( classic ).toEqual( deferred )
+    expect( classic[ 12 ] ).toBeCloseTo( -GRID_EASTING, 6 )
+    expect( classic[ 14 ] ).toBeCloseTo( GRID_NORTHING, 6 )
+
+    // And the classic identity contract is untouched on both.
+    expect( api.GetCoordinationMatrix( classicID ) ).toEqual( [ ...IDENTITY_MAT4 ] )
+    expect( api.GetCoordinationMatrix( deferredID ) ).toEqual( [ ...IDENTITY_MAT4 ] )
+  }, 120000 )
 } )
 
 describe( 'normalizeWithCentreF64', () => {
