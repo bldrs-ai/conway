@@ -4,7 +4,8 @@ import { IfcGeometryExtraction } from './ifc_geometry_extraction'
 import { ParseResult } from '../step/parsing/step_parser'
 import IfcStepParser from './ifc_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
-import { ConwayGeometry } from '../../dependencies/conway-geom'
+import { ConwayGeometry, ParamsGetIfcCircle, ParamsGetIfcTrimmedCurve,
+  NativeTransform3x3, NativeTransform4x4 } from '../../dependencies/conway-geom'
 import { ColorRGBA } from '../core/canonical_material'
 import { ExtractResult } from '../core/shared_constants'
 
@@ -138,4 +139,83 @@ describe('Ifc Geometry Extraction', () => {
     expect(destroy()).toBe(false)
   })
 
+})
+
+describe('getIfcCircle 2D cartesian trim (test-models#20 driveway)', () => {
+
+  // Pins conway-geom#... : a 2D IfcCircle trimmed by two distinct Cartesian
+  // points (IfcTrimmingPreference.CARTESIAN, the case used by the
+  // IFCCOMPOSITECURVE driveway boundary in ISSUE_126_model.ifc /
+  // bldrs-ai/test-models#20) must tessellate the arc between those two
+  // points, not collapse to the start point twice. Before the fix, the 2D
+  // byPos branch of ConwayGeometryProcessor::getIfcCircle computed both
+  // startDegrees and endDegrees from trim1Cartesian2D (a copy/paste of the
+  // start-angle calculation), so any 2D Cartesian-trimmed circle produced a
+  // zero-length arc regardless of trim2 — exactly what turned the
+  // driveway's two IFCTRIMMEDCURVE/IFCCIRCLE segments into straight
+  // 2-point stand-ins instead of curves.
+  test('tessellates a quarter arc between two distinct trim points', async () => {
+    const conwayGeometry: ConwayGeometry = new ConwayGeometry()
+    const initializationStatus = await conwayGeometry.initialize()
+
+    expect(initializationStatus).toBe(true)
+
+    const radius = 100
+
+    // Identity placement: circle centred at the origin, X/Y axes aligned.
+    const axis2Placement2D =
+      (new (conwayGeometry.wasmModule!.Glmdmat3)) as NativeTransform3x3
+    const axis2Placement3D =
+      (new (conwayGeometry.wasmModule!.Glmdmat4)) as NativeTransform4x4
+
+    const paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve = {
+      masterRepresentation: 0, // IfcTrimmingPreference.CARTESIAN
+      dimensions: 2,
+      senseAgreement: true,
+      // 0 degrees
+      trim1Cartesian2D: { x: radius, y: 0 },
+      trim1Cartesian3D: { x: 0, y: 0, z: 0 },
+      trim1Double: 0,
+      // 90 degrees — distinct from trim1, unlike the start point.
+      trim2Cartesian2D: { x: 0, y: radius },
+      trim2Cartesian3D: { x: 0, y: 0, z: 0 },
+      trim2Double: 0,
+      trimExists: true,
+    }
+
+    const parameters: ParamsGetIfcCircle = {
+      dimensions: 2,
+      axis2Placement2D,
+      axis2Placement3D,
+      radius,
+      radius2: radius,
+      paramsGetIfcTrimmedCurve,
+      isEdge: false,
+    }
+
+    const curve = conwayGeometry.getIfcCircle(parameters)
+    const pointCount = curve.getPointsSize()
+
+    // A degenerate (zero-length) arc collapses to 2 duplicate points; a real
+    // quarter-circle tessellation is many more than that.
+    expect(pointCount).toBeGreaterThan(2)
+
+    const start = curve.get2d(0)
+    const end = curve.get2d(pointCount - 1)
+    const precisionDigits = 6
+
+    expect(start.x).toBeCloseTo(radius, precisionDigits)
+    expect(start.y).toBeCloseTo(0, precisionDigits)
+    expect(end.x).toBeCloseTo(0, precisionDigits)
+    expect(end.y).toBeCloseTo(radius, precisionDigits)
+
+    // A genuine arc bulges away from the chord between its endpoints; the
+    // degenerate-arc bug left every intermediate point pinned to the start.
+    const midpoint = curve.get2d(Math.floor(pointCount / 2))
+    const distanceFromStart = Math.hypot(midpoint.x - start.x, midpoint.y - start.y)
+
+    expect(distanceFromStart).toBeGreaterThan(radius / 4)
+
+    conwayGeometry.destroy()
+  })
 })
