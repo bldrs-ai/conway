@@ -1,3 +1,4 @@
+import { DemandPrepYieldLike } from '../../core/progress_log'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcGeometry, RawLineData, Vector } from './ifc_api'
 import { PropertiesPassthrough } from './properties_passthrough'
@@ -44,6 +45,14 @@ export interface IfcApiModelPassthrough {
    * deferred pump (AP214/STEP) have no frame to supply.
    */
   setCoordinationFrame?( matrix?: number[] ): void
+
+  /**
+   * What building this model's demand worklists cost (conway extension,
+   * M3) — see IfcAPI.GetDemandPrepYield. Optional and undefined until the
+   * first pump: passthroughs with no demand worklists (AP214/STEP) never
+   * build any, and a deferred model has none before it pumps.
+   */
+  readonly demandPrepYield?: DemandPrepYieldLike
 
   /**
    * Set the resident-geometry budget in bytes (conway extension, M3) —

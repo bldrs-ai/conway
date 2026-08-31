@@ -224,6 +224,90 @@ export function formatPreviewLine( preview: PreviewYieldLike ): string {
     `${preview.retried} retried`
 }
 
+/**
+ * What building a deferred model's demand worklists cost — structurally
+ * typed against `IfcApiProxyIfc.demandPrepYield` so this module stays
+ * import-free, exactly as {@link PreviewYieldLike} is against the preview
+ * channels.
+ *
+ * Wall time, not CPU: on a windowed source the build awaits paging, and
+ * {@link windowed} says so rather than leaving the number to be read as
+ * compute.
+ */
+export interface DemandPrepYieldLike {
+  /** Wall ms for the whole worklist build, end to end. */
+  totalMs: number
+  /**
+   * Wall ms enumerating the whole model's candidates. Every worker in a
+   * pool pays this in full — a shard narrows what is BUILT, not what is
+   * walked (conway#682).
+   */
+  candidatesMs: number
+  /**
+   * Wall ms in the dispatch-key pass. Undefined on an unsharded build,
+   * which computes no keys at all — so this is the shard-only term, and
+   * absent rather than zero because "not run" and "ran instantly" are
+   * different measurements.
+   */
+  keysMs?: number
+  /** Products the whole-model walk produced, before any shard filter. */
+  candidateProducts: number
+  /** Rel-aggregates the whole-model walk produced, before any filter. */
+  candidateAggregates: number
+  /** Products this instance kept — equal to the candidates when unsharded. */
+  keptProducts: number
+  /** Rel-aggregates this instance kept. */
+  keptAggregates: number
+  /** The claimed shard index, when one was claimed. */
+  shardIndex?: number
+  /** The claimed shard count, when one was claimed. */
+  shardCount?: number
+  /** Whether the build paged a windowed source, so its wall time includes I/O. */
+  windowed: boolean
+}
+
+/**
+ * The prep line: what a deferred model's worklist build cost, split into
+ * the part every worker replicates and the part only a shard runs.
+ *
+ * Not a stage, for the same reason the Preview line is not one: the build
+ * happens *inside* the geometry phase, on the first pump call, so feeding
+ * it through onProgress would split Geometry across two lines. It is also
+ * the reason the window needed an in-engine timer at all — an external
+ * probe can only difference two `ExtractGeometryBatch` calls, and the pump
+ * floors a batch at one product, so every window it can time carries a
+ * product of real geometry inside it. On two of four measured models that
+ * geometry was larger than the term being measured
+ * (`design/new/load-performance-ledger.md` §11.4, conway#682).
+ *
+ * The candidate-versus-kept counts are on the line rather than only the
+ * times because they are what makes the replication legible: a shard that
+ * walked 46,166 products to keep 11,542 has done the other three shards'
+ * enumeration as well as its own.
+ *
+ * @param prep The worklist build's reported cost.
+ * @return {string} e.g. "Prep: worklists 0.685s (candidates 0.412s, keys
+ * 0.264s), shard 1/4 kept 11542 of 46166 products, 203 of 812 aggregates"
+ */
+export function formatDemandPrepLine( prep: DemandPrepYieldLike ): string {
+
+  const keys = prep.keysMs !== void 0 ?
+    `, keys ${formatSeconds( prep.keysMs )}` : ''
+
+  const scope = prep.shardCount !== void 0 ?
+    `shard ${prep.shardIndex}/${prep.shardCount} kept ` +
+      `${prep.keptProducts} of ${prep.candidateProducts} products, ` +
+      `${prep.keptAggregates} of ${prep.candidateAggregates} aggregates` :
+    `${prep.candidateProducts} products, ` +
+      `${prep.candidateAggregates} aggregates`
+
+  const windowed = prep.windowed ? ', windowed' : ''
+
+  return `Prep: worklists ${formatSeconds( prep.totalMs )} ` +
+    `(candidates ${formatSeconds( prep.candidatesMs )}${keys}), ` +
+    `${scope}${windowed}`
+}
+
 interface StageState {
   label: string
   startElapsedMs: number

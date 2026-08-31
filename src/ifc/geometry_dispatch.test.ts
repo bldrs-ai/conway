@@ -365,3 +365,161 @@ describe( 'dispatch keys on a windowed source', () => {
             .toEqual( expectedAggregates.slice().sort( ( a, b ) => a - b ) )
       }, 240000 )
 } )
+
+
+describe( 'demand prep yield', () => {
+
+  test( 'is absent until a build runs, then reports what that build cost',
+      async () => {
+
+        // The build is lazy — it happens inside the FIRST pump call — and
+        // that laziness is exactly why an external probe cannot time it
+        // without a product of geometry riding along. So the yield must be
+        // undefined beforehand rather than zeroed: "not measured" and
+        // "measured as nothing" are different answers, and the ledger's
+        // discipline is to print the first as absent (conway#682).
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const { modelID, passthrough } =
+          await openDeferred( api, 'data/mapped_shared_representation.ifc', false )
+
+        expect( api.GetDemandPrepYield( modelID ) ).toBeUndefined()
+
+        passthrough.ensureDemandWorklists_()
+
+        const prep = api.GetDemandPrepYield( modelID )
+
+        expect( prep ).toBeDefined()
+
+        // An unsharded build takes the `shard_ === void 0` return before a
+        // single dispatch key is computed, so the key term is ABSENT. This
+        // is the asymmetry the ledger's §11.4 turns on: the unsharded
+        // reference does not perform this work, so it cannot be the
+        // denominator for it.
+        expect( prep!.keysMs ).toBeUndefined()
+        expect( prep!.shardCount ).toBeUndefined()
+        expect( prep!.windowed ).toBe( false )
+
+        // Nothing was filtered, so the walk and the worklist agree.
+        expect( prep!.candidateProducts )
+            .toBe( ( passthrough.demandProducts_ ?? [] ).length )
+        expect( prep!.keptProducts ).toBe( prep!.candidateProducts )
+        expect( prep!.keptAggregates ).toBe( prep!.candidateAggregates )
+        expect( prep!.candidateProducts ).toBeGreaterThan( 0 )
+
+        // Wall time is a real interval, and the parts fit inside the whole.
+        // Bounded rather than pinned: Date.now() is millisecond-resolution
+        // and this fixture builds in less than one, so anything stricter
+        // than an ordering would be asserting the clock.
+        expect( prep!.candidatesMs ).toBeGreaterThanOrEqual( 0 )
+        expect( prep!.totalMs ).toBeGreaterThanOrEqual( prep!.candidatesMs )
+
+        api.CloseModel( modelID )
+      }, 240000 )
+
+  test( 'every shard walks the WHOLE model, which is what makes prep replicated',
+      async () => {
+
+        // The measurement conway#682 is filed on, asserted rather than
+        // timed. A shard narrows what is BUILT, not what is walked: each
+        // worker's `candidateProducts` is the whole model's count, while its
+        // `keptProducts` is only its own share. So N workers between them
+        // enumerate the model N times and build it once, and the gap
+        // between the two columns is the replication — visible here without
+        // depending on a clock.
+        const api = new IfcAPI()
+
+        await api.Init()
+
+        const fixture = 'data/mapped_shared_representation.ifc'
+        const shardCount = 2
+
+        const whole = await openDeferred( api, fixture, false )
+
+        whole.passthrough.ensureDemandWorklists_()
+
+        const wholeProducts = ( whole.passthrough.demandProducts_ ?? [] ).length
+        const wholeAggregates =
+          ( whole.passthrough.demandAggregates_ ?? [] ).length
+
+        expect( wholeProducts ).toBeGreaterThan( 1 )
+
+        api.CloseModel( whole.modelID )
+
+        let keptProducts = 0
+        let keptAggregates = 0
+
+        for ( let index = 0; index < shardCount; ++index ) {
+
+          const shardModel = await openDeferred( api, fixture, false )
+
+          expect( api.SetGeometryShard(
+              shardModel.modelID, { index, count: shardCount } ) ).toBe( true )
+
+          shardModel.passthrough.ensureDemandWorklists_()
+
+          const prep = api.GetDemandPrepYield( shardModel.modelID )
+
+          expect( prep ).toBeDefined()
+
+          // Every shard walked the whole model...
+          expect( prep!.candidateProducts ).toBe( wholeProducts )
+          expect( prep!.candidateAggregates ).toBe( wholeAggregates )
+
+          // ...and ran the dispatch-key pass the unsharded build skipped.
+          expect( prep!.keysMs ).toBeDefined()
+          expect( prep!.keysMs ).toBeGreaterThanOrEqual( 0 )
+
+          expect( prep!.shardIndex ).toBe( index )
+          expect( prep!.shardCount ).toBe( shardCount )
+
+          // ...but kept only its own share of it.
+          expect( prep!.keptProducts ).toBeLessThan( prep!.candidateProducts )
+          expect( prep!.keptProducts )
+              .toBe( ( shardModel.passthrough.demandProducts_ ?? [] ).length )
+
+          keptProducts += prep!.keptProducts
+          keptAggregates += prep!.keptAggregates
+
+          api.CloseModel( shardModel.modelID )
+        }
+
+        // The partition closes, so the walk really was N times the build:
+        // shardCount x wholeProducts products enumerated to produce
+        // wholeProducts built.
+        expect( keptProducts ).toBe( wholeProducts )
+        expect( keptAggregates ).toBe( wholeAggregates )
+      }, 240000 )
+
+  test( 'a windowed build marks its wall time as containing paging', async () => {
+
+    // The async builder awaits `ensureAggregateTargetLocalIDs` and
+    // `computeDispatchKeys`, both of which page a windowed source. Its
+    // `totalMs` is therefore not comparable with a resident worker's
+    // without knowing that, so the flag travels with the number rather
+    // than being inferred from the configuration by whoever reads it.
+    const api = new IfcAPI()
+
+    await api.Init()
+
+    const { modelID, passthrough } =
+      await openDeferred( api, 'data/aggregate_master_voids.ifc', true )
+
+    expect( api.SetGeometryShard( modelID, { index: 0, count: 2 } ) ).toBe( true )
+
+    await passthrough.ensureDemandWorklistsAsync_()
+
+    const prep = api.GetDemandPrepYield( modelID )
+
+    expect( prep ).toBeDefined()
+    expect( prep!.windowed ).toBe( true )
+    expect( prep!.keysMs ).toBeDefined()
+    expect( prep!.shardCount ).toBe( 2 )
+    expect( prep!.keptProducts )
+        .toBe( ( passthrough.demandProducts_ ?? [] ).length )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+} )

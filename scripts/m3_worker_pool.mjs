@@ -35,6 +35,18 @@
  * product is not the unsharded reference's first product; see `prepProbe`
  * and `runPrepProbe`.
  *
+ * Each level now also prints a `direct (engine)` line, read from
+ * `IfcAPI.GetDemandPrepYield` (conway#682). That figure is timed inside
+ * `ensureDemandWorklists_` itself, so it contains no geometry at all and
+ * needs neither the tail correction nor an error bar for the product that
+ * correction stands in for — which is what lets the candidate/key split
+ * resolve on models where the differenced estimate reported
+ * `NOT RESOLVED` (ledger §11.4: Snowdon and MB-Khaya). The differenced
+ * lines stay: agreement between the two is what says the direct timer
+ * measures the window the sweep's `dupFirstBatch` ratio is about, and
+ * `prepMs` legitimately includes one-time extraction-path warmup that the
+ * direct figure, by construction, excludes.
+ *
  * D3D needs `--max-old-space-size=12288`; nothing here calls `gc()`, so
  * `--expose-gc` buys nothing and is deliberately not in that line.
  */
@@ -179,6 +191,18 @@ function prepProbe( api, modelID, task, openMs ) {
   const tWindow = performance.now()
   const { extracted } = api.ExtractGeometryBatch( modelID, batch, () => {} )
   const windowMs = performance.now() - tWindow
+
+  // The engine's own measurement of the same window, read after the call
+  // that built the worklists. It carries NO geometry — the timer closes
+  // where the build ends, before the pump starts — so it needs neither the
+  // tail correction below nor an error bar for the product the correction
+  // stands in for, and it resolves on every model rather than only the two
+  // whose prep is large against one product's extraction (conway#682,
+  // ledger §11.4). Everything else here is left in place: the differenced
+  // estimate is what says the direct one is measuring the same window, and
+  // `prepMs` still legitimately contains one-time extraction-path warmup
+  // that the direct figure, by construction, does not.
+  const directPrep = api.GetDemandPrepYield( modelID )
   const tailMs = []
 
   for ( let call = 0; call < PROBE_TAIL_CALLS; ++call ) {
@@ -211,6 +235,13 @@ function prepProbe( api, modelID, task, openMs ) {
     prepMs: geometryMs === void 0 ? void 0 : windowMs - geometryMs,
     geometryMs,
     extracted,
+    // Flattened rather than passed whole: this crosses a worker_threads
+    // postMessage boundary, so it has to be plain data.
+    directTotalMs: directPrep?.totalMs,
+    directCandidatesMs: directPrep?.candidatesMs,
+    directKeysMs: directPrep?.keysMs,
+    directCandidateProducts: directPrep?.candidateProducts,
+    directKeptProducts: directPrep?.keptProducts,
   }
 }
 
@@ -333,10 +364,45 @@ async function runPrepProbe( sweep, runPool, runs ) {
             'out of the window and no split of it would mean anything' )
       }
 
+      // Refused for the same reason the tail refusal above is: a level
+      // whose workers did not all report the engine timer would sum a
+      // partial set and print it as if it were the level's, and that is
+      // the "looks measured, is not" shape this probe keeps running into.
+      const untimed = results.filter( ( r ) => r.directTotalMs === void 0 )
+
+      if ( untimed.length > 0 ) {
+
+        throw new Error(
+            `prep probe: ${untimed.length} of ${count} worker(s) reported no ` +
+            'demand-prep yield — GetDemandPrepYield returned undefined, so ' +
+            'either the model was not opened deferred or this build predates ' +
+            'conway#682' )
+      }
+
       samples.push( {
         summed: results.reduce( ( sum, r ) => sum + r.prepMs, 0 ),
         geometry: results.reduce( ( sum, r ) => sum + r.geometryMs, 0 ),
         uncertainty: results.reduce( ( sum, r ) => sum + spread( r.tailMs ), 0 ),
+        // The engine's own split of the same window, summed the same way.
+        directSummed: results.reduce( ( sum, r ) => sum + r.directTotalMs, 0 ),
+        directCandidates:
+          results.reduce( ( sum, r ) => sum + r.directCandidatesMs, 0 ),
+        directKeys:
+          results.reduce( ( sum, r ) => sum + ( r.directKeysMs ?? 0 ), 0 ),
+        // Whether the key pass RAN, carried separately from what it cost.
+        // The engine reports `keysMs` absent rather than zero precisely so
+        // that "did not run" and "ran inside one clock tick" stay distinct,
+        // and summing the durations throws that away again: a sharded level
+        // on a small model can sum to 0 ms and is then indistinguishable
+        // from an unsharded one, which would print the sharded branch as
+        // `keys none (unsharded)` (codex round 1). So the flag travels, and
+        // the report branches on it rather than on the duration.
+        directKeyedWorkers:
+          results.filter( ( r ) => r.directKeysMs !== void 0 ).length,
+        directWorkers: results.length,
+        directWalked:
+          results.reduce( ( sum, r ) => sum + r.directCandidateProducts, 0 ),
+        directKept: results.reduce( ( sum, r ) => sum + r.directKeptProducts, 0 ),
         // The uncorrected first-batch window, kept because the two N=1
         // levels below are differenced rather than tail-corrected — see the
         // batch-BATCH_SIZE report.
@@ -400,6 +466,41 @@ async function runPrepProbe( sweep, runPool, runs ) {
         '(NOT RESOLVED: smaller than its own spread)' )
   }
 
+  /**
+   * The engine timer's own reading of a level, printed beside the
+   * differenced one.
+   *
+   * This is the line conway#682 asked for. It needs no error bar and no
+   * `NOT RESOLVED` case: `keysMs` is the dispatch-key pass as the code
+   * measured it, not a difference between two configurations that pump
+   * different products, so a model whose prep is smaller than one product
+   * of geometry still reports it. The walked/kept counts are on the line
+   * because they are the replication itself — a level whose workers walked
+   * four times what they kept has enumerated the model four times.
+   *
+   * @param {object} chosen The median repetition's sample.
+   * @return {string} The direct line.
+   */
+  function directLine( chosen ) {
+
+    // Branching on whether the pass RAN, never on what it cost — a sharded
+    // level whose key pass fits inside one clock tick sums to 0 ms and must
+    // still read as sharded. A level with SOME keyed workers is not a
+    // configuration this probe can produce (every worker at a level takes
+    // the same shard descriptor), so it is named rather than averaged away.
+    const keys = chosen.directKeyedWorkers === 0 ?
+      ', keys none (unsharded)' :
+      `, keys ${toS( chosen.directKeys )}s` +
+        ( chosen.directKeyedWorkers === chosen.directWorkers ? '' :
+          ` [MIXED: only ${chosen.directKeyedWorkers} of ` +
+          `${chosen.directWorkers} workers ran the key pass]` )
+
+    return '                   direct (engine)     ' +
+      `${toS( chosen.directSummed )}s summed ` +
+      `(candidates ${toS( chosen.directCandidates )}s${keys}), ` +
+      `walked ${chosen.directWalked} products to keep ${chosen.directKept}`
+  }
+
   const unsharded = await level( 1, () => void 0 )
   const shardOfOne = await level( 1, () => ( { index: 0, count: 1 } ) )
   const withBatch = await level( 1, () => void 0, BATCH_SIZE )
@@ -411,6 +512,7 @@ async function runPrepProbe( sweep, runPool, runs ) {
       'dispatch key computed at all, plus\n                   whatever the ' +
       'first extraction call warms up; the one product of geometry\n' +
       `                   is out — it measured ${toS( unsharded.chosen.geometry )}s)` )
+  console.log( directLine( unsharded.chosen ) )
   console.log(
       `level=shard-of-1   workers=1 batch=0  prep=${toS( shardOfOne.chosen.summed )}s ` +
       `[${toS( shardOfOne.lo )}..${toS( shardOfOne.hi )}] ` +
@@ -486,11 +588,13 @@ async function runPrepProbe( sweep, runPool, runs ) {
         `(${( replicatedAtN.chosen.summed / replicatedLevel.chosen.summed )
           .toFixed( 2 )}x N x the single worker:\n                   ` +
         'contention on the replicated prep alone)' )
+    console.log( directLine( replicatedAtN.chosen ) )
     console.log(
         `level=shards       workers=${count} batch=0  ` +
         `per-shard=${shards.chosen.perWorker.map( toS ).join( '/' )}s ` +
         `summed=${toS( whole )}s [${toS( shards.lo )}..${toS( shards.hi )}] ` +
         `+/-${toS( shards.chosen.uncertainty )}` )
+    console.log( directLine( shards.chosen ) )
     console.log(
         '                   replicated prep     ' +
         `${toS( replicatedLevel.chosen.summed )}s ` +

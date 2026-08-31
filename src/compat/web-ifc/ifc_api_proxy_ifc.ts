@@ -36,7 +36,7 @@ import {
 import { IfcProperties } from './ifc_properties'
 import Logger from '../../logging/logger'
 import { ProgressTracker, yieldToEventLoop } from '../../core/progress'
-import { formatModelLine } from '../../core/progress_log'
+import { DemandPrepYieldLike, formatModelLine } from '../../core/progress_log'
 import {
   WasmHeapArrayConstructor, wasmHeapView,
 } from '../../core/wasm_heap'
@@ -239,6 +239,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
   /** Deferred-mode product worklist (file order), lazily enumerated. */
   private demandProducts_?: number[]
+
+  /**
+   * What the worklist build cost, recorded by whichever builder installed
+   * the worklists. Undefined until then — a model that never pumps has no
+   * prep to report, and reporting zeros would be indistinguishable from a
+   * build that was instantaneous.
+   */
+  private demandPrepYield_?: DemandPrepYieldLike
 
   /**
    * Deferred capture watermarks: entity localID -> how many of its
@@ -2643,10 +2651,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
+    // Three timestamps for a build that runs once per model and costs
+    // 0.02-1.7 s — the instrument is far below its own resolution, which is
+    // what lets it stay unconditional. See recordDemandPrep_ for why it is
+    // not gated behind a flag.
+    const startedMs = Date.now()
+
     const {products, aggregates} = this.collectDemandCandidates_()
+
+    const candidatesEndedMs = Date.now()
 
     if (this.shard_ === void 0) {
       this.adoptDemandWorklists_(products, aggregates)
+      this.recordDemandPrep_(
+          startedMs, candidatesEndedMs, void 0,
+          products.length, aggregates.length)
       return
     }
 
@@ -2679,8 +2698,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           relatingLocalIDOf(this.model[0], aggregates[where].localID))
     }
 
+    const keysEndedMs = Date.now()
+
     this.adoptShardedWorklists_(
         products, aggregates, productKeys, aggregateKeys)
+
+    this.recordDemandPrep_(
+        startedMs, candidatesEndedMs, keysEndedMs,
+        products.length, aggregates.length)
   }
 
 
@@ -2706,6 +2731,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       return
     }
 
+    // Started before the aggregate-target paging below, which is part of
+    // what a windowed build costs — the yield's `windowed` flag is what
+    // says this number contains I/O rather than only compute.
+    const startedMs = Date.now()
+
     // BEFORE collecting: the aggregate-target set is read from the
     // IfcRelAggregates records themselves, and on a windowed source those
     // pages are long gone by the first pump. The sync walk swallows the
@@ -2722,8 +2752,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const {products, aggregates} = this.collectDemandCandidates_()
 
+    const candidatesEndedMs = Date.now()
+
     if (this.shard_ === void 0) {
       this.adoptDemandWorklists_(products, aggregates)
+      this.recordDemandPrep_(
+          startedMs, candidatesEndedMs, void 0,
+          products.length, aggregates.length)
       return
     }
 
@@ -2734,15 +2769,25 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         await computeRelatingLocalIDs(
             this.model[0], aggregates.map((aggregate) => aggregate.localID)))
 
+    const keysEndedMs = Date.now()
+
     // Re-checked after the awaits: a concurrent pump could have built the
     // worklists while this one was paging, and adopting a second set would
     // reset the cursors under it, re-extracting everything already pumped.
+    //
+    // Nothing is recorded on this branch either: the yield describes the
+    // build that WON, and overwriting it with a discarded one's timings
+    // would report kept counts against worklists this call never installed.
     if (this.demandProducts_ !== void 0) {
       return
     }
 
     this.adoptShardedWorklists_(
         products, aggregates, productKeys, aggregateKeys)
+
+    this.recordDemandPrep_(
+        startedMs, candidatesEndedMs, keysEndedMs,
+        products.length, aggregates.length)
   }
 
 
@@ -2884,6 +2929,102 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.demandAggregatesCursor_ = 0
 
     this.adoptAggregateStepPrefix_()
+  }
+
+
+  /**
+   * Record what the worklist build just cost — the direct measurement of
+   * the window conway#682 is about.
+   *
+   * **Why this lives in the engine.** The build runs lazily inside the
+   * FIRST `ExtractGeometryBatch` call, so from outside it can only be
+   * timed by differencing two pump calls — and `pumpGeometryBatch_` floors
+   * a batch at one product, so every window an external probe can time
+   * carries a product of real geometry inside it. On two of the four
+   * models `scripts/m3_worker_pool.mjs --prep-probe` measured, that
+   * geometry was larger than the term being measured and the split was
+   * reported `NOT RESOLVED` rather than as a number
+   * (`design/new/load-performance-ledger.md` §11.4). This timer has no
+   * geometry inside it at all, so those models resolve by construction
+   * rather than by subtraction.
+   *
+   * **Why it is unconditional rather than flag-gated.** It is three
+   * `Date.now()` calls and four array lengths, once per model, against a
+   * build measured at 21 ms on Schependomlaan and 1.7 s on D3D — the
+   * instrument sits several orders of magnitude below its own subject, so
+   * a flag would buy nothing and add a configuration in which the number
+   * silently does not exist. Nothing is emitted: the value is held for a
+   * caller that asks (`IfcAPI.GetDemandPrepYield`, rendered by
+   * `formatDemandPrepLine`), and a load that never asks logs nothing and
+   * formats nothing. That is the same shape as the preview channels'
+   * `previewYield`, one report per run rather than a stream.
+   *
+   * **`candidatesMs` is the replicated term.** Every worker in a pool runs
+   * `collectDemandCandidates_` over the WHOLE model — a shard narrows what
+   * is built, not what is walked — so this is what N workers duplicate N
+   * times. `keysMs` is its opposite: work that exists only because
+   * sharding exists, which an unsharded reference never performs and so
+   * cannot be divided by.
+   *
+   * **The clock is `Date.now`, so the floor is one millisecond**, matching
+   * the rest of this load-log channel (the preview channels' `firstMeshMs`
+   * is the same clock rendered through the same formatter). That is three
+   * orders of magnitude under the terms it has to separate — the ledger's
+   * smallest per-worker prep is Schependomlaan's ~21 ms, against the
+   * ±0.628 s the external probe could not beat on Snowdon — but it is NOT
+   * under a small fixture's. A few dozen products build their worklists in
+   * well under a millisecond and will report `0.000s` here; that is the
+   * clock, not a measurement, and the counts are the fields to read on a
+   * model that size.
+   *
+   * @param startedMs When the build began.
+   * @param candidatesEndedMs When the whole-model candidate walk finished.
+   * @param keysEndedMs When the dispatch-key pass finished; undefined on an
+   * unsharded build, which runs none.
+   * @param candidateProducts Products the walk produced, before filtering.
+   * @param candidateAggregates Rel-aggregates the walk produced, before
+   * filtering.
+   */
+  private recordDemandPrep_(
+      startedMs: number,
+      candidatesEndedMs: number,
+      keysEndedMs: number | undefined,
+      candidateProducts: number,
+      candidateAggregates: number): void {
+
+    this.demandPrepYield_ = {
+      totalMs: Date.now() - startedMs,
+      candidatesMs: candidatesEndedMs - startedMs,
+      keysMs: keysEndedMs !== void 0 ?
+        keysEndedMs - candidatesEndedMs : void 0,
+      candidateProducts,
+      candidateAggregates,
+      // The ADOPTED lists, not the arguments: on a sharded build these are
+      // the filtered ones, and the gap between the two pairs is the whole
+      // replication claim.
+      keptProducts: (this.demandProducts_ ?? []).length,
+      keptAggregates: (this.demandAggregates_ ?? []).length,
+      shardIndex: this.shard_?.index,
+      shardCount: this.shard_?.count,
+      windowed: this.model[0].isSourceExternal,
+    }
+  }
+
+
+  /**
+   * What building this model's demand worklists cost, once they exist.
+   *
+   * Undefined before the first pump, and on a model opened without
+   * `DEFER_GEOMETRY` (which builds no worklists at all). See
+   * {@link recordDemandPrep_} for what the fields mean and
+   * `core/progress_log.ts`'s `formatDemandPrepLine` for the canonical
+   * rendering.
+   *
+   * @return {DemandPrepYieldLike | undefined} The build's cost, or
+   * undefined if no build has run.
+   */
+  public get demandPrepYield(): DemandPrepYieldLike | undefined {
+    return this.demandPrepYield_
   }
 
 
