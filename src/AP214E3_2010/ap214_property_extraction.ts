@@ -7,6 +7,7 @@ import { measure_representation_item } from './AP214E3_2010_gen/measure_represen
 import { property_definition } from './AP214E3_2010_gen/property_definition.gen'
 import { property_definition_representation } from './AP214E3_2010_gen/property_definition_representation.gen'
 import { shape_definition_representation } from './AP214E3_2010_gen/shape_definition_representation.gen'
+import Logger from '../logging/logger'
 
 
 /**
@@ -134,6 +135,10 @@ export class AP214PropertyExtraction {
    * Resolve the part owner and value rows for one
    * `property_definition_representation` and append them to the result map.
    *
+   * A `property_definition_representation` whose chain cannot be typed against
+   * the AP214 schema is skipped with a warning rather than propagating — see
+   * the comment on the `try` below.
+   *
    * @param pdr The property-definition representation to walk.
    * @param result The accumulating per-part property map.
    */
@@ -141,47 +146,103 @@ export class AP214PropertyExtraction {
       pdr: property_definition_representation,
       result: ExtractedPropertyMap ): void {
 
-    const propertyDefinition = pdr.definition
+    // Two getters in this chain throw on AP242 files, which route through the
+    // AP214 loader by design (design/new/step-metadata-nist.md §"The AP242
+    // wrinkle"), so AP242-only entities reach here routinely. Both are
+    // observed on the NIST PMI corpus, from bldrs-ai/test-models#61:
+    //
+    // - `representation.items`: `extractBufferElement`
+    //   (src/step/step_entity_base.ts) throws `unresolvedReferenceError_`
+    //   ("Value in STEP was incorrectly typed") when an item names a type the
+    //   schema has no class for — `#4319=REPRESENTATION('',(#4270,…),#4351)`
+    //   over `INTEGER_REPRESENTATION_ITEM` user-attribute counters.
+    // - `property_definition.definition`: the generated `characterized_
+    //   definition` SELECT narrows to AP214's member list and throws
+    //   ("Value in STEP was incorrectly typed for field") otherwise —
+    //   `#4344=PROPERTY_DEFINITION('pmi validation property','',#13)`, where
+    //   `#13` is the complex `CHARACTERIZED_OBJECT | CHARACTERIZED_
+    //   REPRESENTATION | DRAUGHTING_MODEL | REPRESENTATION` PMI model.
+    //
+    // Uncaught, either one took down the whole property map — and with it the
+    // spatial structure built alongside it — for 16 of the 17 NIST AP242 PMI
+    // files. Skipping the offending `pdr` is what the design doc's Phase 0
+    // already promises: structure + properties come through "with unknowns
+    // skipped". Rows accumulate in a local array and are merged only on
+    // success, so a skip is all-or-nothing for one `pdr` and can never leave
+    // half a representation's rows in `result`.
+    //
+    // Nothing this tier would have surfaced is lost, checked over the corpus.
+    // The skips are of exactly two kinds. Either the representation's items
+    // are wholly AP242-only (the INTEGER_REPRESENTATION_ITEM PMI counters —
+    // no mixed typeable/untypeable representation occurs), or the throw is on
+    // the *owner* side, where the `characterized_definition` is an AP242-only
+    // member — `CHARACTERIZED_ITEM_WITHIN_REPRESENTATION` for a PMI linear
+    // size, the complex draughting model above. Those own feature-level PMI,
+    // and `resolveProductDefinitionId` returns `void 0` for anything that is
+    // not a `product_definition` or `product_definition_shape`, so this
+    // (Simplified) tier already dropped them before the fix — see the note on
+    // `extractProperties`.
+    try {
 
-    if ( !( propertyDefinition instanceof property_definition ) ) {
-      return
-    }
+      const propertyDefinition = pdr.definition
 
-    const ownerId =
-      AP214ProductStructureExtraction.resolveProductDefinitionId( propertyDefinition.definition )
-
-    if ( ownerId === void 0 ) {
-      return
-    }
-
-    const definitionId = propertyDefinition.expressID
-    const group = propertyDefinition.name
-    const fallbackKey =
-      ( definitionId !== void 0 ? this.generalPropertyNameByDef_.get( definitionId ) : void 0 ) ??
-      ( group.length > 0 ? group : ( propertyDefinition.description ?? '' ) )
-
-    const representation = pdr.used_representation
-
-    if ( representation === void 0 ) {
-      return
-    }
-
-    for ( const item of representation.items ) {
-
-      const property = AP214PropertyExtraction.toProperty( item, fallbackKey, group )
-
-      if ( property === void 0 ) {
-        continue
+      if ( !( propertyDefinition instanceof property_definition ) ) {
+        return
       }
 
-      let rows = result.get( ownerId )
+      const ownerId =
+        AP214ProductStructureExtraction.resolveProductDefinitionId( propertyDefinition.definition )
 
-      if ( rows === void 0 ) {
-        rows = []
+      if ( ownerId === void 0 ) {
+        return
+      }
+
+      const definitionId = propertyDefinition.expressID
+      const group = propertyDefinition.name
+      const fallbackKey =
+        ( definitionId !== void 0 ? this.generalPropertyNameByDef_.get( definitionId ) : void 0 ) ??
+        ( group.length > 0 ? group : ( propertyDefinition.description ?? '' ) )
+
+      const representation = pdr.used_representation
+
+      if ( representation === void 0 ) {
+        return
+      }
+
+      const rows: ExtractedProperty[] = []
+
+      for ( const item of representation.items ) {
+
+        const property = AP214PropertyExtraction.toProperty( item, fallbackKey, group )
+
+        if ( property === void 0 ) {
+          continue
+        }
+
+        rows.push( property )
+      }
+
+      if ( rows.length === 0 ) {
+        return
+      }
+
+      const existing = result.get( ownerId )
+
+      if ( existing === void 0 ) {
         result.set( ownerId, rows )
+      } else {
+        existing.push( ...rows )
       }
 
-      rows.push( property )
+    } catch ( error ) {
+
+      // toString(), not localID — localID is the dense internal index and
+      // means nothing against the source file; the reference is what a reader
+      // can go look up. Same idiom as populateStyledItemsMap() in
+      // ap214_geometry_extraction.ts.
+      Logger.warning(
+          `Skipping property definition representation that is untypeable in AP214: ${error}`,
+          pdr.toString() )
     }
   }
 

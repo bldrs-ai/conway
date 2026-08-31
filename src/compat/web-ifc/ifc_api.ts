@@ -69,6 +69,69 @@ export interface Loadersettings {
   DEFER_GEOMETRY?: boolean
 
   /**
+   * Conway extension (DEFER_GEOMETRY only; conway#638): the caller declares
+   * that IT owns the pumped mesh stream, so conway keeps no reference to it.
+   *
+   * Default (absent/false) is the historical behaviour, unchanged: every
+   * `PlacedGeometry` the pump builds is filed into the model's cumulative
+   * per-entity `meshMap` and its `vectorFlatMesh` spine as well as being
+   * handed to the mesh callback, so a later whole-model ask can be served
+   * out of that cache. On a D3D-scale model that cache is the largest single
+   * bucket of JS heap a load holds — 475 MB of `FlatMesh`/`PlacedGeometry`
+   * measured — and a consumer that assembles each batch as it lands (Share's
+   * incremental batched builder) never reads it.
+   *
+   * With this set, the pump delivers each delta `FlatMesh` to the callback
+   * and drops it. **The callback is the only delivery**: whatever the
+   * consumer does not copy or keep is gone.
+   *
+   * **This drops JS pointer spines, never native geometry.** The natives
+   * behind the delivered placements are owned by the model's geometry store
+   * and are freed only by `GEOMETRY_BUDGET_MB` eviction or
+   * `ReleaseModelGeometry`, neither of which this setting touches. The
+   * copy-window guarantee above — everything pump call N delivered stays
+   * resident until call N+1 begins — therefore holds exactly as it does
+   * without this flag.
+   *
+   * **A late whole-model ask still works, until the natives are gone.**
+   * `StreamAllMeshes`, `LoadAllGeometry` and `GetFlatMesh` on such a model
+   * re-walk the live scene rather than replaying a cache, which costs a walk
+   * but returns the same placements the pump delivered.
+   *
+   * **What a budget does to that ask.** The re-walk reads the geometry store,
+   * and `GEOMETRY_BUDGET_MB` eviction deletes from it, so an evicted
+   * placement is not recovered by the re-walk — it is simply absent from
+   * what the ask returns. Partial loss is served with a warning naming the
+   * count of unresolved instances; total loss — nothing resolved at all —
+   * throws a descriptive error naming this contract, as does a whole-model
+   * ask after `ReleaseModelGeometry`. What never happens is a silent empty
+   * model. A consumer that needs every placement should copy at delivery
+   * from the pump, which is what the budget's own contract already says.
+   *
+   * **Scope: on a windowed source the ask is async
+   * ({@link StreamAllMeshesAsync}).** The synchronous whole-model entry
+   * points drain through the synchronous pump, which refuses an external
+   * source outright — *"ExtractGeometryBatch is synchronous and cannot page
+   * a windowed source"*. That predates this setting, is identical with and
+   * without it, and is unchanged: `StreamAllMeshes` on a model opened with
+   * `OpenModelStream` still throws. `StreamAllMeshesAsync` (conway#660) is
+   * the entry point that serves such a model — it drains through
+   * `ExtractGeometryBatchAsync`, which pages each batch's product closures
+   * in, and then serves the identical re-walk with the identical accounting.
+   * Share pumps the async pump over a store, so that is the entry point a
+   * windowed Share load reaches for.
+   *
+   * The re-walk itself is unaffected by windowing either way: it resolves
+   * scene nodes against the model's geometry STORE, never against the byte
+   * source, so what a fully drained windowed model can serve is exactly what
+   * a fully drained resident one can. Paging is a property of the drain.
+   *
+   * Ignored on a non-deferred open, which has no pump and no accumulation to
+   * suppress.
+   */
+  STREAMING_CONSUMER?: boolean
+
+  /**
    * Conway extension (OpenModelStreamed + DEFER_GEOMETRY only; demand/tiled
    * rendering slice A2): receive PREVIEW mesh payloads while the parse is
    * still running — self-contained (geometry copied out of the wasm heap),
@@ -82,16 +145,44 @@ export interface Loadersettings {
 
   /**
    * Conway extension (DEFER_GEOMETRY only; M3's budgeted arena): cap the
-   * native geometry a model keeps resident, in MB. At each pump batch the
-   * least-recently-used assets are evicted until the live set fits.
-   * Unset — the default — keeps everything, which is what every consumer
-   * did before this existed.
+   * native geometry a model keeps resident, in MB. At the START of each pump
+   * batch the least-recently-used assets are evicted until the live set
+   * fits. Unset — the default — keeps everything, which is what every
+   * consumer did before this existed.
    *
    * **This changes a contract, so it is opt-in.** An evicted asset is gone
    * from `GetGeometry` until something re-extracts it, which is safe for a
    * consumer that copies payloads at delivery (the invariant Share#1640
    * asserts) and unsafe for one that keeps geometry IDs and fetches them
    * lazily later.
+   *
+   * **What "at delivery" means, precisely.** Everything pump call N
+   * delivered stays resident until pump call N+1 BEGINS, so the copy window
+   * is the whole gap between calls — an embedder may return from the pump,
+   * yield to the event loop, and only then read back the batch's geometry.
+   * Eviction ran at the tail of the pump until Sentry SHARE-1NK, which made
+   * that window a lie: a batch bigger than the whole budget was evicted by
+   * its own call, and the copy that followed hit a freed handle. The price
+   * of the guarantee is that the live set may transiently exceed the budget
+   * by one batch.
+   *
+   * **The trailing batch is the consumer's job, not the engine's.** The
+   * "by one batch" overshoot above is normally transient — pump call N+1's
+   * head eviction trims whatever call N left over budget. But nothing forces
+   * a call N+1: a consumer whose loop stops the moment `remaining` reaches 0
+   * never makes that call, so if the FINAL batch pushed `liveBytes` over
+   * budget, that overshoot is permanent, not transient — it persists for the
+   * model's lifetime. Evicting at the tail of that last call instead is not
+   * a fix: it would reintroduce the SHARE-1NK bug above for exactly that
+   * batch, since the embedder's copy happens after the call returns and
+   * there is still no in-engine signal for "the embedder is done copying."
+   * The trim is therefore on the consumer: pump once more after `remaining`
+   * reaches 0 (it extracts nothing and costs only the eviction pass) or call
+   * `SetGeometryBudget` directly. Share's own loop already does the former —
+   * its stop condition is `remaining === 0 && extracted === 0`, not
+   * `remaining === 0` alone, which guarantees exactly one such zero-work
+   * call. See {@link ExtractGeometryBatch}'s doc for the same contract from
+   * the pump-signature side.
    *
    * Budgeted on each native's `getAllocationSize` — vertices, triangles,
    * edges, the triangle-edge structures and the float vertex mirror. That is
@@ -910,8 +1001,13 @@ export class IfcAPI {
    * opened with `OpenModelStreamed(data, {DEFER_GEOMETRY: true})`,
    * extract the next `batchSize` products and emit this batch's meshes —
    * the incremental twin of StreamAllMeshes. Feature-detect with
-   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly
-   * until `remaining` is 0.
+   * `typeof api.ExtractGeometryBatch === 'function'`; call repeatedly until
+   * `remaining === 0 && extracted === 0` — one call PAST `remaining` alone
+   * first reaching 0. That extra call extracts nothing, but it still runs
+   * the geometry budget's head eviction (see `GEOMETRY_BUDGET_MB`), which is
+   * the only thing that trims an overshoot the final real batch left over
+   * budget; stopping at `remaining === 0` alone can leave that overshoot
+   * resident for the model's lifetime.
    *
    * DELTA CONTRACT: an entity may be emitted again in a LATER call with
    * a FlatMesh containing only its NEW placed instances (shared/mapped
@@ -940,6 +1036,13 @@ export class IfcAPI {
    * Same contract as the setting: an evicted asset is gone from GetGeometry
    * until something re-extracts it, which is safe for a consumer that copies
    * payloads at delivery and unsafe for one that fetches lazily later.
+   *
+   * Same trailing-batch caveat as the setting, too: this eviction pass runs
+   * against the live set as it stands right now, so it does not by itself
+   * guarantee a LATER pump call won't push `liveBytes` back over budget.
+   * Calling this explicitly after a demand pump's `remaining` reaches 0 is
+   * exactly the "pump once more" trim `GEOMETRY_BUDGET_MB` describes — a
+   * direct call here is equivalent to that trailing zero-work pump call.
    *
    * @param modelID handle retrieved by an open
    * @param megabytes the ceiling, in MB of native allocation (see
@@ -1130,6 +1233,59 @@ export class IfcAPI {
     if (result !== void 0) {
 
       result.streamAllMeshes(meshCallback)
+    }
+
+    Logger.displayLogs()
+    Logger.clearLogs()
+    Logger.printStatistics(modelID)
+  }
+
+  /**
+   * Conway extension (conway#660): async twin of {@link StreamAllMeshes},
+   * and the ONLY whole-model ask a **windowed** deferred model can answer.
+   *
+   * `StreamAllMeshes` drains a deferred model through the synchronous pump,
+   * which refuses an external source — *"ExtractGeometryBatch is synchronous
+   * and cannot page a windowed source"* — so on a model opened with
+   * {@link OpenModelStream} it throws before serving anything. This drains
+   * through {@link ExtractGeometryBatchAsync} instead, paging each batch's
+   * product closures in, and then serves exactly what the sync entry point
+   * would have served on the same model: the same placements, the same
+   * `STREAMING_CONSUMER` re-walk, the same budget accounting (partial loss
+   * warns with the unresolved count, total loss throws), and the same loud
+   * throw once `ReleaseModelGeometry` has freed the natives.
+   *
+   * **What it does not do is recover geometry.** The re-walk that serves the
+   * ask reads the model's geometry store, not the byte source, so paging is
+   * a property of the DRAIN only — anything a `GEOMETRY_BUDGET_MB` eviction
+   * already freed is reported as missing rather than fetched back, exactly
+   * as on a resident source. A consumer that needs every placement copies at
+   * delivery from the pump.
+   *
+   * Safe on a resident source and on a non-deferred model, both of which are
+   * served by the synchronous path internally. Feature-detect with
+   * `typeof api.StreamAllMeshesAsync === 'function'`.
+   *
+   * @param modelID handle retrieved by OpenModelStream / OpenModelStreamed
+   * @param meshCallback receives one whole-model FlatMesh per entity
+   * @return {Promise<void>} resolves once every entity has been delivered
+   */
+  async StreamAllMeshesAsync(
+      modelID: number,
+      meshCallback: (mesh: FlatMesh) => void ): Promise<void> {
+
+    const result = this.models.get(modelID)
+
+    if (result !== void 0) {
+
+      // Passthroughs predating conway#660 (and any future non-conway one)
+      // have no async twin; the sync entry point is the whole of what they
+      // can do, and on a resident source it is equivalent.
+      if (result.streamAllMeshesAsync !== void 0) {
+        await result.streamAllMeshesAsync(meshCallback)
+      } else {
+        result.streamAllMeshes(meshCallback)
+      }
     }
 
     Logger.displayLogs()

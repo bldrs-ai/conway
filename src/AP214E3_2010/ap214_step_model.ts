@@ -1,6 +1,8 @@
-import EntityTypesAP214, {EntityTypesAP214Count} from './AP214E3_2010_gen/entity_types_ap214.gen'
+import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
 import StepModelBase from '../step/step_model_base'
-import SchemaAP214 from './AP214E3_2010_gen/schema_ap214.gen'
+import SchemaAP214Tessellated, {
+  EntityTypesAP214ExtendedCount,
+} from './ap214_tessellated_types'
 import {StepIndexEntry} from '../step/parsing/step_parser'
 import {StepIndexColumns} from '../step/parsing/columnar_index'
 import {StepTypeIndexer} from '../step/indexing/step_type_indexer'
@@ -13,7 +15,11 @@ import AP214ModelCurves from './ap214_model_curves'
 import { CsgMemoization } from '../core/csg_operations'
 
 
-const indexerInstance = new StepTypeIndexer< EntityTypesAP214 >( EntityTypesAP214Count )
+// Sized for the extended schema — the AP242 shadow types (see
+// ap214_tessellated_types.ts) are allocated past the generated enum, so an
+// indexer built to the generated count would index off the end of its
+// counters for them.
+const indexerInstance = new StepTypeIndexer< EntityTypesAP214 >( EntityTypesAP214ExtendedCount )
 
 /**
  * Represents an IFC model deserialized from step.
@@ -38,7 +44,7 @@ export default class AP214StepModel extends StepModelBase< EntityTypesAP214 > {
   constructor(
       buffer: Uint8Array,
       elementIndex: StepIndexEntry< EntityTypesAP214 >[] | StepIndexColumns< EntityTypesAP214 > ) {
-    super( SchemaAP214, buffer, elementIndex )
+    super( SchemaAP214Tessellated, buffer, elementIndex )
 
     this.typeIndex = indexerInstance.createFor( elementIndex )
   }
