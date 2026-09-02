@@ -194,7 +194,7 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`, and a Tier-A geometry-digest check of the in-repo `data/` models against committed goldens. |
-| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Runs the regression batch over the **smoke subset** (`regression/smoke_models.txt`) of the public `test-models` ref (`TEST_MODELS_REF`, default `main`), pinned per-run to the resolved commit SHA. Fails on any `failed.csv` row; digest *changes* are informational (reviewed via the visual-diff comment, blessed at the rc). Posts a per-PR comment with the resolved SHA + smoke-scoped `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
+| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Free `ubuntu-24.04` (4 vCPU / 16 GB). Runs the digest batch over the **PR subset** (`regression/smoke_models.txt`) of the public `test-models` ref (`TEST_MODELS_REF`, default `main`), skip-smudge + LFS-pull of those files only. Fails on any `failed.csv` row; digest *changes* are informational (reviewed via the visual-diff comment, blessed at the rc). Posts a per-PR comment with the resolved SHA + smoke-scoped `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
 
 A `concurrency` group cancels superseded PR runs (main runs are never
 cancelled, so releases always complete). A merge to `main` re-runs those two
@@ -394,8 +394,9 @@ umbrella waterfall (#316) and performance-in-CI (#314) issues are closed.
   at the rc, blessed into the baseline), but a PR is not *failed* on unexpected
   new errors — only on parse/extract failures (`failed.csv`). A golden-errors
   gate could fail smoke-scoped error churn that isn't an intended change.
-- **Smoke-list curation.** The smoke subset (`regression/smoke_models.txt`)
-  is a hand-picked spread; as the engine's failure surface shifts, revisit
-  which models best catch regressions cheaply.
+- **Smoke-list curation.** The PR subset (`regression/smoke_models.txt`) is
+  a hand-picked spread sized to stay in a couple of minutes of batch time
+  on a free 4-vCPU runner. As the engine's failure surface shifts, revisit
+  which models best catch regressions cheaply — slow giants stay on the rc.
 - **Perf-threshold gating.** The `perf-three-*` jobs post deltas but don't
   fail an rc on a regression; a threshold could turn perf into a release gate.

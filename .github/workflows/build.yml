@@ -105,8 +105,9 @@ env:
 
 jobs:
   build:
-    # Heavy runner matches ifc-regression. The WASM toolchain (genie +
-    # emcc) needs the headroom; the default 2-vCPU runner fails the compile.
+    # Paid 150 GB SKU: emcc's working set does not fit the public
+    # runner's 14 GB disk. 4 vCPU is enough (the old 2-vCPU image is
+    # what failed the compile); disk is why this job stays billed.
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     steps:
       - name: Checkout
@@ -276,13 +277,20 @@ jobs:
           path: tierA-goldens/*.csv
 
   # ---------------------------------------------------------------------------
-  # Regression (SMOKE subset): consumes build's WASM cache (no rebuild), runs
+  # Regression (PR subset): consumes build's WASM cache (no rebuild), runs
   # the digest batch over regression/smoke_models.txt only, gates on failures,
   # posts results to the PR, and packs the npm tarball the perf jobs consume.
   # The FULL public+private corpus runs once per release candidate in
   # rc-regression.yml (rc-* tag) — its baseline-PR diff is the release's
   # regression report. Kept on a separate job (vs steps in build) so its
   # runtime doesn't block the build-job status once fast feedback finishes.
+  #
+  # Free public ubuntu-24.04 is 4 vCPU / 16 GB / 14 GB disk. The paid
+  # SKU this job used to share with build is 4 vCPU / 8 GB / 150 GB —
+  # billed even on a public repo. Digests are not jitter-sensitive, so
+  # the extra RAM is a win and the missing disk is the thing to watch:
+  # skip-smudge the test-models clone and LFS-pull only the listed
+  # models (~hundreds of MB, not the 9.6 GB tree).
   # ---------------------------------------------------------------------------
   run-ifc-regression:
     needs: build
@@ -305,7 +313,7 @@ jobs:
     # this job -- hinge on a documented-but-obscure corner of the expression
     # language. The clause states the intent instead.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    runs-on: ubuntu-24.04
     # Expose the packed tarball name so downstream perf jobs can download the
     # artifact by name without re-packing conway.
     outputs:
@@ -398,10 +406,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ steps.tmsha.outputs.sha }}
+          # smoke- in the key so we never restore a 9.6 GB full-corpus
+          # cache onto the 14 GB public disk. hashFiles so growing the
+          # list misses rather than running against pointer stubs.
+          key: ${{ runner.os }}-test-models-smoke-${{ steps.tmsha.outputs.sha }}-${{ hashFiles('regression/smoke_models.txt') }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
+        env:
+          # Pointers only. The next step LFS-pulls the smoke list; a
+          # smudged checkout of ifc/** + step/** is ~3 GB of models and
+          # does not fit next to node_modules + wasm on 14 GB.
+          GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           SHA="${{ steps.tmsha.outputs.sha }}"
           # Shallow-fetch exactly the resolved commit (GitHub allows fetch-by-SHA
@@ -411,6 +427,39 @@ jobs:
           git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
           git -C test-models fetch --depth 1 origin "$SHA"
           git -C test-models checkout "$SHA"
+
+      - name: Materialize smoke-list LFS models
+        run: |
+          python3 - <<'EOF'
+          import subprocess, sys
+          from pathlib import Path
+
+          names = [l.strip() for l in open('regression/smoke_models.txt')
+                   if l.strip() and not l.strip().startswith('#')]
+          want = set(names)
+          root = Path('test-models')
+          paths = []
+          for top in ('ifc', 'step'):
+              for p in (root / top).rglob('*'):
+                  if p.is_file() and p.name in want:
+                      paths.append(p.relative_to(root).as_posix())
+          missing = want - {Path(p).name for p in paths}
+          if missing:
+              print('::error::smoke_models.txt names not in test-models: '
+                    + ', '.join(sorted(missing)))
+              sys.exit(1)
+          stubs = []
+          for rel in paths:
+              head = (root / rel).read_bytes()[:200]
+              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
+                  stubs.append(rel)
+          print(f'{len(paths)} smoke models, {len(stubs)} LFS stubs to pull')
+          if not stubs:
+              sys.exit(0)
+          subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
+          subprocess.check_call(
+              ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)], cwd=root)
+          EOF
 
       # This job runs the SMOKE subset only (regression/smoke_models.txt) —
       # the full public+private corpus runs once per release candidate in
@@ -441,7 +490,10 @@ jobs:
       # baselines. The aggregate is uploaded as a workflow artifact below and
       # summarised in the PR comment. NOTE these timings come from a --parallel
       # run (models contend), so they're a smoke signal only — the clean
-      # per-model perf record is the rc-gated perf-three-* jobs.
+      # per-model perf record is the rc-gated perf-three-* jobs. Each child
+      # is itself multi-threaded wasm; `--concurrency 2` on 4 vCPU avoids
+      # oversubscribing as the list grows (the CLI default is one child per
+      # core).
       - name: Run IFC Regression Batch Script (smoke subset)
         env:
           SMOKE_EXCLUDE: ${{ steps.smoke.outputs.regex }}
@@ -452,7 +504,7 @@ jobs:
             --perf "${GITHUB_WORKSPACE}/perf.csv" \
             test-models \
             test-models/regression/test_models \
-            --parallel --mem-utilization 90
+            --parallel --mem-utilization 90 --concurrency 2
 
       - name: Gather Regression Results
         id: regression_results
@@ -839,11 +891,12 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       needs.run-ifc-regression.outputs.visual_diff_count != '0'
-    # Same large runner as every other job that executes the conway CLIs:
-    # the MT WASM engine reserves multi-GB (shared) memory at startup, and on
-    # the standard 4-vcpu runner every export died with an uncaught allocation
-    # crash (only the "Node.js vX.Y.Z" report footer reached the PR table).
-    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    # Public ubuntu-24.04 is 4 vCPU / 16 GB — more RAM than the paid
+    # 8 GB SKU this used to share. The allocation crash that forced the
+    # large runner was on the old 2-vCPU/7 GB image; disk is handled by
+    # restoring the smoke-sized test-models cache (or skip-smudge +
+    # LFS-pull of changed_models.txt only).
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
@@ -895,10 +948,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
+          key: ${{ runner.os }}-test-models-smoke-${{ needs.run-ifc-regression.outputs.test_models_sha }}-${{ hashFiles('regression/smoke_models.txt') }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
+        env:
+          GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           SHA="${{ needs.run-ifc-regression.outputs.test_models_sha }}"
           git init test-models
@@ -906,34 +961,48 @@ jobs:
           git -C test-models fetch --depth 1 origin "$SHA"
           git -C test-models checkout "$SHA"
 
-      # Model files under ifc/ and step/ are git-lfs objects; a manual
-      # fetch/checkout (and a cache seeded from one) can leave 132-byte
-      # pointer stubs. Materialize what we can.
-      #
-      # Stubs used to be tolerated here with a warning saying their rows would
-      # read "no geometry" truthfully. That is truthful about the bytes on
-      # disk and false about the model, and it cost real work: two models were
-      # blessed at zero rows and filed as engine bugs (#477) before anyone
-      # noticed the run had never read them. The regression batch now FAILS a
-      # stub instead of parsing it (#486), so a stub can no longer reach a
-      # baseline. This job renders rather than digests, so it still continues
-      # — a stub here costs one blank image, not a committed falsehood — but
-      # the warning now says what it actually means.
+      # Pull LFS only for the models this job will render. A full
+      # `ifc/**,step/**` pull is ~3 GB and does not fit on 14 GB disk.
+      # Stubs used to be tolerated as "no geometry"; that blessed two
+      # pointer files as engine bugs (#477). The batch now fails a stub
+      # (#486). This job still continues on a leftover stub — one blank
+      # image, not a committed falsehood — but the warning says that.
       - name: Materialize LFS model files
         run: |
-          cd test-models
-          STUBS=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
-          echo "LFS pointer stubs remaining: $STUBS"
-          if [ "$STUBS" != "0" ]; then
-            git lfs install --local
-            git lfs pull --include="ifc/**,step/**" || true
-            LEFT=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
-            echo "stubs after lfs pull: $LEFT"
-            if [ "$LEFT" != "0" ]; then
-              echo "::warning::test-models still has $LEFT unsmudged LFS pointer stub(s). These are NOT models: any row below that renders empty for one of them is a missing file, not a geometry regression."
-              grep -rl "git-lfs.github.com" ifc step 2>/dev/null || true
-            fi
-          fi
+          python3 - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          root = Path('test-models')
+          rels = []
+          for line in open('changed_models.txt'):
+              rel = line.split('\t', 1)[0].strip()
+              if rel:
+                  rels.append(rel)
+          stubs = []
+          for rel in rels:
+              p = root / rel
+              if not p.is_file():
+                  print(f'::warning::changed model missing: {rel}')
+                  continue
+              head = p.read_bytes()[:200]
+              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
+                  stubs.append(rel)
+          print(f'{len(rels)} changed models, {len(stubs)} LFS stubs to pull')
+          if not stubs:
+              raise SystemExit(0)
+          subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
+          subprocess.check_call(
+              ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)], cwd=root)
+          left = []
+          for rel in stubs:
+              head = (root / rel).read_bytes()[:200]
+              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
+                  left.append(rel)
+          if left:
+              print('::warning::unsmudged LFS pointer stub(s) after pull — '
+                    'blank renders for these are a missing file, not a geometry '
+                    'regression: ' + ', '.join(left))
+          EOF
 
       - name: Render before/after pairs
         run: |
@@ -1139,6 +1208,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test-models
+          # Full public corpus, not the smoke-sized cache the PR
+          # regression job writes. This job is rc-only on the 150 GB
+          # SKU; a miss re-clones.
           key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
 
       - name: Checkout Test Models Repo if Not Cached

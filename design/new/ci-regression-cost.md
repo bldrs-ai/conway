@@ -22,7 +22,7 @@ full sweep only at a blessed release point.
 | Tier | When | What runs | Gate |
 |---|---|---|---|
 | **A — fixtures** | every PR + merge | unit tests + `data/` geometry goldens (in `build`) | **hard** — a mismatch fails `build` |
-| **B — smoke** | every PR + merge | digest batch over `regression/smoke_models.txt` (~12 models) in `run-ifc-regression` | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational |
+| **B — smoke** | every PR + merge | digest batch over `regression/smoke_models.txt` (~50 models) in `run-ifc-regression` | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
 Tier A is hermetic (no `test-models` clone, no token — protects forks too);
@@ -40,21 +40,27 @@ visually (the visual-diff comment) and **blessed at the rc**, not at PR time.
 
 ## Why it's tiered this way (the cost rationale)
 
-Every heavy job runs on the `ubuntu-24.04-4vcpu-8gb-150gbssd` runner, billed
-as **Actions Linux 16-core at $0.012/min** — that line item is ~100% of the
-metered spend (the 2-core `Actions Linux` rows bill $0 inside the included
-allotment). So cost ≈ **large-runner minutes**, and the levers are *how often*
+Jobs that need the 150 GB disk still run on
+`ubuntu-24.04-4vcpu-8gb-150gbssd`, billed as **Actions Linux 16-core at
+$0.012/min**. Conway is public, so standard `ubuntu-24.04` is 4 vCPU /
+16 GB / 14 GB disk and **unlimited-free**. Digests are not
+jitter-sensitive; the PR regression and visual-diff jobs run there.
+`build` (emcc working set), `perf-three-*` (low-variance timings + full
+corpus on disk), and `rc-regression.yml` (full public+private LFS tree)
+stay on the paid SKU.
+
+So metered cost ≈ **large-runner minutes**, and the levers are *how often*
 and *how many* jobs hit that runner.
 
-Measured per-job wall time on that runner (representative runs):
+Measured per-job wall time (representative runs):
 
 | job | wall time |
 |---|---|
-| build (WASM cache hit) | ~2.8 min |
+| build (WASM cache hit, paid 150 GB) | ~2.8 min |
 | run-ifc-regression (full corpus, old) | ~5 min |
 | **perf-three-private** | **~27 min** |
 | **perf-three-public** | **~11 min** |
-| smoke batch step (12 models) | **seconds** |
+| smoke batch step (~12 models, paid) | **~14 s** of a ~3 min job |
 
 Findings that drove the design:
 
@@ -64,8 +70,12 @@ Findings that drove the design:
    is deliberately not reduced**: for a benchmark, the 8-vcpu headroom buys
    low-variance timings, not throughput — frequency is the lever, not size.
 2. **The full digest batch ran on every PR** for a whole-corpus signal that a
-   ~12-model smoke subset delivers for correctness at a fraction of the cost
-   (#443). The full corpus still runs — once, at the rc.
+   curated smoke subset delivers for correctness at a fraction of the cost
+   (#443). The list grew off the original ~12 once the job moved to a free
+   runner (skip-smudge + LFS-pull of the listed files only — the 9.6 GB
+   tree does not fit 14 GB disk). The full corpus still runs — once, at
+   the rc. Do not shard the PR job until the *batch step* is the wall;
+   today checkout / yarn / tsc dominate, and shards would repeat them.
 3. **Every PR push spawned a fresh pipeline with no cancellation.** A
    concurrency group now cancels superseded runs (#399, see below).
 
@@ -150,8 +160,9 @@ model shows as digest-changed but renders pixel-identical (the change already
 shipped). That churn is baseline drift, not a PR regression — which is why:
 
 - the smoke diff is **scoped to the smoke subset** (a batch that only
-  regenerated 12 models would otherwise report every *other* model as
-  "resolved" — the phantom "602 resolved" seen on #443's first run); and
+  regenerated the listed models would otherwise report every *other*
+  model as "resolved" — the phantom "602 resolved" seen on #443's
+  first run); and
 - the **visual diff is pixel-thresholded** (`--diff-threshold`, default
   0.05%): identical renders are suppressed to a tally instead of shown as
   no-op rows (#441). Limitation: the threshold is area-only, so a tiny
@@ -222,13 +233,14 @@ corpus size.
   files are LFS; a fresh checkout must fetch them. When the org's LFS
   *bandwidth* budget is exhausted, `git lfs` fetch is refused
   (`This repository exceeded its LFS budget`) and any fresh pull fails
-  (exit 128). `run-ifc-regression` normally survives on a **warm test-models
-  cache** (keyed on the test-models SHA) — so the failure is *masked* until
-  the cache misses (test-models `main` advances) or a job does a fresh pull
-  (the rc run). Symptom: PRs suddenly red at the test-models checkout with no
-  code change. Fix: add an LFS data pack to the org (Settings → Billing), or
-  as a no-code stopgap set the repo variable `TEST_MODELS_REF` to a SHA whose
-  cache is still warm.
+  (exit 128). The PR job skip-smudges and LFS-pulls only
+  `smoke_models.txt`, then caches that smaller tree (key includes
+  `smoke-` + the list hash) — so a PR is a few hundred MB of LFS, not
+  9.6 GB. The rc run still clones the full tree. Symptom of a spent
+  budget: PRs red at the LFS-pull step, or an rc red at checkout, with
+  no code change. Fix: add an LFS data pack to the org (Settings →
+  Billing), or as a no-code stopgap set the repo variable
+  `TEST_MODELS_REF` to a SHA whose cache is still warm.
 
 - **`matrix` is not available in a job-level `if:`.** `rc-regression.yml`
   selects corpora via a dynamic matrix built by a `setup` job, not a
