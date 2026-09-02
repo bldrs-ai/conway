@@ -102,11 +102,13 @@ env:
   # reproducible without test-models having to cut tags. Override via the
   # repo/environment variable TEST_MODELS_REF (a branch, tag, or full commit SHA).
   TEST_MODELS_REF: ${{ vars.TEST_MODELS_REF || 'main' }}
+  TEST_MODELS_PRIVATE_TAG: ${{ vars.TEST_MODELS_PRIVATE_TAG || 'main' }}
 
 jobs:
   build:
-    # Heavy runner matches ifc-regression. The WASM toolchain (genie +
-    # emcc) needs the headroom; the default 2-vCPU runner fails the compile.
+    # Paid 150 GB SKU: emcc's working set does not fit the public
+    # runner's 14 GB disk. 4 vCPU is enough (the old 2-vCPU image is
+    # what failed the compile); disk is why this job stays billed.
     runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
     steps:
       - name: Checkout
@@ -276,46 +278,32 @@ jobs:
           path: tierA-goldens/*.csv
 
   # ---------------------------------------------------------------------------
-  # Regression (SMOKE subset): consumes build's WASM cache (no rebuild), runs
-  # the digest batch over regression/smoke_models.txt only, gates on failures,
-  # posts results to the PR, and packs the npm tarball the perf jobs consume.
-  # The FULL public+private corpus runs once per release candidate in
-  # rc-regression.yml (rc-* tag) — its baseline-PR diff is the release's
-  # regression report. Kept on a separate job (vs steps in build) so its
-  # runtime doesn't block the build-job status once fast feedback finishes.
+  # PR regression: digest batch, sharded, on free ubuntu-24.04.
+  #
+  # Ten shards max (see regression/shards/README.md):
+  #   coverage-1..3  public small models (union = smoke_models.txt)
+  #   psb, d3d, ilna, dowa, orbiter, blsn, hospital
+  #                  one private headline model each
+  #
+  # A few-minute load gets its own machine so a regression there cannot
+  # hide behind a short coverage batch. Skip-smudge + LFS-pull of the
+  # shard list only: PSB is ~900 MB and the public runner has 14 GB disk.
+  #
+  # regression-pack produces the npm tarball perf jobs consume, in
+  # parallel with the shards (both need: build). The aggregator keeps
+  # the check name `run-ifc-regression`.
+  #
+  # Visual-diff is public coverage only — rendering private models would
+  # publish them onto visual-diff-assets.
   # ---------------------------------------------------------------------------
-  run-ifc-regression:
+  regression-pack:
     needs: build
-    # Draft PRs don't run the regression. It is by far the longest job here,
-    # and with several PRs in flight the draft pushes alone can saturate the
-    # 4-job concurrency cap and starve the PRs that are actually ready for
-    # review. `build` is deliberately NOT gated: it is comparatively cheap and
-    # it is the compile + unit-test signal you want while a draft is still
-    # being worked. See AGENTS.md "PR lifecycle".
-    #
-    # A job-level `if` rather than a trigger filter, for the reason spelled
-    # out in the paths-ignore note above: a skipped-by-if job satisfies a
-    # required status check, a workflow that never triggers does not.
-    #
-    # The event_name clause is defensive, not load-bearing. On push and
-    # workflow_dispatch `github.event.pull_request` is null, and Actions
-    # coerces both sides of `==` to a number when the types differ, so a bare
-    # `draft == false` would evaluate `0 == 0` and run anyway. Relying on that
-    # coercion would make merges -- and with them auto-publish, which needs
-    # this job -- hinge on a documented-but-obscure corner of the expression
-    # language. The clause states the intent instead.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
-    # Expose the packed tarball name so downstream perf jobs can download the
-    # artifact by name without re-packing conway.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       package_tgz: ${{ steps.npm_pack.outputs.package_tgz }}
-      # Resolved test-models commit SHA, so perf-three-public pins the exact
-      # same model set this job diffed against.
       test_models_sha: ${{ steps.tmsha.outputs.sha }}
-      # Number of models whose digest CSVs changed vs the pinned test-models
-      # commit; gates the visual-diff job.
-      visual_diff_count: ${{ steps.vdiff.outputs.count }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -335,8 +323,6 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      # Build job populated this cache. We expect a hit; if not, fail fast
-      # rather than silently rebuilding WASM and confusing the timing model.
       - name: Restore WASM build cache (populated by build)
         id: wasm-cache
         uses: actions/cache@v4
@@ -350,353 +336,37 @@ jobs:
       - name: Fail if WASM cache miss
         if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: |
-          echo "::error::WASM cache miss in regression job; build should have populated it."
+          echo "::error::WASM cache miss in regression-pack; build should have populated it."
           exit 1
 
       - name: TypeScript build
         run: yarn build-incremental
 
-      # Bump the minor version so the artifact tarball has a unique name
-      # distinct from the released package (matches prior workflow behavior).
       - name: Bump minor for artifact naming
         run: yarn bumpMinor
 
       - name: Bundle examples
         run: yarn bundle-examples
 
-      # --- Test Models Checkout & Regression ---
-      # Resolve the tracked ref to a concrete commit SHA. Recording the SHA (not
-      # a tag) is what makes the baseline reproducible: test-models doesn't tag
-      # reliably, so we track its main branch and pin per-run to the commit we
-      # actually tested. The SHA keys the cache and is the git-diff target below.
       - name: Resolve test-models SHA
         id: tmsha
         run: |
           set -euo pipefail
           URL=https://github.com/bldrs-ai/test-models.git
-          # Run ls-remote as its own command (errexit) so a transient network
-          # failure aborts the job loudly instead of being masked by the head/cut
-          # pipeline and silently falling back to a moving ref. Annotated tags
-          # advertise a peeled "<ref>^{}" commit line, which we prefer over the
-          # tag-object id.
           REFS=$(git ls-remote "$URL" "$TEST_MODELS_REF")
           SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
-          # No advertised match -> TEST_MODELS_REF is itself a raw commit SHA.
           if [ -z "$SHA" ]; then SHA="$TEST_MODELS_REF"; fi
-          # Refuse anything that is not a 40-hex commit SHA rather than poisoning
-          # the cache key and git-diff target with a moving or bogus ref.
           if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Could not resolve TEST_MODELS_REF='$TEST_MODELS_REF' to a commit SHA (got '$SHA'). Use an existing branch, tag, or full 40-char commit SHA."
+            echo "::error::Could not resolve TEST_MODELS_REF='$TEST_MODELS_REF' to a commit SHA (got '$SHA')."
             exit 1
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Resolved test-models ref '$TEST_MODELS_REF' -> $SHA"
-          echo "**Models:** test-models @ \`$SHA\` (ref \`$TEST_MODELS_REF\`)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Restore Test Models Cache
-        id: cache-test-models
-        uses: actions/cache@v4
-        with:
-          path: test-models
-          key: ${{ runner.os }}-test-models-${{ steps.tmsha.outputs.sha }}
-
-      - name: Checkout Test Models Repo if Not Cached
-        if: steps.cache-test-models.outputs.cache-hit != 'true'
-        run: |
-          SHA="${{ steps.tmsha.outputs.sha }}"
-          # Shallow-fetch exactly the resolved commit (GitHub allows fetch-by-SHA
-          # for reachable commits) so the working tree and git-diff target match
-          # the SHA we recorded, even if main advanced since we resolved it.
-          git init test-models
-          git -C test-models remote add origin https://github.com/bldrs-ai/test-models.git
-          git -C test-models fetch --depth 1 origin "$SHA"
-          git -C test-models checkout "$SHA"
-
-      # This job runs the SMOKE subset only (regression/smoke_models.txt) —
-      # the full public+private corpus runs once per release candidate in
-      # rc-regression.yml, whose baseline-PR diff is the release's regression
-      # report. The batch CLI only has an EXCLUDE regex, so build one that
-      # excludes every model file whose basename is NOT in the smoke list.
-      # The regex must only ever match model FILES (extension-anchored):
-      # the batch's directory walk applies the same regex to directories,
-      # and a broader pattern would stop recursion entirely.
-      - name: Build smoke-subset exclude regex
-        id: smoke
-        run: |
-          python3 - <<'EOF'
-          import os, re
-          names = [l.strip() for l in open('regression/smoke_models.txt')
-                   if l.strip() and not l.strip().startswith('#')]
-          assert names, 'smoke_models.txt selected no models'
-          alts = '|'.join(re.escape(n) for n in names)
-          regex = (rf"^(?!.*/(?:{alts})$)"
-                   r".*\.(?:[iI][fF][cC]|[sS][tT][eE][pP]|[sS][tT][pP])$")
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-            fh.write(f'regex={regex}\n')
-          print(f'{len(names)} smoke models; exclude regex: {regex}')
-          EOF
-
-      # Perf CSV lands OUTSIDE the diffed test_models folder so machine-specific
-      # timings don't show up as "changes" against test-models's checked-in
-      # baselines. The aggregate is uploaded as a workflow artifact below and
-      # summarised in the PR comment. NOTE these timings come from a --parallel
-      # run (models contend), so they're a smoke signal only — the clean
-      # per-model perf record is the rc-gated perf-three-* jobs.
-      - name: Run IFC Regression Batch Script (smoke subset)
-        env:
-          SMOKE_EXCLUDE: ${{ steps.smoke.outputs.regex }}
-        run: |
-          node --experimental-specifier-resolution=node ./compiled/src/ifc/ifc_regression_batch_main.js \
-            -e "$SMOKE_EXCLUDE" \
-            -t ${{ steps.tmsha.outputs.sha }} \
-            --perf "${GITHUB_WORKSPACE}/perf.csv" \
-            test-models \
-            test-models/regression/test_models \
-            --parallel --mem-utilization 90
-
-      - name: Gather Regression Results
-        id: regression_results
-        run: |
-          cd test-models/regression/test_models
-
-          # Summarize failed.csv / errors.csv as diffs against the versions
-          # tracked at the pinned test-models commit. The full tables repeat a
-          # couple dozen pages of long-standing, already-triaged output on
-          # every PR; what a reviewer needs is the delta. Row counts always
-          # show; full rows only for entries added or resolved vs the
-          # baseline (failed.csv additionally prints all current rows when
-          # non-empty - hard failures are rare and always worth reading).
-          cat > /tmp/regression_summary.py <<'EOF'
-          import csv, io, subprocess, sys
-          from collections import Counter
-
-          sha, name, empty_msg, mode = sys.argv[1:5]
-          # Optional 5th arg: a smoke_models.txt path. The run only regenerates
-          # that subset, so baseline rows for models OUTSIDE it would all count
-          # as "resolved" (they weren't retested — on the first smoke run that
-          # was 602 phantom resolved errors). Scope both sides to the subset so
-          # the diff is apples-to-apples.
-          scope_path = sys.argv[5] if len(sys.argv) > 5 else ""
-          scope = set()
-          if scope_path:
-              scope = {
-                  l.strip() for l in open(scope_path)
-                  if l.strip() and not l.strip().startswith("#")
-              }
-
-          def parse(text):
-              rows = list(csv.reader(io.StringIO(text)))
-              if not rows:
-                  return [], []
-              body = [
-                  tuple(
-                      field.replace("\n", " ").replace("\r", " ").replace("|", "\\|")
-                      for field in row
-                  )
-                  for row in rows[1:]
-              ]
-              return rows[0], body
-
-          def table(header, rows, limit=50):
-              out = ["| " + " | ".join(header) + " |", "|" + " --- |" * len(header)]
-              for row in rows[:limit]:
-                  out.append("| " + " | ".join(row) + " |")
-              if len(rows) > limit:
-                  out.append("")
-                  out.append(f"_...and {len(rows) - limit} more row(s); full CSV in the run artifacts._")
-              return "\n".join(out)
-
-          def details(summary, body):
-              return f"<details><summary>{summary}</summary>\n\n{body}\n\n</details>"
-
-          try:
-              with open(name, newline="") as f:
-                  current_text = f.read()
-          except FileNotFoundError:
-              print(f"No {name} found.")
-              sys.exit(0)
-
-          header, current = parse(current_text)
-
-          baseline_run = subprocess.run(
-              ["git", "-C", "../..", "show", f"{sha}:regression/test_models/{name}"],
-              capture_output=True, text=True)
-          has_baseline = baseline_run.returncode == 0
-          baseline = parse(baseline_run.stdout)[1] if has_baseline else []
-
-          scoped_note = ""
-          if scope and "file" in header:
-              fi = header.index("file")
-              baseline = [r for r in baseline if len(r) > fi and r[fi] in scope]
-              current = [r for r in current if len(r) > fi and r[fi] in scope]
-              scoped_note = ", scoped to the smoke subset"
-
-          current_counts, baseline_counts = Counter(current), Counter(baseline)
-          added = list((current_counts - baseline_counts).elements())
-          resolved = list((baseline_counts - current_counts).elements())
-
-          lines = []
-
-          if not current:
-              lines.append(empty_msg)
-          else:
-              lines.append(f"**{len(current)}** row(s) (baseline **{len(baseline)}**{scoped_note}).")
-
-          if not has_baseline:
-              lines.append(f"_No {name} at the pinned test-models commit - every row counts as new._")
-
-          if current and mode == "full":
-              lines.append("")
-              lines.append(table(header, current))
-
-          if added or resolved:
-              summary_bits = []
-              if added:
-                  summary_bits.append(f"{len(added)} new")
-              if resolved:
-                  summary_bits.append(f"{len(resolved)} resolved")
-              lines.append("")
-              lines.append(f"**Changes vs baseline:** {', '.join(summary_bits)}.")
-              if added:
-                  lines.append("")
-                  lines.append(details(f"New ({len(added)})", table(header, added)))
-              if resolved:
-                  lines.append("")
-                  lines.append(details(f"Resolved ({len(resolved)})", table(header, resolved)))
-          elif current:
-              lines.append("No changes vs baseline.")
-
-          print("\n".join(lines))
-          EOF
-
-          if FAILED_OUTPUT=$(python /tmp/regression_summary.py \
-              "${{ steps.tmsha.outputs.sha }}" failed.csv "No failures :white_check_mark:" full \
-              "${GITHUB_WORKSPACE}/regression/smoke_models.txt"); then
-            :
-          else
-            FAILED_OUTPUT="Failed to summarize failed.csv (see job log)."
-          fi
-
-          if ERRORS_OUTPUT=$(python /tmp/regression_summary.py \
-              "${{ steps.tmsha.outputs.sha }}" errors.csv "No errors found." diff \
-              "${GITHUB_WORKSPACE}/regression/smoke_models.txt"); then
-            :
-          else
-            ERRORS_OUTPUT="Failed to summarize errors.csv (see job log)."
-          fi
-
-          echo "failed_output<<EOF" >> $GITHUB_OUTPUT
-          echo "$FAILED_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          echo "errors_output<<EOF" >> $GITHUB_OUTPUT
-          echo "$ERRORS_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          # Summarise the top-10 slowest models from the perf CSV. The full
-          # CSV is uploaded as an artifact for finer inspection.
-          PERF_CSV="${GITHUB_WORKSPACE}/perf.csv"
-          if [ -f "$PERF_CSV" ]; then
-            PERF_OUTPUT=$(python - "$PERF_CSV" <<'EOF'
-          import csv, sys
-          with open(sys.argv[1], newline='') as f:
-              rows = list(csv.DictReader(f))
-          if not rows:
-              print("perf.csv is empty.")
-          else:
-              top_n = 10
-              def total(r):
-                  try: return int(r.get('totalTimeMs','0') or 0)
-                  except ValueError: return 0
-              rows.sort(key=total, reverse=True)
-              header = ['file','status','parseTimeMs','geometryTimeMs','totalTimeMs','rssMb','heapUsedMb']
-              print("| " + " | ".join(header) + " |")
-              print("|" + " --- |" * len(header))
-              for r in rows[:top_n]:
-                  print("| " + " | ".join(r.get(h,'') for h in header) + " |")
-              print("")
-              print(f"_Showing top {min(top_n,len(rows))} of {len(rows)} models by totalTimeMs. Full CSV in the run artifacts._")
-          EOF
-          )
-          else
-            PERF_OUTPUT="perf.csv not produced."
-          fi
-
-          echo "perf_output<<EOF" >> $GITHUB_OUTPUT
-          echo "$PERF_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      # The batch run above left regenerated digest CSVs in the test-models
-      # working tree; any tracked CSV that differs from the pinned commit is a
-      # model whose geometry changed under this PR's engine, and any UNTRACKED
-      # digest CSV is a model newly added to the smoke subset (no committed
-      # baseline yet — `git diff` can't see it, which is how new smoke models
-      # used to miss their visual diff entirely). New models are marked with a
-      # tab-separated `new` field; the report always shows their rows, since a
-      # first-time model must be eyeballed before its digest gets blessed.
-      # Model paths are recorded relative to the test-models root so the
-      # visual-diff job (a different workspace) can re-anchor them.
-      - name: Collect digest-changed models for visual diff
-        id: vdiff
-        run: |
-          python3 - "$PWD/test-models" "${{ steps.tmsha.outputs.sha }}" <<'EOF'
-          import os, subprocess, sys
-          root, sha = sys.argv[1], sys.argv[2]
-          out = subprocess.run(
-              ['git', 'diff', '--name-only', sha, '--', 'regression/test_models'],
-              cwd=root, capture_output=True, text=True, check=True).stdout
-          untracked = subprocess.run(
-              ['git', 'ls-files', '--others', '--exclude-standard', '--',
-               'regression/test_models'],
-              cwd=root, capture_output=True, text=True, check=True).stdout
-          # Per-run report files churn on every run (env-specific paths,
-          # counters) — only per-model digest CSVs identify changed geometry.
-          meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv',
-                  'zero_geometry.csv'}
-
-          def digest_stems(listing):
-              stems = set()
-              for line in listing.splitlines():
-                  base = os.path.basename(line)
-                  if base.endswith('.csv') and base not in meta:
-                      stems.add(base[:-4])
-              return stems
-
-          new_stems = digest_stems(untracked)
-          stems = digest_stems(out) | new_stems
-          models, found = [], set()
-          for top in ('ifc', 'step'):
-              for dirpath, _, files in os.walk(os.path.join(root, top)):
-                  for f in files:
-                      stem, ext = os.path.splitext(f)
-                      if (stem in stems and stem not in found and
-                              ext.lower() in ('.ifc', '.step', '.stp')):
-                          found.add(stem)
-                          rel = os.path.relpath(os.path.join(dirpath, f), root)
-                          models.append(
-                              f'{rel}\tnew' if stem in new_stems else rel)
-          with open('changed_models.txt', 'w') as fh:
-              fh.write('\n'.join(sorted(models)) + ('\n' if models else ''))
-          print(f'{len(models)} digest-changed/new model(s)')
-          for m in models:
-              print(f'  {m}')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-              fh.write(f'count={len(models)}\n')
-          EOF
-
-      - name: Upload changed-model list
-        if: steps.vdiff.outputs.count != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: visual-diff-models-${{ github.run_id }}
-          path: changed_models.txt
 
       - name: Create NPM Package
         id: npm_pack
         run: |
           PACKAGE_TGZ=$(npm pack 2>&1 | grep "filename:" | sed 's/.*filename: //')
-          echo "PACKAGE_TGZ=${PACKAGE_TGZ}" >> $GITHUB_ENV
-          echo "package_tgz=${PACKAGE_TGZ}" >> $GITHUB_OUTPUT
+          echo "package_tgz=${PACKAGE_TGZ}" >> "$GITHUB_OUTPUT"
 
       - name: Upload NPM Package Artifact
         uses: actions/upload-artifact@v4
@@ -704,118 +374,160 @@ jobs:
           name: ${{ steps.npm_pack.outputs.package_tgz }}
           path: ${{ steps.npm_pack.outputs.package_tgz }}
 
-      - name: Upload perf.csv artifact
-        if: ${{ hashFiles('perf.csv') != '' }}
+  regression-shard:
+    needs: build
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: coverage-1
+            corpus: public
+            concurrency: '2'
+          - id: coverage-2
+            corpus: public
+            concurrency: '2'
+          - id: coverage-3
+            corpus: public
+            concurrency: '2'
+          - id: psb
+            corpus: private
+            concurrency: '1'
+          - id: d3d
+            corpus: private
+            concurrency: '1'
+          - id: ilna
+            corpus: private
+            concurrency: '1'
+          - id: dowa
+            corpus: private
+            concurrency: '1'
+          - id: orbiter
+            corpus: private
+            concurrency: '1'
+          - id: blsn
+            corpus: private
+            concurrency: '1'
+          - id: hospital
+            corpus: private
+            concurrency: '1'
+    name: regression-shard ${{ matrix.id }}
+    env:
+      TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
+    steps:
+      - name: Checkout Conway Repo
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        run: yarn install --frozen-lockfile
+
+      - name: Restore WASM build cache (populated by build)
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      - name: Fail if WASM cache miss
+        if: (matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true') && steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::WASM cache miss in regression shard; build should have populated it."
+          exit 1
+
+      - name: TypeScript build
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        run: yarn build-incremental
+
+      - name: Run shard
+        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
+        uses: ./.github/actions/regression-shard
+        with:
+          shard-id: ${{ matrix.id }}
+          shard-file: regression/shards/${{ matrix.id }}.txt
+          corpus: ${{ matrix.corpus }}
+          models-ref: ${{ matrix.corpus == 'public' && env.TEST_MODELS_REF || env.TEST_MODELS_PRIVATE_TAG }}
+          models-repo: ${{ matrix.corpus == 'public' && 'bldrs-ai/test-models' || 'bldrs-ai/test-models-private' }}
+          models-token: ${{ matrix.corpus == 'private' && secrets.TEST_MODELS_PRIVATE_TOKEN || '' }}
+          concurrency: ${{ matrix.concurrency }}
+          allow-visual-diff: ${{ matrix.corpus == 'public' && 'true' || 'false' }}
+
+  # Required check name. Must stay `run-ifc-regression` — README and any
+  # status-check consumers match on it. Tiny: it AND-reduces the shards
+  # and merges public visual-diff lists.
+  run-ifc-regression:
+    name: run-ifc-regression
+    needs: [regression-pack, regression-shard]
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      package_tgz: ${{ needs.regression-pack.outputs.package_tgz }}
+      test_models_sha: ${{ needs.regression-pack.outputs.test_models_sha }}
+      visual_diff_count: ${{ steps.concat.outputs.count }}
+    steps:
+      - name: Merge public visual-diff lists
+        id: merge
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: visual-diff-models-*
+          path: vdiff-in
+          merge-multiple: false
+
+      - name: Concatenate changed-model lists
+        id: concat
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path('vdiff-in')
+          lines = []
+          if root.is_dir():
+              for p in sorted(root.rglob('changed_models.txt')):
+                  lines.extend(l.strip() for l in p.read_text().splitlines() if l.strip())
+          uniq = sorted(set(lines))
+          Path('changed_models.txt').write_text(('\n'.join(uniq) + '\n') if uniq else '')
+          count = len(uniq)
+          print(f'{count} public digest-changed model(s)')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f'count={count}\n')
+          PY
+
+      - name: Upload merged changed-model list
+        if: steps.concat.outputs.count != '0'
         uses: actions/upload-artifact@v4
         with:
-          name: perf-${{ github.run_id }}
-          path: perf.csv
+          name: visual-diff-models-${{ github.run_id }}
+          path: changed_models.txt
 
-      - name: Comment on Pull Request with Regression Results and NPM Package Artifact
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          issue-number: ${{ github.event.pull_request.number }}
-          body: |
-            ## Regression Results (smoke subset, IFC + STEP)
-
-            **Models:** smoke subset (`regression/smoke_models.txt`) of `test-models` @ `${{ steps.tmsha.outputs.sha }}` (ref `${{ env.TEST_MODELS_REF }}`).
-            The full public+private corpus runs once per release candidate (`rc-*` tag, see `rc-regression.yml`).
-
-            **Failed.csv:**
-            ${{ steps.regression_results.outputs.failed_output }}
-
-            **Errors.csv:**
-            ${{ steps.regression_results.outputs.errors_output }}
-
-            **Performance (top 10 by totalTimeMs):**
-            ${{ steps.regression_results.outputs.perf_output }}
-
-            **NPM Package Artifact:**
-            The package **${{ steps.npm_pack.outputs.package_tgz }}** was generated.
-            Download it from [this run's artifacts page](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            (look for the artifact named **${{ steps.npm_pack.outputs.package_tgz }}**).
-
-      # --- Gates. Both run LAST, and both `!cancelled()`. ---------------------
-      #
-      # A gate that exits 1 mid-job takes every later step with it, so gating up
-      # front discarded exactly the evidence needed to diagnose the model it had
-      # just flagged: the results summary, the changed-model list visual-diff
-      # consumes, the tarball, perf.csv, and the PR comment — which quotes
-      # failed.csv, so before this a smoke crash produced no PR comment at all
-      # and you had to open the job log to see WHICH model crashed. Running the
-      # gates last costs nothing but the red X. `!cancelled()` (rather than bare)
-      # so neither gate masks the other: a run reports both problems instead of
-      # making the next push rediscover the second.
-
-      # Hard gate: a smoke model that fails to parse/extract blocks the PR.
-      # Digest CHANGES stay informational (intended geometry changes are
-      # reviewed via the visual diff and blessed at the rc), but a crash is
-      # never intended.
-      - name: Fail on smoke regression failures
-        if: ${{ !cancelled() }}
+      - name: All shards passed
         run: |
-          FAILED=test-models/regression/test_models/failed.csv
-          if [ -f "$FAILED" ] && [ "$(wc -l < "$FAILED")" -gt 1 ]; then
-            echo "::error::Smoke regression failures:"
-            cat "$FAILED"
-            exit 1
-          fi
-          echo "No smoke failures."
-
-      # A model that loads and emits nothing exits 0 and writes no failed.csv
-      # row, so hard-failure detection cannot see it — see #477 / #478. The
-      # batch now reports these in zero_geometry.csv; anything not explicitly
-      # listed (with an issue) in regression/zero_geometry_allowlist.txt is a
-      # new one and fails here.
-      - name: Fail on unexpected zero-geometry models
-        if: ${{ !cancelled() }}
-        run: |
-          ZERO=test-models/regression/test_models/zero_geometry.csv
-          MAIN=test-models/regression/test_models/main.csv
-          ALLOW=regression/zero_geometry_allowlist.txt
-          if [ ! -f "$ZERO" ]; then
-            echo "No zero_geometry.csv produced."; exit 0
-          fi
-          python3 - "$ZERO" "$ALLOW" "$MAIN" <<'PY'
-          import csv, os, sys
-          zero, allow, main = sys.argv[1], sys.argv[2], sys.argv[3]
-          allowed = set()
-          for line in open(allow, encoding='utf-8'):
-              line = line.split('#', 1)[0].strip()
-              if line:
-                  allowed.add(line)
-          rows = [r['file'] for r in csv.DictReader(open(zero, newline='', encoding='utf-8'))]
-          unexpected = [f for f in rows if f not in allowed]
-          for f in rows:
-              print(f"zero geometry: {f}" + ("" if f in unexpected else "  (allowlisted)"))
-
-          # Stale entries rot silently: an allowlisted model that starts
-          # producing geometry keeps its exemption forever, so a later
-          # regression that empties it again is waved through. main.csv is the
-          # set of models this run actually digested, which is what keeps this
-          # correct on the smoke subset - an entry for a model the run never
-          # touched is neither stale nor confirmed, just absent.
-          ran = set()
-          if os.path.exists(main):
-              ran = {r['file'] for r in csv.DictReader(open(main, newline='', encoding='utf-8'))}
-          stale = sorted((allowed & ran) - set(rows))
-
-          if unexpected:
-              print("::error::Models loaded but produced NO geometry and are not allowlisted:")
-              for f in unexpected:
-                  print(f"::error::  {f}")
-          if stale:
-              print("::error::Allowlisted models that now DO produce geometry - "
-                    "delete their lines from regression/zero_geometry_allowlist.txt:")
-              for f in stale:
-                  print(f"::error::  {f}")
-          if unexpected or stale:
-              sys.exit(1)
-          print(f"{len(rows)} zero-geometry model(s), all allowlisted; "
-                f"{len(allowed & ran)} allowlist entr(ies) exercised and still empty.")
-          PY
+          echo "regression-pack: ${{ needs.regression-pack.result }}"
+          echo "regression-shard: ${{ needs.regression-shard.result }}"
+          test "${{ needs.regression-pack.result }}" = "success"
+          test "${{ needs.regression-shard.result }}" = "success"
 
   # ---------------------------------------------------------------------------
   # Visual diff: render before/after images for every model whose regression
@@ -839,11 +551,12 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       needs.run-ifc-regression.outputs.visual_diff_count != '0'
-    # Same large runner as every other job that executes the conway CLIs:
-    # the MT WASM engine reserves multi-GB (shared) memory at startup, and on
-    # the standard 4-vcpu runner every export died with an uncaught allocation
-    # crash (only the "Node.js vX.Y.Z" report footer reached the PR table).
-    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    # Public ubuntu-24.04 is 4 vCPU / 16 GB — more RAM than the paid
+    # 8 GB SKU this used to share. The allocation crash that forced the
+    # large runner was on the old 2-vCPU/7 GB image; disk is handled by
+    # restoring the smoke-sized test-models cache (or skip-smudge +
+    # LFS-pull of changed_models.txt only).
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write       # push rendered PNGs to visual-diff-assets
@@ -895,10 +608,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: test-models
-          key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
+          key: ${{ runner.os }}-test-models-smoke-${{ needs.run-ifc-regression.outputs.test_models_sha }}-${{ hashFiles('regression/smoke_models.txt') }}
 
       - name: Checkout Test Models Repo if Not Cached
         if: steps.cache-test-models.outputs.cache-hit != 'true'
+        env:
+          GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           SHA="${{ needs.run-ifc-regression.outputs.test_models_sha }}"
           git init test-models
@@ -906,34 +621,48 @@ jobs:
           git -C test-models fetch --depth 1 origin "$SHA"
           git -C test-models checkout "$SHA"
 
-      # Model files under ifc/ and step/ are git-lfs objects; a manual
-      # fetch/checkout (and a cache seeded from one) can leave 132-byte
-      # pointer stubs. Materialize what we can.
-      #
-      # Stubs used to be tolerated here with a warning saying their rows would
-      # read "no geometry" truthfully. That is truthful about the bytes on
-      # disk and false about the model, and it cost real work: two models were
-      # blessed at zero rows and filed as engine bugs (#477) before anyone
-      # noticed the run had never read them. The regression batch now FAILS a
-      # stub instead of parsing it (#486), so a stub can no longer reach a
-      # baseline. This job renders rather than digests, so it still continues
-      # — a stub here costs one blank image, not a committed falsehood — but
-      # the warning now says what it actually means.
+      # Pull LFS only for the models this job will render. A full
+      # `ifc/**,step/**` pull is ~3 GB and does not fit on 14 GB disk.
+      # Stubs used to be tolerated as "no geometry"; that blessed two
+      # pointer files as engine bugs (#477). The batch now fails a stub
+      # (#486). This job still continues on a leftover stub — one blank
+      # image, not a committed falsehood — but the warning says that.
       - name: Materialize LFS model files
         run: |
-          cd test-models
-          STUBS=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
-          echo "LFS pointer stubs remaining: $STUBS"
-          if [ "$STUBS" != "0" ]; then
-            git lfs install --local
-            git lfs pull --include="ifc/**,step/**" || true
-            LEFT=$(grep -rl "git-lfs.github.com" ifc step 2>/dev/null | wc -l || true)
-            echo "stubs after lfs pull: $LEFT"
-            if [ "$LEFT" != "0" ]; then
-              echo "::warning::test-models still has $LEFT unsmudged LFS pointer stub(s). These are NOT models: any row below that renders empty for one of them is a missing file, not a geometry regression."
-              grep -rl "git-lfs.github.com" ifc step 2>/dev/null || true
-            fi
-          fi
+          python3 - <<'EOF'
+          import subprocess
+          from pathlib import Path
+          root = Path('test-models')
+          rels = []
+          for line in open('changed_models.txt'):
+              rel = line.split('\t', 1)[0].strip()
+              if rel:
+                  rels.append(rel)
+          stubs = []
+          for rel in rels:
+              p = root / rel
+              if not p.is_file():
+                  print(f'::warning::changed model missing: {rel}')
+                  continue
+              head = p.read_bytes()[:200]
+              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
+                  stubs.append(rel)
+          print(f'{len(rels)} changed models, {len(stubs)} LFS stubs to pull')
+          if not stubs:
+              raise SystemExit(0)
+          subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
+          subprocess.check_call(
+              ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)], cwd=root)
+          left = []
+          for rel in stubs:
+              head = (root / rel).read_bytes()[:200]
+              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
+                  left.append(rel)
+          if left:
+              print('::warning::unsmudged LFS pointer stub(s) after pull — '
+                    'blank renders for these are a missing file, not a geometry '
+                    'regression: ' + ', '.join(left))
+          EOF
 
       - name: Render before/after pairs
         run: |
@@ -1139,6 +868,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test-models
+          # Full public corpus, not the smoke-sized cache the PR
+          # regression job writes. This job is rc-only on the 150 GB
+          # SKU; a miss re-clones.
           key: ${{ runner.os }}-test-models-${{ needs.run-ifc-regression.outputs.test_models_sha }}
 
       - name: Checkout Test Models Repo if Not Cached

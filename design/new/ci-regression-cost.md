@@ -22,7 +22,7 @@ full sweep only at a blessed release point.
 | Tier | When | What runs | Gate |
 |---|---|---|---|
 | **A — fixtures** | every PR + merge | unit tests + `data/` geometry goldens (in `build`) | **hard** — a mismatch fails `build` |
-| **B — smoke** | every PR + merge | digest batch over `regression/smoke_models.txt` (~12 models) in `run-ifc-regression` | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational |
+| **B — PR shards** | every ready PR + merge | up to **10 shards** on free `ubuntu-24.04`: three public coverage lists (union = `regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
 Tier A is hermetic (no `test-models` clone, no token — protects forks too);
@@ -40,21 +40,28 @@ visually (the visual-diff comment) and **blessed at the rc**, not at PR time.
 
 ## Why it's tiered this way (the cost rationale)
 
-Every heavy job runs on the `ubuntu-24.04-4vcpu-8gb-150gbssd` runner, billed
-as **Actions Linux 16-core at $0.012/min** — that line item is ~100% of the
-metered spend (the 2-core `Actions Linux` rows bill $0 inside the included
-allotment). So cost ≈ **large-runner minutes**, and the levers are *how often*
+Jobs that need the 150 GB disk still run on
+`ubuntu-24.04-4vcpu-8gb-150gbssd`, billed as **Actions Linux 16-core at
+$0.012/min**. Conway is public, so standard `ubuntu-24.04` is 4 vCPU /
+16 GB / 14 GB disk and **unlimited-free**. Digests are not
+jitter-sensitive; the PR regression and visual-diff jobs run there.
+`build` (emcc working set), `perf-three-*` (low-variance timings + full
+corpus on disk), and `rc-regression.yml` (full public+private LFS tree)
+stay on the paid SKU.
+
+So metered cost ≈ **large-runner minutes**, and the levers are *how often*
 and *how many* jobs hit that runner.
 
-Measured per-job wall time on that runner (representative runs):
+Measured per-job wall time (representative runs):
 
 | job | wall time |
 |---|---|
-| build (WASM cache hit) | ~2.8 min |
+| build (WASM cache hit, paid 150 GB) | ~2.8 min |
 | run-ifc-regression (full corpus, old) | ~5 min |
 | **perf-three-private** | **~27 min** |
 | **perf-three-public** | **~11 min** |
-| smoke batch step (12 models) | **seconds** |
+| PR coverage shard (public small models) | setup ~2.5 min + batch well under a minute |
+| PR headline shard (one private model) | setup ~2.5 min + a few minutes of load (PSB / D3D / Hospital class) |
 
 Findings that drove the design:
 
@@ -64,8 +71,15 @@ Findings that drove the design:
    is deliberately not reduced**: for a benchmark, the 8-vcpu headroom buys
    low-variance timings, not throughput — frequency is the lever, not size.
 2. **The full digest batch ran on every PR** for a whole-corpus signal that a
-   ~12-model smoke subset delivers for correctness at a fraction of the cost
-   (#443). The full corpus still runs — once, at the rc.
+   curated subset delivers for correctness at a fraction of the cost
+   (#443). The PR job is now **sharded (max 10)** on free runners:
+   coverage lists of small public models, plus one shard per private
+   headline model (PSB / D3D / ILNA / DOWA / Orbiter / BLSN / Hospital).
+   A few-minute load gets its own machine so a regression there cannot
+   hide behind a short batch. Skip-smudge + LFS-pull of the shard list
+   only — the 9.6 GB public tree and 15 GB private tree do not fit 14 GB
+   disk; PSB alone is ~900 MB. The full corpus still runs once, at the rc.
+   Do not add an 11th shard; see `regression/shards/README.md`.
 3. **Every PR push spawned a fresh pipeline with no cancellation.** A
    concurrency group now cancels superseded runs (#399, see below).
 
@@ -150,8 +164,9 @@ model shows as digest-changed but renders pixel-identical (the change already
 shipped). That churn is baseline drift, not a PR regression — which is why:
 
 - the smoke diff is **scoped to the smoke subset** (a batch that only
-  regenerated 12 models would otherwise report every *other* model as
-  "resolved" — the phantom "602 resolved" seen on #443's first run); and
+  regenerated the listed models would otherwise report every *other*
+  model as "resolved" — the phantom "602 resolved" seen on #443's
+  first run); and
 - the **visual diff is pixel-thresholded** (`--diff-threshold`, default
   0.05%): identical renders are suppressed to a tally instead of shown as
   no-op rows (#441). Limitation: the threshold is area-only, so a tiny
@@ -222,13 +237,14 @@ corpus size.
   files are LFS; a fresh checkout must fetch them. When the org's LFS
   *bandwidth* budget is exhausted, `git lfs` fetch is refused
   (`This repository exceeded its LFS budget`) and any fresh pull fails
-  (exit 128). `run-ifc-regression` normally survives on a **warm test-models
-  cache** (keyed on the test-models SHA) — so the failure is *masked* until
-  the cache misses (test-models `main` advances) or a job does a fresh pull
-  (the rc run). Symptom: PRs suddenly red at the test-models checkout with no
-  code change. Fix: add an LFS data pack to the org (Settings → Billing), or
-  as a no-code stopgap set the repo variable `TEST_MODELS_REF` to a SHA whose
-  cache is still warm.
+  (exit 128). PR shards skip-smudge and LFS-pull only their list —
+  public coverage is ~180 MB; the seven private headline models are
+  ~2.6 GB together (PSB alone ~900 MB), cached per shard. The rc run
+  still clones the full trees. Symptom of a spent budget: PRs red at
+  the LFS-pull step, or an rc red at checkout, with no code change.
+  Fix: add an LFS data pack to the org (Settings → Billing), or as a
+  no-code stopgap set `TEST_MODELS_REF` / `TEST_MODELS_PRIVATE_TAG` to
+  a SHA whose cache is still warm.
 
 - **`matrix` is not available in a job-level `if:`.** `rc-regression.yml`
   selects corpora via a dynamic matrix built by a `setup` job, not a

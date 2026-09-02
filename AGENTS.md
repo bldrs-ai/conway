@@ -56,11 +56,13 @@ This repo uses yarn 1.22.22.
 
 ## PR lifecycle
 
-Several PRs are usually in flight at once, and the CI runners are a
-shared, capped resource (4 concurrent jobs). A PR that runs the full
-suite on every push while it is still being reworked starves the PRs
-that are actually ready. So work moves through these five steps, in
-order:
+Several PRs are usually in flight at once. The paid 150 GB runners
+are a shared, capped resource (4 concurrent jobs) — `build`,
+`perf-three-*`, and rc-regression sit there. `run-ifc-regression` and
+`visual-diff` use free public `ubuntu-24.04` and do not count against
+that cap, but a PR that runs them on every draft push still burns
+LFS bandwidth and stacks batch jobs. So work moves through these
+five steps, in order:
 
 1. **Open the PR as a draft.** Not "open it and mark it draft" —
    `create_pull_request` takes `draft: true`. Heavy CI is gated on
@@ -133,7 +135,7 @@ the two in step when either changes.
 | Job | Draft PR | Ready PR |
 |---|---|---|
 | `build` (compile + unit tests) | runs | runs |
-| `run-ifc-regression` | **skipped** | runs |
+| `run-ifc-regression` (aggregator over ≤10 shards) | **skipped** | runs |
 | `visual-diff` | **skipped** | runs (when digests changed) |
 
 `build` is deliberately left ungated: it is the cheap compile and

@@ -1,32 +1,79 @@
-# PR-time regression smoke subset.
+# Public coverage models for PR-time digest CI. The workflow splits this
+# list across regression/shards/coverage-{1,2,3}.txt (keep those in sync).
+# Headline private models (PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital)
+# each get their own shard — see regression/shards/README.md.
 #
 # One model filename per line (basename with extension, matched against the
-# test-models tree; lines starting with '#' are ignored). Every PR's
-# run-ifc-regression job runs the digest batch over ONLY these models — the
-# full public+private corpus runs once per release candidate (rc-* tag) in
-# rc-regression.yml, whose baseline-PR diff is the release's regression
-# report.
+# test-models tree; lines starting with '#' are ignored). The full
+# public+private corpus still runs once per release candidate (rc-* tag)
+# in rc-regression.yml.
 #
-# Curation intent: small/fast models, a spread of schemas and exporters,
-# both IFC and STEP, plus one chronically error-producing model (supercap)
-# so error-churn regressions surface at PR time too. Each entry must have a
-# committed baseline CSV in test-models regression/test_models/. Slow models
-# (SKYLARK, Snowdon, Arty_Z7, Jetenginestep, DSA2, nist_ftc_08...) are
-# deliberately excluded — they belong to the RC pass.
+# Curation intent: a spread of schemas and exporters, both IFC and STEP,
+# plus one chronically error-producing model (supercap) so error-churn
+# regressions surface at PR time. Each entry must have a committed
+# baseline CSV in test-models regression/test_models/ (or it lands as
+# "new" and is blessed with the next baseline PR).
+#
+# Kept off the public coverage list on purpose — they belong to a
+# headline shard or the RC pass:
+#   SKYLARK, Snowdon, Arty_Z7, Jetenginestep, DSA2, nist_ftc_08,
+#   sp-231/469/946, ISSUE_068, ISSUE_098, ISSUE_102_M3D-CON-CD,
+#   schependomlaan, Stohr, advanced_model, S_Office, Trapelo,
+#   Haus Aarburg (the 38 MB one). File size is not the only signal:
+#   nist_ftc_08 is small and still slow.
+
+# --- IFC: tiny fixtures + schema spread ---
 index.ifc
+box.ifc
+bath-csg-solid.ifc
+b.ifc
+example.ifc
+Sample_entities.ifc
+IfcOpenHouse_IFC4.ifc
+KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
+haus.ifc
 duplex.ifc
 AC20-FZK-Haus.ifc
 ISSUE_005_haus.ifc
 ISSUE_021_Mini Project.ifc
+ISSUE_034_HouseZ.ifc
+ISSUE_044_test_IFCCOMPOSITEPROFILEDEF.ifc
+ISSUE_102_M3D-CON.ifc
+ISSUE_126_model.ifc
+ISSUE_159_kleine_Wohnung_R22.ifc
+ISSUE_171_IfcSurfaceCurveSweptAreaSolid.ifc
+Office_A_20110811.ifc
+tested_sample_project.ifc
+171210AISC_Sculpture_param.ifc
+Remigen_Mo.ifc
+House Aarburg IFC (1).ifc
+C20-Institute-Var-2.ifc
+dental_clinic.ifc
+FM_ARC_DigitalHub.ifc
+ifcbridge-model01.ifc
+ISSUE_129_N1540_17_EXE_MOD_448200_02_09_11SMC_IGC_V17.ifc
+# One larger IFC kept as a catch-all (already on the original smoke list).
 MB-Khaya.ifc
+
+# --- STEP: NIST CTC geometry + a few AP242, plus small assemblies ---
 nist_ctc_01_asme1_rd.stp
 nist_ctc_02_asme1_rc.stp
+nist_ctc_03_asme1_rc.stp
+nist_ctc_04_asme1_rd.stp
+nist_ctc_05_asme1_rd.stp
+nist_ctc_01_asme1_ap242-e1.stp
+nist_ctc_02_asme1_ap242-e2.stp
+as1-oc-214.stp
 create-a-tube.step
-supercap.step
-driver board.step
-# Metre-unit Onshape AP242 assembly (rational B-splines, same_sense=.F.
-# edges, pre-defined colours) — the exporter family the
-# step-small-model-fidelity fixes target; ~2s end-to-end. No committed
-# baseline yet: first smoke run's digest lands as new and gets blessed
-# with the next baseline PR.
+a-gear.step
+NEMA 23 - 76mm.STEP
 Right_Hand.step
+Equiptment_1mLSyringe.step
+Equiptment_SyringePumpSystem.step
+TestSetup_UltrasoundTransducerScattering.step
+# Chronically error-producing; keep so error-churn shows at PR time.
+supercap.step
+supercap2.step
+supercap3.step
+# Mid-size STEP already on the original list.
+driver board.step
