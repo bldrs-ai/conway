@@ -1,11 +1,12 @@
-# PR-time regression subset.
+# Public coverage models for PR-time digest CI. The workflow splits this
+# list across regression/shards/coverage-{1,2,3}.txt (keep those in sync).
+# Headline private models (PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital)
+# each get their own shard — see regression/shards/README.md.
 #
 # One model filename per line (basename with extension, matched against the
-# test-models tree; lines starting with '#' are ignored). Every ready PR's
-# run-ifc-regression job runs the digest batch over ONLY these models — the
-# full public+private corpus still runs once per release candidate (rc-*
-# tag) in rc-regression.yml, whose baseline-PR diff is the release's
-# regression report.
+# test-models tree; lines starting with '#' are ignored). The full
+# public+private corpus still runs once per release candidate (rc-* tag)
+# in rc-regression.yml.
 #
 # Curation intent: a spread of schemas and exporters, both IFC and STEP,
 # plus one chronically error-producing model (supercap) so error-churn
@@ -13,17 +14,13 @@
 # baseline CSV in test-models regression/test_models/ (or it lands as
 # "new" and is blessed with the next baseline PR).
 #
-# Kept off this list on purpose — they belong to the RC pass:
+# Kept off the public coverage list on purpose — they belong to a
+# headline shard or the RC pass:
 #   SKYLARK, Snowdon, Arty_Z7, Jetenginestep, DSA2, nist_ftc_08,
 #   sp-231/469/946, ISSUE_068, ISSUE_098, ISSUE_102_M3D-CON-CD,
 #   schependomlaan, Stohr, advanced_model, S_Office, Trapelo,
 #   Haus Aarburg (the 38 MB one). File size is not the only signal:
 #   nist_ftc_08 is small and still slow.
-#
-# The batch itself is ~14s for the original ~12 models on 4 cores
-# (`--parallel`); this list is sized so the step stays well under a
-# couple of minutes. Sharding the job would only pay once the batch
-# (not checkout / yarn / tsc) is the wall.
 
 # --- IFC: tiny fixtures + schema spread ---
 index.ifc

@@ -6,7 +6,7 @@ Conway has a built in regression testing framework that is designed to be run as
 
 CI runs the framework at three escalating scopes, so full-corpus cost is paid once per release instead of per push:
 
-1. **Every PR / merge** — unit tests plus the in-repo `data/` goldens (Tier A in `build.yml`), and the digest batch over the **PR subset** in `regression/smoke_models.txt` on a free `ubuntu-24.04` runner. A listed model that fails to parse blocks the PR; digest *changes* are informational and reviewed via the visual diff.
+1. **Every ready PR / merge** — unit tests plus the in-repo `data/` goldens (Tier A in `build.yml`), and up to ten digest shards on free `ubuntu-24.04` (three public coverage lists plus one shard each for PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital — see `regression/shards/README.md`). A listed model that fails to parse blocks the PR; digest *changes* are informational and reviewed via the visual diff (public coverage only).
 2. **Release candidate (`rc-*` tag)** — `rc-regression.yml` runs the batch over the **entire public and private corpora**, goes red on any failure, and opens a baseline PR in each test-models repo. That PR's diff is the release's regression report; merging it blesses the baselines so they track releases exactly.
 3. **Perf** — the headless-three benchmarks also run per `rc-*` tag (`perf-three-*` in `build.yml`); timings from the parallel smoke batch are contended and only a coarse signal.
 

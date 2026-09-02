@@ -1,0 +1,4 @@
+# corpus: private
+# Headline STEP. Small on disk (~10 MB), long-running geometry
+# (coil spring / helical thread — design/new and scripts/debug/README.md).
+Orbiter_v1.1_Gear_7.5.step

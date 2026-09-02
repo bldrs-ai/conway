@@ -135,7 +135,7 @@ the two in step when either changes.
 | Job | Draft PR | Ready PR |
 |---|---|---|
 | `build` (compile + unit tests) | runs | runs |
-| `run-ifc-regression` | **skipped** | runs |
+| `run-ifc-regression` (aggregator over ≤10 shards) | **skipped** | runs |
 | `visual-diff` | **skipped** | runs (when digests changed) |
 
 `build` is deliberately left ungated: it is the cheap compile and

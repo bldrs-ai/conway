@@ -194,7 +194,7 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`, and a Tier-A geometry-digest check of the in-repo `data/` models against committed goldens. |
-| `run-ifc-regression` | `needs: build`. Reuses the same WASM cache. Free `ubuntu-24.04` (4 vCPU / 16 GB). Runs the digest batch over the **PR subset** (`regression/smoke_models.txt`) of the public `test-models` ref (`TEST_MODELS_REF`, default `main`), skip-smudge + LFS-pull of those files only. Fails on any `failed.csv` row; digest *changes* are informational (reviewed via the visual-diff comment, blessed at the rc). Posts a per-PR comment with the resolved SHA + smoke-scoped `failed.csv` / `errors.csv` / perf summaries, and uploads the candidate npm tarball + `perf.csv` as workflow artifacts. |
+| `run-ifc-regression` | Aggregator over `regression-shard` (max 10, free `ubuntu-24.04`). Three public coverage shards (`regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital. Skip-smudge + LFS-pull of that shard's files only. Fails on any `failed.csv` row; digest *changes* are informational (visual-diff is public coverage only). `regression-pack` uploads the candidate npm tarball the perf jobs consume. |
 
 A `concurrency` group cancels superseded PR runs (main runs are never
 cancelled, so releases always complete). A merge to `main` re-runs those two

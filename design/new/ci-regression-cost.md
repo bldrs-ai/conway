@@ -22,7 +22,7 @@ full sweep only at a blessed release point.
 | Tier | When | What runs | Gate |
 |---|---|---|---|
 | **A — fixtures** | every PR + merge | unit tests + `data/` geometry goldens (in `build`) | **hard** — a mismatch fails `build` |
-| **B — smoke** | every PR + merge | digest batch over `regression/smoke_models.txt` (~50 models) in `run-ifc-regression` | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational |
+| **B — PR shards** | every ready PR + merge | up to **10 shards** on free `ubuntu-24.04`: three public coverage lists (union = `regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
 Tier A is hermetic (no `test-models` clone, no token — protects forks too);
@@ -60,7 +60,8 @@ Measured per-job wall time (representative runs):
 | run-ifc-regression (full corpus, old) | ~5 min |
 | **perf-three-private** | **~27 min** |
 | **perf-three-public** | **~11 min** |
-| smoke batch step (~12 models, paid) | **~14 s** of a ~3 min job |
+| PR coverage shard (public small models) | setup ~2.5 min + batch well under a minute |
+| PR headline shard (one private model) | setup ~2.5 min + a few minutes of load (PSB / D3D / Hospital class) |
 
 Findings that drove the design:
 
@@ -70,12 +71,15 @@ Findings that drove the design:
    is deliberately not reduced**: for a benchmark, the 8-vcpu headroom buys
    low-variance timings, not throughput — frequency is the lever, not size.
 2. **The full digest batch ran on every PR** for a whole-corpus signal that a
-   curated smoke subset delivers for correctness at a fraction of the cost
-   (#443). The list grew off the original ~12 once the job moved to a free
-   runner (skip-smudge + LFS-pull of the listed files only — the 9.6 GB
-   tree does not fit 14 GB disk). The full corpus still runs — once, at
-   the rc. Do not shard the PR job until the *batch step* is the wall;
-   today checkout / yarn / tsc dominate, and shards would repeat them.
+   curated subset delivers for correctness at a fraction of the cost
+   (#443). The PR job is now **sharded (max 10)** on free runners:
+   coverage lists of small public models, plus one shard per private
+   headline model (PSB / D3D / ILNA / DOWA / Orbiter / BLSN / Hospital).
+   A few-minute load gets its own machine so a regression there cannot
+   hide behind a short batch. Skip-smudge + LFS-pull of the shard list
+   only — the 9.6 GB public tree and 15 GB private tree do not fit 14 GB
+   disk; PSB alone is ~900 MB. The full corpus still runs once, at the rc.
+   Do not add an 11th shard; see `regression/shards/README.md`.
 3. **Every PR push spawned a fresh pipeline with no cancellation.** A
    concurrency group now cancels superseded runs (#399, see below).
 
@@ -233,14 +237,14 @@ corpus size.
   files are LFS; a fresh checkout must fetch them. When the org's LFS
   *bandwidth* budget is exhausted, `git lfs` fetch is refused
   (`This repository exceeded its LFS budget`) and any fresh pull fails
-  (exit 128). The PR job skip-smudges and LFS-pulls only
-  `smoke_models.txt`, then caches that smaller tree (key includes
-  `smoke-` + the list hash) — so a PR is a few hundred MB of LFS, not
-  9.6 GB. The rc run still clones the full tree. Symptom of a spent
-  budget: PRs red at the LFS-pull step, or an rc red at checkout, with
-  no code change. Fix: add an LFS data pack to the org (Settings →
-  Billing), or as a no-code stopgap set the repo variable
-  `TEST_MODELS_REF` to a SHA whose cache is still warm.
+  (exit 128). PR shards skip-smudge and LFS-pull only their list —
+  public coverage is ~180 MB; the seven private headline models are
+  ~2.6 GB together (PSB alone ~900 MB), cached per shard. The rc run
+  still clones the full trees. Symptom of a spent budget: PRs red at
+  the LFS-pull step, or an rc red at checkout, with no code change.
+  Fix: add an LFS data pack to the org (Settings → Billing), or as a
+  no-code stopgap set `TEST_MODELS_REF` / `TEST_MODELS_PRIVATE_TAG` to
+  a SHA whose cache is still warm.
 
 - **`matrix` is not available in a job-level `if:`.** `rc-regression.yml`
   selects corpora via a dynamic matrix built by a `setup` job, not a
