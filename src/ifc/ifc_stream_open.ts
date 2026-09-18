@@ -23,6 +23,7 @@ import { PrefixTypeIndex } from '../step/parsing/prefix_type_index'
 import { StepTypeIndexer } from '../step/indexing/step_type_indexer'
 import IfcStepModel from './ifc_step_model'
 import IfcStepParser from './ifc_step_parser'
+import { selectIfcSchemaKindForHeader } from './ifc_schema_selection'
 
 
 /**
@@ -115,6 +116,82 @@ export const HEADER_PREFIX_RETRY_BYTES = 4 * 1024 * 1024
 
 
 /**
+ * Read and parse a STEP header from a bounded prefix of a random-access
+ * store, growing the prefix once on failure before giving up.
+ *
+ * Factored out of {@link openIfcModelFromIndex} (its original, and still
+ * only, caller) so every store-backed open — the index-first path and, as
+ * of the up-front schema gate below, the streamed-from-store paths — reads
+ * exactly one implementation rather than one that has silently drifted
+ * from a copy.
+ *
+ * @param store The random-access store to read the header prefix from.
+ * @return {Promise<{header: StepHeader, result: ParseResult, prefixLength: number}>}
+ * The parsed header, the parse result (check against `ParseResult.COMPLETE`
+ * before trusting `header`), and the prefix length actually read — callers
+ * that report byte counts (e.g. `StreamingIndexStats.bytesRead`) want it.
+ */
+export async function parseIfcHeaderFromStore( store: StepExternalByteStore ):
+    Promise<{ header: StepHeader, result: ParseResult, prefixLength: number }> {
+
+  let prefixLength = Math.min( store.byteLength, HEADER_PREFIX_BYTES )
+
+  let [ header, headerResult ] =
+    IfcStepParser.Instance.parseHeader(
+        new ParsingBuffer( await store.read( 0, prefixLength ) ) )
+
+  // Retried on ANY non-COMPLETE result, not on some "truncated" one:
+  // `parseHeader` runs off the end of a short buffer into its ordinary
+  // `syntaxError()` returns (step_parser.ts — it never reports INCOMPLETE),
+  // so a header that simply did not fit is indistinguishable from a
+  // malformed one at this point. The retry is bounded and only happens on
+  // the path that was about to throw, so the cost of being unable to tell
+  // them apart is one read of at most 4 MiB on a failing open.
+  if ( headerResult !== ParseResult.COMPLETE &&
+    prefixLength < store.byteLength ) {
+
+    prefixLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
+
+    ;( [ header, headerResult ] =
+      IfcStepParser.Instance.parseHeader(
+          new ParsingBuffer( await store.read( 0, prefixLength ) ) ) )
+  }
+
+  return { header, result: headerResult, prefixLength }
+}
+
+
+/**
+ * Gate a native streamed-open entry point against an IFC4X3 file, from a
+ * header already known to have parsed completely.
+ *
+ * This is the native (non-web-ifc-compat) twin of
+ * `IfcApiProxyIfc.assertSchemaSupported` — same reasoning (4X3 reorders the
+ * entity-type ordinal space, so IFC4-typed extraction against a 4X3 file
+ * would silently misidentify entities; codex review of bldrs-ai/conway#713,
+ * P1), but native callers get a plain throw rather than the compat surface's
+ * statistics bookkeeping and `-1`-return convention. `selectIfcSchemaKindForHeader`
+ * itself throws {@link UnrecognizedIfc4x3SchemaError} for an unrecognised
+ * 4X3-family spelling; that propagates through this function unchanged.
+ *
+ * @param header The parsed STEP header (only call this once parsing it
+ * reported `ParseResult.COMPLETE` — a header that did not fully parse
+ * carries no trustworthy FILE_SCHEMA to gate on).
+ * @throws {Error} If the header names the (recognised) IFC4X3 schema.
+ */
+function assertNativeSchemaSupported( header: StepHeader ): void {
+
+  if ( selectIfcSchemaKindForHeader( header ) === 'ifc4x3' ) {
+
+    throw new Error(
+        'IFC4X3 schema detected: geometry extraction is not yet ' +
+        'implemented for this schema on the native streamed-open API — ' +
+        'see bldrs-ai/conway#280 phase 2b.' )
+  }
+}
+
+
+/**
  * Open an IFC model from a streamed source with a **fixed-memory parse**
  * (the release-facing Phase B API; composes M0/M1a/M7):
  *
@@ -156,6 +233,16 @@ export function openStreamedIfcModel(
   if ( result !== ParseResult.COMPLETE ) {
     return { model: void 0, result, header, columns, stats }
   }
+
+  // Gate before constructing/returning a model (codex review of #713, P1:
+  // the four public opens in this file returned an ungated model). Unlike
+  // the async opens below, this function is deliberately synchronous
+  // (`ByteSource.read` is sync, `StepExternalByteStore.read` is not), so a
+  // store-based prefix sniff would force an API-breaking `Promise` return.
+  // No such sniff is needed here anyway: `buildColumnarIndexStreaming`
+  // above has already parsed `header` off `source` at zero extra cost, so
+  // gating on it costs nothing beyond the check itself.
+  assertNativeSchemaSupported( header )
 
   const provider = new WindowedStepBufferProvider(
       store, options?.chunkBytes, options?.maxResidentChunks )
@@ -224,6 +311,20 @@ export async function openStreamedIfcModelAsync(
     throw new Error(
         `Streaming store byteLength ${store.byteLength} does not match ` +
         `source byteLength ${source.byteLength}` )
+  }
+
+  // Gate up front, from the store, before the (potentially long-running,
+  // cooperative) index build below starts — codex review of #713, P1 & P2.
+  // A bounded prefix read against a random-access store is negligible next
+  // to the full-file parse it precedes; only on a failing/malformed header
+  // does it grow to the 4 MiB retry (see parseIfcHeaderFromStore). Gated
+  // only when the sniff itself parsed cleanly — a header that did not fit
+  // or is malformed is left for the real parse below to report as it
+  // always has, rather than this sniff inventing a new failure mode for it.
+  const sniffed = await parseIfcHeaderFromStore( store )
+
+  if ( sniffed.result === ParseResult.COMPLETE ) {
+    assertNativeSchemaSupported( sniffed.header )
   }
 
   const { header, columns, result, stats } = await buildColumnarIndexStreamingAsync(
@@ -354,28 +455,8 @@ export async function openIfcModelFromIndex(
     }
   }
 
-  let prefixLength = Math.min( store.byteLength, HEADER_PREFIX_BYTES )
-
-  let [ header, headerResult ] =
-    IfcStepParser.Instance.parseHeader(
-        new ParsingBuffer( await store.read( 0, prefixLength ) ) )
-
-  // Retried on ANY non-COMPLETE result, not on some "truncated" one:
-  // `parseHeader` runs off the end of a short buffer into its ordinary
-  // `syntaxError()` returns (step_parser.ts — it never reports INCOMPLETE),
-  // so a header that simply did not fit is indistinguishable from a
-  // malformed one at this point. The retry is bounded and only happens on
-  // the path that was about to throw, so the cost of being unable to tell
-  // them apart is one read of at most 4 MiB on a failing open.
-  if ( headerResult !== ParseResult.COMPLETE &&
-    prefixLength < store.byteLength ) {
-
-    prefixLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
-
-    ;( [ header, headerResult ] =
-      IfcStepParser.Instance.parseHeader(
-          new ParsingBuffer( await store.read( 0, prefixLength ) ) ) )
-  }
+  const { header, result: headerResult, prefixLength } =
+    await parseIfcHeaderFromStore( store )
 
   if ( headerResult !== ParseResult.COMPLETE ) {
     // The length check passed but the bytes are not the file the index
@@ -385,6 +466,13 @@ export async function openIfcModelFromIndex(
         `Index-first open could not parse a STEP header from the first ` +
         `${prefixLength} bytes (result ${headerResult})` )
   }
+
+  // Gate before constructing/returning a model (codex review of #713, P1).
+  // There is no data parse on this path at all — the sidecar supplies the
+  // index — so this header, from the bounded prefix read above, is the
+  // only place the schema is ever visible before a caller could reach
+  // IFC4-typed extraction.
+  assertNativeSchemaSupported( header )
 
   const provider = new WindowedStepBufferProvider(
       store, options?.chunkBytes, options?.maxResidentChunks )

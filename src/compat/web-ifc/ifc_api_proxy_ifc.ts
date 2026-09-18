@@ -43,7 +43,7 @@ import {
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { selectIfcSchemaKindForHeader } from '../../ifc/ifc_schema_selection'
 import IfcStepParser from '../../ifc/ifc_step_parser'
-import { openIfcModelFromIndex } from '../../ifc/ifc_stream_open'
+import { openIfcModelFromIndex, parseIfcHeaderFromStore } from '../../ifc/ifc_stream_open'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
 import {
@@ -1793,6 +1793,24 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const statistics = Logger.getStatistics(modelID)
 
+    // codex review of bldrs-ai/conway#713 (P1 & P2): gate UP FRONT, from a
+    // bounded header sniff of `store`, before any parse or preview work
+    // begins below. This is deliberately ahead of `buildIndexStreamingAsync`
+    // and the `StorePreviewChannel` construction that follows it: with
+    // ON_PREVIEW_MESH set, that channel builds an IfcStepModel/
+    // IfcGeometryExtraction and emits preview meshes DURING the parse, so a
+    // gate placed after the parse (as this function used to have it, and as
+    // a since-corrected comment here used to claim) let a 4X3 file's
+    // wrongly IFC4-typed preview meshes reach the caller before the
+    // rejection ever fired. `parseIfcHeaderFromStore` reads only a bounded
+    // prefix (64 KiB, occasionally a 4 MiB retry), negligible next to the
+    // full-file parse it now precedes.
+    const sniffedHeader = await parseIfcHeaderFromStore( store )
+
+    if ( sniffedHeader.result === ParseResult.COMPLETE ) {
+      IfcApiProxyIfc.assertSchemaSupported( modelID, sniffedHeader.header )
+    }
+
     tracker?.beginPhase('dataParse', 'bytes', fileSize)
 
     const parseTick = tracker !== void 0 ?
@@ -1851,9 +1869,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
-    // codex review of #713 (P1): gate before the data parse/geometry
-    // extraction below commit to IFC4 — see assertSchemaSupported's
-    // doc-comment.
+    // Fallback gate, not the primary one. The primary gate is the
+    // up-front header sniff above, which is what actually keeps preview
+    // meshes from ever reaching ON_PREVIEW_MESH for a 4X3 file (codex
+    // review of bldrs-ai/conway#713, P1 & P2). This second call only
+    // matters for the edge case where that sniff's header prefix (64 KiB,
+    // 4 MiB on retry) could not parse a complete header but the real
+    // parse's window — unbounded — did; it is a safety net against that
+    // gap, not a spot this schema check is meant to live.
     IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     const parseEndTime = Date.now()
