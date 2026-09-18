@@ -373,6 +373,26 @@ async function main() {
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Setting exitCode rather than calling exit()/process.exit() here: this
+    // catch is the ONLY thing standing between an uncaught throw and
+    // exiting 0 -- `exit()` with no argument uses process.exitCode, which
+    // defaults to 0, so `ifc_regression_batch_main.ts`'s childProcess.exec
+    // callback (which reads `err.code` off the child's exit status to
+    // decide Failed vs. a clean run) would read this as a clean run.
+    // Covers a throw ahead of doWork() (e.g. Environment.checkEnvironment())
+    // reaching here synchronously; it does NOT cover a throw inside the
+    // command handler below, which is `async` -- yargs' own default
+    // fail-and-exit already calls `process.exit(1)` for that case
+    // (including selectIfcSchemaKindForHeader's UnrecognizedIfc4x3SchemaError
+    // for an unrecognised 4X3-family schema such as IFC4X3_TC1), verified
+    // empirically with `--unhandled-rejections=warn` still exiting 1 -- so
+    // this catch's own exitCode assignment is defense for the paths yargs
+    // does not own, not a fix for that one. process.exitCode also lets Node
+    // finish flushing any pending output before exiting non-zero rather than
+    // truncating it the way a forced process.exit() can (codex review of
+    // bldrs-ai/conway#713, P1: the same gap fixed for the explicit exit(1)
+    // calls below in e5696915 also applies to whatever this catch swallows).
+    process.exitCode = 1
   }
 }
 

@@ -42,6 +42,17 @@ const IFC4_FIXTURE = path.resolve(REPO_ROOT, 'data/index.ifc')
 const SUBPROCESS_TIMEOUT_MS = 60000
 
 /**
+ * A FILE_SCHEMA identifier belonging to the IFC4X3 family that
+ * `IFC4X3_IDENTIFIERS` (ifc_schema_selection.ts) does NOT recognise.
+ * `selectIfcSchemaKind` THROWS `UnrecognizedIfc4x3SchemaError` for this case
+ * rather than returning a kind -- a different code path from the plain
+ * `IFC4X3_RC2` refusal above, and one that reaches each entry point's outer
+ * catch instead of its explicit `exit(1)` gate. Generated from the ordinary
+ * 4X3 fixture rather than committed as a second near-duplicate file.
+ */
+const UNRECOGNIZED_4X3_SCHEMA = 'IFC4X3_TC1'
+
+/**
  * Runs a node script and returns its outcome without throwing on a
  * non-zero exit — `execFileSync` normally throws in that case, which would
  * make the exit code itself invisible to the assertions below.
@@ -171,8 +182,29 @@ for (const required of [
 let cliArtifact: string
 let browserArtifact: string
 let validatorArtifact: string
+let unrecognized4x3Fixture: string
 
 beforeAll(() => {
+  // Rewrite FILE_SCHEMA on the existing 4X3 fixture rather than committing a
+  // second near-duplicate .ifc: the throwing path only depends on the
+  // header, not on which 4X3 entities follow it.
+  const ifc4x3Source = fs.readFileSync(IFC4X3_FIXTURE, 'utf8')
+  const rewritten = ifc4x3Source.replace(
+      /FILE_SCHEMA\(\('IFC4X3_RC2'\)\);/,
+      `FILE_SCHEMA(('${UNRECOGNIZED_4X3_SCHEMA}'));`)
+
+  if (rewritten === ifc4x3Source) {
+    // Loud, not silent: a fixture format change upstream would otherwise
+    // leave this suite exercising the ORIGINAL (recognised) schema under a
+    // test that claims to cover the unrecognised one.
+    throw new Error(
+        `Could not rewrite FILE_SCHEMA in ${IFC4X3_FIXTURE} -- expected ` +
+        `literal FILE_SCHEMA(('IFC4X3_RC2'));`)
+  }
+
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'conway-unrecognized-4x3-'))
+  unrecognized4x3Fixture = path.join(fixtureDir, 'unrecognized_4x3.ifc')
+  fs.writeFileSync(unrecognized4x3Fixture, rewritten)
   // Bundled INTO `compiled/examples/`, exactly where `package.json`'s
   // bundle-cli/bundle-browser/bundle-validator scripts put these artifacts
   // and where `bin.*` points -- NOT into a temp directory. A bundle carries
@@ -269,5 +301,55 @@ describe('direct-parse entry points fail closed on IFC4X3', () => {
 
     const control = runNode(validatorArtifact, [IFC4_FIXTURE, 'IFCSITE'])
     expect(control.code).toBe(0)
+  }, SUBPROCESS_TIMEOUT_MS)
+})
+
+describe('direct-parse entry points fail closed on an unrecognized 4X3-family ' +
+  'schema (e.g. IFC4X3_TC1)', () => {
+
+  // `selectIfcSchemaKindForHeader` THROWS `UnrecognizedIfc4x3SchemaError` for
+  // this case rather than returning 'ifc4x3', so it never reaches the
+  // entry points' explicit `exit(1)` gates covered above -- it surfaces
+  // through whatever each entry point does with an uncaught error instead.
+  // Two of the four (ifc_command_line_main.ts, ifc_regression_main.ts) wrap
+  // their whole body in a top-level `try { doWork() } catch (error) {
+  // console.error(...) }` with no exit-code side effect of its own, so
+  // without `process.exitCode = 1` in that catch this case exited 0 despite
+  // printing the exception -- the same defect class as the bare `exit()`
+  // calls fixed in e5696915, one layer further out (codex review of
+  // bldrs-ai/conway#713, P1). The other two (examples/browser.ts,
+  // examples/validator.ts) call `selectIfcSchemaKindForHeader` at top level
+  // with no enclosing catch, so the throw was already an uncaught exception
+  // -- Node exits non-zero for that on its own, verified separately (not
+  // asserted here as a defect fixed by this PR, since there was none to
+  // fix on those two paths).
+
+  test('CLI (bin.cli): refuses an unrecognized 4X3-family schema', () => {
+    const refused = runNode(cliArtifact, [unrecognized4x3Fixture, '-n'])
+    expect(refused.code).not.toBe(0)
+    expect(refused.stdout + refused.stderr).toMatch(/IFC4X3/)
+  }, SUBPROCESS_TIMEOUT_MS)
+
+  test('regression child: refuses an unrecognized 4X3-family schema with a ' +
+    'non-zero exit', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'conway-regression-tc1-'))
+
+    const refused = runNode(
+        COMPILED_REGRESSION,
+        ['-d', unrecognized4x3Fixture, path.join(workDir, 'refused-out')])
+    expect(refused.code).not.toBe(0)
+    expect(refused.stdout + refused.stderr).toMatch(/IFC4X3/)
+  }, SUBPROCESS_TIMEOUT_MS)
+
+  test('browser (bin.browser): refuses an unrecognized 4X3-family schema', () => {
+    const refused = runNode(browserArtifact, [unrecognized4x3Fixture])
+    expect(refused.code).not.toBe(0)
+    expect(refused.stdout + refused.stderr).toMatch(/IFC4X3/)
+  }, SUBPROCESS_TIMEOUT_MS)
+
+  test('validator (bin.validator): refuses an unrecognized 4X3-family schema', () => {
+    const refused = runNode(validatorArtifact, [unrecognized4x3Fixture, 'IFCSITE'])
+    expect(refused.code).not.toBe(0)
+    expect(refused.stdout + refused.stderr).toMatch(/IFC4X3/)
   }, SUBPROCESS_TIMEOUT_MS)
 })

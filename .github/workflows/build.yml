@@ -254,9 +254,23 @@ jobs:
             # process substitution: the grep below reads this log, and a tee
             # subshell is not guaranteed to have flushed by then.
             log="$OUT/$m.log"
-            node --experimental-specifier-resolution=node \
+            # Captured via if/else (not `|| true` on the command itself) so
+            # `rc` holds the CHILD's real exit status rather than `true`'s: a
+            # bare `cmd || true` under this step's `-e` shell discards `cmd`'s
+            # status entirely, which is exactly the gap that let the 4X3
+            # refusal below regress to exiting 0 while this assertion kept
+            # passing (codex review of bldrs-ai/conway#713, P2 -- the
+            # `exit()`-with-no-argument defect e5696915 fixed for the gate
+            # itself, reintroduced one layer up in this assertion). The
+            # if/else still keeps `|| true`'s purpose: a non-zero child exit
+            # here must not abort the step.
+            if node --experimental-specifier-resolution=node \
               ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m" \
-              > "$log" 2>&1 || true
+              > "$log" 2>&1; then
+              rc=0
+            else
+              rc=$?
+            fi
             cat "$log"
             cand="$OUT/$m.csv"
             golden="data/$m.csv"
@@ -264,11 +278,14 @@ jobs:
               if [ -f "$cand" ]; then
                 echo "::error::$f declares an IFC4X3 schema but produced a digest -- the schema gate did not fire, so 4X3 entities were read with IFC4 ordinals."
                 status=1
-              elif grep -q "IFC4X3" "$log"; then
-                echo "$f: refused as expected (IFC4X3 schema gate fired)."
-              else
+              elif ! grep -q "IFC4X3" "$log"; then
                 echo "::error::$f produced no digest, but nothing in the output names IFC4X3 -- it failed for some other reason than the schema gate."
                 status=1
+              elif [ "$rc" -eq 0 ]; then
+                echo "::error::$f was refused (no digest; log names IFC4X3) but the regression binary exited 0 -- a refusal must exit non-zero so a caller/script can tell it apart from success."
+                status=1
+              else
+                echo "$f: refused as expected (IFC4X3 schema gate fired, exit $rc)."
               fi
               continue
             fi

@@ -54,6 +54,18 @@ async function main() {
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Setting exitCode rather than calling exit()/process.exit() here: this
+    // catch is the ONLY thing standing between an uncaught throw (e.g.
+    // selectIfcSchemaKindForHeader's UnrecognizedIfc4x3SchemaError for a
+    // schema identifier this repo hasn't verified, such as IFC4X3_TC1) and
+    // exiting 0 -- `exit()` with no argument uses process.exitCode, which
+    // defaults to 0, so a caller/shell script driving this CLI could not
+    // tell a crash from success. process.exitCode lets Node finish flushing
+    // any pending output before exiting non-zero, rather than truncating it
+    // the way a forced process.exit() can (codex review of
+    // bldrs-ai/conway#713, P1: the same gap fixed for the explicit exit(1)
+    // calls below in e5696915 also applies to whatever this catch swallows).
+    process.exitCode = 1
   }
 }
 
