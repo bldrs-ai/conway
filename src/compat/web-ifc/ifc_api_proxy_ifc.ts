@@ -65,15 +65,6 @@ import { releaseScratchParsingBuffer } from '../../step/parsing/step_deserializa
 import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
-import {
-  IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE,
-  IFC4X3_WEBIFC_TYPE_CODES,
-  IFC4X3_WEBIFC_TYPE_NAMES,
-  checkIfc4x3Provenance,
-  expressIDsForAliasedKeyword,
-  expressIDsWithUnknownProvenance,
-  ifc4x3KeywordScanRange,
-} from '../../ifc/ifc4x3_supertype_aliases'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
@@ -2083,39 +2074,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * NOT entities it merely references — recursive flattening across
    * references needs each referenced record ensured in turn.
    *
-   * Also pre-pages the small keyword window `checkIfc4x3Provenance`
-   * (`ifc4x3_supertype_aliases.ts`) needs to tell a genuine
-   * `IfcBuildingStorey`/`IfcBuildingElementProxy` from an IFC4X3 alias
-   * hit — codex's #706 follow-up (P2): without this, a spilled/windowed
-   * model that only pages a record's own range leaves that window
-   * nonresident, and the scan answers `'unknown'` even for a record this
-   * WOULD have resolved correctly had the bytes been there. A no-op for
-   * every entity that isn't one of the two candidate types (see
-   * `ifc4x3KeywordScanRange`), so this costs nothing for the other ~900.
-   * Consumers that skip this method still get the safe (never
-   * corrupting) `'unknown'` fallback in `webIfcTypeOf_` — this only
-   * improves the CORRECT-label rate for the well-behaved async path.
-   *
    * @param expressID The record's express ID.
    * @return {Promise<void>} Resolves when resident.
    */
   async ensureLineResident(expressID: number): Promise<void> {
-
-    const [model] = this.model
-
-    await model.ensureResidentByExpressID(expressID)
-
-    const element = model.getElementByExpressID(expressID)
-
-    if (element === void 0) {
-      return
-    }
-
-    const range = ifc4x3KeywordScanRange(model, element.localID, element.type)
-
-    if (range !== void 0) {
-      await model.ensureResidentRange(range[0], range[1])
-    }
+    await this.model[0].ensureResidentByExpressID(expressID)
   }
 
   /**
@@ -2192,49 +2155,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
-   * The web-ifc "type" code to export for a record's `RawLineData` —
-   * `shimIfcEntityReverseMap[element.type]` normally, EXCEPT for a record
-   * `Ifc4X3AliasedTypeIndex` (issue #280) mapped onto `IfcBuildingStorey`
-   * or `IfcBuildingElementProxy` because conway has no real IFC4X3 schema.
-   * For those, `element.type` is the borrowed IFC4 type, not the record's
-   * real one — exporting it as-is would hand `getLine`'s `FromRawLineData`
-   * converter a real `IfcFacilityPart`/`IfcRoad`/`IfcPavement`/`IfcKerb`
-   * argument tape to decode against the WRONG type's field layout, silently
-   * misreading trailing attributes (codex's review of #706; see the block
-   * comment on `checkIfc4x3Provenance` in `ifc4x3_supertype_aliases.ts`
-   * for the reproduced case).
-   *
-   * `checkIfc4x3Provenance` establishes which of three things is true —
-   * confirmed aliased, confirmed genuine, or unknown — and unknown is
-   * NOT treated as genuine (codex's #706 follow-up, P2: doing that
-   * reopened the same corruption on a spilled/windowed model whose
-   * keyword window hadn't been paged). Confirmed-aliased exports one of
-   * `IFC4X3_WEBIFC_TYPE_CODES`; unknown exports
-   * `IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE`. Both are codes
-   * `FromRawLineData` has no converter for, so `getLine` falls back to
-   * the raw, unconverted argument tape rather than confidently
-   * misreading it as the wrong type — only confirmed-genuine reaches the
-   * real converter.
-   *
-   * @param model The model `element` belongs to.
-   * @param element The record to classify.
-   * @return {number} The web-ifc type code to export.
-   */
-  private webIfcTypeOf_(model: IfcStepModel, element: { localID: number, type: number }): number {
-
-    const provenance = checkIfc4x3Provenance(model, element.localID, element.type)
-
-    switch (provenance.status) {
-      case 'aliased':
-        return IFC4X3_WEBIFC_TYPE_CODES[provenance.keyword]
-      case 'unknown':
-        return IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE
-      case 'genuine':
-        return shimIfcEntityReverseMap[element.type]
-    }
-  }
-
-  /**
    *
    * @param modelID
    * @param expressID
@@ -2251,7 +2171,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if (element !== void 0) {
       const lineArguments = element.extractLineArguments()
-      const webIfcType = this.webIfcTypeOf_(model, element)
 
       const parsingBuffer = new ParsingBuffer(lineArguments)
       if (element.expressID !== void 0) {
@@ -2259,7 +2178,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         if (result_[1] === ParseResult.COMPLETE) {
           const rawLineData: RawLineData = {
             ID: expressID,
-            type: webIfcType,
+            type: shimIfcEntityReverseMap[element.type],
             arguments: result_[0],
           }
 
@@ -2271,7 +2190,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const rawLineData: RawLineData = {
         ID: expressID,
-        type: webIfcType,
+        type: shimIfcEntityReverseMap[element.type],
         arguments: args,
       }
 
@@ -2328,28 +2247,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // eslint-disable-next-line no-unused-vars
     const [model, _] = this.model
     if (type in shimIfcEntityMap) {
-      // Deliberately UNCHANGED from before this fix, including for
-      // IFCBUILDINGSTOREY/IFCBUILDINGELEMENTPROXY (IFC4X3_SUPERTYPE_ALIASES's
-      // two IFC4 targets): querying by one of THEIR own web-ifc codes can
-      // still return an aliased IFC4X3 record indistinguishably mixed in
-      // with genuine ones of that type (checkIfc4x3Provenance is the only
-      // way to tell them apart, and it isn't free). Filtering this branch
-      // through it was tried and reverted -- getAllTypesOfModel()
-      // (ifc_properties.ts) calls getLineIDsWithType once per EVERY
-      // IfcElements type code to build its type map, so the filter's
-      // per-candidate backward byte-scan became a cost paid by every
-      // model with any IfcBuildingStorey/IfcBuildingElementProxy content,
-      // aliased or not -- and on a spilled/windowed model (no equivalent
-      // of ensureLineResident's pre-paging exists on this synchronous,
-      // bulk-sweep path) it silently DROPPED genuine, ordinary entities
-      // of those two types from the spatial tree whenever their keyword
-      // window wasn't resident (caught by
-      // ifc_spill_source.test.ts's 'spatial tree (names mode) ... survive
-      // a spill', a real IFC4 model with zero 4X3 content). That is
-      // disproportionate to codex's #706 follow-up (P2) ask, which was
-      // specifically about the four SENTINEL codes below returning an
-      // empty vector -- not about the genuine codes' pre-existing mixing
-      // behaviour, which this leaves exactly as it was.
       const value = shimIfcEntityMap[type]
       // Do something with value
       const results = model.typeIDs(value)
@@ -2364,21 +2261,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
       }
 
-    } else if (type in IFC4X3_WEBIFC_TYPE_NAMES) {
-      // One of IFC4X3_WEBIFC_TYPE_CODES's sentinels (codex's #706
-      // follow-up, P2): not a real web-ifc/IFC4 type code, so it was never
-      // a key shimIfcEntityMap could have and never will be — querying by
-      // it has to go through the alias-provenance scan instead (see
-      // expressIDsForAliasedKeyword's block comment for why a plain
-      // model.typeIDs(targetType) lookup can't disambiguate the four
-      // keywords that share two IFC4 alias targets).
-      for (const expressID of expressIDsForAliasedKeyword(model, IFC4X3_WEBIFC_TYPE_NAMES[type])) {
-        expressIDVector.push(expressID)
-      }
-    } else if (type === IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE) {
-      for (const expressID of expressIDsWithUnknownProvenance(model)) {
-        expressIDVector.push(expressID)
-      }
     } else {
       // Handle case where key does not exist
       Logger.warning(`[GetLineIDsWithType] Type: ${type} does not exist in shimIfcEntityMap`)

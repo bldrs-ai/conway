@@ -5,7 +5,6 @@ import {
 
 import { IncludeProperties, SpatialStructureOptions } from './properties_passthrough'
 import { IfcTypesMap } from './types-map'
-import { IFC4X3_WEBIFC_TYPE_NAMES } from '../../ifc/ifc4x3_supertype_aliases'
 
 export class Properties {
 
@@ -15,10 +14,7 @@ export class Properties {
   }
 
   getIfcType(type: number) {
-    // Synthetic IFC4X3 sentinel codes (issue #280) first — IfcTypesMap,
-    // web-ifc's own table, has no entry for them at all (see
-    // ifc4x3_supertype_aliases.ts's IFC4X3_WEBIFC_TYPE_NAMES doc comment).
-    return IFC4X3_WEBIFC_TYPE_NAMES[type] ?? IfcTypesMap[type]
+    return IfcTypesMap[type]
   }
 
   async getItemProperties(modelID: number, id: number, recursive = false) {

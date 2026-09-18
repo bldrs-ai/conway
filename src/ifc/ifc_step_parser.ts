@@ -3,7 +3,6 @@ import StepParser, {ParseProgressCallback, ParseResult} from '../step/parsing/st
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import EntitTypesIfcSearch from './ifc4_gen/entity_types_search.gen'
 import IfcStepModel from './ifc_step_model'
-import { Ifc4X3AliasedTypeIndex } from './ifc4x3_supertype_aliases'
 import { ByteSource, ReadableByteSource } from '../step/parsing/byte_source'
 import {
   buildColumnarIndexStreaming,
@@ -27,10 +26,7 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
    * Construct the IFC step parser.
    */
   constructor() {
-    // Wrapped rather than passed raw: falls back to IFC4X3-only entity
-    // keywords the generated IFC4 hash doesn't know, onto their nearest
-    // IFC4 supertype — see ifc4x3_supertype_aliases.ts (issue #280).
-    super( new Ifc4X3AliasedTypeIndex( EntitTypesIfcSearch ) )
+    super( EntitTypesIfcSearch )
   }
 
   /**
