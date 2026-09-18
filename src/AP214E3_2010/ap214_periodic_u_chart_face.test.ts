@@ -28,15 +28,22 @@ import { advanced_face } from './AP214E3_2010_gen'
  * so the face was emitted from ring 0's 65 points alone and the other 191 never
  * appeared in any triangle.
  *
- * This pins tryPeriodicUStrip, which cuts the chart open and hands earcut one
- * simple polygon instead. Reverting mesh_utils.h takes the face from 3180
- * triangles to 190 and leaves three of the four loop vertices below absent,
- * which is what makes this test able to fail.
+ * This pins triangulatePeriodicUChart, which triangulates the periodic chart
+ * directly - the rings go into a constrained Delaunay triangulation laid out
+ * as an annulus, and `eraseOuterTrianglesAndHoles` decides interior by parity,
+ * so no ring has to be bridged to any other. Reverting mesh_utils.h takes the
+ * face to 190 triangles and leaves three of the four loop vertices below
+ * absent, which is what makes this test able to fail.
+ *
+ * It replaced tryPeriodicUStrip, which cut the chart open into one simple
+ * polygon for earcut; this file's assertions are unchanged across that
+ * replacement, because what they pin is the face's COVERAGE, which both
+ * constructions have to deliver and only the unfixed header fails.
  */
 const FIXTURE = 'data/ap242-periodic-u-strip-face.step'
 
-/** The periodic-strip face the fixture was cut for. */
-const STRIP_FACE = 19218
+/** The periodic-chart face the fixture was cut for. */
+const CHART_FACE = 19218
 
 /**
  * The other periodic face of the same shell, whose ring 1 is a hole that
@@ -48,8 +55,13 @@ const STRIP_FACE = 19218
  * test read the surface as OPEN. The inverse solve therefore clamped u at the
  * domain floor instead of wrapping it, and 27 of that hole's 53 points came
  * back at u = 0.000000 exactly - the whole far half of the hole collapsed onto
- * the domain edge. The strip was then refused and earcut dropped both holes:
+ * the domain edge. The chart was then refused and earcut dropped both holes:
  * the face emitted 358 triangles from 213 of its 327 boundary points.
+ *
+ * Its hole is also the ring that made the predecessor's winding reading so
+ * awkward - its two ends are ONE 3D point the solve answered twice, 0.0026 of
+ * a period apart in u - and the CDT path reads no winding per ring at all: the
+ * ring is a closed loop with one short closing segment, like any other.
  */
 const SEAM_HOLE_FACE = 19215
 
@@ -134,7 +146,7 @@ beforeAll(async () => {
       geometry: GeometryObject,
       parentLocalID?: number ) {
 
-    if (from.expressID !== STRIP_FACE && from.expressID !== SEAM_HOLE_FACE) {
+    if (from.expressID !== CHART_FACE && from.expressID !== SEAM_HOLE_FACE) {
       original.call(this, from, geometry, parentLocalID)
       return
     }
@@ -189,13 +201,13 @@ describe('a b-spline face whose boundary wraps the surface\'s u closure', () => 
     // the distinction the investigation behind this fixture needed twice, and
     // it cost two wrong diagnoses to learn. Raised by review on
     // bldrs-ai/conway#711.
-    expect(emitted.get(STRIP_FACE)?.length ?? 0).toBeGreaterThan(0)
+    expect(emitted.get(CHART_FACE)?.length ?? 0).toBeGreaterThan(0)
   })
 
   test('every one of its four trim loops reaches the emitted geometry', () => {
 
     const missing = BOUND_VERTICES.filter((wanted) =>
-      !(emitted.get(STRIP_FACE) ?? []).some((each) =>
+      !(emitted.get(CHART_FACE) ?? []).some((each) =>
         Math.abs(each[0] - wanted[0]) <= POSITION_TOLERANCE &&
         Math.abs(each[1] - wanted[1]) <= POSITION_TOLERANCE &&
         Math.abs(each[2] - wanted[2]) <= POSITION_TOLERANCE))
@@ -205,27 +217,24 @@ describe('a b-spline face whose boundary wraps the surface\'s u closure', () => 
 
   test('it emits at least as many triangles as its boundary demands', () => {
 
-    // A polygon with V boundary VERTICES and h holes triangulates into exactly
-    // V + 2h - 2 triangles when it adds no interior point, and into more when
-    // it does. Both numbers have to be counted carefully here, and an earlier
-    // reading of this bound got both wrong (review, bldrs-ai/conway#711):
+    // A floor on the TOPOLOGY, not a target, and deliberately one that holds
+    // whichever way the chart is triangulated.
     //
-    //   V is 252, not 256. #19218's four rings are 65 + 65 + 65 + 61 POINTS,
-    //   but every one of them REPEATS ITS FIRST POINT AS ITS LAST - measured
-    //   off the curves as they are handed to native, head and tail are the
-    //   same point at a 3D gap of exactly zero - so they carry 64 + 64 + 64 +
-    //   60 distinct vertices.
+    // V is 252, not 256. #19218's four rings are 65 + 65 + 65 + 61 POINTS, but
+    // every one of them REPEATS ITS FIRST POINT AS ITS LAST - measured off the
+    // curves as they are handed to native, head and tail are the same point at
+    // a 3D gap of exactly zero - so they carry 64 + 64 + 64 + 60 distinct
+    // vertices. Any triangulation of a region those 252 vertices bound has at
+    // least V - 2 = 250 triangles, and the two constructions that have covered
+    // this face both exceed it comfortably: the CDT of the annulus seeds 260
+    // and the cut polygon earcut clipped seeded 258, before refinement takes
+    // either well past a thousand. 254 sits above both seeds' floor and far
+    // under either result.
     //
-    //   h is 2, not 3. The periodic-strip cut joins the two RIMS into a single
-    //   outer ring, which leaves the two circular holes.
-    //
-    // So the floor is 252 + 4 - 2 = 254, and it is a floor on the topology
-    // rather than a target: this face emits 3180, because the surface
-    // refinement subdivides what earcut clips. What the assertion has to
-    // separate is that from the 190 the unfixed header emits - fewer triangles
-    // than the outer ring alone has points - and any bound at or under 254
-    // does that without being able to reject a valid minimal tessellation.
-    expect(triangles.get(STRIP_FACE) ?? 0).toBeGreaterThanOrEqual(254)
+    // What the assertion has to separate is any of that from the 190 the
+    // unfixed header emits - fewer triangles than the outer ring alone has
+    // points.
+    expect(triangles.get(CHART_FACE) ?? 0).toBeGreaterThanOrEqual(254)
   })
 })
 
