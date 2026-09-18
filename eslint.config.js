@@ -10,9 +10,11 @@ export default [
   {
     ignores: [
       '**/ifc_functions.ts',
+      '**/ifc4x3_functions.ts',
       'compiled',
       'external',
       'src/ifc/ifc4_gen',
+      'src/ifc/ifc4x3_gen',
       'src/AP214E3_2010/AP214E3_2010_gen',
       // Vendored web-ifc compat surface (from conway-web-ifc-adapter).
       // tsc still type-checks it; eslint skips style on vendored code for

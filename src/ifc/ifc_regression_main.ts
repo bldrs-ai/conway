@@ -18,6 +18,8 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcBooleanResult } from './ifc4_gen'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { wasmHeapByteLength } from '../core/wasm_heap'
+import { extractModelInfo } from '../loaders/loading_utilities'
+import { selectIfcSchemaKindForHeader } from './ifc_schema_selection'
 import {
   RetainedMemoryMb,
   retainedMemoryMb,
@@ -371,6 +373,26 @@ async function main() {
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Setting exitCode rather than calling exit()/process.exit() here: this
+    // catch is the ONLY thing standing between an uncaught throw and
+    // exiting 0 -- `exit()` with no argument uses process.exitCode, which
+    // defaults to 0, so `ifc_regression_batch_main.ts`'s childProcess.exec
+    // callback (which reads `err.code` off the child's exit status to
+    // decide Failed vs. a clean run) would read this as a clean run.
+    // Covers a throw ahead of doWork() (e.g. Environment.checkEnvironment())
+    // reaching here synchronously; it does NOT cover a throw inside the
+    // command handler below, which is `async` -- yargs' own default
+    // fail-and-exit already calls `process.exit(1)` for that case
+    // (including selectIfcSchemaKindForHeader's UnrecognizedIfc4x3SchemaError
+    // for an unrecognised 4X3-family schema such as IFC4X3_TC1), verified
+    // empirically with `--unhandled-rejections=warn` still exiting 1 -- so
+    // this catch's own exitCode assignment is defense for the paths yargs
+    // does not own, not a fix for that one. process.exitCode also lets Node
+    // finish flushing any pending output before exiting non-zero rather than
+    // truncating it the way a forced process.exit() can (codex review of
+    // bldrs-ai/conway#713, P1: the same gap fixed for the explicit exit(1)
+    // calls below in e5696915 also applies to whatever this catch swallows).
+    process.exitCode = 1
   }
 }
 
@@ -474,7 +496,7 @@ function doWork() {
 
           const parseStartMs = Date.now()
 
-          const result0 = parser.parseHeader(bufferInput)[ 1 ]
+          const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
           switch (result0) {
             case ParseResult.COMPLETE:
@@ -502,6 +524,45 @@ function doWork() {
               break
 
             default:
+          }
+
+          // IFC4X3 reorders the entity-type ordinal space, so the
+          // IFC4-typed extraction below would silently misidentify entities
+          // against a 4X3 file — same reasoning as
+          // `assertNativeSchemaSupported`. This regression executable
+          // parses directly via `IfcStepParser` rather than through the
+          // gated streaming-open surface, so it needs its own check (codex
+          // review of bldrs-ai/conway#713, P1, round 5 asked this direct
+          // parser path be audited; it had no gate at all).
+          if (selectIfcSchemaKindForHeader(stepHeader) === 'ifc4x3') {
+            Logger.error(
+                `IFC4X3 schema detected (${extractModelInfo(stepHeader,
+                    indexIfcBuffer.length).schema}): geometry extraction is not yet ` +
+                'implemented for this schema — see bldrs-ai/conway#280 phase 2b.')
+            displayErrors(ifcFile)
+            // `exit()` with no argument exits 0 (Node uses the current
+            // `process.exitCode`, which defaults to 0) — that silently
+            // undid "fail closed" here specifically: this file is spawned
+            // by `ifc_regression_batch_main.ts`'s `safeExecWithCancellation`
+            // via `childProcess.exec`, whose callback sets `err.code` to the
+            // child's exit status (verified empirically — not the
+            // `child.on('exit', ...)` handler in the same function, which
+            // only clears the cancellation timeout and reads no code).
+            // `runForFile` turns a non-null `err` into `type: 'Failed'` and
+            // a `failed.csv` row; exit 0 instead classified this refusal as
+            // "loaded, produced no digest" — the same shape as a model that
+            // legitimately has no geometry — which is why
+            // KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc is in
+            // regression/zero_geometry_allowlist.txt (bldrs-ai/conway#280).
+            // With this fix that model now reports as a NEW `failed.csv`
+            // row instead; it is excluded from the PR-time smoke subset
+            // (regression/smoke_models.txt) so `run-ifc-regression` is
+            // unaffected, but the full-corpus `rc-regression.yml` diffs
+            // `failed.csv` against the baseline committed in the
+            // `test-models` repo, so that baseline needs this row added
+            // (or the next rc run reports it as a new failure). Found via
+            // the subprocess smoke test added alongside this gate.
+            exit(1)
           }
 
           const [result1, model] = parser.parseDataToModel( bufferInput)

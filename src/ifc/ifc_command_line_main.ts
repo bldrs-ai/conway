@@ -23,6 +23,7 @@ import Memory from '../memory/memory'
 import { ExtractResult } from '../core/shared_constants'
 import path from 'path'
 import { extractModelInfo, parseFileHeader } from '../loaders/loading_utilities'
+import { selectIfcSchemaKindForHeader } from './ifc_schema_selection'
 
 // create a model ID
 const modelID: number = 0
@@ -53,6 +54,18 @@ async function main() {
     doWork()
   } catch (error) {
     console.error('An error occurred:', error)
+    // Setting exitCode rather than calling exit()/process.exit() here: this
+    // catch is the ONLY thing standing between an uncaught throw (e.g.
+    // selectIfcSchemaKindForHeader's UnrecognizedIfc4x3SchemaError for a
+    // schema identifier this repo hasn't verified, such as IFC4X3_TC1) and
+    // exiting 0 -- `exit()` with no argument uses process.exitCode, which
+    // defaults to 0, so a caller/shell script driving this CLI could not
+    // tell a crash from success. process.exitCode lets Node finish flushing
+    // any pending output before exiting non-zero, rather than truncating it
+    // the way a forced process.exit() can (codex review of
+    // bldrs-ai/conway#713, P1: the same gap fixed for the explicit exit(1)
+    // calls below in e5696915 also applies to whatever this catch swallows).
+    process.exitCode = 1
   }
 }
 
@@ -252,6 +265,28 @@ function doWork() {
               break
 
             default:
+          }
+
+          // IFC4X3 reorders the entity-type ordinal space, so extraction
+          // below (typed against IFC4's ordinals only — genericizing it is
+          // phase 2b, bldrs-ai/conway#280) would silently misidentify
+          // entities against a 4X3 file. Fail closed here, before the data
+          // parse, rather than let corrupted geometry reach `-g`'s output —
+          // same reasoning as `assertNativeSchemaSupported` (codex review
+          // of bldrs-ai/conway#713, P1, round 5: this CLI had no gate at all).
+          if (selectIfcSchemaKindForHeader(stepHeader) === 'ifc4x3') {
+            Logger.error(
+                `IFC4X3 schema detected (${extractModelInfo(stepHeader,
+                    indexIfcBuffer.length).schema}): geometry extraction is not yet ` +
+                'implemented for this schema — see bldrs-ai/conway#280 phase 2b.')
+            // `exit()` with no argument exits 0 (Node uses the current
+            // `process.exitCode`, which defaults to 0) — that silently
+            // undid "fail closed" for this CLI: a bin that refuses its
+            // input still has to report failure to `$?`, or a caller/shell
+            // script driving it treats the refusal as a success. Found via
+            // the subprocess smoke test added alongside this gate, which
+            // asserts on the exit code rather than only on log output.
+            exit(1)
           }
 
           tracker?.beginPhase('dataParse', 'bytes', indexIfcBuffer.length)

@@ -1,0 +1,60 @@
+
+import { IfcObjectDefinition } from "./index"
+import { IfcLabel } from "./index"
+
+/* This is generated code, don't modify */
+import EntityTypesIfc4x3 from './entity_types_ifc4x3.gen'
+import StepEntityInternalReference from '../../step/step_entity_internal_reference'
+import StepEntityBase from '../../step/step_entity_base'
+import StepModelBase from '../../step/step_model_base'
+
+///**
+// *  */
+export abstract class IfcObject extends IfcObjectDefinition {
+  public get type(): EntityTypesIfc4x3 {
+    return EntityTypesIfc4x3.IFCOBJECT
+  }
+  private ObjectType_? : string | null
+
+  public get ObjectType() : string | null {
+    if ( this.ObjectType_ === void 0 ) {
+      this.ObjectType_ = this.extractString( 4, 4, 2, true )
+    }
+
+    return this.ObjectType_ as string | null
+  }
+
+
+
+
+  constructor(
+    localID: number,
+    internalReference: StepEntityInternalReference< EntityTypesIfc4x3 >,
+    model: StepModelBase< EntityTypesIfc4x3, StepEntityBase< EntityTypesIfc4x3 > >,
+    multiReference?: StepEntityInternalReference< EntityTypesIfc4x3 >[] ) {
+
+    super( localID, internalReference, model, multiReference )
+
+    if ( multiReference !== void 0 ) {
+
+      const localReference =
+        multiReference.find( ( item ) => item.typeID === IfcObject.expectedType )
+
+      if ( localReference === void 0 ) {
+        throw new Error( "Couldn't find multi-element reference for IfcObject" )
+      }
+
+      this.multiReference_ ??= []
+
+      this.multiReference_.push( localReference )
+
+      localReference.visitedMulti = true
+    }
+  }
+
+  public static readonly query = 
+    [ EntityTypesIfc4x3.IFCACTOR, EntityTypesIfc4x3.IFCGROUP, EntityTypesIfc4x3.IFCOCCUPANT, EntityTypesIfc4x3.IFCACTIONREQUEST, EntityTypesIfc4x3.IFCCOSTITEM, EntityTypesIfc4x3.IFCCOSTSCHEDULE, EntityTypesIfc4x3.IFCPERFORMANCEHISTORY, EntityTypesIfc4x3.IFCPERMIT, EntityTypesIfc4x3.IFCPROJECTORDER, EntityTypesIfc4x3.IFCWORKCALENDAR, EntityTypesIfc4x3.IFCWORKPLAN, EntityTypesIfc4x3.IFCWORKSCHEDULE, EntityTypesIfc4x3.IFCASSET, EntityTypesIfc4x3.IFCINVENTORY, EntityTypesIfc4x3.IFCSTRUCTURALLOADGROUP, EntityTypesIfc4x3.IFCSTRUCTURALRESULTGROUP, EntityTypesIfc4x3.IFCSYSTEM, EntityTypesIfc4x3.IFCSTRUCTURALLOADCASE, EntityTypesIfc4x3.IFCBUILDINGSYSTEM, EntityTypesIfc4x3.IFCBUILTSYSTEM, EntityTypesIfc4x3.IFCDISTRIBUTIONSYSTEM, EntityTypesIfc4x3.IFCSTRUCTURALANALYSISMODEL, EntityTypesIfc4x3.IFCZONE, EntityTypesIfc4x3.IFCDISTRIBUTIONCIRCUIT, EntityTypesIfc4x3.IFCEVENT, EntityTypesIfc4x3.IFCPROCEDURE, EntityTypesIfc4x3.IFCTASK, EntityTypesIfc4x3.IFCANNOTATION, EntityTypesIfc4x3.IFCLINEARELEMENT, EntityTypesIfc4x3.IFCBUILTELEMENT, EntityTypesIfc4x3.IFCCIVILELEMENT, EntityTypesIfc4x3.IFCDISTRIBUTIONELEMENT, EntityTypesIfc4x3.IFCELEMENTASSEMBLY, EntityTypesIfc4x3.IFCFURNISHINGELEMENT, EntityTypesIfc4x3.IFCGEOGRAPHICELEMENT, EntityTypesIfc4x3.IFCVIRTUALELEMENT, EntityTypesIfc4x3.IFCBEAM, EntityTypesIfc4x3.IFCBEARING, EntityTypesIfc4x3.IFCBUILDINGELEMENTPROXY, EntityTypesIfc4x3.IFCCHIMNEY, EntityTypesIfc4x3.IFCCOLUMN, EntityTypesIfc4x3.IFCCOURSE, EntityTypesIfc4x3.IFCCOVERING, EntityTypesIfc4x3.IFCCURTAINWALL, EntityTypesIfc4x3.IFCDEEPFOUNDATION, EntityTypesIfc4x3.IFCDOOR, EntityTypesIfc4x3.IFCEARTHWORKSELEMENT, EntityTypesIfc4x3.IFCFOOTING, EntityTypesIfc4x3.IFCKERB, EntityTypesIfc4x3.IFCMEMBER, EntityTypesIfc4x3.IFCMOORINGDEVICE, EntityTypesIfc4x3.IFCNAVIGATIONELEMENT, EntityTypesIfc4x3.IFCPAVEMENT, EntityTypesIfc4x3.IFCPLATE, EntityTypesIfc4x3.IFCRAIL, EntityTypesIfc4x3.IFCRAILING, EntityTypesIfc4x3.IFCRAMP, EntityTypesIfc4x3.IFCRAMPFLIGHT, EntityTypesIfc4x3.IFCROOF, EntityTypesIfc4x3.IFCSHADINGDEVICE, EntityTypesIfc4x3.IFCSLAB, EntityTypesIfc4x3.IFCSTAIR, EntityTypesIfc4x3.IFCSTAIRFLIGHT, EntityTypesIfc4x3.IFCTRACKELEMENT, EntityTypesIfc4x3.IFCWALL, EntityTypesIfc4x3.IFCWINDOW, EntityTypesIfc4x3.IFCCAISSONFOUNDATION, EntityTypesIfc4x3.IFCPILE, EntityTypesIfc4x3.IFCEARTHWORKSFILL, EntityTypesIfc4x3.IFCREINFORCEDSOIL, EntityTypesIfc4x3.IFCWALLSTANDARDCASE, EntityTypesIfc4x3.IFCDISTRIBUTIONCONTROLELEMENT, EntityTypesIfc4x3.IFCDISTRIBUTIONFLOWELEMENT, EntityTypesIfc4x3.IFCACTUATOR, EntityTypesIfc4x3.IFCALARM, EntityTypesIfc4x3.IFCCONTROLLER, EntityTypesIfc4x3.IFCFLOWINSTRUMENT, EntityTypesIfc4x3.IFCPROTECTIVEDEVICETRIPPINGUNIT, EntityTypesIfc4x3.IFCSENSOR, EntityTypesIfc4x3.IFCUNITARYCONTROLELEMENT, EntityTypesIfc4x3.IFCDISTRIBUTIONCHAMBERELEMENT, EntityTypesIfc4x3.IFCENERGYCONVERSIONDEVICE, EntityTypesIfc4x3.IFCFLOWCONTROLLER, EntityTypesIfc4x3.IFCFLOWFITTING, EntityTypesIfc4x3.IFCFLOWMOVINGDEVICE, EntityTypesIfc4x3.IFCFLOWSEGMENT, EntityTypesIfc4x3.IFCFLOWSTORAGEDEVICE, EntityTypesIfc4x3.IFCFLOWTERMINAL, EntityTypesIfc4x3.IFCFLOWTREATMENTDEVICE, EntityTypesIfc4x3.IFCAIRTOAIRHEATRECOVERY, EntityTypesIfc4x3.IFCBOILER, EntityTypesIfc4x3.IFCBURNER, EntityTypesIfc4x3.IFCCHILLER, EntityTypesIfc4x3.IFCCOIL, EntityTypesIfc4x3.IFCCONDENSER, EntityTypesIfc4x3.IFCCOOLEDBEAM, EntityTypesIfc4x3.IFCCOOLINGTOWER, EntityTypesIfc4x3.IFCELECTRICGENERATOR, EntityTypesIfc4x3.IFCELECTRICMOTOR, EntityTypesIfc4x3.IFCENGINE, EntityTypesIfc4x3.IFCEVAPORATIVECOOLER, EntityTypesIfc4x3.IFCEVAPORATOR, EntityTypesIfc4x3.IFCHEATEXCHANGER, EntityTypesIfc4x3.IFCHUMIDIFIER, EntityTypesIfc4x3.IFCMOTORCONNECTION, EntityTypesIfc4x3.IFCSOLARDEVICE, EntityTypesIfc4x3.IFCTRANSFORMER, EntityTypesIfc4x3.IFCTUBEBUNDLE, EntityTypesIfc4x3.IFCUNITARYEQUIPMENT, EntityTypesIfc4x3.IFCAIRTERMINALBOX, EntityTypesIfc4x3.IFCDAMPER, EntityTypesIfc4x3.IFCDISTRIBUTIONBOARD, EntityTypesIfc4x3.IFCELECTRICDISTRIBUTIONBOARD, EntityTypesIfc4x3.IFCELECTRICTIMECONTROL, EntityTypesIfc4x3.IFCFLOWMETER, EntityTypesIfc4x3.IFCPROTECTIVEDEVICE, EntityTypesIfc4x3.IFCSWITCHINGDEVICE, EntityTypesIfc4x3.IFCVALVE, EntityTypesIfc4x3.IFCCABLECARRIERFITTING, EntityTypesIfc4x3.IFCCABLEFITTING, EntityTypesIfc4x3.IFCDUCTFITTING, EntityTypesIfc4x3.IFCJUNCTIONBOX, EntityTypesIfc4x3.IFCPIPEFITTING, EntityTypesIfc4x3.IFCCOMPRESSOR, EntityTypesIfc4x3.IFCFAN, EntityTypesIfc4x3.IFCPUMP, EntityTypesIfc4x3.IFCCABLECARRIERSEGMENT, EntityTypesIfc4x3.IFCCABLESEGMENT, EntityTypesIfc4x3.IFCCONVEYORSEGMENT, EntityTypesIfc4x3.IFCDUCTSEGMENT, EntityTypesIfc4x3.IFCPIPESEGMENT, EntityTypesIfc4x3.IFCELECTRICFLOWSTORAGEDEVICE, EntityTypesIfc4x3.IFCTANK, EntityTypesIfc4x3.IFCAIRTERMINAL, EntityTypesIfc4x3.IFCAUDIOVISUALAPPLIANCE, EntityTypesIfc4x3.IFCCOMMUNICATIONSAPPLIANCE, EntityTypesIfc4x3.IFCELECTRICAPPLIANCE, EntityTypesIfc4x3.IFCFIRESUPPRESSIONTERMINAL, EntityTypesIfc4x3.IFCLAMP, EntityTypesIfc4x3.IFCLIGHTFIXTURE, EntityTypesIfc4x3.IFCLIQUIDTERMINAL, EntityTypesIfc4x3.IFCMEDICALDEVICE, EntityTypesIfc4x3.IFCMOBILETELECOMMUNICATIONSAPPLIANCE, EntityTypesIfc4x3.IFCOUTLET, EntityTypesIfc4x3.IFCSANITARYTERMINAL, EntityTypesIfc4x3.IFCSIGNAL, EntityTypesIfc4x3.IFCSPACEHEATER, EntityTypesIfc4x3.IFCSTACKTERMINAL, EntityTypesIfc4x3.IFCWASTETERMINAL, EntityTypesIfc4x3.IFCDUCTSILENCER, EntityTypesIfc4x3.IFCELECTRICFLOWTREATMENTDEVICE, EntityTypesIfc4x3.IFCFILTER, EntityTypesIfc4x3.IFCINTERCEPTOR, EntityTypesIfc4x3.IFCBUILDINGELEMENTPART, EntityTypesIfc4x3.IFCDISCRETEACCESSORY, EntityTypesIfc4x3.IFCFASTENER, EntityTypesIfc4x3.IFCIMPACTPROTECTIONDEVICE, EntityTypesIfc4x3.IFCMECHANICALFASTENER, EntityTypesIfc4x3.IFCSIGN, EntityTypesIfc4x3.IFCVIBRATIONDAMPER, EntityTypesIfc4x3.IFCVIBRATIONISOLATOR, EntityTypesIfc4x3.IFCREINFORCINGBAR, EntityTypesIfc4x3.IFCREINFORCINGMESH, EntityTypesIfc4x3.IFCTENDON, EntityTypesIfc4x3.IFCTENDONANCHOR, EntityTypesIfc4x3.IFCTENDONCONDUIT, EntityTypesIfc4x3.IFCSURFACEFEATURE, EntityTypesIfc4x3.IFCPROJECTIONELEMENT, EntityTypesIfc4x3.IFCEARTHWORKSCUT, EntityTypesIfc4x3.IFCOPENINGELEMENT, EntityTypesIfc4x3.IFCVOIDINGFEATURE, EntityTypesIfc4x3.IFCFURNITURE, EntityTypesIfc4x3.IFCSYSTEMFURNITUREELEMENT, EntityTypesIfc4x3.IFCGEOTECHNICALSTRATUM, EntityTypesIfc4x3.IFCBOREHOLE, EntityTypesIfc4x3.IFCGEOMODEL, EntityTypesIfc4x3.IFCGEOSLICE, EntityTypesIfc4x3.IFCTRANSPORTELEMENT, EntityTypesIfc4x3.IFCVEHICLE, EntityTypesIfc4x3.IFCALIGNMENTCANT, EntityTypesIfc4x3.IFCALIGNMENTHORIZONTAL, EntityTypesIfc4x3.IFCALIGNMENTSEGMENT, EntityTypesIfc4x3.IFCALIGNMENTVERTICAL, EntityTypesIfc4x3.IFCDISTRIBUTIONPORT, EntityTypesIfc4x3.IFCGRID, EntityTypesIfc4x3.IFCLINEARPOSITIONINGELEMENT, EntityTypesIfc4x3.IFCREFERENT, EntityTypesIfc4x3.IFCALIGNMENT, EntityTypesIfc4x3.IFCSPATIALZONE, EntityTypesIfc4x3.IFCEXTERNALSPATIALELEMENT, EntityTypesIfc4x3.IFCBUILDINGSTOREY, EntityTypesIfc4x3.IFCFACILITY, EntityTypesIfc4x3.IFCSITE, EntityTypesIfc4x3.IFCSPACE, EntityTypesIfc4x3.IFCBRIDGE, EntityTypesIfc4x3.IFCBUILDING, EntityTypesIfc4x3.IFCMARINEFACILITY, EntityTypesIfc4x3.IFCRAILWAY, EntityTypesIfc4x3.IFCROAD, EntityTypesIfc4x3.IFCBRIDGEPART, EntityTypesIfc4x3.IFCFACILITYPARTCOMMON, EntityTypesIfc4x3.IFCMARINEPART, EntityTypesIfc4x3.IFCRAILWAYPART, EntityTypesIfc4x3.IFCROADPART, EntityTypesIfc4x3.IFCSTRUCTURALCURVEACTION, EntityTypesIfc4x3.IFCSTRUCTURALPOINTACTION, EntityTypesIfc4x3.IFCSTRUCTURALSURFACEACTION, EntityTypesIfc4x3.IFCSTRUCTURALLINEARACTION, EntityTypesIfc4x3.IFCSTRUCTURALPLANARACTION, EntityTypesIfc4x3.IFCSTRUCTURALCURVEREACTION, EntityTypesIfc4x3.IFCSTRUCTURALPOINTREACTION, EntityTypesIfc4x3.IFCSTRUCTURALSURFACEREACTION, EntityTypesIfc4x3.IFCSTRUCTURALCURVECONNECTION, EntityTypesIfc4x3.IFCSTRUCTURALPOINTCONNECTION, EntityTypesIfc4x3.IFCSTRUCTURALSURFACECONNECTION, EntityTypesIfc4x3.IFCSTRUCTURALCURVEMEMBER, EntityTypesIfc4x3.IFCSTRUCTURALSURFACEMEMBER, EntityTypesIfc4x3.IFCSTRUCTURALCURVEMEMBERVARYING, EntityTypesIfc4x3.IFCSTRUCTURALSURFACEMEMBERVARYING, EntityTypesIfc4x3.IFCCONSTRUCTIONEQUIPMENTRESOURCE, EntityTypesIfc4x3.IFCCONSTRUCTIONMATERIALRESOURCE, EntityTypesIfc4x3.IFCCONSTRUCTIONPRODUCTRESOURCE, EntityTypesIfc4x3.IFCCREWRESOURCE, EntityTypesIfc4x3.IFCLABORRESOURCE, EntityTypesIfc4x3.IFCSUBCONTRACTRESOURCE ]
+
+  public static readonly expectedType: EntityTypesIfc4x3 =
+    EntityTypesIfc4x3.IFCOBJECT
+}
