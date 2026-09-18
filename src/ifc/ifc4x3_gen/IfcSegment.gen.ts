@@ -2,11 +2,9 @@
 import { IfcGeometricRepresentationItem } from "./index"
 import { IfcTransitionCode, IfcTransitionCodeDeserializeStep } from "./index"
 import { IfcDimensionCount } from "./index"
-// Hand-added: the generator omits this import for IfcSegment's DERIVE
-// clause (a generator bug specific to IFC4X3_ADD2.exp — see
-// ifc4x3_functions.ts's top-of-file comment). A regenerate will drop this
-// line and re-break the build until that's fixed upstream.
-import { IfcSegmentDim } from '../ifc4x3_functions'
+import {
+  IfcSegmentDim,
+} from '../ifc4x3_functions'
 
 /* This is generated code, don't modify */
 import EntityTypesIfc4x3 from './entity_types_ifc4x3.gen'

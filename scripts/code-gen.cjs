@@ -39,7 +39,16 @@ const vendoredSchemasPath = path.resolve(__dirname, 'schemas');
 // bump is inert for the schemas it doesn't touch. It also newly generates
 // src/ifc/ifc4x3_gen/ (see code-gen-ifc4x3 below), which c001505 could not
 // produce.
-const IFC_GEN_REVISION = '7120675b1b8501bfcfe59241f8dea19b95a78365';
+//
+// Bumped to 9b439d4 for #280 phase 2a: fixes the two generator bugs that
+// 7120675's ifc4x3_gen/ output needed by-hand patches to work around
+// (IfcPoint/IfcSIUnit/IfcSegment and the schema_ifc4x3 descriptions typing),
+// plus two review hardenings from that fix's review round. Regenerating
+// IFC4X3 at this revision reproduces the previously hand-patched output
+// with no hand patches needed; IFC4 and AP214 stay byte-for-byte reproduced
+// except for a 10-file AP214 import-name reordering (see the AP214
+// re-bless commit).
+const IFC_GEN_REVISION = '9b439d49c4980fb4f4a702c71e838d46126c3c34';
 
 function runCommand(command, options = {}) {
   try {

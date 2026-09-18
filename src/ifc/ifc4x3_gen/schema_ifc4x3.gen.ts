@@ -3284,14 +3284,7 @@ let queries : EntityTypesIfc4x3[][] = [
   IfcWarpingMomentMeasure.query,
   IfcWellKnownTextLiteral.query,
 ]
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see
-// ifc4x3_functions.ts's top-of-file comment: at this schema's scale (1009
-// entities) a fully-typed array literal here hits TS2590 ("union type too
-// complex to represent") — IFC4's/AP214's smaller schemas stay under
-// whatever internal threshold trips it. Typed loosely here and passed to
-// StepEntitySchema's constructor, which is where the real (checked) type
-// comes back in.
-let descriptions : any[] = [
+let descriptions0 : EntityDescription< EntityTypesIfc4x3 >[] = [
   {
     fields: {
     },
@@ -16969,6 +16962,8 @@ let descriptions : any[] = [
     isAbstract: false,
     superType: e.IFCFLOWMOVINGDEVICE,
   },
+]
+let descriptions1 : EntityDescription< EntityTypesIfc4x3 >[] = [
   {
     fields: {
       PredefinedType: {
@@ -38044,6 +38039,8 @@ let descriptions : any[] = [
     depth: 0,
     isAbstract: false,
   },
+]
+let descriptions2 : EntityDescription< EntityTypesIfc4x3 >[] = [
   {
     fields: {
       Value: {
@@ -38162,6 +38159,7 @@ let descriptions : any[] = [
     isAbstract: false,
   },
 ]
+let descriptions : EntityDescription< EntityTypesIfc4x3 >[] = [ ...descriptions0, ...descriptions1, ...descriptions2 ]
 let parser =
   new StepParser< EntityTypesIfc4x3 >( EntityTypesIfc4x3Search )
 
