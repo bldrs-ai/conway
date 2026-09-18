@@ -173,7 +173,34 @@ let browserArtifact: string
 let validatorArtifact: string
 
 beforeAll(() => {
-  const bundleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'conway-bundle-'))
+  // Bundled INTO `compiled/examples/`, exactly where `package.json`'s
+  // bundle-cli/bundle-browser/bundle-validator scripts put these artifacts
+  // and where `bin.*` points -- NOT into a temp directory. A bundle carries
+  // a runtime-relative path to the wasm (`../Dist/ConwayGeomWasmNodeMT.js`,
+  // resolved against the bundle's own location), so a bundle written
+  // anywhere else dies in wasm init before reaching any of the code under
+  // test. That failure is silent here in the worst way: these binaries
+  // print "An error occurred: ..." and still exit 0, so a temp-dir bundle
+  // made the CLI test fail with "Expected: not 0" for a reason that had
+  // nothing to do with the schema gate it exists to check.
+  const bundleDir = path.resolve(REPO_ROOT, 'compiled/examples')
+
+  fs.mkdirSync(bundleDir, { recursive: true })
+
+  // `bundle-examples` does not stop at esbuild: it finishes with
+  // `rm -rf compiled/Dist && cp -r dependencies/conway-geom/Dist compiled/`.
+  // That copy is load-bearing, because a bundle resolves its wasm as
+  // `../Dist/...` relative to itself -- from `compiled/examples/` that is
+  // `compiled/Dist/`, NOT the `compiled/dependencies/conway-geom/Dist/`
+  // that tsc produces. Bundling without it yields a binary that dies in
+  // wasm init, and since these binaries exit 0 on a fatal error, it dies
+  // in a way that makes the IFC4 control pass vacuously.
+  const wasmSource = path.resolve(REPO_ROOT, 'compiled/dependencies/conway-geom/Dist')
+  const wasmTarget = path.resolve(REPO_ROOT, 'compiled/Dist')
+
+  if (fs.existsSync(wasmSource)) {
+    fs.cpSync(wasmSource, wasmTarget, { recursive: true })
+  }
 
   cliArtifact =
     tryBundle(COMPILED_CLI, path.join(bundleDir, 'cli-bundled.cjs')) ?? COMPILED_CLI
