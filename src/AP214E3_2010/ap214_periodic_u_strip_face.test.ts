@@ -156,8 +156,18 @@ describe('a b-spline face whose boundary wraps the surface\'s u closure', () => 
 
   test('the face under test was reached at all', () => {
 
-    // Without this a renamed express ID, a fixture that stopped loading, or a
-    // staged-face run would leave every assertion below vacuously true.
+    // NOT a vacuity guard, and it would be dishonest to call it one: if the
+    // wrapper never fires, the two assertions below fail on their own - all
+    // four BOUND_VERTICES come back missing and the triangle count is 0.
+    //
+    // What this one adds is WHICH of the two things went wrong, because they
+    // want opposite responses. A renamed express ID, a fixture that stopped
+    // loading, or a run that took the staged-face path is a broken test and
+    // the triangulator is fine; a face that was reached and came back short of
+    // its boundary is the defect this file exists for. Telling those apart is
+    // the distinction the investigation behind this fixture needed twice, and
+    // it cost two wrong diagnoses to learn. Raised by review on
+    // bldrs-ai/conway#711.
     expect(emitted.length).toBeGreaterThan(0)
   })
 
@@ -174,11 +184,26 @@ describe('a b-spline face whose boundary wraps the surface\'s u closure', () => 
 
   test('it emits at least as many triangles as its boundary demands', () => {
 
-    // A polygon with N boundary points and h holes ear-clips into N + 2h - 2
-    // triangles - each hole costs two bridge vertices - and refinement only
-    // adds to that. #19218's rings are 65 + 65 + 65 + 61 points with three of
-    // them holes, so 256 + 6 - 2. Dropping the three unbridgeable rings left
-    // 190, i.e. fewer triangles than the outer ring alone has points.
-    expect(triangleCount).toBeGreaterThanOrEqual(260)
+    // A polygon with V boundary VERTICES and h holes triangulates into exactly
+    // V + 2h - 2 triangles when it adds no interior point, and into more when
+    // it does. Both numbers have to be counted carefully here, and an earlier
+    // reading of this bound got both wrong (review, bldrs-ai/conway#711):
+    //
+    //   V is 252, not 256. #19218's four rings are 65 + 65 + 65 + 61 POINTS,
+    //   but every one of them REPEATS ITS FIRST POINT AS ITS LAST - measured
+    //   off the curves as they are handed to native, head and tail are the
+    //   same point at a 3D gap of exactly zero - so they carry 64 + 64 + 64 +
+    //   60 distinct vertices.
+    //
+    //   h is 2, not 3. The periodic-strip cut joins the two RIMS into a single
+    //   outer ring, which leaves the two circular holes.
+    //
+    // So the floor is 252 + 4 - 2 = 254, and it is a floor on the topology
+    // rather than a target: this face emits 3180, because the surface
+    // refinement subdivides what earcut clips. What the assertion has to
+    // separate is that from the 190 the unfixed header emits - fewer triangles
+    // than the outer ring alone has points - and any bound at or under 254
+    // does that without being able to reject a valid minimal tessellation.
+    expect(triangleCount).toBeGreaterThanOrEqual(254)
   })
 })

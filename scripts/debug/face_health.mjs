@@ -51,6 +51,37 @@
  * face is reified and the heap views are re-read per face: a held `HEAPF32`
  * view detaches when the heap grows and then silently reads zeroes.
  *
+ * ### THE ISOLATION FOLLOWS addOrStageFace, NOT THE GEOMETRY ARGUMENT
+ *
+ * `extractAdvancedFace` does not always tessellate into the geometry it is
+ * passed. A face carrying its own STYLED_ITEM goes down a branch that builds a
+ * FRESH `IfcGeometry` and registers it as a canonical mesh of its own
+ * (ap214_geometry_extraction.ts, the `styledItemLocalID !== void 0` arm), and
+ * the caller's buffer is never touched. Handing that path an isolation
+ * geometry and then reading it back therefore reports an EMPTY face - `v=0
+ * t=0 mapped=0/N` - which is this probe's own signature for a dropped ring.
+ * Measured before this was fixed, 254 of solid `#3`'s 257 faces in
+ * `data/nema-23-76mm.step` read that way, every one of them healthy. A probe
+ * that cries "dropped ring" on a styled face is worse than no probe, because
+ * the whole reason to reach for this one is that the outlier stages are quiet.
+ *
+ * So the redirect is installed one level down, on `addOrStageFace`, which both
+ * branches funnel through: the real target is remembered, the tessellation is
+ * routed into the isolation geometry, and the isolation geometry is appended
+ * back into whichever buffer the extractor had chosen. Found by review on
+ * bldrs-ai/conway#711.
+ *
+ * ### AREA IS CONVERTED FROM THE FILE'S OWN LENGTH UNIT
+ *
+ * STEP geometry is emitted in RAW FILE COORDINATES - the metre conversion
+ * rides on the root scene transform, not on the mesh (see
+ * `rootUnitScaleTransform`, conway#458). So a fixed 1e6 scaling of the area
+ * column is only right for a metre-authored file, and reports a millimetre
+ * one (`data/create-a-tube.step`) 1e6 times too large. The factor is read from
+ * the representation's own LENGTH_UNIT instead. When a model declares more
+ * than one, or none, no conversion is invented: the column is labelled `fu2`,
+ * file units squared, and says so in the header line.
+ *
  * Usage:
  *   node scripts/debug/face_health.mjs <model> <solid express id>
  *
@@ -76,12 +107,14 @@ if (modelPath === undefined || wantSolid === undefined) {
 process.env.CONWAY_DISABLE_STAGED_FACES = '1'
 
 const [{AP214GeometryExtraction}, {ConwayModelLoader}, {default: Logger},
-  {default: Environment}, {ConwayGeometry}] = await Promise.all([
+  {default: Environment}, {ConwayGeometry},
+  {global_unit_assigned_context, length_unit}] = await Promise.all([
     compiled('src/AP214E3_2010/ap214_geometry_extraction.js'),
     compiled('src/loaders/conway_model_loader.js'),
     compiled('src/logging/logger.js'),
     compiled('src/utilities/environment.js'),
     compiled('dependencies/conway-geom/index.js'),
+    compiled('src/AP214E3_2010/AP214E3_2010_gen/index.js'),
   ])
 let conwayWasm
 const oi = ConwayGeometry.prototype.initialize
@@ -93,8 +126,32 @@ const Q = 1e6
 const key = (x, y, z) => `${Math.round(x * Q)},${Math.round(y * Q)},${Math.round(z * Q)}`
 
 const original = AP214GeometryExtraction.prototype.extractAdvancedFace
+const realAddOrStageFace = AP214GeometryExtraction.prototype.addOrStageFace
 const rows = []
 let fired = 0
+
+// Metres per file unit, read the way rootUnitScaleTransform reads it - through
+// the representation's own context_of_items - and read WHILE THAT RUNS. It
+// cannot be read afterwards: the loader's model resolves references lazily
+// against a buffer it no longer holds once the load returns, and every
+// context_of_items then throws "Value in STEP was incorrectly typed".
+//
+// A set, not a scalar, so a model declaring two length units is reported
+// rather than silently taking one of them. See "AREA IS CONVERTED FROM THE
+// FILE'S OWN LENGTH UNIT" above.
+const metresPerUnit = new Set()
+const realRootUnitScale = AP214GeometryExtraction.prototype.rootUnitScaleTransform
+
+AP214GeometryExtraction.prototype.rootUnitScaleTransform = function(representation) {
+  try {
+    const declared =
+      representation.context_of_items?.findVariant?.(global_unit_assigned_context)
+          ?.units?.find((unit) => unit.findVariant(length_unit))?.findVariant(length_unit)
+    const inMetres = declared ? this.convertToMetres(declared) : undefined
+    if (inMetres !== undefined) metresPerUnit.add(inMetres)
+  } catch { /* unreadable context: not a unit declaration this can use */ }
+  return realRootUnitScale.call(this, representation)
+}
 
 AP214GeometryExtraction.prototype.extractAdvancedFace = function(from, geometry, parentLocalID) {
   if (this.model.getElementByLocalID?.(parentLocalID)?.expressID !== Number(wantSolid)) {
@@ -117,9 +174,41 @@ AP214GeometryExtraction.prototype.extractAdvancedFace = function(from, geometry,
     return realCreate(params)
   }
 
+  // Route the tessellation into an isolation geometry at addOrStageFace - the
+  // one point both of extractAdvancedFace's branches pass through - and give
+  // the extractor's own target the result afterwards, so the model still loads
+  // with every face in it. See "THE ISOLATION FOLLOWS addOrStageFace" above.
+  //
+  // The own property shadows the prototype for this call only, and is deleted
+  // again in the finally, so a nested or later face is unaffected.
+  //
+  // One consequence to know about: extractAdvancedFace's own face-accounting
+  // reads its target's triangle count around this call, and the diversion
+  // makes that delta zero. `trackFaceAccounting` is off in every run this
+  // probe is used for, and nothing here reads those counters; a run that wants
+  // them wants the extractor unwrapped.
   const fresh = new this.wasmModule.IfcGeometry()
-  try { original.call(this, from, fresh, parentLocalID) } finally { cm.createBound3D = realCreate }
-  geometry.appendGeometry(fresh)
+  let realTarget
+  this.addOrStageFace = function(parameters, target) {
+    realTarget = target
+    return realAddOrStageFace.call(this, parameters, fresh)
+  }
+  try {
+    // The extractor is handed its REAL target, not the isolation geometry: the
+    // redirect above is what captures that target and diverts the
+    // tessellation, and passing `fresh` here as well would make the extractor
+    // hand the face back to itself and count it twice - measured, that read as
+    // #19218 emitting 6360 triangles instead of 3180.
+    original.call(this, from, geometry, parentLocalID)
+  } finally {
+    delete this.addOrStageFace
+    cm.createBound3D = realCreate
+  }
+
+  // `realTarget` is undefined only if the face never reached tessellation at
+  // all - a surface the extractor declined. Nothing was produced to hand back
+  // in that case, and the row below reports the face as empty, which it is.
+  ;(realTarget ?? geometry).appendGeometry(fresh)
   fresh.reify({x: 0, y: 0, z: 0})
 
   const wasm = conwayWasm.wasmModule
@@ -200,9 +289,16 @@ const data = new Uint8Array(fs.readFileSync(modelPath))
 await ConwayModelLoader.loadModelWithScene(data, true, 20, 0)
 if (fired === 0) { console.error(`PROBE NEVER FIRED for solid #${wantSolid}`); process.exit(2) }
 
+const mmPerUnit = metresPerUnit.size === 1 ? [...metresPerUnit][0] * 1e3 : undefined
+const areaScale = mmPerUnit === undefined ? 1 : mmPerUnit * mmPerUnit
+const areaUnit = mmPerUnit === undefined ? 'fu2' : 'mm2'
+
 console.log(`# face health, solid #${wantSolid}: ${fired} faces seen`)
 console.log('  spurious = welded open edges that are NOT a segment of any trim loop')
 console.log('  mapped   = loop points found in the emitted mesh (low => the face lost its boundary)')
+console.log(mmPerUnit === undefined ?
+  `  area     = FILE UNITS squared (fu2): the model declares ${metresPerUnit.size} length units` :
+  `  area     = mm2, from the file's own length unit (1 file unit = ${mmPerUnit} mm)`)
 rows.sort((a, b) => b.spurious - a.spurious)
 let totSpur = 0
 for (const r of rows) {
@@ -210,7 +306,7 @@ for (const r of rows) {
   console.log(
     `  #${String(r.express).padEnd(6)} ${String(r.surface).padEnd(26)} bounds=${r.nBounds} ` +
     `types=[${r.types}] seamPair=[${r.seamPair}] loopPts=[${r.loopSizes}] ` +
-    `v=${r.nv}/${r.welded} t=${r.nt} area=${(r.area * 1e6).toFixed(2)}mm2 degen=${r.degen} ` +
+    `v=${r.nv}/${r.welded} t=${r.nt} area=${(r.area * areaScale).toFixed(2)}${areaUnit} degen=${r.degen} ` +
     `open=${r.open} spurious=${r.spurious} loopSeg=${r.loopSegments} mapped=${r.loopPointsMapped}/${r.loopPointsTotal}`)
 }
 console.log(`TOTAL spurious open edges: ${totSpur}`)
