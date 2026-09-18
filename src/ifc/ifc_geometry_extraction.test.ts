@@ -524,8 +524,29 @@ describe('getIfcCircle 2D Cartesian trim test matrix (conway-geom#205)', () => {
 
       expect(pointCount).toBeGreaterThan(2)
 
+      // Endpoints and sweep direction, checked for every cell -- not only
+      // the rotated-ellipse one. A smoothly tessellated curve that satisfies
+      // the analytic equation everywhere and has no outlier segment can
+      // still be the WRONG arc: a placement-rotation phase error (the
+      // no-op-for-circles claim this matrix exists to test) rotates every
+      // sample together, so each stays on the circle and the segment
+      // lengths stay uniform, yet the arc starts and ends at the wrong
+      // points and sweeps a materially different chord than trim1..trim2
+      // asks for. Pinning first/last to the requested trim points, and the
+      // sweep direction to the requested parametric interval, is what
+      // catches that a smoothness/on-curve check cannot.
+      const precisionDigits = 6
+      const first = curve.get2d(0)
+      const last = curve.get2d(pointCount - 1)
+
+      expect(first.x).toBeCloseTo(trim1.x, precisionDigits)
+      expect(first.y).toBeCloseTo(trim1.y, precisionDigits)
+      expect(last.x).toBeCloseTo(trim2.x, precisionDigits)
+      expect(last.y).toBeCloseTo(trim2.y, precisionDigits)
+
       const onCurveTolerance = 1e-6
       let maxSegmentLength = 0
+      let previousParamDeg: number | undefined
 
       let previous = curve.get2d(0)
 
@@ -537,6 +558,20 @@ describe('getIfcCircle 2D Cartesian trim test matrix (conway-geom#205)', () => {
         const curveResidual = (normalizedX * normalizedX) + (normalizedY * normalizedY) - 1
 
         expect(Math.abs(curveResidual)).toBeLessThan(onCurveTolerance)
+
+        // The PARAMETRIC angle of this sample, in the placement's own
+        // frame -- atan2 on the (radius, radius2)-normalized coordinates,
+        // which is exactly how worldTrimPoint() authored trim1/trim2 above.
+        // A phase-shifted sweep would still satisfy the ellipse equation
+        // and stay smooth, but would not advance monotonically from
+        // startParamDeg to endParamDeg the way a correctly-phased sweep
+        // must.
+        const paramDeg = Math.atan2(normalizedY, normalizedX) / parametricDegreesToRadians
+
+        if (previousParamDeg !== undefined) {
+          expect(paramDeg).toBeGreaterThanOrEqual(previousParamDeg - onCurveTolerance)
+        }
+        previousParamDeg = paramDeg
 
         if (index > 0) {
           const segmentLength = Math.hypot(point.x - previous.x, point.y - previous.y)

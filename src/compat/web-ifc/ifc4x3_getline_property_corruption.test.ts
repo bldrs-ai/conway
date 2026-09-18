@@ -23,6 +23,36 @@
 // / getLine / properties.getIfcType path (not the isolated alias module —
 // see ifc4x3_supertype_aliases.test.ts for that), because both defects
 // only exist on this path.
+//
+// Third-round codex review (#706, P2) asked whether IFCFACILITYPART should
+// switch from the sentinel to its real canonical web-ifc code
+// (IFCFACILITYPART = 1310830890, present in types-map.ts) now that a
+// FromRawLineData converter exists for it (ifc2x4_helper.ts). Checked
+// empirically below ('the canonical IfcFacilityPart converter is not safe
+// to use' describe block): the generated `IfcFacilityPart` class in
+// ifc2x4_helper.ts is byte-for-byte the same 9-field shape as the abstract
+// `IfcFacility` class immediately above it in the same file — GlobalId
+// through CompositionType, with no PredefinedType/UsageType fields at all.
+// `FromTape` never reads tape[9]/tape[10], so a converted IfcFacilityPart
+// silently DROPS PredefinedType and UsageType — the exact two attributes
+// the original P1 corrupted, just without the misleading wrong-field-name
+// symptom. That makes the canonical code unsafe here, so IFCFACILITYPART
+// stays on the sentinel like the other three; this file keeps asserting
+// "is not the borrowed code" rather than "converts correctly", and the new
+// describe block pins the drop so a future code-gen refresh that finally
+// gives IfcFacilityPart its real 11-field shape is what has to touch this
+// assertion, not a change made without re-checking.
+//
+// Also new: 'GetLineIDsWithType for the alias sentinels' covers the other
+// codex point from the same review — feeding a sentinel code back into
+// GetLineIDsWithType used to miss shimIfcEntityMap and return an empty
+// vector. expressIDsForAliasedKeyword/expressIDsWithUnknownProvenance
+// (ifc4x3_supertype_aliases.ts) fix that by re-running the same
+// checkIfc4x3Provenance scan per candidate, since IFCROAD/IFCFACILITYPART
+// share one IFC4 alias target (IFCBUILDINGSTOREY) and
+// IFCPAVEMENT/IFCKERB share the other (IFCBUILDINGELEMENTPROXY) — a plain
+// type-index lookup on the target can't tell the aliases apart, or from a
+// genuine record of the target type.
 import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
@@ -33,8 +63,25 @@ import {
   IFC4X3_WEBIFC_TYPE_CODES,
 } from '../../ifc/ifc4x3_supertype_aliases'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
+import { FromRawLineData } from './ifc2x4_helper'
 import { IfcAPI } from './ifc_api'
 import { shimIfcEntityReverseMap } from './shim_schema_mapping'
+
+/**
+ * Drains a web-ifc `Vector<number>` into a plain array for assertions.
+ *
+ * @param vector The vector to drain.
+ * @return {number[]} Its contents, in order.
+ */
+function vectorToArray(vector: { size(): number, get(index: number): number }): number[] {
+  const out: number[] = []
+
+  for (let i = 0; i < vector.size(); ++i) {
+    out.push(vector.get(i))
+  }
+
+  return out
+}
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
@@ -213,7 +260,8 @@ describe('inconclusive provenance on a spilled/windowed model (codex review, #70
    * model per test so one test's paging can't leave residency state for
    * the next.
    *
-   * @return {{proxy: any, model: any}} The passthrough and its model.
+   * @return {{proxy: any, model: any, freshModelID: number}} The
+   * passthrough, its model, and the model ID `api` opened it under.
    */
   function openSpilledModel() {
     const bytes = new TextEncoder().encode(IFC4X3_SNIPPET)
@@ -224,7 +272,7 @@ describe('inconclusive provenance on a spilled/windowed model (codex review, #70
     model.spillSourceToExternalStore(
         new InMemoryStepByteStore(bytes), CHUNK_BYTES, MAX_RESIDENT_CHUNKS)
 
-    return { proxy, model }
+    return { proxy, model, freshModelID }
   }
 
   test(
@@ -313,4 +361,148 @@ describe('inconclusive provenance on a spilled/windowed model (codex review, #70
 
         expect(line.Elevation).toMatchObject({ value: 3.5 })
       })
+
+  test(
+      'GetLineIDsWithType(UNKNOWN_PROVENANCE) finds a candidate paged only over ' +
+      'its own record range',
+      async () => {
+
+        const { model, freshModelID } = openSpilledModel()
+
+        // Same under-paging as the first test in this block: only the
+        // record's own range, never the keyword window behind it.
+        await model.ensureResidentByExpressID(2)
+
+        const ids = vectorToArray(
+            api.GetLineIDsWithType(freshModelID, IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE))
+
+        expect(ids).toContain(2)
+      })
+})
+
+describe('the canonical IfcFacilityPart converter is not safe to use (codex review, #706 P2)', () => {
+
+  // Empirical check, not an assumption: does FromRawLineData's
+  // IFCFACILITYPART converter (ifc2x4_helper.ts) actually read
+  // PredefinedType/UsageType off a real 4X3 record's tape? Built directly
+  // from the fixture's own record #2 arguments (the same 11-argument tape
+  // IfcApiProxyIfc.getRawLineData would hand it), bypassing the sentinel
+  // entirely, so this pins the converter's OWN behaviour independent of
+  // which type code getRawLineData chooses to export.
+  test('IfcFacilityPart.FromTape drops PredefinedType and UsageType', () => {
+
+    const proxy = api.getPassthrough(modelID)!
+    const raw = proxy.getRawLineData(2)
+
+    expect(raw.arguments).toHaveLength(11)
+    // The real values are present in the raw tape, at their real
+    // positions -- see the "no misread Elevation, no dropped UsageType"
+    // test above.
+    expect(raw.arguments[9]).toMatchObject({ value: 'ROADSEGMENT' })
+    expect(raw.arguments[10]).toMatchObject({ value: 'LONGITUDINAL' })
+
+    const converter = FromRawLineData[IFC4X3_WEBIFC_TYPE_CODES.IFCFACILITYPART]
+
+    // No converter is registered for the sentinel -- confirms getLine()
+    // really does fall back to the raw tape for it, the safe behaviour
+    // this file's fixed code relies on.
+    expect(converter).toBeUndefined()
+
+    // Now run the SAME tape through the canonical type's converter
+    // directly -- the thing #706's P2 review suggested using instead of
+    // the sentinel -- and inspect what it actually produces.
+    const canonicalConverter = FromRawLineData[1310830890] // ifc2x4.IFCFACILITYPART
+
+    expect(canonicalConverter).toBeDefined()
+
+    const converted = canonicalConverter!({
+      ID: raw.ID,
+      type: 1310830890,
+      arguments: raw.arguments,
+    }) as any
+
+    // This is the unsafe part: the generated IfcFacilityPart class has no
+    // PredefinedType/UsageType fields at all (it is, field-for-field, the
+    // same shape as the abstract IfcFacility class above it in
+    // ifc2x4_helper.ts) -- FromTape never reads tape[9]/tape[10], so both
+    // attributes are silently dropped, not merely misnamed. A consumer
+    // reading converted.PredefinedType or converted.UsageType would see
+    // undefined despite the real values sitting right there in the tape,
+    // which is why the fix keeps IFCFACILITYPART on the safe raw-tape
+    // sentinel rather than switching to this converter.
+    expect(converted.PredefinedType).toBeUndefined()
+    expect(converted.UsageType).toBeUndefined()
+
+    // Confirms it is a field-list problem, not a value problem: the nine
+    // fields the class DOES declare read correctly off the same tape.
+    expect(converted.Name).toMatchObject({ value: 'Road-ROADSEGMENT-01' })
+    expect(converted.CompositionType).toMatchObject({ value: 'ELEMENT' })
+  })
+})
+
+describe('GetLineIDsWithType for the alias sentinels (codex review, #706 P2)', () => {
+
+  test('IFCFACILITYPART sentinel returns only the aliased facility part, not the road', () => {
+
+    const ids = vectorToArray(api.GetLineIDsWithType(modelID, IFC4X3_WEBIFC_TYPE_CODES.IFCFACILITYPART))
+
+    expect(ids).toEqual([2])
+  })
+
+  test('IFCROAD sentinel returns only the aliased road, not the facility part', () => {
+
+    const ids = vectorToArray(api.GetLineIDsWithType(modelID, IFC4X3_WEBIFC_TYPE_CODES.IFCROAD))
+
+    expect(ids).toEqual([1])
+  })
+
+  test('IFCPAVEMENT and IFCKERB sentinels each return only their own record', () => {
+
+    const pavementIDs = vectorToArray(api.GetLineIDsWithType(modelID, IFC4X3_WEBIFC_TYPE_CODES.IFCPAVEMENT))
+    const kerbIDs = vectorToArray(api.GetLineIDsWithType(modelID, IFC4X3_WEBIFC_TYPE_CODES.IFCKERB))
+
+    expect(pavementIDs).toEqual([3])
+    expect(kerbIDs).toEqual([4])
+  })
+
+  test(
+      'querying the genuine IfcBuildingStorey/IfcBuildingElementProxy codes still mixes in ' +
+      'the aliased records sharing that target type (documented pre-existing behaviour, ' +
+      'deliberately left alone)',
+      () => {
+
+        // NOT a fix: filtering this direction through checkIfc4x3Provenance
+        // was tried and reverted (see the block comment on the
+        // shimIfcEntityMap branch above in ifc_api_proxy_ifc.ts) because
+        // getAllTypesOfModel() calls getLineIDsWithType with EVERY
+        // IfcElements code to build its per-model type map, so the
+        // per-candidate byte-scan became a cost every model with any
+        // IfcBuildingStorey/IfcBuildingElementProxy pays, and on a
+        // spilled/windowed model (no pre-paging hook on this bulk,
+        // synchronous sweep) it silently dropped GENUINE entities of
+        // those two types whenever their keyword window wasn't resident
+        // -- caught by ifc_spill_source.test.ts's spatial-tree-survives-
+        // a-spill test on a plain IFC4 model with zero 4X3 content. Pinned
+        // here so a future attempt at this filter has a regression test
+        // to check itself against, not just the spill test far away.
+        const storeyIDs = vectorToArray(
+            api.GetLineIDsWithType(modelID, shimIfcEntityReverseMap[EntityTypesIfc.IFCBUILDINGSTOREY]))
+        const proxyIDs = vectorToArray(
+            api.GetLineIDsWithType(modelID, shimIfcEntityReverseMap[EntityTypesIfc.IFCBUILDINGELEMENTPROXY]))
+
+        // The genuine records (#5, #6) plus the aliased ones sharing their
+        // IFC4 target type: IFCROAD (#1) and IFCFACILITYPART (#2) alias
+        // onto IFCBUILDINGSTOREY; IFCPAVEMENT (#3) and IFCKERB (#4) alias
+        // onto IFCBUILDINGELEMENTPROXY.
+        expect(storeyIDs.sort()).toEqual([1, 2, 5])
+        expect(proxyIDs.sort()).toEqual([3, 4, 6])
+      })
+
+  test('an unrecognized type code still returns an empty vector, as before', () => {
+
+    // eslint-disable-next-line no-magic-numbers
+    const ids = vectorToArray(api.GetLineIDsWithType(modelID, -999999))
+
+    expect(ids).toEqual([])
+  })
 })

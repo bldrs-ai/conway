@@ -68,7 +68,10 @@ import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping
 import {
   IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE,
   IFC4X3_WEBIFC_TYPE_CODES,
+  IFC4X3_WEBIFC_TYPE_NAMES,
   checkIfc4x3Provenance,
+  expressIDsForAliasedKeyword,
+  expressIDsWithUnknownProvenance,
   ifc4x3KeywordScanRange,
 } from '../../ifc/ifc4x3_supertype_aliases'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
@@ -2325,6 +2328,28 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // eslint-disable-next-line no-unused-vars
     const [model, _] = this.model
     if (type in shimIfcEntityMap) {
+      // Deliberately UNCHANGED from before this fix, including for
+      // IFCBUILDINGSTOREY/IFCBUILDINGELEMENTPROXY (IFC4X3_SUPERTYPE_ALIASES's
+      // two IFC4 targets): querying by one of THEIR own web-ifc codes can
+      // still return an aliased IFC4X3 record indistinguishably mixed in
+      // with genuine ones of that type (checkIfc4x3Provenance is the only
+      // way to tell them apart, and it isn't free). Filtering this branch
+      // through it was tried and reverted -- getAllTypesOfModel()
+      // (ifc_properties.ts) calls getLineIDsWithType once per EVERY
+      // IfcElements type code to build its type map, so the filter's
+      // per-candidate backward byte-scan became a cost paid by every
+      // model with any IfcBuildingStorey/IfcBuildingElementProxy content,
+      // aliased or not -- and on a spilled/windowed model (no equivalent
+      // of ensureLineResident's pre-paging exists on this synchronous,
+      // bulk-sweep path) it silently DROPPED genuine, ordinary entities
+      // of those two types from the spatial tree whenever their keyword
+      // window wasn't resident (caught by
+      // ifc_spill_source.test.ts's 'spatial tree (names mode) ... survive
+      // a spill', a real IFC4 model with zero 4X3 content). That is
+      // disproportionate to codex's #706 follow-up (P2) ask, which was
+      // specifically about the four SENTINEL codes below returning an
+      // empty vector -- not about the genuine codes' pre-existing mixing
+      // behaviour, which this leaves exactly as it was.
       const value = shimIfcEntityMap[type]
       // Do something with value
       const results = model.typeIDs(value)
@@ -2339,6 +2364,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
         }
       }
 
+    } else if (type in IFC4X3_WEBIFC_TYPE_NAMES) {
+      // One of IFC4X3_WEBIFC_TYPE_CODES's sentinels (codex's #706
+      // follow-up, P2): not a real web-ifc/IFC4 type code, so it was never
+      // a key shimIfcEntityMap could have and never will be — querying by
+      // it has to go through the alias-provenance scan instead (see
+      // expressIDsForAliasedKeyword's block comment for why a plain
+      // model.typeIDs(targetType) lookup can't disambiguate the four
+      // keywords that share two IFC4 alias targets).
+      for (const expressID of expressIDsForAliasedKeyword(model, IFC4X3_WEBIFC_TYPE_NAMES[type])) {
+        expressIDVector.push(expressID)
+      }
+    } else if (type === IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE) {
+      for (const expressID of expressIDsWithUnknownProvenance(model)) {
+        expressIDVector.push(expressID)
+      }
     } else {
       // Handle case where key does not exist
       Logger.warning(`[GetLineIDsWithType] Type: ${type} does not exist in shimIfcEntityMap`)

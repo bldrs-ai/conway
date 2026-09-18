@@ -200,7 +200,7 @@ export class Ifc4X3AliasedTypeIndex implements TypeIndex<EntityTypesIfc> {
  * explicit `'unknown'` outcome the caller must treat as unsafe — see
  * `IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE`.
  */
-const ALIAS_TARGET_TYPES: ReadonlySet<EntityTypesIfc> = new Set(
+export const ALIAS_TARGET_TYPES: ReadonlySet<EntityTypesIfc> = new Set(
     IFC4X3_SUPERTYPE_ALIASES.values() )
 
 /** The real IFC4 keyword for each alias TARGET type, for a strict match. */
@@ -437,3 +437,110 @@ export const IFC4X3_WEBIFC_TYPE_NAMES: Readonly<Record<number, string>> =
  * the property-read side's refusal to guess.
  */
 export const IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE = -280099
+
+/**
+ * The subset of `IfcStepModel` {@link expressIDsForAliasedKeyword} and
+ * {@link expressIDsWithUnknownProvenance} need: {@link
+ * Ifc4X3KeywordSourceModel}'s keyword-scan surface plus `typeIDs`, the
+ * same type-index lookup `IfcApiProxyIfc.getLineIDsWithType` already uses
+ * for every ordinary web-ifc type code (`model.typeIDs(value)` against
+ * `shimIfcEntityMap`). Kept narrow, like {@link Ifc4X3KeywordSourceModel},
+ * so this stays testable without constructing a full model.
+ */
+export interface Ifc4X3AliasQueryModel extends Ifc4X3KeywordSourceModel {
+  typeIDs(...types: EntityTypesIfc[]): IterableIterator<{ localID: number, expressID?: number }>
+}
+
+/**
+ * `getLineIDsWithType`'s answer for one of {@link IFC4X3_WEBIFC_TYPE_CODES}
+ * (a CONFIRMED alias hit) — codex's #706 follow-up (P2) point that feeding
+ * a sentinel code back into `GetLineIDsWithType` "misses `shimIfcEntityMap`
+ * and returns an empty vector", because the sentinel was never a key in
+ * that table and never can be (it isn't a real web-ifc/IFC4 type code).
+ *
+ * There is no shortcut through `shimIfcEntityMap`: `IFCROAD` and
+ * `IFCFACILITYPART` share one IFC4 alias TARGET (`IFCBUILDINGSTOREY`), as
+ * do `IFCPAVEMENT`/`IFCKERB` (`IFCBUILDINGELEMENTPROXY`) — see {@link
+ * IFC4X3_SUPERTYPE_ALIASES}'s block comment. `model.typeIDs(targetType)`
+ * alone cannot separate a query for "every IFCROAD" from "every
+ * IFCFACILITYPART", let alone from a genuine `IfcBuildingStorey` sharing
+ * the same target — every candidate has to be run back through {@link
+ * checkIfc4x3Provenance} and matched against `keyword` specifically. Cheap
+ * in practice: at most the handful of alias-target-typed records a model
+ * has, and only paid when a caller actually queries by one of these four
+ * codes.
+ *
+ * @param model The model to query.
+ * @param keyword One of {@link IFC4X3_SUPERTYPE_ALIASES}'s four keys —
+ * the real IFC4X3 keyword a caller is asking for by its sentinel code.
+ * @return {number[]} Express IDs of records confirmed (not just
+ * suspected) to have been aliased from `keyword`. Empty for an unknown
+ * keyword, and silently excludes any candidate whose provenance can only
+ * be established as `'unknown'` — same safety stance as `webIfcTypeOf_`:
+ * a query result that omits an unresolved record is honest, one that
+ * guesses it in is not.
+ */
+export function expressIDsForAliasedKeyword(
+    model: Ifc4X3AliasQueryModel,
+    keyword: string ): number[] {
+
+  const targetType = IFC4X3_SUPERTYPE_ALIASES.get( keyword )
+
+  if ( targetType === void 0 ) {
+    return []
+  }
+
+  const results: number[] = []
+
+  for ( const candidate of model.typeIDs( targetType ) ) {
+
+    if ( candidate.expressID === void 0 ) {
+      continue
+    }
+
+    const provenance = checkIfc4x3Provenance( model, candidate.localID, targetType )
+
+    if ( provenance.status === 'aliased' && provenance.keyword === keyword ) {
+      results.push( candidate.expressID )
+    }
+  }
+
+  return results
+}
+
+/**
+ * `getLineIDsWithType`'s answer for {@link
+ * IFC4X3_UNKNOWN_PROVENANCE_TYPE_CODE} — every alias-target-typed record
+ * (across both {@link ALIAS_TARGET_TYPES}) whose provenance {@link
+ * checkIfc4x3Provenance} could not establish either way. Scans both
+ * target types since the sentinel is not keyword-specific — it is what
+ * `webIfcTypeOf_` exports for ANY unresolved candidate, regardless of
+ * which of the four keywords (or a genuine `IfcBuildingStorey`/
+ * `IfcBuildingElementProxy`) it might actually be.
+ *
+ * @param model The model to query.
+ * @return {number[]} Express IDs of alias-target-typed records with
+ * `{status: 'unknown'}` provenance.
+ */
+export function expressIDsWithUnknownProvenance(
+    model: Ifc4X3AliasQueryModel ): number[] {
+
+  const results: number[] = []
+
+  for ( const targetType of ALIAS_TARGET_TYPES ) {
+    for ( const candidate of model.typeIDs( targetType ) ) {
+
+      if ( candidate.expressID === void 0 ) {
+        continue
+      }
+
+      const provenance = checkIfc4x3Provenance( model, candidate.localID, targetType )
+
+      if ( provenance.status === 'unknown' ) {
+        results.push( candidate.expressID )
+      }
+    }
+  }
+
+  return results
+}
