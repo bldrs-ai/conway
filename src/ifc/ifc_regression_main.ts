@@ -520,7 +520,29 @@ function doWork() {
                     indexIfcBuffer.length).schema}): geometry extraction is not yet ` +
                 'implemented for this schema — see bldrs-ai/conway#280 phase 2b.')
             displayErrors(ifcFile)
-            exit()
+            // `exit()` with no argument exits 0 (Node uses the current
+            // `process.exitCode`, which defaults to 0) — that silently
+            // undid "fail closed" here specifically: this file is spawned
+            // by `ifc_regression_batch_main.ts`'s `safeExecWithCancellation`
+            // via `childProcess.exec`, whose callback sets `err.code` to the
+            // child's exit status (verified empirically — not the
+            // `child.on('exit', ...)` handler in the same function, which
+            // only clears the cancellation timeout and reads no code).
+            // `runForFile` turns a non-null `err` into `type: 'Failed'` and
+            // a `failed.csv` row; exit 0 instead classified this refusal as
+            // "loaded, produced no digest" — the same shape as a model that
+            // legitimately has no geometry — which is why
+            // KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc is in
+            // regression/zero_geometry_allowlist.txt (bldrs-ai/conway#280).
+            // With this fix that model now reports as a NEW `failed.csv`
+            // row instead; it is excluded from the PR-time smoke subset
+            // (regression/smoke_models.txt) so `run-ifc-regression` is
+            // unaffected, but the full-corpus `rc-regression.yml` diffs
+            // `failed.csv` against the baseline committed in the
+            // `test-models` repo, so that baseline needs this row added
+            // (or the next rc run reports it as a new failure). Found via
+            // the subprocess smoke test added alongside this gate.
+            exit(1)
           }
 
           const [result1, model] = parser.parseDataToModel( bufferInput)

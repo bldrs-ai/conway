@@ -267,7 +267,14 @@ function doWork() {
                 `IFC4X3 schema detected (${extractModelInfo(stepHeader,
                     indexIfcBuffer.length).schema}): geometry extraction is not yet ` +
                 'implemented for this schema — see bldrs-ai/conway#280 phase 2b.')
-            exit()
+            // `exit()` with no argument exits 0 (Node uses the current
+            // `process.exitCode`, which defaults to 0) — that silently
+            // undid "fail closed" for this CLI: a bin that refuses its
+            // input still has to report failure to `$?`, or a caller/shell
+            // script driving it treats the refusal as a success. Found via
+            // the subprocess smoke test added alongside this gate, which
+            // asserts on the exit code rather than only on log output.
+            exit(1)
           }
 
           tracker?.beginPhase('dataParse', 'bytes', indexIfcBuffer.length)
