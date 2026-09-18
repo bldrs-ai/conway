@@ -177,10 +177,22 @@ export default class Logger {
    *
    * @param message - log message
    * @param level - log level
+   * @param category - machine-readable kind, part of the entry's identity
+   *   (see {@link LogCategoryName})
    * @return {number} log index
    */
-  private static findLogIndex(message: string, level: LogLevelName): number {
-    return Logger.logs.findIndex((log) => log.message === message && log.level === level)
+  private static findLogIndex(
+      message: string, level: LogLevelName, category?: LogCategoryName): number {
+
+    // The category is part of the dedup identity, not a property a later
+    // call can attach. `warning`/`error` are public and a call site is free
+    // to log the same text with and without a category, so folding the two
+    // together would let an ordinary engine error be RETROACTIVELY marked as
+    // a data defect by an unrelated later call — and their counts summed
+    // under whichever marker won. Share#1863 triages on that marker, so the
+    // two have to stay two entries (codex round 1 on conway#708).
+    return Logger.logs.findIndex((log) =>
+      log.message === message && log.level === level && log.category === category)
   }
 
   /**
@@ -210,7 +222,7 @@ export default class Logger {
       String( expressID ) :
       message.split(' expressID: ')[1] // Extract the expressID
 
-    const index = Logger.findLogIndex(baseMessage, level)
+    const index = Logger.findLogIndex(baseMessage, level, category)
     let logEntry: LogEntry
     let firstOccurrence = false
 
@@ -220,14 +232,10 @@ export default class Logger {
         Logger.logs[index].expressIDs = Logger.logs[index].expressIDs || new Set<string>()
         Logger.logs[index].expressIDs.add(data)
       }
-      // Set rather than merged: entries dedupe on message+level, and the
-      // category is a property of the message, so a repeat can only ever
-      // carry the same one. Assigning it anyway means a call site that
-      // gains a category later classifies the entry its earlier repeats
-      // already opened, instead of the marker depending on call order.
-      if (category !== void 0) {
-        Logger.logs[index].category = category
-      }
+      // Note what is NOT here: the category is never written to an existing
+      // entry. It is part of the identity findLogIndex matched on, so this
+      // entry already carries it — and assigning it would be the retroactive
+      // re-marking that identity exists to prevent.
       logEntry = Logger.logs[index]
     } else {
       firstOccurrence = true
@@ -264,8 +272,12 @@ export default class Logger {
     const compressedLogs: LogEntry[] = []
 
     Logger.logs.forEach((log) => {
+      // Same identity findLogIndex uses, category included — this runs
+      // inside getErrors()/getDataDefects(), so merging on message+level
+      // alone would put back together exactly the entries the dedup
+      // identity keeps apart, and hand the survivor one arbitrary marker.
       const existingLog = compressedLogs.find((l) =>
-        l.message === log.message && l.level === log.level)
+        l.message === log.message && l.level === log.level && l.category === log.category)
       if (existingLog !== void 0) {
         existingLog.count += log.count
         if (log.expressIDs !== void 0) {

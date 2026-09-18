@@ -127,6 +127,69 @@ describe( 'Logger levels + sink', () => {
     expect( Logger.getErrors().length ).toBe( 2 )
   } )
 
+  test( 'the same message logged uncategorised then categorised stays two ' +
+    'entries', () => {
+
+    // `error`/`warning` are public and take the category as an optional
+    // argument, so one message reaching them both ways is a state a caller
+    // can produce. Folding the two together would let this later call
+    // RETROACTIVELY mark the engine error above as the file's fault, and
+    // add its occurrence to the defect's count — and Share#1863 triages on
+    // exactly that marker (codex round 1 on conway#708).
+    Logger.error( 'same text', 1 )
+    Logger.error( 'same text', 2, DATA_DEFECT )
+
+    const entries = Logger.getErrors()
+
+    expect( entries.length ).toBe( 2 )
+    expect( entries.map( ( entry ) => entry.count ) ).toEqual( [ 1, 1 ] )
+    expect( entries.map( ( entry ) => entry.category ) ).toEqual( [ void 0, DATA_DEFECT ] )
+
+    const defects = Logger.getDataDefects()
+
+    expect( defects.length ).toBe( 1 )
+    expect( defects[ 0 ].count ).toBe( 1 )
+    expect( defects[ 0 ].expressIDs ).toEqual( new Set( [ '2' ] ) )
+  } )
+
+  test( 'and stays two entries in the other order, with no marker leaking ' +
+    'backwards', () => {
+
+    // The mirror. This ordering is the one that used to look correct —
+    // both occurrences ended up categorised — which is why it needs its own
+    // test rather than being assumed symmetric.
+    Logger.error( 'same text', 1, DATA_DEFECT )
+    Logger.error( 'same text', 2 )
+
+    const entries = Logger.getErrors()
+
+    expect( entries.length ).toBe( 2 )
+    expect( entries.map( ( entry ) => entry.count ) ).toEqual( [ 1, 1 ] )
+    expect( entries.map( ( entry ) => entry.category ) ).toEqual( [ DATA_DEFECT, void 0 ] )
+
+    const defects = Logger.getDataDefects()
+
+    expect( defects.length ).toBe( 1 )
+    expect( defects[ 0 ].count ).toBe( 1 )
+    expect( defects[ 0 ].expressIDs ).toEqual( new Set( [ '1' ] ) )
+  } )
+
+  test( 'same message, same category still dedups to one counted entry', () => {
+
+    // The behaviour every path fixture in this change rests on: one defect
+    // family is one entry whose `count` sizes it. Widening the dedup
+    // identity must not cost this.
+    Logger.error( 'skipped something', 1, DATA_DEFECT )
+    Logger.error( 'skipped something', 2, DATA_DEFECT )
+    Logger.error( 'skipped something', 3, DATA_DEFECT )
+
+    const defects = Logger.getDataDefects()
+
+    expect( defects.length ).toBe( 1 )
+    expect( defects[ 0 ].count ).toBe( 3 )
+    expect( defects[ 0 ].expressIDs ).toEqual( new Set( [ '1', '2', '3' ] ) )
+  } )
+
   test( 'a data defect keeps whatever level its call site chose', () => {
 
     // Severity is Share's call (Share#1815), so conway does not move these
