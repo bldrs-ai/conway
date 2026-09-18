@@ -35,8 +35,23 @@ import { advanced_face } from './AP214E3_2010_gen'
  */
 const FIXTURE = 'data/ap242-periodic-u-strip-face.step'
 
-/** The periodic-strip face under test. */
+/** The periodic-strip face the fixture was cut for. */
 const STRIP_FACE = 19218
+
+/**
+ * The other periodic face of the same shell, whose ring 1 is a hole that
+ * STRADDLES THE SEAM - bldrs-ai/conway#709 and #710.
+ *
+ * `#19215` sits on `B_SPLINE_SURFACE_WITH_KNOTS #160`, which spells its closure
+ * in the PERIODIC form: the first three control rows repeat as the last three,
+ * so rows 0 and n-1 are 2.33mm apart and the clamped row-against-row closure
+ * test read the surface as OPEN. The inverse solve therefore clamped u at the
+ * domain floor instead of wrapping it, and 27 of that hole's 53 points came
+ * back at u = 0.000000 exactly - the whole far half of the hole collapsed onto
+ * the domain edge. The strip was then refused and earcut dropped both holes:
+ * the face emitted 358 triangles from 213 of its 327 boundary points.
+ */
+const SEAM_HOLE_FACE = 19215
 
 /**
  * The topological vertex of each of `#19218`'s four bounds, straight out of the
@@ -62,8 +77,11 @@ const BOUND_VERTICES = [
  */
 const POSITION_TOLERANCE = 1e-6
 
-const emitted: number[][] = []
-let triangleCount = 0
+/** Emitted vertex positions per isolated face, keyed by express ID. */
+const emitted = new Map< number, number[][] >()
+
+/** Emitted triangle count per isolated face, likewise. */
+const triangles = new Map< number, number >()
 
 
 beforeAll(async () => {
@@ -116,7 +134,7 @@ beforeAll(async () => {
       geometry: GeometryObject,
       parentLocalID?: number ) {
 
-    if (from.expressID !== STRIP_FACE) {
+    if (from.expressID !== STRIP_FACE && from.expressID !== SEAM_HOLE_FACE) {
       original.call(this, from, geometry, parentLocalID)
       return
     }
@@ -137,11 +155,14 @@ beforeAll(async () => {
         isolated.GetVertexData() / 4,
         (isolated.GetVertexData() / 4) + floatCount)
 
+    const positions: number[][] = []
+
     for (let where = 0; where < floatCount; where += 6) {
-      emitted.push([data[where], data[where + 1], data[where + 2]])
+      positions.push([data[where], data[where + 1], data[where + 2]])
     }
 
-    triangleCount = isolated.GetIndexDataSize() / 3
+    emitted.set(from.expressID, positions)
+    triangles.set(from.expressID, isolated.GetIndexDataSize() / 3)
   }
 
   try {
@@ -168,13 +189,13 @@ describe('a b-spline face whose boundary wraps the surface\'s u closure', () => 
     // the distinction the investigation behind this fixture needed twice, and
     // it cost two wrong diagnoses to learn. Raised by review on
     // bldrs-ai/conway#711.
-    expect(emitted.length).toBeGreaterThan(0)
+    expect(emitted.get(STRIP_FACE)?.length ?? 0).toBeGreaterThan(0)
   })
 
   test('every one of its four trim loops reaches the emitted geometry', () => {
 
     const missing = BOUND_VERTICES.filter((wanted) =>
-      !emitted.some((each) =>
+      !(emitted.get(STRIP_FACE) ?? []).some((each) =>
         Math.abs(each[0] - wanted[0]) <= POSITION_TOLERANCE &&
         Math.abs(each[1] - wanted[1]) <= POSITION_TOLERANCE &&
         Math.abs(each[2] - wanted[2]) <= POSITION_TOLERANCE))
@@ -204,6 +225,48 @@ describe('a b-spline face whose boundary wraps the surface\'s u closure', () => 
     // separate is that from the 190 the unfixed header emits - fewer triangles
     // than the outer ring alone has points - and any bound at or under 254
     // does that without being able to reject a valid minimal tessellation.
-    expect(triangleCount).toBeGreaterThanOrEqual(254)
+    expect(triangles.get(STRIP_FACE) ?? 0).toBeGreaterThanOrEqual(254)
+  })
+})
+
+/**
+ * The topological vertex of each of `#19215`'s three bounds, straight out of
+ * the fixture: `FACE_BOUND #17475..#17477` -> `EDGE_LOOP #15906..#15908` ->
+ * the first `EDGE_CURVE` of each -> its start `VERTEX_POINT`, in metres.
+ *
+ * `#15906` is the four-edge slot hole that straddles the seam (53 points),
+ * `#15907` the one-edge circular hole (61), `#15908` the eight-edge outer rim
+ * (213). One point per ring is all this needs: a ring earcut dropped
+ * contributes no index at all, so not one of its points reaches the geometry.
+ */
+const SEAM_HOLE_BOUND_VERTICES = [
+  [-0.004, 0.0135598252486046, 0.011673925254519],
+  [-8.13151629364128e-20, 0.00801397189192832, 0.0114935408121511],
+  [0.0107434876397606, 0.0349638694583991, 0.00459999999997733],
+]
+
+
+describe('a b-spline face whose hole straddles the seam', () => {
+
+  test('the face under test was reached at all', () => {
+
+    // Same distinction the sibling suite draws, and for the same reason: a
+    // wrapper that never fired and a face that came back short of its boundary
+    // want opposite responses.
+    expect(emitted.get(SEAM_HOLE_FACE)?.length ?? 0).toBeGreaterThan(0)
+  })
+
+  test('every one of its three trim loops reaches the emitted geometry', () => {
+
+    // Before the closure fixes this came back with ONE of the three present -
+    // the outer rim - because the seam-straddling hole was clamped flat onto
+    // the domain edge, the strip was refused, and earcut dropped both holes.
+    const missing = SEAM_HOLE_BOUND_VERTICES.filter((wanted) =>
+      !(emitted.get(SEAM_HOLE_FACE) ?? []).some((each) =>
+        Math.abs(each[0] - wanted[0]) <= POSITION_TOLERANCE &&
+        Math.abs(each[1] - wanted[1]) <= POSITION_TOLERANCE &&
+        Math.abs(each[2] - wanted[2]) <= POSITION_TOLERANCE))
+
+    expect(missing).toStrictEqual([])
   })
 })
