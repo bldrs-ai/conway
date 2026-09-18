@@ -8,6 +8,7 @@ import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
+import { IDENTITY_MAT4, NORMALIZE_MAT_F64 } from './coordination_f64'
 import { FlatMesh, IfcAPI } from './ifc_api'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
@@ -297,4 +298,123 @@ describe( 'OpenModelStreamed on AP214 STEP input', () => {
     }
 
   }, 240000 )
+
+  test( 'classic and deferred report the same applied coordination frame',
+      async () => {
+
+        // The AP214 arm of the Share#1634 accessor. Both walks derive
+        // through deriveCoordinationF64 and both must RECORD what they
+        // derived: the classic walk kept it in a local for a while, so
+        // GetAppliedCoordinationMatrix answered identity for a model it
+        // had in fact composed a frame into, while the deferred pump on
+        // the same file answered the truth. A consumer mapping a
+        // rendered point back to authored coordinates got a different
+        // answer depending on which open it took.
+        const data = new Uint8Array( fs.readFileSync( FIXTURES[ 0 ] ) )
+
+        const classicID = api.OpenModel( data, SETTINGS )
+
+        capture( classicID )
+
+        const classic = api.GetAppliedCoordinationMatrix( classicID )
+
+        const deferredID = await api.OpenModelStreamed(
+            data, { ...SETTINGS, DEFER_GEOMETRY: true } )
+
+        capture( deferredID )
+
+        expect( api.GetAppliedCoordinationMatrix( deferredID ) ).toEqual( classic )
+
+        // Non-vacuous: this fixture sits near the origin, so the frame
+        // carries no recentre — but it still carries the Z-up -> Y-up
+        // basis change and the file's unit scale, which is exactly what
+        // an identity report would lose. Without this the equality above
+        // would hold just as well for two paths that both reported
+        // nothing.
+        expect( classic[ 12 ] ).toBe( 0 )
+        expect( classic[ 13 ] ).toBe( 0 )
+        expect( classic[ 14 ] ).toBe( 0 )
+
+        const scale = Math.hypot( classic[ 0 ], classic[ 1 ], classic[ 2 ] )
+
+        expect( scale ).toBeGreaterThan( 0 )
+
+        for ( let element = 0; element < 16; ++element ) {
+
+          // Bottom row unscaled; the columns above it are NormalizeMat
+          // times the linear scaling factor.
+          const expected = ( element % 4 ) === 3 ?
+            NORMALIZE_MAT_F64[ element ] : NORMALIZE_MAT_F64[ element ] * scale
+
+          expect( classic[ element ] ).toBeCloseTo( expected, 9 )
+        }
+
+        // ...and that is not identity, so an accessor that lost the
+        // classic frame would be caught by the equality above.
+        expect( classic ).not.toEqual( [ ...IDENTITY_MAT4 ] )
+      }, 240000 )
+
+  test( 'a second classic walk composes under the frame the first derived',
+      async () => {
+
+        // conway#703 on the AP214 arm. More than one classic walk of one
+        // live model is legal, and the second used to seed its
+        // coordination local from the model tuple's identity while the
+        // `_isCoordinated` guard — correctly — stopped it re-deriving, so
+        // it re-emitted every placement without the frame. On a
+        // near-origin STEP part that is not a 2.6e6 m jump, it is the
+        // Z-up -> Y-up basis change going missing: the second walk's
+        // copies of the model come back in a different axis convention
+        // from the first's, and from what GetAppliedCoordinationMatrix
+        // says they are in.
+        const data = new Uint8Array( fs.readFileSync( FIXTURES[ 0 ] ) )
+
+        const modelID = api.OpenModel( data, SETTINGS )
+
+        const first = capture( modelID )
+
+        expect( first.size ).toBeGreaterThan( 0 )
+
+        const applied = api.GetAppliedCoordinationMatrix( modelID )
+
+        // The per-entity placement vectors are cumulative across walks, so
+        // after the second walk each entity carries both emissions and the
+        // tail of the list is the second walk's.
+        const second = capture( modelID )
+
+        expect( second.size ).toBe( first.size )
+
+        let compared = 0
+
+        for ( const [ expressID, firstList ] of first ) {
+
+          const bothWalks = second.get( expressID )!
+
+          expect( bothWalks.length ).toBe( firstList.length * 2 )
+
+          for ( let where = 0; where < firstList.length; ++where ) {
+
+            const rewalked = bothWalks[ firstList.length + where ]
+
+            expect( rewalked.geometryExpressID )
+                .toBe( firstList[ where ].geometryExpressID )
+
+            // Bit-equality: the same composition over the same inputs, so
+            // any difference at all means the two walks disagreed about
+            // the frame.
+            expect( rewalked.flatTransformation )
+                .toEqual( firstList[ where ].flatTransformation )
+
+            ++compared
+          }
+        }
+
+        expect( compared ).toBeGreaterThan( 0 )
+
+        // The accessor still describes what the SECOND walk emitted, which
+        // is the half that fails on the applied-frame contract rather than
+        // on parity.
+        expect( api.GetAppliedCoordinationMatrix( modelID ) ).toEqual( applied )
+        expect( applied ).not.toEqual( [ ...IDENTITY_MAT4 ] )
+      }, 240000 )
 } )

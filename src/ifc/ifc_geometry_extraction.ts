@@ -183,6 +183,8 @@ import {
   IfcTShapeProfileDef,
   IfcZShapeProfileDef,
   IfcRelAggregates,
+  IfcRelDefinesByType,
+  IfcTypeObject,
   IfcObjectDefinition,
   IfcTriangulatedFaceSet,
   IfcPolygonalBoundedHalfSpace,
@@ -381,6 +383,16 @@ const REL_AGGREGATES_RELATING_DEPTH = 3
 const REL_ASSOCIATES_RELATED_OFFSET = 4
 const REL_ASSOCIATES_RELATED_BASE = 4
 const REL_ASSOCIATES_RELATED_DEPTH = 2
+
+/** IfcRelDefinesByType.RelatedObjects — see IfcRelDefinesByType.gen.ts. */
+const REL_DEFINES_BY_TYPE_RELATED_OFFSET = 4
+const REL_DEFINES_BY_TYPE_RELATED_BASE = 4
+const REL_DEFINES_BY_TYPE_RELATED_DEPTH = 3
+
+/** IfcRelDefinesByType.RelatingType — see IfcRelDefinesByType.gen.ts. */
+const REL_DEFINES_BY_TYPE_RELATING_OFFSET = 5
+const REL_DEFINES_BY_TYPE_RELATING_BASE = 4
+const REL_DEFINES_BY_TYPE_RELATING_DEPTH = 3
 const COORD_INDEX_FIELD_OFFSET = 0
 
 const POLYGONAL_INDEX_SINK_CAPACITY = 65536
@@ -7156,6 +7168,17 @@ export class IfcGeometryExtraction {
     // populate relMaterialsMap
     const relAssociatesMaterials = this.model.types(IfcRelAssociatesMaterial)
     const productTypes = new Set< number >( IfcProduct.query )
+    const typeObjectTypes = new Set< number >( IfcTypeObject.query )
+
+    // Material associations whose related object is a TYPE object
+    // (IfcDoorType, IfcWindowType, ...) instead of an occurrence. The
+    // product filter below drops those — correctly, since a type object is
+    // an IfcTypeObject and not an IfcProduct, so it has no geometry of its
+    // own to colour — but the occurrences it defines still inherit its
+    // material. They are collected here keyed by the TYPE's local ID and
+    // pushed down onto occurrences by inheritTypeMaterials_ once the whole
+    // sweep has run; see that method for the precedence rule.
+    const typeMaterialsMap = new Map< number, number >()
 
     for (const relAssociateMaterial of relAssociatesMaterials) {
       try {
@@ -7178,22 +7201,21 @@ export class IfcGeometryExtraction {
                 return true
               }
 
-              const productLocalID = this.model.resolveExpressID( expressID )
+              const relatedLocalID = this.model.resolveExpressID( expressID )
 
-              if ( productLocalID === void 0 ) {
+              if ( relatedLocalID === void 0 ) {
                 return true
               }
 
-              const typeID = this.model.typeIDOf( productLocalID )
+              const typeID = this.model.typeIDOf( relatedLocalID )
 
-              if ( typeID === EntityTypesIfc.IFCOPENINGELEMENT ||
-                  typeID === EntityTypesIfc.IFCSPACE ||
-                  typeID === EntityTypesIfc.IFCOPENINGSTANDARDCASE ) {
+              if ( typeID !== void 0 && typeObjectTypes.has( typeID ) ) {
+                typeMaterialsMap.set( relatedLocalID, materialLocalID )
                 return true
               }
 
-              if ( typeID !== void 0 && productTypes.has( typeID ) ) {
-                this.materials.relMaterialsMap.set( productLocalID, materialLocalID )
+              if ( this.isMaterialTargetProductType_( typeID, productTypes ) ) {
+                this.materials.relMaterialsMap.set( relatedLocalID, materialLocalID )
               }
 
               return true
@@ -7206,6 +7228,10 @@ export class IfcGeometryExtraction {
       }
     }
 
+    // Fill occurrences that got no direct association from their type's,
+    // strictly after the sweep above so direct entries always win.
+    this.inheritTypeMaterials_( typeMaterialsMap, productTypes )
+
     // populate MaterialDefinitionsMap
     this.populateMaterialDefinitionsMap()
 
@@ -7214,6 +7240,135 @@ export class IfcGeometryExtraction {
 
     // populate styled items map
     this.populateStyledItemsMap()
+  }
+
+  /**
+   * Is a related object of an IfcRelAssociatesMaterial one whose geometry
+   * that material may colour?
+   *
+   * Openings and spaces are excluded: they do carry material associations
+   * in real files, but they are subtractive/void volumes rather than
+   * things the scene shows. Shared by the direct-association sweep and the
+   * type-inheritance pass so the two cannot drift apart on which products
+   * count — an occurrence excluded here must stay excluded when the same
+   * material arrives via its type.
+   *
+   * Takes the type ID rather than the local ID because both callers have
+   * already resolved it for their own dispatch.
+   *
+   * @param typeID The related object's entity type ID, or undefined when
+   * the model has no type for it.
+   * @param productTypes The IfcProduct type-ID set, hoisted by the caller.
+   * @return {boolean} True when a material association on this object
+   * should reach relMaterialsMap.
+   */
+  private isMaterialTargetProductType_(
+      typeID: number | undefined,
+      productTypes: ReadonlySet< number > ): boolean {
+
+    if ( typeID === void 0 ||
+        typeID === EntityTypesIfc.IFCOPENINGELEMENT ||
+        typeID === EntityTypesIfc.IFCSPACE ||
+        typeID === EntityTypesIfc.IFCOPENINGSTANDARDCASE ) {
+      return false
+    }
+
+    return productTypes.has( typeID )
+  }
+
+  /**
+   * Push type-level material associations down onto the occurrences that
+   * IfcRelDefinesByType binds to those types.
+   *
+   * A material may be associated with an occurrence (IfcDoor) or with its
+   * type (IfcDoorType); an occurrence without one of its own takes the
+   * type's. Precedence is the load-bearing rule: an occurrence-level
+   * IfcRelAssociatesMaterial ALWAYS overrides the type-level one (IFC4
+   * "Object Typing" — a type's assignments are defaults the occurrence may
+   * override), so this pass only ever fills a hole and never overwrites an
+   * entry the direct sweep wrote. Running it strictly after the WHOLE
+   * IfcRelAssociatesMaterial sweep is what makes that order-independent: a
+   * direct association written later in the file than its type's still
+   * wins, which a fill interleaved with the sweep could not guarantee.
+   *
+   * Without this, an occurrence whose material lives only on its type
+   * resolves no material at all and renders untinted — 272 of 5,351 scene
+   * placements on the Renga convenience-store model
+   * (bldrs-ai/test-models-private#61), all of them windows, doors, light
+   * fixtures and railings whose IfcRelAssociatesMaterial names the
+   * Type entity rather than the occurrence.
+   *
+   * @param typeMaterialsMap Material local ID per TYPE object local ID,
+   * collected by the direct sweep.
+   * @param productTypes The IfcProduct type-ID set, hoisted by the caller.
+   */
+  private inheritTypeMaterials_(
+      typeMaterialsMap: ReadonlyMap< number, number >,
+      productTypes: ReadonlySet< number > ): void {
+
+    if ( typeMaterialsMap.size === 0 ) {
+      // No type carries a material, so no IfcRelDefinesByType in this model
+      // can contribute one. Skip the sweep rather than walk (and, on a
+      // windowed source, page in) every type relationship for nothing.
+      return
+    }
+
+    const relMaterialsMap = this.materials.relMaterialsMap
+
+    for ( const relDefinesByType of this.model.types( IfcRelDefinesByType ) ) {
+
+      try {
+        // RelatingType as a bare local ID: hydrating the type object would
+        // pin its record on a windowed source for no gain, since
+        // typeMaterialsMap is keyed by local ID. Same reason the related
+        // objects go through forEachReferenceInField below.
+        const typeLocalID = relDefinesByType.extractReferenceLocalID(
+            REL_DEFINES_BY_TYPE_RELATING_OFFSET,
+            REL_DEFINES_BY_TYPE_RELATING_BASE,
+            REL_DEFINES_BY_TYPE_RELATING_DEPTH,
+            false )
+
+        if ( typeLocalID === null ) {
+          continue
+        }
+
+        const materialLocalID = typeMaterialsMap.get( typeLocalID )
+
+        if ( materialLocalID === void 0 ) {
+          continue
+        }
+
+        relDefinesByType.forEachReferenceInField(
+            REL_DEFINES_BY_TYPE_RELATED_OFFSET,
+            REL_DEFINES_BY_TYPE_RELATED_BASE,
+            REL_DEFINES_BY_TYPE_RELATED_DEPTH,
+            ( expressID ) => {
+
+              if ( expressID === void 0 ) {
+                return true
+              }
+
+              const productLocalID = this.model.resolveExpressID( expressID )
+
+              if ( productLocalID === void 0 ||
+                  relMaterialsMap.has( productLocalID ) ) {
+                // Occupied entry: the occurrence declared its own material
+                // and that wins over the type's.
+                return true
+              }
+
+              if ( this.isMaterialTargetProductType_(
+                  this.model.typeIDOf( productLocalID ), productTypes ) ) {
+                relMaterialsMap.set( productLocalID, materialLocalID )
+              }
+
+              return true
+            } )
+      } catch ( ex ) {
+        this.handleMapPrepError_(
+            'IfcRelDefinesByType', relDefinesByType.expressID, ex )
+      }
+    }
   }
 
   /**
@@ -7304,8 +7459,19 @@ export class IfcGeometryExtraction {
       }
     }
 
+    // Every relationship prepareExtractionMaps_ sweeps has to be listed
+    // here, or its field reads throw StepBufferNotResidentError on a
+    // windowed source and handleMapPrepError_ swallows the throw in
+    // permissive mode — a sweep that silently does nothing rather than a
+    // loud failure. IfcRelDefinesByType is here for inheritTypeMaterials_;
+    // it needs no entry in the 1-hop pass below because that pass exists
+    // for relationship GETTERS, which hydrate their targets, and the
+    // type-inheritance sweep reads only the relationship's own bytes
+    // (extractReferenceLocalID / forEachReferenceInField) plus index
+    // columns (codex finding on bldrs-ai/conway#704).
     const recordOnlyTypes = [
       IfcRelAssociatesMaterial,
+      IfcRelDefinesByType,
       IfcRelVoidsElement,
       IfcStyledItem,
       IfcRelAggregates,

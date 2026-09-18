@@ -103,6 +103,131 @@ const STORE_PARSE_POOL_BYTES = 16 * 1024 * 1024
 // eslint-disable-next-line no-magic-numbers
 const BYTES_PER_MIB = 1024 * 1024
 
+/* Set to an integer seed to reorder the demand worklists after they are
+ * built. Off by default and free when unset — see permuteDemandWorklists
+ * for what it is for (conway#640). */
+const WORKLIST_PERMUTATION_ENV = 'CONWAY_PERMUTE_WORKLIST'
+
+/* xorshift32's shift triple. Named rather than inlined because they ARE
+ * the generator: change one and every seed names a different permutation,
+ * which would silently invalidate any run record that cites a seed. */
+// eslint-disable-next-line no-magic-numbers
+const XORSHIFT_SHIFT_A = 13
+// eslint-disable-next-line no-magic-numbers
+const XORSHIFT_SHIFT_B = 17
+const XORSHIFT_SHIFT_C = 5
+
+/* 2^32 — the divisor that turns the generator's uint32 into the [0, 1)
+ * fraction Fisher-Yates indexes with. */
+// eslint-disable-next-line no-magic-numbers
+const UINT32_RANGE = 4294967296
+
+/**
+ * The permutation seed this process asks for, if any.
+ *
+ * Reads the environment defensively: this module runs in the browser as
+ * well, where `process` is not defined, and an unset lever must cost
+ * nothing rather than throw.
+ *
+ * @return {number | undefined} The seed, or undefined when the lever is
+ * off or its value is not a finite number.
+ */
+function worklistPermutationSeed(): number | undefined {
+
+  const raw = typeof process === 'undefined' ?
+    void 0 : process.env[WORKLIST_PERMUTATION_ENV]
+
+  if (raw === void 0 || raw === '') {
+    return void 0
+  }
+
+  const seed = Number(raw)
+
+  return Number.isFinite(seed) ? seed : void 0
+}
+
+/**
+ * Fisher-Yates over `items`, in place, driven by a seeded xorshift32.
+ *
+ * Seeded rather than `Math.random` because the experiment this serves
+ * compares two whole model loads: an order nobody can name again is not a
+ * result, it is an anecdote.
+ *
+ * @param items The list to reorder.
+ * @param seed The permutation seed.
+ */
+function permuteInPlace<Element>(items: Element[], seed: number): void {
+
+  // xorshift32 has a fixed point at zero — seeded there it emits zero
+  // forever and the "shuffle" is the identity, which would read as a clean
+  // null result rather than as a misconfigured run.
+  let state = (seed | 0) === 0 ? 1 : seed | 0
+
+  for (let where = items.length - 1; where > 0; --where) {
+
+    state ^= state << XORSHIFT_SHIFT_A
+    state ^= state >>> XORSHIFT_SHIFT_B
+    state ^= state << XORSHIFT_SHIFT_C
+
+    const pick = Math.floor(((state >>> 0) / UINT32_RANGE) * (where + 1))
+    const held = items[where]
+
+    items[where] = items[pick]
+    items[pick] = held
+  }
+}
+
+/**
+ * Reorder worklists that are about to be adopted, under
+ * `CONWAY_PERMUTE_WORKLIST`. A no-op — not even a copy — when unset.
+ *
+ * **Why this exists (conway#640).** A sharded load builds a small
+ * population of one model's geometries differently from an unsharded one.
+ * The diagnosis localises that to extraction ORDER rather than to
+ * sharding: the geometry cache is keyed by representation-item local ID
+ * and is last-writer-wins (`ifc_model_geometry.ts` `add`), while the
+ * rel-void path writes into it a solid cut in the absolute frame of
+ * whichever product is being walked — so which product touches a shared
+ * key last decides that key's content. Sharding changes that order, but so
+ * would anything else, and the claim can only be settled by an experiment
+ * that changes ONLY the order.
+ *
+ * That is what this is, and why it runs here: after the worklists are
+ * built and after any shard has narrowed them, before anything reads them.
+ * Membership is untouched — the same products and the same relationships,
+ * walked in a different sequence — so a divergence between two seeds on
+ * one unsharded load is order-dependence with no sharding in the picture.
+ *
+ * Kept as a permanent lever rather than a throwaway patch: order
+ * dependence is not the kind of defect that stays fixed by itself, and
+ * this is the cheapest check that it has not come back.
+ *
+ * @param products The product worklist, reordered in place.
+ * @param aggregates The rel-aggregates worklist, reordered in place.
+ */
+function permuteDemandWorklists(
+    products: number[],
+    aggregates: IfcRelAggregates[]): void {
+
+  const seed = worklistPermutationSeed()
+
+  if (seed === void 0) {
+    return
+  }
+
+  // Two streams rather than one: the passes run one after the other, so a
+  // single generator would give the aggregates whatever state the products
+  // happened to leave it in — correlated with the product count, which is
+  // exactly what a second seeded run is supposed to hold fixed.
+  permuteInPlace(products, seed)
+  permuteInPlace(aggregates, seed + 1)
+
+  Logger.warning(
+      `[worklist] ${WORKLIST_PERMUTATION_ENV}=${seed}: demand worklists ` +
+      `permuted (${products.length} products, ${aggregates.length} ` +
+      'rel-aggregates). Output is not comparable to an unpermuted load.')
+}
+
 /**
  * The coordination frame spatial-structure imposters compose under.
  *
@@ -2284,6 +2409,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * The classic web-ifc coordination matrix, held at identity on purpose
+   * — consumers stamp it onto the assembled model, so returning the real
+   * recentre here would apply it twice. For the frame this instance
+   * actually composed into its placements, see
+   * {@link getAppliedCoordination}.
    *
    * @param modelID
    * @return {Array<number>}
@@ -2304,14 +2434,69 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
 
   /**
-   * The coordination frame actually applied to emitted placements —
-   * the derived (or validated adopted) recenter, identity when no
-   * recenter ran. See ifc_api_model_passthrough.getAppliedCoordination.
+   * The coordination frame this instance actually composed into the
+   * placements it emitted — derived, supplied, or an adopted preview
+   * frame the durable walk has since validated; identity while nothing
+   * has been composed and nothing handed in.
    *
-   * @return {Array<number>} column-major mat4
+   * "Handed in" is the exception to the emitted-placements reading, and
+   * it is deliberate: {@link setCoordinationFrame} stores its matrix at
+   * call time, so a supplied frame reports from that moment rather than
+   * from the first placement composed under it. M3's pool needs exactly
+   * that — a worker is asked which frame it will apply, not which one it
+   * has finished applying — and a supplied frame is final, so the early
+   * answer is never revised.
+   *
+   * Every emit site (classic `streamAllMeshes` /
+   * `streamAllMeshesWithTypes` / `loadAllGeometry`, and the deferred
+   * `streamNewMeshes_`) writes `demandCoordination_` at the moment it
+   * derives, which is what makes the classic and deferred opens report
+   * the same frame for the same model.
+   *
+   * The contract this satisfies — composition order, the
+   * `world = inverse(A) * rendered` inverse, and when identity is owed —
+   * is stated on `IfcAPI.GetAppliedCoordinationMatrix`.
+   *
+   * @return {Array<number>} column-major mat4, a fresh array; `identity`
+   * is a mutable field, so the copy is what keeps a caller from editing
+   * this instance's own zero frame.
    */
   getAppliedCoordination(): Array<number> {
     return [...(this.demandCoordination_ ?? this.identity)]
+  }
+
+
+  /**
+   * The frame a classic walk composes under: whatever this model has
+   * already derived, and only failing that the model tuple's identity
+   * seed.
+   *
+   * The classic walks derive a frame only while `_isCoordinated` is
+   * false, which is right — a model must not re-anchor halfway through
+   * its life — but they used to seed their local from `model[5]`'s
+   * identity regardless. So a SECOND walk of one live model
+   * (`streamAllMeshes` and then `loadAllGeometry`, both legal on a
+   * classic open) skipped the derivation AND started from identity,
+   * composing every placement without the recentre while
+   * {@link getAppliedCoordination} went on reporting the real frame:
+   * emitted geometry and accessor answer disagreeing precisely on the
+   * georeferenced models where the difference is 2.6e6 m (#703). Before
+   * the accessor existed the two were accidentally consistent, both
+   * identity, which is why this surfaced only now.
+   *
+   * Skipping the re-derivation was never the bug; seeding identity was.
+   * Reading the persisted frame here is what keeps
+   * `world = inverse(A) * rendered` true for every walk rather than only
+   * the first.
+   *
+   * `demandCoordination_` is undefined until something derives, so a
+   * first walk still starts from the identity seed and emits exactly
+   * what it did before this existed.
+   *
+   * @return {ArrayLike<number>} The frame to seed a classic walk with.
+   */
+  private classicCoordinationSeed_(): ArrayLike<number> {
+    return this.demandCoordination_ ?? this.model[5]
   }
 
   /**
@@ -2929,6 +3114,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.releaseDemandAggregate_()
 
+    permuteDemandWorklists(products, aggregates)
+
     this.demandProducts_ = products
     this.demandAggregates_ = aggregates
     this.demandCursor_ = 0
@@ -2964,7 +3151,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let placed = 0
     let positional = 0
 
-    this.demandProducts_ = products.filter((localID, where) => {
+    const keptProducts = products.filter((localID, where) => {
 
       const key = productKeys[where]
 
@@ -2998,8 +3185,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // geometry, so getting it wrong leaves placement with almost nothing
     // to control (measured on D3D, where that mistake made every strategy
     // look identical).
-    this.demandAggregates_ = aggregates.filter((relAggregate, where) =>
+    const keptAggregates = aggregates.filter((relAggregate, where) =>
       shardOfDispatchKey(aggregateKeys[where], shard.count) === shard.index)
+
+    // After the narrowing, so the lever reorders what this shard will
+    // actually walk without touching which products that is.
+    permuteDemandWorklists(keptProducts, keptAggregates)
+
+    this.demandProducts_ = keptProducts
+    this.demandAggregates_ = keptAggregates
 
     this.releaseDemandAggregate_()
 
@@ -4661,7 +4855,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {
@@ -4823,7 +5017,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     const conwayTypesArray: number[] = []
     types.forEach((type) => {
@@ -5007,7 +5201,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       geometryMaterialTransformMap,
       vectorFlatMesh] = this.model
 
-    let coordinationMatrix: ArrayLike<number> = this.model[5]
+    let coordinationMatrix: ArrayLike<number> = this.classicCoordinationSeed_()
 
     // eslint-disable-next-line no-unused-vars
     for (const [_, nativeTransform, geometry, material, entity] of scene.walk()) {

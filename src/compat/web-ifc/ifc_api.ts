@@ -962,6 +962,15 @@ export class IfcAPI {
   }
 
   /**
+   * The CLASSIC web-ifc coordination matrix, which this surface
+   * deliberately keeps at identity: consumers stamp the value they read
+   * here onto the assembled model, and a non-identity return would apply
+   * the recentre a SECOND time on top of the placements that already
+   * carry it.
+   *
+   * It is therefore NOT the answer to "what offset did the engine
+   * apply?" — that is {@link GetAppliedCoordinationMatrix}, and it is
+   * what you want for measurements, georeferenced permalinks and export.
    *
    * @param modelID
    * @return {Array<number>}
@@ -981,16 +990,90 @@ export class IfcAPI {
   }
 
   /**
-   * Conway extension: the coordination frame the open ACTUALLY applied
-   * to emitted placements (the COORDINATE_TO_ORIGIN recenter), identity
-   * when none ran. GetCoordinationMatrix keeps its classic identity
-   * contract (consumers stamp it onto assembled models); this is the
-   * explicit report of the real offset so embedders can map rendered
-   * points back to source-world coordinates (Share#1634 acceptance).
+   * Conway extension: the coordination frame this open ACTUALLY composed
+   * into the placements it emitted — the full float64 column-major mat4,
+   * not {@link GetCoordinationMatrix}'s classic identity (Share#1634).
+   *
+   * **The frame contract.** Write `A` for what this returns. Every
+   * `flatTransformation` the model emits was composed as
+   *
+   * ```
+   *   flatTransformation = A * placement [ * translate(geomCentre) ]
+   * ```
+   *
+   * `placement` is the entity's native world placement in the file's own
+   * authored space — source units, Z-up, un-recentred. The optional
+   * `translate(geomCentre)` is the per-leaf offset the IFC path bakes out
+   * of the shared vertex buffer so the uploaded float32 positions stay
+   * local; the AP214/STEP path omits it (its vertices stay in local
+   * source space and `placement` carries the whole world transform). Both
+   * factors sit to the RIGHT of `A`, which is why neither one is needed
+   * below.
+   *
+   * So for any vertex `v` a consumer uploads and renders,
+   *
+   * ```
+   *   rendered = flatTransformation * v = A * world
+   *   world    = inverse(A) * rendered            <- the inverse you want
+   * ```
+   *
+   * where `world` is the point in the model's AUTHORED world space: the
+   * coordinates the file declares, in the file's units, Z-up. Inverting
+   * the returned matrix is the whole of it — nothing else about the model
+   * is required — because `A` carries all three factors the recentre
+   * composed, in this order (see `deriveCoordinationF64`):
+   *
+   * ```
+   *   A = scale(linearScalingFactor) * NormalizeMat * translate(-anchor)
+   * ```
+   *
+   * innermost first: the recentre translation, in SOURCE units and before
+   * any rotation; then `NormalizeMat`, the Z-up -> Y-up change of basis;
+   * then the scale to metres. `inverse(A)` therefore undoes the unit
+   * scale and the axis convention as well as the offset, so a consumer
+   * recovers authored coordinates without knowing either.
+   *
+   * **When it is identity.** When nothing has been composed AND nothing
+   * has been handed in: an open without COORDINATE_TO_ORIGIN, a shard
+   * (`SetGeometryShard` suppresses deriving) with no frame supplied, a
+   * model that has emitted no geometry yet and been given no frame, and
+   * an unknown `modelID` or a passthrough that does not implement it.
+   *
+   * Two things are NOT in that list, and both are load-bearing:
+   *
+   *  - A frame handed in by {@link SetCoordinationFrame} is reported
+   *    **immediately**, before a single placement has been composed under
+   *    it. That is what the M3 derive-once-then-distribute workflow needs
+   *    — a worker is asked for the frame it is going to apply, not the
+   *    frame it has finished applying — and it is safe to report early
+   *    precisely because a supplied frame is final: the setter refuses to
+   *    replace a frame the model derived for itself, and refuses to
+   *    accept one at all after the first batch. So "identity" never means
+   *    "ask again later"; on a model you supplied, the answer is right
+   *    from the moment you supplied it.
+   *  - A near-origin model under COORDINATE_TO_ORIGIN returns a frame
+   *    whose TRANSLATION is exactly zero — no recentre was needed, that
+   *    is the model-zero rule in `COORDINATION_SNAP_M` — but whose
+   *    rotation and scale are still the `NormalizeMat` and unit scale the
+   *    placements were composed under. Do not shortcut on "no offset
+   *    applied"; invert the matrix.
+   *
+   * **Preview-adopted vs. durable.** A deferred open that adopted its
+   * parse-time preview channel's frame reports that adopted frame from
+   * the moment the model opens — truthfully, since the preview payloads
+   * were composed under it. The durable walk is the authority, and it
+   * revalidates that adoption against its own first geometry, so the
+   * value can change ONCE, at the first durable batch, if the adopted
+   * frame is rejected. From the frame's derivation (or validation)
+   * onward it is fixed for the life of the model: later batches place
+   * under the same frame, and {@link SetCoordinationFrame} refuses to
+   * replace a frame the model already derived.
+   *
    * Feature-detect: typeof api.GetAppliedCoordinationMatrix.
    *
    * @param modelID
-   * @return {Array<number>} column-major mat4
+   * @return {Array<number>} column-major mat4, a fresh array the caller
+   * owns
    */
   GetAppliedCoordinationMatrix(modelID: number): Array<number> {
 
@@ -1215,6 +1298,11 @@ export class IfcAPI {
    * Typical use: the coordinator opens once (its parse-time preview channel
    * derives a frame), reads it back with {@link GetAppliedCoordinationMatrix}, and
    * passes it to every worker before their first batch.
+   *
+   * A frame supplied here is readable back from
+   * {@link GetAppliedCoordinationMatrix} straight away, before the worker
+   * has composed anything under it — which is what lets a coordinator
+   * confirm every worker took the frame without first pumping each one.
    *
    * @param modelID handle from a DEFER_GEOMETRY open
    * @param matrix column-major mat4 of 16 finite numbers, or omitted to drop

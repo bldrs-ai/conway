@@ -76,12 +76,20 @@ export interface IfcApiModelPassthrough {
   getCoordinationMatrix(): number[]
 
   /**
-   * Optional: the coordination frame the open ACTUALLY applied to
-   * emitted placements (COORDINATE_TO_ORIGIN recenter). Unlike
+   * Optional: the coordination frame the open ACTUALLY composed into the
+   * placements it emitted (the COORDINATE_TO_ORIGIN recentre, plus the
+   * Z-up -> Y-up normalize and unit scale that ride with it). Unlike
    * getCoordinationMatrix — whose classic identity contract consumers
-   * stamp onto assembled models — this reports the real offset, so
-   * embedders can map rendered points back to source-world coordinates
+   * stamp onto assembled models — this reports the real frame, so
+   * embedders can map rendered points back to authored world coordinates
    * (Share#1634 acceptance).
+   *
+   * The full contract an implementation must satisfy — the composition
+   * order, the `world = inverse(A) * rendered` inverse it has to make
+   * computable from the return value ALONE, when identity is owed, and
+   * the preview-adopted-versus-durable rule — is stated once on
+   * `IfcAPI.GetAppliedCoordinationMatrix`. Read it before changing an
+   * implementation of this.
    */
   getAppliedCoordination?(): number[]
   getAllLines(): Vector<number>

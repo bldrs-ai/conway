@@ -14,7 +14,12 @@ import IfcStepModel from './ifc_step_model'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ConwayGeometry } from '../../dependencies/conway-geom'
 import { ExtractResult } from '../core/shared_constants'
-import { IfcProduct, IfcStyledItem } from './ifc4_gen'
+import {
+  IfcProduct,
+  IfcRelAssociatesMaterial,
+  IfcRelDefinesByType,
+  IfcStyledItem,
+} from './ifc4_gen'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { openStreamedIfcModelFromStore } from './ifc_stream_open'
 import {
@@ -555,6 +560,74 @@ describe( 'concurrent windowed product prefetch (conway#526)', () => {
 
         for ( const span of leafSpans ) {
           model.unpinAddressRange( span.address, span.length )
+        }
+      }, 120000 )
+} )
+
+
+// codex finding on bldrs-ai/conway#704: the map-prep residency contract is a
+// list, and a sweep added to prepareExtractionMaps_ without a matching entry
+// in ensureResidentForDemandPrep's `recordOnlyTypes` fails SILENTLY on a
+// windowed source. Its field reads throw StepBufferNotResidentError,
+// handleMapPrepError_ swallows the throw (MATERIAL_RELATED_OBJECTS_PERMISSIVE
+// is true), and the sweep contributes nothing — while the same model opened
+// classically is correct, so nothing downstream reports a difference.
+//
+// Measured on the Renga convenience-store model
+// (bldrs-ai/test-models-private#61) with IfcRelDefinesByType missing from the
+// list: 0 of its 103 records pinned, and 5 / 11 / 17 swallowed
+// not-resident errors as the window tightened from 4 KiB x 16 to 1 KiB x 2.
+// That model's inheritance survived anyway — a Renga export writes each
+// IfcRelDefinesByType on the line after its type object, so the 1-hop pin of
+// the type dragged in the relationship's chunk — which is precisely why this
+// asserts the pin set rather than a colour: the colour is right by adjacency
+// luck that no other file owes us.
+describe( 'windowed demand-prep residency (conway#704)', () => {
+
+  /** 4 KiB chunks, 2 resident — the cramped window the suite above uses. */
+  const CHUNK = 4 * 1024
+
+  test( 'prep pins every record of every relationship its sweeps read',
+      async () => {
+
+        const store = new InMemoryStepByteStore(
+            new Uint8Array( fs.readFileSync( 'data/surface_style_shading_mapped.ifc' ) ) )
+        const open = await openStreamedIfcModelFromStore( store, { pool: CHUNK } )
+
+        expect( open.model ).toBeDefined()
+
+        const model = new IfcStepModel(
+            void 0,
+            open.columns as any,
+            new WindowedStepBufferProvider( store, CHUNK, 2 ) )
+
+        expect( model.isSourceExternal ).toBe( true )
+
+        const extraction = new IfcGeometryExtraction( conwayGeometry, model )
+        const prepPins = await extraction.ensureResidentForDemandPrep()
+
+        try {
+
+          // IfcRelAssociatesMaterial is the control: it has been in
+          // `recordOnlyTypes` since the map prep existed, so it holds whether
+          // or not the type-material work landed. If it ever stops holding,
+          // the assertion below is measuring the harness, not the list.
+          for ( const type of [ IfcRelAssociatesMaterial, IfcRelDefinesByType ] ) {
+
+            // Materialising to read `.localID` costs no source bytes:
+            // descriptors come from the index columns and the generated
+            // constructors have empty bodies.
+            const localIDs = [ ...model.types( type ) ].map( ( record ) => record.localID )
+
+            // Guard the guard — an empty fixture would satisfy any
+            // "nothing unpinned" claim.
+            expect( localIDs.length ).toBeGreaterThan( 0 )
+            expect( localIDs.filter( ( localID ) => !prepPins.has( localID ) ) ).toEqual( [] )
+          }
+
+        } finally {
+          model.releaseSourceViews( prepPins )
+          model.unpinLocalIDs( prepPins )
         }
       }, 120000 )
 } )
