@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, test} from '@jest/globals'
 
-import Logger, { LogLevel, LogLevelName } from './logger'
+import Logger, { DATA_DEFECT, LogLevel, LogLevelName } from './logger'
 
 
 type Echoed = [LogLevelName, string]
@@ -101,6 +101,44 @@ describe( 'Logger levels + sink', () => {
 
     expect( entries[ 0 ].message ).toBe( 'clash' )
     expect( entries[ 0 ].expressIDs ).toEqual( new Set( [ '2' ] ) )
+  } )
+
+  test( 'a data-defect category rides on the entry, not in the message ' +
+    '(conway#708)', () => {
+
+    // The marker Share#1863 reads. It has to survive dedup and stay off the
+    // message, because the message is what Logger dedups on — a marker
+    // spelled into the text would be inside the key that a future rewording
+    // changes.
+    Logger.error( 'skipped something', 1, DATA_DEFECT )
+    Logger.error( 'skipped something', 2, DATA_DEFECT )
+    Logger.error( 'unrelated failure' )
+
+    const defects = Logger.getDataDefects()
+
+    expect( defects.length ).toBe( 1 )
+    expect( defects[ 0 ].message ).toBe( 'skipped something' )
+    expect( defects[ 0 ].count ).toBe( 2 )
+    expect( defects[ 0 ].expressIDs ).toEqual( new Set( [ '1', '2' ] ) )
+    expect( defects[ 0 ].level ).toBe( 'error' )
+
+    // The uncategorised entry is still an error, and still nothing to do
+    // with data quality — the split is the point of the field.
+    expect( Logger.getErrors().length ).toBe( 2 )
+  } )
+
+  test( 'a data defect keeps whatever level its call site chose', () => {
+
+    // Severity is Share's call (Share#1815), so conway does not move these
+    // entries to one level — which also keeps the regression corpus's
+    // errors.csv where it was.
+    Logger.warning( 'skipped quietly', 7, DATA_DEFECT )
+
+    const defects = Logger.getDataDefects()
+
+    expect( defects.length ).toBe( 1 )
+    expect( defects[ 0 ].level ).toBe( 'warning' )
+    expect( Logger.getErrors() ).toEqual( [] )
   } )
 
   test( 'isLevelEnabled matches the threshold ordering', () => {

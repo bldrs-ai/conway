@@ -7,7 +7,8 @@ import { measure_representation_item } from './AP214E3_2010_gen/measure_represen
 import { property_definition } from './AP214E3_2010_gen/property_definition.gen'
 import { property_definition_representation } from './AP214E3_2010_gen/property_definition_representation.gen'
 import { shape_definition_representation } from './AP214E3_2010_gen/shape_definition_representation.gen'
-import Logger from '../logging/logger'
+import Logger, { DATA_DEFECT } from '../logging/logger'
+import { isUnresolvedReferenceError } from '../step/dangling_reference_error'
 
 
 /**
@@ -240,9 +241,25 @@ export class AP214PropertyExtraction {
       // means nothing against the source file; the reference is what a reader
       // can go look up. Same idiom as populateStyledItemsMap() in
       // ap214_geometry_extraction.ts.
-      Logger.warning(
-          `Skipping property definition representation that is untypeable in AP214: ${error}`,
-          pdr.toString() )
+      //
+      // The unresolved/mistyped family — which is what the two getters named
+      // above actually throw, and what this skip was written for — carries
+      // the data-defect marker and drops `${error}` from its message, since
+      // that is Logger's dedup key and a dangling reference writes its own
+      // express ID into it (conway#708). The level stays `warning`: this
+      // tier already dropped these rows before #671, so the entry is
+      // informational, and Share decides the user-facing severity from the
+      // marker rather than from the level.
+      if ( isUnresolvedReferenceError( error ) ) {
+        Logger.warning(
+            'Skipping property definition representation that is untypeable in AP214',
+            pdr.toString(),
+            DATA_DEFECT )
+      } else {
+        Logger.warning(
+            `Skipping property definition representation that is untypeable in AP214: ${error}`,
+            pdr.toString() )
+      }
     }
   }
 
