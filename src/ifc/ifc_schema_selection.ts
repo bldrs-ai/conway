@@ -6,9 +6,12 @@ import { extractFileSchemaEntries } from '../format_detection/model_format_detec
  *
  * 'ifc4' covers everything up to and including IFC4 (and is also the
  * fallback for anything unrecognised that ISN'T 4X3-family — matching this
- * repo's historical, only-ever-IFC4 behaviour). 'ifc4x3' covers the IFC4X3
- * family: the released RC2, the TC1 corrigendum and the ADD2 addendum this
- * repo generates from (see code-gen-ifc4x3 in package.json).
+ * repo's historical, only-ever-IFC4 behaviour). 'ifc4x3' covers the 4X3
+ * spellings this repo has verified are covered by the ADD2 addendum it
+ * generates from (see code-gen-ifc4x3 in package.json) — the released RC2
+ * and ADD2 itself, but NOT the TC1 corrigendum, which fails closed until a
+ * pinned TC1 schema or fixture verifies it (see `IFC4X3_IDENTIFIERS`
+ * below).
  *
  * There is no third value for "4X3-family but unrecognised" — that case
  * throws {@link UnrecognizedIfc4x3SchemaError} instead of returning a kind.
@@ -19,19 +22,21 @@ import { extractFileSchemaEntries } from '../format_detection/model_format_detec
  */
 export type IfcSchemaKind = 'ifc4' | 'ifc4x3'
 
-// The 4X3-family identifiers a real FILE_SCHEMA header can carry.
-// IFC4X3_TC1 is included on the assumption that ADD2 — a strict
-// addendum to TC1's entity set, not a replacement schema — covers what
-// a TC1 file declares; nothing in this repo has verified that against an
-// actual TC1-labelled file, so treat it as inferred rather than tested.
-// (codex review of #713, P1: if this inference is ever found wanting,
-// dropping IFC4X3_TC1 from this set routes it into the fail-closed
-// UnrecognizedIfc4x3SchemaError path below, which is a safe default.)
+// The 4X3-family identifiers this repo has verified are covered by the
+// ADD2-generated module. IFC4X3_TC1 is deliberately NOT in this set: the
+// generated module comes solely from IFC4X3_ADD2, and while ADD2 is meant
+// as a strict addendum to TC1's entity set, nothing in this repo has ever
+// checked that against a pinned TC1 schema or a TC1-labelled fixture. A
+// changed positional entity layout between TC1 and ADD2 would be read
+// with the wrong generated definitions and reported as correctly typed —
+// so TC1 falls through to the 4X3-family-prefix branch below and fails
+// closed with UnrecognizedIfc4x3SchemaError until that verification
+// exists (codex review of bldrs-ai/conway#713, P1, round 3 — explicitly
+// decided "fail closed" rather than left speculative).
 const IFC4X3_IDENTIFIERS: ReadonlySet<string> = new Set([
   'IFC4X3',
   'IFC4X3_RC2',
   'IFC4X3_ADD2',
-  'IFC4X3_TC1',
 ])
 
 // Any FILE_SCHEMA identifier in the 4X3 family shares this prefix,

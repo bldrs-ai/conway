@@ -44,7 +44,6 @@ describe( 'selectIfcSchemaKind', () => {
     expect( selectIfcSchemaKind( 'IFC4X3' ) ).toBe( 'ifc4x3' )
     expect( selectIfcSchemaKind( 'IFC4X3_RC2' ) ).toBe( 'ifc4x3' )
     expect( selectIfcSchemaKind( 'IFC4X3_ADD2' ) ).toBe( 'ifc4x3' )
-    expect( selectIfcSchemaKind( 'IFC4X3_TC1' ) ).toBe( 'ifc4x3' )
   } )
 
   test( 'is case-insensitive', () => {
@@ -63,6 +62,19 @@ describe( 'selectIfcSchemaKind', () => {
         .toThrow( UnrecognizedIfc4x3SchemaError )
     expect( () => selectIfcSchemaKind( 'IFC4X3_RC1' ) )
         .toThrow( /IFC4X3_RC1/ )
+  } )
+
+  // codex review of bldrs-ai/conway#713 (P1, round 3): the generated
+  // module this repo routes 4X3 files through comes solely from
+  // IFC4X3_ADD2, and nothing here has ever verified that against a pinned
+  // TC1 schema or a TC1-labelled fixture. Explicitly decided "fail
+  // closed" rather than assume ADD2 covers TC1's entity layout.
+  test( 'IFC4X3_TC1 fails closed rather than routing to the ADD2 module', () => {
+
+    expect( () => selectIfcSchemaKind( 'IFC4X3_TC1' ) )
+        .toThrow( UnrecognizedIfc4x3SchemaError )
+    expect( () => selectIfcSchemaKind( 'IFC4X3_TC1' ) )
+        .toThrow( /IFC4X3_TC1/ )
   } )
 } )
 

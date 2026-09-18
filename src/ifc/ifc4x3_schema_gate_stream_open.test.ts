@@ -74,6 +74,34 @@ describe( 'ifc_stream_open.ts: IFC4X3 schema gate on the native streamed-open AP
         .toThrow( /IFC4X3/ )
   } )
 
+  // codex review of bldrs-ai/conway#713 (P1, round 3): a test asserting
+  // only the throw above would pass against a gate placed AFTER
+  // buildColumnarIndexStreaming, because that gate still throws — it just
+  // throws too late, after onRecordIndexed and indexSink have already
+  // seen every record typed with IFC4's ordinals. This asserts the count
+  // itself is zero, which only a pre-parse sniff can satisfy.
+  test( 'openStreamedIfcModel fires zero onRecordIndexed callbacks and ' +
+      'indexes zero records into a caller-owned sink before throwing on ' +
+      'a 4X3 file', () => {
+
+    let callbackCount = 0
+    const indexSink = new ColumnarIndexSink<EntityTypesIfc>()
+
+    expect( () => openStreamedIfcModel(
+        new BufferByteSource( ifc4x3Bytes ),
+        new InMemoryStepByteStore( ifc4x3Bytes ),
+        {
+          onRecordIndexed: () => {
+            callbackCount++
+          },
+          indexSink,
+        } ) )
+        .toThrow( /IFC4X3/ )
+
+    expect( callbackCount ).toBe( 0 )
+    expect( indexSink.finalize().count ).toBe( 0 )
+  } )
+
   test( 'openStreamedIfcModel still opens an ordinary IFC4 file', () => {
 
     const open = openStreamedIfcModel(
