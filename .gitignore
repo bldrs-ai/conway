@@ -39,6 +39,7 @@ scripts/test_runs/
 # not descend into an excluded directory looking for negations.
 scripts/*/
 !scripts/debug/
+!scripts/schemas/
 benchmarks/*private
 
 #external

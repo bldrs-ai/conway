@@ -10,6 +10,8 @@ import ModelFormatDetector, { ModelFormatType } from '../format_detection/model_
 import { IfcGeometryExtraction } from '../ifc/ifc_geometry_extraction'
 import { IfcProduct } from '../ifc/ifc4_gen'
 import IfcStepParser from '../ifc/ifc_step_parser'
+import Ifc4x3StepParser from '../ifc/ifc4x3_step_parser'
+import { selectIfcSchemaKind } from '../ifc/ifc_schema_selection'
 import Logger from '../logging/logger'
 import Memory from '../memory/memory'
 import ParsingBuffer from '../parsing/parsing_buffer'
@@ -466,6 +468,32 @@ export class ConwayModelLoader {
 
             Logger.info( formatModelLine( modelInfo ) )
             options?.onModelInfo?.( modelInfo )
+
+            // bldrs-ai/conway#280 phase 2a: an IFC4X3-family file parses with
+            // the correct (4X3-numbered) entity identities via
+            // Ifc4x3StepParser/Ifc4x3StepModel — see ifc_schema_selection.ts
+            // and ifc4x3_step_model.test.ts (verified against the KIT road
+            // model). Geometry extraction (IfcGeometryExtraction and the rest
+            // of this function below) is still typed against
+            // IfcStepModel/EntityTypesIfc only — genericizing it is phase 2b,
+            // deliberately out of scope here — so a 4X3 file is parsed far
+            // enough to prove that, then reported rather than run through
+            // extraction it would misidentify entities against.
+            if ( selectIfcSchemaKind( modelInfo.schema ) === 'ifc4x3' ) {
+
+              const [schemaParseResult, schemaModel] =
+                Ifc4x3StepParser.Instance.parseDataToModel( bufferInput )
+
+              const entityCount = schemaModel !== void 0 ?
+                Array.from( schemaModel ).length : 0
+
+              throw Error(
+                  `IFC4X3 schema detected (${modelInfo.schema}): parsed ` +
+                  `${ParseResult[schemaParseResult]} with ${entityCount} ` +
+                  'correctly-typed (4X3-numbered) entities, but geometry ' +
+                  'extraction is not yet implemented for this schema — ' +
+                  'see bldrs-ai/conway#280 phase 2b.' )
+            }
           }
 
           tracker?.beginPhase( 'dataParse', 'bytes', data.length )

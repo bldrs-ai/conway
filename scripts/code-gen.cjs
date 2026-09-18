@@ -6,6 +6,17 @@ const path = require('path');
 
 const ifcGenPath = path.resolve(__dirname, '../external/IFC-gen-internal');
 
+// Schemas conway vendors itself rather than relying on IFC-gen-internal to
+// ship them (phase 1 of #280 deliberately left the generator schema-name
+// agnostic without adding one there — the generator repo takes a path, not
+// an opinion on where schemas live). IFC4X3_ADD2.exp is a ~400 KB EXPRESS
+// file, and fetching it live at codegen time would make a build depend on
+// standards.buildingsmart.org being reachable; vendoring it here keeps
+// codegen reproducible offline, in keeping with the revision pin above.
+// Copied into the checkout's schemas/ dir below because that's where the
+// Makefile's `SCHEMA=$(CURR_DIR)/schemas/$(SCHEMA_INPUT).exp` looks for it.
+const vendoredSchemasPath = path.resolve(__dirname, 'schemas');
+
 // The generator revision this repo's checked-in *.gen.ts were produced by.
 // Step it forward deliberately, in a PR that also carries the regenerated
 // output, so the two never disagree.
@@ -14,10 +25,21 @@ const ifcGenPath = path.resolve(__dirname, '../external/IFC-gen-internal');
 // silently rotted: main sat 14 months behind the branch that actually
 // generated our code (no multiReference support), so running `yarn code-gen`
 // would have rewritten ~966 files and DELETED that support, with nothing to
-// warn you. Verified at this SHA: regenerating both schemas reproduces the
-// checked-in output byte for byte, 1111 AP214 files and 1180 IFC4 files, zero
-// differences.
-const IFC_GEN_REVISION = 'c001505abd849e8be826ce61b0f7db0e6b6d82f4';
+// warn you. Verified at c001505 (the previous pin): regenerating both
+// schemas reproduces the checked-in output byte for byte, 1111 AP214 files
+// and 1180 IFC4 files, zero differences.
+//
+// Bumped to 7120675 for bldrs-ai/conway#280 phase 2a (IFC4X3 support):
+// bldrs-ai/IFC-gen-internal#3 makes the generator accept any EXPRESS schema
+// name (previously hardcoded to IFC/AP214E3_2010) and stops the lexer
+// swallowing a unary minus in an EXPRESS default-value expression — needed
+// for IFC4X3_ADD2.exp, which the older generator could not read at all.
+// Re-verified at this SHA: regenerating IFC4 and AP214 at the new revision
+// reproduces the checked-in output byte for byte, zero differences — the
+// bump is inert for the schemas it doesn't touch. It also newly generates
+// src/ifc/ifc4x3_gen/ (see code-gen-ifc4x3 below), which c001505 could not
+// produce.
+const IFC_GEN_REVISION = '7120675b1b8501bfcfe59241f8dea19b95a78365';
 
 function runCommand(command, options = {}) {
   try {
@@ -58,6 +80,19 @@ function main() {
       `Could not check out IFC-gen-internal at ${IFC_GEN_REVISION}. ` +
       'Refusing to generate from an unknown revision.');
     process.exit(1);
+  }
+
+  // Copy conway's vendored schemas into the freshly-checked-out clone every
+  // run — the checkout above can land on a commit that never shipped a
+  // given schema (IFC4X3_ADD2.exp is not in IFC-gen-internal at all), and a
+  // stale copy left over from a previous run would silently generate from
+  // the wrong bytes.
+  const genSchemasDir = path.join(ifcGenPath, 'schemas');
+
+  for (const fileName of fs.readdirSync(vendoredSchemasPath)) {
+    fs.copyFileSync(
+      path.join(vendoredSchemasPath, fileName),
+      path.join(genSchemasDir, fileName));
   }
 
   // Run the code generation
