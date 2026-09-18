@@ -1,0 +1,216 @@
+#!/usr/bin/env node
+/**
+ * Per-FACE triangulation health for one solid: which of a face's own trim-loop
+ * points reached its emitted geometry.
+ *
+ * For each ADVANCED_FACE of the named solid this extracts the face alone into
+ * a fresh IfcGeometry, welds its vertices by position, and compares the welded
+ * mesh's OPEN (unpaired directed) edges against the face's own trim loops as
+ * the extractor handed them to native.
+ *
+ * A correctly triangulated trimmed face has exactly one open boundary: its
+ * loop polylines, each segment traversed once. Any open edge that is NOT a
+ * consecutive pair of some loop is a SPURIOUS boundary - a dropped region, a
+ * fold, or an overlap.
+ *
+ * ## Why this is not model_report.mjs
+ *
+ * `model_report.mjs` is an OUTLIER detector: it scores each entity against the
+ * rest of the model, so a face that emits plausible geometry, of a plausible
+ * size, in the right place, from a QUARTER of its own boundary reads as clean.
+ * That is exactly the shape mapbox::earcut produces when it cannot bridge a
+ * hole - `findHoleBridge` returns null, `eliminateHole` links nothing, and the
+ * ring is dropped with no error logged anywhere.
+ *
+ * `mapped=` is the column that makes that visible, and the only one that does:
+ * a dropped ring contributes no index at all, so not one of its points appears
+ * in the output. Measured on `ADVANCED_FACE #19218` of `Right_Hand.step` while
+ * bldrs-ai/test-models#65 was still open, three of its four rings dropped:
+ *
+ *     #19218 BSPLINE bounds=4 ... t=190 open=67 spurious=3 mapped=65/256
+ *
+ * Note `spurious` is 3 there. The dropped rings do not show up as spurious
+ * boundary, because the face emits no edge along them to be spurious ABOUT -
+ * which is why the ratio, not the edge census, is the signal to read first.
+ * After the fix that face reads `t=3180 open=255 spurious=3 mapped=256/256`.
+ *
+ * Two of the three wrong diagnoses in that investigation came from trusting a
+ * clean outlier report over a face that was missing most of itself. Reach for
+ * this when a solid is visibly wrong - open shell, negative signed volume, a
+ * hole where a surface should be - and the outlier stages are quiet.
+ *
+ * ## Probe validation
+ *
+ * The run prints the count of faces seen and refuses to report if none of the
+ * named solid was reached, so a mistyped express ID reads as a failure rather
+ * than as a clean solid. `loopSeg` is the loop segment count the `open` column
+ * is being judged against, so a probe that failed to capture the loops at all
+ * reads as `mapped=0/N`, not as a face with nothing spurious.
+ *
+ * Vertex data is copied out of the wasm heap with `.slice()` the moment the
+ * face is reified and the heap views are re-read per face: a held `HEAPF32`
+ * view detaches when the heap grows and then silently reads zeroes.
+ *
+ * Usage:
+ *   node scripts/debug/face_health.mjs <model> <solid express id>
+ *
+ * Example - the AmazingHand proximal shell, whose b-spline faces wrap their
+ * surface's u closure (bldrs-ai/test-models#65):
+ *
+ *   node scripts/debug/face_health.mjs Right_Hand.step 19715
+ *
+ * Reads `compiled/`, not `src/`, so rebuild (`yarn build-incremental`, or
+ * `yarn build-codex-MT` if conway-geom changed) before trusting a run.
+ */
+import fs from 'node:fs'
+
+const REPO_ROOT = new URL('../../', import.meta.url)
+const compiled = (rel) => import(new URL(`compiled/${rel}`, REPO_ROOT).href)
+const [modelPath, wantSolid] = process.argv.slice(2)
+
+if (modelPath === undefined || wantSolid === undefined) {
+  console.error('usage: node scripts/debug/face_health.mjs <model> <solid express id>')
+  process.exit(2)
+}
+
+process.env.CONWAY_DISABLE_STAGED_FACES = '1'
+
+const [{AP214GeometryExtraction}, {ConwayModelLoader}, {default: Logger},
+  {default: Environment}, {ConwayGeometry}] = await Promise.all([
+    compiled('src/AP214E3_2010/ap214_geometry_extraction.js'),
+    compiled('src/loaders/conway_model_loader.js'),
+    compiled('src/logging/logger.js'),
+    compiled('src/utilities/environment.js'),
+    compiled('dependencies/conway-geom/index.js'),
+  ])
+let conwayWasm
+const oi = ConwayGeometry.prototype.initialize
+ConwayGeometry.prototype.initialize = function(...a) { conwayWasm = this; return oi.apply(this, a) }
+Environment.checkEnvironment(); Logger.initializeWasmCallbacks()
+Logger.setSink((l, m) => { const s = String(m); if (/Error extracting face|no geometry|not valid/.test(s)) console.error(`NATIVE: ${s.slice(0, 200)}`) })
+
+const Q = 1e6
+const key = (x, y, z) => `${Math.round(x * Q)},${Math.round(y * Q)},${Math.round(z * Q)}`
+
+const original = AP214GeometryExtraction.prototype.extractAdvancedFace
+const rows = []
+let fired = 0
+
+AP214GeometryExtraction.prototype.extractAdvancedFace = function(from, geometry, parentLocalID) {
+  if (this.model.getElementByLocalID?.(parentLocalID)?.expressID !== Number(wantSolid)) {
+    return original.call(this, from, geometry, parentLocalID)
+  }
+  ++fired
+
+  // Capture the loops exactly as they are handed to native, in the order they
+  // are handed over (index 0 is what earcut reads as the outer ring).
+  const cm = this.conwayModel
+  const realCreate = cm.createBound3D.bind(cm)
+  const loops = []
+  cm.createBound3D = (params) => {
+    const c = params.curve
+    const n = c?.getPointsSize?.() ?? 0
+    const pts = []
+    for (let i = 0; i < n; ++i) { const p = c.get3d(i); pts.push([p.x, p.y, p.z]) }
+    loops.push({pts, type: params.type, seam: params.seam, seamPair: params.seamPair,
+      orientation: params.orientation})
+    return realCreate(params)
+  }
+
+  const fresh = new this.wasmModule.IfcGeometry()
+  try { original.call(this, from, fresh, parentLocalID) } finally { cm.createBound3D = realCreate }
+  geometry.appendGeometry(fresh)
+  fresh.reify({x: 0, y: 0, z: 0})
+
+  const wasm = conwayWasm.wasmModule
+  const vd = wasm.HEAPF32.slice(fresh.GetVertexData() / 4, fresh.GetVertexData() / 4 + fresh.GetVertexDataSize())
+  const id = wasm.HEAPU32.slice(fresh.GetIndexData() / 4, fresh.GetIndexData() / 4 + fresh.GetIndexDataSize())
+  const nv = vd.length / 6
+  const nt = id.length / 3
+
+  // Weld by quantized position.
+  const wm = new Map()
+  const widx = new Int32Array(nv)
+  for (let i = 0; i < nv; ++i) {
+    const k = key(vd[i * 6], vd[i * 6 + 1], vd[i * 6 + 2])
+    let w = wm.get(k); if (w === undefined) { w = wm.size; wm.set(k, w) }
+    widx[i] = w
+  }
+  const edges = new Set()
+  let area = 0, degen = 0
+  for (let t = 0; t < nt; ++t) {
+    const a = id[t * 3], b = id[t * 3 + 1], c = id[t * 3 + 2]
+    const A = [vd[a * 6], vd[a * 6 + 1], vd[a * 6 + 2]]
+    const B = [vd[b * 6], vd[b * 6 + 1], vd[b * 6 + 2]]
+    const C = [vd[c * 6], vd[c * 6 + 1], vd[c * 6 + 2]]
+    const e1 = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], e2 = [C[0] - A[0], C[1] - A[1], C[2] - A[2]]
+    const cx = e1[1] * e2[2] - e1[2] * e2[1], cy = e1[2] * e2[0] - e1[0] * e2[2], cz = e1[0] * e2[1] - e1[1] * e2[0]
+    const m = Math.hypot(cx, cy, cz)
+    area += m / 2
+    if (m === 0) ++degen
+    const wa = widx[a], wb = widx[b], wc = widx[c]
+    if (wa === wb || wb === wc || wc === wa) continue
+    edges.add(`${wa}_${wb}`); edges.add(`${wb}_${wc}`); edges.add(`${wc}_${wa}`)
+  }
+  const open = []
+  for (const k of edges) { const [u, v] = k.split('_'); if (!edges.has(`${v}_${u}`)) open.push(k) }
+
+  // Expected boundary: consecutive pairs of every loop, either direction.
+  const expected = new Set()
+  let loopSegments = 0, loopPointsMapped = 0, loopPointsTotal = 0
+  const idOf = (p) => {
+    // exact bucket first, then the 26 neighbours (float32 emit vs double loop)
+    const w = wm.get(key(p[0], p[1], p[2]))
+    if (w !== undefined) return w
+    const bx = Math.round(p[0] * Q), by = Math.round(p[1] * Q), bz = Math.round(p[2] * Q)
+    for (let dx = -1; dx <= 1; ++dx) for (let dy = -1; dy <= 1; ++dy) for (let dz = -1; dz <= 1; ++dz) {
+      const q = wm.get(`${bx + dx},${by + dy},${bz + dz}`)
+      if (q !== undefined) return q
+    }
+    return undefined
+  }
+  for (const loop of loops) {
+    const ids = loop.pts.map(idOf)
+    loopPointsTotal += ids.length
+    loopPointsMapped += ids.filter((x) => x !== undefined).length
+    for (let i = 0; i + 1 < ids.length; ++i) {
+      if (ids[i] === undefined || ids[i + 1] === undefined || ids[i] === ids[i + 1]) continue
+      expected.add(`${ids[i]}_${ids[i + 1]}`); expected.add(`${ids[i + 1]}_${ids[i]}`)
+      ++loopSegments
+    }
+  }
+  const spurious = open.filter((k) => !expected.has(k))
+
+  rows.push({
+    express: from.expressID,
+    surface: from.face_geometry?.constructor?.name?.replace('b_spline_surface_with_knots', 'BSPLINE'),
+    nBounds: loops.length,
+    loopSizes: loops.map((l) => l.pts.length),
+    types: loops.map((l) => l.type),
+    seamPair: loops.map((l) => (l.seamPair ? 1 : 0)),
+    seam: loops.map((l) => (l.seam ? 1 : 0)),
+    nv, nt, welded: wm.size, area, degen,
+    open: open.length, spurious: spurious.length,
+    loopSegments, loopPointsMapped, loopPointsTotal,
+  })
+  fresh.delete?.()
+}
+
+const data = new Uint8Array(fs.readFileSync(modelPath))
+await ConwayModelLoader.loadModelWithScene(data, true, 20, 0)
+if (fired === 0) { console.error(`PROBE NEVER FIRED for solid #${wantSolid}`); process.exit(2) }
+
+console.log(`# face health, solid #${wantSolid}: ${fired} faces seen`)
+console.log('  spurious = welded open edges that are NOT a segment of any trim loop')
+console.log('  mapped   = loop points found in the emitted mesh (low => the face lost its boundary)')
+rows.sort((a, b) => b.spurious - a.spurious)
+let totSpur = 0
+for (const r of rows) {
+  totSpur += r.spurious
+  console.log(
+    `  #${String(r.express).padEnd(6)} ${String(r.surface).padEnd(26)} bounds=${r.nBounds} ` +
+    `types=[${r.types}] seamPair=[${r.seamPair}] loopPts=[${r.loopSizes}] ` +
+    `v=${r.nv}/${r.welded} t=${r.nt} area=${(r.area * 1e6).toFixed(2)}mm2 degen=${r.degen} ` +
+    `open=${r.open} spurious=${r.spurious} loopSeg=${r.loopSegments} mapped=${r.loopPointsMapped}/${r.loopPointsTotal}`)
+}
+console.log(`TOTAL spurious open edges: ${totSpur}`)
