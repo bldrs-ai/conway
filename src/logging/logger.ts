@@ -26,11 +26,40 @@ const LOG_LEVEL_BY_NAME: Record<LogLevelName, LogLevel> = {
   'error': LogLevel.ERROR,
 }
 
+/**
+ * Machine-readable classification for a log entry, so a consumer can act on
+ * a family of diagnostics without matching their prose.
+ *
+ * `dataDefect` is the one kind so far: the file said something the schema
+ * cannot resolve — a dangling or mistyped STEP reference — so conway skipped
+ * the entity rather than throwing (bldrs-ai/ops#28, conway#708). It is a
+ * statement about the INPUT, not about conway, which is the distinction it
+ * exists to carry: Share tags these `data_defect` and keeps them out of
+ * engine-bug triage (bldrs-ai/Share#1863), and derives the user-facing
+ * severity itself per the T0 policy in Share#1815 (displays despite skips →
+ * warning, builds nothing → error).
+ *
+ * Deliberately a separate field rather than a message prefix. Entries are
+ * already structured and already reach embedders whole, through
+ * {@link LoggingProxy} and {@link Logger.getLogs}; a prefix would instead
+ * put the marker inside the string that {@link Logger.log} dedups on, where
+ * a future rewording silently breaks every consumer. The `level` is left to
+ * each call site for the same reason — moving these entries to `warning`
+ * would rewrite the regression corpus's errors.csv without telling anyone
+ * anything new.
+ */
+export type LogCategoryName = 'dataDefect'
+
+/** {@link LogCategoryName}'s data-defect value, so call sites don't spell it. */
+export const DATA_DEFECT: LogCategoryName = 'dataDefect'
+
 export interface LogEntry {
     level: LogLevelName
     message: string
     count: number
     expressIDs:Set<string>
+    /** Machine-readable kind; absent for an unclassified entry. */
+    category?: LogCategoryName
 }
 
 
@@ -148,10 +177,22 @@ export default class Logger {
    *
    * @param message - log message
    * @param level - log level
+   * @param category - machine-readable kind, part of the entry's identity
+   *   (see {@link LogCategoryName})
    * @return {number} log index
    */
-  private static findLogIndex(message: string, level: LogLevelName): number {
-    return Logger.logs.findIndex((log) => log.message === message && log.level === level)
+  private static findLogIndex(
+      message: string, level: LogLevelName, category?: LogCategoryName): number {
+
+    // The category is part of the dedup identity, not a property a later
+    // call can attach. `warning`/`error` are public and a call site is free
+    // to log the same text with and without a category, so folding the two
+    // together would let an ordinary engine error be RETROACTIVELY marked as
+    // a data defect by an unrelated later call — and their counts summed
+    // under whichever marker won. Share#1863 triages on that marker, so the
+    // two have to stay two entries (codex round 1 on conway#708).
+    return Logger.logs.findIndex((log) =>
+      log.message === message && log.level === level && log.category === category)
   }
 
   /**
@@ -160,9 +201,15 @@ export default class Logger {
    * @param message - log message
    * @param expressID - record this entry is about, kept out of the message
    *   text so repeats dedupe into one entry (see the class doc)
+   * @param category - machine-readable kind for consumers that act on a
+   *   family of diagnostics rather than reading them (see
+   *   {@link LogCategoryName})
    */
   private static log(
-      level: LogLevelName, message: string, expressID?: number | string ): void {
+      level: LogLevelName,
+      message: string,
+      expressID?: number | string,
+      category?: LogCategoryName ): void {
 
     // Two ways to attach a record to an entry. The parameter is the one to
     // use; the ' expressID: ' suffix is the older in-message form, kept
@@ -175,7 +222,7 @@ export default class Logger {
       String( expressID ) :
       message.split(' expressID: ')[1] // Extract the expressID
 
-    const index = Logger.findLogIndex(baseMessage, level)
+    const index = Logger.findLogIndex(baseMessage, level, category)
     let logEntry: LogEntry
     let firstOccurrence = false
 
@@ -185,6 +232,10 @@ export default class Logger {
         Logger.logs[index].expressIDs = Logger.logs[index].expressIDs || new Set<string>()
         Logger.logs[index].expressIDs.add(data)
       }
+      // Note what is NOT here: the category is never written to an existing
+      // entry. It is part of the identity findLogIndex matched on, so this
+      // entry already carries it — and assigning it would be the retroactive
+      // re-marking that identity exists to prevent.
       logEntry = Logger.logs[index]
     } else {
       firstOccurrence = true
@@ -193,6 +244,7 @@ export default class Logger {
         message: baseMessage,
         count: 1,
         expressIDs: data ? new Set([data]) : new Set(),
+        category,
       }
       Logger.logs.push(logEntry)
     }
@@ -220,8 +272,12 @@ export default class Logger {
     const compressedLogs: LogEntry[] = []
 
     Logger.logs.forEach((log) => {
+      // Same identity findLogIndex uses, category included — this runs
+      // inside getErrors()/getDataDefects(), so merging on message+level
+      // alone would put back together exactly the entries the dedup
+      // identity keeps apart, and hand the survivor one arbitrary marker.
       const existingLog = compressedLogs.find((l) =>
-        l.message === log.message && l.level === log.level)
+        l.message === log.message && l.level === log.level && l.category === log.category)
       if (existingLog !== void 0) {
         existingLog.count += log.count
         if (log.expressIDs !== void 0) {
@@ -334,21 +390,44 @@ export default class Logger {
   }
 
   /**
+   * Compresses the logs if they haven't been compressed, then returns just
+   * the entries conway classified as data defects — bad input rather than
+   * an engine failure (see {@link LogCategoryName}).
    *
-   * @param message - log message
-   * @param expressID - record this entry is about
+   * Each entry's `count` is how many entities that one defect skipped and
+   * `expressIDs` names them, so "what did this load drop, and where do I go
+   * look" is answerable without parsing any message text.
+   *
+   * @return {LogEntry[]} The data-defect entries, at whatever level each
+   * call site logged at.
    */
-  public static warning(message: string, expressID?: number | string): void {
-    Logger.log('warning', message, expressID)
+  public static getDataDefects(): LogEntry[] {
+
+    Logger.compressLogs()
+
+    return this.logs.filter( ( where ) => where.category === DATA_DEFECT )
   }
 
   /**
    *
    * @param message - log message
    * @param expressID - record this entry is about
+   * @param category - machine-readable kind (see {@link LogCategoryName})
    */
-  public static error(message: string, expressID?: number | string): void {
-    Logger.log('error', message, expressID)
+  public static warning(
+      message: string, expressID?: number | string, category?: LogCategoryName): void {
+    Logger.log('warning', message, expressID, category)
+  }
+
+  /**
+   *
+   * @param message - log message
+   * @param expressID - record this entry is about
+   * @param category - machine-readable kind (see {@link LogCategoryName})
+   */
+  public static error(
+      message: string, expressID?: number | string, category?: LogCategoryName): void {
+    Logger.log('error', message, expressID, category)
   }
 
   /**

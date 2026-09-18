@@ -56,7 +56,8 @@ import {
 } from '../core/native_types'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { ExtractResult } from '../core/shared_constants'
-import Logger from '../logging/logger'
+import Logger, { DATA_DEFECT } from '../logging/logger'
+import { isUnresolvedReferenceError } from '../step/dangling_reference_error'
 import { arrayToWasmHeap, wasmHeapView } from '../core/wasm_heap'
 import {
   advanced_brep_shape_representation,
@@ -4429,7 +4430,25 @@ export class AP214GeometryExtraction {
         }
       } catch (error) {
 
-        if ( error instanceof Error ) {
+        if ( isUnresolvedReferenceError( error ) ) {
+
+          // A face whose bounds or surface name a record the schema cannot
+          // type there (Sentry SHARE-1NB). The face is skipped and the rest
+          // of the shell still tessellates — that part was already true —
+          // but the message now holds nothing per-record, so Logger's
+          // `count` is the number of faces this file lost rather than a row
+          // of 1s: `error.stack` differs per throw site and a dangling
+          // reference writes its own express ID into `error.message`, so
+          // between them the old line was very nearly unique per face.
+          // The face's own express ID is on the entry, unioned across
+          // repeats, and the marker says the file is at fault (conway#708).
+          Logger.error(
+            `Skipping face with an unresolved or mistyped STEP reference: ${
+              EntityTypesAP214[face_.type]}`,
+            face_.expressID,
+            DATA_DEFECT )
+
+        } else if ( error instanceof Error ) {
           Logger.error(
             `Error extracting face ${EntityTypesAP214[face_.type]} - ${
               error.message}\t\n${error.stack} - expressID: #${face_.expressID}`)
@@ -6145,8 +6164,16 @@ export class AP214GeometryExtraction {
           // regression run's `expressids` column where the whole point is to
           // be able to go look at the record. It also spells the inline case
           // honestly rather than passing off an index as a reference.
-          Logger.error(
-            `Error populating styled item map: ${error}`, styledItem.toString() )
+          //
+          // `${error}` stays out of the message for the family that carries
+          // the express ID in its own text — a dangling reference reads
+          // "Reference to #4211 is not in the index", and Logger dedups on
+          // the message, so interpolating it gave 7 users' worth of one
+          // SolidWorks defect (Sentry SHARE-1NA) one entry apiece with
+          // count 1. Marked as a data defect so Share can tag it without
+          // reading the prose (conway#708).
+          this.reportStyledItemDefect_(
+            'Error populating styled item map', error, styledItem.toString() )
         }
       }
     }
@@ -6159,12 +6186,42 @@ export class AP214GeometryExtraction {
         }
       } catch (error) {
         if ( !this.quietRecoverableLogging ) {
-          Logger.error(
-            `Error populating overriding styled item map: ${error}`,
+          this.reportStyledItemDefect_(
+            'Error populating overriding styled item map',
+            error,
             overridingStyledItem.toString() )
         }
       }
     }
+  }
+
+  /**
+   * Report one styled item this map skipped, splitting the input's fault
+   * from conway's.
+   *
+   * An unresolved or mistyped reference means the FILE named something the
+   * schema cannot type there. Nothing is half-built either way — the
+   * `styledItemMap.set` is the whole body, so a throw before it leaves the
+   * map exactly as it was, and the item is simply unstyled — but only the
+   * data-defect branch gets a stable message, and so a `count` that sizes
+   * the defect, and the marker Share reads (conway#708). Anything else
+   * keeps the interpolated text, which is all there is to go on for a throw
+   * nothing has classified.
+   *
+   * @param context What was being populated, for the message.
+   * @param error The throw to classify.
+   * @param reference The styled item's `toString()` — a reference a reader
+   * can look up in the source, not an internal index.
+   */
+  private reportStyledItemDefect_(
+      context: string, error: unknown, reference: string ): void {
+
+    if ( isUnresolvedReferenceError( error ) ) {
+      Logger.error( `${context}: unresolved or mistyped STEP reference`, reference, DATA_DEFECT )
+      return
+    }
+
+    Logger.error( `${context}: ${error}`, reference )
   }
 
   /**
@@ -6508,8 +6565,20 @@ export class AP214GeometryExtraction {
         // composed onto it — which is how the tessellated part in that file
         // came out 1000x too small, its own mm->m root scale multiplied by
         // the leaked one (test-models#62; the two roots are #25231 and #106,
-        // adjacent in the free-root scan). Capture, unwind, then rethrow at
-        // the end so the demand pump still reports it exactly as before.
+        // adjacent in the free-root scan). Capture, unwind, then settle it
+        // at the end of the thunk, where the transform state is sound
+        // again.
+        //
+        // What "settle" means depends on the throw, and the split is
+        // conway#708 / bldrs-ai/ops#28. An unresolved or mistyped reference
+        // is a defect in the FILE: the representation's items cannot be
+        // typed against AP214 no matter how often they are retried, so the
+        // representation is skipped, counted and reported as a data defect
+        // right here — where the owning record is still in hand, which the
+        // demand pump's catch no longer has (a unit is an opaque closure
+        // there, so its report named no entity at all: Sentry SHARE-1P2,
+        // "Error processing demand unit: Value in STEP was incorrectly
+        // typed"). Anything else still propagates to that catch untouched.
         let items: representation_item[] = []
         let deferredItemsError: unknown = void 0
 
@@ -6651,7 +6720,29 @@ export class AP214GeometryExtraction {
         }
 
         if ( deferredItemsError !== void 0 ) {
-          throw deferredItemsError
+
+          if ( !isUnresolvedReferenceError( deferredItemsError ) ) {
+            throw deferredItemsError
+          }
+
+          // Skipped, not failed: the thunk's children ran, its transform
+          // state is unwound, and the only thing missing is the items this
+          // representation could not type. Returning normally is what makes
+          // the pump's `executed` count say so — the unit did run — and
+          // keeps a data defect out of the generic "Error processing demand
+          // unit" channel, which cannot name the entity.
+          //
+          // The message carries no error text: DanglingReferenceError spells
+          // its missing express ID into its own message, and that message is
+          // Logger's dedup key, so interpolating it would give every skipped
+          // representation an entry of count 1 (see Logger's class doc). The
+          // representation is on the entry instead, where repeats union it.
+          if ( !this.quietRecoverableLogging ) {
+            Logger.error(
+                'Skipping representation items with an unresolved or mistyped STEP reference',
+                representation.expressID,
+                DATA_DEFECT )
+          }
         }
       }
     }

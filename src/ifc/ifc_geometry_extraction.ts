@@ -54,6 +54,7 @@ import { Uint32Sink } from '../step/parsing/uint32_sink'
 import { StepBufferNotResidentError } from '../step/step_buffer_provider'
 import {
   DanglingReferenceError,
+  isUnresolvedReferenceError,
   unresolvedReferenceError,
 } from '../step/dangling_reference_error'
 import { DanglingPlacementError } from './dangling_placement_error'
@@ -208,7 +209,7 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcMaterialCache } from './ifc_material_cache'
 import { IfcSceneBuilder, IfcSceneTransform } from './ifc_scene_builder'
 import IfcStepModel from './ifc_step_model'
-import Logger from '../logging/logger'
+import Logger, { DATA_DEFECT } from '../logging/logger'
 import {
   arraysToWasmHeap, arrayToWasmHeap, freeAll, wasmHeapView, withRelease,
 } from '../core/wasm_heap'
@@ -7927,6 +7928,34 @@ export class IfcGeometryExtraction {
         await this.ensureResidentForProductExtract(
             relating.localID, pinned, leafSpans )
       }
+
+    } catch ( error ) {
+
+      // The `RelatingObject` getter throws when the field names a record
+      // the schema cannot type there — a SketchUp Pro 2015 IFC4X3_RC2
+      // export is the case in production (Sentry SHARE-1PA), and it threw
+      // from here, out through beginAggregateExtract, out through
+      // ExtractGeometryBatchAsync, and took the whole load with it. That is
+      // what bldrs-ai/ops#28 forbids: a bad reference skips an entity, it
+      // does not end a load (conway#708).
+      //
+      // Nothing is reported here, deliberately. This is a PREFETCH — there
+      // is no relating record to page, and the relationship itself has not
+      // been skipped yet. The pass that skips it,
+      // extractRelAggregateGeometryIncremental, reads the same getter,
+      // throws the same error into its own permissive catch and reports it
+      // there, keyed on this relationship (see that catch). Reporting the
+      // same skip twice would make the per-entry counts Share sizes a
+      // defect by read double.
+      //
+      // Only the unresolved-reference family is absorbed. A
+      // StepBufferNotResidentError or any other paging failure still
+      // propagates: swallowing one would turn a residency bug into
+      // geometry that silently goes missing.
+      if ( !isUnresolvedReferenceError( error ) ) {
+        throw error
+      }
+
     } finally {
 
       if ( relatingLocalID !== null ) {
@@ -8474,9 +8503,30 @@ export class IfcGeometryExtraction {
     } catch (ex) {
       if (ex instanceof Error) {
         if (MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
-          Logger.error(
-            `Error processing relAggregate\n\terror: ${ex.message}`,
-            relAggregate.expressID )
+
+          // The one report for a relationship this pass abandons, and so the
+          // one place it is counted — the prefetch that reads the same
+          // getter stays quiet for that reason (see
+          // ensureResidentForAggregateBase's catch).
+          //
+          // A bad reference is a defect in the FILE, not in conway, and
+          // carries the marker that says so (conway#708). Its message drops
+          // `ex.message` because that is the dedup key: a
+          // DanglingReferenceError spells the missing express ID into its
+          // own message, so interpolating it split one relationship-wide
+          // defect into one entry of count 1 per relationship and left
+          // `count` meaning nothing (see Logger's class doc). The express ID
+          // is already on the entry, where repeats union it.
+          if ( isUnresolvedReferenceError( ex ) ) {
+            Logger.error(
+              'Skipping IfcRelAggregates with an unresolved or mistyped STEP reference',
+              relAggregate.expressID,
+              DATA_DEFECT )
+          } else {
+            Logger.error(
+              `Error processing relAggregate\n\terror: ${ex.message}`,
+              relAggregate.expressID )
+          }
         } else {
           throw ex
         }

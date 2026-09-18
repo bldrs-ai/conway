@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, test} from '@jest/globals'
 
-import Logger, { LogLevel } from './logger'
+import Logger, { DATA_DEFECT, LogLevel } from './logger'
 import DiagnosticTally from './diagnostic_tally'
 
 
@@ -110,5 +110,26 @@ describe( 'DiagnosticTally', () => {
     const counts = new Map( tally.entries() )
 
     expect( counts.get( 'warning: face contributed no geometry' ) ).toBe( 2 )
+  } )
+
+  // conway#708 widened Logger's dedup identity to include `category`, so one
+  // message logged with and without a marker is now TWO entries, each with
+  // its own count from 1. This tally's per-entry tracking key assumed
+  // message+level identified an entry uniquely (see the class doc); left
+  // that way, the second entry's count reads as the first one's running
+  // total and every occurrence of it records a delta of zero — four
+  // occurrences reported as two.
+  test( 'sums two entries that share a message but differ in category', () => {
+
+    Logger.warning( 'skipped an entity', 1 )
+    Logger.warning( 'skipped an entity', 2, DATA_DEFECT )
+    Logger.warning( 'skipped an entity', 3 )
+    Logger.warning( 'skipped an entity', 4, DATA_DEFECT )
+
+    const counts = new Map( tally.entries() )
+
+    // One REPORT line — a reader wants the message tallied once — carrying
+    // all four occurrences.
+    expect( counts.get( 'warning: skipped an entity' ) ).toBe( 4 )
   } )
 } )

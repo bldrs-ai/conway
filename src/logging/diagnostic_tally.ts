@@ -34,17 +34,17 @@ const KEY_MESSAGE_LENGTH = 120
  * sums that entry's DELTA into the shared key on every call, rather than
  * overwriting the key with one entry's absolute count.
  *
- * The per-entry tracking key is the entry's own untruncated `level: message`
- * — NOT the `LogEntry` object's identity. `Logger.compressLogs()` (run by
- * `getErrors()` and `displayLogs(true)`) replaces every buffered entry with
- * a FRESH object that carries the same `count` forward (it merges by
- * `message`+`level`, same as `findLogIndex`, and rebuilds `Logger.logs` from
- * scratch); an identity-keyed tracker would miss that new object entirely on
- * its first post-compression repeat and treat the carried-over count as a
- * brand-new delta from zero — 1 warning, `getErrors()`, then the same
- * warning again would report 3, not 2. Keying on the same message+level
- * identity Logger itself uses for both dedup and compression survives that
- * object swap for free.
+ * The per-entry tracking key is the entry's own untruncated level, category
+ * and message — NOT the `LogEntry` object's identity. `Logger.compressLogs()`
+ * (run by `getErrors()`, `getDataDefects()` and `displayLogs(true)`) replaces
+ * every buffered entry with a FRESH object that carries the same `count`
+ * forward (it merges on the same identity `findLogIndex` uses, and rebuilds
+ * `Logger.logs` from scratch); an identity-keyed tracker would miss that new
+ * object entirely on its first post-compression repeat and treat the
+ * carried-over count as a brand-new delta from zero — 1 warning,
+ * `getErrors()`, then the same warning again would report 3, not 2. Keying on
+ * the same identity Logger itself uses for both dedup and compression
+ * survives that object swap for free.
  */
 export default class DiagnosticTally implements LoggingProxy {
   private counts = new Map<string, number>()
@@ -68,7 +68,15 @@ export default class DiagnosticTally implements LoggingProxy {
     // would otherwise clobber. Keyed on the untruncated message (see the
     // class doc) so a post-compressLogs() fresh LogEntry object for the
     // same message is still recognised as the same entry.
-    const entryKey = `${entry.level}: ${entry.message}`
+    //
+    // The category is on this key because it is part of Logger's dedup
+    // identity (conway#708): the same text logged with and without one is
+    // two entries, each counting from 1, and a tracking key that could not
+    // tell them apart would read the second entry's count as the first
+    // one's total and record a delta of zero for every occurrence of it.
+    // The REPORT key above deliberately does not carry it — a reader wants
+    // the message tallied once.
+    const entryKey = `${entry.level}:${entry.category ?? ''}: ${entry.message}`
     const previousCount = this.lastSeenCount.get(entryKey) ?? 0
     const delta = entry.count - previousCount
 

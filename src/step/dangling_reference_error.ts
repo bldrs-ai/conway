@@ -145,3 +145,46 @@ export function unresolvedReferenceError(
 
   return new Error( MISTYPED_VALUE_MESSAGE )
 }
+
+/**
+ * Is this throw the "the file says something the schema cannot resolve"
+ * family — a dangling reference or a mistyped one?
+ *
+ * The single predicate for conway's never-throw-on-a-bad-reference policy
+ * (bldrs-ai/ops#28, conway#708): a path that meets one of these skips the
+ * offending entity, counts it and reports it as a data defect; anything
+ * else propagates exactly as it did before. Keeping the test in one place
+ * is what stops the policy from quietly widening into "catch everything",
+ * which would turn a residency or wasm defect into silently missing
+ * geometry — the same split `IfcGeometryExtraction.relatedObjectExpressIDs_`
+ * already makes for `StepBufferNotResidentError`.
+ *
+ * Two shapes qualify, and they are the two this module mints or documents:
+ *
+ * - {@link DanglingReferenceError}, for a reference whose target is not in
+ *   the index;
+ * - a bare `Error` whose message BEGINS with {@link MISTYPED_VALUE_MESSAGE}
+ *   — the generated getters throw both that exact string and
+ *   `'Value in STEP was incorrectly typed for field'` (a SELECT narrowed to
+ *   a schema's own member list), so the test is `startsWith` rather than
+ *   equality.
+ *
+ * Message matching is the only handle available for the second shape: the
+ * generated schema code mints those errors inline — 256 sites in
+ * `AP214E3_2010_gen`, 276 in `ifc4_gen` — so giving them a type would mean
+ * changing the generator and regenerating both trees. The constant above is
+ * what keeps the string in one place on the throwing side; this is its one
+ * reader.
+ *
+ * @param error The value that was thrown.
+ * @return {boolean} True when the throw is an unresolved/mistyped
+ * reference.
+ */
+export function isUnresolvedReferenceError( error: unknown ): boolean {
+
+  if ( error instanceof DanglingReferenceError ) {
+    return true
+  }
+
+  return error instanceof Error && error.message.startsWith( MISTYPED_VALUE_MESSAGE )
+}

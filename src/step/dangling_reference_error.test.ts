@@ -7,6 +7,7 @@ import IfcStepModel from '../ifc/ifc_step_model'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import {
   DanglingReferenceError,
+  isUnresolvedReferenceError,
   MISTYPED_VALUE_MESSAGE,
 } from './dangling_reference_error'
 import { BufferByteSource } from './parsing/byte_source'
@@ -439,5 +440,49 @@ describe( 'reference-array classification', () => {
 
     expect( caught ).not.toBeInstanceOf( DanglingReferenceError )
     expect( ( caught as Error ).message ).toBe( MISTYPED_VALUE_MESSAGE )
+  } )
+} )
+
+
+/**
+ * conway#708 / bldrs-ai/ops#28: the never-throw-on-a-bad-reference policy
+ * turns on one predicate, so the predicate is where it can go wrong in both
+ * directions — too narrow and a real file still ends a load, too wide and a
+ * residency or wasm defect becomes geometry that silently goes missing.
+ */
+describe( 'isUnresolvedReferenceError', () => {
+
+  /** An arbitrary referenced record, and the highest ID a prefix holds. */
+  const MISSING_EXPRESS_ID = 42
+  const HIGHEST_INDEXED_EXPRESS_ID = 41
+
+  test( 'accepts both shapes the step layer throws for a bad reference', () => {
+
+    expect( isUnresolvedReferenceError(
+        new DanglingReferenceError( MISSING_EXPRESS_ID ) ) ).toBe( true )
+    expect( isUnresolvedReferenceError(
+        new DanglingReferenceError(
+            MISSING_EXPRESS_ID, HIGHEST_INDEXED_EXPRESS_ID ) ) ).toBe( true )
+    expect( isUnresolvedReferenceError( new Error( MISTYPED_VALUE_MESSAGE ) ) ).toBe( true )
+
+    // The generated SELECT narrowing throws this longer form — same family,
+    // which is why the test is on the prefix and not on equality.
+    expect( isUnresolvedReferenceError(
+        new Error( `${MISTYPED_VALUE_MESSAGE} for field` ) ) ).toBe( true )
+  } )
+
+  test( 'rejects everything else, so only this family is ever skipped', () => {
+
+    // A paging failure is the one that matters: swallowing it would turn a
+    // residency bug into missing geometry with no diagnostic at all.
+    class StepBufferNotResidentErrorLike extends Error {}
+
+    expect( isUnresolvedReferenceError(
+        new StepBufferNotResidentErrorLike( 'chunk 3 is not resident' ) ) ).toBe( false )
+    expect( isUnresolvedReferenceError( new TypeError( 'x is not a function' ) ) ).toBe( false )
+    expect( isUnresolvedReferenceError(
+        new Error( `wrapped: ${MISTYPED_VALUE_MESSAGE}` ) ) ).toBe( false )
+    expect( isUnresolvedReferenceError( 'Value in STEP was incorrectly typed' ) ).toBe( false )
+    expect( isUnresolvedReferenceError( void 0 ) ).toBe( false )
   } )
 } )
