@@ -71,6 +71,38 @@
  * back into whichever buffer the extractor had chosen. Found by review on
  * bldrs-ai/conway#711.
  *
+ * ### THE WELD BUCKET IS FLOAT32-SIZED, NOT A FIXED 1e-6
+ *
+ * Emitted vertices are `HEAPF32` - float32 - while the trim-loop points are
+ * the doubles the extractor handed to native, so the same point differs
+ * between the two by up to half a float32 ULP. A FIXED 1e-6 bucket is
+ * therefore only wide enough for SMALL coordinates. On a millimetre-authored
+ * model with coordinates around 76, half a ULP is 3.6e-6 - nearly four
+ * buckets - and the 26-neighbour search reaches one. Measured on
+ * `data/nema-23-76mm.step` solid `#3` before this was fixed: 674 loop points
+ * across 28 of 257 faces read as unmapped, and EVERY ONE of them had an
+ * emitted vertex within 0.49 of a float32 ULP (0.19 to 0.49, at magnitudes
+ * 68.8 to 76.7). Not one was a dropped ring; the probe could not see points
+ * that were there.
+ *
+ * That matters more than an ordinary off-by-a-bit, because `mapped=` is the
+ * column this file's own header tells the next reader to trust, and a probe
+ * that invents dropped rings on healthy geometry is worse than no probe.
+ * This is the third false positive of exactly that shape, after the
+ * styled-face blindness and the area units below.
+ *
+ * So the bucket is derived per face from the largest coordinate it involves:
+ * `max(1e-6, maxAbs * 8 * 2^-24)`. The second term is eight times the worst
+ * float32 storage error at that magnitude, so the quantisation of the two
+ * spellings lands in the same bucket or an adjacent one, which the neighbour
+ * search already covers. The 1e-6 floor keeps small-coordinate models reading
+ * exactly as they did - `Right_Hand.step` is metre-authored around 0.1, where
+ * the float32 term is 5e-8 and the floor is what applies. Note the floor is
+ * in RAW FILE UNITS, so it is a tighter physical tolerance on a millimetre
+ * file than on a metre one; that asymmetry only bites below the float32 term,
+ * which is where it does not matter. The bucket in force is printed per row.
+ * Found by review on bldrs-ai/conway#711.
+ *
  * ### AREA IS CONVERTED FROM THE FILE'S OWN LENGTH UNIT
  *
  * STEP geometry is emitted in RAW FILE COORDINATES - the metre conversion
@@ -122,8 +154,14 @@ ConwayGeometry.prototype.initialize = function(...a) { conwayWasm = this; return
 Environment.checkEnvironment(); Logger.initializeWasmCallbacks()
 Logger.setSink((l, m) => { const s = String(m); if (/Error extracting face|no geometry|not valid/.test(s)) console.error(`NATIVE: ${s.slice(0, 200)}`) })
 
-const Q = 1e6
-const key = (x, y, z) => `${Math.round(x * Q)},${Math.round(y * Q)},${Math.round(z * Q)}`
+// Weld/lookup bucket, in raw file units. See "THE WELD BUCKET IS
+// FLOAT32-SIZED" above: the floor, and the per-magnitude term that is eight
+// times the worst float32 storage error at a given coordinate size.
+const BUCKET_FLOOR = 1e-6
+const BUCKET_PER_UNIT = 8 * Math.pow(2, -24)
+const bucketFor = (maxAbs) => Math.max(BUCKET_FLOOR, maxAbs * BUCKET_PER_UNIT)
+const keyWith = (q) => (x, y, z) =>
+  `${Math.round(x * q)},${Math.round(y * q)},${Math.round(z * q)}`
 
 const original = AP214GeometryExtraction.prototype.extractAdvancedFace
 const realAddOrStageFace = AP214GeometryExtraction.prototype.addOrStageFace
@@ -217,6 +255,22 @@ AP214GeometryExtraction.prototype.extractAdvancedFace = function(from, geometry,
   const nv = vd.length / 6
   const nt = id.length / 3
 
+  // The bucket is sized for THIS face: both spellings of its largest
+  // coordinate have to land in the same bucket or a neighbouring one.
+  let maxAbs = 0
+  for (let i = 0; i < nv; ++i) {
+    maxAbs = Math.max(maxAbs, Math.abs(vd[i * 6]), Math.abs(vd[i * 6 + 1]),
+        Math.abs(vd[i * 6 + 2]))
+  }
+  for (const loop of loops) {
+    for (const p of loop.pts) {
+      maxAbs = Math.max(maxAbs, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]))
+    }
+  }
+  const bucket = bucketFor(maxAbs)
+  const Q = 1 / bucket
+  const key = keyWith(Q)
+
   // Weld by quantized position.
   const wm = new Map()
   const widx = new Int32Array(nv)
@@ -278,7 +332,7 @@ AP214GeometryExtraction.prototype.extractAdvancedFace = function(from, geometry,
     types: loops.map((l) => l.type),
     seamPair: loops.map((l) => (l.seamPair ? 1 : 0)),
     seam: loops.map((l) => (l.seam ? 1 : 0)),
-    nv, nt, welded: wm.size, area, degen,
+    nv, nt, welded: wm.size, area, degen, bucket,
     open: open.length, spurious: spurious.length,
     loopSegments, loopPointsMapped, loopPointsTotal,
   })
@@ -307,6 +361,6 @@ for (const r of rows) {
     `  #${String(r.express).padEnd(6)} ${String(r.surface).padEnd(26)} bounds=${r.nBounds} ` +
     `types=[${r.types}] seamPair=[${r.seamPair}] loopPts=[${r.loopSizes}] ` +
     `v=${r.nv}/${r.welded} t=${r.nt} area=${(r.area * areaScale).toFixed(2)}${areaUnit} degen=${r.degen} ` +
-    `open=${r.open} spurious=${r.spurious} loopSeg=${r.loopSegments} mapped=${r.loopPointsMapped}/${r.loopPointsTotal}`)
+    `bucket=${r.bucket.toExponential(2)} open=${r.open} spurious=${r.spurious} loopSeg=${r.loopSegments} mapped=${r.loopPointsMapped}/${r.loopPointsTotal}`)
 }
 console.log(`TOTAL spurious open edges: ${totSpur}`)
