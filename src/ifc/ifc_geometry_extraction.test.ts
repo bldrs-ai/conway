@@ -5,12 +5,48 @@ import { ParseResult } from '../step/parsing/step_parser'
 import IfcStepParser from './ifc_step_parser'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { ConwayGeometry, ParamsGetIfcCircle, ParamsGetIfcTrimmedCurve,
-  NativeTransform3x3, NativeTransform4x4 } from '../../dependencies/conway-geom'
+  ParamsGetAxis2Placement2D, NativeTransform3x3, NativeTransform4x4 } from '../../dependencies/conway-geom'
 import { ColorRGBA } from '../core/canonical_material'
 import { ExtractResult } from '../core/shared_constants'
 
 
 let conwayModel:IfcGeometryExtraction
+
+/**
+ * Builds a genuine identity axis2Placement2D (X/Y axes aligned, origin at
+ * (0, 0)) through the same GetAxis2Placement2D() code path real IFC
+ * extraction uses (extractAxis2Placement2D / IfcAxis2Placement2D). A raw
+ * default-constructed `Glmdmat3` is NOT this: the wasm binding's default
+ * constructor leaves it all-zero rather than identity, which conway-geom#205's
+ * fix exposes -- getIfcCircle's 2D byPos branch now projects trim points
+ * onto the placement's own axis columns (placement[0]/[1]) instead of the
+ * sampler unconditionally overwriting them with a hardcoded identity, so a
+ * zero placement now zeroes those projections instead of being silently
+ * discarded. Production code never hits this: it only ever passes a raw
+ * Glmdmat3 as a placeholder on the dimensions === 3 path, where the 2D
+ * placement argument goes unused.
+ *
+ * @param conwayGeometry Initialized ConwayGeometry instance.
+ * @return {NativeTransform3x3} A true identity 2D placement.
+ */
+function identityAxis2Placement2D(conwayGeometry: ConwayGeometry): NativeTransform3x3 {
+  const parameters: ParamsGetAxis2Placement2D = {
+    isAxis2Placement2D: true,
+    isCartesianTransformationOperator2D: false,
+    isCartesianTransformationOperator2DNonUniform: false,
+    position2D: { x: 0, y: 0 },
+    customAxis1Ref: false,
+    axis1Ref: { x: 1, y: 0 },
+    customAxis2Ref: false,
+    axis2Ref: { x: 1, y: 0 },
+    customScale: false,
+    scale1: 0,
+    customScale2: false,
+    scale2: 0,
+  }
+
+  return conwayGeometry.getAxis2Placement2D(parameters)
+}
 
 /**
  *
@@ -163,8 +199,7 @@ describe('getIfcCircle 2D cartesian trim (test-models#20 driveway)', () => {
     const radius = 100
 
     // Identity placement: circle centred at the origin, X/Y axes aligned.
-    const axis2Placement2D =
-      (new (conwayGeometry.wasmModule!.Glmdmat3)) as NativeTransform3x3
+    const axis2Placement2D = identityAxis2Placement2D(conwayGeometry)
     const axis2Placement3D =
       (new (conwayGeometry.wasmModule!.Glmdmat4)) as NativeTransform4x4
 
@@ -245,8 +280,7 @@ describe('getIfcCircle 2D Cartesian trim on an eccentric ellipse (codex review, 
     const radius = 200 // semi-major
     const radius2 = 100 // semi-minor (2:1 ellipse)
 
-    const axis2Placement2D =
-      (new (conwayGeometry.wasmModule!.Glmdmat3)) as NativeTransform3x3
+    const axis2Placement2D = identityAxis2Placement2D(conwayGeometry)
     const axis2Placement3D =
       (new (conwayGeometry.wasmModule!.Glmdmat4)) as NativeTransform4x4
 
@@ -318,4 +352,207 @@ describe('getIfcCircle 2D Cartesian trim on an eccentric ellipse (codex review, 
 
     conwayGeometry.destroy()
   })
+})
+
+describe('getIfcCircle 2D Cartesian trim test matrix (conway-geom#205)', () => {
+
+  // conway-geom#204 fixed the 2D byPos branch for {circle, ellipse} x
+  // {identity placement} by removing only the placement *translation*
+  // before computing trim angles, while the sampling loop below
+  // correspondingly forces dmat[0]/dmat[1] to identity ('If trimming by
+  // points no rotation is required'). For a CIRCLE those two omissions
+  // cancel exactly: a placement rotation is a phase shift of the
+  // parametric angle, and both halves drop it identically, so the result
+  // is correct even though the frame is wrong. For an eccentric ELLIPSE
+  // under a rotated placement the cancellation does not hold, because
+  // the phase-shift equivalence is a circle-only property — see #205.
+  //
+  // This block is the {circle, eccentric ellipse} x {identity, rotated}
+  // matrix the issue asks for, so a fix to the rotated-ellipse cell can
+  // be driven from it and checked not to disturb the other three,
+  // especially the rotated circle — which is the driveway's own shape
+  // (ISSUE_126_model.ifc's placements #1170/#1181 carry non-axis-aligned
+  // RefDirections).
+  //
+  // Every case is verified against the analytic curve equation in WORLD
+  // space: each sampled point is pulled back into the placement's own
+  // (rotated) frame via dot products against the placement's actual axes
+  // -- never assumed to already be unrotated -- and checked to satisfy
+  // (x/r1)^2 + (y/r2)^2 == 1 there. That is a stronger check than 'looks
+  // smooth': a curve that is smooth but off the true ellipse (e.g. still
+  // swept in the wrong frame) fails it.
+
+  const degreesPerHalfTurn = 180
+  const parametricDegreesToRadians = Math.PI / degreesPerHalfTurn
+  const rotationDegrees = 37
+  const rotationRadians = rotationDegrees * parametricDegreesToRadians
+  const placementXAxis = { x: Math.cos(rotationRadians), y: Math.sin(rotationRadians) }
+  const placementPosition = { x: 50, y: -30 }
+  const startParamDeg = 0
+  const endParamDeg = 45
+
+  /**
+   * Builds a 2D Cartesian trim point at a given PARAMETRIC angle on the
+   * (radius1, radius2) ellipse, expressed in a placement's own local
+   * frame, then maps it into world space through that placement -- this
+   * is what an IFC exporter would author for an IfcTrimmedCurve over an
+   * IfcEllipse/IfcCircle.
+   *
+   * @param radius1 Semi-major (or circle) radius.
+   * @param radius2 Semi-minor radius.
+   * @param paramDeg Parametric angle in degrees.
+   * @param xAxis The placement's local X axis, in world space.
+   * @param xAxis.x X component.
+   * @param xAxis.y Y component.
+   * @param position The placement's world-space origin.
+   * @param position.x X component.
+   * @param position.y Y component.
+   * @return {{x: number, y: number}} The Cartesian trim point in world space.
+   */
+  function worldTrimPoint(
+      radius1: number, radius2: number, paramDeg: number,
+      xAxis: {x: number, y: number}, position: {x: number, y: number}) {
+    const yAxis = { x: -xAxis.y, y: xAxis.x }
+    const localX = radius1 * Math.cos(paramDeg * parametricDegreesToRadians)
+    const localY = radius2 * Math.sin(paramDeg * parametricDegreesToRadians)
+
+    return {
+      x: position.x + localX * xAxis.x + localY * yAxis.x,
+      y: position.y + localX * xAxis.y + localY * yAxis.y,
+    }
+  }
+
+  /**
+   * Pulls a world-space point back into the placement's local frame via
+   * dot products against its actual (possibly rotated) axes -- the
+   * frame the placement itself defines, independent of whatever frame
+   * the implementation under test used internally.
+   *
+   * @param point World-space point.
+   * @param point.x X component.
+   * @param point.y Y component.
+   * @param xAxis The placement's local X axis, in world space.
+   * @param xAxis.x X component.
+   * @param xAxis.y Y component.
+   * @param position The placement's world-space origin.
+   * @param position.x X component.
+   * @param position.y Y component.
+   * @return {{x: number, y: number}} The point in the placement's local frame.
+   */
+  function toLocalFrame(
+      point: {x: number, y: number}, xAxis: {x: number, y: number},
+      position: {x: number, y: number}) {
+    const yAxis = { x: -xAxis.y, y: xAxis.x }
+    const dx = point.x - position.x
+    const dy = point.y - position.y
+
+    return {
+      x: dx * xAxis.x + dy * xAxis.y,
+      y: dx * yAxis.x + dy * yAxis.y,
+    }
+  }
+
+  const matrix: Array<{
+    name: string,
+    radius: number,
+    radius2: number,
+    rotated: boolean,
+  }> = [
+    { name: 'circle, identity placement', radius: 100, radius2: 100, rotated: false },
+    { name: 'circle, rotated placement', radius: 100, radius2: 100, rotated: true },
+    { name: 'eccentric ellipse, identity placement', radius: 200, radius2: 100, rotated: false },
+    { name: 'eccentric ellipse, rotated placement', radius: 200, radius2: 100, rotated: true },
+  ]
+
+  for (const cell of matrix) {
+
+    test(`${cell.name}: every sampled point lies on the analytic curve`, async () => {
+      const conwayGeometry: ConwayGeometry = new ConwayGeometry()
+
+      expect(await conwayGeometry.initialize()).toBe(true)
+
+      const xAxis = cell.rotated ? placementXAxis : { x: 1, y: 0 }
+      const position = cell.rotated ? placementPosition : { x: 0, y: 0 }
+
+      const axis2Placement2DParameters: ParamsGetAxis2Placement2D = {
+        isAxis2Placement2D: true,
+        isCartesianTransformationOperator2D: false,
+        isCartesianTransformationOperator2DNonUniform: false,
+        position2D: position,
+        customAxis1Ref: cell.rotated,
+        axis1Ref: xAxis,
+        customAxis2Ref: false,
+        axis2Ref: xAxis,
+        customScale: false,
+        scale1: 0,
+        customScale2: false,
+        scale2: 0,
+      }
+
+      const axis2Placement2D = conwayGeometry.getAxis2Placement2D(axis2Placement2DParameters)
+      const axis2Placement3D =
+        (new (conwayGeometry.wasmModule!.Glmdmat4)) as NativeTransform4x4
+
+      const trim1 = worldTrimPoint(cell.radius, cell.radius2, startParamDeg, xAxis, position)
+      const trim2 = worldTrimPoint(cell.radius, cell.radius2, endParamDeg, xAxis, position)
+
+      const paramsGetIfcTrimmedCurve: ParamsGetIfcTrimmedCurve = {
+        masterRepresentation: 0, // IfcTrimmingPreference.CARTESIAN
+        dimensions: 2,
+        senseAgreement: true,
+        trim1Cartesian2D: trim1,
+        trim1Cartesian3D: { x: 0, y: 0, z: 0 },
+        trim1Double: 0,
+        trim2Cartesian2D: trim2,
+        trim2Cartesian3D: { x: 0, y: 0, z: 0 },
+        trim2Double: 0,
+        trimExists: true,
+      }
+
+      const parameters: ParamsGetIfcCircle = {
+        dimensions: 2,
+        axis2Placement2D,
+        axis2Placement3D,
+        radius: cell.radius,
+        radius2: cell.radius2,
+        paramsGetIfcTrimmedCurve,
+        isEdge: false,
+      }
+
+      const curve = conwayGeometry.getIfcCircle(parameters)
+      const pointCount = curve.getPointsSize()
+
+      expect(pointCount).toBeGreaterThan(2)
+
+      const onCurveTolerance = 1e-6
+      let maxSegmentLength = 0
+
+      let previous = curve.get2d(0)
+
+      for (let index = 0; index < pointCount; ++index) {
+        const point = curve.get2d(index)
+        const local = toLocalFrame(point, xAxis, position)
+        const normalizedX = local.x / cell.radius
+        const normalizedY = local.y / cell.radius2
+        const curveResidual = (normalizedX * normalizedX) + (normalizedY * normalizedY) - 1
+
+        expect(Math.abs(curveResidual)).toBeLessThan(onCurveTolerance)
+
+        if (index > 0) {
+          const segmentLength = Math.hypot(point.x - previous.x, point.y - previous.y)
+
+          maxSegmentLength = Math.max(maxSegmentLength, segmentLength)
+        }
+        previous = point
+      }
+
+      // A correct 45-degree-of-parameter arc has no segment anywhere near
+      // as long as the ~50-unit structural mismatch measured for the
+      // broken rotated-ellipse cell (conway-geom#205) -- a smooth curve
+      // has no such outlier segment.
+      expect(maxSegmentLength).toBeLessThan(cell.radius / 4)
+
+      conwayGeometry.destroy()
+    })
+  }
 })
