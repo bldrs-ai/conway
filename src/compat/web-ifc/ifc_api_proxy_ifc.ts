@@ -41,6 +41,7 @@ import {
   WasmHeapArrayConstructor, wasmHeapView,
 } from '../../core/wasm_heap'
 import { extractModelInfo } from '../../loaders/loading_utilities'
+import { selectIfcSchemaKindForHeader } from '../../ifc/ifc_schema_selection'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import { openIfcModelFromIndex } from '../../ifc/ifc_stream_open'
 import ParsingBuffer from '../../parsing/parsing_buffer'
@@ -989,6 +990,54 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Gate on FILE_SCHEMA before the data parse / geometry extraction below
+   * commit to IFC4 (`IfcStepParser`/`EntityTypesIfc`) — codex review of
+   * bldrs-ai/conway#713 (P1): every entry point in this file that opens an
+   * IFC model (the classic, cooperative, streamed and both store-backed
+   * paths) hard-codes `IfcStepParser`, so without this call an IFC4X3 file
+   * reaching Share's `USE_WEBIFC_SHIM=true` production path would parse
+   * and extract under IFC4's ordinals with no error at all — silently
+   * misidentifying every 4X3-only entity (IFCROAD, IFCFACILITYPART,
+   * IFCPAVEMENT, IFCKERB, …), the exact defect conway#280 exists to
+   * eliminate. `ConwayModelLoader` (conway_model_loader.ts) already gates
+   * its own path the same way; this is that gate's twin for the shim.
+   *
+   * Classifies the header's full FILE_SCHEMA entry list
+   * (`selectIfcSchemaKindForHeader`), not a single already-truncated
+   * identifier, and lets `UnrecognizedIfc4x3SchemaError` propagate for an
+   * unrecognised 4X3-family spelling rather than falling back to IFC4 (P1 &
+   * P2 of the same review). Geometry extraction for the 4X3 schema itself
+   * is conway#280 phase 2b, out of scope here — so, like
+   * ConwayModelLoader, this throws rather than proceeding; the factory that
+   * constructs this class (`IfcApiModelPassthroughFactory.from`) already
+   * catches construction errors and reports `OpenModel` failure (`-1`)
+   * through the normal failure path, so this needs no special handling by
+   * callers.
+   *
+   * @param modelID The model ID being opened (for statistics).
+   * @param stepHeader The parsed STEP header.
+   * @throws {Error} If the file is IFC4X3-family: recognised (explicit,
+   * named) or unrecognised (`UnrecognizedIfc4x3SchemaError`, thrown by
+   * `selectIfcSchemaKindForHeader` itself).
+   */
+  private static assertSchemaSupported(
+      modelID: number,
+      stepHeader: StepHeader ): void {
+
+    if ( selectIfcSchemaKindForHeader( stepHeader ) === 'ifc4x3' ) {
+
+      const statistics = Logger.getStatistics(modelID)
+
+      statistics?.setLoadStatus('UNSUPPORTED_SCHEMA')
+
+      throw new Error(
+          'IFC4X3 schema detected: geometry extraction is not yet ' +
+          'implemented for this schema on the web-ifc compat surface — ' +
+          'see bldrs-ai/conway#280 phase 2b.' )
+    }
+  }
+
+  /**
    * Build the progress tracker for a load, when the settings carry an
    * ON_PROGRESS callback.
    *
@@ -1042,6 +1091,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
+
+    // codex review of #713 (P1): gate before the data parse/geometry
+    // extraction below commit to IFC4 — see assertSchemaSupported's
+    // doc-comment.
+    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
@@ -1138,6 +1192,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
+
+    // codex review of #713 (P1): gate before the data parse/geometry
+    // extraction below commit to IFC4 — see assertSchemaSupported's
+    // doc-comment.
+    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
@@ -1249,6 +1308,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
+
+    // codex review of #713 (P1): gate before the data parse/geometry
+    // extraction below commit to IFC4 — see assertSchemaSupported's
+    // doc-comment.
+    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
@@ -1674,6 +1738,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
+    // codex review of #713 (P1): gate before the data parse/geometry
+    // extraction below commit to IFC4 — see assertSchemaSupported's
+    // doc-comment.
+    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
+
     tracker?.endPhase(fileSize)
 
     statistics?.setParseTime(restoreEndTime - restoreStartTime)
@@ -1781,6 +1850,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
+
+    // codex review of #713 (P1): gate before the data parse/geometry
+    // extraction below commit to IFC4 — see assertSchemaSupported's
+    // doc-comment.
+    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     const parseEndTime = Date.now()
 

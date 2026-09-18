@@ -19,6 +19,35 @@ export enum ModelFormatType {
 }
 
 /**
+ * Split a raw `FILE_SCHEMA` header value into its individual (uppercased)
+ * identifiers. A header can carry more than one quoted entry, e.g.
+ * `FILE_SCHEMA(('IFC4','IFC4X3_ADD2'))` — codex review of bldrs-ai/conway#713
+ * (P2) flagged that IFC4X3 schema routing (ifc_schema_selection.ts) must
+ * inspect this same complete list rather than re-parsing the header a
+ * second time, or a mixed header silently loses everything after the first
+ * entry. Exported so ifc_schema_selection.ts can reuse it instead of
+ * writing a third parse of the same header.
+ *
+ * @param schemaRaw The raw FILE_SCHEMA header value, as
+ * `stepHeader.headers.get('FILE_SCHEMA')` returns it (undefined if absent).
+ * @return {string[]} Each quoted identifier, uppercased; a single-entry
+ * array of the whole (uppercased) value if no quoted entries were found;
+ * or an empty array when `schemaRaw` is undefined.
+ */
+export function extractFileSchemaEntries( schemaRaw: string | undefined ): string[] {
+
+  if ( schemaRaw === void 0 ) {
+
+    return []
+  }
+
+  const schema = schemaRaw.toLocaleUpperCase()
+  const quotedEntries = Array.from( schema.matchAll( /'([^']+)'/g ) ).map( (match) => match[1] )
+
+  return quotedEntries.length > 0 ? quotedEntries : [schema]
+}
+
+/**
  * Format detector for finding the format of a model from a buffer in conway.
  */
 export default class ModelFormatDetector {
@@ -36,12 +65,11 @@ export default class ModelFormatDetector {
 
     if ( errorCode === ParseResult.COMPLETE || errorCode === ParseResult.INCOMPLETE ) {
 
-      const schema = stepHeader.headers.get( 'FILE_SCHEMA' )?.toLocaleUpperCase()
+      const schema = stepHeader.headers.get( 'FILE_SCHEMA' )
 
       if ( schema !== void 0 ) {
 
-        const quotedEntries = Array.from( schema.matchAll( /'([^']+)'/g ) ).map( (match) => match[1] )
-        const schemaEntries = quotedEntries.length > 0 ? quotedEntries : [schema]
+        const schemaEntries = extractFileSchemaEntries( schema )
 
         for ( const rawEntry of schemaEntries ) {
           const entryNoSpaces = rawEntry.replaceAll( ' ', '' )
