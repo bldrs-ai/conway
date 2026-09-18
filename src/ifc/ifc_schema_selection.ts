@@ -143,3 +143,43 @@ export function selectIfcSchemaKindForHeader( stepHeader: StepHeader ): IfcSchem
 
   return sawIfc4x3 ? 'ifc4x3' : 'ifc4'
 }
+
+/**
+ * Gate a native (non-web-ifc-compat) entry point against an IFC4X3 file.
+ *
+ * Same reasoning as `IfcApiProxyIfc.assertSchemaSupported` (4X3 reorders
+ * the entity-type ordinal space, so IFC4-typed extraction against a 4X3
+ * file would silently misidentify entities; codex review of
+ * bldrs-ai/conway#713, P1), but native callers get a plain throw rather
+ * than the compat surface's statistics bookkeeping and `-1`-return
+ * convention. `selectIfcSchemaKindForHeader` itself throws
+ * {@link UnrecognizedIfc4x3SchemaError} for an unrecognised 4X3-family
+ * spelling; that propagates through this function unchanged.
+ *
+ * Lives here rather than in `ifc_stream_open.ts` (its original home) or
+ * `ifc_step_parser.ts` (a caller as of #713 P1 round 5) so both can import
+ * it without a cycle: `ifc_stream_open.ts` imports `IfcStepParser` from
+ * `ifc_step_parser.ts`, so the reverse import would close a loop. This
+ * module imports neither, so it is the shared home.
+ *
+ * Passed directly as `onHeaderParsed` to `buildIndexStreaming`/
+ * `buildColumnarIndexStreaming` (and their async twins) by every native
+ * streamed-open entry point that has a data parse to attach the seam to.
+ * The builder only ever invokes its hook after a header parses
+ * `ParseResult.COMPLETE`, so this function does not need to check that
+ * itself (codex review of #713, P1 round 4 — see
+ * streaming_index_builder.ts's doc-comment on the seam).
+ *
+ * @param header The parsed STEP header.
+ * @throws {Error} If the header names the (recognised) IFC4X3 schema.
+ */
+export function assertNativeSchemaSupported( header: StepHeader ): void {
+
+  if ( selectIfcSchemaKindForHeader( header ) === 'ifc4x3' ) {
+
+    throw new Error(
+        'IFC4X3 schema detected: geometry extraction is not yet ' +
+        'implemented for this schema on the native streamed-open API — ' +
+        'see bldrs-ai/conway#280 phase 2b.' )
+  }
+}

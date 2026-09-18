@@ -18,6 +18,8 @@ import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import { IfcBooleanResult } from './ifc4_gen'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { wasmHeapByteLength } from '../core/wasm_heap'
+import { extractModelInfo } from '../loaders/loading_utilities'
+import { selectIfcSchemaKindForHeader } from './ifc_schema_selection'
 import {
   RetainedMemoryMb,
   retainedMemoryMb,
@@ -474,7 +476,7 @@ function doWork() {
 
           const parseStartMs = Date.now()
 
-          const result0 = parser.parseHeader(bufferInput)[ 1 ]
+          const [stepHeader, result0] = parser.parseHeader(bufferInput)
 
           switch (result0) {
             case ParseResult.COMPLETE:
@@ -502,6 +504,23 @@ function doWork() {
               break
 
             default:
+          }
+
+          // IFC4X3 reorders the entity-type ordinal space, so the
+          // IFC4-typed extraction below would silently misidentify entities
+          // against a 4X3 file — same reasoning as
+          // `assertNativeSchemaSupported`. This regression executable
+          // parses directly via `IfcStepParser` rather than through the
+          // gated streaming-open surface, so it needs its own check (codex
+          // review of bldrs-ai/conway#713, P1, round 5 asked this direct
+          // parser path be audited; it had no gate at all).
+          if (selectIfcSchemaKindForHeader(stepHeader) === 'ifc4x3') {
+            Logger.error(
+                `IFC4X3 schema detected (${extractModelInfo(stepHeader,
+                    indexIfcBuffer.length).schema}): geometry extraction is not yet ` +
+                'implemented for this schema — see bldrs-ai/conway#280 phase 2b.')
+            displayErrors(ifcFile)
+            exit()
           }
 
           const [result1, model] = parser.parseDataToModel( bufferInput)

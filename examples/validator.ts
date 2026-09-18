@@ -9,6 +9,7 @@ import ParsingBuffer from '../src/parsing/parsing_buffer'
 import { ParseResult } from '../src/step/parsing/step_parser'
 import StepEntityBase from '../src/step/step_entity_base'
 import Environment from '../src/utilities/environment'
+import { selectIfcSchemaKindForHeader } from '../src/ifc/ifc_schema_selection'
 
 
 /**
@@ -48,6 +49,20 @@ const bufferInput = new ParsingBuffer(ifcBuffer)
 
 // eslint-disable-next-line no-unused-vars
 const [stepHeader, resultHeader] = parser.parseHeader(bufferInput)
+
+// IFC4X3 reorders the entity-type ordinal space, so the IFC4-typed model
+// below would silently misidentify entities against a 4X3 file — same
+// reasoning as `assertNativeSchemaSupported`. This shipped `validator` bin
+// parses directly via `IfcStepParser`, bypassing the gated streaming-open
+// surface, so it needs its own check (codex review of bldrs-ai/conway#713,
+// P1, round 5 audit of the package's public surface).
+if (selectIfcSchemaKindForHeader(stepHeader) === 'ifc4x3') {
+  Logger.error(
+      'IFC4X3 schema detected: this validator is not yet implemented for ' +
+      'this schema — see bldrs-ai/conway#280 phase 2b.')
+  exit(1)
+}
+
 const [parseResult, model] = parser.parseDataToModel(bufferInput)
 
 switch (parseResult) {

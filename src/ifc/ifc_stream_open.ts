@@ -23,7 +23,7 @@ import { PrefixTypeIndex } from '../step/parsing/prefix_type_index'
 import { StepTypeIndexer } from '../step/indexing/step_type_indexer'
 import IfcStepModel from './ifc_step_model'
 import IfcStepParser from './ifc_step_parser'
-import { selectIfcSchemaKindForHeader } from './ifc_schema_selection'
+import { assertNativeSchemaSupported } from './ifc_schema_selection'
 
 
 /**
@@ -164,42 +164,6 @@ export async function parseIfcHeaderFromStore( store: StepExternalByteStore ):
   }
 
   return { header, result: headerResult, prefixLength }
-}
-
-
-/**
- * Gate a native streamed-open entry point against an IFC4X3 file.
- *
- * This is the native (non-web-ifc-compat) twin of
- * `IfcApiProxyIfc.assertSchemaSupported` — same reasoning (4X3 reorders the
- * entity-type ordinal space, so IFC4-typed extraction against a 4X3 file
- * would silently misidentify entities; codex review of bldrs-ai/conway#713,
- * P1), but native callers get a plain throw rather than the compat surface's
- * statistics bookkeeping and `-1`-return convention. `selectIfcSchemaKindForHeader`
- * itself throws {@link UnrecognizedIfc4x3SchemaError} for an unrecognised
- * 4X3-family spelling; that propagates through this function unchanged.
- *
- * Passed directly as `onHeaderParsed` to `buildIndexStreaming`/
- * `buildColumnarIndexStreaming` (and their async twins) by every native
- * streamed-open below except {@link openIfcModelFromIndex}, which has no
- * data parse to attach the seam to and calls this explicitly instead. The
- * builder only ever invokes its hook after a header parses
- * `ParseResult.COMPLETE`, so this function does not need to check that
- * itself (codex review of #713, P1 round 4 — see
- * streaming_index_builder.ts's doc-comment on the seam).
- *
- * @param header The parsed STEP header.
- * @throws {Error} If the header names the (recognised) IFC4X3 schema.
- */
-function assertNativeSchemaSupported( header: StepHeader ): void {
-
-  if ( selectIfcSchemaKindForHeader( header ) === 'ifc4x3' ) {
-
-    throw new Error(
-        'IFC4X3 schema detected: geometry extraction is not yet ' +
-        'implemented for this schema on the native streamed-open API — ' +
-        'see bldrs-ai/conway#280 phase 2b.' )
-  }
 }
 
 

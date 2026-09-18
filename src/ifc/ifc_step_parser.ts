@@ -12,6 +12,7 @@ import {
   StepExternalByteStore,
   WindowedStepBufferProvider,
 } from '../step/step_buffer_provider'
+import { assertNativeSchemaSupported } from './ifc_schema_selection'
 
 
 /** Default moving-window size for the streaming index build (1 MiB). */
@@ -90,12 +91,22 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
    * `ensureResident` first (demand-driven geometry is M3). Property / index
    * access works directly via the async surfaces.
    *
+   * Gated unconditionally against IFC4X3: this wrapper's whole job is
+   * "hand me an `IfcStepModel`", and there is no legitimate 4X3 use of that
+   * until phase 2b's genericized extraction exists (bldrs-ai/conway#280).
+   * Passed as `buildColumnarIndexStreaming`'s `onHeaderParsed` hook, the
+   * same seam `openStreamedIfcModel` gates through — see that function's
+   * doc-comment and `assertNativeSchemaSupported`'s (codex review of #713,
+   * P1, round 5: this wrapper and its async twin were the two paths that
+   * bypassed the seam by not passing the hook at all).
+   *
    * @param source Synchronous byte source feeding the streaming parse.
    * @param store Async external store backing the windowed model.
    * @param opts Optional window sizing: `pool` (parse window),
    * `chunkBytes` / `maxResidentChunks` (model window).
    * @return {[ParseResult, IfcStepModel | undefined]} The parse result and
    * the windowed model.
+   * @throws {Error} If the header names the (recognised) IFC4X3 schema.
    */
   public parseStreamToModel(
       source: ByteSource,
@@ -112,7 +123,9 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
     // Columnar build (M7): the index goes straight into SoA columns — the
     // per-record object phase never exists, so peak heap is window + columns.
     const { columns, result } =
-      buildColumnarIndexStreaming( source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES )
+      buildColumnarIndexStreaming(
+          source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES,
+          void 0, void 0, assertNativeSchemaSupported )
 
     const provider =
       new WindowedStepBufferProvider( store, opts?.chunkBytes, opts?.maxResidentChunks )
@@ -127,11 +140,15 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
    * model is still windowed — geometry extract must
    * `ensureResident` first.
    *
+   * Gated unconditionally against IFC4X3 — see {@link parseStreamToModel}'s
+   * doc-comment for the reasoning.
+   *
    * @param source Sync or async byte source feeding the parse.
    * @param store Async external store backing the windowed model.
    * @param opts Optional window sizing plus parse progress.
    * @return {Promise<[ParseResult, IfcStepModel | undefined]>} The
    * parse result and the windowed model.
+   * @throws {Error} If the header names the (recognised) IFC4X3 schema.
    */
   public async parseStreamToModelAsync(
       source: ReadableByteSource,
@@ -153,7 +170,7 @@ export default class IfcStepParser extends StepParser< EntityTypesIfc > {
     const { columns, result } =
       await buildColumnarIndexStreamingAsync(
           source, this, opts?.pool ?? DEFAULT_STREAM_POOL_BYTES,
-          void 0, opts?.onProgress )
+          void 0, opts?.onProgress, void 0, void 0, assertNativeSchemaSupported )
 
     const provider =
       new WindowedStepBufferProvider( store, opts?.chunkBytes, opts?.maxResidentChunks )
