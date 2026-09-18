@@ -70,6 +70,24 @@ export interface StreamingIndexResult<TypeIDType> {
  * production path will instead grow in place / restart from the last
  * boundary; from-scratch keeps the spike simple.)
  *
+ * `onHeaderParsed` is the schema-gate seam. A caller that must refuse to
+ * extract typed records against a header it does not support (e.g. Share's
+ * IFC4X3-vs-IFC4 ordinal mismatch, bldrs-ai/conway#713) passes a hook that
+ * throws on a disqualifying header; this builder invokes it immediately
+ * after the header parses COMPLETE and unconditionally before
+ * `parseDataBlockStreamed` runs, so a throw here guarantees zero typed
+ * records — `onRecordIndexed` firings, sink writes, everything —
+ * ever reach the caller. That guarantee is the whole reason the hook lives
+ * inside the builder rather than in each entry point that calls it: an
+ * entry-point-side gate has to sniff the header itself before parsing, and
+ * every such sniff is bounded (cheap relative to the full parse) while the
+ * real parse's window is not, so a header that completes in the real
+ * parse's window but not in the sniff's smaller one slips the gate
+ * entirely (conway#713 review round 4). The hook instead sees the exact
+ * header the real parse produced, in the real parse's own window — there is
+ * no second, disagreeing read to exploit. This module stays schema-agnostic
+ * on purpose (`TypeIDType` only): it provides the seam, never the policy.
+ *
  * @param source The byte source.
  * @param parser The STEP parser (typed to the schema).
  * @param pool Target window size in bytes.
@@ -83,6 +101,11 @@ export interface StreamingIndexResult<TypeIDType> {
  * expressID (the standard consumers — type index keyed by localID, roots
  * registry keyed by expressID — are). Must be synchronous and cheap;
  * expensive work belongs on a demand queue, not the parse path.
+ * @param sink Optional index sink (columnar builds route their sink
+ * through here).
+ * @param onHeaderParsed Optional header-inspection hook — see the
+ * "schema-gate seam" paragraph above for the invariant it exists to
+ * enforce.
  * @return {StreamingIndexResult} The index, header, result and diagnostics.
  */
 export function buildIndexStreaming<TypeIDType>(
@@ -90,7 +113,8 @@ export function buildIndexStreaming<TypeIDType>(
     parser: StepParser<TypeIDType>,
     pool: number,
     onRecordIndexed?: RecordEventHandler<TypeIDType>,
-    sink?: StepIndexSink<TypeIDType> ):
+    sink?: StepIndexSink<TypeIDType>,
+    onHeaderParsed?: ( header: StepHeader ) => void ):
     StreamingIndexResult<TypeIDType> {
 
   const fileSize = source.byteLength
@@ -99,6 +123,16 @@ export function buildIndexStreaming<TypeIDType>(
   // window size. It only re-runs if a single record couldn't fit the window
   // (false end-of-file before true EOF), doubling the window each time.
   let windowBytes = Math.max( pool, MIN_WINDOW )
+
+  // `onHeaderParsed` fires at most once, on the first header this builder
+  // parses COMPLETE — not once per grow-and-restart attempt. The header is
+  // read from byte 0 on every attempt and growth only widens the window
+  // *after* it, so every attempt reparses byte-identical header content;
+  // firing again on each retry would just repeat the same call, and a
+  // caller that reacted to it (a schema gate throwing) would rather see a
+  // single, first-attempt decision than a second one that fires only when
+  // the file happened to need a regrow.
+  let headerHookFired = false
 
   for ( ; ; ) {
 
@@ -122,6 +156,14 @@ export function buildIndexStreaming<TypeIDType>(
         result: headerResult,
         stats: { pool, windowBytes, slides: 0, maxRecordLen: 0, bytesRead },
       }
+    }
+
+    if ( onHeaderParsed !== void 0 && !headerHookFired ) {
+      headerHookFired = true
+      // Before parseDataBlockStreamed, unconditionally: a throw here
+      // reaches the caller with no record emitted (see the function
+      // doc-comment's "schema-gate seam" paragraph).
+      onHeaderParsed( header )
     }
 
     // Slide once the cursor is past half the window; a record up to this much
@@ -249,6 +291,10 @@ async function readSource(
  * cursor (unlike the parser's window-relative cursor), so callers can report
  * `cursor / source.byteLength` directly.
  * @param yieldIntervalMs Minimum ms between event-loop yields.
+ * @param onHeaderParsed Optional header-inspection hook — see
+ * {@link buildIndexStreaming}'s doc-comment for the invariant it exists to
+ * enforce and the "fires at most once" retry-loop policy, which this async
+ * twin shares (same grow-and-restart shape, same byte-identical reparse).
  * @return {Promise<StreamingIndexResult>} The index, header, result and
  * diagnostics.
  */
@@ -259,12 +305,17 @@ export async function buildIndexStreamingAsync<TypeIDType>(
     onRecordIndexed?: RecordEventHandler<TypeIDType>,
     sink?: StepIndexSink<TypeIDType>,
     onProgress?: ( absoluteByteCursor: number ) => unknown,
-    yieldIntervalMs?: number ):
+    yieldIntervalMs?: number,
+    onHeaderParsed?: ( header: StepHeader ) => void ):
     Promise<StreamingIndexResult<TypeIDType>> {
 
   const fileSize = source.byteLength
 
   let windowBytes = Math.max( pool, MIN_WINDOW )
+
+  // See buildIndexStreaming's identical flag: fires at most once, on the
+  // first COMPLETE header, not once per grow-and-restart attempt.
+  let headerHookFired = false
 
   for ( ; ; ) {
 
@@ -285,6 +336,13 @@ export async function buildIndexStreamingAsync<TypeIDType>(
         result: headerResult,
         stats: { pool, windowBytes, slides: 0, maxRecordLen: 0, bytesRead },
       }
+    }
+
+    if ( onHeaderParsed !== void 0 && !headerHookFired ) {
+      headerHookFired = true
+      // Before parseDataBlockStreamedAsync, unconditionally — see the sync
+      // builder's identical call for the invariant this enforces.
+      onHeaderParsed( header )
     }
 
     const slideThreshold = windowBytes >> 1
@@ -398,6 +456,8 @@ export interface StreamingColumnarIndexResult<TypeIDType> {
  * while the parse runs — that is what a prefix-derived consumer
  * ({@link import('./prefix_type_index').PrefixTypeIndex}) reads. Omit it and
  * the columns only exist once this returns.
+ * @param onHeaderParsed Optional header-inspection hook, passed straight
+ * through to {@link buildIndexStreaming} — see its doc-comment.
  * @return {StreamingColumnarIndexResult} Columns, header, result, stats.
  */
 export function buildColumnarIndexStreaming<TypeIDType extends number>(
@@ -405,11 +465,12 @@ export function buildColumnarIndexStreaming<TypeIDType extends number>(
     parser: StepParser<TypeIDType>,
     pool: number,
     onRecordIndexed?: RecordEventHandler<TypeIDType>,
-    sink: ColumnarIndexSink<TypeIDType> = new ColumnarIndexSink<TypeIDType>() ):
+    sink: ColumnarIndexSink<TypeIDType> = new ColumnarIndexSink<TypeIDType>(),
+    onHeaderParsed?: ( header: StepHeader ) => void ):
     StreamingColumnarIndexResult<TypeIDType> {
 
   const { header, result, stats } =
-    buildIndexStreaming( source, parser, pool, onRecordIndexed, sink )
+    buildIndexStreaming( source, parser, pool, onRecordIndexed, sink, onHeaderParsed )
 
   return { header, columns: sink.finalize(), result, stats }
 }
@@ -430,6 +491,8 @@ export function buildColumnarIndexStreaming<TypeIDType extends number>(
  * @param sink Optional caller-owned sink (see
  * {@link buildColumnarIndexStreaming}) — the seam for reading the columns
  * while the parse is still running.
+ * @param onHeaderParsed Optional header-inspection hook, passed straight
+ * through to {@link buildIndexStreamingAsync} — see its doc-comment.
  * @return {Promise<StreamingColumnarIndexResult>} Columns, header, result,
  * stats.
  */
@@ -440,11 +503,13 @@ export async function buildColumnarIndexStreamingAsync<TypeIDType extends number
     onRecordIndexed?: RecordEventHandler<TypeIDType>,
     onProgress?: ( absoluteByteCursor: number ) => unknown,
     yieldIntervalMs?: number,
-    sink: ColumnarIndexSink<TypeIDType> = new ColumnarIndexSink<TypeIDType>() ):
+    sink: ColumnarIndexSink<TypeIDType> = new ColumnarIndexSink<TypeIDType>(),
+    onHeaderParsed?: ( header: StepHeader ) => void ):
     Promise<StreamingColumnarIndexResult<TypeIDType>> {
 
   const { header, result, stats } = await buildIndexStreamingAsync(
-      source, parser, pool, onRecordIndexed, sink, onProgress, yieldIntervalMs )
+      source, parser, pool, onRecordIndexed, sink, onProgress, yieldIntervalMs,
+      onHeaderParsed )
 
   return { header, columns: sink.finalize(), result, stats }
 }

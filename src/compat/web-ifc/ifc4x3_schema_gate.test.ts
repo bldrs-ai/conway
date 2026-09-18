@@ -87,6 +87,61 @@ function bigSyntheticIfc4x3(): Uint8Array {
   return new TextEncoder().encode( text )
 }
 
+// codex review of bldrs-ai/conway#713, P1 round 4 (#discussion_r4050179873):
+// the old bounded pre-parse sniff (HEADER_PREFIX_BYTES, retried once to
+// HEADER_PREFIX_RETRY_BYTES = 4 MiB) ran independently of the real,
+// larger-window parse below it. A header exceeding that retry cap but
+// still fitting inside the real parse's pool (STORE_PARSE_POOL_BYTES,
+// 16 MiB) made the sniff report non-COMPLETE — treated as "leave it for
+// the real parse to report", i.e. skip the gate.
+const OLD_SNIFF_CAP_BYTES = 4 * 1024 * 1024
+
+/**
+ * A synthetic IFC4X3_RC2 file combining {@link bigSyntheticIfc4x3}'s
+ * FILLER_RECORDS (clearing StorePreviewChannel's 1024-record floor, so a
+ * preview leak has something to leak) with a HEADER section exceeding
+ * `OLD_SNIFF_CAP_BYTES` (so the old bounded sniff could not complete it,
+ * while the real 16 MiB parse pool still does) — a legal STEP file (a
+ * large `FILE_DESCRIPTION`), not a malformed edge case.
+ *
+ * @return {Uint8Array} The synthetic file's bytes.
+ */
+function bigHeaderIfc4x3(): Uint8Array {
+
+  let filler = ''
+
+  for ( let i = 0; i < FILLER_RECORDS; ++i ) {
+    filler += `#${i + 1000}=IFCCARTESIANPOINT((${i}.,0.,0.));\n`
+  }
+
+  const description = 'A'.repeat( OLD_SNIFF_CAP_BYTES + 1024 * 1024 )
+
+  const text =
+    'ISO-10303-21;\nHEADER;\n' +
+    `FILE_DESCRIPTION(('${description}'),'2;1');\n` +
+    "FILE_NAME('big_header.ifc','2026-01-01T00:00:00',(''),(''),'','','');\n" +
+    "FILE_SCHEMA(('IFC4X3_RC2'));\nENDSEC;\nDATA;\n" +
+    filler +
+    '#1=IFCCARTESIANPOINT((0.,0.,0.));\n' +
+    '#2=IFCAXIS2PLACEMENT3D(#1,$,$);\n' +
+    '#3=IFCLOCALPLACEMENT($,#2);\n' +
+    "#90=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n" +
+    '#91=IFCUNITASSIGNMENT((#90));\n' +
+    "#10=IFCPROJECT('3vP000000000000000001',$,'P',$,$,$,$,$,#91);\n" +
+    "#11=IFCSITE('3vP000000000000000002',$,'S',$,$,#3,$,$,.ELEMENT.,$,$,$,$,$);\n" +
+    "#12=IFCBUILDING('3vP000000000000000003',$,'B',$,$,#3,$,$,.ELEMENT.,$,$,$);\n" +
+    "#13=IFCBUILDINGSTOREY('3vP000000000000000004',$,'L0',$,$,#3,$,$,.ELEMENT.,0.);\n" +
+    "#20=IFCRELAGGREGATES('3vP000000000000000005',$,$,$,#10,(#11));\n" +
+    "#21=IFCRELAGGREGATES('3vP000000000000000006',$,$,$,#11,(#12));\n" +
+    "#22=IFCRELAGGREGATES('3vP000000000000000007',$,$,$,#12,(#13));\n" +
+    "#30=IFCWALL('3vP000000000000000008',$,$,$,$,#3,$,$,$);\n" +
+    "#31=IFCRELCONTAINEDINSPATIALSTRUCTURE" +
+    "('3vP000000000000000009',$,$,$,(#30),#13);\n" +
+    'ENDSEC;\nEND-ISO-10303-21;\n'
+
+  return new TextEncoder().encode( text )
+}
+
 let api: IfcAPI
 
 beforeAll(async () => {
@@ -205,6 +260,49 @@ describe('IfcAPI: IFC4X3 schema gate on the web-ifc compat surface (#713 P1)', (
       'a 4X3 model (fail-closed ordering, #713 P2)', async () => {
 
         const bytes = bigSyntheticIfc4x3()
+        const store = new InMemoryStepByteStore(bytes)
+
+        const payloads: PreviewMeshPayload[] = []
+
+        const warningSpy = jest.spyOn(Logger, 'warning').mockImplementation(() => {})
+
+        try {
+          const modelID = await api.OpenModelStream(store, {
+            ...SETTINGS,
+            DEFER_GEOMETRY: true,
+            ON_PREVIEW_MESH: (mesh) => {
+              payloads.push(mesh)
+            },
+          })
+
+          expect(modelID).toBe(-1)
+          expect(payloads).toHaveLength(0)
+        } finally {
+          warningSpy.mockRestore()
+        }
+      })
+
+  // Supplementary coverage for the seam at the proxy level, same shape as
+  // conway#713's P1 round 4 finding (#discussion_r4050179873: a header
+  // exceeding the old bounded sniff's retry cap but fitting the real
+  // parse's pool). NOTE this does not discriminate old vs. new code on
+  // THIS path the way the equivalent tests in
+  // ifc4x3_schema_gate_stream_open.test.ts do: verified by hand against
+  // the pre-seam code (f089f917), this test already passed there too --
+  // `parseColumnarFromStore` carried a second, fallback
+  // `assertSchemaSupported` call after the parse (see that function's
+  // pre-seam history) specifically to catch the case its own up-front
+  // sniff could miss, so old code already rejected this shape by the time
+  // OpenModelStream returned. Kept anyway as regression coverage that the
+  // single-gate seam (`onHeaderParsed`, replacing that two-gate
+  // arrangement) still catches it. The round 4 finding itself was on the
+  // NATIVE opens in ifc_stream_open.ts, which had no such fallback --
+  // those tests are the ones proven to fail against f089f917.
+  test('OpenModelStream rejects a 4X3 file whose header exceeds the old ' +
+      'bounded-sniff cap but fits the real parse pool, with zero preview ' +
+      'callbacks', async () => {
+
+        const bytes = bigHeaderIfc4x3()
         const store = new InMemoryStepByteStore(bytes)
 
         const payloads: PreviewMeshPayload[] = []

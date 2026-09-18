@@ -116,41 +116,21 @@ export const HEADER_PREFIX_RETRY_BYTES = 4 * 1024 * 1024
 
 
 /**
- * The bounded-prefix retry policy shared by every header sniff in this
- * file (store-backed and, as of the up-front native gate below,
- * source-backed): read {@link HEADER_PREFIX_BYTES}, and only on a
- * non-`COMPLETE` result — grown once to {@link HEADER_PREFIX_RETRY_BYTES}
- * before giving up. Factored out so the sync and async sniffs share one
- * length policy rather than drifting apart; each caller still owns its own
- * read-and-parse loop because one reads synchronously off a `ByteSource`
- * and the other awaits a `StepExternalByteStore`, and there is no shared
- * shape for "maybe a promise" that would not cost the sync path its
- * synchronicity.
- *
- * @param byteLength The source's total length.
- * @param priorLength The prefix length already tried.
- * @return {number | undefined} The next (larger) prefix length to try, or
- * `undefined` if `priorLength` already covers the whole source and no
- * retry is possible.
- */
-function nextHeaderPrefixLength( byteLength: number, priorLength: number ): number | undefined {
-
-  return priorLength < byteLength ?
-    Math.min( byteLength, HEADER_PREFIX_RETRY_BYTES ) : void 0
-}
-
-
-/**
  * Read and parse a STEP header from a bounded prefix of a random-access
- * store, growing the prefix once on failure before giving up (see
- * {@link nextHeaderPrefixLength}).
+ * store, growing the prefix once (to {@link HEADER_PREFIX_RETRY_BYTES}) on
+ * failure before giving up.
  *
- * Factored out of {@link openIfcModelFromIndex} (its original, and still
- * only, caller) so every store-backed open — the index-first path and the
- * async streamed-from-store paths' up-front schema gate — reads exactly
- * one implementation rather than one that has silently drifted from a
- * copy. {@link parseIfcHeaderFromSource} is this function's synchronous,
- * `ByteSource`-backed twin for `openStreamedIfcModel`.
+ * Factored out of {@link openIfcModelFromIndex}, this function's only
+ * remaining caller — the sidecar path has no data parse at all (the index
+ * comes from the sidecar), so a bounded prefix sniff is the only place its
+ * schema is ever visible; every other native open gates from the real
+ * parse's own header via `buildIndexStreaming`'s `onHeaderParsed` seam
+ * instead (streaming_index_builder.ts), which is what closed the gap this
+ * function's sibling sniff used to leave (a header completing in the real
+ * parse's window but not in a smaller bounded one — codex review of
+ * bldrs-ai/conway#713, P1 round 4). Do not resurrect a second bounded sniff
+ * as a substitute for the seam; this one stays only because
+ * `openIfcModelFromIndex` has no parse for the seam to attach to.
  *
  * @param store The random-access store to read the header prefix from.
  * @return {Promise<{header: StepHeader, result: ParseResult, prefixLength: number}>}
@@ -174,11 +154,9 @@ export async function parseIfcHeaderFromStore( store: StepExternalByteStore ):
   // malformed one at this point. The retry is bounded and only happens on
   // the path that was about to throw, so the cost of being unable to tell
   // them apart is one read of at most 4 MiB on a failing open.
-  const retryLength = nextHeaderPrefixLength( store.byteLength, prefixLength )
+  if ( headerResult !== ParseResult.COMPLETE && prefixLength < store.byteLength ) {
 
-  if ( headerResult !== ParseResult.COMPLETE && retryLength !== void 0 ) {
-
-    prefixLength = retryLength
+    prefixLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
 
     ;( [ header, headerResult ] =
       IfcStepParser.Instance.parseHeader(
@@ -190,53 +168,7 @@ export async function parseIfcHeaderFromStore( store: StepExternalByteStore ):
 
 
 /**
- * Synchronous twin of {@link parseIfcHeaderFromStore}, reading the bounded
- * header prefix off a `ByteSource` rather than a `StepExternalByteStore`.
- * `ByteSource.read` is positioned and synchronous (see byte_source.ts), so
- * this needs no `Promise` — which is what lets
- * {@link openStreamedIfcModel} sniff the schema and gate BEFORE calling
- * `buildColumnarIndexStreaming`, instead of gating after the index build
- * has already run typed callbacks with the wrong (IFC4) ordinals (codex
- * review of bldrs-ai/conway#713, P1 round 3).
- *
- * @param source The sequential/random-access source to read the header
- * prefix from.
- * @return {{header: StepHeader, result: ParseResult, prefixLength: number}}
- * Same contract as {@link parseIfcHeaderFromStore}.
- */
-function parseIfcHeaderFromSource( source: ByteSource ):
-    { header: StepHeader, result: ParseResult, prefixLength: number } {
-
-  const readPrefix = ( length: number ): Uint8Array => {
-
-    const buffer = new Uint8Array( length )
-    const bytesRead = source.read( 0, length, buffer, 0 )
-
-    return bytesRead === length ? buffer : buffer.subarray( 0, bytesRead )
-  }
-
-  let prefixLength = Math.min( source.byteLength, HEADER_PREFIX_BYTES )
-
-  let [ header, headerResult ] =
-    IfcStepParser.Instance.parseHeader( new ParsingBuffer( readPrefix( prefixLength ) ) )
-
-  const retryLength = nextHeaderPrefixLength( source.byteLength, prefixLength )
-
-  if ( headerResult !== ParseResult.COMPLETE && retryLength !== void 0 ) {
-
-    prefixLength = retryLength
-
-    ;( [ header, headerResult ] =
-      IfcStepParser.Instance.parseHeader( new ParsingBuffer( readPrefix( prefixLength ) ) ) )
-  }
-
-  return { header, result: headerResult, prefixLength }
-}
-
-
-/**
- * Gate a native streamed-open entry point against an IFC4X3 file, from a
- * header already known to have parsed completely.
+ * Gate a native streamed-open entry point against an IFC4X3 file.
  *
  * This is the native (non-web-ifc-compat) twin of
  * `IfcApiProxyIfc.assertSchemaSupported` — same reasoning (4X3 reorders the
@@ -247,9 +179,16 @@ function parseIfcHeaderFromSource( source: ByteSource ):
  * itself throws {@link UnrecognizedIfc4x3SchemaError} for an unrecognised
  * 4X3-family spelling; that propagates through this function unchanged.
  *
- * @param header The parsed STEP header (only call this once parsing it
- * reported `ParseResult.COMPLETE` — a header that did not fully parse
- * carries no trustworthy FILE_SCHEMA to gate on).
+ * Passed directly as `onHeaderParsed` to `buildIndexStreaming`/
+ * `buildColumnarIndexStreaming` (and their async twins) by every native
+ * streamed-open below except {@link openIfcModelFromIndex}, which has no
+ * data parse to attach the seam to and calls this explicitly instead. The
+ * builder only ever invokes its hook after a header parses
+ * `ParseResult.COMPLETE`, so this function does not need to check that
+ * itself (codex review of #713, P1 round 4 — see
+ * streaming_index_builder.ts's doc-comment on the seam).
+ *
+ * @param header The parsed STEP header.
  * @throws {Error} If the header names the (recognised) IFC4X3 schema.
  */
 function assertNativeSchemaSupported( header: StepHeader ): void {
@@ -296,30 +235,24 @@ export function openStreamedIfcModel(
         `source byteLength ${source.byteLength}` )
   }
 
-  // Gate BEFORE the index build, not after (codex review of #713, P1,
-  // round 3): `buildColumnarIndexStreaming` below fires `onRecordIndexed`
-  // and populates a caller-owned `indexSink` DURING the parse, with
-  // IFC4 ordinals. A post-parse gate lets those typed side effects reach
-  // the caller before the throw unwinds them — measured at 15 callback
-  // firings (five `IFCFACETEDBREP` records reported at IFC4's ordinal
-  // 422 instead of IFC4X3's 488) against the 4X3 fixture. `ByteSource.read`
-  // is positioned and synchronous, so this sniff (unlike a store-based one)
-  // costs no `Promise` — see {@link parseIfcHeaderFromSource}. Only a
-  // sniff that reaches `ParseResult.COMPLETE` is gated on; a header that
-  // did not fit or is malformed is left for the real parse below to
-  // report, per the same policy `parseIfcHeaderFromStore` uses.
-  const sniffed = parseIfcHeaderFromSource( source )
-
-  if ( sniffed.result === ParseResult.COMPLETE ) {
-    assertNativeSchemaSupported( sniffed.header )
-  }
-
+  // Gate through the builder's `onHeaderParsed` seam rather than a sniff of
+  // our own (codex review of #713, P1 round 3 fixed a post-parse gate here;
+  // round 4 then found that ANY bounded pre-parse sniff can disagree with
+  // the real parse's own window and let a header slip through ungated —
+  // see streaming_index_builder.ts's doc-comment on the seam). The hook
+  // fires after `buildColumnarIndexStreaming` parses the header COMPLETE
+  // and strictly before it fires `onRecordIndexed` or writes to
+  // `options?.indexSink`, so a throw here still reaches the caller with
+  // zero typed side effects — the same guarantee the old sniff-based gate
+  // measured at 15 callback firings (five `IFCFACETEDBREP` records reported
+  // at IFC4's ordinal 422 instead of IFC4X3's 488) when it ran too late.
   const { header, columns, result, stats } = buildColumnarIndexStreaming(
       source,
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
       options?.onRecordIndexed,
-      options?.indexSink )
+      options?.indexSink,
+      assertNativeSchemaSupported )
 
   if ( result !== ParseResult.COMPLETE ) {
     return { model: void 0, result, header, columns, stats }
@@ -394,20 +327,13 @@ export async function openStreamedIfcModelAsync(
         `source byteLength ${source.byteLength}` )
   }
 
-  // Gate up front, from the store, before the (potentially long-running,
-  // cooperative) index build below starts — codex review of #713, P1 & P2.
-  // A bounded prefix read against a random-access store is negligible next
-  // to the full-file parse it precedes; only on a failing/malformed header
-  // does it grow to the 4 MiB retry (see parseIfcHeaderFromStore). Gated
-  // only when the sniff itself parsed cleanly — a header that did not fit
-  // or is malformed is left for the real parse below to report as it
-  // always has, rather than this sniff inventing a new failure mode for it.
-  const sniffed = await parseIfcHeaderFromStore( store )
-
-  if ( sniffed.result === ParseResult.COMPLETE ) {
-    assertNativeSchemaSupported( sniffed.header )
-  }
-
+  // Gate through the builder's `onHeaderParsed` seam (see
+  // {@link openStreamedIfcModel}'s identical note) rather than a bounded
+  // pre-parse sniff of the store: the hook fires from the real parse's own
+  // header, after it parses COMPLETE and strictly before any
+  // `onRecordIndexed`/`onProgress`/`indexSink` side effect of the
+  // (potentially long-running, cooperative) build below — codex review of
+  // #713, P1/P2/round 4.
   const { header, columns, result, stats } = await buildColumnarIndexStreamingAsync(
       source,
       IfcStepParser.Instance,
@@ -415,7 +341,8 @@ export async function openStreamedIfcModelAsync(
       options?.onRecordIndexed,
       options?.onProgress,
       void 0,
-      options?.indexSink )
+      options?.indexSink,
+      assertNativeSchemaSupported )
 
   if ( result !== ParseResult.COMPLETE ) {
     return { model: void 0, result, header, columns, stats }
@@ -549,10 +476,12 @@ export async function openIfcModelFromIndex(
   }
 
   // Gate before constructing/returning a model (codex review of #713, P1).
-  // There is no data parse on this path at all — the sidecar supplies the
-  // index — so this header, from the bounded prefix read above, is the
-  // only place the schema is ever visible before a caller could reach
-  // IFC4-typed extraction.
+  // Every other native open passes this function as `buildIndexStreaming`'s
+  // `onHeaderParsed` hook and never sniffs a header itself; this path
+  // CANNOT do that — there is no data parse here at all, the sidecar
+  // supplies the index — so the bounded prefix read above is the only place
+  // the schema is ever visible before a caller could reach IFC4-typed
+  // extraction, and a plain explicit call is the only option.
   assertNativeSchemaSupported( header )
 
   const provider = new WindowedStepBufferProvider(

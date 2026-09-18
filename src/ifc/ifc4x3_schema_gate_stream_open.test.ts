@@ -63,6 +63,44 @@ beforeAll( () => {
   ifc4Bytes = new Uint8Array( fs.readFileSync( IFC4_FIXTURE_PATH ) )
 } )
 
+// The old (pre-seam) HEADER_PREFIX_RETRY_BYTES sniff cap this fixture must
+// exceed to reproduce round 4 (codex review of bldrs-ai/conway#713,
+// #discussion_r4050179873): a header that completes inside a real parse's
+// window but not inside a smaller bounded sniff window used to slip the
+// gate entirely, because the sniff reported non-COMPLETE and the entry
+// point skipped the gate rather than refusing to open.
+const OLD_SNIFF_CAP_BYTES = 4 * 1024 * 1024
+
+/**
+ * A synthetic IFC4X3_RC2 file whose HEADER section alone exceeds
+ * `OLD_SNIFF_CAP_BYTES` — a large `FILE_DESCRIPTION` is legal STEP (see
+ * `HEADER_PREFIX_BYTES`'s doc-comment in ifc_stream_open.ts), so this is a
+ * valid file a real model could ship, not a malformed edge case.
+ *
+ * @return {Uint8Array} The synthetic file's bytes.
+ */
+function bigHeaderIfc4x3(): Uint8Array {
+
+  // Comfortably over the old 4 MiB sniff cap, comfortably under the pool
+  // the tests below give the real parse.
+  const description = 'A'.repeat( OLD_SNIFF_CAP_BYTES + 1024 * 1024 )
+
+  const text =
+    'ISO-10303-21;\nHEADER;\n' +
+    `FILE_DESCRIPTION(('${description}'),'2;1');\n` +
+    "FILE_NAME('big_header.ifc','2026-01-01T00:00:00',(''),(''),'','','');\n" +
+    "FILE_SCHEMA(('IFC4X3_RC2'));\nENDSEC;\nDATA;\n" +
+    "#1=IFCROAD('0fixt0000000000000001x',$,'Road0','desc',$,$,$,$,.ELEMENT.);\n" +
+    'ENDSEC;\nEND-ISO-10303-21;\n'
+
+  return new TextEncoder().encode( text )
+}
+
+// Pool comfortably bigger than the header (and the old 4 MiB sniff cap),
+// so the real parse's window completes the header where the old bounded
+// sniff could not.
+const BIG_HEADER_POOL_BYTES = 8 * 1024 * 1024
+
 describe( 'ifc_stream_open.ts: IFC4X3 schema gate on the native streamed-open API (#713 P1)', () => {
 
   test( 'openStreamedIfcModel rejects a 4X3 file rather than returning an ' +
@@ -166,4 +204,53 @@ describe( 'ifc_stream_open.ts: IFC4X3 schema gate on the native streamed-open AP
 
         expect( open.model ).toBeDefined()
       } )
+
+  // codex review of bldrs-ai/conway#713, P1 round 4
+  // (#discussion_r4050179873): every entry point above used to gate off a
+  // BOUNDED pre-parse sniff (HEADER_PREFIX_BYTES, retried once up to
+  // HEADER_PREFIX_RETRY_BYTES = 4 MiB) that read the header independently
+  // of the real parse. A header that completes inside `options.pool` but
+  // not inside that smaller sniff window made the sniff report
+  // non-COMPLETE, which every entry point treated as "leave it for the
+  // real parse to report" — i.e. skip the gate — and the real parse then
+  // parsed that same header fine in its larger window and ran the data
+  // parse ungated. `onHeaderParsed` closes this because it fires from the
+  // header the REAL parse produced, in the real parse's own window: there
+  // is no second, smaller read left to disagree with it.
+  test( 'openStreamedIfcModel rejects a 4X3 file whose header exceeds the ' +
+      'old bounded-sniff cap but fits the real parse window, with zero ' +
+      'onRecordIndexed callbacks', () => {
+
+    const bytes = bigHeaderIfc4x3()
+    let callbackCount = 0
+
+    expect( () => openStreamedIfcModel(
+        new BufferByteSource( bytes ),
+        new InMemoryStepByteStore( bytes ),
+        {
+          pool: BIG_HEADER_POOL_BYTES,
+          onRecordIndexed: () => { callbackCount++ },
+        } ) )
+        .toThrow( /IFC4X3/ )
+
+    expect( callbackCount ).toBe( 0 )
+  } )
+
+  test( 'openStreamedIfcModelAsync rejects the same oversized-header 4X3 ' +
+      'file, with zero onRecordIndexed callbacks', async () => {
+
+    const bytes = bigHeaderIfc4x3()
+    let callbackCount = 0
+
+    await expect( openStreamedIfcModelAsync(
+        new BufferByteSource( bytes ),
+        new InMemoryStepByteStore( bytes ),
+        {
+          pool: BIG_HEADER_POOL_BYTES,
+          onRecordIndexed: () => { callbackCount++ },
+        } ) )
+        .rejects.toThrow( /IFC4X3/ )
+
+    expect( callbackCount ).toBe( 0 )
+  } )
 } )

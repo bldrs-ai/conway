@@ -43,7 +43,7 @@ import {
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { selectIfcSchemaKindForHeader } from '../../ifc/ifc_schema_selection'
 import IfcStepParser from '../../ifc/ifc_step_parser'
-import { openIfcModelFromIndex, parseIfcHeaderFromStore } from '../../ifc/ifc_stream_open'
+import { openIfcModelFromIndex } from '../../ifc/ifc_stream_open'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
 import {
@@ -1092,9 +1092,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
-    // codex review of #713 (P1): gate before the data parse/geometry
-    // extraction below commit to IFC4 — see assertSchemaSupported's
-    // doc-comment.
+    // No builder here — parseDataToModel(Async) parses the whole resident
+    // `data` buffer directly, so this explicit gate (not the
+    // `onHeaderParsed` seam) is the only one this path needs; `stepHeader`
+    // above already came from parsing that same full buffer, not a bounded
+    // prefix, so there is no sniff-vs-parse-window gap to close here
+    // (codex review of #713, P1) — see assertSchemaSupported's doc-comment.
     IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     tracker?.beginPhase('dataParse', 'bytes', data.length)
@@ -1193,9 +1196,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
-    // codex review of #713 (P1): gate before the data parse/geometry
-    // extraction below commit to IFC4 — see assertSchemaSupported's
-    // doc-comment.
+    // No builder here — parseDataToModel(Async) parses the whole resident
+    // `data` buffer directly, so this explicit gate (not the
+    // `onHeaderParsed` seam) is the only one this path needs; `stepHeader`
+    // above already came from parsing that same full buffer, not a bounded
+    // prefix, so there is no sniff-vs-parse-window gap to close here
+    // (codex review of #713, P1) — see assertSchemaSupported's doc-comment.
     IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     tracker?.beginPhase('dataParse', 'bytes', data.length)
@@ -1309,11 +1315,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
-    // codex review of #713 (P1): gate before the data parse/geometry
-    // extraction below commit to IFC4 — see assertSchemaSupported's
-    // doc-comment.
-    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
-
     tracker?.beginPhase('dataParse', 'bytes', data.length)
 
     const parseTick = tracker !== void 0 ?
@@ -1337,7 +1338,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // Channel ticks ride the parse's own progress callback (see
     // maybeTickInline) — timer ticks alone starve under the parse's
-    // scheduler-priority yields in browsers.
+    // scheduler-priority yields in browsers. Progress ticks only fire from
+    // inside parseDataBlockStreamedAsync, strictly after `onHeaderParsed`
+    // below runs and would have thrown, so `previewChannel.start()` above
+    // cannot leak a tick ahead of the gate.
     const parseProgress = previewChannel !== void 0 ?
       (cursorBytes: number) => {
         parseTick?.(cursorBytes)
@@ -1349,7 +1353,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     try {
       ( { result } = await buildIndexStreamingAsync(
           new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
-          void 0, sink, parseProgress) )
+          void 0, sink, parseProgress, void 0,
+          // codex review of #713 (P1/round 4): gate through the builder's
+          // own seam — see streaming_index_builder.ts's doc-comment — rather
+          // than the standalone pre-parse check this function used to make
+          // against the same-buffer `stepHeader` above.
+          ( header ) => IfcApiProxyIfc.assertSchemaSupported( modelID, header ) ) )
     } finally {
       previewChannel?.stop()
     }
@@ -1738,9 +1747,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
-    // codex review of #713 (P1): gate before the data parse/geometry
-    // extraction below commit to IFC4 — see assertSchemaSupported's
-    // doc-comment.
+    // This path has no builder to attach `onHeaderParsed` to — the sidecar
+    // supplies the index, `openIfcModelFromIndex` runs no data parse at all
+    // — so unlike every builder-backed entry point above, it keeps its own
+    // explicit gate (codex review of #713, P1) rather than the seam. See
+    // `openIfcModelFromIndex`'s own gate comment (ifc_stream_open.ts) for
+    // why this is the one path that must.
     IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
 
     tracker?.endPhase(fileSize)
@@ -1793,24 +1805,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const statistics = Logger.getStatistics(modelID)
 
-    // codex review of bldrs-ai/conway#713 (P1 & P2): gate UP FRONT, from a
-    // bounded header sniff of `store`, before any parse or preview work
-    // begins below. This is deliberately ahead of `buildIndexStreamingAsync`
-    // and the `StorePreviewChannel` construction that follows it: with
-    // ON_PREVIEW_MESH set, that channel builds an IfcStepModel/
-    // IfcGeometryExtraction and emits preview meshes DURING the parse, so a
-    // gate placed after the parse (as this function used to have it, and as
-    // a since-corrected comment here used to claim) let a 4X3 file's
-    // wrongly IFC4-typed preview meshes reach the caller before the
-    // rejection ever fired. `parseIfcHeaderFromStore` reads only a bounded
-    // prefix (64 KiB, occasionally a 4 MiB retry), negligible next to the
-    // full-file parse it now precedes.
-    const sniffedHeader = await parseIfcHeaderFromStore( store )
-
-    if ( sniffedHeader.result === ParseResult.COMPLETE ) {
-      IfcApiProxyIfc.assertSchemaSupported( modelID, sniffedHeader.header )
-    }
-
     tracker?.beginPhase('dataParse', 'bytes', fileSize)
 
     const parseTick = tracker !== void 0 ?
@@ -1835,7 +1829,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     }
 
     // One windowed pass: header comes out of the same slide as the
-    // data block so we do not hold a second 16 MiB prefix copy.
+    // data block so we do not hold a second 16 MiB prefix copy. The schema
+    // gate rides `onHeaderParsed`, the builder's own seam (codex review of
+    // bldrs-ai/conway#713, P1/P2/round 4 — see streaming_index_builder.ts):
+    // it fires from the real parse's own header, after COMPLETE and
+    // strictly before any record reaches `sink` or the `StorePreviewChannel`
+    // below gets to tick, so a throw here still means zero IFC4-typed
+    // preview meshes or index rows ever reach the caller. This replaces the
+    // old two-gate arrangement (an up-front bounded sniff of `store`, plus a
+    // post-parse fallback for when that sniff's smaller window disagreed
+    // with the real parse's) — the seam collapses both into one gate that
+    // cannot disagree with itself.
     let result
     let stepHeader
 
@@ -1846,7 +1850,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           STORE_PARSE_POOL_BYTES,
           void 0,
           sink,
-          parseProgress ) )
+          parseProgress,
+          void 0,
+          ( header ) => IfcApiProxyIfc.assertSchemaSupported( modelID, header ) ) )
 
       if ( storePreview !== void 0 ) {
         await storePreview.flushAsync()
@@ -1869,16 +1875,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     Logger.info(formatModelLine(modelInfo))
     settings?.ON_MODEL_INFO?.(modelInfo)
 
-    // Fallback gate, not the primary one. The primary gate is the
-    // up-front header sniff above, which is what actually keeps preview
-    // meshes from ever reaching ON_PREVIEW_MESH for a 4X3 file (codex
-    // review of bldrs-ai/conway#713, P1 & P2). This second call only
-    // matters for the edge case where that sniff's header prefix (64 KiB,
-    // 4 MiB on retry) could not parse a complete header but the real
-    // parse's window — unbounded — did; it is a safety net against that
-    // gap, not a spot this schema check is meant to live.
-    IfcApiProxyIfc.assertSchemaSupported(modelID, stepHeader)
-
+    // No second gate needed here: the `onHeaderParsed` call passed into
+    // `buildIndexStreamingAsync` above already ran (and would have thrown,
+    // unwinding out of the `try` before any of this) — see that call's
+    // comment.
     const parseEndTime = Date.now()
 
     tracker?.endPhase(fileSize)
