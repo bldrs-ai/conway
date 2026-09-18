@@ -243,10 +243,35 @@ jobs:
           for f in data/*.ifc; do
             count=$((count + 1))
             m=$(basename "$f" .ifc)
+            # Fixtures whose FILE_SCHEMA is IFC4X3 are *expected* to produce no
+            # digest: conway refuses them rather than reinterpreting 4X3's
+            # reordered entity ordinals as IFC4 (bldrs-ai/conway#713). Asserting
+            # the refusal here rather than excluding them keeps this loop's
+            # "derive the list from data/*.ifc" property while giving the
+            # regression binary's schema gate its only end-to-end coverage --
+            # a silent skip would let the gate rot unnoticed.
+            # Output is captured to a file and echoed, rather than teed through
+            # process substitution: the grep below reads this log, and a tee
+            # subshell is not guaranteed to have flushed by then.
+            log="$OUT/$m.log"
             node --experimental-specifier-resolution=node \
-              ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m"
+              ./compiled/src/ifc/ifc_regression_main.js -d "$f" "$OUT/$m" \
+              > "$log" 2>&1 || true
+            cat "$log"
             cand="$OUT/$m.csv"
             golden="data/$m.csv"
+            if grep -qiE "FILE_SCHEMA[^;]*IFC4X3" "$f"; then
+              if [ -f "$cand" ]; then
+                echo "::error::$f declares an IFC4X3 schema but produced a digest -- the schema gate did not fire, so 4X3 entities were read with IFC4 ordinals."
+                status=1
+              elif grep -q "IFC4X3" "$log"; then
+                echo "$f: refused as expected (IFC4X3 schema gate fired)."
+              else
+                echo "::error::$f produced no digest, but nothing in the output names IFC4X3 -- it failed for some other reason than the schema gate."
+                status=1
+              fi
+              continue
+            fi
             if [ ! -f "$cand" ]; then
               echo "::error::No digest produced for $f -- parsing or geometry extraction likely failed for this model (see log above)."
               status=1; continue
