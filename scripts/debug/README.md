@@ -12,10 +12,19 @@ zero, twice attached to the wrong seam, and never survived the session.
 | Tool | Answers |
 |---|---|
 | [`model_report.mjs`](model_report.mjs) | Which entities produced bad geometry, and at which stage of the pipeline |
+| [`face_health.mjs`](face_health.mjs) | Which of a face's own trim-loop points reached its emitted geometry — the silently dropped ring `model_report.mjs` reads clean through |
 | [`occurrence_report.mjs`](occurrence_report.mjs) | Whether a click selects one thing — how many placements each body got, whether their occurrence paths are unique, and whether those paths are the product-structure tree's |
 | [`../render_glb.cjs`](../render_glb.cjs) | What does the output actually look like (zero-dependency software rasterizer, deterministic, pair mode for before/after) |
 | [`../visual_diff_report.cjs`](../visual_diff_report.cjs) | Which regression models changed appearance in this PR |
 | The STEP / IFC CLI mains | Query entities by express ID, and export GLB/GLTF/OBJ to feed the renderer |
+
+`model_report.mjs` first, always — but it is an *outlier* detector, so a
+face that emits the right-looking geometry from a quarter of its own
+boundary reads as clean through every one of its stages. When a solid is
+plainly wrong (open shell, negative signed volume, a hole where a surface
+should be) and the stages are quiet, reach for `face_health.mjs`: its
+`mapped=` ratio is the one signal here that names a ring the triangulator
+dropped. That gap cost bldrs-ai/test-models#65 two wrong diagnoses.
 
 
 ## Quick start
