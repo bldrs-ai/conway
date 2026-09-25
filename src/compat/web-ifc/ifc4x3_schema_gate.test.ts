@@ -18,10 +18,21 @@ import type { PreviewMeshPayload } from './streamed_preview_channel'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
-// The same small synthetic IFC4X3_RC2 fixture ifc4x3_step_model.test.ts
-// uses (see that file for why it's synthetic and where its counts come
-// from) — any FILE_SCHEMA(('IFC4X3_RC2')) file exercises this gate.
-const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities.ifc'
+// An INELIGIBLE IFC4X3_RC2 file: the #713 road fixture plus one
+// IFC4X3-only record (IFCALIGNMENT, last in the file) that neither IFC4 nor
+// the translation table can decode. Since bldrs-ai/conway#280 an eligible
+// 4X3 file loads here through the IFC4-compatible route
+// (ifc4x3_ifc4_compat.ts, covered by ifc4x3_compat_route.test.ts), so only
+// an ineligible one still exercises the refusal. Because the offending
+// record is LAST, the refusal is decided only after the whole file has been
+// indexed. That makes the zero-emission assertions below the strongest
+// version of the #713 ordering finding.
+const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities_ineligible.ifc'
+
+// Appended as the last record of each synthetic 4X3 file below: IFC4X3-only
+// and untranslated, so the file is refused (see IFC4X3_FIXTURE_PATH).
+const INELIGIBLE_TAIL =
+  "#99=IFCALIGNMENT('3vP000000000000000099',$,'A',$,$,$,$,.NOTDEFINED.);\n"
 
 // StorePreviewChannel only ever builds its first generation (and so only
 // ever calls maybeEmitEarlySpatialPlates_/extracts a product) once the live
@@ -82,6 +93,7 @@ function bigSyntheticIfc4x3(): Uint8Array {
     "#30=IFCWALL('3vP000000000000000008',$,$,$,$,#3,$,$,$);\n" +
     "#31=IFCRELCONTAINEDINSPATIALSTRUCTURE" +
     "('3vP000000000000000009',$,$,$,(#30),#13);\n" +
+    INELIGIBLE_TAIL +
     'ENDSEC;\nEND-ISO-10303-21;\n'
 
   return new TextEncoder().encode( text )
@@ -137,6 +149,7 @@ function bigHeaderIfc4x3(): Uint8Array {
     "#30=IFCWALL('3vP000000000000000008',$,$,$,$,#3,$,$,$);\n" +
     "#31=IFCRELCONTAINEDINSPATIALSTRUCTURE" +
     "('3vP000000000000000009',$,$,$,(#30),#13);\n" +
+    INELIGIBLE_TAIL +
     'ENDSEC;\nEND-ISO-10303-21;\n'
 
   return new TextEncoder().encode( text )

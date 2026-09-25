@@ -66,6 +66,14 @@ function extractInlineElementAddress(
 }
 
 /**
+ * What a masked field reads as: a standalone `$`. Its base address is 0,
+ * so the inline-element fallback of a reference read can never resolve it
+ * (every STEP file starts with `ISO-10303-21;`, so no record lives at 0).
+ */
+const MASKED_FIELD: [number, number, Uint8Array] =
+  [ 0, 1, Uint8Array.of( '$'.charCodeAt( 0 ) ) ]
+
+/**
  * Merge the entity field descriptions.
  *
  * Merging uses "hasOwnProperty" semantics to avoid overwriting
@@ -1196,6 +1204,14 @@ export default abstract class StepEntityBase<EntityTypeIDs extends number> imple
     const internalReference = this.guaranteeVTable( depth )
 
     if ( internalReference === void 0 || offset >= internalReference.vtableCount ) {
+
+      // A masked record (StepModelBase.setFieldMasks) reads every field past
+      // its mask as `$`, which each extractor already handles as absent:
+      // null for an optional field, a throw for a required one.
+      if ( internalReference?.maskedFieldCount !== void 0 ) {
+        return MASKED_FIELD
+      }
+
       throw new Error( 'Couldn\'t read field due to too few fields in record' )
     }
 

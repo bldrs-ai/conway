@@ -19,7 +19,7 @@ import { IfcBooleanResult } from './ifc4_gen'
 import { MemoizationCapture, RegressionCaptureState } from '../core/regression_capture_state'
 import { wasmHeapByteLength } from '../core/wasm_heap'
 import { extractModelInfo } from '../loaders/loading_utilities'
-import { selectIfcSchemaKindForHeader } from './ifc_schema_selection'
+import { Ifc4x3IneligibleError } from './ifc4x3_ifc4_compat'
 import {
   RetainedMemoryMb,
   retainedMemoryMb,
@@ -526,46 +526,43 @@ function doWork() {
             default:
           }
 
-          // IFC4X3 reorders the entity-type ordinal space, so the
-          // IFC4-typed extraction below would silently misidentify entities
-          // against a 4X3 file — same reasoning as
-          // `assertNativeSchemaSupported`. This regression executable
-          // parses directly via `IfcStepParser` rather than through the
-          // gated streaming-open surface, so it needs its own check (codex
-          // review of bldrs-ai/conway#713, P1, round 5 asked this direct
-          // parser path be audited; it had no gate at all).
-          if (selectIfcSchemaKindForHeader(stepHeader) === 'ifc4x3') {
+          // An IFC4X3 header takes the IFC4-compatible route
+          // (ifc4x3_ifc4_compat.ts) inside parseDataToModelForHeader: indexed
+          // privately, then decoded as IFC4 with translated records masked,
+          // or refused with Ifc4x3IneligibleError before anything reaches
+          // the extraction below. This executable parses directly via
+          // `IfcStepParser` rather than through the streaming-open surface,
+          // so the refusal is handled here (codex review of
+          // bldrs-ai/conway#713, P1, round 5 asked this direct parser path
+          // be audited; it had no gate at all).
+          let parsed: ReturnType< typeof parser.parseDataToModelForHeader >
+
+          try {
+            parsed = parser.parseDataToModelForHeader( stepHeader, bufferInput )
+          } catch ( error ) {
+
+            if ( !( error instanceof Ifc4x3IneligibleError ) ) {
+              throw error
+            }
+
             Logger.error(
-                `IFC4X3 schema detected (${extractModelInfo(stepHeader,
-                    indexIfcBuffer.length).schema}): geometry extraction is not yet ` +
-                'implemented for this schema — see bldrs-ai/conway#280 phase 2b.')
+                `${error.message} (FILE_SCHEMA ${extractModelInfo(stepHeader,
+                    indexIfcBuffer.length).schema})` )
             displayErrors(ifcFile)
             // `exit()` with no argument exits 0 (Node uses the current
-            // `process.exitCode`, which defaults to 0) — that silently
-            // undid "fail closed" here specifically: this file is spawned
+            // `process.exitCode`, which defaults to 0). This file is spawned
             // by `ifc_regression_batch_main.ts`'s `safeExecWithCancellation`
-            // via `childProcess.exec`, whose callback sets `err.code` to the
-            // child's exit status (verified empirically — not the
-            // `child.on('exit', ...)` handler in the same function, which
-            // only clears the cancellation timeout and reads no code).
-            // `runForFile` turns a non-null `err` into `type: 'Failed'` and
-            // a `failed.csv` row; exit 0 instead classified this refusal as
-            // "loaded, produced no digest" — the same shape as a model that
-            // legitimately has no geometry — which is why
-            // KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc is in
-            // regression/zero_geometry_allowlist.txt (bldrs-ai/conway#280).
-            // With this fix that model now reports as a NEW `failed.csv`
-            // row instead; it is excluded from the PR-time smoke subset
-            // (regression/smoke_models.txt) so `run-ifc-regression` is
-            // unaffected, but the full-corpus `rc-regression.yml` diffs
-            // `failed.csv` against the baseline committed in the
-            // `test-models` repo, so that baseline needs this row added
-            // (or the next rc run reports it as a new failure). Found via
-            // the subprocess smoke test added alongside this gate.
+            // via `childProcess.exec`, whose callback reads the child's exit
+            // status into `err.code`, and `runForFile` turns a non-null
+            // `err` into a `failed.csv` row. Exit 0 would instead classify
+            // this refusal as "loaded, produced no digest" — the same shape
+            // as a model that legitimately has no geometry — which is how an
+            // IFC4X3 refusal once hid in regression/zero_geometry_allowlist.txt
+            // (bldrs-ai/conway#713).
             exit(1)
           }
 
-          const [result1, model] = parser.parseDataToModel( bufferInput)
+          const [result1, model] = parsed
 
           switch (result1) {
             case ParseResult.COMPLETE:

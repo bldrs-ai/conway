@@ -210,6 +210,14 @@ export function openStreamedIfcModel(
   // zero typed side effects — the same guarantee the old sniff-based gate
   // measured at 15 callback firings (five `IFCFACETEDBREP` records reported
   // at IFC4's ordinal 422 instead of IFC4X3's 488) when it ran too late.
+  //
+  // This open does NOT take the IFC4-compatible IFC4X3 route
+  // (ifc4x3_ifc4_compat.ts), even for an eligible file: its contract is to
+  // hand records to `onRecordIndexed` and `indexSink` AS they are indexed,
+  // and that route must index the whole file privately before anything is
+  // emitted. So `Ifc4x3CompatRouteRequired` propagates here as a refusal of
+  // every 4X3 file. Use the loader, the compat surface or
+  // `IfcStepParser.parseStreamToModel` for those.
   const { header, columns, result, stats } = buildColumnarIndexStreaming(
       source,
       IfcStepParser.Instance,

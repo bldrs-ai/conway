@@ -87,6 +87,9 @@ implements Iterable<BaseEntity>, Model {
   private descriptorCache_:
     ( StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > | undefined )[] = []
 
+  /** Decoded-field counts by local ID — see {@link setFieldMasks}. */
+  private fieldMasks_?: Map< number, number >
+
   // Rare STEP complex/external-mapping entities (multiMapping) keep their full
   // descriptor object — the multi-entity graph isn't column-encoded.
   private readonly complexEntries_?:
@@ -344,13 +347,72 @@ implements Iterable<BaseEntity>, Model {
 
     const typeID = this.typeID_[ localID ]
 
-    return {
+    const descriptor: StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > = {
       address:   this.address_[ localID ],
       length:    this.length_[ localID ],
       typeID:    typeID === -1 ? void 0 : ( typeID as EntityTypeIDs ),
       expressID: localID < this.firstInlineElement_ ?
         this.expressID_[ localID ] : void 0,
     }
+
+    const maskedFieldCount = this.fieldMasks_?.get( localID )
+
+    if ( maskedFieldCount !== void 0 ) {
+      descriptor.maskedFieldCount = maskedFieldCount
+    }
+
+    return descriptor
+  }
+
+
+  /**
+   * Mask the trailing fields of specific records: for each express ID, only
+   * the first `count` fields are ever decoded, and every field at or past
+   * `count` reads as `$` through the typed getters (and through any direct
+   * `extract*` call — e.g. spatial_imposter.ts's storey `Elevation` read).
+   *
+   * The mechanism is the vtable: `populateVtableEntryRaw` clamps
+   * `vtableCount` to `count` and ends the last kept field where field
+   * `count` starts, so no cursor into the masked bytes survives, and
+   * `StepEntityBase.getOffsetAndEndCursor` answers a masked record's
+   * out-of-range read with a one-byte `$` rather than its "too few fields"
+   * throw. Unmasked records keep that throw unchanged.
+   *
+   * Exists for IFC4X3 records translated to an IFC4 type whose tail
+   * attributes mean something else (ifc4x3_ifc4_translation.ts):
+   * IFCFACILITYPART's index 9 is a typed select, which would otherwise be
+   * decoded as IfcBuildingStorey's `Elevation`. Call before any entity of
+   * the model is read. Descriptors materialised earlier would carry no
+   * mask, so they are dropped here.
+   *
+   * @param masks Decoded-field count, keyed by express ID.
+   */
+  public setFieldMasks( masks: ReadonlyMap< number, number > ): void {
+
+    const byLocalID = new Map< number, number >()
+
+    for ( const [ expressID, count ] of masks ) {
+
+      const localID = this.expressIDMap_.get( expressID )
+
+      if ( localID !== void 0 ) {
+        byLocalID.set( localID, count )
+      }
+    }
+
+    this.fieldMasks_ = byLocalID.size > 0 ? byLocalID : void 0
+    this.descriptorCache_ = []
+  }
+
+
+  /**
+   * The decoded-field count set by {@link setFieldMasks} for a record.
+   *
+   * @param localID The record's local ID.
+   * @return {number | undefined} The count, or undefined if unmasked.
+   */
+  public fieldMaskOf( localID: number ): number | undefined {
+    return this.fieldMasks_?.get( localID )
   }
 
   /**
@@ -624,6 +686,16 @@ implements Iterable<BaseEntity>, Model {
     element.endCursor   = extratedEntry[ 2 ]
     element.buffer = acquisition.buffer
     element.vtable = this.vtableBuilder_.buffer
+
+    // setFieldMasks: drop the masked fields' cursors entirely, and end the
+    // last kept field exactly where a non-final field ends (the byte before
+    // the next field's start), so no read can reach the masked bytes.
+    const masked = element.maskedFieldCount
+
+    if ( masked !== void 0 && extratedEntry[ 1 ] > masked ) {
+      element.endCursor   = element.vtable[ extratedEntry[ 0 ] + masked ] - 1
+      element.vtableCount = masked
+    }
 
     return true
   }

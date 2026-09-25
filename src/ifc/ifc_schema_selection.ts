@@ -145,16 +145,45 @@ export function selectIfcSchemaKindForHeader( stepHeader: StepHeader ): IfcSchem
 }
 
 /**
+ * Thrown by {@link assertNativeSchemaSupported} for a recognised IFC4X3
+ * header, from the builder's `onHeaderParsed` seam: before the IFC4 build
+ * has indexed a single record, so nothing typed has been emitted.
+ *
+ * It is a routing signal as much as a refusal. Entry points that support
+ * the IFC4-compatible route (ifc4x3_ifc4_compat.ts) catch it and index the
+ * file privately with `buildIfc4x3CompatIndex`. That route decides
+ * eligibility from the whole file before anything is emitted, and refuses
+ * with `Ifc4x3IneligibleError` otherwise. Entry points that cannot take the
+ * route let it propagate, and it reads as the refusal it always was. Those
+ * are the native streamed opens, which hand records to caller callbacks
+ * and sinks while they parse, and the sidecar open, which has no parse.
+ */
+export class Ifc4x3CompatRouteRequired extends Error {
+
+  /** Constructs the signal. */
+  constructor() {
+
+    super(
+        'IFC4X3 schema detected: this entry point parses with IFC4 and ' +
+        'streams records to its caller as they are indexed, so it cannot ' +
+        'take the IFC4-compatible IFC4X3 route (which must index the whole ' +
+        'file privately before emitting anything); geometry extraction for ' +
+        'the IFC4X3 schema itself is bldrs-ai/conway#280 phase 2b.' )
+    this.name = 'Ifc4x3CompatRouteRequired'
+  }
+}
+
+/**
  * Gate a native (non-web-ifc-compat) entry point against an IFC4X3 file.
  *
- * Same reasoning as `IfcApiProxyIfc.assertSchemaSupported` (4X3 reorders
- * the entity-type ordinal space, so IFC4-typed extraction against a 4X3
- * file would silently misidentify entities; codex review of
- * bldrs-ai/conway#713, P1), but native callers get a plain throw rather
- * than the compat surface's statistics bookkeeping and `-1`-return
- * convention. `selectIfcSchemaKindForHeader` itself throws
- * {@link UnrecognizedIfc4x3SchemaError} for an unrecognised 4X3-family
- * spelling; that propagates through this function unchanged.
+ * 4X3 reorders the entity-type ordinal space, so parsing a 4X3 file with
+ * the IFC4 parser and extracting as usual is only sound through the
+ * IFC4-compatible route (ifc4x3_ifc4_compat.ts), never implicitly. This
+ * throws {@link Ifc4x3CompatRouteRequired} for a recognised 4X3 header —
+ * see that class for who catches it. `selectIfcSchemaKindForHeader` itself
+ * throws {@link UnrecognizedIfc4x3SchemaError} for an unrecognised
+ * 4X3-family spelling; that propagates through this function unchanged,
+ * and no entry point routes it.
  *
  * Lives here rather than in `ifc_stream_open.ts` (its original home) or
  * `ifc_step_parser.ts` (a caller as of #713 P1 round 5) so both can import
@@ -171,15 +200,13 @@ export function selectIfcSchemaKindForHeader( stepHeader: StepHeader ): IfcSchem
  * streaming_index_builder.ts's doc-comment on the seam).
  *
  * @param header The parsed STEP header.
- * @throws {Error} If the header names the (recognised) IFC4X3 schema.
+ * @throws {Ifc4x3CompatRouteRequired} If the header names the
+ * (recognised) IFC4X3 schema.
  */
 export function assertNativeSchemaSupported( header: StepHeader ): void {
 
   if ( selectIfcSchemaKindForHeader( header ) === 'ifc4x3' ) {
 
-    throw new Error(
-        'IFC4X3 schema detected: geometry extraction is not yet ' +
-        'implemented for this schema on the native streamed-open API — ' +
-        'see bldrs-ai/conway#280 phase 2b.' )
+    throw new Ifc4x3CompatRouteRequired()
   }
 }

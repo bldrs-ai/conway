@@ -22,9 +22,3 @@
 # here should require writing down why, and every line should have an issue.
 #
 # One basename per line; '#' starts a comment.
-
-# --- Unsupported schema: expected until the schema lands ---
-
-# IFC4X3_RC2. Tracked by #280 (IFC 4.3 support).
-KIT-Simple-Road-Test-Web-IFC4x3_RC2.ifc
-

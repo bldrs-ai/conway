@@ -21,10 +21,17 @@ import { IfcRoot } from './ifc4_gen'
 // buildColumnarIndexStreaming(Async) without passing `onHeaderParsed`, so a
 // 4X3 file parsed COMPLETE and returned an IfcStepModel keyed to IFC4's
 // entity ordinals instead of refusing.
-const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities.ifc'
+//
+// Since bldrs-ai/conway#280 these wrappers take the IFC4-compatible route
+// for an ELIGIBLE 4X3 file (they have no caller callbacks to protect), so
+// the refusal is pinned with an ineligible one: the road fixture plus an
+// IFC4X3-only IFCALIGNMENT record.
+const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities_ineligible.ifc'
+const IFC4X3_ELIGIBLE_FIXTURE_PATH = 'data/ifc4x3_road_geometry.ifc'
 
 let bytes: Uint8Array
 let ifc4x3Bytes: Uint8Array
+let eligibleBytes: Uint8Array
 
 /**
  * Decode every IfcRoot-derived entity's GlobalId + Name from a model into a
@@ -56,6 +63,7 @@ function rootAttributes( model: any ): Map<number, string> {
 beforeAll( () => {
   bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
   ifc4x3Bytes = new Uint8Array( fs.readFileSync( IFC4X3_FIXTURE_PATH ) )
+  eligibleBytes = new Uint8Array( fs.readFileSync( IFC4X3_ELIGIBLE_FIXTURE_PATH ) )
 } )
 
 describe( 'parseStreamToModel', () => {
@@ -108,6 +116,18 @@ describe( 'parseStreamToModel', () => {
         .toThrow( /IFC4X3/ )
   } )
 
+  test( 'an eligible IFC4X3 file opens through the IFC4-compatible route, ' +
+      'with its translated records masked', () => {
+    const [ result, model ] = IfcStepParser.Instance.parseStreamToModel(
+        new BufferByteSource( eligibleBytes ),
+        new InMemoryStepByteStore( eligibleBytes ) )
+
+    expect( result ).toBe( ParseResult.COMPLETE )
+    // #37 is the IFCFACILITYPART, read as an IfcBuildingStorey with its
+    // first 9 attributes decoded.
+    expect( model!.fieldMaskOf( model!.resolveExpressID( 37 )! ) ).toBe( 9 )
+  } )
+
   test( 'an ordinary IFC4 file still parses through the gate', () => {
     const [ result, model ] = IfcStepParser.Instance.parseStreamToModel(
         new BufferByteSource( bytes ),
@@ -125,6 +145,16 @@ describe( 'parseStreamToModelAsync', () => {
         new BufferByteSource( ifc4x3Bytes ),
         new InMemoryStepByteStore( ifc4x3Bytes ) ) )
         .rejects.toThrow( /IFC4X3/ )
+  } )
+
+  test( 'an eligible IFC4X3 file opens through the IFC4-compatible route, ' +
+      'with its translated records masked', async () => {
+    const [ result, model ] = await IfcStepParser.Instance.parseStreamToModelAsync(
+        new BufferByteSource( eligibleBytes ),
+        new InMemoryStepByteStore( eligibleBytes ) )
+
+    expect( result ).toBe( ParseResult.COMPLETE )
+    expect( model!.fieldMaskOf( model!.resolveExpressID( 37 )! ) ).toBe( 9 )
   } )
 
   test( 'an ordinary IFC4 file still parses through the gate', async () => {

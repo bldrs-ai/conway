@@ -25,10 +25,18 @@ import { buildColumnarIndexStreaming } from '../step/parsing/streaming_index_bui
 import { hashSource, serializeIndexSidecarFromColumns } from '../step/parsing/index_sidecar'
 import EntityTypesIfc from './ifc4_gen/entity_types_ifc.gen'
 import IfcStepParser from './ifc_step_parser'
+import { Ifc4x3CompatRouteRequired } from './ifc_schema_selection'
 
-// The same small synthetic IFC4X3_RC2 fixture the web-ifc-compat-surface
-// gate test (ifc4x3_schema_gate.test.ts) and ifc4x3_step_model.test.ts use.
-const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities.ifc'
+// An INELIGIBLE IFC4X3_RC2 file: the #713 road fixture plus one
+// IFC4X3-only record (IFCALIGNMENT) that neither IFC4 nor the translation
+// table can decode (see data/ifc4x3_expected_refusals.txt). The plain road
+// fixture is eligible for the IFC4-compatible route since bldrs-ai/conway#280,
+// so it no longer exercises a refusal everywhere. These native opens refuse
+// every 4X3 file regardless (they stream records to caller callbacks, so
+// they cannot take the route; see ifc_stream_open.ts), which the last test
+// below pins with the eligible fixture.
+const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities_ineligible.ifc'
+const IFC4X3_ELIGIBLE_FIXTURE_PATH = 'data/ifc4x3_road_geometry.ifc'
 const IFC4_FIXTURE_PATH = 'data/index.ifc'
 
 let ifc4x3Bytes: Uint8Array
@@ -91,6 +99,9 @@ function bigHeaderIfc4x3(): Uint8Array {
     "FILE_NAME('big_header.ifc','2026-01-01T00:00:00',(''),(''),'','','');\n" +
     "FILE_SCHEMA(('IFC4X3_RC2'));\nENDSEC;\nDATA;\n" +
     "#1=IFCROAD('0fixt0000000000000001x',$,'Road0','desc',$,$,$,$,.ELEMENT.);\n" +
+    // Makes the file ineligible for the IFC4-compatible route, so every
+    // entry point must refuse it (bldrs-ai/conway#280).
+    "#2=IFCALIGNMENT('0fixt0000000000000002x',$,'A',$,$,$,$,.NOTDEFINED.);\n" +
     'ENDSEC;\nEND-ISO-10303-21;\n'
 
   return new TextEncoder().encode( text )
@@ -252,5 +263,28 @@ describe( 'ifc_stream_open.ts: IFC4X3 schema gate on the native streamed-open AP
         .rejects.toThrow( /IFC4X3/ )
 
     expect( callbackCount ).toBe( 0 )
+  } )
+
+  // bldrs-ai/conway#280: these opens hand every record to `onRecordIndexed`
+  // and `indexSink` as it is indexed, so they cannot index a 4X3 file
+  // privately first, and so they cannot take the IFC4-compatible route. An
+  // ELIGIBLE file must therefore be refused here too, still before a single
+  // record is emitted, and with the route signal rather than an
+  // eligibility verdict.
+  test( 'openStreamedIfcModel refuses even an ELIGIBLE 4X3 file, with zero ' +
+      'onRecordIndexed callbacks and zero sink rows', () => {
+
+    const bytes = new Uint8Array( fs.readFileSync( IFC4X3_ELIGIBLE_FIXTURE_PATH ) )
+    let callbackCount = 0
+    const indexSink = new ColumnarIndexSink<EntityTypesIfc>()
+
+    expect( () => openStreamedIfcModel(
+        new BufferByteSource( bytes ),
+        new InMemoryStepByteStore( bytes ),
+        { onRecordIndexed: () => { callbackCount++ }, indexSink } ) )
+        .toThrow( Ifc4x3CompatRouteRequired )
+
+    expect( callbackCount ).toBe( 0 )
+    expect( indexSink.finalize().count ).toBe( 0 )
   } )
 } )

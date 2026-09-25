@@ -1,0 +1,17 @@
+# data/ fixtures that declare an IFC4X3 FILE_SCHEMA and must be REFUSED by
+# ifc_regression_main.js: no digest, output naming IFC4X3, non-zero exit.
+# Read by the tier-A goldens loop in .github/workflows/build.yml.
+#
+# Every other data/*.ifc, including an IFC4X3 file that is eligible for the
+# IFC4-compatible route (src/ifc/ifc4x3_ifc4_compat.ts), is gated like any
+# model: its digest must match the golden data/<name>.csv. A file listed
+# here that produces a digest fails the loop, and so does an unlisted file
+# that produces none. So a regression in either direction (eligibility
+# widening to what must be refused, or narrowing to refuse what must load)
+# shows up.
+#
+# One basename per line; '#' starts a comment.
+
+# The #713 road fixture plus one IFC4X3-only record (IFCALIGNMENT, last in
+# the file) that IFC4 cannot decode and nothing translates.
+ifc4x3_road_entities_ineligible.ifc
