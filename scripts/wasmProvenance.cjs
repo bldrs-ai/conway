@@ -40,6 +40,7 @@ const fs = require('fs')
 const path = require('path')
 
 const REPO_ROOT = path.resolve(__dirname, '..')
+const SUBMODULE = path.join(REPO_ROOT, 'dependencies', 'conway-geom')
 
 /**
  * Both in-repo Dist locations. `compiled/` is what jest and the debug scripts
@@ -54,6 +55,21 @@ const DIST_TARGETS = [
 ]
 
 const MARKER_NAME = '.wasm-provenance.json'
+
+/**
+ * A stamp may only be written when all four were rebuilt. A partial build
+ * (`build-GHA-MT`, `build-codex-MT`, `yarn build-MT`) copies `bin/release/*`
+ * wholesale, so siblings left there by an earlier build at a different SHA
+ * ride along into Dist; stamping that bundle asserts the stale Web artifacts
+ * are current, and browser consumers then execute them under an `ok` verdict
+ * (codex review, conway#717). Partial paths clear the marker instead.
+ */
+const REQUIRED_TARGETS = [
+  'ConwayGeomWasmNode',
+  'ConwayGeomWasmNodeMT',
+  'ConwayGeomWasmWeb',
+  'ConwayGeomWasmWebMT',
+]
 
 // The MT node build is the module the jest geometry path imports, so its
 // presence is what "Dist is populated" means in practice.
@@ -77,7 +93,37 @@ function git(args, cwd = REPO_ROOT) {
 
 /** @return {string|null} the conway-geom SHA this checkout has. */
 function submoduleSha() {
-  return git(['rev-parse', 'HEAD'], path.join(REPO_ROOT, 'dependencies', 'conway-geom'))
+  return git(['rev-parse', 'HEAD'], SUBMODULE)
+}
+
+
+/**
+ * Digest of the submodule's UNCOMMITTED state, or null when it is clean.
+ *
+ * A SHA alone is not an identity during the normal iterative C++ workflow:
+ * edit `conway_geometry/*.h`, rebuild, and `HEAD` is unchanged, so a marker
+ * written before the edit still matches and everything reports `ok` while
+ * running WASM that predates the edit (codex review, conway#717). Folding the
+ * working-tree state in means an edit invalidates the marker exactly as a
+ * commit would.
+ *
+ * `status --porcelain` carries the NAMES of changed and untracked files,
+ * `diff HEAD` the CONTENT of tracked changes. An untracked file's contents
+ * are therefore not hashed — its existence is, which is what flips the marker
+ * — so this narrows the window rather than closing it completely.
+ *
+ * @return {string|null}
+ */
+function submoduleDirtyDigest() {
+  const status = git(['status', '--porcelain'], SUBMODULE)
+
+  if (status === null || status === '') {
+    return null
+  }
+
+  const diff = git(['diff', 'HEAD'], SUBMODULE) ?? ''
+
+  return crypto.createHash('sha256').update(status).update('\0').update(diff).digest('hex')
 }
 
 
@@ -146,6 +192,28 @@ function writeMarker(record) {
 
 
 /**
+ * Remove the marker from every Dist target, so an unverifiable bundle reads
+ * `unstamped` rather than carrying a claim nobody can stand behind.
+ *
+ * @return {string[]} the directories a marker was removed from
+ */
+function clearMarker() {
+  const cleared = []
+
+  for (const dir of DIST_TARGETS) {
+    const marker = path.join(dir, MARKER_NAME)
+
+    if (fs.existsSync(marker)) {
+      fs.rmSync(marker)
+      cleared.push(dir)
+    }
+  }
+
+  return cleared
+}
+
+
+/**
  * Digest of EVERY artifact in a Dist directory, not just the sentinel.
  *
  * The sentinel alone is not enough: `ConwayGeomWasmWebMT.wasm` is a separate
@@ -196,7 +264,7 @@ function bundleDigest(dir) {
 
 
 /**
- * @typedef {'ok'|'missing'|'unstamped'|'stale'|'skew'|'unresolved'} WasmStatus
+ * @typedef {'ok'|'missing'|'unstamped'|'stale'|'dirty'|'skew'|'unresolved'} WasmStatus
  */
 
 /**
@@ -211,10 +279,11 @@ function bundleDigest(dir) {
  *   mirrorsAgree: boolean|null,
  *   marker: object|null,
  *   expectedSha: string|null,
+ *   expectedDirty: string|null,
  * }} facts
  * @return {{status: WasmStatus, message: string, remedy: string|null}}
  */
-function classify({populated, mirrorsAgree, marker, expectedSha}) {
+function classify({populated, mirrorsAgree, marker, expectedSha, expectedDirty = null}) {
   if (populated === 0) {
     return {
       status: 'missing',
@@ -264,6 +333,17 @@ function classify({populated, mirrorsAgree, marker, expectedSha}) {
     }
   }
 
+  if (marker.conwayGeomSha === expectedSha && (marker.sourceDirty ?? null) !== expectedDirty) {
+    return {
+      status: 'dirty',
+      message: expectedDirty === null ?
+        'conway-geom is clean but Dist was built from a modified working tree' :
+        'conway-geom has uncommitted changes that postdate this build — the ' +
+          'wasm predates your edits even though the submodule SHA still matches',
+      remedy: 'rebuild conway-geom (`yarn build-codex-all` / `yarn build-GHA-all`)',
+    }
+  }
+
   if (marker.conwayGeomSha !== expectedSha) {
     return {
       status: 'stale',
@@ -302,14 +382,18 @@ function inspect() {
     mirrorsAgree,
     marker: populatedDirs.length > 0 ? readMarker(populatedDirs[0]) : null,
     expectedSha: submoduleSha(),
+    expectedDirty: submoduleDirtyDigest(),
   })
 }
 
 
 module.exports = {
   DIST_TARGETS,
+  REQUIRED_TARGETS,
   bundleDigest,
   classify,
+  clearMarker,
+  submoduleDirtyDigest,
   MARKER_NAME,
   SENTINEL,
   inspect,

@@ -33,4 +33,4 @@ yarn build-incremental
 # at the point Dist is written, rather than in each package.json wrapper:
 # there are a dozen build entry points and a check that rejects a correctly
 # rebuilt tree is one people learn to bypass (conway#717 review).
-yarn wasm-stamp
+yarn wasm-stamp --built "$@"

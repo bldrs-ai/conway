@@ -101,6 +101,8 @@ function main() {
     writeMarker({
       conwayGeomSha,
       conwayCommit,
+      // A published build is by construction from a clean tree at that commit.
+      sourceDirty: null,
       source: `npm:${PACKAGE}@${resolvedVersion}`,
     })
 

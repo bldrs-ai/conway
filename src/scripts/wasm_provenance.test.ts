@@ -25,14 +25,21 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { bundleDigest, classify, shaForPackageVersion } =
+const { REQUIRED_TARGETS, bundleDigest, classify, shaForPackageVersion } =
   require_(path.resolve(process.cwd(), 'scripts/wasmProvenance.cjs')) as {
+    REQUIRED_TARGETS: string[],
     bundleDigest: ( dir: string ) => string | null,
     classify: ( facts: {
       populated: number,
       mirrorsAgree: boolean | null,
-      marker: { conwayGeomSha?: string | null, conwayCommit?: string | null, source?: string } | null,
+      marker: {
+        conwayGeomSha?: string | null,
+        conwayCommit?: string | null,
+        sourceDirty?: string | null,
+        source?: string,
+      } | null,
       expectedSha: string | null,
+      expectedDirty?: string | null,
     } ) => { status: string, message: string, remedy: string | null },
     shaForPackageVersion: ( version: string ) => {
       conwayCommit: string | null,
@@ -46,8 +53,9 @@ const SHA_B = 'a28c7d9000000000000000000000000000000000'
 const fresh = {
   populated: 2,
   mirrorsAgree: true,
-  marker: { conwayGeomSha: SHA_A, source: 'native-build' },
+  marker: { conwayGeomSha: SHA_A, sourceDirty: null, source: 'native-build' },
   expectedSha: SHA_A,
+  expectedDirty: null,
 }
 
 
@@ -104,6 +112,62 @@ describe('classify', () => {
 
   test('an unreadable submodule HEAD is unresolved, not a false match', () => {
     expect(classify({ ...fresh, expectedSha: null }).status).toBe('unresolved')
+  })
+
+  /*
+   * The SHA alone is not an identity during iterative C++ work: edit
+   * conway-geom, rebuild nothing, and HEAD is unchanged, so a marker written
+   * before the edit still matched and everything read `ok` while the wasm
+   * predated the edit (codex review, conway#717).
+   */
+  test('THE DEFECT: edits that leave HEAD alone still invalidate the stamp', () => {
+    const result = classify({ ...fresh, expectedDirty: 'deadbeef' })
+
+    expect(result.status).toBe('dirty')
+    expect(result.message).toContain('uncommitted changes')
+  })
+
+  test('a build FROM a dirty tree does not read ok once the tree is clean', () => {
+    const result = classify({
+      ...fresh,
+      marker: { conwayGeomSha: SHA_A, sourceDirty: 'deadbeef' },
+      expectedDirty: null,
+    })
+
+    expect(result.status).toBe('dirty')
+  })
+
+  test('the same dirty state on both sides is ok — iterating is not an error', () => {
+    const result = classify({
+      ...fresh,
+      marker: { conwayGeomSha: SHA_A, sourceDirty: 'deadbeef' },
+      expectedDirty: 'deadbeef',
+    })
+
+    expect(result.status).toBe('ok')
+  })
+
+  test('a wrong SHA outranks dirty state — the coarser problem is named first', () => {
+    const result = classify({ ...fresh, marker: { conwayGeomSha: SHA_B }, expectedDirty: 'deadbeef' })
+
+    expect(result.status).toBe('stale')
+  })
+})
+
+
+describe('REQUIRED_TARGETS', () => {
+  /*
+   * A stamp asserts a COMPLETE bundle. Partial builds copy bin/release
+   * wholesale, so siblings from an earlier build at another SHA ride along;
+   * stamping those converts "nobody can tell" into a confident wrong answer.
+   */
+  test('names all four variants, so a partial build cannot satisfy it', () => {
+    expect([...REQUIRED_TARGETS].sort()).toEqual([
+      'ConwayGeomWasmNode',
+      'ConwayGeomWasmNodeMT',
+      'ConwayGeomWasmWeb',
+      'ConwayGeomWasmWebMT',
+    ])
   })
 })
 
