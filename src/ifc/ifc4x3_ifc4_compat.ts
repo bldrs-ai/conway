@@ -193,16 +193,25 @@ interface PendingLookup {
  * {@link onRecordIndexed}, which attributes them by position. The window
  * buffer does not slide inside a record, so a lookup whose `end` is at or
  * before the record's attribute start is the record's own keyword, and one
- * at or after it is inline. A lookup made against a different window
- * buffer is left over from a grow-and-restart that discarded its record
- * (the builder allocates a fresh window on restart). It is dropped, and the
- * restarted parse looks the keyword up again.
+ * at or after it is inline.
+ *
+ * A grow-and-restart (streaming_index_builder.ts) re-parses the whole file
+ * from byte 0 into a freshly allocated window, while a slide keeps the same
+ * window buffer. So the first lookup against a new buffer means everything
+ * collected so far came from a parse the builder abandoned, and all of it
+ * is discarded: the restarted parse looks every keyword up again, and
+ * announces every record again. Dropping only the stale PENDING lookups is
+ * not enough — the attempt that overflowed may have resolved a truncated
+ * identifier at the window's end as a different, known keyword
+ * (`IFCPROPERTY` cut out of `IFCPROPERTYSINGLEVALUE`) and marked it seen
+ * (codex review of bldrs-ai/conway#718, P2).
  */
 class Ifc4x3EligibilityCollector {
 
   private readonly seen_ = new Uint8Array( EntityTypesIfcCount )
   private pending_: PendingLookup[] = []
   private readonly reasons_ = new Set< string >()
+  private window_?: Uint8Array
 
   /** Decoded-field counts for translated records, by express ID. */
   public readonly fieldMasks = new Map< number, number >()
@@ -210,6 +219,13 @@ class Ifc4x3EligibilityCollector {
   public readonly typeIndex: TypeIndex< EntityTypesIfc > = {
 
     get: ( buffer: Uint8Array, offset?: number, end?: number ) => {
+
+      if ( buffer !== this.window_ ) {
+        if ( this.window_ !== void 0 ) {
+          this.discardAbandonedParse()
+        }
+        this.window_ = buffer
+      }
 
       const start = offset ?? 0
       const stop = end ?? buffer.length
@@ -298,6 +314,14 @@ class Ifc4x3EligibilityCollector {
           'and not inside a translated record\'s masked attributes' )
       }
     }
+  }
+
+  /** Forget everything a grow-and-restart abandoned (see the class comment). */
+  private discardAbandonedParse(): void {
+    this.seen_.fill( 0 )
+    this.pending_ = []
+    this.reasons_.clear()
+    this.fieldMasks.clear()
   }
 
   /**

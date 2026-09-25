@@ -232,6 +232,43 @@ describe( 'IFC4X3 eligibility for the IFC4-compatible route', () => {
     expect( index.stats.windowBytes ).toBeGreaterThan( SMALL_POOL )
     expect( new Map( index.fieldMasks ) ).toEqual( new Map( [ [ 1, 9 ], [ 2, 9 ] ] ) )
   } )
+
+  // The window boundary cuts a record's keyword, the builder restarts with a
+  // bigger window, and the attempt it abandoned must leave nothing behind.
+  // At one cut the abandoned attempt resolves the truncated
+  // `IFCPROPERTYSINGLEVALUE` as `IFCPROPERTY` — known to IFC4, and abstract
+  // there — so a collector that kept the first attempt's state refused a
+  // valid file (codex review of bldrs-ai/conway#718, P2). The comment pads
+  // the DATA section without adding a record boundary, so nothing slides
+  // before the cut. Swept over every cut rather than pinned to one, so the
+  // test does not depend on where the parser happens to resolve a keyword.
+  test( 'a keyword cut by the window edge before a restart does not refuse the file', async () => {
+
+    const keyword = 'IFCPROPERTYSINGLEVALUE'
+    const prefix = new TextDecoder().decode( ifc4x3( '' ) ).replace( /ENDSEC;\nEND-ISO-10303-21;\n$/, '' )
+    const cutsThatRestarted: number[] = []
+
+    for ( let cut = 1; cut < keyword.length; ++cut ) {
+
+      const padding = SMALL_POOL - ( prefix.length + '/*  */\n#1='.length ) - cut
+      const bytes = new TextEncoder().encode(
+          `${prefix}/* ${'x'.repeat( padding )} */\n#1=${keyword}('p',$,$,$);\n` +
+          'ENDSEC;\nEND-ISO-10303-21;\n' )
+
+      const index = compat( bytes, SMALL_POOL )
+
+      if ( index.stats.windowBytes > SMALL_POOL ) {
+        cutsThatRestarted.push( cut )
+      }
+
+      await expect( buildIfc4x3CompatIndexAsync( new BufferByteSource( bytes ), SMALL_POOL ) )
+          .resolves.toBeDefined()
+    }
+
+    // Guards the sweep itself: if the padding arithmetic drifted so no cut
+    // forced a restart, every case above would pass without exercising it.
+    expect( cutsThatRestarted.length ).toBe( keyword.length - 1 )
+  } )
 } )
 
 
