@@ -37,6 +37,9 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import {assertWasmFresh} from './wasmFreshness.mjs'
+
+assertWasmFresh('occurrence_report')
 
 const HERE = path.dirname( fileURLToPath( import.meta.url ) )
 const COMPILED = path.resolve( HERE, '../../compiled' )

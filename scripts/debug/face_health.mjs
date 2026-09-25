@@ -126,6 +126,9 @@
  * `yarn build-codex-MT` if conway-geom changed) before trusting a run.
  */
 import fs from 'node:fs'
+import {assertWasmFresh} from './wasmFreshness.mjs'
+
+assertWasmFresh('face_health')
 
 const REPO_ROOT = new URL('../../', import.meta.url)
 const compiled = (rel) => import(new URL(`compiled/${rel}`, REPO_ROOT).href)
