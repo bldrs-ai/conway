@@ -15,6 +15,7 @@ export default [
       'external',
       'src/ifc/ifc4_gen',
       'src/ifc/ifc4x3_gen',
+      'src/ifc/ifc4x3_ifc4_compat_gen',
       'src/AP214E3_2010/AP214E3_2010_gen',
       // Vendored web-ifc compat surface (from conway-web-ifc-adapter).
       // tsc still type-checks it; eslint skips style on vendored code for

@@ -237,19 +237,23 @@ jobs:
           shopt -s nullglob
           status=0
           count=0
+          refused=0
           # Cover every in-repo quick-check model; deriving the list from
           # data/*.ifc (vs a hard-coded set) means a newly added model is gated
           # as soon as its golden is committed, with no edit here.
           for f in data/*.ifc; do
             count=$((count + 1))
             m=$(basename "$f" .ifc)
-            # Fixtures whose FILE_SCHEMA is IFC4X3 are *expected* to produce no
-            # digest: conway refuses them rather than reinterpreting 4X3's
-            # reordered entity ordinals as IFC4 (bldrs-ai/conway#713). Asserting
-            # the refusal here rather than excluding them keeps this loop's
-            # "derive the list from data/*.ifc" property while giving the
-            # regression binary's schema gate its only end-to-end coverage --
-            # a silent skip would let the gate rot unnoticed.
+            # IFC4X3 fixtures come in two kinds (bldrs-ai/conway#280). One kind
+            # is eligible for the IFC4-compatible route (src/ifc/ifc4x3_ifc4_compat.ts),
+            # produces a digest, and is gated below like any other model. The
+            # other must be REFUSED: those are listed in
+            # data/ifc4x3_expected_refusals.txt and asserted refused here (no
+            # digest, output naming IFC4X3, non-zero exit). They are asserted
+            # rather than excluded, which keeps this loop's "derive the list
+            # from data/*.ifc" property and gives the regression binary's
+            # refusal its only end-to-end coverage; a silent skip would let it
+            # rot unnoticed.
             # Output is captured to a file and echoed, rather than teed through
             # process substitution: the grep below reads this log, and a tee
             # subshell is not guaranteed to have flushed by then.
@@ -274,18 +278,22 @@ jobs:
             cat "$log"
             cand="$OUT/$m.csv"
             golden="data/$m.csv"
-            if grep -qiE "FILE_SCHEMA[^;]*IFC4X3" "$f"; then
-              if [ -f "$cand" ]; then
-                echo "::error::$f declares an IFC4X3 schema but produced a digest -- the schema gate did not fire, so 4X3 entities were read with IFC4 ordinals."
+            if grep -v '^#' data/ifc4x3_expected_refusals.txt | grep -qxF "$m.ifc"; then
+              if ! grep -qiE "FILE_SCHEMA[^;]*IFC4X3" "$f"; then
+                echo "::error::$f is listed in data/ifc4x3_expected_refusals.txt but does not declare an IFC4X3 FILE_SCHEMA -- the refusal asserted here would not be the IFC4X3 gate's."
+                status=1
+              elif [ -f "$cand" ]; then
+                echo "::error::$f must be refused (data/ifc4x3_expected_refusals.txt) but produced a digest -- IFC4X3 eligibility admitted a file IFC4 cannot decode."
                 status=1
               elif ! grep -q "IFC4X3" "$log"; then
-                echo "::error::$f produced no digest, but nothing in the output names IFC4X3 -- it failed for some other reason than the schema gate."
+                echo "::error::$f produced no digest, but nothing in the output names IFC4X3 -- it failed for some other reason than the IFC4X3 refusal."
                 status=1
               elif [ "$rc" -eq 0 ]; then
                 echo "::error::$f was refused (no digest; log names IFC4X3) but the regression binary exited 0 -- a refusal must exit non-zero so a caller/script can tell it apart from success."
                 status=1
               else
-                echo "$f: refused as expected (IFC4X3 schema gate fired, exit $rc)."
+                echo "$f: refused as expected (IFC4X3 refusal, exit $rc)."
+                refused=$((refused + 1))
               fi
               continue
             fi
@@ -308,6 +316,24 @@ jobs:
             echo "::error::No data/*.ifc quick-check models found."
             status=1
           fi
+          # The refusal branch above is the regression binary's only end-to-end
+          # IFC4X3 refusal coverage. Removing the last fixture together with
+          # its list entry would run it zero times and still pass, so require
+          # at least one (codex review of bldrs-ai/conway#718, P2). Counted on
+          # the "refused as expected" outcome, not on listing, so a listed
+          # fixture that failed its assertions does not satisfy it either.
+          if [ "$refused" -eq 0 ]; then
+            echo "::error::No IFC4X3 refusal was asserted -- data/ifc4x3_expected_refusals.txt must list at least one data/*.ifc fixture that is refused."
+            status=1
+          fi
+          # A listed refusal whose fixture is gone would otherwise stop being
+          # asserted without anything failing.
+          for listed in $(grep -v '^#' data/ifc4x3_expected_refusals.txt); do
+            if [ ! -f "data/$listed" ]; then
+              echo "::error::data/ifc4x3_expected_refusals.txt lists $listed, which is not in data/."
+              status=1
+            fi
+          done
           exit $status
 
       - name: Upload Tier A digest candidates

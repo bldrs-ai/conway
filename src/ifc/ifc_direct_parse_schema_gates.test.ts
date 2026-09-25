@@ -36,7 +36,12 @@ import { describe, expect, test, beforeAll } from '@jest/globals'
  */
 
 const REPO_ROOT = process.cwd()
-const IFC4X3_FIXTURE = path.resolve(REPO_ROOT, 'data/ifc4x3_road_entities.ifc')
+// INELIGIBLE for the IFC4-compatible IFC4X3 route (bldrs-ai/conway#280):
+// the #713 road fixture plus an IFC4X3-only IFCALIGNMENT record. The plain
+// road fixture is eligible now and loads, which the regression-child case
+// below checks as a positive control.
+const IFC4X3_FIXTURE = path.resolve(REPO_ROOT, 'data/ifc4x3_road_entities_ineligible.ifc')
+const IFC4X3_ELIGIBLE_FIXTURE = path.resolve(REPO_ROOT, 'data/ifc4x3_road_geometry.ifc')
 const IFC4_FIXTURE = path.resolve(REPO_ROOT, 'data/index.ifc')
 
 const SUBPROCESS_TIMEOUT_MS = 60000
@@ -279,6 +284,14 @@ describe('direct-parse entry points fail closed on IFC4X3', () => {
     const control = runNode(
         COMPILED_REGRESSION, ['-d', IFC4_FIXTURE, path.join(workDir, 'control-out')])
     expect(control.code).toBe(0)
+
+    // An ELIGIBLE 4X3 file loads and digests its geometry: the refusal
+    // above is about eligibility, not about the schema name.
+    const eligible = runNode(
+        COMPILED_REGRESSION, ['-d', IFC4X3_ELIGIBLE_FIXTURE, path.join(workDir, 'eligible-out')])
+    expect(eligible.code).toBe(0)
+    expect(fs.readFileSync(path.join(workDir, 'eligible-out.csv'), 'utf8'))
+        .toMatch(/IFCFACETEDBREP/)
   }, SUBPROCESS_TIMEOUT_MS)
 
   test('browser (bin.browser): refuses IFC4X3, names the schema, and ' +
