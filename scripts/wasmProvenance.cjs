@@ -145,10 +145,50 @@ function writeMarker(record) {
 }
 
 
-/** @param {string} file @return {string|null} */
-function digest(file) {
+/**
+ * Digest of EVERY artifact in a Dist directory, not just the sentinel.
+ *
+ * The sentinel alone is not enough: `ConwayGeomWasmWebMT.wasm` is a separate
+ * 1.8MB file, and a C++-only change or an interrupted copy can leave it
+ * differing between the mirrors while the Node glue matches byte for byte. A
+ * sentinel-only comparison would call that agreement and let `inspect()`
+ * return `ok` while two consumers ran different engines (codex review,
+ * conway#717).
+ *
+ * Restricted to the RUNTIME artifacts (`.js`, `.wasm`). The source-side
+ * mirror also carries the `.d.ts` declarations, which the build copies there
+ * and not into `compiled/`; folding those in flags every correctly populated
+ * tree as skewed. Measured on a good tree before narrowing this — the five
+ * `.d.ts` files were the only difference, with every `.js` and `.wasm`
+ * byte-identical. A type declaration cannot make two consumers run different
+ * engines, which is the only thing this comparison is for.
+ *
+ * Names are folded in alongside contents so an extra or missing runtime file
+ * counts as a difference rather than being silently skipped, and the marker
+ * itself is excluded — it is written per-directory and would otherwise make
+ * every pair of mirrors disagree.
+ *
+ * @param {string} dir
+ * @return {string|null} null when the directory cannot be read.
+ */
+function bundleDigest(dir) {
   try {
-    return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+    const hash = crypto.createHash('sha256')
+
+    const runtime = fs.readdirSync(dir)
+        .filter((n) => n.endsWith('.js') || n.endsWith('.wasm'))
+        .sort()
+
+    for (const name of runtime) {
+      const full = path.join(dir, name)
+
+      if (!fs.statSync(full).isFile()) {
+        continue
+      }
+      hash.update(name).update('\0').update(fs.readFileSync(full))
+    }
+
+    return hash.digest('hex')
   } catch {
     return null
   }
@@ -189,7 +229,7 @@ function classify({populated, mirrorsAgree, marker, expectedSha}) {
   if (mirrorsAgree === false) {
     return {
       status: 'skew',
-      message: `the two Dist mirrors hold DIFFERENT ${SENTINEL} builds ` +
+      message: 'the two Dist mirrors hold DIFFERENT build bundles ' +
         `(${DIST_TARGETS.map((d) => path.relative(REPO_ROOT, d)).join(' vs ')}) — ` +
         'whichever one a given consumer resolves decides which engine it runs',
       remedy: 'yarn wasm-prebuilt --force   (or a native `yarn build-GHA-all`)',
@@ -254,7 +294,7 @@ function inspect() {
   // Only meaningful when BOTH are populated; a single-mirror checkout has
   // nothing to disagree with, which is not the same as agreeing.
   const mirrorsAgree = populatedDirs.length === DIST_TARGETS.length ?
-    digest(path.join(populatedDirs[0], SENTINEL)) === digest(path.join(populatedDirs[1], SENTINEL)) :
+    bundleDigest(populatedDirs[0]) === bundleDigest(populatedDirs[1]) :
     null
 
   return classify({
@@ -268,6 +308,7 @@ function inspect() {
 
 module.exports = {
   DIST_TARGETS,
+  bundleDigest,
   classify,
   MARKER_NAME,
   SENTINEL,

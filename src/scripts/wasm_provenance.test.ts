@@ -1,5 +1,7 @@
+import fs from 'fs'
+import os from 'os'
 import path from 'path'
-import { describe, expect, test } from '@jest/globals'
+import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 import { createRequire } from 'module'
 
 /**
@@ -23,8 +25,9 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { classify, shaForPackageVersion } =
+const { bundleDigest, classify, shaForPackageVersion } =
   require_(path.resolve(process.cwd(), 'scripts/wasmProvenance.cjs')) as {
+    bundleDigest: ( dir: string ) => string | null,
     classify: ( facts: {
       populated: number,
       mirrorsAgree: boolean | null,
@@ -115,5 +118,84 @@ describe('shaForPackageVersion', () => {
       conwayCommit: null,
       conwayGeomSha: null,
     })
+  })
+})
+
+
+/**
+ * The mirror comparison, over real directories.
+ *
+ * Both cases below came out of the conway#717 review and the measurement that
+ * followed it. The first is the defect codex found: hashing only the Node
+ * sentinel misses `ConwayGeomWasmWebMT.wasm`, which is a separate 1.8MB
+ * artifact and can differ on its own. The second is the false positive that
+ * fix introduced and a measurement caught — the source-side mirror carries
+ * `.d.ts` declarations the compiled one never gets, so a whole-directory hash
+ * calls every correctly populated tree skewed, and a check that rejects
+ * correct work is one people learn to bypass.
+ */
+describe('bundleDigest', () => {
+  let a: string
+  let b: string
+
+  /**
+   * @param dir directory to create
+   * @param files basename to contents
+   */
+  const populate = ( dir: string, files: Record<string, string> ): void => {
+    fs.mkdirSync(dir, { recursive: true })
+    for (const [name, body] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, name), body)
+    }
+  }
+
+  beforeEach(() => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wasm-prov-'))
+
+    a = path.join(root, 'a')
+    b = path.join(root, 'b')
+  })
+
+  afterEach(() => {
+    fs.rmSync(path.dirname(a), { recursive: true, force: true })
+  })
+
+  test('identical runtime bundles agree', () => {
+    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
+    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
+
+    expect(bundleDigest(a)).toBe(bundleDigest(b))
+  })
+
+  test('THE DEFECT: a differing .wasm is skew even when the glue matches', () => {
+    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
+    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'DIFFERENT' })
+
+    expect(bundleDigest(a)).not.toBe(bundleDigest(b))
+  })
+
+  test('a missing runtime file is skew, not a silent skip', () => {
+    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
+    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue' })
+
+    expect(bundleDigest(a)).not.toBe(bundleDigest(b))
+  })
+
+  test('.d.ts declarations on one side only do NOT count as skew', () => {
+    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasm.d.ts': 'declarations' })
+    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue' })
+
+    expect(bundleDigest(a)).toBe(bundleDigest(b))
+  })
+
+  test('the per-directory marker does not count as skew', () => {
+    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', '.wasm-provenance.json': '{"a":1}' })
+    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue', '.wasm-provenance.json': '{"b":2}' })
+
+    expect(bundleDigest(a)).toBe(bundleDigest(b))
+  })
+
+  test('an unreadable directory digests to null rather than throwing', () => {
+    expect(bundleDigest(path.join(a, 'nope'))).toBeNull()
   })
 })

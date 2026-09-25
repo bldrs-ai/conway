@@ -22,3 +22,9 @@ cp ./bin/release/* ../../compiled/dependencies/conway-geom/Dist
 
 cd ../../
 yarn build-incremental
+
+# Record which conway-geom source these binaries came from. Stamped here,
+# at the point Dist is written, rather than in each package.json wrapper:
+# there are a dozen build entry points and a check that rejects a correctly
+# rebuilt tree is one people learn to bypass (conway#717 review).
+yarn wasm-stamp
