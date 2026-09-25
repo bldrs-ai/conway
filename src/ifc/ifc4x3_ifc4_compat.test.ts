@@ -17,6 +17,7 @@ import StepEntityBase from '../step/step_entity_base'
 import { flatLayout, parseExpressSchema } from './ifc4x3_decode_compat_derive'
 import {
   buildIfc4x3CompatIndex,
+  buildIfc4x3CompatIndexAsync,
   Ifc4x3CompatIndex,
   Ifc4x3IneligibleError,
 } from './ifc4x3_ifc4_compat'
@@ -186,6 +187,32 @@ describe( 'IFC4X3 eligibility for the IFC4-compatible route', () => {
     expect( refusal( ifc4x3(
         "#1=(IFCKERB('0fixt0000000000000001x',$,$,$,$,$,$,$,$)IFCOBJECT($,$,$,$,$));\n" ) ) )
         .toEqual( expect.arrayContaining( [ expect.stringMatching( /^#1: inline keyword IFCKERB/ ) ] ) )
+  } )
+
+  // Eligibility is a claim about the whole file. A parse that stops short
+  // leaves records unexamined and the stopped record's keyword unattributed,
+  // so without a complete-parse requirement this file came back eligible:
+  // a one-row index, SYNTAX_ERROR, and no reason recorded (codex review of
+  // bldrs-ai/conway#718, P1). Both twins share `decide`, and both are
+  // asserted, since each passes its own build's result into it.
+  test( 'a truncated file refuses, even when every complete record is eligible', async () => {
+
+    const truncated = new TextEncoder().encode(
+        new TextDecoder().decode( ifc4x3( PAVEMENT( 1, '$,$,$,$,$' ) ) )
+            .replace( /ENDSEC;\nEND-ISO-10303-21;\n$/, '#2=IFCALIGNMENT(' ) )
+
+    const reasons = refusal( truncated )
+
+    expect( reasons ).toEqual( expect.arrayContaining( [
+      expect.stringMatching( /^the parse ended (SYNTAX_ERROR|INCOMPLETE) before the whole file/ ),
+    ] ) )
+
+    await expect( buildIfc4x3CompatIndexAsync( new BufferByteSource( truncated ), 1024 * 1024 ) )
+        .rejects.toBeInstanceOf( Ifc4x3IneligibleError )
+
+    // The same records, complete, are eligible: what refuses is the
+    // truncation, not the pavement.
+    expect( refusal( ifc4x3( PAVEMENT( 1, '$,$,$,$,$' ) ) ) ).toEqual( [] )
   } )
 
   test( 'attribution survives a grow-and-restart of the parse window', () => {

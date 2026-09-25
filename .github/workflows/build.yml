@@ -237,6 +237,7 @@ jobs:
           shopt -s nullglob
           status=0
           count=0
+          refused=0
           # Cover every in-repo quick-check model; deriving the list from
           # data/*.ifc (vs a hard-coded set) means a newly added model is gated
           # as soon as its golden is committed, with no edit here.
@@ -292,6 +293,7 @@ jobs:
                 status=1
               else
                 echo "$f: refused as expected (IFC4X3 refusal, exit $rc)."
+                refused=$((refused + 1))
               fi
               continue
             fi
@@ -312,6 +314,16 @@ jobs:
           done
           if [ "$count" -eq 0 ]; then
             echo "::error::No data/*.ifc quick-check models found."
+            status=1
+          fi
+          # The refusal branch above is the regression binary's only end-to-end
+          # IFC4X3 refusal coverage. Removing the last fixture together with
+          # its list entry would run it zero times and still pass, so require
+          # at least one (codex review of bldrs-ai/conway#718, P2). Counted on
+          # the "refused as expected" outcome, not on listing, so a listed
+          # fixture that failed its assertions does not satisfy it either.
+          if [ "$refused" -eq 0 ]; then
+            echo "::error::No IFC4X3 refusal was asserted -- data/ifc4x3_expected_refusals.txt must list at least one data/*.ifc fixture that is refused."
             status=1
           fi
           # A listed refusal whose fixture is gone would otherwise stop being

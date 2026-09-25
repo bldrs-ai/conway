@@ -1,7 +1,7 @@
 import TypeIndex from '../indexing/type_index'
 import { ByteSource, ReadableByteSource } from '../step/parsing/byte_source'
 import { ColumnarIndexSink } from '../step/parsing/columnar_index'
-import StepParser, { StepHeader } from '../step/parsing/step_parser'
+import StepParser, { ParseResult, StepHeader } from '../step/parsing/step_parser'
 import {
   buildColumnarIndexStreaming,
   buildColumnarIndexStreamingAsync,
@@ -312,9 +312,33 @@ class Ifc4x3EligibilityCollector {
   /**
    * Decide eligibility over everything indexed.
    *
+   * Eligibility is a claim about the WHOLE file, so a parse that stopped
+   * short cannot establish it: records past the stop were never looked at,
+   * and a keyword lookup whose record never completed was never attributed
+   * (codex review of bldrs-ai/conway#718, P1 — a valid record followed by a
+   * truncated `#2=IFCALIGNMENT(` came back SYNTAX_ERROR with a one-row index
+   * and no reason recorded). IFC4 files keep the builder's warn-and-continue
+   * on a partial parse; an IFC4X3 file fails closed instead, because a
+   * partial index of it is exactly what #713's refusal exists to prevent.
+   *
+   * @param result How the private parse ended.
    * @throws {Ifc4x3IneligibleError} If the file is not eligible.
    */
-  public decide(): void {
+  public decide( result: ParseResult ): void {
+
+    if ( result !== ParseResult.COMPLETE ) {
+      this.refuse( `the parse ended ${ParseResult[ result ]} before the whole file ` +
+        'was checked' )
+    }
+
+    // After a complete parse every lookup has been attributed by a later
+    // record's hook (a grow-and-restart re-parses, and so re-attributes, the
+    // record it discarded), so a leftover one is a keyword no record owns.
+    for ( const lookup of this.pending_ ) {
+      this.refuse( `keyword ${lookup.name} was looked up in a record that never completed` )
+    }
+
+    this.pending_ = []
 
     for ( let typeID = 0; typeID < this.seen_.length; ++typeID ) {
 
@@ -383,7 +407,7 @@ export function buildIfc4x3CompatIndex( source: ByteSource, pool: number ): Ifc4
       source, parser, pool, collector.onRecordIndexed,
       new ColumnarIndexSink< EntityTypesIfc >(), assertIfc4x3Header )
 
-  collector.decide()
+  collector.decide( built.result )
 
   return { ...built, fieldMasks: collector.fieldMasks }
 }
@@ -411,7 +435,7 @@ export async function buildIfc4x3CompatIndexAsync(
       source, parser, pool, collector.onRecordIndexed, onProgress, void 0,
       new ColumnarIndexSink< EntityTypesIfc >(), assertIfc4x3Header )
 
-  collector.decide()
+  collector.decide( built.result )
 
   return { ...built, fieldMasks: collector.fieldMasks }
 }
