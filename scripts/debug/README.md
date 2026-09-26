@@ -286,8 +286,27 @@ they apply to any new instrumentation you write, not just to this script.
    - **A stale prebuilt wasm.** `yarn wasm-prebuilt` checks whether the
      Dist files are *present*, not whether they match the current
      `conway-geom` pin, and reports `already present — skipping`. Three
-     geometry suites failed against binaries several commits old. Use
-     `FORCE=1 yarn wasm-prebuilt` after any submodule change.
+     geometry suites failed against binaries several commits old.
+
+     This bullet used to end "use `FORCE=1 yarn wasm-prebuilt` after any
+     submodule change", and that was not enough — a countermeasure you
+     have to remember is one you eventually don't. It recurred in Sep
+     2026 with worse consequences than a failing suite: `face_health.mjs`
+     ran against a Dist several commits behind the checked-out submodule
+     and reported `ADVANCED_FACE #18856` still carrying the fold that
+     conway-geom#214 had already removed. A closed defect read as live,
+     with no signal of any kind, in the exact workflow this repo runs
+     (bump the submodule, measure, commit the pin).
+
+     It is now enforced rather than remembered. `Dist/` carries a
+     `.wasm-provenance.json` naming the conway-geom SHA it was built
+     from; `yarn check-wasm-fresh` compares that to the submodule and is
+     wired into `yarn precommit`, and **every script in this directory
+     refuses to run against a mismatch** (exit 3). If you are measuring
+     an old engine deliberately — an A/B against a previous pin — set
+     `CONWAY_ALLOW_STALE_WASM=1`, which downgrades the refusal to a
+     warning that still names which engine produced the numbers.
+     See `scripts/wasmProvenance.cjs`.
    - **A format string.** `printf`-ing a `double` through `%zu` printed
      `cap=0` for every face, which made "169 of 169 faces hit the
      amplification cap" look true when it was comparing against zero.
