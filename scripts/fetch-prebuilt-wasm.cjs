@@ -26,6 +26,7 @@ const { execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const {ALL_TARGETS, shaForPackageVersion, writeMarker} = require('./wasmProvenance.cjs')
 
 const PACKAGE = '@bldrs-ai/conway'
 const VERSION = process.env.CONWAY_PREBUILT_WASM_VERSION || 'latest'
@@ -89,13 +90,31 @@ function main() {
       }
     }
 
+    // Stamp WHICH conway-geom source these binaries came from. Without this
+    // the bundle is indistinguishable from one built here, and the caveat
+    // below is only a console line nobody re-reads six commits later.
+    // `resolvedVersion` is the concrete version npm gave us, not the `latest`
+    // tag we asked for — a tag is not a provenance record.
+    const resolvedVersion = /^(.*)\.tgz$/.exec(tgz.replace(/^bldrs-ai-conway-/, ''))?.[1] ?? VERSION
+    const {conwayCommit, conwayGeomSha} = shaForPackageVersion(resolvedVersion)
+
+    // A published tarball is a complete bundle, so every target is covered.
+    writeMarker(ALL_TARGETS, {
+      conwayGeomSha,
+      conwayCommit,
+      // A published build is by construction from a clean tree at that commit.
+      sourceDirty: null,
+      source: `npm:${PACKAGE}@${resolvedVersion}`,
+    })
+
     console.log(`[prebuilt-wasm] installed ${files.length} file(s) ` +
       `(${files.join(', ')}) into:`)
     for (const target of DIST_TARGETS) {
       console.log(`  - ${path.relative(REPO_ROOT, target)}`)
     }
     console.log('[prebuilt-wasm] done. NOTE: this is the last-published build; ' +
-      'rebuild from source if you changed the conway-geom submodule.')
+      'rebuild from source if you changed the conway-geom submodule. ' +
+      '`yarn check-wasm-fresh` now enforces that rather than trusting this line.')
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true })
   }

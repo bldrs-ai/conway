@@ -286,8 +286,44 @@ they apply to any new instrumentation you write, not just to this script.
    - **A stale prebuilt wasm.** `yarn wasm-prebuilt` checks whether the
      Dist files are *present*, not whether they match the current
      `conway-geom` pin, and reports `already present — skipping`. Three
-     geometry suites failed against binaries several commits old. Use
-     `FORCE=1 yarn wasm-prebuilt` after any submodule change.
+     geometry suites failed against binaries several commits old.
+
+     This bullet used to end "use `FORCE=1 yarn wasm-prebuilt` after any
+     submodule change", and that was not enough — a countermeasure you
+     have to remember is one you eventually don't. It recurred in Sep
+     2026 with worse consequences than a failing suite: `face_health.mjs`
+     ran against a Dist several commits behind the checked-out submodule
+     and reported `ADVANCED_FACE #18856` still carrying the fold that
+     conway-geom#214 had already removed. A closed defect read as live,
+     with no signal of any kind, in the exact workflow this repo runs
+     (bump the submodule, measure, commit the pin).
+
+     It is now checked rather than remembered, though deliberately
+     NARROWLY. `Dist/` carries a `.wasm-provenance.json` recording, per
+     build target, the conway-geom source it was built from. The scripts
+     in this directory **refuse to run** (exit 3) on exactly one
+     condition: that record names a different submodule SHA than the
+     checkout has — the incident above. Everything else it can tell you
+     (a dirty submodule, an unstamped bundle, a stale sibling) is
+     printed and allowed through.
+
+     That asymmetry is the design, not an oversight. The first version
+     tried to be sound about what the build depends on, and across four
+     review rounds each widening found another missing term — untracked
+     file contents, nested submodules, runtime variant selection — while
+     twice rejecting a *correctly rebuilt* tree. A check that is
+     occasionally wrong about correct work is one people learn to
+     bypass, which is how the original prose warning failed. See
+     `scripts/wasmProvenance.cjs` for the full list of what is
+     uncovered by choice.
+
+     The verdict is about `ConwayGeomWasmNodeMT`, the one artifact these
+     scripts and jest load by default. A stale sibling is a note rather
+     than a refusal, and the check does not follow loader overrides such
+     as `FORCE_SINGLE_THREAD`. Set `CONWAY_ALLOW_STALE_WASM=1` to
+     downgrade even the SHA mismatch to a warning, for a deliberate A/B
+     against an older pin; it still prints which engine you are running.
+
    - **A format string.** `printf`-ing a `double` through `%zu` printed
      `cap=0` for every face, which made "169 of 169 faces hit the
      amplification cap" look true when it was comparing against zero.

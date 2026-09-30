@@ -77,6 +77,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {localCentre, placeCentre, robustCentre} from './displacement.mjs'
+import {assertWasmFresh} from './wasmFreshness.mjs'
+
+assertWasmFresh('model_report')
 
 const REPO_ROOT = new URL('../../', import.meta.url)
 
