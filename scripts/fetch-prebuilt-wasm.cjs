@@ -26,7 +26,7 @@ const { execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const {shaForPackageVersion, writeMarker} = require('./wasmProvenance.cjs')
+const {ALL_TARGETS, shaForPackageVersion, writeMarker} = require('./wasmProvenance.cjs')
 
 const PACKAGE = '@bldrs-ai/conway'
 const VERSION = process.env.CONWAY_PREBUILT_WASM_VERSION || 'latest'
@@ -98,7 +98,8 @@ function main() {
     const resolvedVersion = /^(.*)\.tgz$/.exec(tgz.replace(/^bldrs-ai-conway-/, ''))?.[1] ?? VERSION
     const {conwayCommit, conwayGeomSha} = shaForPackageVersion(resolvedVersion)
 
-    writeMarker({
+    // A published tarball is a complete bundle, so every target is covered.
+    writeMarker(ALL_TARGETS, {
       conwayGeomSha,
       conwayCommit,
       // A published build is by construction from a clean tree at that commit.

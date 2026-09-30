@@ -21,7 +21,11 @@ const WARN_ONLY = process.argv.includes('--warn-only')
 // there is nothing the developer did wrong to get there.
 const TOLERATED = new Set(['ok', 'unresolved'])
 
-const {status, message, remedy} = inspect()
+const {status, message, remedy, warnings} = inspect()
+
+for (const warning of warnings) {
+  console.warn(`[wasm-fresh] note: ${warning}`)
+}
 
 if (status === 'ok') {
   console.log(`[wasm-fresh] ${message}`)

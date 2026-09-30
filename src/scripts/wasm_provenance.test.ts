@@ -25,22 +25,28 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { REQUIRED_TARGETS, bundleDigest, classify, shaForPackageVersion } =
+const { ALL_TARGETS, GATED_TARGET, bundleDigest, classify, markerEntries, shaForPackageVersion } =
   require_(path.resolve(process.cwd(), 'scripts/wasmProvenance.cjs')) as {
-    REQUIRED_TARGETS: string[],
+    ALL_TARGETS: string[],
+    GATED_TARGET: string,
+    markerEntries: ( marker: object | null ) => Record<string, object> | null,
     bundleDigest: ( dir: string ) => string | null,
     classify: ( facts: {
       populated: number,
       mirrorsAgree: boolean | null,
+      // Either shape: a v1 flat marker (which describes the whole bundle) or
+      // the v2 per-target map. `markerEntries` normalizes between them.
       marker: {
         conwayGeomSha?: string | null,
         conwayCommit?: string | null,
         sourceDirty?: string | null,
         source?: string,
+        version?: number,
+        targets?: Record<string, object>,
       } | null,
       expectedSha: string | null,
       expectedDirty?: string | null,
-    } ) => { status: string, message: string, remedy: string | null },
+    } ) => { status: string, message: string, remedy: string | null, warnings: string[] },
     shaForPackageVersion: ( version: string ) => {
       conwayCommit: string | null,
       conwayGeomSha: string | null,
@@ -155,19 +161,87 @@ describe('classify', () => {
 })
 
 
-describe('REQUIRED_TARGETS', () => {
+describe('the gate is scoped to the artifact its consumers load', () => {
   /*
-   * A stamp asserts a COMPLETE bundle. Partial builds copy bin/release
-   * wholesale, so siblings from an earlier build at another SHA ride along;
-   * stamping those converts "nobody can tell" into a confident wrong answer.
+   * Rounds one to three of the conway#717 review walked a circle: partial
+   * builds must not be blessed (they copy siblings from an earlier SHA), and
+   * partial builds must not be blocked (build-codex-MT is documented). Both
+   * are true of the same input, so the BUNDLE was the wrong unit. Provenance
+   * is per target, and the verdict is about GATED_TARGET alone.
    */
-  test('names all four variants, so a partial build cannot satisfy it', () => {
-    expect([...REQUIRED_TARGETS].sort()).toEqual([
-      'ConwayGeomWasmNode',
-      'ConwayGeomWasmNodeMT',
-      'ConwayGeomWasmWeb',
-      'ConwayGeomWasmWebMT',
-    ])
+  const perTarget = ( targets: Record<string, object> ) => ({
+    populated: 2,
+    mirrorsAgree: true,
+    marker: { version: 2, targets },
+    expectedSha: SHA_A,
+    expectedDirty: null,
+  })
+
+  test('the gated target is the one jest and the debug probes load', () => {
+    expect(GATED_TARGET).toBe('ConwayGeomWasmNodeMT')
+    expect(ALL_TARGETS).toContain(GATED_TARGET)
+  })
+
+  test('THE DEFECT: a stale SIBLING warns but does not block', () => {
+    const result = classify(perTarget({
+      ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_A, sourceDirty: null },
+      ConwayGeomWasmWebMT: { conwayGeomSha: SHA_B, sourceDirty: null },
+    }))
+
+    expect(result.status).toBe('ok')
+    expect(result.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining('ConwayGeomWasmWebMT is stale')]))
+  })
+
+  test('a stale GATED target still fails', () => {
+    const result = classify(perTarget({
+      ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_B, sourceDirty: null },
+      ConwayGeomWasmWebMT: { conwayGeomSha: SHA_A, sourceDirty: null },
+    }))
+
+    expect(result.status).toBe('stale')
+  })
+
+  test('a partial stamp covering only the gated target is ok', () => {
+    const result = classify(perTarget({ ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_A, sourceDirty: null } }))
+
+    expect(result.status).toBe('ok')
+    // The three absent siblings are unstamped, not silently fine.
+    expect(result.warnings).toHaveLength(3)
+  })
+
+  test('a stamp that misses the gated target is unstamped, however complete otherwise', () => {
+    const result = classify(perTarget({ ConwayGeomWasmWeb: { conwayGeomSha: SHA_A, sourceDirty: null } }))
+
+    expect(result.status).toBe('unstamped')
+    expect(result.remedy).toContain('--built ConwayGeomWasmNodeMT')
+  })
+
+  test('a remedy naming wasm-stamp always names --built with it', () => {
+    const result = classify(perTarget({}))
+
+    // Round three found the remedy printing a bare `yarn wasm-stamp`, which
+    // the argument parser rejects — advice that cannot be followed.
+    expect(result.remedy).toEqual(expect.stringContaining('wasm-stamp --built'))
+  })
+})
+
+
+describe('markerEntries', () => {
+  test('a v1 flat marker describes every target, so old checkouts keep working', () => {
+    const entries = markerEntries({ conwayGeomSha: SHA_A, source: 'npm' })
+
+    expect(Object.keys(entries ?? {}).sort()).toEqual([...ALL_TARGETS].sort())
+  })
+
+  test('a v2 marker is returned as-is', () => {
+    const targets = { ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_A } }
+
+    expect(markerEntries({ version: 2, targets })).toEqual(targets)
+  })
+
+  test('no marker is null, not an empty set of targets', () => {
+    expect(markerEntries(null)).toBeNull()
   })
 })
 

@@ -1,42 +1,39 @@
 #!/usr/bin/env node
 /**
- * Record that the WASM currently in `Dist/` was built from the conway-geom
- * source this checkout has — or, when the build was partial, remove any
- * existing marker so the bundle reads `unstamped` instead.
+ * Record that the named targets in `Dist/` were built from the conway-geom
+ * source this checkout has.
  *
  * Usage: `yarn wasm-stamp --built <target>...`
  *
- * Why the target list is required
- * -------------------------------
- * A partial build (`build-GHA-MT`, `build-codex-MT`, `yarn build-MT`) rebuilds
- * one or two variants but copies `bin/release/*` wholesale, so siblings left
- * there by an earlier build at a different SHA ride along into `Dist/`.
- * Stamping that asserts the stale Web artifacts are current, and a browser
- * consumer then executes them under an `ok` verdict — a worse outcome than no
- * marker at all, because it converts "nobody can tell" into a confident wrong
- * answer (codex review, conway#717). So a stamp is written only when all four
- * variants were rebuilt; anything less clears the marker.
+ * Provenance is per target, so a partial build stamps exactly what it
+ * rebuilt and leaves every other entry untouched. That is what makes the
+ * documented `yarn build-codex-MT` loop work with the freshness gate: it
+ * refreshes `ConwayGeomWasmNodeMT`, which is what jest and the debug probes
+ * load, while any stale Web sibling keeps its older provenance and is
+ * reported as a warning rather than erased or vouched for (conway#717).
  *
- * This remains an ASSERTION about a complete build, not a verification of it:
- * nothing here rebuilds or hashes the binaries against their source.
+ * This remains an ASSERTION, not a verification — nothing here rebuilds or
+ * hashes the binaries against their source — so it belongs immediately after
+ * a build that succeeded, and nowhere else.
  */
-const {REQUIRED_TARGETS, clearMarker, inspect, submoduleDirtyDigest, submoduleSha, writeMarker} =
+const {ALL_TARGETS, inspect, submoduleDirtyDigest, submoduleSha, writeMarker} =
   require('./wasmProvenance.cjs')
 
 const args = process.argv.slice(2)
 const builtIndex = args.indexOf('--built')
 const built = builtIndex === -1 ? [] : args.slice(builtIndex + 1).filter((a) => !a.startsWith('--'))
-const missing = REQUIRED_TARGETS.filter((t) => !built.includes(t))
+const unknown = built.filter((t) => !ALL_TARGETS.includes(t))
 
-if (missing.length > 0) {
-  const cleared = clearMarker()
+if (built.length === 0) {
+  console.error('[wasm-stamp] ERROR: no targets given. Usage: ' +
+    `yarn wasm-stamp --built <${ALL_TARGETS.join('|')}>...`)
+  process.exit(1)
+}
 
-  console.log('[wasm-stamp] partial build ' +
-    `(${built.length === 0 ? 'no targets named' : built.join(', ')}); ` +
-    `not stamping — ${missing.join(', ')} may be stale in Dist.`)
-  console.log(`[wasm-stamp] cleared ${cleared.length} existing marker(s); ` +
-    'Dist now reads `unstamped` until a full build or `yarn wasm-prebuilt --force`.')
-  process.exit(0)
+if (unknown.length > 0) {
+  console.error(`[wasm-stamp] ERROR: unknown target(s): ${unknown.join(', ')}`)
+  console.error(`[wasm-stamp] known targets: ${ALL_TARGETS.join(', ')}`)
+  process.exit(1)
 }
 
 const sha = submoduleSha()
@@ -46,7 +43,7 @@ if (sha === null) {
   process.exit(1)
 }
 
-const written = writeMarker({
+const written = writeMarker(built, {
   conwayGeomSha: sha,
   conwayCommit: null,
   sourceDirty: submoduleDirtyDigest(),
@@ -58,5 +55,12 @@ if (written.length === 0) {
   process.exit(1)
 }
 
-console.log(`[wasm-stamp] recorded conway-geom ${sha.slice(0, 10)} in ${written.length} location(s)`)
-console.log(`[wasm-stamp] ${inspect().message}`)
+console.log(`[wasm-stamp] ${built.join(', ')} -> conway-geom ${sha.slice(0, 10)} ` +
+  `in ${written.length} location(s)`)
+
+const {message, warnings} = inspect()
+
+console.log(`[wasm-stamp] ${message}`)
+for (const warning of warnings) {
+  console.log(`[wasm-stamp] note: ${warning}`)
+}

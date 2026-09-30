@@ -26,7 +26,11 @@ const {inspect} = require('../wasmProvenance.cjs')
  * @return {void} exits the process on a stale build.
  */
 export function assertWasmFresh(toolName) {
-  const {status, message, remedy} = inspect()
+  const {status, message, remedy, warnings} = inspect()
+
+  for (const warning of warnings) {
+    console.warn(`[${toolName}] note: ${warning}`)
+  }
 
   if (status === 'ok') {
     return

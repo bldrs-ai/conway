@@ -299,10 +299,18 @@ they apply to any new instrumentation you write, not just to this script.
      (bump the submodule, measure, commit the pin).
 
      It is now enforced rather than remembered. `Dist/` carries a
-     `.wasm-provenance.json` naming the conway-geom SHA it was built
-     from; `yarn check-wasm-fresh` compares that to the submodule and is
+     `.wasm-provenance.json` recording, PER BUILD TARGET, the conway-geom
+     source it was built from — the submodule SHA plus a digest of any
+     uncommitted state, so editing the C++ invalidates it just as a commit
+     would. `yarn check-wasm-fresh` compares that to the submodule and is
      wired into `yarn precommit`, and **every script in this directory
-     refuses to run against a mismatch** (exit 3). If you are measuring
+     refuses to run against a mismatch** (exit 3).
+
+     The verdict is about `ConwayGeomWasmNodeMT`, the one artifact these
+     scripts and jest actually load. A stale Web sibling is reported as a
+     note rather than a refusal — it cannot change what you are measuring,
+     and blocking on it would make the fast `yarn build-codex-MT` loop
+     unusable, which is how the previous design got bypassed. If you are measuring
      an old engine deliberately — an A/B against a previous pin — set
      `CONWAY_ALLOW_STALE_WASM=1`, which downgrades the refusal to a
      warning that still names which engine produced the numbers.

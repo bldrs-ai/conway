@@ -26,13 +26,33 @@
  * outright on a cache miss. This module is that same rule, moved to where
  * humans and debug scripts can hit it.
  *
+ * Provenance is PER ARTIFACT, and the gate is SCOPED
+ * --------------------------------------------------
+ * An earlier design stamped the bundle as a whole, and that ran into a
+ * contradiction the review surfaced in three rounds (conway#717): a partial
+ * build (`build-codex-MT`, `build-GHA-MT`, `yarn build-MT`) rebuilds one or
+ * two variants and copies `bin/release/*` wholesale, so stamping it vouches
+ * for siblings that may predate the change — while NOT stamping it makes the
+ * documented MT workflow fail the gate on a correctly rebuilt tree. Stamping
+ * and clearing are both wrong for the same input, which means the bundle was
+ * the wrong unit.
+ *
+ * So each TARGET carries its own identity, and a partial build updates only
+ * what it rebuilt. The gate then asks a narrower, answerable question: is the
+ * artifact THIS CONSUMER LOADS current? `GATED_TARGET` is
+ * `ConwayGeomWasmNodeMT`, which is what jest and every script in
+ * `scripts/debug/` import. A stale sibling is reported as a warning rather
+ * than a failure, because it cannot affect them — and is still named, so a
+ * release path can act on it.
+ *
  * What a marker does and does not assert
  * --------------------------------------
  * `wasm-stamp` and the native build write the marker from the CURRENT
- * submodule SHA — that is an ASSERTION that the build in `Dist/` came from
- * that source, not a verification of it. Nothing here hashes the wasm against
- * a rebuild. A marker is therefore as trustworthy as the step that wrote it;
- * what it removes is the case where nobody can even tell.
+ * submodule state — that is an ASSERTION that the artifact in `Dist/` came
+ * from that source, not a verification of it. Nothing here hashes the wasm
+ * against a rebuild, so a build that dies halfway with a zero exit still
+ * stamps. A marker is as trustworthy as the step that wrote it; what it
+ * removes is the case where nobody can even tell.
  */
 const {execFileSync} = require('child_process')
 const crypto = require('crypto')
@@ -56,15 +76,13 @@ const DIST_TARGETS = [
 
 const MARKER_NAME = '.wasm-provenance.json'
 
+const GATED_TARGET = 'ConwayGeomWasmNodeMT'
+
 /**
- * A stamp may only be written when all four were rebuilt. A partial build
- * (`build-GHA-MT`, `build-codex-MT`, `yarn build-MT`) copies `bin/release/*`
- * wholesale, so siblings left there by an earlier build at a different SHA
- * ride along into Dist; stamping that bundle asserts the stale Web artifacts
- * are current, and browser consumers then execute them under an `ok` verdict
- * (codex review, conway#717). Partial paths clear the marker instead.
+ * Every variant a complete build produces. Used to stamp a full build and to
+ * report stale siblings; NOT a precondition for the gate — see `GATED_TARGET`.
  */
-const REQUIRED_TARGETS = [
+const ALL_TARGETS = [
   'ConwayGeomWasmNode',
   'ConwayGeomWasmNodeMT',
   'ConwayGeomWasmWeb',
@@ -107,10 +125,18 @@ function submoduleSha() {
  * working-tree state in means an edit invalidates the marker exactly as a
  * commit would.
  *
- * `status --porcelain` carries the NAMES of changed and untracked files,
- * `diff HEAD` the CONTENT of tracked changes. An untracked file's contents
- * are therefore not hashed — its existence is, which is what flips the marker
- * — so this narrows the window rather than closing it completely.
+ * Three sources, because two were not enough: `status --porcelain` for the
+ * NAMES of changed and untracked files, `diff HEAD` for the CONTENT of
+ * tracked changes, and the CONTENT of each untracked file. That last one is
+ * not belt-and-braces — `dependencies/conway-geom/genie.lua` globs
+ * `conway_geometry/**` recursively, so a source file is a real build input
+ * from the moment it exists, before anyone runs `git add`. Hashing only names
+ * meant creating a file, stamping a build, then editing that file left the
+ * digest unchanged and the gate green against wasm that predated the edit
+ * (codex review, conway#717).
+ *
+ * `--exclude-standard` keeps this bounded: `bin/`, `Dist/` and `gmake/` are
+ * gitignored, so the untracked set is source files and little else.
  *
  * @return {string|null}
  */
@@ -121,9 +147,27 @@ function submoduleDirtyDigest() {
     return null
   }
 
-  const diff = git(['diff', 'HEAD'], SUBMODULE) ?? ''
+  const hash = crypto.createHash('sha256')
 
-  return crypto.createHash('sha256').update(status).update('\0').update(diff).digest('hex')
+  hash.update(status).update('\0').update(git(['diff', 'HEAD'], SUBMODULE) ?? '')
+
+  const untracked = git(['ls-files', '--others', '--exclude-standard'], SUBMODULE) ?? ''
+
+  for (const rel of untracked.split('\n').filter(Boolean).sort()) {
+    hash.update('\0').update(rel).update('\0')
+    try {
+      const full = path.join(SUBMODULE, rel)
+
+      if (fs.statSync(full).isFile()) {
+        hash.update(fs.readFileSync(full))
+      }
+    } catch {
+      // Raced with a delete, or unreadable. The name is already folded in,
+      // which is enough to mark the tree dirty.
+    }
+  }
+
+  return hash.digest('hex')
 }
 
 
@@ -169,47 +213,38 @@ function readMarker(dir) {
 
 
 /**
- * Write the same marker into every populated Dist target.
+ * Record `record` as the provenance of each named target, in every populated
+ * Dist directory.
  *
+ * @param {string[]} targets target names this record describes
  * @param {object} record
  * @return {string[]} the directories written
  */
-function writeMarker(record) {
+function writeMarker(targets, record) {
   const written = []
 
   for (const dir of DIST_TARGETS) {
     if (!fs.existsSync(dir)) {
       continue
     }
+
+    // MERGE rather than replace: a partial build must leave the entries for
+    // targets it did not rebuild exactly as they were, so their staleness
+    // stays visible instead of being erased by the rebuild of a sibling.
+    const existing = markerEntries(readMarker(dir)) ?? {}
+    const stamped = {...record, stampedAt: new Date().toISOString()}
+
+    for (const name of targets) {
+      existing[name] = stamped
+    }
+
     fs.writeFileSync(
         path.join(dir, MARKER_NAME),
-        `${JSON.stringify({...record, stampedAt: new Date().toISOString()}, null, 2)}\n`)
+        `${JSON.stringify({version: 2, targets: existing}, null, 2)}\n`)
     written.push(dir)
   }
 
   return written
-}
-
-
-/**
- * Remove the marker from every Dist target, so an unverifiable bundle reads
- * `unstamped` rather than carrying a claim nobody can stand behind.
- *
- * @return {string[]} the directories a marker was removed from
- */
-function clearMarker() {
-  const cleared = []
-
-  for (const dir of DIST_TARGETS) {
-    const marker = path.join(dir, MARKER_NAME)
-
-    if (fs.existsSync(marker)) {
-      fs.rmSync(marker)
-      cleared.push(dir)
-    }
-  }
-
-  return cleared
 }
 
 
@@ -268,11 +303,71 @@ function bundleDigest(dir) {
  */
 
 /**
+ * Evaluate ONE target's marker entry against the current source.
+ *
+ * @param {object|undefined} entry
+ * @param {string|null} expectedSha
+ * @param {string|null} expectedDirty
+ * @return {'ok'|'unstamped'|'stale'|'dirty'|'unresolved'}
+ */
+function evaluateTarget(entry, expectedSha, expectedDirty) {
+  if (entry === undefined || entry === null) {
+    return 'unstamped'
+  }
+
+  if (entry.conwayGeomSha === null || entry.conwayGeomSha === undefined || expectedSha === null) {
+    return 'unresolved'
+  }
+
+  if (entry.conwayGeomSha !== expectedSha) {
+    return 'stale'
+  }
+
+  return (entry.sourceDirty ?? null) === expectedDirty ? 'ok' : 'dirty'
+}
+
+
+/**
+ * Per-target entries from a marker, tolerating the v1 flat shape.
+ *
+ * A v1 marker described the whole bundle, which is exactly what a published
+ * tarball is, so it maps onto every target rather than being discarded — a
+ * checkout that fetched a prebuilt before this change keeps working.
+ *
+ * @param {object|null} marker
+ * @return {object|null}
+ */
+function markerEntries(marker) {
+  if (marker === null || marker === undefined) {
+    return null
+  }
+
+  if (marker.targets !== undefined && marker.targets !== null) {
+    return marker.targets
+  }
+
+  const flat = {
+    conwayGeomSha: marker.conwayGeomSha ?? null,
+    conwayCommit: marker.conwayCommit ?? null,
+    sourceDirty: marker.sourceDirty ?? null,
+    source: marker.source,
+  }
+
+  return Object.fromEntries(ALL_TARGETS.map((name) => [name, flat]))
+}
+
+
+/**
  * Decide the status from already-gathered facts.
  *
- * Kept pure and exported so the decision table is testable without a Dist
- * directory, a submodule, or a build — `inspect()` below is the I/O half and
- * does no deciding of its own.
+ * Kept pure and exported so the decision table is testable without a Dist, a
+ * submodule or a build — `inspect()` below is the I/O half and does no
+ * deciding of its own.
+ *
+ * The verdict is about `gatedTarget` ALONE. Other targets being stale is
+ * reported in `warnings`, never as a failure: they cannot affect the consumer
+ * this gate protects, and failing on them is what made the documented
+ * `build-codex-MT` workflow unusable (conway#717 review round three).
  *
  * @param {{
  *   populated: number,
@@ -280,15 +375,26 @@ function bundleDigest(dir) {
  *   marker: object|null,
  *   expectedSha: string|null,
  *   expectedDirty: string|null,
+ *   gatedTarget: string,
  * }} facts
- * @return {{status: WasmStatus, message: string, remedy: string|null}}
+ * @return {{status: string, message: string, remedy: string|null, warnings: string[]}}
  */
-function classify({populated, mirrorsAgree, marker, expectedSha, expectedDirty = null}) {
+function classify({
+  populated,
+  mirrorsAgree,
+  marker,
+  expectedSha,
+  expectedDirty = null,
+  gatedTarget = GATED_TARGET,
+}) {
+  const REBUILD = `yarn wasm-prebuilt --force   (or rebuild: yarn build-codex-MT / yarn build-GHA-all)`
+
   if (populated === 0) {
     return {
       status: 'missing',
       message: `no ${SENTINEL} in either Dist location — the geometry wasm is not populated`,
-      remedy: 'yarn wasm-prebuilt   (or a native `yarn build-GHA-all`)',
+      remedy: 'yarn wasm-prebuilt',
+      warnings: [],
     }
   }
 
@@ -301,67 +407,62 @@ function classify({populated, mirrorsAgree, marker, expectedSha, expectedDirty =
       message: 'the two Dist mirrors hold DIFFERENT build bundles ' +
         `(${DIST_TARGETS.map((d) => path.relative(REPO_ROOT, d)).join(' vs ')}) — ` +
         'whichever one a given consumer resolves decides which engine it runs',
-      remedy: 'yarn wasm-prebuilt --force   (or a native `yarn build-GHA-all`)',
+      remedy: REBUILD,
+      warnings: [],
     }
   }
 
-  if (marker === null) {
-    return {
-      status: 'unstamped',
-      message: 'Dist carries no provenance marker, so nothing can say which ' +
+  const entries = markerEntries(marker)
+  const gated = entries === null ? undefined : entries[gatedTarget]
+  const status = evaluateTarget(gated, expectedSha, expectedDirty)
+
+  // Siblings are advisory. Named individually so a release path can act on
+  // them without re-deriving which one moved.
+  const warnings = entries === null ? [] : ALL_TARGETS
+      .filter((name) => name !== gatedTarget)
+      .map((name) => [name, evaluateTarget(entries[name], expectedSha, expectedDirty)])
+      .filter(([, s]) => s !== 'ok' && s !== 'unresolved')
+      .map(([name, s]) => `${name} is ${s} — it does not gate jest or the debug ` +
+        'probes, but a browser consumer would run it')
+
+  const MESSAGES = {
+    unstamped: {
+      message: `${gatedTarget} carries no provenance, so nothing can say which ` +
         'conway-geom source it was built from',
-      remedy: 'yarn wasm-prebuilt --force, or `yarn wasm-stamp` if you know ' +
-        'this build matches the checked-out submodule',
-    }
-  }
-
-  if (marker.conwayGeomSha === null || marker.conwayGeomSha === undefined) {
-    return {
-      status: 'unresolved',
-      message: `Dist came from ${marker.source ?? 'an unknown source'} whose ` +
-        'conway-geom SHA could not be resolved in this clone' +
-        (marker.conwayCommit ? ` (conway commit ${marker.conwayCommit} not present)` : ''),
+      remedy: `yarn wasm-prebuilt --force, or \`yarn wasm-stamp --built ${gatedTarget}\` ` +
+        'if you know this build matches the checked-out submodule',
+    },
+    unresolved: {
+      message: `${gatedTarget}'s conway-geom SHA could not be resolved in this clone` +
+        (gated?.conwayCommit ? ` (conway commit ${gated.conwayCommit} not present)` : ''),
       remedy: 'git fetch origin, then `yarn check-wasm-fresh` again',
-    }
-  }
-
-  if (expectedSha === null) {
-    return {
-      status: 'unresolved',
-      message: 'could not read the conway-geom submodule HEAD to compare against',
-      remedy: 'yarn submodule-update',
-    }
-  }
-
-  if (marker.conwayGeomSha === expectedSha && (marker.sourceDirty ?? null) !== expectedDirty) {
-    return {
-      status: 'dirty',
-      message: expectedDirty === null ?
-        'conway-geom is clean but Dist was built from a modified working tree' :
-        'conway-geom has uncommitted changes that postdate this build — the ' +
-          'wasm predates your edits even though the submodule SHA still matches',
-      remedy: 'rebuild conway-geom (`yarn build-codex-all` / `yarn build-GHA-all`)',
-    }
-  }
-
-  if (marker.conwayGeomSha !== expectedSha) {
-    return {
-      status: 'stale',
-      message: `Dist was built from conway-geom ${marker.conwayGeomSha.slice(0, 10)} ` +
-        `but this checkout has ${expectedSha.slice(0, 10)} — every consumer is ` +
+    },
+    stale: {
+      message: `${gatedTarget} was built from conway-geom ` +
+        `${String(gated?.conwayGeomSha).slice(0, 10)} but this checkout has ` +
+        `${String(expectedSha).slice(0, 10)} — jest and the debug probes are ` +
         'running the OLD engine against the current source',
-      remedy: 'yarn wasm-prebuilt --force   (or a native `yarn build-GHA-all`)',
+      remedy: REBUILD,
+    },
+    dirty: {
+      message: 'conway-geom has uncommitted changes that postdate this build — ' +
+        `${gatedTarget} predates your edits even though the submodule SHA still matches`,
+      remedy: 'rebuild conway-geom (`yarn build-codex-MT` rebuilds just this target)',
+    },
+  }
+
+  if (status === 'ok') {
+    return {
+      status: 'ok',
+      message: `${gatedTarget} matches conway-geom ${String(expectedSha).slice(0, 10)} ` +
+        `(${gated?.source ?? 'unknown source'})`,
+      remedy: null,
+      warnings,
     }
   }
 
-  return {
-    status: 'ok',
-    message: `Dist matches conway-geom ${expectedSha.slice(0, 10)} ` +
-      `(${marker.source ?? 'unknown source'})`,
-    remedy: null,
-  }
+  return {status, ...MESSAGES[status], warnings}
 }
-
 
 /**
  * Gather the facts from disk and git, then `classify` them.
@@ -383,16 +484,19 @@ function inspect() {
     marker: populatedDirs.length > 0 ? readMarker(populatedDirs[0]) : null,
     expectedSha: submoduleSha(),
     expectedDirty: submoduleDirtyDigest(),
+    gatedTarget: GATED_TARGET,
   })
 }
 
 
 module.exports = {
+  ALL_TARGETS,
+  evaluateTarget,
+  markerEntries,
   DIST_TARGETS,
-  REQUIRED_TARGETS,
+  GATED_TARGET,
   bundleDigest,
   classify,
-  clearMarker,
   submoduleDirtyDigest,
   MARKER_NAME,
   SENTINEL,
