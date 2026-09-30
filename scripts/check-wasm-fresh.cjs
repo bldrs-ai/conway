@@ -1,27 +1,23 @@
 #!/usr/bin/env node
 /**
- * Fail when the geometry WASM in `Dist/` was not built from the conway-geom
- * source this checkout has. See scripts/wasmProvenance.cjs for why.
+ * Report whether the geometry WASM matches the conway-geom source this
+ * checkout has. See scripts/wasmProvenance.cjs for the scope, and for what
+ * this deliberately does not cover.
  *
- * Sibling of `check-compiled-fresh.cjs`, which answers the same shape of
- * question for TypeScript: "the build ran" and "the outputs are current" are
- * different claims, and only the second one matters.
+ * Exit 1 ONLY when the marker names a different submodule SHA. Every other
+ * condition — a dirty tree, an unstamped or unresolved bundle, a stale
+ * sibling — prints and exits 0. That asymmetry is the point: four review
+ * rounds on conway#717 showed the broader checks rejecting correctly rebuilt
+ * trees, and a gate that is wrong about correct work is one people route
+ * around.
  *
- * Exit codes: 0 fresh (or a warning the caller chose to tolerate), 1 stale.
- *
- * `--warn-only` reports and exits 0 — for call sites that want the notice
- * without blocking, such as the hint printed after a submodule update.
+ * `--warn-only` never exits non-zero, for call sites that want the notice
+ * without the block. `yarn precommit` uses it.
  */
 const {inspect} = require('./wasmProvenance.cjs')
 
 const WARN_ONLY = process.argv.includes('--warn-only')
-
-// `unresolved` cannot distinguish "matches" from "does not match", so it is a
-// warning rather than a failure: a shallow clone reaches it routinely and
-// there is nothing the developer did wrong to get there.
-const TOLERATED = new Set(['ok', 'unresolved'])
-
-const {status, message, remedy, warnings} = inspect()
+const {status, fatal, message, remedy, warnings} = inspect()
 
 for (const warning of warnings) {
   console.warn(`[wasm-fresh] note: ${warning}`)
@@ -32,12 +28,12 @@ if (status === 'ok') {
   process.exit(0)
 }
 
-const label = TOLERATED.has(status) || WARN_ONLY ? 'WARNING' : 'ERROR'
+const blocking = fatal && !WARN_ONLY
 
-console.error(`[wasm-fresh] ${label}: ${message}`)
+console.error(`[wasm-fresh] ${blocking ? 'ERROR' : 'WARNING'}: ${message}`)
 
 if (remedy !== null) {
   console.error(`[wasm-fresh] fix: ${remedy}`)
 }
 
-process.exit(TOLERATED.has(status) || WARN_ONLY ? 0 : 1)
+process.exit(blocking ? 1 : 0)

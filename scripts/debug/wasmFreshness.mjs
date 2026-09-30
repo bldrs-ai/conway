@@ -26,7 +26,7 @@ const {inspect} = require('../wasmProvenance.cjs')
  * @return {void} exits the process on a stale build.
  */
 export function assertWasmFresh(toolName) {
-  const {status, message, remedy, warnings} = inspect()
+  const {status, fatal, message, remedy, warnings} = inspect()
 
   for (const warning of warnings) {
     console.warn(`[${toolName}] note: ${warning}`)
@@ -36,17 +36,18 @@ export function assertWasmFresh(toolName) {
     return
   }
 
-  // `unresolved` means we could not establish the SHA either way; blocking a
-  // measurement on that would make shallow clones unusable for debugging.
-  const fatal = status !== 'unresolved' && process.env.CONWAY_ALLOW_STALE_WASM !== '1'
+  // Only a SHA mismatch blocks. A dirty tree or an unstamped bundle is
+  // reported and allowed through: those readings are approximate (see
+  // wasmProvenance.cjs) and refusing on them stops real debugging.
+  const blocking = fatal && process.env.CONWAY_ALLOW_STALE_WASM !== '1'
 
-  console.error(`[${toolName}] ${fatal ? 'ERROR' : 'WARNING'}: ${message}`)
+  console.error(`[${toolName}] ${blocking ? 'ERROR' : 'WARNING'}: ${message}`)
 
   if (remedy !== null) {
     console.error(`[${toolName}] fix: ${remedy}`)
   }
 
-  if (fatal) {
+  if (blocking) {
     console.error(`[${toolName}] measurements from a mismatched engine describe ` +
       'code you are not reading. Set CONWAY_ALLOW_STALE_WASM=1 if that is deliberate.')
     process.exit(3)

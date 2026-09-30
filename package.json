@@ -121,7 +121,7 @@
     "check-compiled-fresh": "node ./scripts/check-compiled-fresh.cjs",
     "check-wasm-fresh": "node ./scripts/check-wasm-fresh.cjs",
     "wasm-stamp": "node ./scripts/stamp-wasm.cjs",
-    "precommit": "yarn build-incremental && yarn check-compiled-fresh && yarn check-wasm-fresh && yarn lint && yarn test",
+    "precommit": "yarn build-incremental && yarn check-compiled-fresh && yarn check-wasm-fresh --warn-only && yarn lint && yarn test",
     "prepare": "husky install",
     "submodule-update": "git submodule update --init --recursive && yarn check-wasm-fresh --warn-only",
     "test-watch": "jest --watchAll  --notify",

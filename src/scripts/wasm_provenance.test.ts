@@ -1,7 +1,5 @@
-import fs from 'fs'
-import os from 'os'
 import path from 'path'
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
+import { describe, expect, test } from '@jest/globals'
 import { createRequire } from 'module'
 
 /**
@@ -25,15 +23,13 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { ALL_TARGETS, GATED_TARGET, bundleDigest, classify, markerEntries, shaForPackageVersion } =
+const { ALL_TARGETS, GATED_TARGET, classify, markerEntries, shaForPackageVersion } =
   require_(path.resolve(process.cwd(), 'scripts/wasmProvenance.cjs')) as {
     ALL_TARGETS: string[],
     GATED_TARGET: string,
     markerEntries: ( marker: object | null ) => Record<string, object> | null,
-    bundleDigest: ( dir: string ) => string | null,
     classify: ( facts: {
       populated: number,
-      mirrorsAgree: boolean | null,
       // Either shape: a v1 flat marker (which describes the whole bundle) or
       // the v2 per-target map. `markerEntries` normalizes between them.
       marker: {
@@ -46,7 +42,13 @@ const { ALL_TARGETS, GATED_TARGET, bundleDigest, classify, markerEntries, shaFor
       } | null,
       expectedSha: string | null,
       expectedDirty?: string | null,
-    } ) => { status: string, message: string, remedy: string | null, warnings: string[] },
+    } ) => {
+      status: string,
+      fatal: boolean,
+      message: string,
+      remedy: string | null,
+      warnings: string[],
+    },
     shaForPackageVersion: ( version: string ) => {
       conwayCommit: string | null,
       conwayGeomSha: string | null,
@@ -58,7 +60,6 @@ const SHA_B = 'a28c7d9000000000000000000000000000000000'
 
 const fresh = {
   populated: 2,
-  mirrorsAgree: true,
   marker: { conwayGeomSha: SHA_A, sourceDirty: null, source: 'native-build' },
   expectedSha: SHA_A,
   expectedDirty: null,
@@ -87,16 +88,8 @@ describe('classify', () => {
     expect(classify({ ...fresh, populated: 0 }).status).toBe('missing')
   })
 
-  test('mirrors holding different builds is skew, and outranks provenance', () => {
-    // Marker agrees with the submodule, so only the skew can produce a
-    // non-ok verdict here — this fails if the ordering is reversed.
-    const result = classify({ ...fresh, mirrorsAgree: false })
-
-    expect(result.status).toBe('skew')
-  })
-
-  test('a single populated mirror does not count as agreement', () => {
-    expect(classify({ ...fresh, populated: 1, mirrorsAgree: null }).status).toBe('ok')
+  test('a single populated mirror is fine — mirror drift is not checked', () => {
+    expect(classify({ ...fresh, populated: 1 }).status).toBe('ok')
   })
 
   test('no marker is unstamped — never silently ok', () => {
@@ -157,6 +150,104 @@ describe('classify', () => {
     const result = classify({ ...fresh, marker: { conwayGeomSha: SHA_B }, expectedDirty: 'deadbeef' })
 
     expect(result.status).toBe('stale')
+  })
+})
+
+
+describe('the gate is scoped to the artifact its consumers load', () => {
+  /*
+   * Rounds one to three of the conway#717 review walked a circle: partial
+   * builds must not be blessed (they copy siblings from an earlier SHA), and
+   * partial builds must not be blocked (build-codex-MT is documented). Both
+   * are true of the same input, so the BUNDLE was the wrong unit. Provenance
+   * is per target, and the verdict is about GATED_TARGET alone.
+   */
+  const perTarget = ( targets: Record<string, object> ) => ({
+    populated: 2,
+    marker: { version: 2, targets },
+    expectedSha: SHA_A,
+    expectedDirty: null,
+  })
+
+  test('the gated target is the one jest and the debug probes load', () => {
+    expect(GATED_TARGET).toBe('ConwayGeomWasmNodeMT')
+    expect(ALL_TARGETS).toContain(GATED_TARGET)
+  })
+
+  test('THE DEFECT: a stale SIBLING warns but does not block', () => {
+    const result = classify(perTarget({
+      ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_A, sourceDirty: null },
+      ConwayGeomWasmWebMT: { conwayGeomSha: SHA_B, sourceDirty: null },
+    }))
+
+    expect(result.status).toBe('ok')
+    expect(result.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining('ConwayGeomWasmWebMT is stale')]))
+  })
+
+  test('a stale GATED target still fails', () => {
+    const result = classify(perTarget({
+      ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_B, sourceDirty: null },
+      ConwayGeomWasmWebMT: { conwayGeomSha: SHA_A, sourceDirty: null },
+    }))
+
+    expect(result.status).toBe('stale')
+  })
+
+  test('a partial stamp covering only the gated target is ok', () => {
+    const result = classify(perTarget({ ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_A, sourceDirty: null } }))
+
+    expect(result.status).toBe('ok')
+    // The three absent siblings are unstamped, not silently fine.
+    expect(result.warnings).toHaveLength(3)
+  })
+
+  test('a stamp that misses the gated target is unstamped, however complete otherwise', () => {
+    const result = classify(perTarget({ ConwayGeomWasmWeb: { conwayGeomSha: SHA_A, sourceDirty: null } }))
+
+    expect(result.status).toBe('unstamped')
+    expect(result.remedy).toContain('--built ConwayGeomWasmNodeMT')
+  })
+
+  test('a remedy naming wasm-stamp always names --built with it', () => {
+    const result = classify(perTarget({}))
+
+    // Round three found the remedy printing a bare `yarn wasm-stamp`, which
+    // the argument parser rejects — advice that cannot be followed.
+    expect(result.remedy).toEqual(expect.stringContaining('wasm-stamp --built'))
+  })
+})
+
+
+describe('markerEntries', () => {
+  test('a v1 flat marker describes every target, so old checkouts keep working', () => {
+    const entries = markerEntries({ conwayGeomSha: SHA_A, source: 'npm' })
+
+    expect(Object.keys(entries ?? {}).sort()).toEqual([...ALL_TARGETS].sort())
+  })
+
+  test('a v2 marker is returned as-is', () => {
+    const targets = { ConwayGeomWasmNodeMT: { conwayGeomSha: SHA_A } }
+
+    expect(markerEntries({ version: 2, targets })).toEqual(targets)
+  })
+
+  test('no marker is null, not an empty set of targets', () => {
+    expect(markerEntries(null)).toBeNull()
+  })
+})
+
+
+describe('shaForPackageVersion', () => {
+  test('reads the conway commit out of a published version suffix', () => {
+    expect(shaForPackageVersion('1.1604.715-gefd109ea').conwayCommit).toBe('efd109ea')
+  })
+
+  test('a version with no suffix resolves to nothing rather than guessing', () => {
+    expect(shaForPackageVersion('0.8.750')).toEqual({
+      conwayCommit: null,
+      conwayGeomSha: null,
+    })
   })
 })
 
@@ -272,68 +363,58 @@ describe('shaForPackageVersion', () => {
  * calls every correctly populated tree skewed, and a check that rejects
  * correct work is one people learn to bypass.
  */
-describe('bundleDigest', () => {
-  let a: string
-  let b: string
 
-  /**
-   * @param dir directory to create
-   * @param files basename to contents
-   */
-  const populate = ( dir: string, files: Record<string, string> ): void => {
-    fs.mkdirSync(dir, { recursive: true })
-    for (const [name, body] of Object.entries(files)) {
-      fs.writeFileSync(path.join(dir, name), body)
-    }
-  }
 
-  beforeEach(() => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wasm-prov-'))
+/**
+ * WHAT BLOCKS, AND WHAT ONLY SPEAKS.
+ *
+ * Four review rounds on conway#717 each widened the model of "what the build
+ * depends on" and each time the next round found another term; twice a fix
+ * rejected a CORRECTLY rebuilt tree. The retreat is deliberate: a SHA
+ * mismatch — the incident that actually happened — blocks, and every
+ * approximate reading is advisory. These cases pin that asymmetry, because
+ * it is the whole design and it would be easy to "tighten" back into the
+ * loop.
+ */
+describe('only a SHA mismatch is fatal', () => {
+  const at = ( overrides: object ) => classify({ ...fresh, ...overrides })
 
-    a = path.join(root, 'a')
-    b = path.join(root, 'b')
+  test('a stale gated target blocks', () => {
+    const result = at({ marker: { conwayGeomSha: SHA_B, sourceDirty: null } })
+
+    expect(result.status).toBe('stale')
+    expect(result.fatal).toBe(true)
   })
 
-  afterEach(() => {
-    fs.rmSync(path.dirname(a), { recursive: true, force: true })
+  test('a dirty tree is advisory, not fatal', () => {
+    const result = at({ expectedDirty: 'deadbeef' })
+
+    expect(result.status).toBe('dirty')
+    expect(result.fatal).toBe(false)
   })
 
-  test('identical runtime bundles agree', () => {
-    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
-    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
+  test('an unstamped bundle is advisory, not fatal', () => {
+    const result = at({ marker: null })
 
-    expect(bundleDigest(a)).toBe(bundleDigest(b))
+    expect(result.status).toBe('unstamped')
+    expect(result.fatal).toBe(false)
   })
 
-  test('THE DEFECT: a differing .wasm is skew even when the glue matches', () => {
-    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
-    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'DIFFERENT' })
+  test('an unresolved SHA is advisory, not fatal', () => {
+    const result = at({ expectedSha: null })
 
-    expect(bundleDigest(a)).not.toBe(bundleDigest(b))
+    expect(result.status).toBe('unresolved')
+    expect(result.fatal).toBe(false)
   })
 
-  test('a missing runtime file is skew, not a silent skip', () => {
-    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasmWebMT.wasm': 'binary' })
-    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue' })
+  test('an unpopulated Dist is advisory, not fatal', () => {
+    const result = at({ populated: 0 })
 
-    expect(bundleDigest(a)).not.toBe(bundleDigest(b))
+    expect(result.status).toBe('missing')
+    expect(result.fatal).toBe(false)
   })
 
-  test('.d.ts declarations on one side only do NOT count as skew', () => {
-    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', 'ConwayGeomWasm.d.ts': 'declarations' })
-    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue' })
-
-    expect(bundleDigest(a)).toBe(bundleDigest(b))
-  })
-
-  test('the per-directory marker does not count as skew', () => {
-    populate(a, { 'ConwayGeomWasmNodeMT.js': 'glue', '.wasm-provenance.json': '{"a":1}' })
-    populate(b, { 'ConwayGeomWasmNodeMT.js': 'glue', '.wasm-provenance.json': '{"b":2}' })
-
-    expect(bundleDigest(a)).toBe(bundleDigest(b))
-  })
-
-  test('an unreadable directory digests to null rather than throwing', () => {
-    expect(bundleDigest(path.join(a, 'nope'))).toBeNull()
+  test('ok is never fatal', () => {
+    expect(at({}).fatal).toBe(false)
   })
 })

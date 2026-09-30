@@ -26,6 +26,31 @@
  * outright on a cache miss. This module is that same rule, moved to where
  * humans and debug scripts can hit it.
  *
+ * WHAT THIS CHECKS, AND WHAT IT DELIBERATELY DOES NOT
+ * ----------------------------------------------------
+ * ONE hard failure: the marker names a different conway-geom SHA than this
+ * checkout has. That is the incident described above and the only condition
+ * this module is willing to block on.
+ *
+ * Everything else is ADVISORY - printed, never fatal. That is a deliberate
+ * retreat. Four review rounds on conway#717 each added a term to a model of
+ * "what the build depends on" (untracked file contents, nested submodules,
+ * runtime variant selection, legacy marker formats) and each time the next
+ * round found another; twice a fix rejected a CORRECTLY rebuilt tree, which
+ * is the failure that teaches people to bypass a check. A gate that is
+ * approximately sound and occasionally wrong about correct work is worth
+ * less than a narrow one that is right.
+ *
+ * Known and uncovered, by choice:
+ *   - a DIRTY submodule is reported, not blocked, and its digest does not
+ *     descend into conway-geom's own submodules (glm, tinynurbs, ...);
+ *   - the gated artifact is the one the DEFAULT loader path uses; overrides
+ *     such as FORCE_SINGLE_THREAD or PLATFORM=web select a different
+ *     variant, and this does not follow them;
+ *   - a build that dies halfway with a zero exit still stamps;
+ *   - mirror drift between the two Dist copies is not checked at all - the
+ *     comparison produced two false positives and no true ones.
+ *
  * Provenance is PER ARTIFACT, and the gate is SCOPED
  * --------------------------------------------------
  * An earlier design stamped the bundle as a whole, and that ran into a
@@ -249,60 +274,6 @@ function writeMarker(targets, record) {
 
 
 /**
- * Digest of EVERY artifact in a Dist directory, not just the sentinel.
- *
- * The sentinel alone is not enough: `ConwayGeomWasmWebMT.wasm` is a separate
- * 1.8MB file, and a C++-only change or an interrupted copy can leave it
- * differing between the mirrors while the Node glue matches byte for byte. A
- * sentinel-only comparison would call that agreement and let `inspect()`
- * return `ok` while two consumers ran different engines (codex review,
- * conway#717).
- *
- * Restricted to the RUNTIME artifacts (`.js`, `.wasm`). The source-side
- * mirror also carries the `.d.ts` declarations, which the build copies there
- * and not into `compiled/`; folding those in flags every correctly populated
- * tree as skewed. Measured on a good tree before narrowing this — the five
- * `.d.ts` files were the only difference, with every `.js` and `.wasm`
- * byte-identical. A type declaration cannot make two consumers run different
- * engines, which is the only thing this comparison is for.
- *
- * Names are folded in alongside contents so an extra or missing runtime file
- * counts as a difference rather than being silently skipped, and the marker
- * itself is excluded — it is written per-directory and would otherwise make
- * every pair of mirrors disagree.
- *
- * @param {string} dir
- * @return {string|null} null when the directory cannot be read.
- */
-function bundleDigest(dir) {
-  try {
-    const hash = crypto.createHash('sha256')
-
-    const runtime = fs.readdirSync(dir)
-        .filter((n) => n.endsWith('.js') || n.endsWith('.wasm'))
-        .sort()
-
-    for (const name of runtime) {
-      const full = path.join(dir, name)
-
-      if (!fs.statSync(full).isFile()) {
-        continue
-      }
-      hash.update(name).update('\0').update(fs.readFileSync(full))
-    }
-
-    return hash.digest('hex')
-  } catch {
-    return null
-  }
-}
-
-
-/**
- * @typedef {'ok'|'missing'|'unstamped'|'stale'|'dirty'|'skew'|'unresolved'} WasmStatus
- */
-
-/**
  * Evaluate ONE target's marker entry against the current source.
  *
  * @param {object|undefined} entry
@@ -371,17 +342,18 @@ function markerEntries(marker) {
  *
  * @param {{
  *   populated: number,
- *   mirrorsAgree: boolean|null,
  *   marker: object|null,
  *   expectedSha: string|null,
  *   expectedDirty: string|null,
  *   gatedTarget: string,
  * }} facts
- * @return {{status: string, message: string, remedy: string|null, warnings: string[]}}
+ * Only `stale` is fatal. See the header for why everything else is advisory.
+ *
+ * @return {{status: string, fatal: boolean, message: string, remedy: string|null,
+ *   warnings: string[]}}
  */
 function classify({
   populated,
-  mirrorsAgree,
   marker,
   expectedSha,
   expectedDirty = null,
@@ -392,22 +364,9 @@ function classify({
   if (populated === 0) {
     return {
       status: 'missing',
+      fatal: false,
       message: `no ${SENTINEL} in either Dist location — the geometry wasm is not populated`,
       remedy: 'yarn wasm-prebuilt',
-      warnings: [],
-    }
-  }
-
-  // Mirror skew is decided BEFORE provenance, because when the two disagree
-  // the marker can only describe one of them and a "fresh" verdict would be
-  // read as covering both.
-  if (mirrorsAgree === false) {
-    return {
-      status: 'skew',
-      message: 'the two Dist mirrors hold DIFFERENT build bundles ' +
-        `(${DIST_TARGETS.map((d) => path.relative(REPO_ROOT, d)).join(' vs ')}) — ` +
-        'whichever one a given consumer resolves decides which engine it runs',
-      remedy: REBUILD,
       warnings: [],
     }
   }
@@ -422,8 +381,8 @@ function classify({
       .filter((name) => name !== gatedTarget)
       .map((name) => [name, evaluateTarget(entries[name], expectedSha, expectedDirty)])
       .filter(([, s]) => s !== 'ok' && s !== 'unresolved')
-      .map(([name, s]) => `${name} is ${s} — it does not gate jest or the debug ` +
-        'probes, but a browser consumer would run it')
+      .map(([name, s]) => `${name} is ${s} — not what jest or the debug probes ` +
+        'load, so it is reported rather than blocking')
 
   const MESSAGES = {
     unstamped: {
@@ -454,6 +413,7 @@ function classify({
   if (status === 'ok') {
     return {
       status: 'ok',
+      fatal: false,
       message: `${gatedTarget} matches conway-geom ${String(expectedSha).slice(0, 10)} ` +
         `(${gated?.source ?? 'unknown source'})`,
       remedy: null,
@@ -461,7 +421,7 @@ function classify({
     }
   }
 
-  return {status, ...MESSAGES[status], warnings}
+  return {status, fatal: status === 'stale', ...MESSAGES[status], warnings}
 }
 
 /**
@@ -472,15 +432,8 @@ function classify({
 function inspect() {
   const populatedDirs = DIST_TARGETS.filter((d) => fs.existsSync(path.join(d, SENTINEL)))
 
-  // Only meaningful when BOTH are populated; a single-mirror checkout has
-  // nothing to disagree with, which is not the same as agreeing.
-  const mirrorsAgree = populatedDirs.length === DIST_TARGETS.length ?
-    bundleDigest(populatedDirs[0]) === bundleDigest(populatedDirs[1]) :
-    null
-
   return classify({
     populated: populatedDirs.length,
-    mirrorsAgree,
     marker: populatedDirs.length > 0 ? readMarker(populatedDirs[0]) : null,
     expectedSha: submoduleSha(),
     expectedDirty: submoduleDirtyDigest(),
@@ -495,7 +448,6 @@ module.exports = {
   markerEntries,
   DIST_TARGETS,
   GATED_TARGET,
-  bundleDigest,
   classify,
   submoduleDirtyDigest,
   MARKER_NAME,
