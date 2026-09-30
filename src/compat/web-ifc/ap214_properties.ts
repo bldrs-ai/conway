@@ -148,6 +148,7 @@ export class AP214Properties {
   private propertyMap_?: ExtractedPropertyMap
   private ownerByExpressID_?: Map<number, number>
   private nodeNameByExpressID_?: Map<number, string>
+  private nodeTypeByExpressID_?: Map<number, string>
   private propertyByItemId_?: Map<number, ExtractedProperty>
 
   /**
@@ -176,8 +177,12 @@ export class AP214Properties {
    *   NominalValue: {type,value} }`, the shape `unpackHelper` reads after it
    *   dereferences a `HasProperties` handle;
    * - a **tree node** (NAUO occurrence id, or `product_definition[_shape]` id
-   *   for single-part files) → `{ expressID, Name: {type,value} }`, the part's
-   *   identity row that the Properties panel runs through `deref`.
+   *   for single-part files) → `{ expressID, type, Name: {type,value} }`, the
+   *   part's identity row that the Properties panel runs through `deref`.
+   *   `type` is the node entity's STEP type name (`NEXT_ASSEMBLY_USAGE_
+   *   OCCURRENCE`, `PRODUCT_DEFINITION`, …), the same shape the arbitrary-
+   *   entity fallback below returns — so a consumer's Type row reads the same
+   *   for a part as for any other entity.
    *
    * Property-single ids and node ids are disjoint (distinct STEP entities), so
    * the lookup is unambiguous.
@@ -203,10 +208,12 @@ export class AP214Properties {
     const nodeName = this.nodeNameByExpressID_!.get( id )
 
     if ( nodeName !== void 0 ) {
-      return {
-        expressID: id,
-        Name: valueHandle( nodeName ),
-      }
+
+      const nodeType = this.nodeTypeByExpressID_!.get( id )
+
+      return nodeType === void 0 ?
+        { expressID: id, Name: valueHandle( nodeName ) } :
+        { expressID: id, type: nodeType, Name: valueHandle( nodeName ) }
     }
 
     // Arbitrary-entity fallback: an id that is neither a property single nor
@@ -469,6 +476,10 @@ export class AP214Properties {
    *   property map is keyed);
    * - `nodeNameByExpressID_` — node id → display name (for `getItemProperties`
    *   identity rows);
+   * - `nodeTypeByExpressID_` — node id → STEP entity type name, for the same
+   *   rows. Resolved here, not per call, because this sweep runs while the
+   *   source is resident (see {@link primeIndexes}); after a spill the row
+   *   stays a pure map lookup, like the name;
    * - `propertyByItemId_` — representation-item id → property (so a pset's
    *   `HasProperties` reference resolves back to its key/value).
    */
@@ -496,6 +507,7 @@ export class AP214Properties {
 
     this.ownerByExpressID_ = new Map<number, number>()
     this.nodeNameByExpressID_ = new Map<number, string>()
+    this.nodeTypeByExpressID_ = new Map<number, string>()
 
     for ( const root of this.structureRoots_ ) {
       this.indexNodes( root )
@@ -513,8 +525,8 @@ export class AP214Properties {
   }
 
   /**
-   * Record a node's owning product-definition id and display name, recursing
-   * into children.
+   * Record a node's owning product-definition id, display name and STEP type
+   * name, recursing into children.
    *
    * @param node The node to index.
    */
@@ -522,6 +534,12 @@ export class AP214Properties {
 
     this.ownerByExpressID_!.set( node.expressID, node.productDefinitionExpressID )
     this.nodeNameByExpressID_!.set( node.expressID, node.name )
+
+    const element = this.api.StepModel.getElementByExpressID( node.expressID )
+
+    if ( element !== void 0 ) {
+      this.nodeTypeByExpressID_!.set( node.expressID, ap214TypeName( element.type ) )
+    }
 
     for ( const childNode of node.children ) {
       this.indexNodes( childNode )

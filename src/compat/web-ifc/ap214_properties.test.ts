@@ -3,6 +3,7 @@ import { describe, expect, test } from '@jest/globals'
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { ParseResult } from '../../step/parsing/step_parser'
+import { ap214TypeName } from '../../AP214E3_2010/ap214_tessellated_types'
 import { AP214Properties } from './ap214_properties'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 
@@ -104,6 +105,39 @@ describe( 'compat/web-ifc/AP214Properties', () => {
 
     expect( item.expressID ).toBe( root.expressID )
     expect( item.Name.value ).toBe( 'as1' )
+  } )
+
+  test( 'a node identity row carries its STEP entity type name', async () => {
+
+    // Without `type` the Properties panel has no Type row for a STEP part —
+    // on a fresh parse, and on a Share cache hit, which stores exactly this
+    // row. The arbitrary-entity fallback already returned a type; tree nodes
+    // (the rows a user actually selects) did not.
+    const surface = compatSurfaceFor( 'data/as1-assembly.step' )
+    const root = await surface.getSpatialStructure() as any
+    const nodes: any[] = []
+    const collect = ( node: any ): void => {
+      nodes.push( node )
+      node.children.forEach( collect )
+    }
+
+    collect( root )
+
+    const occurrence = nodes.find( ( node: any ) => node.type === 'product_occurrence' )
+
+    expect( occurrence ).toBeDefined()
+    expect( ( await surface.getItemProperties( occurrence.expressID ) as any ).type )
+        .toBe( 'NEXT_ASSEMBLY_USAGE_OCCURRENCE' )
+
+    // Every node: the row's type is the model's own entity type for that id.
+    const model = ( surface as any ).api.StepModel
+
+    for ( const node of nodes ) {
+      const item = await surface.getItemProperties( node.expressID ) as any
+      const element = model.getElementByExpressID( node.expressID )
+
+      expect( item.type ).toBe( ap214TypeName( element.type ) )
+    }
   } )
 
   test( 'value handles carry a deref-compatible web-ifc type (string => 1)', async () => {
