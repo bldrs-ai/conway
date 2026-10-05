@@ -53,3 +53,6 @@ benchmarks/*private
 
 # Subagent git worktrees (transient scaffolding created per agent run)
 .claude/worktrees/
+
+# Byte-cache from the regression-shard helper scripts importing each other.
+__pycache__/

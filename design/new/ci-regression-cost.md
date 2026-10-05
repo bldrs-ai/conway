@@ -238,10 +238,17 @@ corpus size.
   *bandwidth* budget is exhausted, `git lfs` fetch is refused
   (`This repository exceeded its LFS budget`) and any fresh pull fails
   (exit 128). PR shards skip-smudge and LFS-pull only their list —
-  public coverage is ~180 MB; the seven private headline models are
-  ~2.6 GB together (PSB alone ~900 MB), cached per shard. The rc run
-  still clones the full trees. Symptom of a spent budget: PRs red at
-  the LFS-pull step, or an rc red at checkout, with no code change.
+  public coverage is ~180 MB, cached per shard; the seven private
+  headline models are ~2.6 GB together (PSB alone ~900 MB) and are
+  **deliberately not cached**, so that 2.6 GB is re-pulled on every
+  ready-PR run. See `regression/shards/README.md`: an Actions cache on
+  a public repo is readable from a fork's `pull_request` run, which
+  would publish the private models and the token in
+  `models/.git/config`. This is the one place the design pays cash for
+  confidentiality; if the budget bites, reduce how many private shards
+  run per PR rather than caching them. The rc run still clones the full
+  trees. Symptom of a spent budget: PRs red at the LFS-pull step, or an
+  rc red at checkout, with no code change.
   Fix: add an LFS data pack to the org (Settings → Billing), or as a
   no-code stopgap set `TEST_MODELS_REF` / `TEST_MODELS_PRIVATE_TAG` to
   a SHA whose cache is still warm.

@@ -194,7 +194,7 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`, and a Tier-A geometry-digest check of the in-repo `data/` models against committed goldens. |
-| `run-ifc-regression` | Aggregator over `regression-shard` (max 10, free `ubuntu-24.04`). Three public coverage shards (`regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital. Skip-smudge + LFS-pull of that shard's files only. Fails on any `failed.csv` row; digest *changes* are informational (visual-diff is public coverage only). `regression-pack` uploads the candidate npm tarball the perf jobs consume. |
+| `run-ifc-regression` | Aggregator over `regression-shard` (max 10, free `ubuntu-24.04`). Three public coverage shards (union = `regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital. `resolve-models` pins one corpus commit for the whole run; each shard skip-smudges and LFS-pulls only its own files (public corpora cached, private ones never — see `regression/shards/README.md`). Fails on any `failed.csv` row or un-allowlisted zero-geometry model; digest *changes* are informational (visual-diff is public coverage only). Posts one per-PR comment merging each shard's `failed.csv` / `errors.csv` delta vs the pinned commit and its slowest models; `regression-pack` uploads the candidate npm tarball the perf jobs consume. |
 
 A `concurrency` group cancels superseded PR runs (main runs are never
 cancelled, so releases always complete). A merge to `main` re-runs those two

@@ -59,7 +59,13 @@ def find_paths(root: Path, names: list[str]) -> list[str]:
 
 
 def is_lfs_stub(path: Path) -> bool:
-    head = path.read_bytes()[:200]
+    """True if path is an unsmudged LFS pointer rather than the model.
+
+    Reads only the pointer-sized prefix: these files run to ~900 MB, and
+    slurping one to look at its first 200 bytes is a 900 MB allocation.
+    """
+    with path.open('rb') as fh:
+        head = fh.read(200)
     return head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head
 
 
@@ -76,6 +82,121 @@ def cmd_corpus(args: argparse.Namespace) -> None:
 def cmd_names(args: argparse.Namespace) -> None:
     _, names = parse_shard(args.shard)
     print('\n'.join(names))
+
+
+MAX_SHARDS = 10
+
+
+def cmd_check(args: argparse.Namespace) -> None:
+    """Validate regression/shards against the invariants the docs state.
+
+    Cheap, hermetic, and wired into `build` so it gates every PR
+    including drafts and forks. The invariants are not self-enforcing:
+    the shard `# corpus:` header and the workflow matrix are separate
+    declarations, a shard file with no matrix entry never runs at all,
+    and `smoke_models.txt` is now only documentation of the coverage
+    union, so nothing else would notice it drifting.
+    """
+    shard_dir = Path(args.shard_dir)
+    smoke = Path(args.smoke)
+    errors: list[str] = []
+
+    files = sorted(p for p in shard_dir.glob('*.txt'))
+    if not files:
+        raise SystemExit(f'no shard lists in {shard_dir}')
+    if len(files) > MAX_SHARDS:
+        errors.append(
+            f'{len(files)} shard lists, max is {MAX_SHARDS} '
+            '(regression/shards/README.md)')
+
+    # basename -> shard that claims it. A model in two shards is digested
+    # twice and billed twice, and its visual-diff row would dedupe to one
+    # for no stated reason.
+    owner: dict[str, str] = {}
+    coverage: set[str] = set()
+    corpora: dict[str, str] = {}
+    for path in files:
+        stem = path.stem
+        corpus, names = parse_shard(str(path))
+        corpora[stem] = corpus
+        seen: set[str] = set()
+        for name in names:
+            if name in seen:
+                errors.append(f'{path.name}: duplicate entry {name!r}')
+            seen.add(name)
+            if name in owner:
+                errors.append(
+                    f'{name!r} is listed in both {owner[name]} and {stem}')
+            else:
+                owner[name] = stem
+        if stem.startswith('coverage-'):
+            if corpus != 'public':
+                errors.append(
+                    f'{path.name}: coverage shards must be public, not '
+                    f'{corpus!r} — visual-diff renders them and would '
+                    'publish private models')
+            coverage |= seen
+
+    smoke_names = {
+        line.split('#', 1)[0].strip()
+        for line in smoke.read_text(encoding='utf-8').splitlines()
+    } - {''}
+    if coverage != smoke_names:
+        for name in sorted(smoke_names - coverage):
+            errors.append(f'{smoke.name} lists {name!r}, no coverage shard does')
+        for name in sorted(coverage - smoke_names):
+            errors.append(f'a coverage shard lists {name!r}, {smoke.name} does not')
+
+    errors.extend(_matrix_errors(Path(args.workflow), corpora))
+
+    if errors:
+        for message in errors:
+            print(f'::error::{message}')
+        raise SystemExit(1)
+    print(
+        f'{len(files)} shard list(s) OK: {len(coverage)} public coverage '
+        f'models (= {smoke.name}), '
+        f'{len(owner) - len(coverage)} headline model(s).')
+
+
+def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
+    """Cross-check the shard files against the workflow's matrix.
+
+    A shard list with no matrix entry silently never runs; a matrix entry
+    whose `corpus` disagrees with the list's `# corpus:` header would
+    resolve the wrong models repo. Needs a YAML parser; PyYAML ships on
+    the GitHub-hosted ubuntu images, and the rest of the check is still
+    worth running where it does not.
+    """
+    try:
+        import yaml  # noqa: PLC0415 - optional, see docstring
+    except ImportError:
+        print(f'::notice::PyYAML unavailable, skipping the {workflow} '
+              'matrix cross-check')
+        return []
+    with workflow.open(encoding='utf-8') as fh:
+        # GitHub's `on:` key parses as the boolean True under YAML 1.1;
+        # harmless here, we only read `jobs`.
+        spec = yaml.safe_load(fh)
+    include = (spec.get('jobs', {}).get('regression-shard', {})
+               .get('strategy', {}).get('matrix', {}).get('include'))
+    if not include:
+        return [f'{workflow}: no regression-shard matrix include block']
+    matrix = {entry['id']: entry.get('corpus') for entry in include}
+    errors = []
+    for shard, corpus in sorted(corpora.items()):
+        if shard not in matrix:
+            errors.append(
+                f'regression/shards/{shard}.txt has no regression-shard '
+                'matrix entry, so it never runs')
+        elif matrix[shard] != corpus:
+            errors.append(
+                f'{shard}: matrix says corpus {matrix[shard]!r}, '
+                f'regression/shards/{shard}.txt says {corpus!r}')
+    for shard in sorted(set(matrix) - set(corpora)):
+        errors.append(
+            f'matrix entry {shard!r} has no regression/shards/{shard}.txt')
+    return errors
 
 
 def cmd_pull(args: argparse.Namespace) -> None:
@@ -117,6 +238,12 @@ def main() -> None:
     p_pull.add_argument('shard')
     p_pull.add_argument('root')
     p_pull.set_defaults(func=cmd_pull)
+
+    p_check = sub.add_parser('check')
+    p_check.add_argument('--shard-dir', default='regression/shards')
+    p_check.add_argument('--smoke', default='regression/smoke_models.txt')
+    p_check.add_argument('--workflow', default='.github/workflows/build.yml')
+    p_check.set_defaults(func=cmd_check)
 
     args = parser.parse_args()
     args.func(args)

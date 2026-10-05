@@ -10,12 +10,47 @@ list, so a 900 MB headline model fits on the 14 GB disk.
 | `psb`, `d3d`, `ilna`, `dowa`, `orbiter`, `blsn`, `hospital` | private `test-models-private` | One headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. |
 
 Private shards need `TEST_MODELS_PRIVATE_TOKEN`. Forks without it skip
-those shards; public coverage still runs. Visual-diff is **public
-coverage only** — rendering private models would publish them onto
-`visual-diff-assets`.
+those shards; public coverage still runs.
 
-The full public+private corpora still run once per `rc-*` tag
-(`rc-regression.yml`).
+## Nothing private leaves the private repo
+
+Conway is public, and both of the places a run could stash model bytes
+are readable by anyone who can open a PR:
+
+- **Visual-diff is public coverage only.** Rendering a private model
+  would publish it onto the `visual-diff-assets` branch.
+- **Only public corpora are cached.** An Actions cache written on the
+  default branch is restorable by any `pull_request` run, and a
+  `pull_request` run uses the *fork's* workflow file — so a fork can
+  add a restore step. A cached private shard would hand over both the
+  model bytes and the `TEST_MODELS_PRIVATE_TOKEN` that `git remote add`
+  leaves in `models/.git/config`.
+
+The cost of the second rule is real: a ready-PR run re-pulls ~2.6 GB of
+private LFS rather than restoring it. If that starts hurting the LFS
+budget, cut the number of private shards per PR or move them to
+merge/rc — do not cache private bytes in a public repo.
+
+## Invariants
+
+`build` runs `shard_list.py check` on every PR, draft and fork
+included. It enforces: at most ten lists, no model claimed by two
+shards, coverage shards are public, the coverage union is exactly
+[`../smoke_models.txt`](../smoke_models.txt), and each list's
+`# corpus:` header matches its `regression-shard` matrix entry. A list
+with no matrix entry never runs, so that last one matters most.
 
 Do not add an 11th shard. If a new headline model needs isolation,
 merge two coverage lists or move a small headline into coverage.
+
+## Reporting
+
+One commit is pinned for the whole run (the `resolve-models` job), so
+ten shards cannot straddle two corpus states. Each shard writes a
+`shard_summary.md` fragment — its `failed.csv` in full, its
+`errors.csv` as a delta against that pinned commit, its slowest models
+— into its own artifact, and `run-ifc-regression` concatenates the ten
+into the PR comment.
+
+The full public+private corpora still run once per `rc-*` tag
+(`rc-regression.yml`).

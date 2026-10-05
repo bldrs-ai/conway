@@ -116,6 +116,16 @@ jobs:
         with:
           submodules: recursive
 
+      # Hermetic, seconds, and deliberately in `build` rather than in the
+      # shards it describes: a shard list with no matrix entry never runs,
+      # so the job that would catch the mistake is the one that is missing.
+      # Checks the <=10 cap, that no model is claimed by two shards, that
+      # coverage shards stay public, that the coverage union is still
+      # exactly regression/smoke_models.txt, and that each list's
+      # `# corpus:` header matches its matrix entry.
+      - name: Validate regression shard lists
+        run: python3 .github/actions/regression-shard/shard_list.py check
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -289,13 +299,84 @@ jobs:
   # hide behind a short coverage batch. Skip-smudge + LFS-pull of the
   # shard list only: PSB is ~900 MB and the public runner has 14 GB disk.
   #
+  # resolve-models pins one corpus commit for the whole run, so ten
+  # shards cannot straddle two states of a moving `main`.
   # regression-pack produces the npm tarball perf jobs consume, in
   # parallel with the shards (both need: build). The aggregator keeps
-  # the check name `run-ifc-regression`.
+  # the check name `run-ifc-regression`, AND-reduces the shards, and
+  # stitches their summary fragments into the PR comment.
   #
-  # Visual-diff is public coverage only — rendering private models would
-  # publish them onto visual-diff-assets.
+  # Nothing private is written anywhere a fork can read it: visual-diff
+  # is public coverage only (rendering a private model would publish it
+  # onto visual-diff-assets), and only public corpora are cached (an
+  # Actions cache on the default branch is restorable from a fork's
+  # pull_request run). See regression/shards/README.md.
   # ---------------------------------------------------------------------------
+  # One corpus commit for the whole run. Each shard used to resolve
+  # TEST_MODELS_REF itself, so eleven independent `git ls-remote` calls
+  # against a moving `main` could straddle two corpus states: shards
+  # digesting against one baseline while visual-diff rendered models
+  # pinned from another. Resolving once here makes the run reproducible
+  # and is the SHA every downstream job reports.
+  resolve-models:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      public_sha: ${{ steps.public.outputs.sha }}
+      private_sha: ${{ steps.private.outputs.sha }}
+    # `secrets` is not an allowed context in a step-level `if:`; a
+    # job-level `env` is how it reaches one. Same trick as
+    # regression-shard below.
+    env:
+      TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
+    steps:
+      # Recording a SHA (not a tag) is what makes the baseline
+      # reproducible: test-models does not tag reliably, so we track its
+      # main branch and pin per-run to the commit we actually tested.
+      # Run ls-remote as its own command (errexit) so a transient network
+      # failure aborts loudly instead of being masked by a pipeline and
+      # silently falling back to a moving ref. Annotated tags advertise a
+      # peeled "<ref>^{}" commit line, preferred over the tag-object id.
+      - name: Resolve public test-models SHA
+        id: public
+        run: |
+          set -euo pipefail
+          REF="$TEST_MODELS_REF"
+          REFS=$(git ls-remote https://github.com/bldrs-ai/test-models.git "$REF")
+          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
+          # No advertised match -> REF is itself a raw commit SHA.
+          if [ -z "$SHA" ]; then SHA="$REF"; fi
+          # Refuse anything that is not a 40-hex commit SHA rather than
+          # poisoning cache keys and git-diff targets with a moving ref.
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve TEST_MODELS_REF='$REF' to a commit SHA (got '$SHA'). Use an existing branch, tag, or full 40-char commit SHA."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "**Models:** test-models @ \`$SHA\` (ref \`$REF\`)" >> "$GITHUB_STEP_SUMMARY"
+
+      # Forks have no token; their private shards skip, so an empty
+      # output here is the expected quiet path, not a failure.
+      - name: Resolve private test-models SHA
+        id: private
+        if: env.TOKEN_PRESENT == 'true'
+        env:
+          TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+        run: |
+          set -euo pipefail
+          REF="$TEST_MODELS_PRIVATE_TAG"
+          URL="https://x-access-token:${TOKEN}@github.com/bldrs-ai/test-models-private.git"
+          REFS=$(git ls-remote "$URL" "$REF")
+          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
+          if [ -z "$SHA" ]; then SHA="$REF"; fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve TEST_MODELS_PRIVATE_TAG='$REF' to a commit SHA (got '$SHA')."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "**Private models:** test-models-private @ \`$SHA\` (ref \`$REF\`)" >> "$GITHUB_STEP_SUMMARY"
+
   regression-pack:
     needs: build
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -303,7 +384,6 @@ jobs:
     timeout-minutes: 10
     outputs:
       package_tgz: ${{ steps.npm_pack.outputs.package_tgz }}
-      test_models_sha: ${{ steps.tmsha.outputs.sha }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -348,20 +428,6 @@ jobs:
       - name: Bundle examples
         run: yarn bundle-examples
 
-      - name: Resolve test-models SHA
-        id: tmsha
-        run: |
-          set -euo pipefail
-          URL=https://github.com/bldrs-ai/test-models.git
-          REFS=$(git ls-remote "$URL" "$TEST_MODELS_REF")
-          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
-          if [ -z "$SHA" ]; then SHA="$TEST_MODELS_REF"; fi
-          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Could not resolve TEST_MODELS_REF='$TEST_MODELS_REF' to a commit SHA (got '$SHA')."
-            exit 1
-          fi
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
       - name: Create NPM Package
         id: npm_pack
         run: |
@@ -375,7 +441,7 @@ jobs:
           path: ${{ steps.npm_pack.outputs.package_tgz }}
 
   regression-shard:
-    needs: build
+    needs: [build, resolve-models]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -467,7 +533,9 @@ jobs:
           shard-id: ${{ matrix.id }}
           shard-file: regression/shards/${{ matrix.id }}.txt
           corpus: ${{ matrix.corpus }}
-          models-ref: ${{ matrix.corpus == 'public' && env.TEST_MODELS_REF || env.TEST_MODELS_PRIVATE_TAG }}
+          # Already-resolved commits, not the moving refs: see
+          # resolve-models.
+          models-ref: ${{ matrix.corpus == 'public' && needs.resolve-models.outputs.public_sha || needs.resolve-models.outputs.private_sha }}
           models-repo: ${{ matrix.corpus == 'public' && 'bldrs-ai/test-models' || 'bldrs-ai/test-models-private' }}
           models-token: ${{ matrix.corpus == 'private' && secrets.TEST_MODELS_PRIVATE_TOKEN || '' }}
           concurrency: ${{ matrix.concurrency }}
@@ -478,22 +546,41 @@ jobs:
   # and merges public visual-diff lists.
   run-ifc-regression:
     name: run-ifc-regression
-    needs: [regression-pack, regression-shard]
+    needs: [resolve-models, regression-pack, regression-shard]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write  # post the regression comment
     outputs:
       package_tgz: ${{ needs.regression-pack.outputs.package_tgz }}
-      test_models_sha: ${{ needs.regression-pack.outputs.test_models_sha }}
+      test_models_sha: ${{ needs.resolve-models.outputs.public_sha }}
       visual_diff_count: ${{ steps.concat.outputs.count }}
     steps:
-      - name: Merge public visual-diff lists
-        id: merge
+      # For the shard lists and the merge script only.
+      - name: Checkout Conway Repo
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      - name: Download public visual-diff lists
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           pattern: visual-diff-models-*
           path: vdiff-in
+          merge-multiple: false
+
+      # Shards that died before uploading simply have no fragment;
+      # merge_summaries.py names them in the comment.
+      - name: Download shard results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: regression-shard-*
+          path: shards-in
           merge-multiple: false
 
       - name: Concatenate changed-model lists
@@ -522,10 +609,43 @@ jobs:
           name: visual-diff-models-${{ github.run_id }}
           path: changed_models.txt
 
+      # Rebuilds the report the single-job version posted: per-shard
+      # failed.csv (full) and errors.csv (delta vs the pinned corpus
+      # commit, scoped to the shard), plus the slowest models. Built
+      # BEFORE the AND-reduce below so a red shard still gets its rows
+      # quoted on the PR - a crash used to produce no comment at all and
+      # you had to open the job log to see WHICH model died.
+      - name: Build regression comment
+        run: |
+          set -uo pipefail
+          # Non-fatal for the same reason as the per-shard fragment: the
+          # AND-reduce below is the gate, and a broken report must not
+          # stand in for a broken shard.
+          python3 .github/actions/regression-shard/merge_summaries.py \
+            --artifacts shards-in \
+            --out regression_comment.md \
+            --public-sha "${{ needs.resolve-models.outputs.public_sha }}" \
+            --private-sha "${{ needs.resolve-models.outputs.private_sha }}" \
+            --package "${{ needs.regression-pack.outputs.package_tgz }}" \
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --visual-diff-count "${{ steps.concat.outputs.count }}" \
+            || echo "::warning::Could not build the regression comment; the regression-shard-* artifacts still hold every shard's CSVs."
+
+      - name: Comment on Pull Request with regression results
+        if: ${{ github.event_name == 'pull_request' && hashFiles('regression_comment.md') != '' }}
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: regression_comment.md
+
+      # Runs LAST, so a failing shard does not take the comment with it.
       - name: All shards passed
         run: |
+          echo "resolve-models: ${{ needs.resolve-models.result }}"
           echo "regression-pack: ${{ needs.regression-pack.result }}"
           echo "regression-shard: ${{ needs.regression-shard.result }}"
+          test "${{ needs.resolve-models.result }}" = "success"
           test "${{ needs.regression-pack.result }}" = "success"
           test "${{ needs.regression-shard.result }}" = "success"
 
@@ -553,9 +673,9 @@ jobs:
       needs.run-ifc-regression.outputs.visual_diff_count != '0'
     # Public ubuntu-24.04 is 4 vCPU / 16 GB — more RAM than the paid
     # 8 GB SKU this used to share. The allocation crash that forced the
-    # large runner was on the old 2-vCPU/7 GB image; disk is handled by
-    # restoring the smoke-sized test-models cache (or skip-smudge +
-    # LFS-pull of changed_models.txt only).
+    # large runner was on the old 2-vCPU/7 GB image. Disk fits because
+    # this job never materializes the corpus: skip-smudge clone, then an
+    # LFS pull of changed_models.txt only.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -603,15 +723,12 @@ jobs:
           (cd engines/base && npm install --omit=dev --legacy-peer-deps \
             --ignore-scripts --no-audit --no-fund --silent)
 
-      - name: Restore Test Models Cache
-        id: cache-test-models
-        uses: actions/cache/restore@v4
-        with:
-          path: test-models
-          key: ${{ runner.os }}-test-models-smoke-${{ needs.run-ifc-regression.outputs.test_models_sha }}-${{ hashFiles('regression/smoke_models.txt') }}
-
-      - name: Checkout Test Models Repo if Not Cached
-        if: steps.cache-test-models.outputs.cache-hit != 'true'
+      # No cache to restore: the shards cache `models` keyed on their own
+      # list, which is neither this path nor this content. A skip-smudge
+      # clone is a few seconds and a few MB, so there is nothing here
+      # worth a cache entry - the expensive part is the LFS pull below,
+      # and that is already narrowed to the changed models.
+      - name: Checkout Test Models Repo
         env:
           GIT_LFS_SKIP_SMUDGE: '1'
         run: |
@@ -632,6 +749,15 @@ jobs:
           python3 - <<'EOF'
           import subprocess
           from pathlib import Path
+
+          def is_stub(path):
+              # Pointer-sized prefix only: these models run to hundreds of
+              # MB and read_bytes()[:200] allocates the whole file.
+              with path.open('rb') as fh:
+                  head = fh.read(200)
+              return (head.startswith(b'version https://git-lfs')
+                      or b'git-lfs.github.com' in head)
+
           root = Path('test-models')
           rels = []
           for line in open('changed_models.txt'):
@@ -644,8 +770,7 @@ jobs:
               if not p.is_file():
                   print(f'::warning::changed model missing: {rel}')
                   continue
-              head = p.read_bytes()[:200]
-              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
+              if is_stub(p):
                   stubs.append(rel)
           print(f'{len(rels)} changed models, {len(stubs)} LFS stubs to pull')
           if not stubs:
@@ -653,11 +778,7 @@ jobs:
           subprocess.check_call(['git', 'lfs', 'install', '--local'], cwd=root)
           subprocess.check_call(
               ['git', 'lfs', 'pull', '--include=' + ','.join(stubs)], cwd=root)
-          left = []
-          for rel in stubs:
-              head = (root / rel).read_bytes()[:200]
-              if head.startswith(b'version https://git-lfs') or b'git-lfs.github.com' in head:
-                  left.append(rel)
+          left = [rel for rel in stubs if is_stub(root / rel)]
           if left:
               print('::warning::unsmudged LFS pointer stub(s) after pull — '
                     'blank renders for these are a missing file, not a geometry '
@@ -1079,8 +1200,8 @@ jobs:
       actions: read    # required by download-artifact@v4 to fetch from prior runs
     env:
       H3_SHA: ${{ vars.H3_SHA || '76f9ab686e08e58e7fe798e6a11ed0ad52b38c4b' }}
-      # Default to main; override via repo variable once a stable tag exists.
-      TEST_MODELS_PRIVATE_TAG: ${{ vars.TEST_MODELS_PRIVATE_TAG || 'main' }}
+      # TEST_MODELS_PRIVATE_TAG is workflow-level now that the PR shards
+      # need it too; it used to be redeclared here with the same value.
     steps:
       - name: Fail fast if private models token missing
         env:
