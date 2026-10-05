@@ -242,10 +242,14 @@ per-face vertices that fail to pair, so it moves for reasons unrelated to
 closedness.
 
 An unpaired count is not a gap count either. `seam_census.mjs` welds each
-solid as a whole, and on `Right_Hand.step` (conway-geom#215) 1,104 of its
-1,201 unpaired edges were emitted twice in the same direction. Those are
-winding disagreements over shared vertices. Only 97 edges were missing on
-one side. Report the two separately.
+solid as a whole and pairs edges by count. On `Right_Hand.step`
+(conway-geom#215, conway-geom `d049451`) it finds 1,269 unpaired edges:
+- 1,092 are winding flips over shared vertices;
+- 27 are overlapping sheets;
+- 53 are short non-manifold edges;
+- only 97 were missing on one side.
+
+Report winding and gaps separately.
 
 What does hold up, and what a before/after should report:
 

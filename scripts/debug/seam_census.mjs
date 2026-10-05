@@ -228,8 +228,8 @@ function toSegment(p, a, b) {
   let t = len2 === 0 ? 0 :
     ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1] + (p[2] - a[2]) * ab[2]) / len2
   const tc = Math.min(1, Math.max(0, t))
-  const q = [a[0] + ab[0] * tc - p[0], a[1] + ab[1] * tc - p[1], a[2] + ab[2] * tc - p[2]]
-  return {d: Math.hypot(q[0], q[1], q[2]), t}
+  const foot = [a[0] + ab[0] * tc, a[1] + ab[1] * tc, a[2] + ab[2] * tc]
+  return {d: Math.hypot(foot[0] - p[0], foot[1] - p[1], foot[2] - p[2]), t, foot}
 }
 
 // Cosine of the angle between where c1 and c2 sit around the line a-b: each
@@ -265,12 +265,13 @@ function censusSolid(faces) {
   // widen the weld near the origin. The grid is sized from the largest coordinate so that
   // every local tolerance fits inside one cell; it gathers candidates and
   // never decides a weld. `tolWelds` counts the non-exact ones.
-  const localTol = (p, q) => bucketFor(Math.max(Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]),
-      Math.abs(q[0]), Math.abs(q[1]), Math.abs(q[2])))
-  // Per axis, so a large coordinate on one axis cannot hide a real separation
-  // on another: (1e6, 0, 0) and (1e6, 0.25, 0) stay apart.
-  const weldable = (p, q) => [0, 1, 2].every((i) =>
-    Math.abs(p[i] - q[i]) <= bucketFor(Math.max(Math.abs(p[i]), Math.abs(q[i]))))
+  // Every tolerance here is per axis, so a large coordinate on one axis cannot
+  // hide a real separation on another: (1e6, 0, 0) and (1e6, 0.25, 0) stay
+  // apart. `ulps` scales the float32 term; `slack` is an absolute floor per
+  // axis, for the one test that tolerates a sampling difference.
+  const near = (p, q, ulps = 1, slack = 0) => [0, 1, 2].every((i) =>
+    Math.abs(p[i] - q[i]) <= Math.max(slack, ulps * bucketFor(Math.max(Math.abs(p[i]), Math.abs(q[i])))))
+  const weldable = (p, q) => near(p, q)
   const Q = 1 / bucketFor(maxAbs)
   const cell = (p) => [Math.round(p[0] * Q), Math.round(p[1] * Q), Math.round(p[2] * Q)]
   const f32 = (p) => `${Math.fround(p[0])},${Math.fround(p[1])},${Math.fround(p[2])}`
@@ -338,9 +339,9 @@ function censusSolid(faces) {
   // must lie within tol of SOME segment of that face's loops. The union, not
   // one segment, so a neighbour that samples the boundary as A-M-B still
   // matches A-B, and a segment covering only the middle of A-B does not.
-  const runsAlong = (segs, pa, pb, tol) => [0, 0.25, 0.5, 0.75, 1].every((s) => {
+  const runsAlong = (segs, pa, pb, slack) => [0, 0.25, 0.5, 0.75, 1].every((s) => {
     const p = [pa[0] + (pb[0] - pa[0]) * s, pa[1] + (pb[1] - pa[1]) * s, pa[2] + (pb[2] - pa[2]) * s]
-    return segs.some((seg) => toSegment(p, seg.a, seg.b).d <= tol)
+    return segs.some((seg) => near(p, toSegment(p, seg.a, seg.b).foot, 4, slack))
   })
 
   // Directed edges per face, with the faces in `reversed` wound backwards.
@@ -419,14 +420,13 @@ function censusSolid(faces) {
             let split = false
             for (const w of G.emittedVerts) {
               if (w === a || w === b) continue
-              const {d, t} = toSegment(where[w], pa, pb)
-              if (d <= 4 * localTol(where[w], pa) && t > 1e-9 && t < 1 - 1e-9) { split = true; break }
+              const {t, foot} = toSegment(where[w], pa, pb)
+              if (t > 1e-9 && t < 1 - 1e-9 && near(where[w], foot, 4)) { split = true; break }
             }
             cls = split ? 'neighbour-split' : 'neighbour-missing'
           }
         } else {
-          const tol = Math.max(4 * localTol(pa, pb), 1e-3 * length)
-          const g = faces.findIndex((_, gi) => gi !== f && runsAlong(segsByFace[gi], pa, pb, tol))
+          const g = faces.findIndex((_, gi) => gi !== f && runsAlong(segsByFace[gi], pa, pb, 1e-3 * length))
           if (g >= 0) partner = faces[g].express
           cls = g >= 0 ? 'sampling-differs' : 'no-partner'
         }
@@ -440,29 +440,73 @@ function censusSolid(faces) {
   const asEmitted = buildEdges(new Set())
   const unpaired = classify(asEmitted)
 
-  // Orientation vote. For each face, over the loop segments it shares with
-  // another face: `agree` counts its emitted boundary edges whose REVERSE some
-  // other face emits (correctly paired), `disagree` those some other face
-  // emits in the SAME direction. A face wound backwards relative to its shell
-  // has disagree > agree whatever the global orientation is, which is the only
-  // thing this can decide: it finds the odd face out, not which way is outside.
-  const reversed = new Set()
-  const votes = []
+  // Orientation. For each pair of faces sharing loop segments, count the
+  // boundary edges where one face's edge is emitted in REVERSE by the other
+  // (they agree) and where it is emitted the SAME way (they disagree). A vote
+  // taken face by face cannot pick the odd face out: two faces wound against
+  // each other each see only disagreement, and both would be "reversed". So
+  // the reversed set is chosen jointly, below. It finds the odd faces out, not
+  // which way is outside.
+  const pairs = new Map() // "f_g" (f < g) -> {agree, disagree}
+  const tally = (f, g, key) => {
+    const k = f < g ? `${f}_${g}` : `${g}_${f}`
+    if (!pairs.has(k)) pairs.set(k, {agree: 0, disagree: 0})
+    ++pairs.get(k)[key]
+  }
   for (let fi = 0; fi < faces.length; ++fi) {
-    let agree = 0, disagree = 0
     for (const e of asEmitted.faceEdges[fi]) {
       const [a, b] = e.split('_').map(Number)
       const occ = loopSegs.get(segKey(a, b))
       if (occ === undefined || !occ.some((o) => o.face !== fi)) continue
-      if ((asEmitted.emittedBy.get(`${b}_${a}`) ?? []).some((o) => o.face !== fi)) ++agree
-      if (asEmitted.emittedBy.get(e).some((o) => o.face !== fi)) ++disagree
-    }
-    if (disagree > agree) {
-      reversed.add(fi)
-      votes.push({express: faces[fi].express, surface: faces[fi].surface,
-        sameSense: faces[fi].sameSense, agree, disagree})
+      // Count each shared edge once per pair: from the lower-indexed face.
+      for (const o of asEmitted.emittedBy.get(`${b}_${a}`) ?? []) {
+        if (o.face > fi) tally(fi, o.face, 'agree')
+      }
+      for (const o of asEmitted.emittedBy.get(e)) {
+        if (o.face > fi) tally(fi, o.face, 'disagree')
+      }
     }
   }
+  // Greedy local search: flip the face whose flip removes the most
+  // disagreement, given the flips already made, until no flip helps. Each
+  // step strictly lowers the total, so it terminates. In the two-face case
+  // one face flips and then the other no longer gains anything. Propagating
+  // parity breadth-first from a seed was tried and was worse on real shells:
+  // one inconsistent face on a cycle pushed its error around the cycle, and
+  // faces that agreed with every neighbour were reported reversed.
+  const neighbours = faces.map(() => [])
+  for (const [k, v] of pairs) {
+    const [f, g] = k.split('_').map(Number)
+    neighbours[f].push({g, ...v}); neighbours[g].push({g: f, ...v})
+  }
+  const reversed = new Set()
+  const gain = (f) => {
+    let net = 0
+    for (const {g, agree, disagree} of neighbours[f]) {
+      const differ = reversed.has(f) !== reversed.has(g)
+      // What flipping f would turn the current disagreements into.
+      net += differ ? agree - disagree : disagree - agree
+    }
+    return net
+  }
+  for (;;) {
+    let best = -1, bestGain = 0
+    for (let f = 0; f < faces.length; ++f) {
+      const g = gain(f)
+      if (g > bestGain) { best = f; bestGain = g }
+    }
+    if (best < 0) break
+    if (reversed.has(best)) reversed.delete(best); else reversed.add(best)
+  }
+  const votes = [...reversed].map((fi) => {
+    let agree = 0, disagree = 0
+    for (const [k, v] of pairs) {
+      const [f, g] = k.split('_').map(Number)
+      if (f === fi || g === fi) { agree += v.agree; disagree += v.disagree }
+    }
+    return {express: faces[fi].express, surface: faces[fi].surface,
+      sameSense: faces[fi].sameSense, agree, disagree}
+  })
   const afterReorienting = reversed.size === 0 ? unpaired : classify(buildEdges(reversed))
 
   return {triangles, tolWelds, unpaired, reversedFaces: votes, afterReorienting}
@@ -520,8 +564,9 @@ byClass('as emitted', all)
 if (allReversed.length > 0) byClass('after turning the reversed faces around', allAfter)
 
 if (allReversed.length > 0) {
-  console.log(`\n# reversed faces: wound against most of their shared boundary (${allReversed.length})`)
-  console.log('  agree/disagree = shared boundary edges whose neighbour runs opposite / the same way')
+  console.log(`\n# reversed faces: the flips that most reduce disagreement across the shell (${allReversed.length})`)
+  console.log('  agree/disagree = shared boundary edges whose neighbour runs opposite / the same way, as')
+  console.log('  emitted; a face can be flipped for its neighbours\' sake once they have been flipped')
   for (const r of allReversed.sort((x, y) => y.disagree - x.disagree)) {
     console.log(`  solid #${String(r.solid).padEnd(6)} face #${String(r.express).padEnd(6)} ` +
       `${r.surface.padEnd(20)} same_sense=${r.sameSense ? 'T' : 'F'}  agree=${r.agree} disagree=${r.disagree}`)
