@@ -124,6 +124,22 @@ def main() -> None:
 
     out = '\n'.join(header + body).rstrip() + '\n'
     if len(out) > MAX_BODY:
+        # Trimming the tail would delete whole shards, and the headline
+        # shards sort LAST -- so the one fragment quoting the model that
+        # just crashed is the first thing to go. That is the exact
+        # regression this report exists to fix. Budget per fragment
+        # instead: every shard keeps its head, which is where its counts
+        # and its failed.csv rows are.
+        budget = max(600, (MAX_BODY - len('\n'.join(header))) // max(1, len(body) // 2 or 1))
+        trimmed = []
+        for text in body:
+            if len(text) > budget:
+                text = (text[:budget].rsplit('\n', 1)[0]
+                        + '\n\n_...fragment truncated; full CSVs in this '
+                          'shard\'s `regression-shard-*` artifact._\n')
+            trimmed.append(text)
+        out = '\n'.join(header + trimmed).rstrip() + '\n'
+    if len(out) > MAX_BODY:
         out = (out[:MAX_BODY].rsplit('\n', 1)[0]
                + '\n\n_...truncated; full per-shard CSVs are in the '
                  '`regression-shard-*` run artifacts._\n')

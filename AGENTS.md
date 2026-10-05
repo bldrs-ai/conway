@@ -135,7 +135,10 @@ the two in step when either changes.
 | Job | Draft PR | Ready PR |
 |---|---|---|
 | `build` (compile + unit tests) | runs | runs |
-| `run-ifc-regression` (aggregator over ≤10 shards) | **skipped** | runs |
+| `resolve-models` (pins one corpus commit) | **skipped** | runs |
+| `regression-pack` (npm tarball for perf jobs) | **skipped** | runs |
+| `regression-shard` (≤10 digest shards) | **skipped** | runs |
+| `run-ifc-regression` (aggregator + PR comment) | **skipped** | runs |
 | `visual-diff` | **skipped** | runs (when digests changed) |
 
 `build` is deliberately left ungated: it is the cheap compile and

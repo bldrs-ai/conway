@@ -55,6 +55,21 @@ def find_paths(root: Path, names: list[str]) -> list[str]:
     if missing:
         raise SystemExit(
             'shard names not in corpus: ' + ', '.join(sorted(missing)))
+    # A basename can match more than one path (the public corpus has both
+    # ifc/index.ifc and ifc/bldrs/index.ifc). Both get digested and both
+    # write the same <stem>.csv, so one silently overwrites the other and
+    # the visual diff may render whichever the walk reached first. Sorting
+    # at least makes that deterministic, and saying so makes it findable;
+    # disambiguating properly needs a path-valued shard list, not a
+    # basename one.
+    paths.sort()
+    for name in sorted(want):
+        matches = [p for p in paths if Path(p).name == name]
+        if len(matches) > 1:
+            print(
+                f'::warning::{name} matches {len(matches)} corpus paths '
+                f'({", ".join(matches)}); they share one digest CSV, so '
+                f'{matches[0]} is the one whose digest survives.')
     return paths
 
 
@@ -159,7 +174,7 @@ def cmd_check(args: argparse.Namespace) -> None:
         f'{len(owner) - len(coverage)} headline model(s).')
 
 
-def _matrix_entries(workflow: Path) -> dict[str, str]:
+def _matrix_entries(workflow: Path) -> tuple[dict[str, str], list[str]]:
     """{shard id: corpus} from the workflow's regression-shard matrix.
 
     Prefers PyYAML, falls back to a strict scan of the `include:` block,
@@ -183,10 +198,13 @@ def _matrix_entries(workflow: Path) -> dict[str, str]:
     if not include:
         raise SystemExit(
             f'{workflow}: no regression-shard matrix include block')
-    return {entry['id']: entry.get('corpus') for entry in include}
+    ids = [entry['id'] for entry in include]
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    return ({entry['id']: entry.get('corpus') for entry in include}, dupes)
 
 
-def _scan_matrix_include(text: str, workflow: Path) -> dict[str, str]:
+def _scan_matrix_include(
+        text: str, workflow: Path) -> tuple[dict[str, str], list[str]]:
     """PyYAML-free read of the regression-shard matrix `include:` list.
 
     Deliberately strict and deliberately fatal on anything it does not
@@ -221,6 +239,7 @@ def _scan_matrix_include(text: str, workflow: Path) -> dict[str, str]:
             f'{workflow}: regression-shard has no `include:` under its matrix')
 
     entries: dict[str, str] = {}
+    order: list[str] = []
     current = None
     item_indent = None
     for line in lines[include + 1:end]:
@@ -239,6 +258,7 @@ def _scan_matrix_include(text: str, workflow: Path) -> dict[str, str]:
                     f'{workflow}: expected each matrix item to start with '
                     f'`- id:`, got {stripped!r}')
             current = value.strip().strip("'\"")
+            order.append(current)
             entries[current] = None
         elif item_indent is not None and indent > item_indent:
             key, _, value = stripped.partition(':')
@@ -249,7 +269,7 @@ def _scan_matrix_include(text: str, workflow: Path) -> dict[str, str]:
     if not entries:
         raise SystemExit(
             f'{workflow}: parsed no entries from the regression-shard matrix')
-    return entries
+    return entries, sorted({i for i in order if order.count(i) > 1})
 
 
 def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
@@ -259,8 +279,19 @@ def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
     whose `corpus` disagrees with the list's `# corpus:` header would
     resolve the wrong models repo.
     """
-    matrix = _matrix_entries(workflow)
-    errors = []
+    matrix, duplicates = _matrix_entries(workflow)
+    errors = [
+        f'regression-shard matrix declares id {shard!r} more than once; '
+        'both jobs would upload the artifact `regression-shard-'
+        f'{shard}` and one would fail on the name clash'
+        for shard in sorted(duplicates)
+    ]
+    # The cap is about JOBS, not files: ten lists with eleven matrix
+    # entries is eleven shard jobs.
+    if len(matrix) + len(duplicates) > MAX_SHARDS:
+        errors.append(
+            f'{len(matrix) + len(duplicates)} regression-shard matrix '
+            f'entries, max is {MAX_SHARDS} (regression/shards/README.md)')
     for shard, corpus in sorted(corpora.items()):
         if shard not in matrix:
             errors.append(

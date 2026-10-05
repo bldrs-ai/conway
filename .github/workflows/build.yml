@@ -306,11 +306,13 @@ jobs:
   # the check name `run-ifc-regression`, AND-reduces the shards, and
   # stitches their summary fragments into the PR comment.
   #
-  # Nothing private is written anywhere a fork can read it: visual-diff
-  # is public coverage only (rendering a private model would publish it
-  # onto visual-diff-assets), and only public corpora are cached (an
-  # Actions cache on the default branch is restorable from a fork's
-  # pull_request run). See regression/shards/README.md.
+  # A private shard publishes no model bytes, no renders and no model
+  # internals in the PR comment: visual-diff is public coverage only,
+  # only public corpora are cached (an Actions cache on the default
+  # branch is restorable from a fork's pull_request run), and a private
+  # fragment is counts only. Its artifact and job log DO carry
+  # errors.csv rows, which is a public repo's normal exposure and is
+  # recorded as accepted in regression/shards/README.md.
   # ---------------------------------------------------------------------------
   # One corpus commit for the whole run. Each shard used to resolve
   # TEST_MODELS_REF itself, so eleven independent `git ls-remote` calls

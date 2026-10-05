@@ -17,19 +17,39 @@ otherwise skip, the matrix would still reduce to `success` on the
 strength of the public entries, and a push to `main` could reach
 `auto-publish` having tested none of the seven headline models.
 
-## Nothing private leaves the private repo
+## What a private shard may and may not publish
 
-Conway is public, and both of the places a run could stash model bytes
-are readable by anyone who can open a PR:
+Conway is public. Its Actions caches, artifacts, job logs and PR
+comments are all readable by anyone, so "private" here means a specific
+list of things that must not reach them — not that a private shard is
+invisible.
 
-- **Visual-diff is public coverage only.** Rendering a private model
-  would publish it onto the `visual-diff-assets` branch.
-- **Only public corpora are cached.** An Actions cache written on the
-  default branch is restorable by any `pull_request` run, and a
-  `pull_request` run uses the *fork's* workflow file — so a fork can
-  add a restore step. A cached private shard would hand over both the
-  model bytes and the `TEST_MODELS_PRIVATE_TOKEN` that `git remote add`
-  leaves in `models/.git/config`.
+**Never published:**
+
+- **Model bytes.** Only public corpora are cached. An Actions cache
+  written on the default branch is restorable by any `pull_request`
+  run, and a `pull_request` run uses the *fork's* workflow file — so a
+  fork can add a restore step. A cached private shard would hand over
+  both the model bytes and the `TEST_MODELS_PRIVATE_TOKEN` that
+  `git remote add` leaves in `models/.git/config`.
+- **Renders.** Visual-diff is public coverage only; rendering a private
+  model would publish it onto the `visual-diff-assets` branch. The
+  matrix passes the literal `'false'` for `allow-visual-diff` on every
+  private shard, and both the collect and upload steps are gated on it.
+- **Model internals in the PR comment.** A private shard's fragment is
+  **counts only** — row totals and how many moved. No engine error
+  text, no express IDs, no geometry digests, no timings. This matches
+  `perf-three-private`, which builds "aggregate stats (no filenames)"
+  for the same reason.
+
+**Published, and accepted as such:** the shard id (so the model
+basename, which `regression/shards/*.txt` commits publicly anyway), the
+private corpus SHA in the job summary and comment header, row counts,
+and the per-shard `regression-shard-*` artifact plus job log, which do
+carry `errors.csv` rows. If that last one is too much, redact the
+artifact upload for private shards — but note the gate steps already
+`cat failed.csv` into a public log, so artifacts are not the only path
+and the fix has to cover both.
 
 The cost of the second rule is real: a ready-PR run re-pulls ~2.6 GB of
 private LFS rather than restoring it. If that starts hurting the LFS

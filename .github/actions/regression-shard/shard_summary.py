@@ -79,6 +79,23 @@ def _baseline(root: Path, sha: str, name: str) -> tuple[bool, str]:
     return done.returncode == 0, done.stdout
 
 
+def _scoped(header: list[str], rows: list[tuple[str, ...]],
+            scope: set[str], name: str) -> tuple[list[tuple[str, ...]], bool]:
+    """Rows whose `file` is in this shard, plus whether scoping worked.
+
+    The column index comes from the header that shipped WITH these rows.
+    Reading the baseline through the current header is wrong the moment
+    the CSV schema changes: the old 'file' column sits elsewhere, every
+    baseline row drops out of scope, and the delta reads as "everything
+    is new" with nothing to say it happened.
+    """
+    if 'file' not in header:
+        return rows, False
+    index = header.index('file')
+    return ([row for row in rows if len(row) > index and row[index] in scope],
+            True)
+
+
 def _report_section(root: Path, sha: str, name: str, scope: set[str],
                     empty_msg: str, mode: str) -> list[str]:
     current_path = root / 'regression' / 'test_models' / name
@@ -87,13 +104,27 @@ def _report_section(root: Path, sha: str, name: str, scope: set[str],
 
     header, current = _parse(current_path.read_text(encoding='utf-8'))
     has_baseline, baseline_text = _baseline(root, sha, name)
-    baseline = _parse(baseline_text)[1] if has_baseline else []
+    base_header, baseline = (_parse(baseline_text) if has_baseline
+                             else ([], []))
 
-    if 'file' in header:
-        index = header.index('file')
-        in_scope = (lambda row: len(row) > index and row[index] in scope)
-        baseline = [row for row in baseline if in_scope(row)]
-        current = [row for row in current if in_scope(row)]
+    current, cur_ok = _scoped(header, current, scope, name)
+    baseline, base_ok = _scoped(base_header, baseline, scope, name)
+
+    # Comparing rows across a schema change is meaningless; say so rather
+    # than reporting a delta that is an artifact of the column layout.
+    comparable = (not has_baseline) or (base_header == header)
+    schema_note = []
+    if has_baseline and not comparable:
+        schema_note = [
+            f'_`{name}` schema changed since the pinned commit '
+            f'(baseline columns `{",".join(base_header) or "?"}`, now '
+            f'`{",".join(header)}`), so the added/resolved delta is '
+            'suppressed as meaningless._']
+        baseline = []
+    if not cur_ok or (has_baseline and comparable and not base_ok):
+        schema_note = schema_note or [
+            f'_`{name}` has no `file` column, so these rows could not be '
+            'scoped to this shard._']
 
     lines: list[str] = []
     if not current:
@@ -104,12 +135,21 @@ def _report_section(root: Path, sha: str, name: str, scope: set[str],
     if not has_baseline:
         lines.append(f'_No {name} at the pinned corpus commit — '
                      'every row counts as new._')
+    lines += schema_note
     if current and mode == 'full':
         lines += ['', _table(header, current)]
 
+    if not comparable:
+        return lines
+
     added = list((Counter(current) - Counter(baseline)).elements())
     resolved = list((Counter(baseline) - Counter(current)).elements())
-    if added or resolved:
+    # 'counts' is the private-corpus mode: how much moved, never what.
+    if (added or resolved) and mode == 'counts':
+        bits = ([f'{len(added)} new'] if added else []) + \
+               ([f'{len(resolved)} resolved'] if resolved else [])
+        lines += ['', f'**Changes vs baseline:** {", ".join(bits)}.']
+    elif added or resolved:
         bits = ([f'{len(added)} new'] if added else []) + \
                ([f'{len(resolved)} resolved'] if resolved else [])
         lines += ['', f'**Changes vs baseline:** {", ".join(bits)}.']
@@ -167,20 +207,37 @@ def main() -> None:
     root = Path(args.root)
     scope = set(names)
 
+    # Conway is public and this fragment is destined for a public PR
+    # comment, so a PRIVATE shard reports counts only. The repo already
+    # holds this line: perf-three-private builds "aggregate stats (no
+    # filenames)" for exactly this reason. Model basenames are public
+    # (regression/shards/*.txt commits them), so naming the shard and
+    # saying how many rows moved is fine; the engine's error text,
+    # express IDs and geometry digests describe the model's internals
+    # and are not.
+    redact = corpus == 'private'
+
     lines = [f'<h3>{args.shard_id} <sub>({corpus}, {len(names)} '
              f'model(s))</sub></h3>', '']
+    if redact:
+        lines += ['_Private corpus — counts only. Rows are in the job log '
+                  'and the shard artifact, not in this public comment._', '']
     lines += ['**failed.csv:**', '']
     lines += _report_section(root, args.sha, 'failed.csv', scope,
-                            'No failures :white_check_mark:', 'full')
+                            'No failures :white_check_mark:',
+                            'counts' if redact else 'full')
     lines += ['', '**errors.csv:**', '']
     lines += _report_section(root, args.sha, 'errors.csv', scope,
-                            'No errors found.', 'diff')
-    lines += ['', '**Performance:**', '']
-    lines += _perf_section(Path(args.perf))
+                            'No errors found.',
+                            'counts' if redact else 'diff')
+    if not redact:
+        lines += ['', '**Performance:**', '']
+        lines += _perf_section(Path(args.perf))
     lines.append('')
 
     Path(args.out).write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'wrote {args.out} ({len(lines)} line(s))')
+    print(f'wrote {args.out} ({len(lines)} line(s))'
+          + (' [private: counts only]' if redact else ''))
 
 
 if __name__ == '__main__':

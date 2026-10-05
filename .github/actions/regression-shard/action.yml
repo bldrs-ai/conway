@@ -139,8 +139,18 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        git -C models checkout -- regression/test_models
-        git -C models clean -fdq regression/test_models
+        # `git checkout --` exits 1 on a pathspec that matches nothing
+        # tracked, which is the case for a corpus whose baselines are not
+        # committed yet. Under `set -e` that would red the shard on a
+        # cache HIT only, so the first run would pass and the second
+        # fail. Guard on the pinned tree instead.
+        if git -C models ls-tree -d --name-only HEAD regression/test_models \
+             | grep -q .; then
+          git -C models checkout -- regression/test_models
+        else
+          echo "No tracked regression/test_models at the pinned commit; nothing to reset."
+        fi
+        git -C models clean -fdq regression/test_models || true
 
     - name: Run digest batch
       shell: bash
