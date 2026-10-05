@@ -5,9 +5,11 @@
  *
  * A closed B-rep solid tessellates to a closed mesh only if every boundary
  * segment one face emits is emitted, reversed, by its neighbour. This welds
- * each solid's faces together (one float32-sized bucket per solid, as in
- * face_health.mjs), finds the directed edges whose reverse is absent, and
- * sorts each one into a cause.
+ * each solid's faces together (exact float32 identity first, then a few
+ * float32 ULPs at each vertex's own magnitude), counts each directed edge
+ * against its reverse, and sorts every edge with a surplus into a cause.
+ * Counts are of edges; `half` also counts the surplus incidences, so an edge
+ * emitted twice the same way is one edge and two half-edges.
  *
  * First, whether it is a gap at all. An edge emitted TWICE in the same
  * direction has its vertices shared and nothing missing; the two triangles
@@ -17,6 +19,9 @@
  *                      inconsistently inside itself.
  *   flipped-across     they belong to two faces: one of the pair is wound
  *                      against its shell. The orientation vote below says which.
+ *   overlap            two of the triangles sit on the SAME side of the edge
+ *                      (within OVERLAP_COS), so it is a doubled or folded
+ *                      sheet, not a flip. A flip puts them on opposite sides.
  *
  * Share draws with `DoubleSide`, so a flipped triangle is not culled, but
  * three.js negates the normal of a back-facing triangle when it shades it, so
@@ -62,9 +67,11 @@
  * false positive before it was fixed.
  *
  * Usage:
- *   node scripts/debug/seam_census.mjs <model> [solid express id] [--edges N]
+ *   node scripts/debug/seam_census.mjs <model> [solid express id] [--edges N] [--exact]
  *
  * `--edges N` lists the N longest unpaired edges with their faces and class.
+ * `--exact` welds by float32 identity alone, with no tolerance: run both ways
+ * to see how much of a result the weld tolerance is carrying.
  *
  * Reads `compiled/`, not `src/`, so rebuild (`yarn build-incremental`, or
  * `yarn build-codex-MT` if conway-geom changed) before trusting a run.
@@ -81,11 +88,13 @@ const compiled = (rel) => import(new URL(`compiled/${rel}`, REPO_ROOT).href)
 const args = process.argv.slice(2)
 const edgesFlag = args.indexOf('--edges')
 const listEdges = edgesFlag >= 0 ? Number(args.splice(edgesFlag, 2)[1]) : 0
+const exactFlag = args.indexOf('--exact')
+const exactOnly = exactFlag >= 0 && args.splice(exactFlag, 1).length > 0
 const [modelPath, wantSolidArg] = args
 const wantSolid = wantSolidArg === undefined ? undefined : Number(wantSolidArg)
 
 if (modelPath === undefined) {
-  console.error('usage: node scripts/debug/seam_census.mjs <model> [solid express id] [--edges N]')
+  console.error('usage: node scripts/debug/seam_census.mjs <model> [solid express id] [--edges N] [--exact]')
   process.exit(2)
 }
 
@@ -194,8 +203,16 @@ const mmPerUnit = metresPerUnit.size === 1 ? [...metresPerUnit][0] * 1e3 : undef
 const lenScale = mmPerUnit ?? 1
 const lenUnit = mmPerUnit === undefined ? 'fu' : 'mm'
 
-const CLASSES = ['flipped-in-face', 'flipped-across', 'interior', 'neighbour-dropped',
+const CLASSES = ['flipped-in-face', 'flipped-across', 'overlap', 'interior', 'neighbour-dropped',
   'neighbour-split', 'neighbour-missing', 'sampling-differs', 'no-partner']
+
+// Two same-direction triangles on an edge whose third vertices sit on the SAME
+// side of it, within this angle, are a doubled or folded sheet rather than a
+// winding flip. A flip puts them on opposite sides; a crease between faces
+// puts them at the dihedral angle. cos 0.99 is about 8 degrees, so a knife
+// edge sharper than that would read as overlap, which is the conservative
+// direction: it never manufactures a flip.
+const OVERLAP_COS = 0.99
 
 // Distance from p to segment ab, and the parameter of the foot along ab.
 function toSegment(p, a, b) {
@@ -208,15 +225,22 @@ function toSegment(p, a, b) {
   return {d: Math.hypot(q[0], q[1], q[2]), t}
 }
 
-// Smallest distance between two segments, sampled. Exact closest-approach is
-// not needed: this only decides whether another loop runs ALONG an edge, and a
-// loop that does passes within tolerance of every sample.
-function segmentNearSegment(a, b, c, d, tol) {
-  for (const s of [0.25, 0.5, 0.75]) {
-    const p = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * s]
-    if (toSegment(p, c, d).d > tol) return false
+// Cosine of the angle between where c1 and c2 sit around the line a-b: each
+// third vertex's offset from the line, perpendicular to it. Near 1 means the
+// two triangles lie on the same side; negative means opposite sides.
+function sideCos(a, b, c1, c2) {
+  const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+  const ul = Math.hypot(u[0], u[1], u[2])
+  if (ul === 0) return NaN
+  u[0] /= ul; u[1] /= ul; u[2] /= ul
+  const perp = (c) => {
+    const d = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+    const along = d[0] * u[0] + d[1] * u[1] + d[2] * u[2]
+    return [d[0] - along * u[0], d[1] - along * u[1], d[2] - along * u[2]]
   }
-  return true
+  const w1 = perp(c1), w2 = perp(c2)
+  const n = Math.hypot(w1[0], w1[1], w1[2]) * Math.hypot(w2[0], w2[1], w2[2])
+  return n === 0 ? NaN : (w1[0] * w2[0] + w1[1] * w2[1] + w1[2] * w2[2]) / n
 }
 
 function censusSolid(faces) {
@@ -225,28 +249,49 @@ function censusSolid(faces) {
     for (const v of f.pos) maxAbs = Math.max(maxAbs, Math.abs(v))
     for (const loop of f.loops) for (const p of loop) maxAbs = Math.max(maxAbs, ...p.map(Math.abs))
   }
-  const bucket = bucketFor(maxAbs)
-  const Q = 1 / bucket
-  const cell = (p) => [Math.round(p[0] * Q), Math.round(p[1] * Q), Math.round(p[2] * Q)]
 
-  // One weld over the whole solid. Emitted vertices go in first, so a loop
-  // point that the face DID emit resolves to the emitted id, and a loop point
-  // that no face emitted gets an id of its own, marked unemitted.
-  const weld = new Map()
+  // The weld. Exact float32 identity first: a boundary point two faces share
+  // is one double cast to float32 on both sides, and a loop point is that same
+  // double before the cast, so both match bit for bit. Only on a miss is a
+  // nearby vertex accepted, and only within a tolerance taken from THAT pair's
+  // own magnitude, so a far-flung corner of the solid cannot widen the weld
+  // near the origin. The grid is sized from the largest coordinate so that
+  // every local tolerance fits inside one cell; it gathers candidates and
+  // never decides a weld. `tolWelds` counts the non-exact ones.
+  const localTol = (p, q) => bucketFor(Math.max(Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]),
+      Math.abs(q[0]), Math.abs(q[1]), Math.abs(q[2])))
+  const Q = 1 / bucketFor(maxAbs)
+  const cell = (p) => [Math.round(p[0] * Q), Math.round(p[1] * Q), Math.round(p[2] * Q)]
+  const f32 = (p) => `${Math.fround(p[0])},${Math.fround(p[1])},${Math.fround(p[2])}`
+  const exact = new Map()
+  const grid = new Map()
   const where = []
+  let tolWelds = 0
   const lookup = (p) => {
+    const hit = exact.get(f32(p))
+    if (hit !== undefined || exactOnly) return hit
     const [bx, by, bz] = cell(p)
-    const exact = weld.get(`${bx},${by},${bz}`)
-    if (exact !== undefined) return exact
+    let best, bestD = Infinity
     for (let dx = -1; dx <= 1; ++dx) for (let dy = -1; dy <= 1; ++dy) for (let dz = -1; dz <= 1; ++dz) {
-      const q = weld.get(`${bx + dx},${by + dy},${bz + dz}`)
-      if (q !== undefined) return q
+      for (const id of grid.get(`${bx + dx},${by + dy},${bz + dz}`) ?? []) {
+        const q = where[id]
+        const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])
+        if (d <= localTol(p, q) && d < bestD) { best = id; bestD = d }
+      }
     }
-    return undefined
+    if (best !== undefined) ++tolWelds
+    return best
   }
   const intern = (p) => {
     let w = lookup(p)
-    if (w === undefined) { w = where.length; where.push(p); weld.set(cell(p).join(','), w) }
+    if (w === undefined) {
+      w = where.length
+      where.push(p)
+      exact.set(f32(p), w)
+      const k = cell(p).join(',')
+      if (!grid.has(k)) grid.set(k, [])
+      grid.get(k).push(w)
+    }
     return w
   }
 
@@ -263,7 +308,7 @@ function censusSolid(faces) {
   // loops run along a seam holds that segment twice, once each way, so the
   // occurrence list is a multiset: its own second occurrence is its partner.
   const loopSegs = new Map() // "min_max" -> [{face, from, to}]
-  const loopSegList = [] // [{face, a, b}] in positions, for the proximity search
+  const segsByFace = faces.map(() => []) // [{a, b}] in positions, for the proximity search
   for (let fi = 0; fi < faces.length; ++fi) {
     for (const loop of faces[fi].loops) {
       const ids = loop.map(intern)
@@ -272,17 +317,27 @@ function censusSolid(faces) {
         const k = ids[i] < ids[i + 1] ? `${ids[i]}_${ids[i + 1]}` : `${ids[i + 1]}_${ids[i]}`
         if (!loopSegs.has(k)) loopSegs.set(k, [])
         loopSegs.get(k).push({face: fi, from: ids[i], to: ids[i + 1]})
-        loopSegList.push({face: fi, a: where[ids[i]], b: where[ids[i + 1]]})
+        segsByFace[fi].push({a: where[ids[i]], b: where[ids[i + 1]]})
       }
     }
   }
   const segKey = (a, b) => a < b ? `${a}_${b}` : `${b}_${a}`
 
+  // Does a face's loop polyline run along a-b? Every sample, ends included,
+  // must lie within tol of SOME segment of that face's loops. The union, not
+  // one segment, so a neighbour that samples the boundary as A-M-B still
+  // matches A-B, and a segment covering only the middle of A-B does not.
+  const runsAlong = (segs, pa, pb, tol) => [0, 0.25, 0.5, 0.75, 1].every((s) => {
+    const p = [pa[0] + (pb[0] - pa[0]) * s, pa[1] + (pb[1] - pa[1]) * s, pa[2] + (pb[2] - pa[2]) * s]
+    return segs.some((seg) => toSegment(p, seg.a, seg.b).d <= tol)
+  })
+
   // Directed edges per face, with the faces in `reversed` wound backwards.
   // Run twice: as emitted, and with the faces the orientation vote below
   // finds reversed turned around, so the second census counts only gaps.
+  // Each incidence keeps its triangle's third vertex for the side test.
   const buildEdges = (reversed) => {
-    const emittedBy = new Map() // "a_b" -> [face index]
+    const emittedBy = new Map() // "a_b" -> [{face, third}]
     const faceEdges = faces.map(() => new Set())
     for (let fi = 0; fi < faces.length; ++fi) {
       const f = faces[fi]
@@ -294,32 +349,43 @@ function censusSolid(faces) {
           const e = `${w[k]}_${w[(k + 1) % 3]}`
           faceEdges[fi].add(e)
           if (!emittedBy.has(e)) emittedBy.set(e, [])
-          emittedBy.get(e).push(fi)
+          emittedBy.get(e).push({face: fi, third: w[(k + 2) % 3]})
         }
       }
     }
     return {emittedBy, faceEdges}
   }
 
-  const onSegTol = 4 * bucket
-  const classify = ({emittedBy, faceEdges}) => {
+  const classify = ({emittedBy}) => {
     const unpaired = []
-    for (const [e, owners] of emittedBy) {
+    for (const [e, fwd] of emittedBy) {
       const [a, b] = e.split('_').map(Number)
-      if (emittedBy.has(`${b}_${a}`)) continue
-      const f = owners[0]
+      // Paired by COUNT: two forward incidences against one reverse leave one
+      // unpaired, which a presence check would hide.
+      const excess = fwd.length - (emittedBy.get(`${b}_${a}`)?.length ?? 0)
+      if (excess <= 0) continue
+      const f = fwd[0].face
       const pa = where[a], pb = where[b]
       const length = Math.hypot(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2])
       const occ = loopSegs.get(segKey(a, b)) ?? []
       const ownIndex = occ.findIndex((o) => o.face === f)
       let cls
       let partner
-      if (owners.length > 1) {
-        // Emitted twice, the same way both times: the vertices are shared and
-        // nothing is missing, so this is orientation, not a gap.
-        const other = owners.find((o) => o !== f)
-        if (other !== undefined) partner = faces[other].express
-        cls = other === undefined ? 'flipped-in-face' : 'flipped-across'
+      if (fwd.length > 1) {
+        // Emitted more than once the same way. A winding flip puts the two
+        // triangles on opposite sides of the edge; a doubled or folded sheet
+        // puts them on the same side. A pair on the same side makes it an
+        // overlap, whatever the others do.
+        let sameSide = false
+        for (let i = 0; i < fwd.length && !sameSide; ++i) {
+          for (let j = i + 1; j < fwd.length && !sameSide; ++j) {
+            const c = sideCos(pa, pb, where[fwd[i].third], where[fwd[j].third])
+            if (!(c < OVERLAP_COS)) sameSide = true
+          }
+        }
+        const other = fwd.find((o) => o.face !== f)
+        if (other !== undefined) partner = faces[other.face].express
+        cls = sameSide ? 'overlap' : other === undefined ? 'flipped-in-face' : 'flipped-across'
       } else if (ownIndex < 0) {
         cls = 'interior'
       } else {
@@ -335,18 +401,18 @@ function censusSolid(faces) {
             for (const w of G.emittedVerts) {
               if (w === a || w === b) continue
               const {d, t} = toSegment(where[w], pa, pb)
-              if (d <= onSegTol && t > 1e-9 && t < 1 - 1e-9) { split = true; break }
+              if (d <= 4 * localTol(where[w], pa) && t > 1e-9 && t < 1 - 1e-9) { split = true; break }
             }
             cls = split ? 'neighbour-split' : 'neighbour-missing'
           }
         } else {
-          const tol = Math.max(onSegTol, 1e-3 * length)
-          const near = loopSegList.find((s) => s.face !== f && segmentNearSegment(pa, pb, s.a, s.b, tol))
-          if (near !== undefined) partner = faces[near.face].express
-          cls = near !== undefined ? 'sampling-differs' : 'no-partner'
+          const tol = Math.max(4 * localTol(pa, pb), 1e-3 * length)
+          const g = faces.findIndex((_, gi) => gi !== f && runsAlong(segsByFace[gi], pa, pb, tol))
+          if (g >= 0) partner = faces[g].express
+          cls = g >= 0 ? 'sampling-differs' : 'no-partner'
         }
       }
-      unpaired.push({cls, length: length * lenScale, face: faces[f].express,
+      unpaired.push({cls, half: excess, length: length * lenScale, face: faces[f].express,
         surface: faces[f].surface, partner})
     }
     return unpaired
@@ -369,8 +435,8 @@ function censusSolid(faces) {
       const [a, b] = e.split('_').map(Number)
       const occ = loopSegs.get(segKey(a, b))
       if (occ === undefined || !occ.some((o) => o.face !== fi)) continue
-      if ((asEmitted.emittedBy.get(`${b}_${a}`) ?? []).some((o) => o !== fi)) ++agree
-      if (asEmitted.emittedBy.get(e).some((o) => o !== fi)) ++disagree
+      if ((asEmitted.emittedBy.get(`${b}_${a}`) ?? []).some((o) => o.face !== fi)) ++agree
+      if (asEmitted.emittedBy.get(e).some((o) => o.face !== fi)) ++disagree
     }
     if (disagree > agree) {
       reversed.add(fi)
@@ -380,7 +446,7 @@ function censusSolid(faces) {
   }
   const afterReorienting = reversed.size === 0 ? unpaired : classify(buildEdges(reversed))
 
-  return {triangles, bucket, unpaired, reversedFaces: votes, afterReorienting}
+  return {triangles, tolWelds, unpaired, reversedFaces: votes, afterReorienting}
 }
 
 const quantile = (sorted, q) => sorted.length === 0 ? 0 :
@@ -394,12 +460,14 @@ console.log('  `reoriented` = unpaired edges left once the reversed faces listed
 console.log(`  ${'solid'.padEnd(8)} ${'faces'.padStart(5)} ${'tris'.padStart(7)} ${'unpaired'.padStart(8)} ` +
   `${'reoriented'.padStart(10)}  ` + CLASSES.map((c) => c.replace('neighbour-', 'n-')).join(' '))
 
+let totalTolWelds = 0
 const all = []
 const allAfter = []
 const allReversed = []
 const solidRows = []
 for (const [solid, faces] of solids) {
-  const {triangles, unpaired, reversedFaces, afterReorienting} = censusSolid(faces)
+  const {triangles, tolWelds, unpaired, reversedFaces, afterReorienting} = censusSolid(faces)
+  totalTolWelds += tolWelds
   all.push(...unpaired.map((u) => ({...u, solid})))
   allAfter.push(...afterReorienting.map((u) => ({...u, solid})))
   allReversed.push(...reversedFaces.map((r) => ({...r, solid})))
@@ -413,16 +481,19 @@ for (const r of solidRows) {
     `${String(r.unpaired.length).padStart(8)} ${String(r.after).padStart(10)}  ` +
     counts.map((n, i) => String(n).padStart(CLASSES[i].replace('neighbour-', 'n-').length)).join(' '))
 }
+console.log(`  (${totalTolWelds} welds were by tolerance rather than exact float32 identity)`)
 const clean = solidRows.filter((r) => r.unpaired.length === 0).length
 console.log(`  (${clean} of ${solidRows.length} solids have no unpaired edges${wantSolid === undefined ? ' and are not listed' : ''})`)
 
 const byClass = (title, edges) => {
-  console.log(`\n# by class, ${title} (${edges.length} unpaired edges)`)
-  console.log(`  ${'class'.padEnd(18)} ${'n'.padStart(6)}  ${'p50'.padStart(7)} ${'p90'.padStart(7)} ${'max'.padStart(7)}  ${lenUnit}`)
+  const halves = (list) => list.reduce((n, u) => n + u.half, 0)
+  console.log(`\n# by class, ${title} (${edges.length} unpaired edges, ${halves(edges)} half-edges)`)
+  console.log(`  ${'class'.padEnd(18)} ${'n'.padStart(6)} ${'half'.padStart(6)}  ${'p50'.padStart(7)} ${'p90'.padStart(7)} ${'max'.padStart(7)}  ${lenUnit}`)
   for (const c of CLASSES) {
-    const lens = edges.filter((u) => u.cls === c).map((u) => u.length).sort((x, y) => x - y)
+    const inClass = edges.filter((u) => u.cls === c)
+    const lens = inClass.map((u) => u.length).sort((x, y) => x - y)
     if (lens.length === 0) continue
-    console.log(`  ${c.padEnd(18)} ${String(lens.length).padStart(6)}  ${fmt(quantile(lens, 0.5)).padStart(7)} ` +
+    console.log(`  ${c.padEnd(18)} ${String(lens.length).padStart(6)} ${String(halves(inClass)).padStart(6)}  ${fmt(quantile(lens, 0.5)).padStart(7)} ` +
       `${fmt(quantile(lens, 0.9)).padStart(7)} ${fmt(lens[lens.length - 1]).padStart(7)}`)
   }
 }
