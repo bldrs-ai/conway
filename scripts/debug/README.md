@@ -13,6 +13,7 @@ zero, twice attached to the wrong seam, and never survived the session.
 |---|---|
 | [`model_report.mjs`](model_report.mjs) | Which entities produced bad geometry, and at which stage of the pipeline |
 | [`face_health.mjs`](face_health.mjs) | Which of a face's own trim-loop points reached its emitted geometry — the silently dropped ring `model_report.mjs` reads clean through |
+| [`seam_census.mjs`](seam_census.mjs) | Why a solid is not watertight: every unpaired edge, welded across the whole solid and sorted into winding disagreement versus a real gap, and for a gap what the neighbouring face did with that boundary |
 | [`occurrence_report.mjs`](occurrence_report.mjs) | Whether a click selects one thing — how many placements each body got, whether their occurrence paths are unique, and whether those paths are the product-structure tree's |
 | [`../render_glb.cjs`](../render_glb.cjs) | What does the output actually look like (zero-dependency software rasterizer, deterministic, pair mode for before/after) |
 | [`../visual_diff_report.cjs`](../visual_diff_report.cjs) | Which regression models changed appearance in this PR |
@@ -239,6 +240,16 @@ emitting — which is most geometry work.
 Boundary-edge count is not a clean substitute either: refinement adds
 per-face vertices that fail to pair, so it moves for reasons unrelated to
 closedness.
+
+An unpaired count is not a gap count either. `seam_census.mjs` welds each
+solid as a whole and pairs edges by count. On `Right_Hand.step`
+(conway-geom#215, conway-geom `d049451`) it finds 1,269 unpaired edges:
+- 1,092 are winding flips over shared vertices;
+- 27 are overlapping sheets;
+- 53 are short non-manifold edges;
+- only 97 were missing on one side.
+
+Report winding and gaps separately.
 
 What does hold up, and what a before/after should report:
 
