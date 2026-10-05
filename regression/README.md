@@ -4,11 +4,12 @@ Conway has a built in regression testing framework that is designed to be run as
 
 ### CI tiering
 
-CI runs the framework at three escalating scopes, so full-corpus cost is paid once per release instead of per push:
+CI runs the framework at four escalating scopes, so full-corpus cost is paid once per release instead of per push:
 
-1. **Every ready PR / merge** — unit tests plus the in-repo `data/` goldens (Tier A in `build.yml`), and up to ten digest shards on free `ubuntu-24.04` (three public coverage lists plus one shard each for PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital — see `regression/shards/README.md`). A listed model that fails to parse blocks the PR; digest *changes* are informational and reviewed via the visual diff (public coverage only).
-2. **Release candidate (`rc-*` tag)** — `rc-regression.yml` runs the batch over the **entire public and private corpora**, goes red on any failure, and opens a baseline PR in each test-models repo. That PR's diff is the release's regression report; merging it blesses the baselines so they track releases exactly.
-3. **Perf** — the headless-three benchmarks also run per `rc-*` tag (`perf-three-*` in `build.yml`); timings from the parallel smoke batch are contended and only a coarse signal.
+1. **Every ready PR / merge** — unit tests plus the in-repo `data/` goldens (Tier A in `build.yml`), and three public coverage digest shards on free `ubuntu-24.04` (see `regression/shards/README.md`). A listed model that fails to parse blocks the PR; digest *changes* are informational and reviewed via the visual diff.
+2. **Merge to `main` and `rc-*`** — additionally the seven private headline shards (PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital). They are off the PR path because a public repo's Actions cache is fork-readable, so they cannot be cached and cost ~2.6 GB of private LFS per run; paying that per landed change rather than per push is the trade, and it means a headline regression surfaces at merge rather than at review.
+3. **Release candidate (`rc-*` tag)** — `rc-regression.yml` runs the batch over the **entire public and private corpora**, goes red on any failure, and opens a baseline PR in each test-models repo. That PR's diff is the release's regression report; merging it blesses the baselines so they track releases exactly.
+4. **Perf** — the headless-three benchmarks also run per `rc-*` tag (`perf-three-*` in `build.yml`); timings from the parallel smoke batch are contended and only a coarse signal.
 
  ### Individual models
 

@@ -194,7 +194,7 @@ Every PR is gated on two checks defined in `.github/workflows/build.yml`:
 | Job | What it does |
 |---|---|
 | `build` | `yarn install`, WASM + TS compile (WASM cached on the `conway-geom` submodule SHA), `yarn test`, `yarn lint`, and a Tier-A geometry-digest check of the in-repo `data/` models against committed goldens. |
-| `run-ifc-regression` | Aggregator over `regression-shard` (max 10, free `ubuntu-24.04`). Three public coverage shards (union = `regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital. `resolve-models` pins one corpus commit for the whole run; each shard skip-smudges and LFS-pulls only its own files (public corpora cached, private ones never — see `regression/shards/README.md`). Fails on any `failed.csv` row or un-allowlisted zero-geometry model; digest *changes* are informational (visual-diff is public coverage only). Posts one per-PR comment merging each shard's `failed.csv` / `errors.csv` delta vs the pinned commit and its slowest models; `regression-pack` uploads the candidate npm tarball the perf jobs consume. |
+| `run-ifc-regression` | Aggregator over the shard jobs on free `ubuntu-24.04` (10 entries max). On a PR: three public coverage shards (union = `regression/smoke_models.txt`). On merge and `rc-*` additionally `regression-shard-private` — one shard each for PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital, which are kept off the PR path because a public repo's Actions cache is fork-readable, so they cannot be cached and cost ~2.6 GB of private LFS per run (`regression/shards/README.md`). `resolve-models` pins one corpus commit for the whole run; each shard skip-smudges and LFS-pulls only its own files. Fails on any `failed.csv` row or un-allowlisted zero-geometry model; digest *changes* are informational (visual-diff is public coverage only). Posts one per-PR comment merging each shard's `failed.csv` / `errors.csv` delta vs the pinned commit and its slowest models; `regression-pack` uploads the candidate npm tarball the perf jobs consume. |
 
 A `concurrency` group cancels superseded PR runs (main runs are never
 cancelled, so releases always complete). A merge to `main` re-runs those two
@@ -380,8 +380,9 @@ npm dist-tag add @bldrs-ai/conway@<VERSION> stable
 # Roadmap
 
 The CI / release pipeline is continuous and **tiered**: `build` (fixtures) and
-`run-ifc-regression` (smoke subset) gate every PR; the full public+private
-corpus and the headless-three perf jobs run once per `rc-*` release candidate;
+`run-ifc-regression` (public coverage shards) gate every PR; the private
+headline shards join on merge to `main`; the full public+private corpus and
+the headless-three perf jobs run once per `rc-*` release candidate;
 every green merge to `main` auto-publishes (see [Releases](#releases)). The
 architecture, cost rationale, and rc/re-bless/LFS runbook are in
 [design/new/ci-regression-cost.md](design/new/ci-regression-cost.md). Regression

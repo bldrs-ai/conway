@@ -22,13 +22,19 @@ full sweep only at a blessed release point.
 | Tier | When | What runs | Gate |
 |---|---|---|---|
 | **A — fixtures** | every PR + merge | unit tests + `data/` geometry goldens (in `build`) | **hard** — a mismatch fails `build` |
-| **B — PR shards** | every ready PR + merge | up to **10 shards** on free `ubuntu-24.04`: three public coverage lists (union = `regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
+| **B — PR shards** | every ready PR + merge | three public coverage shards on free `ubuntu-24.04` (union = `regression/smoke_models.txt`, `regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
+| **B′ — headline shards** | merge + `rc-*` only | one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression-shard-private`) | **hard on failures**. Off the PR path because they cannot be cached: ~2.6 GB of private LFS per run |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
-Private shards skip on a fork and **fail** on an internal run with no
-token (`resolve-models`) — an all-steps-skipped matrix entry still
-reports `success`, so a silent skip there would let `auto-publish` ship
-untested headline models.
+Private shards are a separate job gated on `github.event_name !=
+'pull_request'`, not per-step gates inside one matrix: an
+all-steps-skipped matrix entry still reports `success`, which is how a
+private shard could have gone green without digesting anything.
+`resolve-models` **fails** where they do run and the token is missing,
+and `run-ifc-regression` asserts the private job is `skipped` on a PR
+and `success` everywhere else — so neither a shard that quietly stopped
+running on merge, nor one that started spending private LFS on PRs,
+passes unnoticed.
 
 Tier A is hermetic (no `test-models` clone, no token — protects forks too);
 see the Tier-A section of `../../regression/README.md`. Tiers B and C share
@@ -77,14 +83,18 @@ Findings that drove the design:
    low-variance timings, not throughput — frequency is the lever, not size.
 2. **The full digest batch ran on every PR** for a whole-corpus signal that a
    curated subset delivers for correctness at a fraction of the cost
-   (#443). The PR job is now **sharded (max 10)** on free runners:
-   coverage lists of small public models, plus one shard per private
-   headline model (PSB / D3D / ILNA / DOWA / Orbiter / BLSN / Hospital).
-   A few-minute load gets its own machine so a regression there cannot
-   hide behind a short batch. Skip-smudge + LFS-pull of the shard list
-   only — the 9.6 GB public tree and 15 GB private tree do not fit 14 GB
-   disk; PSB alone is ~900 MB. The full corpus still runs once, at the rc.
-   Do not add an 11th shard; see `regression/shards/README.md`.
+   (#443). The PR job is now **sharded** on free runners: three
+   coverage lists of small public models per ready PR, plus one shard
+   per private headline model (PSB / D3D / ILNA / DOWA / Orbiter / BLSN
+   / Hospital) on merge and rc. A few-minute load gets its own machine
+   so a regression there cannot hide behind a short batch. Skip-smudge
+   + LFS-pull of the shard list only — the 9.6 GB public tree and 15 GB
+   private tree do not fit 14 GB disk; PSB alone is ~900 MB. The
+   headline shards are off the PR path because a public repo's Actions
+   cache is fork-readable, so they cannot be cached and cost ~2.6 GB of
+   private LFS per run — per landed change is affordable, per push is
+   not. The full corpus still runs once, at the rc. Ten shard entries
+   total is the cap; see `regression/shards/README.md`.
 3. **Every PR push spawned a fresh pipeline with no cancellation.** A
    concurrency group now cancels superseded runs (#399, see below).
 
@@ -242,18 +252,16 @@ corpus size.
   files are LFS; a fresh checkout must fetch them. When the org's LFS
   *bandwidth* budget is exhausted, `git lfs` fetch is refused
   (`This repository exceeded its LFS budget`) and any fresh pull fails
-  (exit 128). PR shards skip-smudge and LFS-pull only their list —
-  public coverage is ~180 MB, cached per shard; the seven private
-  headline models are ~2.6 GB together (PSB alone ~900 MB) and are
-  **deliberately not cached**, so that 2.6 GB is re-pulled on every
-  ready-PR run. See `regression/shards/README.md`: an Actions cache on
-  a public repo is readable from a fork's `pull_request` run, which
-  would publish the private models and the token in
-  `models/.git/config`. This is the one place the design pays cash for
-  confidentiality; if the budget bites, reduce how many private shards
-  run per PR rather than caching them. The rc run still clones the full
-  trees. Symptom of a spent budget: PRs red at the LFS-pull step, or an
-  rc red at checkout, with no code change.
+  (exit 128). Shards skip-smudge and LFS-pull only their list — public
+  coverage is ~180 MB, cached per shard; the seven private headline
+  models are ~2.6 GB together (PSB alone ~900 MB) and **cannot** be
+  cached, because an Actions cache on a public repo is readable from a
+  fork's `pull_request` run and would publish both the model bytes and
+  the token in `models/.git/config`. That is why they run on merge and
+  rc rather than per PR push: the traffic is unavoidable, so it is paid
+  per landed change. The rc run still clones the full trees. Symptom of
+  a spent budget: a merge or rc red at the LFS-pull step with no code
+  change; a PR is now immune, since it touches public LFS only.
   Fix: add an LFS data pack to the org (Settings → Billing), or as a
   no-code stopgap set `TEST_MODELS_REF` / `TEST_MODELS_PRIVATE_TAG` to
   a SHA whose cache is still warm.

@@ -1,21 +1,33 @@
 # PR regression shards
 
-Ready-PR digest CI is **at most 10 shards** on free `ubuntu-24.04`.
-Each shard skip-smudges its corpus and LFS-pulls only the files in its
-list, so a 900 MB headline model fits on the 14 GB disk.
+Digest CI is **at most 10 shards** on free `ubuntu-24.04`, split by when
+they run. Each shard skip-smudges its corpus and LFS-pulls only the
+files in its list, so a 900 MB headline model fits on the 14 GB disk.
 
-| Shard | Corpus | Why |
-|---|---|---|
-| `coverage-1` … `coverage-3` | public `test-models` | Small/fast models for schema and exporter spread. Lists union to [`../smoke_models.txt`](../smoke_models.txt). |
-| `psb`, `d3d`, `ilna`, `dowa`, `orbiter`, `blsn`, `hospital` | private `test-models-private` | One headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. |
+| Shard | Job | Runs on | Why |
+|---|---|---|---|
+| `coverage-1` … `coverage-3` | `regression-shard` | every ready PR, merge, rc | Small/fast public models for schema and exporter spread. Lists union to [`../smoke_models.txt`](../smoke_models.txt). ~180 MB of LFS, cached. |
+| `psb`, `d3d`, `ilna`, `dowa`, `orbiter`, `blsn`, `hospital` | `regression-shard-private` | **merge and rc only** | One private headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. ~2.6 GB of LFS, **uncached**. |
 
-Private shards need `TEST_MODELS_PRIVATE_TOKEN`. A **fork** has no
-access to it, so its private shards skip and public coverage still
-runs. An **internal** run (a same-repo PR, a push, a dispatch) without
-the token fails in `resolve-models` instead: every private step would
-otherwise skip, the matrix would still reduce to `success` on the
-strength of the public entries, and a push to `main` could reach
-`auto-publish` having tested none of the seven headline models.
+## Why the headline shards are not on pull requests
+
+They cannot be cached — see the next section — so every run that
+includes them re-pulls ~2.6 GB from `test-models-private`. On a per-push
+basis that is the dominant cost of the whole pipeline, and it buys
+coverage that did not exist at all before sharding: the old per-PR job
+ran the public smoke subset only.
+
+Running them per *landed change* instead keeps the coverage and pays for
+it once per merge. The trade is that a headline regression is caught at
+merge rather than at review. If that turns out to be too late, the
+cheap half is `orbiter`: 10 MB of the 2.6 GB, and it is the long-running
+geometry case (coil spring / helical thread), so it could come back to
+the PR path for ~0.4% of the cost. The expensive ones are `psb`
+(900 MB), `hospital` (555 MB) and `dowa` (418 MB).
+
+Private shards need `TEST_MODELS_PRIVATE_TOKEN`. `resolve-models` fails
+loudly if it is missing on a run that executes them; a fork never pushes
+to `main`, so this cannot fire on one.
 
 ## What a private shard may and may not publish
 
@@ -42,28 +54,33 @@ invisible.
   `perf-three-private`, which builds "aggregate stats (no filenames)"
   for the same reason.
 
-**Published, and accepted as such:** the shard id (so the model
-basename, which `regression/shards/*.txt` commits publicly anyway), the
-private corpus SHA in the job summary and comment header, row counts,
-and the per-shard `regression-shard-*` artifact plus job log, which do
-carry `errors.csv` rows. If that last one is too much, redact the
-artifact upload for private shards — but note the gate steps already
-`cat failed.csv` into a public log, so artifacts are not the only path
-and the fix has to cover both.
+**Published, and accepted as such** (a reviewed decision, not an
+oversight): the shard id — so the model basename, which this repo's
+design docs already named for PSB, D3D, DOWA, Orbiter and BLSN before
+sharding existed — the private corpus SHA, row counts, and the
+per-shard `regression-shard-*` artifact plus job log, which do carry
+`errors.csv` rows. Closing that last one needs BOTH the artifact upload
+and the gate steps that `cat failed.csv` into the log; redacting only
+the artifact looks like a fix without being one. It costs the ability
+to debug a private-model regression from a run, which is why it was
+left open. Note these runs are now merge/rc only, so the rows are not
+produced on pull requests at all.
 
-The cost of the second rule is real: a ready-PR run re-pulls ~2.6 GB of
-private LFS rather than restoring it. If that starts hurting the LFS
-budget, cut the number of private shards per PR or move them to
-merge/rc — do not cache private bytes in a public repo.
+This is what moved the headline shards off the PR path: the cache is
+not available to them, and the uncached traffic was too much to pay per
+push. Do not solve it by caching private bytes in a public repo.
 
 ## Invariants
 
 `build` runs `shard_list.py check` on every PR, draft and fork
-included. It enforces: at most ten lists, no model claimed by two
-shards, coverage shards are public, the coverage union is exactly
-[`../smoke_models.txt`](../smoke_models.txt), and each list's
-`# corpus:` header matches its `regression-shard` matrix entry. A list
-with no matrix entry never runs, so that last one matters most — which
+included. It enforces: at most ten entries across both matrices, no id
+declared twice (two jobs of one name would collide on the artifact), no
+model claimed by two shards, coverage shards are public, the coverage
+union is exactly [`../smoke_models.txt`](../smoke_models.txt), and each
+list's `# corpus:` header matching the job that lists it — so moving a
+private model into `regression-shard` is caught, which otherwise both
+resolves the wrong repo and renders it onto `visual-diff-assets`. A
+list in neither matrix never runs, so that one matters most — which
 is why the matrix read is mandatory and never degrades to "no errors".
 It prefers PyYAML and falls back to a strict scan of the `include:`
 block, because this repo's CI does not install PyYAML; it raises if
@@ -76,11 +93,12 @@ merge two coverage lists or move a small headline into coverage.
 ## Reporting
 
 One commit is pinned for the whole run (the `resolve-models` job), so
-ten shards cannot straddle two corpus states. Each shard writes a
+shards cannot straddle two corpus states. Each shard writes a
 `shard_summary.md` fragment — its `failed.csv` in full, its
 `errors.csv` as a delta against that pinned commit, its slowest models
-— into its own artifact, and `run-ifc-regression` concatenates the ten
-into the PR comment.
+— into its own artifact, and `run-ifc-regression` concatenates them
+into the PR comment. A private fragment carries counts only (see
+above), and on a pull request there are none.
 
 The full public+private corpora still run once per `rc-*` tag
 (`rc-regression.yml`).

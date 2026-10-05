@@ -335,20 +335,23 @@ jobs:
     env:
       TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
       IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+      # The private headline shards run on merge and rc tags only, so a
+      # pull_request run needs nothing from the private corpus.
+      PRIVATE_NEEDED: ${{ github.event_name != 'pull_request' }}
     steps:
-      # A fork cannot see the secret, and its private shards are MEANT to
-      # skip. An internal run without the token is a misconfiguration
-      # wearing a skip's clothes: every private step would skip, the
-      # matrix would still reduce to success because the public entries
-      # passed, and a push to main could reach auto-publish having tested
-      # none of the seven headline models. Fail here instead - before
-      # seven jobs start, and loudly enough to name the cause.
-      - name: Require the private-models token on internal runs
-        if: env.TOKEN_PRESENT != 'true' && env.IS_FORK != 'true'
+      # Where private shards DO run, a missing token is a
+      # misconfiguration wearing a skip's clothes: a matrix entry whose
+      # every step skips still reports success, so a push to main could
+      # reach auto-publish having tested none of the seven headline
+      # models. Fail here instead - before seven jobs start, and loudly
+      # enough to name the cause. A fork cannot see the secret, but a
+      # fork never pushes to main either, so this cannot fire on one.
+      - name: Require the private-models token where private shards run
+        if: env.PRIVATE_NEEDED == 'true' && env.TOKEN_PRESENT != 'true' && env.IS_FORK != 'true'
         run: |
-          echo "::error::TEST_MODELS_PRIVATE_TOKEN is empty or unset on an internal run (event: ${{ github.event_name }}, ref: ${{ github.ref }})."
-          echo "::error::The seven private headline shards would silently skip and still report success, so this fails instead."
-          echo "::error::Set the secret, or if the private corpus is deliberately unavailable, remove the private entries from the regression-shard matrix."
+          echo "::error::TEST_MODELS_PRIVATE_TOKEN is empty or unset on a run that executes the private headline shards (event: ${{ github.event_name }}, ref: ${{ github.ref }})."
+          echo "::error::Those seven shards would skip every step and still report success, so this fails instead."
+          echo "::error::Set the secret, or if the private corpus is deliberately unavailable, remove the entries from the regression-shard-private matrix."
           exit 1
       # Recording a SHA (not a tag) is what makes the baseline
       # reproducible: test-models does not tag reliably, so we track its
@@ -375,11 +378,12 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "**Models:** test-models @ \`$SHA\` (ref \`$REF\`)" >> "$GITHUB_STEP_SUMMARY"
 
-      # Forks have no token; their private shards skip, so an empty
-      # output here is the expected quiet path, not a failure.
+      # Skipped on pull_request (no private shards to pin) and on a fork
+      # (no token); an empty output is the expected quiet path in both,
+      # not a failure.
       - name: Resolve private test-models SHA
         id: private
-        if: env.TOKEN_PRESENT == 'true'
+        if: env.PRIVATE_NEEDED == 'true' && env.TOKEN_PRESENT == 'true'
         env:
           TOKEN: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
         run: |
@@ -459,6 +463,8 @@ jobs:
           name: ${{ steps.npm_pack.outputs.package_tgz }}
           path: ${{ steps.npm_pack.outputs.package_tgz }}
 
+  # Public coverage, on every ready PR and every merge. These are the
+  # small/fast models; their union is regression/smoke_models.txt.
   regression-shard:
     needs: [build, resolve-models]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -469,63 +475,33 @@ jobs:
       matrix:
         include:
           - id: coverage-1
-            corpus: public
             concurrency: '2'
           - id: coverage-2
-            corpus: public
             concurrency: '2'
           - id: coverage-3
-            corpus: public
             concurrency: '2'
-          - id: psb
-            corpus: private
-            concurrency: '1'
-          - id: d3d
-            corpus: private
-            concurrency: '1'
-          - id: ilna
-            corpus: private
-            concurrency: '1'
-          - id: dowa
-            corpus: private
-            concurrency: '1'
-          - id: orbiter
-            corpus: private
-            concurrency: '1'
-          - id: blsn
-            corpus: private
-            concurrency: '1'
-          - id: hospital
-            corpus: private
-            concurrency: '1'
     name: regression-shard ${{ matrix.id }}
-    env:
-      TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
+    steps:
     steps:
       - name: Checkout Conway Repo
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Setup Node
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '26'
           cache: 'yarn'
 
       - name: Compute conway-geom submodule SHA
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         id: subsha
         run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         run: yarn install --frozen-lockfile
 
       - name: Restore WASM build cache (populated by build)
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         id: wasm-cache
         uses: actions/cache@v4
         with:
@@ -536,36 +512,130 @@ jobs:
           key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
 
       - name: Fail if WASM cache miss
-        if: (matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true') && steps.wasm-cache.outputs.cache-hit != 'true'
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
         run: |
           echo "::error::WASM cache miss in regression shard; build should have populated it."
           exit 1
 
       - name: TypeScript build
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         run: yarn build-incremental
 
       - name: Run shard
-        if: matrix.corpus == 'public' || env.TOKEN_PRESENT == 'true'
         uses: ./.github/actions/regression-shard
         with:
           shard-id: ${{ matrix.id }}
           shard-file: regression/shards/${{ matrix.id }}.txt
-          corpus: ${{ matrix.corpus }}
-          # Already-resolved commits, not the moving refs: see
-          # resolve-models.
-          models-ref: ${{ matrix.corpus == 'public' && needs.resolve-models.outputs.public_sha || needs.resolve-models.outputs.private_sha }}
-          models-repo: ${{ matrix.corpus == 'public' && 'bldrs-ai/test-models' || 'bldrs-ai/test-models-private' }}
-          models-token: ${{ matrix.corpus == 'private' && secrets.TEST_MODELS_PRIVATE_TOKEN || '' }}
+          corpus: public
+          models-ref: ${{ needs.resolve-models.outputs.public_sha }}
+          models-repo: bldrs-ai/test-models
+          models-token: ''
           concurrency: ${{ matrix.concurrency }}
-          allow-visual-diff: ${{ matrix.corpus == 'public' && 'true' || 'false' }}
+          allow-visual-diff: 'true'
+
+  # Private headline models: one shard each, and deliberately NOT on
+  # pull_request.
+  #
+  # Each of these is a few-minute load that gets its own machine, so a
+  # regression cannot hide behind a short coverage batch. But none of
+  # them can be cached: Conway is public, an Actions cache written on the
+  # default branch is restorable from a fork's pull_request run, and a
+  # cached private shard would hand over the model bytes and the
+  # TEST_MODELS_PRIVATE_TOKEN that `git remote add` leaves in
+  # models/.git/config. Uncached means ~2.6 GB of private LFS per run,
+  # and on every ready-PR push that is the dominant cost of the whole
+  # pipeline for coverage that did not exist before sharding.
+  #
+  # So they run on merge to main and on rc tags, where the traffic is
+  # paid per landed change rather than per push. A headline regression is
+  # caught before a release rather than at review time, which is the
+  # trade. See regression/shards/README.md.
+  #
+  # A job-level `if:` on event_name, rather than per-step gates in one
+  # combined matrix: a matrix entry whose every step skips still reports
+  # `success`, which is exactly how a private shard could have gone green
+  # without digesting anything.
+  regression-shard-private:
+    needs: [build, resolve-models]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: psb
+            concurrency: '1'
+          - id: d3d
+            concurrency: '1'
+          - id: ilna
+            concurrency: '1'
+          - id: dowa
+            concurrency: '1'
+          - id: orbiter
+            concurrency: '1'
+          - id: blsn
+            concurrency: '1'
+          - id: hospital
+            concurrency: '1'
+    name: regression-shard ${{ matrix.id }}
+    steps:
+    steps:
+      - name: Checkout Conway Repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Restore WASM build cache (populated by build)
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      - name: Fail if WASM cache miss
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "::error::WASM cache miss in regression shard; build should have populated it."
+          exit 1
+
+      - name: TypeScript build
+        run: yarn build-incremental
+
+      - name: Run shard
+        uses: ./.github/actions/regression-shard
+        with:
+          shard-id: ${{ matrix.id }}
+          shard-file: regression/shards/${{ matrix.id }}.txt
+          corpus: private
+          models-ref: ${{ needs.resolve-models.outputs.private_sha }}
+          models-repo: bldrs-ai/test-models-private
+          models-token: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN }}
+          concurrency: ${{ matrix.concurrency }}
+          allow-visual-diff: 'false'
+
 
   # Required check name. Must stay `run-ifc-regression` — README and any
   # status-check consumers match on it. Tiny: it AND-reduces the shards
   # and merges public visual-diff lists.
   run-ifc-regression:
     name: run-ifc-regression
-    needs: [resolve-models, regression-pack, regression-shard]
+    needs: [resolve-models, regression-pack, regression-shard, regression-shard-private]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -648,6 +718,7 @@ jobs:
             --package "${{ needs.regression-pack.outputs.package_tgz }}" \
             --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --visual-diff-count "${{ steps.concat.outputs.count }}" \
+            --private-reason "${{ github.event_name == 'pull_request' && 'not-on-prs' || 'no-token' }}" \
             || echo "::warning::Could not build the regression comment; the regression-shard-* artifacts still hold every shard's CSVs."
 
       - name: Comment on Pull Request with regression results
@@ -659,14 +730,26 @@ jobs:
           body-path: regression_comment.md
 
       # Runs LAST, so a failing shard does not take the comment with it.
+      #
+      # regression-shard-private is asserted BOTH ways on purpose. On a
+      # pull_request it must be `skipped` (it is gated off) and on any
+      # other event it must be `success` - so neither a private shard
+      # that quietly stopped running on merge, nor one that started
+      # running on PRs and spending private LFS, can pass unnoticed.
       - name: All shards passed
         run: |
-          echo "resolve-models: ${{ needs.resolve-models.result }}"
-          echo "regression-pack: ${{ needs.regression-pack.result }}"
-          echo "regression-shard: ${{ needs.regression-shard.result }}"
+          echo "resolve-models:           ${{ needs.resolve-models.result }}"
+          echo "regression-pack:          ${{ needs.regression-pack.result }}"
+          echo "regression-shard:         ${{ needs.regression-shard.result }}"
+          echo "regression-shard-private: ${{ needs.regression-shard-private.result }} (event: ${{ github.event_name }})"
           test "${{ needs.resolve-models.result }}" = "success"
           test "${{ needs.regression-pack.result }}" = "success"
           test "${{ needs.regression-shard.result }}" = "success"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "${{ needs.regression-shard-private.result }}" = "skipped"
+          else
+            test "${{ needs.regression-shard-private.result }}" = "success"
+          fi
 
   # ---------------------------------------------------------------------------
   # Visual diff: render before/after images for every model whose regression

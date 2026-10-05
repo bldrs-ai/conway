@@ -61,6 +61,10 @@ def main() -> None:
     parser.add_argument('--package', default='')
     parser.add_argument('--run-url', default='')
     parser.add_argument('--visual-diff-count', default='0')
+    parser.add_argument(
+        '--private-reason', default='no-token',
+        choices=('no-token', 'not-on-prs'),
+        help='why the private headline shards did not run, when they did not')
     args = parser.parse_args()
 
     root = Path(args.artifacts)
@@ -73,6 +77,14 @@ def main() -> None:
     if args.private_sha:
         header.append(f'**Private models:** `bldrs-ai/test-models-private@'
                       f'{args.private_sha}`')
+    elif args.private_reason == 'not-on-prs':
+        header.append(
+            '**Private models:** not run on pull requests. The seven '
+            'headline shards (PSB, D3D, ILNA, DOWA, Orbiter, BLSN, '
+            'Hospital) run on merge to `main` and on `rc-*` tags — they '
+            'cannot be cached on a public repo, so running them per push '
+            'would spend ~2.6 GB of private LFS each time. See '
+            '`regression/shards/README.md`.')
     else:
         header.append('**Private models:** skipped '
                       '(no `TEST_MODELS_PRIVATE_TOKEN` — expected on a fork).')
@@ -93,9 +105,10 @@ def main() -> None:
                    + (f' — [this run\'s artifacts]({args.run_url})'
                       if args.run_url else ''), '']
 
-    # A private shard with no token never ran at all, which is the
-    # expected path on a fork. Reporting that as a failed shard would
-    # cry wolf on every fork PR, so it is accounted for separately.
+    # A private shard that did not run is the NORMAL case on a pull
+    # request (they are gated to merge/rc) and on a fork (no token).
+    # Reporting either as a failed shard would cry wolf on every PR, so
+    # it is accounted for separately.
     private_skipped = not args.private_sha
 
     body: list[str] = []
@@ -110,7 +123,10 @@ def main() -> None:
         body += [text, '']
 
     if skipped:
-        header += ['_Headline shards not run (no private-models token): '
+        why = ('not run on pull requests'
+               if args.private_reason == 'not-on-prs'
+               else 'no private-models token')
+        header += [f'_Headline shards ({why}): '
                    + ', '.join(f'`{shard}`' for shard in skipped) + '._', '']
     if missing:
         header += [
