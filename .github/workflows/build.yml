@@ -151,7 +151,19 @@ jobs:
           curl -fsSL -o /tmp/actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
-          /tmp/actionlint -color
+          # shellcheck and pyflakes integrations OFF, deliberately.
+          # actionlint shells out to whatever shellcheck the runner image
+          # ships, which nothing here pins - so a new shellcheck release
+          # can redden an unrelated PR, which is the exact failure the
+          # pinned ACTIONLINT_VERSION exists to prevent (pinning
+          # actionlint does not pin shellcheck). It already differs from
+          # a local 0.10.0: CI reported SC2013 against `for f in
+          # data/*.ifc`, a glob rather than the command substitution that
+          # check is about. A gate has to be deterministic, and the
+          # defect class this step is here for - duplicate keys, bad
+          # `needs`, unknown contexts, malformed expressions - is all
+          # actionlint's own, pinned, schema-driven checking.
+          /tmp/actionlint -shellcheck= -pyflakes= -color
 
       - name: Validate regression shard lists
         run: python3 .github/actions/regression-shard/shard_list.py check
