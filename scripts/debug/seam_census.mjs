@@ -22,6 +22,12 @@
  *   overlap            two of the triangles sit on the SAME side of the edge
  *                      (within OVERLAP_COS), so it is a doubled or folded
  *                      sheet, not a flip. A flip puts them on opposite sides.
+ *   degenerate         the side test is undefined for every pair (a zero-area
+ *                      triangle), so the edge is not called either way.
+ *   non-manifold       the edge ALSO has reverse incidences, so more than two
+ *                      triangles meet there. Which forward incidence is the
+ *                      surplus is not decidable from incidences alone, so it
+ *                      is not called a flip or an overlap.
  *
  * Share draws with `DoubleSide`, so a flipped triangle is not culled, but
  * three.js negates the normal of a back-facing triangle when it shades it, so
@@ -203,7 +209,8 @@ const mmPerUnit = metresPerUnit.size === 1 ? [...metresPerUnit][0] * 1e3 : undef
 const lenScale = mmPerUnit ?? 1
 const lenUnit = mmPerUnit === undefined ? 'fu' : 'mm'
 
-const CLASSES = ['flipped-in-face', 'flipped-across', 'overlap', 'interior', 'neighbour-dropped',
+const CLASSES = ['flipped-in-face', 'flipped-across', 'overlap', 'non-manifold', 'degenerate',
+  'interior', 'neighbour-dropped',
   'neighbour-split', 'neighbour-missing', 'sampling-differs', 'no-partner']
 
 // Two same-direction triangles on an edge whose third vertices sit on the SAME
@@ -254,12 +261,16 @@ function censusSolid(faces) {
   // is one double cast to float32 on both sides, and a loop point is that same
   // double before the cast, so both match bit for bit. Only on a miss is a
   // nearby vertex accepted, and only within a tolerance taken from THAT pair's
-  // own magnitude, so a far-flung corner of the solid cannot widen the weld
-  // near the origin. The grid is sized from the largest coordinate so that
+  // own magnitude, axis by axis, so a far-flung corner of the solid cannot
+  // widen the weld near the origin. The grid is sized from the largest coordinate so that
   // every local tolerance fits inside one cell; it gathers candidates and
   // never decides a weld. `tolWelds` counts the non-exact ones.
   const localTol = (p, q) => bucketFor(Math.max(Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2]),
       Math.abs(q[0]), Math.abs(q[1]), Math.abs(q[2])))
+  // Per axis, so a large coordinate on one axis cannot hide a real separation
+  // on another: (1e6, 0, 0) and (1e6, 0.25, 0) stay apart.
+  const weldable = (p, q) => [0, 1, 2].every((i) =>
+    Math.abs(p[i] - q[i]) <= bucketFor(Math.max(Math.abs(p[i]), Math.abs(q[i]))))
   const Q = 1 / bucketFor(maxAbs)
   const cell = (p) => [Math.round(p[0] * Q), Math.round(p[1] * Q), Math.round(p[2] * Q)]
   const f32 = (p) => `${Math.fround(p[0])},${Math.fround(p[1])},${Math.fround(p[2])}`
@@ -276,7 +287,7 @@ function censusSolid(faces) {
       for (const id of grid.get(`${bx + dx},${by + dy},${bz + dz}`) ?? []) {
         const q = where[id]
         const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])
-        if (d <= localTol(p, q) && d < bestD) { best = id; bestD = d }
+        if (weldable(p, q) && d < bestD) { best = id; bestD = d }
       }
     }
     if (best !== undefined) ++tolWelds
@@ -362,7 +373,8 @@ function censusSolid(faces) {
       const [a, b] = e.split('_').map(Number)
       // Paired by COUNT: two forward incidences against one reverse leave one
       // unpaired, which a presence check would hide.
-      const excess = fwd.length - (emittedBy.get(`${b}_${a}`)?.length ?? 0)
+      const reverseCount = emittedBy.get(`${b}_${a}`)?.length ?? 0
+      const excess = fwd.length - reverseCount
       if (excess <= 0) continue
       const f = fwd[0].face
       const pa = where[a], pb = where[b]
@@ -371,21 +383,28 @@ function censusSolid(faces) {
       const ownIndex = occ.findIndex((o) => o.face === f)
       let cls
       let partner
-      if (fwd.length > 1) {
-        // Emitted more than once the same way. A winding flip puts the two
-        // triangles on opposite sides of the edge; a doubled or folded sheet
-        // puts them on the same side. A pair on the same side makes it an
-        // overlap, whatever the others do.
+      if (fwd.length > 1 && reverseCount > 0) {
+        cls = 'non-manifold'
+      } else if (fwd.length > 1) {
+        // Emitted more than once the same way and never the other way. A
+        // winding flip puts the two triangles on opposite sides of the edge;
+        // a doubled or folded sheet puts them on the same side. A pair on the
+        // same side makes it an overlap; a pair whose side test is undefined
+        // (a zero-area triangle) is not evidence either way.
         let sameSide = false
+        let decided = false
         for (let i = 0; i < fwd.length && !sameSide; ++i) {
           for (let j = i + 1; j < fwd.length && !sameSide; ++j) {
             const c = sideCos(pa, pb, where[fwd[i].third], where[fwd[j].third])
-            if (!(c < OVERLAP_COS)) sameSide = true
+            if (Number.isNaN(c)) continue
+            decided = true
+            if (c >= OVERLAP_COS) sameSide = true
           }
         }
         const other = fwd.find((o) => o.face !== f)
         if (other !== undefined) partner = faces[other.face].express
-        cls = sameSide ? 'overlap' : other === undefined ? 'flipped-in-face' : 'flipped-across'
+        cls = !decided ? 'degenerate' :
+          sameSide ? 'overlap' : other === undefined ? 'flipped-in-face' : 'flipped-across'
       } else if (ownIndex < 0) {
         cls = 'interior'
       } else {
