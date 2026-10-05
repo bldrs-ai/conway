@@ -25,6 +25,11 @@ full sweep only at a blessed release point.
 | **B — PR shards** | every ready PR + merge | up to **10 shards** on free `ubuntu-24.04`: three public coverage lists (union = `regression/smoke_models.txt`) plus one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
+Private shards skip on a fork and **fail** on an internal run with no
+token (`resolve-models`) — an all-steps-skipped matrix entry still
+reports `success`, so a silent skip there would let `auto-publish` ship
+untested headline models.
+
 Tier A is hermetic (no `test-models` clone, no token — protects forks too);
 see the Tier-A section of `../../regression/README.md`. Tiers B and C share
 the same digest batch (`ifc_regression_batch_main.js`), just over different

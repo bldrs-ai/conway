@@ -159,30 +159,107 @@ def cmd_check(args: argparse.Namespace) -> None:
         f'{len(owner) - len(coverage)} headline model(s).')
 
 
+def _matrix_entries(workflow: Path) -> dict[str, str]:
+    """{shard id: corpus} from the workflow's regression-shard matrix.
+
+    Prefers PyYAML, falls back to a strict scan of the `include:` block,
+    and raises if neither works. It must never degrade to "no errors":
+    this cross-check is the only thing standing between a shard list and
+    never running, and PyYAML is NOT installed by this repo's CI (codex
+    flagged exactly that - the check used to print a notice and exit 0,
+    so it had never actually run).
+    """
+    text = workflow.read_text(encoding='utf-8')
+    try:
+        import yaml  # noqa: PLC0415 - optional, see docstring
+    except ImportError:
+        return _scan_matrix_include(text, workflow)
+
+    # GitHub's `on:` key parses as the boolean True under YAML 1.1;
+    # harmless here, we only read `jobs`.
+    spec = yaml.safe_load(text)
+    include = (spec.get('jobs', {}).get('regression-shard', {})
+               .get('strategy', {}).get('matrix', {}).get('include'))
+    if not include:
+        raise SystemExit(
+            f'{workflow}: no regression-shard matrix include block')
+    return {entry['id']: entry.get('corpus') for entry in include}
+
+
+def _scan_matrix_include(text: str, workflow: Path) -> dict[str, str]:
+    """PyYAML-free read of the regression-shard matrix `include:` list.
+
+    Deliberately strict and deliberately fatal on anything it does not
+    recognise: a silent empty result is the one outcome worse than a
+    confusing failure, because it is indistinguishable from "the lists
+    and the matrix agree".
+    """
+    lines = text.splitlines()
+    try:
+        job = next(i for i, line in enumerate(lines)
+                   if line == '  regression-shard:')
+    except StopIteration:
+        raise SystemExit(
+            f'{workflow}: no `  regression-shard:` job at indent 2'
+        ) from None
+
+    # End of the job block: the next line at indent 2 that is not blank.
+    end = len(lines)
+    for i in range(job + 1, len(lines)):
+        line = lines[i]
+        if line.strip() and not line.startswith('    '):
+            end = i
+            break
+
+    include = None
+    for i in range(job + 1, end):
+        if lines[i].strip() == 'include:':
+            include = i
+            break
+    if include is None:
+        raise SystemExit(
+            f'{workflow}: regression-shard has no `include:` under its matrix')
+
+    entries: dict[str, str] = {}
+    current = None
+    item_indent = None
+    for line in lines[include + 1:end]:
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if stripped.startswith('- '):
+            if item_indent is None:
+                item_indent = indent
+            elif indent != item_indent:
+                break  # dedented out of the include list
+            key, _, value = stripped[2:].partition(':')
+            if key.strip() != 'id':
+                raise SystemExit(
+                    f'{workflow}: expected each matrix item to start with '
+                    f'`- id:`, got {stripped!r}')
+            current = value.strip().strip("'\"")
+            entries[current] = None
+        elif item_indent is not None and indent > item_indent:
+            key, _, value = stripped.partition(':')
+            if key.strip() == 'corpus' and current is not None:
+                entries[current] = value.strip().strip("'\"")
+        elif item_indent is not None:
+            break
+    if not entries:
+        raise SystemExit(
+            f'{workflow}: parsed no entries from the regression-shard matrix')
+    return entries
+
+
 def _matrix_errors(workflow: Path, corpora: dict[str, str]) -> list[str]:
     """Cross-check the shard files against the workflow's matrix.
 
     A shard list with no matrix entry silently never runs; a matrix entry
     whose `corpus` disagrees with the list's `# corpus:` header would
-    resolve the wrong models repo. Needs a YAML parser; PyYAML ships on
-    the GitHub-hosted ubuntu images, and the rest of the check is still
-    worth running where it does not.
+    resolve the wrong models repo.
     """
-    try:
-        import yaml  # noqa: PLC0415 - optional, see docstring
-    except ImportError:
-        print(f'::notice::PyYAML unavailable, skipping the {workflow} '
-              'matrix cross-check')
-        return []
-    with workflow.open(encoding='utf-8') as fh:
-        # GitHub's `on:` key parses as the boolean True under YAML 1.1;
-        # harmless here, we only read `jobs`.
-        spec = yaml.safe_load(fh)
-    include = (spec.get('jobs', {}).get('regression-shard', {})
-               .get('strategy', {}).get('matrix', {}).get('include'))
-    if not include:
-        return [f'{workflow}: no regression-shard matrix include block']
-    matrix = {entry['id']: entry.get('corpus') for entry in include}
+    matrix = _matrix_entries(workflow)
     errors = []
     for shard, corpus in sorted(corpora.items()):
         if shard not in matrix:
