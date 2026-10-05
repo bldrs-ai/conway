@@ -188,7 +188,13 @@ def _matrix_entries(workflow: Path) -> tuple[dict[str, str], list[str]]:
     try:
         import yaml  # noqa: PLC0415 - optional, see docstring
     except ImportError:
+        # Say which path ran. The previous version of this check printed
+        # a notice and exited 0 when PyYAML was missing, and the step
+        # still reported green - so "the step passed" was not evidence
+        # the cross-check had run, and nobody could tell from a log.
+        print('matrix read: strict include-block scan (no PyYAML)')
         return _scan_matrix_include(text, workflow)
+    print(f'matrix read: PyYAML {yaml.__version__}')
 
     # GitHub's `on:` key parses as the boolean True under YAML 1.1;
     # harmless here, we only read `jobs`.
