@@ -61,6 +61,15 @@ on:
   # perf jobs — normally rc-tag only — can be exercised and debugged on a
   # branch without cutting a tag. auto-publish stays push:main-only.
   workflow_dispatch:
+    inputs:
+      run_private_shards:
+        description: >-
+          Also run the seven private headline shards (~2.6 GB of private
+          LFS, uncached). Off by default: a dispatch is normally for
+          debugging perf-three-* on a branch, which needs none of them.
+          Turn it on to exercise them before a merge.
+        type: boolean
+        default: false
 
 # Cancel superseded runs so a rapid series of pushes to the same PR doesn't
 # leave N full build+regression(+visual-diff) pipelines running to completion
@@ -123,6 +132,27 @@ jobs:
       # coverage shards stay public, that the coverage union is still
       # exactly regression/smoke_models.txt, and that each list's
       # `# corpus:` header matches its matrix entry.
+      # actionlint, because `shard_list.py check` structurally CANNOT see
+      # this class of defect. A duplicate `steps:` key shipped on 099ce94
+      # and stopped this file parsing at all - both runs on that SHA were
+      # `failure` with ZERO jobs and ZERO check runs, which is the
+      # required-check-never-reports trap the paths-ignore note above
+      # warns about. `yaml.safe_load` accepted it (PyYAML takes last-wins
+      # on a duplicate key) and the include-block scanner only reads
+      # `include:` lines, so the check printed "10 shard list(s) OK" over
+      # a workflow GitHub could not read. A purpose-built linter is the
+      # thing that catches it; pinned so a new actionlint release cannot
+      # redden an unrelated PR.
+      - name: Lint workflow files
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint -color
+
       - name: Validate regression shard lists
         run: python3 .github/actions/regression-shard/shard_list.py check
 
@@ -327,6 +357,10 @@ jobs:
     outputs:
       public_sha: ${{ steps.public.outputs.sha }}
       private_sha: ${{ steps.private.outputs.sha }}
+      # Whether this run executes the private headline shards. Consumed
+      # by regression-shard-private's `if:` and by run-ifc-regression's
+      # assert, so the three cannot drift apart.
+      private_expected: ${{ steps.scope.outputs.private }}
     # `secrets` is not an allowed context in a step-level `if:`; a
     # job-level `env` is how it reaches one. Same trick as
     # regression-shard below. IS_FORK is 'false' on push and
@@ -335,10 +369,17 @@ jobs:
     env:
       TOKEN_PRESENT: ${{ secrets.TEST_MODELS_PRIVATE_TOKEN != '' }}
       IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
-      # The private headline shards run on merge and rc tags only, so a
-      # pull_request run needs nothing from the private corpus.
-      PRIVATE_NEEDED: ${{ github.event_name != 'pull_request' }}
+      # Merge to main and rc tags always; a manual dispatch only when
+      # asked. Never on a pull_request. `push` is branches:[main] +
+      # tags:[rc-*], so naming the event is enough.
+      PRIVATE_NEEDED: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_private_shards) }}
     steps:
+      - name: Scope of this run
+        id: scope
+        run: |
+          echo "private=${PRIVATE_NEEDED}" >> "$GITHUB_OUTPUT"
+          echo "private headline shards this run: ${PRIVATE_NEEDED}"
+
       # Where private shards DO run, a missing token is a
       # misconfiguration wearing a skip's clothes: a matrix entry whose
       # every step skips still reports success, so a push to main could
@@ -482,7 +523,6 @@ jobs:
             concurrency: '2'
     name: regression-shard ${{ matrix.id }}
     steps:
-    steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
         with:
@@ -556,7 +596,7 @@ jobs:
   # without digesting anything.
   regression-shard-private:
     needs: [build, resolve-models]
-    if: github.event_name != 'pull_request'
+    if: needs.resolve-models.outputs.private_expected == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -577,8 +617,7 @@ jobs:
             concurrency: '1'
           - id: hospital
             concurrency: '1'
-    name: regression-shard ${{ matrix.id }}
-    steps:
+    name: regression-shard-private ${{ matrix.id }}
     steps:
       - name: Checkout Conway Repo
         uses: actions/checkout@v4
@@ -718,7 +757,7 @@ jobs:
             --package "${{ needs.regression-pack.outputs.package_tgz }}" \
             --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --visual-diff-count "${{ steps.concat.outputs.count }}" \
-            --private-reason "${{ github.event_name == 'pull_request' && 'not-on-prs' || 'no-token' }}" \
+            --private-reason "${{ needs.resolve-models.outputs.private_expected == 'true' && 'no-token' || 'not-on-prs' }}" \
             || echo "::warning::Could not build the regression comment; the regression-shard-* artifacts still hold every shard's CSVs."
 
       - name: Comment on Pull Request with regression results
@@ -745,10 +784,10 @@ jobs:
           test "${{ needs.resolve-models.result }}" = "success"
           test "${{ needs.regression-pack.result }}" = "success"
           test "${{ needs.regression-shard.result }}" = "success"
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            test "${{ needs.regression-shard-private.result }}" = "skipped"
-          else
+          if [ "${{ needs.resolve-models.outputs.private_expected }}" = "true" ]; then
             test "${{ needs.regression-shard-private.result }}" = "success"
+          else
+            test "${{ needs.regression-shard-private.result }}" = "skipped"
           fi
 
   # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ full sweep only at a blessed release point.
 |---|---|---|---|
 | **A — fixtures** | every PR + merge | unit tests + `data/` geometry goldens (in `build`) | **hard** — a mismatch fails `build` |
 | **B — PR shards** | every ready PR + merge | three public coverage shards on free `ubuntu-24.04` (union = `regression/smoke_models.txt`, `regression/shards/`) | **hard on failures** — a model that fails to parse/extract blocks; digest *changes* are informational. Visual-diff is public coverage only |
-| **B′ — headline shards** | merge + `rc-*` only | one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression-shard-private`) | **hard on failures**. Off the PR path because they cannot be cached: ~2.6 GB of private LFS per run |
+| **B′ — headline shards** | merge, `rc-*`, opt-in dispatch | one shard each for the private headline models PSB, D3D, ILNA, DOWA, Orbiter, BLSN, Hospital (`regression-shard-private`) | **hard on failures**. Off the PR path because they cannot be cached: ~2.6 GB of private LFS per run |
 | **C — full corpus + perf** | `rc-*` tag | full public+private digest regression (`rc-regression.yml`) **and** the `perf-three-*` headless-three benchmarks (in `build.yml`) | **hard on failures**; digest churn lands in a reviewable baseline PR |
 
 Private shards are a separate job gated on `github.event_name !=

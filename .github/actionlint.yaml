@@ -1,0 +1,6 @@
+# actionlint does not know GitHub's larger-runner labels, so the paid SKU
+# this repo uses for `build`, `perf-three-*` and rc-regression reads as an
+# unknown label. Declaring it here is the documented way to teach it.
+self-hosted-runner:
+  labels:
+    - ubuntu-24.04-4vcpu-8gb-150gbssd

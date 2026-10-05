@@ -7,7 +7,7 @@ files in its list, so a 900 MB headline model fits on the 14 GB disk.
 | Shard | Job | Runs on | Why |
 |---|---|---|---|
 | `coverage-1` … `coverage-3` | `regression-shard` | every ready PR, merge, rc | Small/fast public models for schema and exporter spread. Lists union to [`../smoke_models.txt`](../smoke_models.txt). ~180 MB of LFS, cached. |
-| `psb`, `d3d`, `ilna`, `dowa`, `orbiter`, `blsn`, `hospital` | `regression-shard-private` | **merge and rc only** | One private headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. ~2.6 GB of LFS, **uncached**. |
+| `psb`, `d3d`, `ilna`, `dowa`, `orbiter`, `blsn`, `hospital` | `regression-shard-private` | **merge, rc, opt-in dispatch** | One private headline model each. A few-minute load gets its own machine so a regression there cannot hide behind a short coverage batch. ~2.6 GB of LFS, **uncached**. |
 
 ## Why the headline shards are not on pull requests
 
@@ -55,9 +55,8 @@ invisible.
   for the same reason.
 
 **Published, and accepted as such** (a reviewed decision, not an
-oversight): the shard id — so the model basename, which this repo's
-design docs already named for PSB, D3D, DOWA, Orbiter and BLSN before
-sharding existed — the private corpus SHA, row counts, and the
+oversight): the shard id — so the model basename — the corpus SHA, row
+counts, and the
 per-shard `regression-shard-*` artifact plus job log, which do carry
 `errors.csv` rows. Closing that last one needs BOTH the artifact upload
 and the gate steps that `cat failed.csv` into the log; redacting only
@@ -65,6 +64,19 @@ the artifact looks like a fix without being one. It costs the ability
 to debug a private-model regression from a run, which is why it was
 left open. Note these runs are now merge/rc only, so the rows are not
 produced on pull requests at all.
+
+On the basenames specifically, because an earlier draft of this file got
+it wrong and used it to argue the exposure was pre-existing: four exact
+filenames were already public at `main` before sharding — `PSB.ifc`,
+`D3D.ifc`, `Orbiter_v1.1_Gear_7.5.step` and `BLSN_007.stp`, in design
+docs and `scripts/debug/README.md`. Three were **not**:
+`DOWA_AR_DW_4.ifc` (only the bare label "DOWA" appeared),
+`ILNA 3D_SIA2040.ifc` (only "ILNA") and
+`Autodesk_Hospital_Metric_Architectural_Central.ifc` (nowhere, in any
+form). Those three are first published by `regression/shards/*.txt`, and
+they appear nowhere else in the change. If any of them must not be
+public, the shard list is the one file to change — the argument "it was
+already public" does not cover them.
 
 This is what moved the headline shards off the PR path: the cache is
 not available to them, and the uncached traffic was too much to pay per

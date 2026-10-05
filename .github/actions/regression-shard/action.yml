@@ -150,7 +150,11 @@ runs:
         else
           echo "No tracked regression/test_models at the pinned commit; nothing to reset."
         fi
-        git -C models clean -fdq regression/test_models || true
+        # No `|| true`: `git clean` on a missing pathspec exits 0 anyway,
+        # so the only thing it could swallow is a real clean failure -
+        # after which last run's untracked digest CSVs survive into the
+        # batch, which is the stale-digest hazard this step exists for.
+        git -C models clean -fdq regression/test_models
 
     - name: Run digest batch
       shell: bash

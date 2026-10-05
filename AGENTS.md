@@ -138,18 +138,21 @@ the two in step when either changes.
 | `resolve-models` (pins one corpus commit) | **skipped** | runs |
 | `regression-pack` (npm tarball for perf jobs) | **skipped** | runs |
 | `regression-shard` (3 public coverage shards) | **skipped** | runs |
-| `regression-shard-private` (7 private headline shards) | **skipped** | **skipped** — merge and rc only |
+| `regression-shard-private` (7 private headline shards) | **skipped** | **skipped** — merge, rc, or an opt-in manual dispatch |
 | `run-ifc-regression` (aggregator + PR comment) | **skipped** | runs |
 | `visual-diff` | **skipped** | runs (when digests changed) |
 
 `build` is deliberately left ungated: it is the cheap compile and
 unit-test signal you want while a draft is still moving.
 
-`regression-shard-private` is gated on the *event*, not on draft state:
-it never runs on a `pull_request` at all. Its seven headline models
-cannot be cached on a public repo, so each run re-pulls ~2.6 GB of
-private LFS — paid per landed change instead of per push. A headline
-regression therefore surfaces at merge, not at review. See
+`regression-shard-private` is gated on the *run's scope*, not on draft
+state: it never runs on a `pull_request` at all. Its seven headline
+models cannot be cached on a public repo, so each run re-pulls ~2.6 GB
+of private LFS — paid per landed change instead of per push. A headline
+regression therefore surfaces at merge, not at review. To exercise them
+before a merge, run the workflow manually with `run_private_shards`
+on; a plain dispatch (for debugging `perf-three-*` on a branch) leaves
+them off and spends nothing. See
 [regression/shards/README.md](regression/shards/README.md).
 
 Mechanics worth knowing before you edit `.github/workflows/build.yml`
@@ -177,6 +180,11 @@ tidier:
   to numbers, so `null == false` is already true on push and
   `workflow_dispatch`. Keep it anyway — merges (and `auto-publish`,
   which needs the regression) should not hinge on that coercion.
+  **The exception is `regression-shard-private`**, whose gate
+  (`needs.resolve-models.outputs.private_expected == 'true'`) is the
+  whole mechanism keeping the private corpus off pull requests, not a
+  belt-and-braces clause. Pruning it as "defensive" would put ~2.6 GB
+  of private LFS back on every ready-PR push.
 
 The same lifecycle and the same gate shape apply in
 [Share](https://github.com/bldrs-ai/Share) — see its `AGENTS.md` for
