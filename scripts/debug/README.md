@@ -34,7 +34,7 @@ Needs a built tree — the tools import from `compiled/`, not `src/`:
 
 ```
 yarn build-incremental              # TypeScript only
-yarn build-codex-MT                 # if conway-geom (C++/wasm) changed
+yarn build-codex-node               # if conway-geom (C++/wasm) changed (Node + NodeMT)
 ```
 
 Then:
@@ -382,7 +382,7 @@ they apply to any new instrumentation you write, not just to this script.
    existed and was rebuilt from scratch as a Playwright + three.js
    harness over about four iterations, for a worse result: the existing
    one needs no browser and is bit-deterministic across machines.
-4. **Batch C++ edits per rebuild.** `yarn build-codex-MT` is ~90 s.
+4. **Batch C++ edits per rebuild.** `yarn build-codex-node` is ~3 min (two variants).
    Staging a set of hypotheses and evaluating them in one build beats a
    rebuild per edit, and the TypeScript-only path (`yarn
    build-incremental`) is far cheaper when the change is above the wasm

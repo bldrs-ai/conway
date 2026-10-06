@@ -11,7 +11,7 @@ it has already been run there by the environment setup. A **worktree you
 create yourself inherits none of that state**, so it needs setup run in
 it: `yarn submodule-update && yarn extract-wasm-dependencies` at minimum,
 or `yarn setup` if you want a full build. The symptom is
-`yarn build-codex-MT` failing on missing `glm` / `tinynurbs` (nested
+`yarn build-codex-node` failing on missing `glm` / `tinynurbs` (nested
 submodules under `dependencies/conway-geom/external/`, which is why the
 init is `--recursive`) or on the unextracted
 `dependencies/conway-geom/dependencies/wasm/dependencies.zip`. Two agents
@@ -19,13 +19,17 @@ have read the "already been run" sentence in a worktree and hand-rolled
 those steps as if they were undocumented; they are not, they are `setup`'s
 own named pieces.
 
-To build, run `yarn build-codex-MT`. To test, run `yarn test`. If only
+To build, run `yarn build-codex-node`. To test, run `yarn test`. If only
 making changes to the TypeScript code in conway, you can run `yarn
 build-incremental`. If making changes to conway-geom, you need to run a
-full `yarn build-codex-MT`.
+full `yarn build-codex-node`. It builds both the single-thread variant
+(`ConwayGeomWasmNode`, which Jest loads) and `ConwayGeomWasmNodeMT` (which
+the CLI, regression runs and benchmarks load); `yarn build-codex-MT` builds
+only the second, so after it Jest would still be running the previous
+single-thread engine.
 
 Run `chmod +x` on `scripts/build-codex.sh` before trying to call `yarn
-build-codex-MT`.
+build-codex-node`.
 
 `yarn test` runs Jest on the **single-thread** wasm
 (`ConwayGeomWasmNode.js`): `jest.single-thread.setup.js` sets
@@ -35,7 +39,10 @@ suite with coverage grew past the machine's memory (#724; real fix in #726).
 Everything outside Jest, the CLI, regression, Tier A goldens and every
 benchmark, still loads NodeMT, and `src/scripts/jest_wasm_thread_mode.test.ts`
 pins both halves. To run the suite on MT anyway:
-`FORCE_SINGLE_THREAD=false yarn test`.
+`FORCE_SINGLE_THREAD=false yarn test`. Because Jest loads the Node variant,
+`yarn check-wasm-fresh` (run by `precommit`) checks both `ConwayGeomWasmNode`
+and `ConwayGeomWasmNodeMT` and reports the worse of the two; CI builds all
+four variants (`yarn build-GHA-all`), so it always tests a fresh Node.
 
 `yarn precommit` — what the husky hook runs — rebuilds before it lints and
 tests, and that ordering is load-bearing rather than tidy. Jest runs over
@@ -58,7 +65,7 @@ regression and visual-diff jobs are draft-gated here, on a draft PR that
 means the flip to ready. To force the gate on one, `git commit --amend
 --no-edit` — that is a `git commit`, so `pre-commit` fires.
 
-`yarn build-codex-MT` takes roughly 90 seconds. When iterating on
+`yarn build-codex-node` takes roughly three minutes (two variants, about 90 s each). When iterating on
 conway-geom, stage a set of edits and evaluate them in one build rather
 than rebuilding per edit.
 

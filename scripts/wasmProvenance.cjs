@@ -104,6 +104,21 @@ const MARKER_NAME = '.wasm-provenance.json'
 const GATED_TARGET = 'ConwayGeomWasmNodeMT'
 
 /**
+ * The variant Jest loads. jest.single-thread.setup.js forces
+ * FORCE_SINGLE_THREAD, which makes loadWasmModule() pick
+ * `ConwayGeomWasmNode.js` instead of `ConwayGeomWasmNodeMT.js` (conway#724).
+ * It is checked alongside `GATED_TARGET` rather than instead of it: the debug
+ * probes, the CLI and the regression runs still load NodeMT. Without this a
+ * native change rebuilt through a NodeMT-only entry point (`build-codex-MT`)
+ * is stamped and passes the gate while the whole Jest suite keeps running the
+ * previous single-thread engine.
+ */
+const JEST_TARGET = 'ConwayGeomWasmNode'
+
+/** Every artifact a consumer in this repo loads by default; see `classifyAll`. */
+const LOADED_TARGETS = [GATED_TARGET, JEST_TARGET]
+
+/**
  * Every variant a complete build produces. Used to stamp a full build and to
  * report stale siblings; NOT a precondition for the gate — see `GATED_TARGET`.
  */
@@ -359,7 +374,7 @@ function classify({
   expectedDirty = null,
   gatedTarget = GATED_TARGET,
 }) {
-  const REBUILD = `yarn wasm-prebuilt --force   (or rebuild: yarn build-codex-MT / yarn build-GHA-all)`
+  const REBUILD = `yarn wasm-prebuilt --force   (or rebuild: yarn build-codex-node / yarn build-GHA-all)`
 
   if (populated === 0) {
     return {
@@ -406,7 +421,7 @@ function classify({
     dirty: {
       message: 'conway-geom has uncommitted changes that postdate this build — ' +
         `${gatedTarget} predates your edits even though the submodule SHA still matches`,
-      remedy: 'rebuild conway-geom (`yarn build-codex-MT` rebuilds just this target)',
+      remedy: 'rebuild conway-geom (`yarn build-codex-node` rebuilds the Node and NodeMT variants)',
     },
   }
 
@@ -425,6 +440,53 @@ function classify({
 }
 
 /**
+ * Order in which verdicts are reported when several gated targets disagree:
+ * the coarser problem first, `stale` (the only fatal one) outranking all.
+ */
+const SEVERITY = ['stale', 'dirty', 'unresolved', 'unstamped', 'ok']
+
+/**
+ * `classify` for every artifact this repo loads by default (`LOADED_TARGETS`),
+ * reporting the worst verdict. Each target is still judged on its own marker
+ * entry, so a partial build that stamped only one of them is not blessed for
+ * the other. The other (Web*) targets stay advisory, as in `classify`.
+ *
+ * @param {object} facts same shape as `classify`, minus `gatedTarget`
+ * @return {{status: string, fatal: boolean, message: string, remedy: string|null,
+ *   warnings: string[]}}
+ */
+function classifyAll(facts) {
+  const verdicts = LOADED_TARGETS.map((target) => ({
+    target,
+    verdict: classify({...facts, gatedTarget: target}),
+  }))
+
+  // `missing` (nothing populated) is target-independent and always first.
+  const missing = verdicts.find(({verdict}) => verdict.status === 'missing')
+  if (missing) {
+    return missing.verdict
+  }
+
+  const worst = [...verdicts].sort((a, b) =>
+    SEVERITY.indexOf(a.verdict.status) - SEVERITY.indexOf(b.verdict.status))[0]
+
+  // A gated target's own warnings list the OTHER gated target as an advisory
+  // sibling; drop that, since here it is judged, not merely reported.
+  const warnings = [...new Set(verdicts.flatMap(({verdict}) => verdict.warnings))]
+      .filter((w) => !LOADED_TARGETS.some((t) => w.startsWith(`${t} is `)))
+
+  if (worst.verdict.status === 'ok') {
+    // Say so when both were checked, so a green line is not read as NodeMT only.
+    const message = worst.verdict.message.replace(
+        `${worst.target} matches`, `${LOADED_TARGETS.join(' and ')} match`)
+    return {...worst.verdict, message, warnings}
+  }
+
+  return {...worst.verdict, warnings}
+}
+
+
+/**
  * Gather the facts from disk and git, then `classify` them.
  *
  * @return {{status: WasmStatus, message: string, remedy: string|null}}
@@ -432,12 +494,11 @@ function classify({
 function inspect() {
   const populatedDirs = DIST_TARGETS.filter((d) => fs.existsSync(path.join(d, SENTINEL)))
 
-  return classify({
+  return classifyAll({
     populated: populatedDirs.length,
     marker: populatedDirs.length > 0 ? readMarker(populatedDirs[0]) : null,
     expectedSha: submoduleSha(),
     expectedDirty: submoduleDirtyDigest(),
-    gatedTarget: GATED_TARGET,
   })
 }
 
@@ -448,7 +509,10 @@ module.exports = {
   markerEntries,
   DIST_TARGETS,
   GATED_TARGET,
+  JEST_TARGET,
+  LOADED_TARGETS,
   classify,
+  classifyAll,
   submoduleDirtyDigest,
   MARKER_NAME,
   SENTINEL,

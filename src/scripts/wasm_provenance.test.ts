@@ -23,10 +23,11 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { ALL_TARGETS, GATED_TARGET, classify, markerEntries, shaForPackageVersion } =
+const { ALL_TARGETS, GATED_TARGET, JEST_TARGET, classify, classifyAll, markerEntries, shaForPackageVersion } =
   require_(path.resolve(process.cwd(), 'scripts/wasmProvenance.cjs')) as {
     ALL_TARGETS: string[],
     GATED_TARGET: string,
+    JEST_TARGET: string,
     markerEntries: ( marker: object | null ) => Record<string, object> | null,
     classify: ( facts: {
       populated: number,
@@ -40,6 +41,18 @@ const { ALL_TARGETS, GATED_TARGET, classify, markerEntries, shaForPackageVersion
         version?: number,
         targets?: Record<string, object>,
       } | null,
+      expectedSha: string | null,
+      expectedDirty?: string | null,
+    } ) => {
+      status: string,
+      fatal: boolean,
+      message: string,
+      remedy: string | null,
+      warnings: string[],
+    },
+    classifyAll: ( facts: {
+      populated: number,
+      marker: object | null,
       expectedSha: string | null,
       expectedDirty?: string | null,
     } ) => {
@@ -215,6 +228,75 @@ describe('the gate is scoped to the artifact its consumers load', () => {
     // Round three found the remedy printing a bare `yarn wasm-stamp`, which
     // the argument parser rejects — advice that cannot be followed.
     expect(result.remedy).toEqual(expect.stringContaining('wasm-stamp --built'))
+  })
+})
+
+
+describe('the gate also covers the variant Jest loads', () => {
+  /*
+   * jest.single-thread.setup.js moves Jest onto ConwayGeomWasmNode (conway#724),
+   * but the documented native-change workflow used to rebuild and stamp only
+   * ConwayGeomWasmNodeMT. With the gate looking at NodeMT alone, that left
+   * every Jest geometry test running the previous engine while the freshness
+   * check reported success (codex review, conway#727).
+   */
+  const both = ( node: object | undefined, nodeMT: object | undefined ) => ({
+    populated: 2,
+    marker: {
+      version: 2,
+      targets: {
+        ...(node ? { ConwayGeomWasmNode: node } : {}),
+        ...(nodeMT ? { ConwayGeomWasmNodeMT: nodeMT } : {}),
+      },
+    },
+    expectedSha: SHA_A,
+    expectedDirty: null,
+  })
+  const current = { conwayGeomSha: SHA_A, sourceDirty: null }
+  const old = { conwayGeomSha: SHA_B, sourceDirty: null }
+
+  test('the target Jest loads is named, and is not the MT one', () => {
+    expect(JEST_TARGET).toBe('ConwayGeomWasmNode')
+    expect(ALL_TARGETS).toContain(JEST_TARGET)
+  })
+
+  test('THE DEFECT: NodeMT rebuilt and stamped, Node left stale, is stale', () => {
+    const result = classifyAll(both(old, current))
+
+    expect(result.status).toBe('stale')
+    expect(result.fatal).toBe(true)
+    expect(result.message).toContain('ConwayGeomWasmNode ')
+    expect(result.remedy).toContain('build-codex-node')
+  })
+
+  test('the plain gate on NodeMT alone still reads ok for that same input', () => {
+    // Proves the new check is what catches it, not a change to `classify`.
+    expect(classify({ ...both(old, current), gatedTarget: GATED_TARGET } as never).status).toBe('ok')
+  })
+
+  test('both current is ok', () => {
+    expect(classifyAll(both(current, current)).status).toBe('ok')
+  })
+
+  test('a stale NodeMT with a current Node still fails', () => {
+    const result = classifyAll(both(current, old))
+
+    expect(result.status).toBe('stale')
+    expect(result.message).toContain('ConwayGeomWasmNodeMT')
+  })
+
+  test('a Node variant with no stamp is reported, never silently ok', () => {
+    expect(classifyAll(both(undefined, current)).status).toBe('unstamped')
+  })
+
+  test('an unpopulated Dist is still missing', () => {
+    expect(classifyAll({ ...both(current, current), populated: 0 }).status).toBe('missing')
+  })
+
+  test('the two loaded targets are not repeated as advisory siblings', () => {
+    const result = classifyAll(both(current, current))
+
+    expect(result.warnings.filter((w) => /^ConwayGeomWasmNode(MT)? is /.test(w))).toEqual([])
   })
 })
 
