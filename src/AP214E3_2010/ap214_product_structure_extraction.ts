@@ -1,6 +1,7 @@
 import AP214StepModel from './ap214_step_model'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
 import { face_based_surface_model } from './AP214E3_2010_gen/face_based_surface_model.gen'
+import { featured_shape } from './AP214E3_2010_gen/featured_shape.gen'
 import { manifold_solid_brep } from './AP214E3_2010_gen/manifold_solid_brep.gen'
 import { next_assembly_usage_occurrence } from './AP214E3_2010_gen/next_assembly_usage_occurrence.gen'
 import { product_definition } from './AP214E3_2010_gen/product_definition.gen'
@@ -471,6 +472,16 @@ export class AP214ProductStructureExtraction {
    * distinct entities from every product definition and NAUO, so they never
    * match a node and cost one unused map entry.
    *
+   * `featured_shape` is named alongside its supertype because an AP214
+   * class's `query` lists only its own entity id, so `model.types(
+   * product_definition_shape )` never yields a FEATURED_SHAPE record. The
+   * geometry walk takes any SDR `definition` as the owner (and
+   * `instanceof product_definition_shape` holds for the subtype), so the scene
+   * reports a FEATURED_SHAPE owner and this index has to carry it too.
+   * FEATURED_SHAPE is the only subtype of `product_definition_shape` in the
+   * AP214 schema (`schema_ap214.gen.ts`). The same explicit naming is how the
+   * geometry walk enumerates `shape_representation`'s subtypes.
+   *
    * Contained per record, like {@link indexSolids}: `definition` is a
    * dereferencing getter that throws on a dangling reference (a mid-parse
    * prefix model's truncated tail), and one bad record must not cost the
@@ -478,7 +489,7 @@ export class AP214ProductStructureExtraction {
    */
   private indexProductDefinitionShapes(): void {
 
-    for ( const element of this.model.types( product_definition_shape ) ) {
+    for ( const element of this.model.types( product_definition_shape, featured_shape ) ) {
 
       const pds = element as product_definition_shape
       const pdsId = pds.expressID

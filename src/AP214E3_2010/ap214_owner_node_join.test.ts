@@ -154,6 +154,28 @@ describe( 'AP214 tree ⇄ scene join on (occurrence path, owner PDS)', () => {
     expect( owners.length ).toBe( 2 )
   } )
 
+  test( 'a FEATURED_SHAPE owner joins like its PRODUCT_DEFINITION_SHAPE supertype', async () => {
+
+    // The same file with Plates' #108 written as FEATURED_SHAPE, the one
+    // AP214 subtype of product_definition_shape. The geometry walk takes any
+    // SDR definition as the owner, so the scene reports #108 either way; the
+    // tree's index has to enumerate the subtype too, because an AP214 class's
+    // `query` names only its own entity id and `model.types()` reads exactly
+    // that (conway#723 review).
+    const { root, rows } = await load( 'data/ap214-two-root-parts-featured-shape.step' )
+
+    expect( rows.map( ( row ) => row.owner ).sort( ( a, b ) => a - b ) )
+        .toEqual( [ SHELLS_PDS, PLATES_PDS ] )
+
+    const plates = root.children.find( ( node: any ) => node.Name.value === 'Plates' )
+
+    expect( plates.productDefinitionShapeExpressIDs ).toEqual( [ PLATES_PDS ] )
+
+    for ( const row of rows ) {
+      expect( { row, matches: nodesFor( root, row ).length } ).toEqual( { row, matches: 1 } )
+    }
+  } )
+
   test( 'three roots reached by different arms each get their own row', async () => {
 
     // A second multi-root file, written for another purpose (conway#564), so
