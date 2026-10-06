@@ -6,12 +6,16 @@ import { ParseResult } from '../../step/parsing/step_parser'
 import { ap214TypeName } from '../../AP214E3_2010/ap214_tessellated_types'
 import { AP214Properties } from './ap214_properties'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
+import { Node } from './properties_passthrough'
 
 
 const parser = AP214StepParser.Instance
 
 /** web-ifc tape type code for an entity reference (a `HasProperties` handle). */
 const WEB_IFC_REF_TYPE = 5
+
+/** PDS express id of part "Plates" in `ap214-two-root-parts.step`. */
+const PLATES_PDS_EXPRESS_ID = 108
 
 /** Express id of the single CTC part (`product_definition`) in the fixture. */
 const CTC_PRODUCT_DEFINITION_EXPRESS_ID = 4368
@@ -94,6 +98,35 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     }
 
     expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
+  } )
+
+  test( 'a multi-root wrapper carries no PDS, each root its own', async () => {
+
+    // Every node here has `occurrencePath: []`; the PDS list is what a row
+    // (whose owner is one of these PDSs) joins on instead. The wrapper is not
+    // in the file, so nothing may join to it.
+    const root = await compatSurfaceFor( 'data/ap214-two-root-parts.step' ).getSpatialStructure() as any
+
+    expect( root.expressID ).toBe( 0 )
+    expect( root.productDefinitionShapeExpressIDs ).toEqual( [] )
+    expect( root.children.map( ( node: any ) =>
+      [ node.Name.value, node.occurrencePath, node.productDefinitionShapeExpressIDs ] ) )
+        .toEqual( [ [ 'Shells', [], [ 8 ] ], [ 'Plates', [], [ 108 ] ] ] )
+  } )
+
+  test( 'the public Node type exposes the STEP join fields without a cast', async () => {
+
+    // Typed through the public `Node` on purpose, with no `as any`: if
+    // `occurrencePath` or `productDefinitionShapeExpressIDs` leave that
+    // interface, this stops compiling, which is the failure a TypeScript
+    // consumer (Share) would hit (conway#723 review).
+    const root: Node = await compatSurfaceFor( 'data/ap214-two-root-parts.step' ).getSpatialStructure()
+    const plates: Node | undefined = root.children.find( ( node ) => node.Name?.value === 'Plates' )
+    const occurrencePath: number[] | undefined = plates?.occurrencePath
+    const pdsIds: number[] | undefined = plates?.productDefinitionShapeExpressIDs
+
+    expect( occurrencePath ).toEqual( [] )
+    expect( pdsIds ).toEqual( [ PLATES_PDS_EXPRESS_ID ] )
   } )
 
   test( 'getItemProperties returns a {value}-wrapped identity for a node', async () => {

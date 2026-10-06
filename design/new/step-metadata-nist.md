@@ -411,6 +411,30 @@ unresolvable — `[14107, 6611]` on the NEMA motor named a NAUO and then a
 relationship, and matched no node. Paths are NAUOs, optionally ending in a
 body.
 
+**Where the path is empty, the owner says which root.** A geometry
+instance also carries an owner, the `product_definition_shape` the scene
+reports (`AP214SceneGeometry.relatedElementLocalId`). A part's own
+geometry reports the part's PDS (whose `definition` is the
+`product_definition`); geometry an assembly places through a CDSR reports
+the occurrence's PDS (whose `definition` is the NAUO). The tree is keyed on
+what those PDSs describe, not on the PDSs, so the owner never matched a
+node id directly. Mostly that did not matter, because the path was enough.
+It is not enough in a file of several disconnected top-level parts: every
+root has `occurrencePath: []`, and so does the synthetic `Model` wrapper the
+compat surface adds, so an empty-path row could belong to any of them
+(bldrs-ai/Share#1901: Share's portable export left all such rows under
+`Unassigned`). Each tree node now carries
+`productDefinitionShapeExpressIDs`: the part's PDSs, then (on an occurrence
+node) the occurrence's, with solid nodes copying their product's list. The
+wrapper has `[]`. A row resolves to the node whose path equals its own
+**and** whose list holds its owner. Neither half is a key alone, since a
+reused part reports one PDS from every occurrence.
+`ap214_owner_node_join.test.ts` runs the real geometry walk and holds every
+PDS-owned row of `as1-oc-214`, NEMA 23, the inverted-SRR multibody and two
+multi-root files to exactly one node. Rows whose owner is not a PDS (a free
+representation, an SRR the walk could not resolve to a part) belong to no
+product node and are left out.
+
 **Share generalization flag.** Share's permalink is already a *path*
 (`/1/42/123` = parent chain), but its internal selection key is a scalar
 `expressID`. A scalar cannot distinguish instances; an occurrence **path**

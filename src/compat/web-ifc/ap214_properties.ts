@@ -100,6 +100,17 @@ interface AP214Node extends Node {
    */
   occurrencePath: number[]
 
+  /**
+   * Express ids of the `product_definition_shape`s describing this node — the
+   * ids a geometry instance reports as its owner (its parent / "expressID" on
+   * the scene side). A row resolves to the node whose `occurrencePath` equals
+   * its own AND whose list holds its owner; that pair is exact where the path
+   * alone is not, i.e. the several roots of a multi-root file, which all
+   * carry `[]`. Empty on the synthetic multi-root wrapper. See
+   * `ProductStructureNode.productDefinitionShapeExpressIDs`.
+   */
+  productDefinitionShapeExpressIDs: number[]
+
   children: AP214Node[]
 
   /**
@@ -367,6 +378,10 @@ export class AP214Properties {
       Name: valueHandle( 'Model' ),
       productDefinitionExpressID: SYNTHETIC_ROOT_EXPRESS_ID,
       occurrencePath: [],
+      // The wrapper is not in the file, so no PDS describes it and no row can
+      // join to it: this is what keeps a root's rows off the wrapper, which
+      // shares the roots' empty path.
+      productDefinitionShapeExpressIDs: [],
       children: nodes,
     }
 
@@ -420,6 +435,7 @@ export class AP214Properties {
       Name: valueHandle( node.name ),
       productDefinitionExpressID: node.productDefinitionExpressID,
       occurrencePath: node.occurrencePath,
+      productDefinitionShapeExpressIDs: node.productDefinitionShapeExpressIDs,
       children,
     }
 
