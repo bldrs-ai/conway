@@ -27,6 +27,16 @@ full `yarn build-codex-MT`.
 Run `chmod +x` on `scripts/build-codex.sh` before trying to call `yarn
 build-codex-MT`.
 
+`yarn test` runs Jest on the **single-thread** wasm
+(`ConwayGeomWasmNode.js`): `jest.single-thread.setup.js` sets
+`FORCE_SINGLE_THREAD=true` inside each test context. The MT build spawns
+a pthread pool on every `initialize()` and never terminates it, so the full
+suite with coverage grew past the machine's memory (#724; real fix in #726).
+Everything outside Jest, the CLI, regression, Tier A goldens and every
+benchmark, still loads NodeMT, and `src/scripts/jest_wasm_thread_mode.test.ts`
+pins both halves. To run the suite on MT anyway:
+`FORCE_SINGLE_THREAD=false yarn test`.
+
 `yarn precommit` — what the husky hook runs — rebuilds before it lints and
 tests, and that ordering is load-bearing rather than tidy. Jest runs over
 `compiled/`, so on a tree whose build is older than its sources the run

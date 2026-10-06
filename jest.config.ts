@@ -134,8 +134,14 @@ const config: Config = {
   // Allows you to use a custom runner instead of Jest's default test runner
   // runner: "jest-runner",
 
-  // The paths to modules that run some code to configure or set up the testing environment before each test
-  // setupFiles: [],
+  // Run the suite on the single-thread conway-geom wasm. The MT build eagerly
+  // spawns a pthread pool per initialize() that is never terminated, which
+  // is what made the full suite OOM (bldrs-ai/conway#724, real fix tracked
+  // in #726). A setupFile rather than an env var on the `test` script so it
+  // applies to every way of invoking jest, and stays inside the Jest sandbox
+  // instead of leaking into child processes or benchmarks.
+  // See jest.single-thread.setup.js.
+  setupFiles: ['<rootDir>/jest.single-thread.setup.js'],
 
   // A list of paths to modules that run some code to configure or set up the testing framework before each test
   // setupFilesAfterEnv: [],
