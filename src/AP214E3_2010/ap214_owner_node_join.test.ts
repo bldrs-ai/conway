@@ -38,6 +38,9 @@ const SHELLS_PDS = 8
 const PLATES_PD = 107
 const PLATES_PDS = 108
 
+/** `ap214-two-root-parts-nested-pds.step`: PDS #109, whose definition is PDS #108. */
+const PLATES_OUTER_PDS = 109
+
 /** PDS-owned geometry instances the walk emits for each fixture below. */
 const AS1_OC_ROWS = 18
 const NEMA_ROWS = 268
@@ -170,6 +173,27 @@ describe( 'AP214 tree ⇄ scene join on (occurrence path, owner PDS)', () => {
     const plates = root.children.find( ( node: any ) => node.Name.value === 'Plates' )
 
     expect( plates.productDefinitionShapeExpressIDs ).toEqual( [ PLATES_PDS ] )
+
+    for ( const row of rows ) {
+      expect( { row, matches: nodesFor( root, row ).length } ).toEqual( { row, matches: 1 } )
+    }
+  } )
+
+  test( 'an owner PDS describing another PDS joins to the product at the end of the chain', async () => {
+
+    // Plates' SDR names #109, a PDS whose definition is PDS #108, whose
+    // definition is the product definition #107. The schema allows it
+    // (`characterized_definition` includes `shape_definition`), and the scene
+    // reports the outer #109 as the owner, so the index has to follow the
+    // chain to #107 rather than file #109 under #108 (conway#723 review).
+    const { root, rows } = await load( 'data/ap214-two-root-parts-nested-pds.step' )
+
+    expect( rows.map( ( row ) => row.owner ).sort( ( a, b ) => a - b ) )
+        .toEqual( [ SHELLS_PDS, PLATES_OUTER_PDS ] )
+
+    const plates = root.children.find( ( node: any ) => node.Name.value === 'Plates' )
+
+    expect( plates.productDefinitionShapeExpressIDs ).toEqual( [ PLATES_PDS, PLATES_OUTER_PDS ] )
 
     for ( const row of rows ) {
       expect( { row, matches: nodesFor( root, row ).length } ).toEqual( { row, matches: 1 } )

@@ -497,7 +497,10 @@ export class AP214ProductStructureExtraction {
       let definitionId: number | undefined
 
       try {
-        definitionId = pds.definition?.expressID
+        // The terminal entity, not the immediate one: an owner PDS that
+        // describes another PDS belongs to the product or occurrence at the
+        // end of that chain.
+        definitionId = AP214ProductStructureExtraction.terminalDefinition( pds.definition )?.expressID
       } catch {
         continue
       }
@@ -968,7 +971,8 @@ export class AP214ProductStructureExtraction {
    * Resolve the owning `product_definition` express id from a
    * `property_definition`-style `definition` select. Handles the direct
    * `product_definition` case and the `product_definition_shape` indirection
-   * (its own `definition` points at the product definition).
+   * (its own `definition` points at the product definition), through as many
+   * PDSs as the chain holds — see {@link terminalDefinition}.
    *
    * @param definition The resolved `definition` reference, or `undefined`.
    * @return {number | undefined} The product definition express id, or
@@ -977,18 +981,51 @@ export class AP214ProductStructureExtraction {
   static resolveProductDefinitionId(
       definition: { expressID?: number } | undefined ): number | undefined {
 
-    if ( definition === void 0 ) {
-      return void 0
+    const terminal = AP214ProductStructureExtraction.terminalDefinition( definition )
+
+    return terminal instanceof product_definition ? terminal.expressID : void 0
+  }
+
+  /**
+   * Follow a `definition` select through any chain of
+   * `product_definition_shape`s to what the last one describes: a
+   * `product_definition`, a NAUO, or another characterized definition.
+   * `characterized_definition` admits `shape_definition`, so a PDS may
+   * describe another PDS; no file in conway's fixtures or the real models
+   * checked for conway#723 (DSA2, Right_Hand, NEMA 23, as1) does, but the
+   * scene reports the outermost one as a row's owner, so the tree must key it
+   * on the same terminal entity.
+   *
+   * Cycle-safe by express id: a malformed file whose PDSs describe each other
+   * resolves to `undefined` instead of looping. An inline PDS (no express id)
+   * cannot be referenced back, so it cannot close a cycle.
+   *
+   * Callers contain the throw a dangling `definition` reference raises.
+   *
+   * @param definition The resolved `definition` reference, or `undefined`.
+   * @return {object | undefined} The terminal definition, or `undefined`.
+   */
+  static terminalDefinition(
+      definition: { expressID?: number } | undefined ): { expressID?: number } | undefined {
+
+    const visited = new Set<number>()
+    let current = definition
+
+    while ( current instanceof product_definition_shape ) {
+
+      const id = current.expressID
+
+      if ( id !== void 0 ) {
+        if ( visited.has( id ) ) {
+          return void 0
+        }
+
+        visited.add( id )
+      }
+
+      current = current.definition
     }
 
-    if ( definition instanceof product_definition ) {
-      return definition.expressID
-    }
-
-    if ( definition instanceof product_definition_shape ) {
-      return AP214ProductStructureExtraction.resolveProductDefinitionId( definition.definition )
-    }
-
-    return void 0
+    return current
   }
 }

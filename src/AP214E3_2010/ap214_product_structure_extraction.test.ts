@@ -216,6 +216,21 @@ describe( 'AP214ProductStructureExtraction', () => {
         .toEqual( [ [ NUT_PART_PDS, NUT_751_PDS ], [ NUT_PART_PDS, NUT_757_PDS ] ] )
   } )
 
+  test( 'follows a PDS chain to its product, and survives PDSs describing each other', () => {
+
+    // Plates' shape is bound through #109, a PDS describing PDS #108, which
+    // describes product definition #107; #190 and #191 describe each other
+    // and nothing else. The chain must land on #107 and the cycle must end
+    // the walk rather than hang it.
+    const PLATES_PD = 107
+    const PLATES_PDS = 108
+    const PLATES_OUTER_PDS = 109
+    const roots = extractStructure( 'data/ap214-two-root-parts-nested-pds.step' )
+    const plates = roots.find( ( root ) => root.expressID === PLATES_PD )
+
+    expect( plates?.productDefinitionShapeExpressIDs ).toEqual( [ PLATES_PDS, PLATES_OUTER_PDS ] )
+  } )
+
   test( 'tells disconnected roots apart by their PDS where their paths cannot', () => {
 
     const SHELLS_PD = 7
