@@ -18,6 +18,26 @@ export interface Node {
   Name?: NodeValueHandle
   LongName?: NodeValueHandle
   GlobalId?: NodeValueHandle
+
+  // STEP (AP214/AP242) only; IFC nodes omit both. Declared here so a
+  // consumer of `getSpatialStructure()` can read them without a cast.
+
+  /**
+   * Ordered occurrence path (NAUO express ids, root→node, optionally ending in
+   * a solid's own id) — the STEP selection key. `[]` on a root, and on the
+   * synthetic wrapper of a multi-root file. See
+   * `design/new/step-metadata-nist.md` §"Occurrence identity".
+   */
+  occurrencePath?: number[]
+
+  /**
+   * Express ids of the `product_definition_shape`s describing this node: the
+   * ids a geometry instance reports as its owner. A row resolves to the node
+   * whose `occurrencePath` equals its own and whose list holds its owner,
+   * which is exact where the path alone is not (several roots all carry
+   * `[]`). `[]` on the synthetic multi-root wrapper.
+   */
+  productDefinitionShapeExpressIDs?: number[]
 }
 
 /**
