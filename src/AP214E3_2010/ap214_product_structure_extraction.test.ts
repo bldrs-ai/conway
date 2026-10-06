@@ -189,6 +189,46 @@ describe( 'AP214ProductStructureExtraction', () => {
     expect( root.shapeRepresentationIds.length ).toBeGreaterThan( 0 )
   } )
 
+  test( 'gives each node the PDSs describing its part and its occurrence', () => {
+
+    // PDS express ids in as1-oc-214.stp: the root part's, rod-assembly's part
+    // and occurrence (NAUO #1137), the nut part's, and the two nut
+    // occurrences' (NAUOs #751 / #757).
+    const AS1_ROOT_PDS = 4
+    const ROD_ASSEMBLY_PART_PDS = 38
+    const ROD_ASSEMBLY_OCCURRENCE_PDS = 1136
+    const NUT_PART_PDS = 741
+    const NUT_751_PDS = 750
+    const NUT_757_PDS = 756
+
+    // as1-oc-214, not the as1 stub: the stub carries one PDS, the real file
+    // one per part and one per NAUO (the PDS its CDSR places the part
+    // through). The two nuts of rod-assembly share the part's PDS #741 and
+    // differ in the occurrence's — which is what the scene reports for them.
+    const root = extractStructure( 'data/as1-oc-214.stp' )[0]
+    const rodAssembly = child( root, 'rod-assembly' )
+    const nuts = rodAssembly.children.filter( ( node ) => node.name === 'nut' )
+
+    expect( root.productDefinitionShapeExpressIDs ).toEqual( [ AS1_ROOT_PDS ] )
+    expect( rodAssembly.productDefinitionShapeExpressIDs )
+        .toEqual( [ ROD_ASSEMBLY_PART_PDS, ROD_ASSEMBLY_OCCURRENCE_PDS ] )
+    expect( nuts.map( ( nut ) => nut.productDefinitionShapeExpressIDs ) )
+        .toEqual( [ [ NUT_PART_PDS, NUT_751_PDS ], [ NUT_PART_PDS, NUT_757_PDS ] ] )
+  } )
+
+  test( 'tells disconnected roots apart by their PDS where their paths cannot', () => {
+
+    const SHELLS_PD = 7
+    const SHELLS_PDS = 8
+    const PLATES_PD = 107
+    const PLATES_PDS = 108
+    const roots = extractStructure( 'data/ap214-two-root-parts.step' )
+
+    expect( roots.map( ( root ) => root.occurrencePath ) ).toEqual( [ [], [] ] )
+    expect( roots.map( ( root ) => [ root.expressID, root.productDefinitionShapeExpressIDs ] ) )
+        .toEqual( [ [ SHELLS_PD, [ SHELLS_PDS ] ], [ PLATES_PD, [ PLATES_PDS ] ] ] )
+  } )
+
   test( 'root has the expected number of top-level occurrences', () => {
 
     const root = extractAs1Structure()[0]
@@ -263,6 +303,11 @@ describe( 'AP214ProductStructureExtraction ephemeral solid layer', () => {
         // it selects all three bodies at once (the BLSN_007 defect).
         expect( solid.occurrencePath )
             .toEqual( [ ...widget.occurrencePath, solid.expressID ] )
+        // A body's geometry reports the owner its product's does; its path,
+        // not its PDS, is what sets it apart from the product node.
+        expect( widget.productDefinitionShapeExpressIDs.length ).toBeGreaterThan( 0 )
+        expect( solid.productDefinitionShapeExpressIDs )
+            .toEqual( widget.productDefinitionShapeExpressIDs )
       }
 
       // ...and that makes each body's path unique, which is what a scalar

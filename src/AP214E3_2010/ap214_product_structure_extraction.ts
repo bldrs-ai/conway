@@ -84,6 +84,29 @@ export interface ProductStructureNode {
    */
   shapeRepresentationIds: number[]
 
+  /**
+   * Express ids of the `product_definition_shape`s that describe this node:
+   * the part's own (whose `definition` is this node's `product_definition`)
+   * and, on an occurrence node, the occurrence's (whose `definition` is this
+   * node's NAUO — the PDS a `context_dependent_shape_representation` places
+   * the part through). A `'solid'` node carries its product node's list.
+   * The part's own first, each group in file order; de-duplicated, possibly
+   * empty.
+   *
+   * These are the ids the scene reports as a geometry instance's owner
+   * (`AP214SceneGeometry.relatedElementLocalId`, as an express id): a part's
+   * own geometry reports the part's PDS, and geometry placed under an
+   * assembly reports the occurrence's. So an instance resolves to the node
+   * whose `occurrencePath` equals the instance's AND whose list holds the
+   * instance's owner. The path alone is not enough exactly where it is empty:
+   * a file of several disconnected top-level parts gives every root
+   * `occurrencePath: []` (and the synthetic wrapper the compat surface adds),
+   * so only the owner says which root a row belongs to (bldrs-ai/Share#1901).
+   * The owner alone is not enough either: a part reused at many occurrences
+   * reports one PDS from all of them.
+   */
+  productDefinitionShapeExpressIDs: number[]
+
   /** Child occurrence nodes, plus the solid nodes of a multibody part. */
   children: ProductStructureNode[]
 
@@ -212,6 +235,7 @@ export class AP214ProductStructureExtraction {
   private readonly childProductDefIds_ = new Set<number>()
   private readonly productDefById_ = new Map<number, product_definition>()
   private readonly shapeRepsByProductDef_ = new Map<number, number[]>()
+  private readonly pdsIdsByDefinition_ = new Map<number, number[]>()
   private readonly solidsByProductDef_ = new Map<number, ProductSolid[]>()
   private readonly solidIdsByProductDef_ = new Map<number, Set<number>>()
   private solidsIndexed_ = false
@@ -248,6 +272,7 @@ export class AP214ProductStructureExtraction {
     this.indexProductDefinitions()
     this.indexAssemblyUsages()
     this.indexShapeRepresentations()
+    this.indexProductDefinitionShapes()
 
     if ( this.includeSolids_ ) {
       this.indexSolids()
@@ -429,6 +454,56 @@ export class AP214ProductStructureExtraction {
     for ( const [ productDefId, shapes ] of this.productShapeMap.productDefsToShapes() ) {
       for ( const shapeId of shapes ) {
         this.addShapeRepresentation( productDefId, shapeId )
+      }
+    }
+  }
+
+  /**
+   * Index every `product_definition_shape` by the express id of what it
+   * describes (its `definition`): a `product_definition` for a part's own
+   * shape, a NAUO for the shape an assembly places the part through. That is
+   * the PDS → node link {@link ProductStructureNode.productDefinitionShapeExpressIDs}
+   * carries — the scene reports a geometry instance's owner as one of these
+   * PDSs, and the tree is keyed on what they describe.
+   *
+   * Keyed on the referenced id without a type check: a PDS can also describe
+   * a `shape_aspect` or another characterized definition, but those ids are
+   * distinct entities from every product definition and NAUO, so they never
+   * match a node and cost one unused map entry.
+   *
+   * Contained per record, like {@link indexSolids}: `definition` is a
+   * dereferencing getter that throws on a dangling reference (a mid-parse
+   * prefix model's truncated tail), and one bad record must not cost the
+   * whole tree.
+   */
+  private indexProductDefinitionShapes(): void {
+
+    for ( const element of this.model.types( product_definition_shape ) ) {
+
+      const pds = element as product_definition_shape
+      const pdsId = pds.expressID
+
+      let definitionId: number | undefined
+
+      try {
+        definitionId = pds.definition?.expressID
+      } catch {
+        continue
+      }
+
+      if ( pdsId === void 0 || definitionId === void 0 ) {
+        continue
+      }
+
+      let pdsIds = this.pdsIdsByDefinition_.get( definitionId )
+
+      if ( pdsIds === void 0 ) {
+        pdsIds = []
+        this.pdsIdsByDefinition_.set( definitionId, pdsIds )
+      }
+
+      if ( !pdsIds.includes( pdsId ) ) {
+        pdsIds.push( pdsId )
       }
     }
   }
@@ -667,6 +742,7 @@ export class AP214ProductStructureExtraction {
       occurrenceExpressID,
       occurrencePath,
       shapeRepresentationIds: this.shapeRepsByProductDef_.get( productDefId ) ?? [],
+      productDefinitionShapeExpressIDs: this.productDefinitionShapesFor( productDefId, occurrenceExpressID ),
       children: [],
     }
 
@@ -703,6 +779,31 @@ export class AP214ProductStructureExtraction {
     }
 
     return node
+  }
+
+  /**
+   * The `product_definition_shape` ids describing one node: the part's own,
+   * then the occurrence's.
+   *
+   * @param productDefId The node's product definition express id.
+   * @param occurrenceExpressID The node's NAUO express id, for an occurrence.
+   * @return {number[]} A fresh, de-duplicated array (never a shared index
+   * array, so a consumer mutating one node's list cannot reach another's).
+   */
+  private productDefinitionShapesFor(
+      productDefId: number, occurrenceExpressID: number | undefined ): number[] {
+
+    const pdsIds = [ ...( this.pdsIdsByDefinition_.get( productDefId ) ?? [] ) ]
+
+    if ( occurrenceExpressID !== void 0 ) {
+      for ( const pdsId of this.pdsIdsByDefinition_.get( occurrenceExpressID ) ?? [] ) {
+        if ( !pdsIds.includes( pdsId ) ) {
+          pdsIds.push( pdsId )
+        }
+      }
+    }
+
+    return pdsIds
   }
 
   /**
@@ -746,6 +847,10 @@ export class AP214ProductStructureExtraction {
         occurrencePath: [ ...node.occurrencePath, solid.expressID ],
         shapeRepresentationIds:
           solid.representationId !== void 0 ? [ solid.representationId ] : [],
+        // The body's geometry reports the same owner its product's does (the
+        // part's PDS, or the occurrence's when an assembly places it), and
+        // its path tells it apart from that product node.
+        productDefinitionShapeExpressIDs: [ ...node.productDefinitionShapeExpressIDs ],
         children: [],
         ephemeral: true,
       } )

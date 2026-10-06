@@ -96,6 +96,20 @@ describe( 'compat/web-ifc/AP214Properties', () => {
     expect( collectTypes( plainRoot, new Set() ).has( 'solid' ) ).toBe( false )
   } )
 
+  test( 'a multi-root wrapper carries no PDS, each root its own', async () => {
+
+    // Every node here has `occurrencePath: []`; the PDS list is what a row
+    // (whose owner is one of these PDSs) joins on instead. The wrapper is not
+    // in the file, so nothing may join to it.
+    const root = await compatSurfaceFor( 'data/ap214-two-root-parts.step' ).getSpatialStructure() as any
+
+    expect( root.expressID ).toBe( 0 )
+    expect( root.productDefinitionShapeExpressIDs ).toEqual( [] )
+    expect( root.children.map( ( node: any ) =>
+      [ node.Name.value, node.occurrencePath, node.productDefinitionShapeExpressIDs ] ) )
+        .toEqual( [ [ 'Shells', [], [ 8 ] ], [ 'Plates', [], [ 108 ] ] ] )
+  } )
+
   test( 'getItemProperties returns a {value}-wrapped identity for a node', async () => {
 
     const surface = compatSurfaceFor( 'data/as1-assembly.step' )
