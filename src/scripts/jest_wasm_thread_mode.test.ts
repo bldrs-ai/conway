@@ -2,7 +2,6 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
-import { fileURLToPath } from 'url'
 import { afterAll, beforeAll, describe, expect, test } from '@jest/globals'
 import { ConwayGeometry, wasmType } from '../../dependencies/conway-geom'
 
@@ -27,8 +26,13 @@ import { ConwayGeometry, wasmType } from '../../dependencies/conway-geom'
  * which is Jest's rootDir and cwd.
  */
 const repoRoot = process.cwd()
+// Kept as a file:// URL, not converted to a path: it is spliced into an
+// `import()` in the child script below, and on Windows a drive-letter path
+// (`C:\...`) reads as a URL scheme there and throws
+// ERR_UNSUPPORTED_ESM_URL_SCHEME. The other paths in this file go to fs or to
+// node as a CLI argument, where a plain path is correct.
 const compiledGeomIndex =
-  fileURLToPath(new URL('../../dependencies/conway-geom/index.js', import.meta.url))
+  new URL('../../dependencies/conway-geom/index.js', import.meta.url).href
 
 
 describe('Jest runs on the build the environment asked for', () => {
