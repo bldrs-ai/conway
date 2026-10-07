@@ -129,9 +129,13 @@ const ALL_TARGETS = [
   'ConwayGeomWasmWebMT',
 ]
 
-// The MT node build is the module the jest geometry path imports, so its
-// presence is what "Dist is populated" means in practice.
-const SENTINEL = 'ConwayGeomWasmNodeMT.js'
+// A Dist is "populated" when it holds ANY artifact a consumer loads by default
+// (`LOADED_TARGETS`). NodeMT alone is not the test: the existing `build-node` /
+// `build-single-thread` entry points `clean` first and restore only the
+// single-thread Node artifact, and a NodeMT-only sentinel read that tree as
+// `missing` (nonfatal) before the Node marker was ever examined, so a stale
+// Node that Jest was running passed the gate (codex review, conway#727).
+const SENTINEL = LOADED_TARGETS.map((name) => `${name}.js`).join(' or ')
 
 
 /**
@@ -451,12 +455,26 @@ const SEVERITY = ['stale', 'dirty', 'unresolved', 'unstamped', 'ok']
  * entry, so a partial build that stamped only one of them is not blessed for
  * the other. The other (Web*) targets stay advisory, as in `classify`.
  *
- * @param {object} facts same shape as `classify`, minus `gatedTarget`
+ * Only the targets in `present` are judged (default: all of `LOADED_TARGETS`).
+ * A target whose artifact is not on disk cannot be what anything is running,
+ * so a leftover marker entry for it must not decide the verdict; but a
+ * target that IS present is judged on its own marker even when its sibling is
+ * absent. `missing` is therefore "neither is present", not "NodeMT is absent".
+ *
+ * @param {object} facts same shape as `classify`, minus `gatedTarget`, plus
+ *   optional `present: string[]` naming the LOADED_TARGETS found on disk
  * @return {{status: string, fatal: boolean, message: string, remedy: string|null,
  *   warnings: string[]}}
  */
 function classifyAll(facts) {
-  const verdicts = LOADED_TARGETS.map((target) => ({
+  const {present = LOADED_TARGETS} = facts
+  const targets = LOADED_TARGETS.filter((target) => present.includes(target))
+
+  if (targets.length === 0) {
+    return classify({...facts, populated: 0})
+  }
+
+  const verdicts = targets.map((target) => ({
     target,
     verdict: classify({...facts, gatedTarget: target}),
   }))
@@ -478,11 +496,28 @@ function classifyAll(facts) {
   if (worst.verdict.status === 'ok') {
     // Say so when both were checked, so a green line is not read as NodeMT only.
     const message = worst.verdict.message.replace(
-        `${worst.target} matches`, `${LOADED_TARGETS.join(' and ')} match`)
+        `${worst.target} matches`,
+        targets.length > 1 ? `${targets.join(' and ')} match` : `${worst.target} matches`)
     return {...worst.verdict, message, warnings}
   }
 
   return {...worst.verdict, warnings}
+}
+
+
+/**
+ * Which Dist directories and which `LOADED_TARGETS` are on disk. Population is
+ * judged per target, never off NodeMT alone (see `SENTINEL`). The existence
+ * test is injected so this is checkable without a real Dist.
+ *
+ * @param {function(string, string): boolean} exists whether `<dir>/<target>.js` exists
+ * @return {{populatedDirs: string[], present: string[]}}
+ */
+function loadedArtifacts(exists) {
+  return {
+    populatedDirs: DIST_TARGETS.filter((d) => LOADED_TARGETS.some((t) => exists(d, t))),
+    present: LOADED_TARGETS.filter((t) => DIST_TARGETS.some((d) => exists(d, t))),
+  }
 }
 
 
@@ -492,10 +527,12 @@ function classifyAll(facts) {
  * @return {{status: WasmStatus, message: string, remedy: string|null}}
  */
 function inspect() {
-  const populatedDirs = DIST_TARGETS.filter((d) => fs.existsSync(path.join(d, SENTINEL)))
+  const {populatedDirs, present} = loadedArtifacts((dir, target) =>
+    fs.existsSync(path.join(dir, `${target}.js`)))
 
   return classifyAll({
     populated: populatedDirs.length,
+    present,
     marker: populatedDirs.length > 0 ? readMarker(populatedDirs[0]) : null,
     expectedSha: submoduleSha(),
     expectedDirty: submoduleDirtyDigest(),
@@ -517,6 +554,7 @@ module.exports = {
   MARKER_NAME,
   SENTINEL,
   inspect,
+  loadedArtifacts,
   readMarker,
   shaForPackageVersion,
   submoduleSha,

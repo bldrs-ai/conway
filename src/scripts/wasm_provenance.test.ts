@@ -23,11 +23,15 @@ const require_ = createRequire(import.meta.url)
 
 // Resolved from the repo root: the test runs from compiled/src/scripts, and
 // scripts/ is not part of the tsc build. Jest's rootDir is the repo root.
-const { ALL_TARGETS, GATED_TARGET, JEST_TARGET, classify, classifyAll, markerEntries, shaForPackageVersion } =
+const { ALL_TARGETS, GATED_TARGET, JEST_TARGET, classify, classifyAll, loadedArtifacts, markerEntries, shaForPackageVersion } =
   require_(path.resolve(process.cwd(), 'scripts/wasmProvenance.cjs')) as {
     ALL_TARGETS: string[],
     GATED_TARGET: string,
     JEST_TARGET: string,
+    loadedArtifacts: ( exists: ( dir: string, target: string ) => boolean ) => {
+      populatedDirs: string[],
+      present: string[],
+    },
     markerEntries: ( marker: object | null ) => Record<string, object> | null,
     classify: ( facts: {
       populated: number,
@@ -52,6 +56,8 @@ const { ALL_TARGETS, GATED_TARGET, JEST_TARGET, classify, classifyAll, markerEnt
     },
     classifyAll: ( facts: {
       populated: number,
+      // The LOADED_TARGETS found on disk; omitted means all of them.
+      present?: string[],
       marker: object | null,
       expectedSha: string | null,
       expectedDirty?: string | null,
@@ -291,6 +297,75 @@ describe('the gate also covers the variant Jest loads', () => {
 
   test('an unpopulated Dist is still missing', () => {
     expect(classifyAll({ ...both(current, current), populated: 0 }).status).toBe('missing')
+  })
+
+  describe('only the single-thread Node artifact is on disk', () => {
+    /*
+     * `yarn build-node` / `yarn build-single-thread` run `clean` first, which
+     * removes ConwayGeomWasmNodeMT.js, and restore only ConwayGeomWasmNode.js.
+     * Population was read off the NodeMT file alone, so that tree classified as
+     * `missing` (nonfatal) before the Node marker was looked at, and a stale
+     * Node — the very binary Jest loads — passed the gate (codex review,
+     * conway#727). `present` is what inspect() derives from the files on disk.
+     */
+    const nodeOnly = ( node: object | undefined, extra: object = {} ) => ({
+      ...both(node, undefined),
+      present: [JEST_TARGET],
+      ...extra,
+    })
+
+    test('THE DEFECT: a stale Node with NodeMT absent is fatal stale, not missing', () => {
+      const result = classifyAll(nodeOnly(old))
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+      expect(result.message).toContain('ConwayGeomWasmNode ')
+    })
+
+    test('a fresh Node with NodeMT absent is ok', () => {
+      const result = classifyAll(nodeOnly(current))
+
+      expect(result.status).toBe('ok')
+      expect(result.fatal).toBe(false)
+    })
+
+    test('a leftover stale NodeMT marker does not condemn a fresh Node', () => {
+      // NodeMT.js is gone, so nothing can be running it; its marker entry is
+      // residue of the clean and must not decide the verdict.
+      const result = classifyAll(nodeOnly(current, { ...both(current, old) }))
+
+      expect(result.status).toBe('ok')
+    })
+
+    test('an unstamped Node with NodeMT absent is reported, never silently ok', () => {
+      expect(classifyAll(nodeOnly(undefined)).status).toBe('unstamped')
+    })
+
+    test('end to end: files on disk -> facts -> fatal stale (the pre-fix path was `missing`)', () => {
+      // The Dist as `yarn build-node` leaves it: Node present, NodeMT cleaned.
+      const { populatedDirs, present } =
+        loadedArtifacts(( _dir, target ) => target === JEST_TARGET)
+
+      expect(populatedDirs.length).toBeGreaterThan(0)
+      expect(present).toEqual([JEST_TARGET])
+
+      const result = classifyAll({
+        ...both(old, undefined),
+        populated: populatedDirs.length,
+        present,
+      })
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+    })
+
+    test('an empty Dist has no populated dirs and no present targets', () => {
+      expect(loadedArtifacts(() => false)).toEqual({ populatedDirs: [], present: [] })
+    })
+
+    test('neither target present is still missing', () => {
+      expect(classifyAll({ ...both(current, current), present: [] }).status).toBe('missing')
+    })
   })
 
   test('the two loaded targets are not repeated as advisory siblings', () => {
