@@ -467,10 +467,32 @@ function classify({
 }
 
 /**
+ * The `missing` verdict for in-scope targets whose `.js` is not on disk while
+ * a sibling is. See `classifyAll`.
+ *
+ * @param {string[]} absent LOADED_TARGETS in scope with no artifact on disk
+ * @return {{status: string, fatal: boolean, message: string, remedy: string, warnings: string[]}}
+ */
+function missingTargets(absent) {
+  const names = absent
+      .map((t) => `${t}.js (needed by ${CONSUMERS[t]?.who ?? 'its consumers'})`)
+      .join(' and ')
+  return {
+    status: 'missing',
+    fatal: false,
+    message: `${names} not present in either Dist location, so those consumers fail ` +
+      'to import it even though the artifact(s) that are present may be current',
+    remedy: 'yarn build-codex-node (rebuilds both Node variants), or `yarn wasm-prebuilt` ' +
+      'to install the last published bundle (replaces the whole Dist)',
+    warnings: [],
+  }
+}
+
+/**
  * Order in which verdicts are reported when several gated targets disagree:
  * the coarser problem first, `stale` (the only fatal one) outranking all.
  */
-const SEVERITY = ['stale', 'dirty', 'unresolved', 'unstamped', 'ok']
+const SEVERITY = ['stale', 'missing', 'dirty', 'unresolved', 'unstamped', 'ok']
 
 /**
  * `classify` for every artifact this repo loads by default (`LOADED_TARGETS`),
@@ -485,11 +507,21 @@ const SEVERITY = ['stale', 'dirty', 'unresolved', 'unstamped', 'ok']
  * loads, must not stop them measuring against a fresh NodeMT (codex review,
  * conway#727). A scoped-out loaded target is still reported, as a warning.
  *
- * Only the targets in `present` are judged (default: all of `LOADED_TARGETS`).
+ * Only the targets in `present` are JUDGED (default: all of `LOADED_TARGETS`).
  * A target whose artifact is not on disk cannot be what anything is running,
- * so a leftover marker entry for it must not decide the verdict; but a
- * target that IS present is judged on its own marker even when its sibling is
- * absent. `missing` is therefore "neither is present", not "NodeMT is absent".
+ * so a leftover marker entry for it must not decide the verdict; a target
+ * that IS present is judged on its own marker even when its sibling is absent.
+ *
+ * But an absent target IN SCOPE is not silently dropped: it contributes a
+ * nonfatal `missing` verdict naming it and its consumers. After
+ * `yarn build-MT` (which `clean`s, then restores only NodeMT) the Dist holds a
+ * fresh NodeMT and no Node; judging NodeMT alone read `ok` while the next
+ * default Jest run died importing the absent `ConwayGeomWasmNode.js` (codex
+ * review, conway#727). `missing` is nonfatal for the same reason a wholly
+ * unpopulated Dist is: `yarn test` runs `wasm-prebuilt`. It ranks just below
+ * `stale`, so a stale present target still blocks. A target outside `scope`
+ * is never reported missing: the debug probes scoped to NodeMT do not care
+ * that Node is absent.
  *
  * @param {object} facts same shape as `classify`, minus `gatedTarget`, plus
  *   optional `present: string[]` naming the LOADED_TARGETS found on disk and
@@ -515,6 +547,14 @@ function classifyAll(facts) {
   const missing = verdicts.find(({verdict}) => verdict.status === 'missing')
   if (missing) {
     return missing.verdict
+  }
+
+  // Added AFTER the check above: this one is per-target and ranks by SEVERITY
+  // (below `stale`), where the one above means the whole Dist is empty.
+  const absent = LOADED_TARGETS.filter((target) =>
+    scope.includes(target) && !present.includes(target))
+  if (absent.length > 0) {
+    verdicts.push({target: absent[0], verdict: missingTargets(absent)})
   }
 
   const worst = [...verdicts].sort((a, b) =>

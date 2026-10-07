@@ -360,23 +360,35 @@ describe('the gate also covers the variant Jest loads', () => {
       expect(result.message).toContain('ConwayGeomWasmNode ')
     })
 
-    test('a fresh Node with NodeMT absent is ok', () => {
+    test('a fresh Node with NodeMT absent is no longer ok: NodeMT is reported missing', () => {
+      // Unscoped, NodeMT is a loaded target the CLI, regression runs and
+      // benchmarks need. Judging Node alone read `ok` here; that is the
+      // mirror image of the MT-only defect below (codex review, conway#727).
       const result = classifyAll(nodeOnly(current))
 
-      expect(result.status).toBe('ok')
+      expect(result.status).toBe('missing')
       expect(result.fatal).toBe(false)
+      expect(result.message).toContain('ConwayGeomWasmNodeMT.js')
+      expect(result.message).toContain('the debug probes, CLI, regression runs and benchmarks')
+      expect(result.message).not.toContain('ConwayGeomWasmNode.js')
     })
 
     test('a leftover stale NodeMT marker does not condemn a fresh Node', () => {
       // NodeMT.js is gone, so nothing can be running it; its marker entry is
-      // residue of the clean and must not decide the verdict.
+      // residue of the clean and must not make the verdict `stale`. It is
+      // still `missing` (the file is absent), which is nonfatal.
       const result = classifyAll(nodeOnly(current, { ...both(current, old) }))
 
-      expect(result.status).toBe('ok')
+      expect(result.status).toBe('missing')
+      expect(result.fatal).toBe(false)
     })
 
     test('an unstamped Node with NodeMT absent is reported, never silently ok', () => {
-      expect(classifyAll(nodeOnly(undefined)).status).toBe('unstamped')
+      // `missing` outranks `unstamped`: the absent file is the first thing to fix.
+      const result = classifyAll(nodeOnly(undefined))
+
+      expect(result.status).not.toBe('ok')
+      expect(result.fatal).toBe(false)
     })
 
     test('end to end: files on disk -> facts -> fatal stale (the pre-fix path was `missing`)', () => {
@@ -403,6 +415,70 @@ describe('the gate also covers the variant Jest loads', () => {
 
     test('neither target present is still missing', () => {
       expect(classifyAll({ ...both(current, current), present: [] }).status).toBe('missing')
+    })
+  })
+
+  describe('only the NodeMT artifact is on disk (after yarn build-MT / build-node-MT)', () => {
+    /*
+     * `build-MT` runs `clean` and restores only ConwayGeomWasmNodeMT.js, and
+     * stamps it fresh. `present` used to be filtered by scope AND presence, so
+     * the absent single-thread Node simply disappeared from the aggregate and
+     * `yarn check-wasm-fresh` said `ok` while the next default Jest run could
+     * not import ConwayGeomWasmNode.js (codex review, conway#727).
+     */
+    const mtOnly = ( nodeMT: object | undefined, extra: object = {} ) => ({
+      ...both(undefined, nodeMT),
+      present: [GATED_TARGET],
+      ...extra,
+    })
+
+    test('THE DEFECT: unscoped, a fresh NodeMT with Node absent is not ok', () => {
+      const result = classifyAll(mtOnly(current))
+
+      expect(result.status).toBe('missing')
+      expect(result.fatal).toBe(false)
+      expect(result.message).toContain('ConwayGeomWasmNode.js')
+      expect(result.message).toContain('jest')
+      expect(result.message).not.toContain('ConwayGeomWasmNodeMT.js')
+      expect(result.remedy).not.toBeNull()
+    })
+
+    test('scoped to NodeMT, the absent Node is out of scope and the verdict is ok', () => {
+      const result = classifyAll(mtOnly(current, { targets: [GATED_TARGET] }))
+
+      expect(result.status).toBe('ok')
+      expect(result.fatal).toBe(false)
+      expect(result.message).toContain('ConwayGeomWasmNodeMT matches')
+    })
+
+    test('unscoped, a stale NodeMT with Node absent is fatal stale: stale outranks missing', () => {
+      const result = classifyAll(mtOnly(old))
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+    })
+
+    test('unscoped, a stale Node with NodeMT absent is fatal stale, not missing', () => {
+      const result = classifyAll({ ...both(old, undefined), present: [JEST_TARGET] })
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+    })
+
+    test('end to end: MT-only files on disk -> facts -> not ok', () => {
+      const { populatedDirs, present } =
+        loadedArtifacts(( _dir, target ) => target === GATED_TARGET)
+
+      expect(populatedDirs.length).toBeGreaterThan(0)
+      expect(present).toEqual([GATED_TARGET])
+
+      const result = classifyAll({
+        ...both(undefined, current),
+        populated: populatedDirs.length,
+        present,
+      })
+
+      expect(result.status).not.toBe('ok')
     })
   })
 

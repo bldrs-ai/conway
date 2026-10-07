@@ -42,8 +42,15 @@ pins both halves. To run the suite on MT anyway:
 `FORCE_SINGLE_THREAD=false yarn test`. Because Jest loads the Node variant,
 `yarn check-wasm-fresh` (run by `precommit`) checks both `ConwayGeomWasmNode`
 and `ConwayGeomWasmNodeMT` and reports the worse of the two, naming Jest for a
-stale Node and the CLI/probes/benchmarks for a stale NodeMT (both if both). The debug
-probes (`scripts/debug/wasmFreshness.mjs`) gate on NodeMT alone via
+stale Node and the CLI/probes/benchmarks for a stale NodeMT (both if both). An
+absent target is not skipped: after `yarn build-MT` / `build-node-MT` (which
+`clean` Dist and restore only NodeMT) the unscoped check reports `missing`
+for `ConwayGeomWasmNode.js` (nonfatal, like a wholly empty Dist; `stale`
+outranks it), never `ok`, because the next `yarn test` could not import it.
+`yarn wasm-prebuilt` likewise skips only when BOTH `ConwayGeomWasmNode.js`
+and `ConwayGeomWasmNodeMT.js` are present, so it repopulates a Dist that
+holds just one (it replaces the whole Dist with the last published bundle).
+The debug probes (`scripts/debug/wasmFreshness.mjs`) gate on NodeMT alone via
 `inspect({targets: [GATED_TARGET]})`, so a stale Node, which only Jest loads, does not
 make them exit 3 after a NodeMT-only `build-codex-MT`. CI builds all
 four variants (`yarn build-GHA-all`), so it always tests a fresh Node.
