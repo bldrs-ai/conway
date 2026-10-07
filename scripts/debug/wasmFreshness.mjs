@@ -18,7 +18,7 @@
 import {createRequire} from 'node:module'
 
 const require = createRequire(import.meta.url)
-const {inspect} = require('../wasmProvenance.cjs')
+const {GATED_TARGET, inspect} = require('../wasmProvenance.cjs')
 
 /**
  * @param {string} toolName shown in the message, so the failure names the
@@ -26,7 +26,11 @@ const {inspect} = require('../wasmProvenance.cjs')
  * @return {void} exits the process on a stale build.
  */
 export function assertWasmFresh(toolName) {
-  const {status, fatal, message, remedy, warnings} = inspect()
+  // The probes import NodeMT only. Jest's single-thread Node variant is not
+  // theirs to gate on: after `build-codex-MT` refreshes NodeMT, a stale Node
+  // must not exit 3 here (codex review, conway#727). `check-wasm-fresh` and
+  // `precommit` still check both.
+  const {status, fatal, message, remedy, warnings} = inspect({targets: [GATED_TARGET]})
 
   for (const warning of warnings) {
     console.warn(`[${toolName}] note: ${warning}`)
