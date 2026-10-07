@@ -65,8 +65,8 @@
  * So each TARGET carries its own identity, and a partial build updates only
  * what it rebuilt. The gate then asks a narrower, answerable question: is the
  * artifact THIS CONSUMER LOADS current? `GATED_TARGET` is
- * `ConwayGeomWasmNodeMT`, which is what jest and every script in
- * `scripts/debug/` import. A stale sibling is reported as a warning rather
+ * `ConwayGeomWasmNodeMT`, which is what every script in `scripts/debug/`
+ * imports (Jest moved to the single-thread Node variant; see `JEST_TARGET`). A stale sibling is reported as a warning rather
  * than a failure, because it cannot affect them — and is still named, so a
  * release path can act on it.
  *
@@ -423,8 +423,8 @@ function classify({
       .filter((name) => name !== gatedTarget)
       .map((name) => [name, evaluateTarget(entries[name], expectedSha, expectedDirty)])
       .filter(([, s]) => s !== 'ok' && s !== 'unresolved')
-      .map(([name, s]) => `${name} is ${s} — not what jest or the debug probes ` +
-        'load, so it is reported rather than blocking')
+      .map(([name, s]) => `${name} is ${s} — not the artifact this check gates on, ` +
+        'so it is reported rather than blocking')
 
   const MESSAGES = {
     unstamped: {
@@ -478,6 +478,13 @@ const SEVERITY = ['stale', 'dirty', 'unresolved', 'unstamped', 'ok']
  * entry, so a partial build that stamped only one of them is not blessed for
  * the other. The other (Web*) targets stay advisory, as in `classify`.
  *
+ * `targets` scopes the check to a subset of `LOADED_TARGETS` (default: all).
+ * Jest and `check-wasm-fresh` take the default. A consumer that loads one
+ * artifact asks only about that one: the debug probes pass
+ * `[GATED_TARGET]`, because a stale single-thread Node, which only Jest
+ * loads, must not stop them measuring against a fresh NodeMT (codex review,
+ * conway#727). A scoped-out loaded target is still reported, as a warning.
+ *
  * Only the targets in `present` are judged (default: all of `LOADED_TARGETS`).
  * A target whose artifact is not on disk cannot be what anything is running,
  * so a leftover marker entry for it must not decide the verdict; but a
@@ -485,13 +492,15 @@ const SEVERITY = ['stale', 'dirty', 'unresolved', 'unstamped', 'ok']
  * absent. `missing` is therefore "neither is present", not "NodeMT is absent".
  *
  * @param {object} facts same shape as `classify`, minus `gatedTarget`, plus
- *   optional `present: string[]` naming the LOADED_TARGETS found on disk
+ *   optional `present: string[]` naming the LOADED_TARGETS found on disk and
+ *   optional `targets: string[]` scoping the verdict to those LOADED_TARGETS
  * @return {{status: string, fatal: boolean, message: string, remedy: string|null,
  *   warnings: string[]}}
  */
 function classifyAll(facts) {
-  const {present = LOADED_TARGETS} = facts
-  const targets = LOADED_TARGETS.filter((target) => present.includes(target))
+  const {present = LOADED_TARGETS, targets: scope = LOADED_TARGETS} = facts
+  const targets = LOADED_TARGETS.filter((target) =>
+    scope.includes(target) && present.includes(target))
 
   if (targets.length === 0) {
     return classify({...facts, populated: 0})
@@ -511,10 +520,11 @@ function classifyAll(facts) {
   const worst = [...verdicts].sort((a, b) =>
     SEVERITY.indexOf(a.verdict.status) - SEVERITY.indexOf(b.verdict.status))[0]
 
-  // A gated target's own warnings list the OTHER gated target as an advisory
-  // sibling; drop that, since here it is judged, not merely reported.
+  // A gated target's own warnings list the OTHER judged targets as advisory
+  // siblings; drop those, since here they are judged, not merely reported.
+  // A loaded target outside `scope` stays: it is only reported.
   const warnings = [...new Set(verdicts.flatMap(({verdict}) => verdict.warnings))]
-      .filter((w) => !LOADED_TARGETS.some((t) => w.startsWith(`${t} is `)))
+      .filter((w) => !targets.some((t) => w.startsWith(`${t} is `)))
 
   if (worst.verdict.status === 'ok') {
     // Say so when both were checked, so a green line is not read as NodeMT only.
@@ -542,28 +552,36 @@ function classifyAll(facts) {
  * test is injected so this is checkable without a real Dist.
  *
  * @param {function(string, string): boolean} exists whether `<dir>/<target>.js` exists
+ * @param {string[]} [scope] the LOADED_TARGETS the caller cares about
  * @return {{populatedDirs: string[], present: string[]}}
  */
-function loadedArtifacts(exists) {
+function loadedArtifacts(exists, scope = LOADED_TARGETS) {
+  const wanted = LOADED_TARGETS.filter((t) => scope.includes(t))
   return {
-    populatedDirs: DIST_TARGETS.filter((d) => LOADED_TARGETS.some((t) => exists(d, t))),
-    present: LOADED_TARGETS.filter((t) => DIST_TARGETS.some((d) => exists(d, t))),
+    populatedDirs: DIST_TARGETS.filter((d) => wanted.some((t) => exists(d, t))),
+    present: wanted.filter((t) => DIST_TARGETS.some((d) => exists(d, t))),
   }
 }
 
 
 /**
- * Gather the facts from disk and git, then `classify` them.
+ * Gather the facts from disk and git, then `classifyAll` them.
  *
+ * Unscoped by default (Jest, `check-wasm-fresh`, `precommit`: both loaded
+ * targets). Pass `{targets: [GATED_TARGET]}` from a consumer that loads only
+ * NodeMT; see `classifyAll`.
+ *
+ * @param {{targets?: string[]}} [options]
  * @return {{status: WasmStatus, message: string, remedy: string|null}}
  */
-function inspect() {
+function inspect({targets = LOADED_TARGETS} = {}) {
   const {populatedDirs, present} = loadedArtifacts((dir, target) =>
-    fs.existsSync(path.join(dir, `${target}.js`)))
+    fs.existsSync(path.join(dir, `${target}.js`)), targets)
 
   return classifyAll({
     populated: populatedDirs.length,
     present,
+    targets,
     marker: populatedDirs.length > 0 ? readMarker(populatedDirs[0]) : null,
     expectedSha: submoduleSha(),
     expectedDirty: submoduleDirtyDigest(),

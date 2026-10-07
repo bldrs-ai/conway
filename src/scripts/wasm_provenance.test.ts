@@ -28,7 +28,7 @@ const { ALL_TARGETS, GATED_TARGET, JEST_TARGET, classify, classifyAll, loadedArt
     ALL_TARGETS: string[],
     GATED_TARGET: string,
     JEST_TARGET: string,
-    loadedArtifacts: ( exists: ( dir: string, target: string ) => boolean ) => {
+    loadedArtifacts: ( exists: ( dir: string, target: string ) => boolean, scope?: string[] ) => {
       populatedDirs: string[],
       present: string[],
     },
@@ -58,6 +58,8 @@ const { ALL_TARGETS, GATED_TARGET, JEST_TARGET, classify, classifyAll, loadedArt
       populated: number,
       // The LOADED_TARGETS found on disk; omitted means all of them.
       present?: string[],
+      // Scopes the verdict to a subset of the loaded targets; omitted means all.
+      targets?: string[],
       marker: object | null,
       expectedSha: string | null,
       expectedDirty?: string | null,
@@ -401,6 +403,61 @@ describe('the gate also covers the variant Jest loads', () => {
 
     test('neither target present is still missing', () => {
       expect(classifyAll({ ...both(current, current), present: [] }).status).toBe('missing')
+    })
+  })
+
+  describe('a consumer that loads only NodeMT scopes the check to it', () => {
+    /*
+     * Every debug tool reaches inspect() through scripts/debug/wasmFreshness.mjs,
+     * whose fatal branch exits 3. After `build-codex-MT` refreshes NodeMT the
+     * probes load a fresh artifact, but the aggregate verdict was still fatal
+     * because Node (Jest's variant) was stale, so they were refused for an
+     * artifact they never import (codex review, conway#727).
+     * wasmFreshness.mjs calls inspect({targets: [GATED_TARGET]}), which is
+     * classifyAll over this scope; check-wasm-fresh passes nothing.
+     */
+    const probes = { targets: [GATED_TARGET] }
+
+    test('Node stale, NodeMT fresh, NodeMT-scoped: ok and non-fatal', () => {
+      const result = classifyAll({ ...both(old, current), ...probes })
+
+      expect(result.status).toBe('ok')
+      expect(result.fatal).toBe(false)
+      expect(result.message).toContain('ConwayGeomWasmNodeMT matches')
+      expect(result.message).not.toContain('ConwayGeomWasmNode ')
+    })
+
+    test('the stale Node the probes ignore is still reported as a warning', () => {
+      const result = classifyAll({ ...both(old, current), ...probes })
+
+      expect(result.warnings).toEqual(
+          expect.arrayContaining([expect.stringContaining('ConwayGeomWasmNode is stale')]))
+    })
+
+    test('NodeMT stale, NodeMT-scoped: fatal', () => {
+      const result = classifyAll({ ...both(current, old), ...probes })
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+      expect(result.message).toContain('ConwayGeomWasmNodeMT')
+    })
+
+    test('unscoped, Node stale and NodeMT fresh: still fatal (Jest / precommit)', () => {
+      const result = classifyAll(both(old, current))
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+      expect(result.message).toContain('ConwayGeomWasmNode ')
+    })
+
+    test('scoped to NodeMT with only Node on disk is missing, not judged on Node', () => {
+      const { populatedDirs, present } =
+        loadedArtifacts(( _dir, target ) => target === JEST_TARGET, [GATED_TARGET])
+
+      expect(populatedDirs).toEqual([])
+      expect(present).toEqual([])
+      expect(classifyAll({ ...both(old, undefined), populated: 0, present, ...probes }).status)
+          .toBe('missing')
     })
   })
 

@@ -42,7 +42,10 @@ pins both halves. To run the suite on MT anyway:
 `FORCE_SINGLE_THREAD=false yarn test`. Because Jest loads the Node variant,
 `yarn check-wasm-fresh` (run by `precommit`) checks both `ConwayGeomWasmNode`
 and `ConwayGeomWasmNodeMT` and reports the worse of the two, naming Jest for a
-stale Node and the CLI/probes/benchmarks for a stale NodeMT (both if both); CI builds all
+stale Node and the CLI/probes/benchmarks for a stale NodeMT (both if both). The debug
+probes (`scripts/debug/wasmFreshness.mjs`) gate on NodeMT alone via
+`inspect({targets: [GATED_TARGET]})`, so a stale Node, which only Jest loads, does not
+make them exit 3 after a NodeMT-only `build-codex-MT`. CI builds all
 four variants (`yarn build-GHA-all`), so it always tests a fresh Node.
 
 `yarn precommit` — what the husky hook runs — rebuilds before it lints and
