@@ -115,6 +115,18 @@ const GATED_TARGET = 'ConwayGeomWasmNodeMT'
  */
 const JEST_TARGET = 'ConwayGeomWasmNode'
 
+/**
+ * Who loads each gated target, for the stale report. The two differ: Jest runs
+ * on the single-thread Node variant, everything else (debug probes, CLI,
+ * regression runs, Tier A goldens, benchmarks — AGENTS.md) on NodeMT. After a
+ * NodeMT-only `build-codex-MT` the report must not call the probes stale on
+ * account of Node, nor Jest stale on account of NodeMT (codex review, conway#727).
+ */
+const CONSUMERS = {
+  [JEST_TARGET]: {who: 'jest', verb: 'is'},
+  [GATED_TARGET]: {who: 'the debug probes, CLI, regression runs and benchmarks', verb: 'are'},
+}
+
 /** Every artifact a consumer in this repo loads by default; see `classifyAll`. */
 const LOADED_TARGETS = [GATED_TARGET, JEST_TARGET]
 
@@ -348,6 +360,17 @@ function markerEntries(marker) {
 
 
 /**
+ * "<who> <is|are>" for a gated target, e.g. "jest is".
+ *
+ * @param {string} target
+ * @return {string}
+ */
+function consumersOf(target) {
+  const {who, verb} = CONSUMERS[target] ?? {who: 'its consumers', verb: 'are'}
+  return `${who} ${verb}`
+}
+
+/**
  * Decide the status from already-gathered facts.
  *
  * Kept pure and exported so the decision table is testable without a Dist, a
@@ -418,7 +441,7 @@ function classify({
     stale: {
       message: `${gatedTarget} was built from conway-geom ` +
         `${String(gated?.conwayGeomSha).slice(0, 10)} but this checkout has ` +
-        `${String(expectedSha).slice(0, 10)} — jest and the debug probes are ` +
+        `${String(expectedSha).slice(0, 10)} — ${consumersOf(gatedTarget)} ` +
         'running the OLD engine against the current source',
       remedy: REBUILD,
     },
@@ -498,6 +521,14 @@ function classifyAll(facts) {
     const message = worst.verdict.message.replace(
         `${worst.target} matches`,
         targets.length > 1 ? `${targets.join(' and ')} match` : `${worst.target} matches`)
+    return {...worst.verdict, message, warnings}
+  }
+
+  // Both stale: each verdict names its own target and consumers, and returning
+  // only the first would leave the other consumer looking fine.
+  const stale = verdicts.filter(({verdict}) => verdict.status === 'stale')
+  if (stale.length > 1) {
+    const message = stale.map(({verdict}) => verdict.message).join('; ')
     return {...worst.verdict, message, warnings}
   }
 

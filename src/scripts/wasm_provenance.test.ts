@@ -291,6 +291,42 @@ describe('the gate also covers the variant Jest loads', () => {
     expect(result.message).toContain('ConwayGeomWasmNodeMT')
   })
 
+  describe('the stale report names the consumers of the target that is stale', () => {
+    /*
+     * The message used to say "jest and the debug probes are running the OLD
+     * engine" whichever target was stale. After `build-codex-MT` refreshes
+     * NodeMT and leaves Node stale, the probes load the FRESH NodeMT, so the
+     * report invalidated an experiment that was fine; the inverse case told
+     * the reader Jest was stale when only NodeMT was (codex review, conway#727).
+     */
+    test('Node stale only: names jest, not the debug probes', () => {
+      const result = classifyAll(both(old, current))
+
+      expect(result.status).toBe('stale')
+      expect(result.message).toMatch(/jest/i)
+      expect(result.message).not.toMatch(/probes/i)
+    })
+
+    test('NodeMT stale only: names the debug probes, not jest', () => {
+      const result = classifyAll(both(current, old))
+
+      expect(result.status).toBe('stale')
+      expect(result.message).toMatch(/debug probes/i)
+      expect(result.message).not.toMatch(/jest/i)
+    })
+
+    test('both stale: names both targets and both consumers', () => {
+      const result = classifyAll(both(old, old))
+
+      expect(result.status).toBe('stale')
+      expect(result.fatal).toBe(true)
+      expect(result.message).toContain('ConwayGeomWasmNode ')
+      expect(result.message).toContain('ConwayGeomWasmNodeMT')
+      expect(result.message).toMatch(/jest/i)
+      expect(result.message).toMatch(/debug probes/i)
+    })
+  })
+
   test('a Node variant with no stamp is reported, never silently ok', () => {
     expect(classifyAll(both(undefined, current)).status).toBe('unstamped')
   })

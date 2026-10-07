@@ -41,7 +41,8 @@ benchmark, still loads NodeMT, and `src/scripts/jest_wasm_thread_mode.test.ts`
 pins both halves. To run the suite on MT anyway:
 `FORCE_SINGLE_THREAD=false yarn test`. Because Jest loads the Node variant,
 `yarn check-wasm-fresh` (run by `precommit`) checks both `ConwayGeomWasmNode`
-and `ConwayGeomWasmNodeMT` and reports the worse of the two; CI builds all
+and `ConwayGeomWasmNodeMT` and reports the worse of the two, naming Jest for a
+stale Node and the CLI/probes/benchmarks for a stale NodeMT (both if both); CI builds all
 four variants (`yarn build-GHA-all`), so it always tests a fresh Node.
 
 `yarn precommit` — what the husky hook runs — rebuilds before it lints and
