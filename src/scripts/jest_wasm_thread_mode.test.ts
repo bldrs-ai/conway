@@ -31,20 +31,33 @@ const compiledGeomIndex =
   fileURLToPath(new URL('../../dependencies/conway-geom/index.js', import.meta.url))
 
 
-describe('Jest runs on the single-thread wasm', () => {
+describe('Jest runs on the build the environment asked for', () => {
+
+  // The default is single-thread, forced by the setupFile. The documented
+  // opt-out, `FORCE_SINGLE_THREAD=false yarn test`, is preserved by the
+  // setupFile and must select NodeMT instead, so the expectation follows the
+  // flag. An UNSET flag is deliberately not treated as an opt-out: the
+  // setupFile always defines it, so undefined here means the setupFile is no
+  // longer wired in, and the default run has to go red.
+  const requested = process.env.FORCE_SINGLE_THREAD
+  const optedOut = requested !== undefined && requested !== 'true'
 
   beforeAll(async () => {
     expect(await new ConwayGeometry().initialize()).toBe(true)
   })
 
-  test('the setupFile set the flag in the test context', () => {
-    expect(process.env.FORCE_SINGLE_THREAD).toBe('true')
+  test('the setupFile defaulted the flag, and kept an explicit override', () => {
+    if (optedOut) {
+      expect(requested).toBe('false')
+    } else {
+      expect(requested).toBe('true')
+    }
   })
 
-  test('initialize() loaded ConwayGeomWasmNode, not NodeMT', () => {
+  test('initialize() loaded the matching variant', () => {
     // `wasmType` is the live binding loadWasmModule() assigns, so this is the
     // module that was actually instantiated, not just what the env says.
-    expect(wasmType).toBe('Node')
+    expect(wasmType).toBe(optedOut ? 'NodeMT' : 'Node')
   })
 })
 
