@@ -59,8 +59,18 @@ const NASTY_PREPROCESSOR =
  * column blanks together when it reads `crossHarness`, so one cell explains
  * a whole row of `N/A` — otherwise "not measured", "absent from this old
  * snapshot" and "not comparable" would all read the same.
+ *
+ * 28 since in-job pairing added `measurementBasis`, which says whether the
+ * two rows were measured on ONE machine (`paired`) or against a baseline
+ * frozen by a previous run on an unrecorded one (`crossRun`). A release
+ * directory now ships both files with this identical layout, and the 13.66%
+ * cross-run noise floor means reading the wrong one is not a rounding error
+ * — see design/new/perf-run-comparability.md. Appended LAST rather than
+ * beside `comparability`, where it reads more naturally, so a re-blessed
+ * directory's committed delta diffs as one added column instead of a
+ * reshuffle; every consumer reads these files by header name.
  */
-const DELTA_COLUMN_COUNT = 27
+const DELTA_COLUMN_COUNT = 28
 
 const DETAIL_HEADER = [
   'timestamp', 'loadStatus', 'uname', 'engine', 'filename', 'schemaVersion',
