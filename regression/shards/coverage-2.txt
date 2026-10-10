@@ -1,0 +1,14 @@
+# corpus: public
+# Remaining public IFC, including MB-Khaya (the largest public PR model).
+ISSUE_034_HouseZ.ifc
+ISSUE_102_M3D-CON.ifc
+ISSUE_126_model.ifc
+ISSUE_159_kleine_Wohnung_R22.ifc
+Office_A_20110811.ifc
+Remigen_Mo.ifc
+C20-Institute-Var-2.ifc
+dental_clinic.ifc
+FM_ARC_DigitalHub.ifc
+ifcbridge-model01.ifc
+ISSUE_129_N1540_17_EXE_MOD_448200_02_09_11SMC_IGC_V17.ifc
+MB-Khaya.ifc

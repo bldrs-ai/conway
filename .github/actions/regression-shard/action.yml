@@ -1,0 +1,328 @@
+name: 'Run one PR-regression shard'
+description: >
+  Skip-smudge a test-models corpus, LFS-pull only this shard's files,
+  run the digest batch, upload results, and fail on crashed or
+  unexpected zero-geometry models. Caller has already checked out
+  conway, installed yarn deps, restored the WASM cache, and run
+  yarn build-incremental.
+
+inputs:
+  shard-id:
+    required: true
+  shard-file:
+    required: true
+  corpus:
+    required: true
+    description: 'public or private'
+  models-ref:
+    required: true
+    description: 'Branch, tag, or SHA to resolve'
+  models-repo:
+    required: true
+    description: 'owner/name, e.g. bldrs-ai/test-models'
+  models-token:
+    required: false
+    default: ''
+    description: 'PAT for private clone; empty for public'
+  concurrency:
+    required: true
+  allow-visual-diff:
+    required: false
+    default: 'false'
+    description: 'true only for public shards — do not render private models'
+
+runs:
+  using: composite
+  steps:
+    - name: Check the shard list's corpus matches the caller
+      shell: bash
+      run: |
+        set -euo pipefail
+        DECLARED=$(python3 "${{ github.action_path }}/shard_list.py" corpus \
+          "${{ inputs.shard-file }}")
+        if [ "$DECLARED" != "${{ inputs.corpus }}" ]; then
+          echo "::error::${{ inputs.shard-file }} declares corpus" \
+               "'$DECLARED' but the matrix passed '${{ inputs.corpus }}'." \
+               "A private list resolved against the public repo would" \
+               "silently find no models; the reverse would leak one."
+          exit 1
+        fi
+
+    - name: Resolve corpus SHA
+      id: sha
+      shell: bash
+      env:
+        REF: ${{ inputs.models-ref }}
+        REPO: ${{ inputs.models-repo }}
+        TOKEN: ${{ inputs.models-token }}
+      run: |
+        set -euo pipefail
+        if [ -n "$TOKEN" ]; then
+          URL="https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+        else
+          URL="https://github.com/${REPO}.git"
+        fi
+        # Callers normally pass an already-resolved SHA (the
+        # resolve-models job pins one commit for the whole run, so ten
+        # shards cannot straddle two corpus states). Accept a branch or
+        # tag too, so the action is usable on its own.
+        if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+          SHA="$REF"
+        else
+          REFS=$(git ls-remote "$URL" "$REF")
+          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
+          if [ -z "$SHA" ]; then SHA="$REF"; fi
+        fi
+        if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::Could not resolve ${REPO}@${REF} (got '$SHA')."
+          exit 1
+        fi
+        echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+        echo "Resolved ${REPO} ref '$REF' -> $SHA"
+        echo "**${{ inputs.shard-id }}:** \`${REPO}@${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # Public corpora only, and deliberately so. Conway is public, and an
+    # Actions cache written on the default branch is restorable by any
+    # pull_request run — including one from a fork, which supplies its
+    # own workflow file and could simply add a restore step. Caching a
+    # private shard would publish both the model bytes and the
+    # TEST_MODELS_PRIVATE_TOKEN that `git remote add` leaves in
+    # models/.git/config. Same reason visual-diff is public-only.
+    #
+    # The cost is real: each ready-PR run re-pulls ~2.6 GB of private
+    # LFS instead of restoring it. If that bites the LFS budget, the fix
+    # is fewer private shards per PR (or moving them to merge/rc), not a
+    # cache of private bytes in a public repo.
+    - name: Restore shard models cache
+      id: cache
+      if: inputs.corpus == 'public'
+      uses: actions/cache@v4
+      with:
+        path: models
+        key: ${{ runner.os }}-reg-shard-${{ inputs.corpus }}-${{ inputs.shard-id }}-${{ steps.sha.outputs.sha }}-${{ hashFiles(inputs.shard-file) }}
+
+    # Private shards always land here: the cache step above is skipped
+    # for them, which leaves cache-hit empty.
+    - name: Checkout corpus if not cached
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GIT_LFS_SKIP_SMUDGE: '1'
+        SHA: ${{ steps.sha.outputs.sha }}
+        REPO: ${{ inputs.models-repo }}
+        TOKEN: ${{ inputs.models-token }}
+      run: |
+        set -euo pipefail
+        if [ -n "$TOKEN" ]; then
+          URL="https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+        else
+          URL="https://github.com/${REPO}.git"
+        fi
+        git init models
+        git -C models remote add origin "$URL"
+        git -C models fetch --depth 1 origin "$SHA"
+        git -C models checkout "$SHA"
+
+    - name: Materialize this shard's LFS models
+      shell: bash
+      run: python3 "${{ github.action_path }}/shard_list.py" pull "${{ inputs.shard-file }}" models
+
+    # A public shard's cache is saved AFTER its batch ran, so a restored
+    # corpus arrives with last run's digest CSVs already written over the
+    # committed baselines. The batch rewrites them for every model it
+    # digests - but a model that hard-fails this time writes nothing, and
+    # the previous run's edit would then read as a digest change and send
+    # a clean model to the visual diff. Reset to the pinned commit so the
+    # diff below means "this run vs baseline". No-op on a fresh checkout.
+    - name: Reset corpus digests to the pinned baseline
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # `git checkout --` exits 1 on a pathspec that matches nothing
+        # tracked, which is the case for a corpus whose baselines are not
+        # committed yet. Under `set -e` that would red the shard on a
+        # cache HIT only, so the first run would pass and the second
+        # fail. Guard on the pinned tree instead.
+        if git -C models ls-tree -d --name-only HEAD regression/test_models \
+             | grep -q .; then
+          git -C models checkout -- regression/test_models
+        else
+          echo "No tracked regression/test_models at the pinned commit; nothing to reset."
+        fi
+        # No `|| true`: `git clean` on a missing pathspec exits 0 anyway,
+        # so the only thing it could swallow is a real clean failure -
+        # after which last run's untracked digest CSVs survive into the
+        # batch, which is the stale-digest hazard this step exists for.
+        git -C models clean -fdq regression/test_models
+
+    - name: Run digest batch
+      shell: bash
+      env:
+        CONCURRENCY: ${{ inputs.concurrency }}
+        SHA: ${{ steps.sha.outputs.sha }}
+        SHARD_FILE: ${{ inputs.shard-file }}
+      run: |
+        set -euo pipefail
+        REGEX=$(python3 "${{ github.action_path }}/shard_list.py" regex "$SHARD_FILE")
+        node --experimental-specifier-resolution=node \
+          ./compiled/src/ifc/ifc_regression_batch_main.js \
+          -e "$REGEX" \
+          -t "$SHA" \
+          --perf "${GITHUB_WORKSPACE}/perf.csv" \
+          models \
+          models/regression/test_models \
+          --parallel --mem-utilization 90 --concurrency "$CONCURRENCY"
+
+    # The reviewer-facing half of the old single-job report: the
+    # errors.csv/failed.csv delta against the pinned corpus commit,
+    # scoped to this shard's models. Only this job has the corpus
+    # checkout the baseline side needs, so the fragment is built here
+    # and the aggregator concatenates the ten of them into one comment.
+    # `!cancelled()` because a shard that is about to go red is exactly
+    # the one whose rows the PR comment needs to quote.
+    - name: Write shard summary fragment
+      if: ${{ !cancelled() }}
+      shell: bash
+      env:
+        SHA: ${{ steps.sha.outputs.sha }}
+        ID: ${{ inputs.shard-id }}
+      run: |
+        set -uo pipefail
+        # A summary that cannot be built must not be what turns a green
+        # shard red, so this reports rather than exits - same reason the
+        # single-job version caught its own summary errors.
+        if ! python3 "${{ github.action_path }}/shard_summary.py" \
+          --shard-id "$ID" \
+          --shard-file "${{ inputs.shard-file }}" \
+          --root models \
+          --sha "$SHA" \
+          --perf "${GITHUB_WORKSPACE}/perf.csv" \
+          --out shard_summary.md; then
+          echo "::warning::Could not summarize shard $ID; the per-shard CSVs are still in its artifact."
+          printf '<h3>%s</h3>\n\n_Summary generation failed - see the job log and the `regression-shard-%s` artifact._\n' \
+            "$ID" "$ID" > shard_summary.md
+        fi
+
+    - name: Collect digest-changed models
+      if: inputs.allow-visual-diff == 'true'
+      id: vdiff
+      shell: bash
+      env:
+        SHA: ${{ steps.sha.outputs.sha }}
+      run: |
+        python3 - "$PWD/models" "$SHA" <<'EOF'
+        import os, subprocess, sys
+        root, sha = sys.argv[1], sys.argv[2]
+        out = subprocess.run(
+            ['git', 'diff', '--name-only', sha, '--', 'regression/test_models'],
+            cwd=root, capture_output=True, text=True, check=True).stdout
+        untracked = subprocess.run(
+            ['git', 'ls-files', '--others', '--exclude-standard', '--',
+             'regression/test_models'],
+            cwd=root, capture_output=True, text=True, check=True).stdout
+        meta = {'errors.csv', 'failed.csv', 'main.csv', 'changes.csv',
+                'zero_geometry.csv'}
+
+        def digest_stems(listing):
+            stems = set()
+            for line in listing.splitlines():
+                base = os.path.basename(line)
+                if base.endswith('.csv') and base not in meta:
+                    stems.add(base[:-4])
+            return stems
+
+        new_stems = digest_stems(untracked)
+        stems = digest_stems(out) | new_stems
+        models, found = [], set()
+        for top in ('ifc', 'step'):
+            for dirpath, _, files in os.walk(os.path.join(root, top)):
+                for f in files:
+                    stem, ext = os.path.splitext(f)
+                    if (stem in stems and stem not in found and
+                            ext.lower() in ('.ifc', '.step', '.stp')):
+                        found.add(stem)
+                        rel = os.path.relpath(os.path.join(dirpath, f), root)
+                        models.append(
+                            f'{rel}\tnew' if stem in new_stems else rel)
+        with open('changed_models.txt', 'w') as fh:
+            fh.write('\n'.join(sorted(models)) + ('\n' if models else ''))
+        print(f'{len(models)} digest-changed/new model(s)')
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+            fh.write(f'count={len(models)}\n')
+        EOF
+
+    - name: Upload changed-model list
+      if: inputs.allow-visual-diff == 'true' && steps.vdiff.outputs.count != '0'
+      uses: actions/upload-artifact@v4
+      with:
+        name: visual-diff-models-${{ inputs.shard-id }}
+        path: changed_models.txt
+        if-no-files-found: ignore
+
+    - name: Upload shard results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: regression-shard-${{ inputs.shard-id }}
+        path: |
+          models/regression/test_models/failed.csv
+          models/regression/test_models/errors.csv
+          models/regression/test_models/main.csv
+          models/regression/test_models/zero_geometry.csv
+          perf.csv
+          shard_summary.md
+        if-no-files-found: warn
+
+    - name: Fail on shard parse/extract failures
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: |
+        FAILED=models/regression/test_models/failed.csv
+        if [ -f "$FAILED" ] && [ "$(wc -l < "$FAILED")" -gt 1 ]; then
+          echo "::error::Shard ${{ inputs.shard-id }} failures:"
+          cat "$FAILED"
+          exit 1
+        fi
+        echo "No failures in shard ${{ inputs.shard-id }}."
+
+    - name: Fail on unexpected zero-geometry models
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: |
+        ZERO=models/regression/test_models/zero_geometry.csv
+        MAIN=models/regression/test_models/main.csv
+        ALLOW=regression/zero_geometry_allowlist.txt
+        if [ ! -f "$ZERO" ]; then
+          echo "No zero_geometry.csv produced."; exit 0
+        fi
+        python3 - "$ZERO" "$ALLOW" "$MAIN" <<'PY'
+        import csv, os, sys
+        zero, allow, main = sys.argv[1], sys.argv[2], sys.argv[3]
+        allowed = set()
+        for line in open(allow, encoding='utf-8'):
+            line = line.split('#', 1)[0].strip()
+            if line:
+                allowed.add(line)
+        rows = [r['file'] for r in csv.DictReader(open(zero, newline='', encoding='utf-8'))]
+        unexpected = [f for f in rows if f not in allowed]
+        for f in rows:
+            print(f"zero geometry: {f}" + ("" if f in unexpected else "  (allowlisted)"))
+        ran = set()
+        if os.path.exists(main):
+            ran = {r['file'] for r in csv.DictReader(open(main, newline='', encoding='utf-8'))}
+        stale = sorted((allowed & ran) - set(rows))
+        if unexpected:
+            print("::error::Models loaded but produced NO geometry and are not allowlisted:")
+            for f in unexpected:
+                print(f"::error::  {f}")
+        if stale:
+            print("::error::Allowlisted models that now DO produce geometry - "
+                  "delete their lines from regression/zero_geometry_allowlist.txt:")
+            for f in stale:
+                print(f"::error::  {f}")
+        if unexpected or stale:
+            sys.exit(1)
+        print(f"{len(rows)} zero-geometry model(s), all allowlisted; "
+              f"{len(allowed & ran)} allowlist entr(ies) exercised and still empty.")
+        PY
