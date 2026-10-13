@@ -131,9 +131,15 @@ reports to GA.
 | **T2 RC** | The STEP files excluded from smoke as slow (SKYLARK, Snowdon, Arty_Z7, Jetenginestep, DSA2, nist_ftc_08…) and the rest of the public STEP corpus | Cost on real assemblies; P5 |
 | **T3 scale ladder** | Private large STEP files, sorted by size, with at least one file in each band: < 50 MB, 50–200, 200–500, **500–600 (straddling the string limit)**, > 600 MB, and the largest we have | P1, P2. Private corpus never leaves the machine; results table records size band, not filename |
 
-Run T3 in ascending size order and stop each SMLib arm after its first
-two consecutive failures, so a known wall doesn't cost an hour of
-timeouts.
+Run T3 in ascending size order, and run **at least one file from every
+size band** in every arm, whatever happened in the bands below it. A
+failure in a small band can be content-specific (an unsupported
+construct, a parse error, a timeout), and stopping on it would skip the
+500–600 MiB and > 600 MiB bands that P1 is about, then misreport an
+unrelated failure as a size wall. Within a band, an arm may skip that
+band's remaining files only after a size-monotonic failure: `RangeError:
+Invalid string length`, or a Node heap OOM on a file whose next-smaller
+neighbour in the same arm also OOM'd.
 
 ## Blend test (P4) in more detail
 
@@ -141,10 +147,16 @@ For each T0 blend fixture:
 
 1. smlibpy writes `<name>_<continuity>.step` and records exact area,
    volume, face count, and a zebra render (`render(zebra=True)`).
-2. conway reads the STEP; record Σ area, bbox, triangle count, and a GLB.
-3. `scripts/render_glb.cjs --pair` against smlibwasm's `toGlb` of the
-   same body, one camera on the union bounds.
-4. Pass: conway area within 1% and visually indistinguishable at the
+2. **Isolate the writer.** Re-import the emitted STEP through smlibpy
+   (and OCCT, when that arm is set up) and check that area, volume and
+   face count still match the source body. If they don't, the fixture
+   is bad: an SMLib STEP-export defect, not a conway result. Record it
+   and drop the fixture from the conway comparison. Every later step
+   compares against the **re-imported** body, not the in-memory one.
+3. conway reads the STEP; record Σ area, bbox, triangle count, and a GLB.
+4. `scripts/render_glb.cjs --pair` against smlibwasm's `toGlb` of the
+   re-imported body, one camera on the union bounds.
+5. Pass: conway area within 1% and visually indistinguishable at the
    pair render. G2/G3 must not do worse than the circular twin.
 
 Zebra continuity in Share is a follow-up, not part of this pass:
@@ -185,7 +197,7 @@ scripts/kernel_compare/
 | P3: SMLib and OCCT agree and conway is off | Each disagreement is a conway bug with a free, exact reference. File it with the ratio. |
 | P3: SMLib and OCCT disagree | Neither is ground truth on that model; note it, don't file against conway. |
 | SMLib-js tracks OCCT within 0.1% across T0/T1 | Propose replacing the Create-proof OCCT dependency in the regression area signal with in-process SMLib (closes the "no checked-in reference file" gap in `step-support.md`). Separate PR. |
-| P4 fails | conway's B-spline face path has a blend-specific defect; route through `face_health.mjs` / `seam_census.mjs`. |
+| P4 fails on a fixture that passed the writer check | conway's B-spline face path has a blend-specific defect; route through `face_health.mjs` / `seam_census.mjs`. A fixture that failed the writer check says nothing about conway. |
 
 What this does **not** settle: whether Create should author on SMLib
 instead of replicad/OCCT. That is a separate spike (blend quality,
