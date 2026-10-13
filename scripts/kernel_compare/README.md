@@ -75,3 +75,61 @@ without one.
 
 Everything in the row is millimetres. A conway or OCCT model in metres is
 scaled before the row is written, and the scale applied goes in `notes`.
+
+## Running
+
+```
+# whole ladder, default arms (conway:mt, conway:st, smlib-js:heal=false/true, occt)
+node scripts/kernel_compare/run.mjs --out ~/kernel-compare-out
+# a subset
+node scripts/kernel_compare/run.mjs --tiers T1,T2 --arms conway:mt,smlib-js:heal=false
+node scripts/kernel_compare/run.mjs --dry-run            # print the plan only
+node scripts/kernel_compare/join.mjs --out ~/kernel-compare-out   # -> compare.csv, summary.md
+```
+
+`run.mjs` runs one process per (model, arm/variant), strictly one at a time,
+ascending size within a tier, and appends one row per run (plus `tier`,
+`band` for T3, `run_id`) to `<out>/rows.jsonl`. It is resumable: re-running
+the same command skips every (model, arm, variant) already present with a
+status other than `crash`; `--force` re-runs them (`join.mjs` keeps the last
+row per key). `<out>/run_header.json` records the conway commit, smlibwasm
+version, node/python versions, CPU, memory, thread modes and every invocation.
+
+Useful flags: `--timeout <s>` (default 1800; the process group is killed),
+`--max-old-space <MB>` (default 8192, the same for **both** Node arms),
+`--tolerance <mm>` (passed to every arm), `--python <path>` (default
+`~/kc-venv/bin/python`, run with `-I`), `--public` / `--private` corpus roots,
+`--only <substring>`, `--arms smlib-py:heal=false` to add the optional Python
+arm. `/usr/bin/time -v` is used when present so a crashed child still has a
+max RSS; if it is absent those rows have `peak_rss_bytes: null`.
+
+Tiers (sizes in MiB; 50 MiB is the T2/T3 boundary):
+
+| Tier | Files |
+|---|---|
+| T0 | `<out>/t0_blends/manifest.json` entries with `writer_ok: true` (skipped, with a message, if the manifest is absent) |
+| T1 | STEP entries of `regression/smoke_models.txt`, resolved by basename under the public corpus (unresolved entry = error) |
+| T2 | every other `.step`/`.stp` below 50 MiB in the public + private corpora |
+| T3 | every STEP file of 50 MiB or more in the corpora (T1 excluded) plus every STEP file in `<out>/t3_synthetic/` |
+
+Synthesised rows: `timeout` when the timer fired and no row was printed;
+`oom` on a heap-OOM / `Invalid string length` / `Cannot allocate` /
+`MemoryError` stderr, or on SIGKILL with no timer (probably the kernel OOM
+killer, noted in the row); `crash` otherwise. If a child printed its row and
+then hung on exit (a never-terminated pthread pool), the row is kept and a
+note records that the runner killed the process. `skipped` rows (not a
+failure) are written for Git LFS pointer stubs and for the T3 band rule.
+
+T3 band rule (bands < 50, 50-200, 200-500, 500-600, > 600 MiB; 600 MiB
+exactly is still 500-600): every arm runs the smallest file of every band.
+Within a band an arm skips the remaining files only after
+`RangeError: Invalid string length`, or an `oom` on a file whose next-smaller
+neighbour in the same band and arm was also `oom`. The state is per
+(arm/variant, band), so `conway:mt` and `conway:st` are tracked separately,
+and it is rebuilt from `rows.jsonl` on resume.
+
+`summary.md` labels anything from the private corpus root or `t3_synthetic`
+as `T<tier>-<band>#<n>` (n = rank by size among such files in that tier and
+band) and scrubs their paths and basenames from error text, so it can be
+pasted into `design/new/kernel-compare-smlib.md`. `compare.csv` keeps full
+paths and must stay outside the repo.
