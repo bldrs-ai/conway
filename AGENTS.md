@@ -340,6 +340,7 @@ Check `scripts/` before building tooling — see
 | CI tiering, cost rationale, rc/re-bless/LFS runbook | [design/new/ci-regression-cost.md](design/new/ci-regression-cost.md) |
 | STEP support: schemas, coverage, known gaps | [design/new/step-support.md](design/new/step-support.md) |
 | STEP product structure and metadata (the AP242 wrinkle, NIST) | [design/new/step-metadata-nist.md](design/new/step-metadata-nist.md) |
+| Side-by-side against SMLib (NVIDIA's open NURBS kernel, via `@classcad/smlibwasm`) and OCCT: scale wall, area/bbox fidelity, G2/G3 blend round trip, and whether SMLib can replace the borrowed OCCT ground truth — plan, predictions and harness layout | [design/new/kernel-compare-smlib.md](design/new/kernel-compare-smlib.md) |
 | Why a STEP click selects the wrong thing (or everything): what an occurrence path is made of, the one decision the tree and the scene must agree on, and the inverted-relationship shape that re-places a whole model once per free representation | [design/new/step-nonproduct-semantics.md](design/new/step-nonproduct-semantics.md) |
 | Native GLB export from the CLI | [design/new/glb-native-export.md](design/new/glb-native-export.md) |
 | What the perf bench measures and why: peak vs retention, the three distinct native quantities, why `heapUsed + external` is not a stand-in for RSS, GC settling, the two-pass gc A/B the rc job runs and why a between-run comparison is invalid, and the rule for changing recorded fields | [design/new/perf-measurement.md](design/new/perf-measurement.md) |
