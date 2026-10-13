@@ -247,3 +247,131 @@ built `compiled/` and a fresh `Dist/` for the variant it runs (checked through
   `empty`. A V8 heap OOM kills the process before it can emit, so `run.mjs`
   classifies that one. The script calls `process.exit` after emitting,
   because the MT pthread pool is never terminated.
+
+## SMLib arms
+
+`smlib_measure.mjs` (smlib-js) and `smlib_measure.py` (smlib-py) take
+`<model.step> [--heal true|false] [--tolerance <mm>] [--angle <deg>]`
+(the `.mjs` also accepts and ignores `--threads`). Default is `--heal false`,
+the plan's headline setting; SMLib's own default is `true`.
+
+- **Entry point and the string wall.** JS passes the file to `fromStep` as an
+  undecoded `Buffer` (the least-decoded form its `string | Uint8Array`
+  signature takes). The library then decodes the whole file to one JS string
+  itself (`_text()` in `dist/step_import.js`: `String.fromCharCode` in 32 KiB
+  chunks appended with `+=`, then `.replace(/\r\n?/g, '\n')`), so a
+  `RangeError: Invalid string length` in a row is the library's. Python's only
+  file entry point is `import_step(path)`, which `open(..., encoding="latin-1").read()`s
+  the whole file into one `str`; no bytes entry point exists, and Python has no
+  512 MiB string cap.
+- **Heal.** `{heal}` / `heal=` is honoured and only gates `part.heal()` on a closed
+  body that fails the soundness check; seam insertion and orientation flipping run
+  either way.
+- **Counting.** `closed_valid_bodies` = `Part` (a closed solid by construction; open
+  shells become `Shell`) and `isValid()`. `Shell` bodies add to area, not to volume
+  or `invalid_bodies`. Exact numbers come from `massProperties()` at its default
+  accuracy (1e-7); `measure_ms` covers `massProperties`, `isValid`, `bbox` and face
+  counting.
+- **Mesh.** One `mesh(tolerance, angle)` call per body (default tolerance is per
+  body, `max(0.001 * body bbox diagonal, 1e-6)` mm, angle 15 deg);
+  `mesh_tolerance_mm` is the largest used and the notes give the smallest. If any
+  body fails to mesh, `triangles` and `mesh_area_mm2` are null (partial sums go
+  in `notes`), as are `exact_area_mm2` on measurement failure.
+- **Zero-body files.** `fromStep` / `import_step` throw "holds no B-rep solids or
+  surfaces"; the scripts map that to `status: "empty"`.
+- **Gap warnings.** Bodies whose faces leave gaps make SMLib warn that the volume is
+  uncertain; the scripts collapse these to one note with the count and worst value.
+
+## OCCT arm
+
+```
+~/kc-venv/bin/python -I scripts/kernel_compare/occt_measure.py <model.step> \
+    [--tolerance <mm>] [--angle <deg>] [--gprop-eps <rel>] [--parallel] [--heal true|false]
+```
+
+`STEPControl_Reader` -> `TransferRoots` -> `OneShape()` (placements applied).
+Facts verified against `cadquery-ocp` 8.0.1.1 (do not assume them for another build):
+
+- **Units.** `xstep.cascade.unit` exists only after `STEPControl_Controller.Init_s()`
+  (before that `CVal_s` is `""` and `SetCVal_s` returns `False`). The script inits,
+  forces `MM`, and fails the row if it cannot verify it. `Right_Hand.step`
+  (`SI_UNIT($,.METRE.)`) reads as 132 x 195 x 158 mm, so the conversion happens.
+- **`bodies`** = solids + free shells (shells not inside any solid), each placed
+  instance counted separately (`IsSame` = TShape + Location). Loose faces and
+  wireframe are not bodies; loose faces are noted.
+- **`bbox_extent_mm`** covers those same bodies (`BRepBndLib.AddOptimal_s`,
+  `useTriangulation=False`, `useShapeTolerance=False`, gap asserted 0) and
+  **excludes wireframe**: on `nist_ctc_01_asme1_rd.stp` it is 800x450x150, whereas the
+  whole transferred shape (`bbox_extent_all_mm`, an extra non-contract field) is
+  1170x650x150 because of `GEOMETRIC_CURVE_SET` content.
+- **Closed check.** `BRep_Tool.IsClosed_s(solid)` returns `False` for *every* solid
+  (including a fresh `BRepPrimAPI_MakeBox`); the first version of this script used it
+  and reported `closed_valid_bodies: 0` on all six smoke models. Closed is now
+  "every shell of the solid passes `BRep_Tool.IsClosed_s`" (True for the box shell,
+  False for a sewn 5-face shell, which `BRepCheck_Analyzer` still calls *valid*).
+  `invalid_bodies` was likewise checked to fire (a bow-tie face is invalid).
+- **Exact area/volume** use the adaptive `GProp` overloads, `--gprop-eps` default
+  `1e-6` (`0` = OCCT's fixed-order Gauss); the reached error is in `notes`.
+  `measure_ms` is that integration only; `BRepCheck_Analyzer` time is in `total_ms`.
+- **Mesh.** Default chord tolerance is 0.1 % of the body bbox diagonal at 15 deg,
+  the same defaults as smlibpy's `tessellate`; pass `--tolerance` to match conway.
+  Serial by default (`--parallel` for `BRepMesh` threads). Triangle area applies each
+  face's `TopLoc_Location` (Value() includes scale).
+- **Timing.** Python-side `import OCP.*` (~0.7 s) is done before the clock starts and
+  is in neither `read_ms` nor `total_ms`. The machine is shared, so `measure_ms` on the
+  larger models varied up to ~2x between runs: treat timings as indicative.
+- OCCT writes diagnostics (`*** ERR StepReaderData ...`) to C++ stdout, possibly after
+  `main()` returns. fd 1 is redirected to stderr for the whole run and the row is
+  written to the saved original fd, so the row really is the last stdout line.
+- `--heal` is accepted and ignored (noted); there is no OCCT healing step.
+- Also importable: `measure_file(path, do_mesh=False)` is what `gen_blends.py` uses.
+
+## T0 blend family
+
+```
+~/kc-venv/bin/python -I scripts/kernel_compare/gen_blends.py [--out DIR] [--only SUBSTR] [--no-render]
+                                                             [--tol-area 1e-4] [--tol-volume 1e-4]
+```
+
+Default `--out` is `/home/user/kernel-compare-out/t0_blends/`; the script refuses an
+output directory inside the repo. About 70 s for all fixtures.
+
+Fixtures: 3 bases x 2 radii x {circular, G1, G2, G3} x {constant, variable} = 48,
+named `<base>_r<R>_<circ|g1|g2|g3>[_var].step`.
+
+| Base | Shape | Radii (mm) | Constant: edges | Variable (R/2 -> R): edges |
+|---|---|---|---|---|
+| `box` | 80x60x40 | 4, 8 | all 12 | 4 parallel to Z |
+| `lbracket` | 80x60x10 plate + 80x10x50 back wall | 2, 4 | all 18 (incl. concave inner edge) | 6 parallel to Z |
+| `bossplate` | 80x60x10 plate + R15x20 boss | 2, 4 | all 14 (incl. both boss circles) | 4 plate corners |
+
+smlibpy API (read from source, `Part.fillet(edges, radius, *, continuity=None, fullness=1.0)`):
+`continuity` `None` = circular, `"G1"`/`"G2"`/`"G3"` = blend (`1`/`2`/`3` also accepted);
+`radius` as `(start, end)` = linear variable radius along each edge. All four
+continuities exist for constant and for variable radius.
+
+Gaps found while choosing edge sets (not fixtures; all raise `KernelError ... radius may be too large`):
+
+- variable radius on edges that meet at a vertex (all 12 box edges, or the 4 top edges);
+- variable radius with start != end on a closed circular edge (seam jump), at any
+  continuity; start == end works for circular, and for G2 only on the convex boss edge.
+
+Writer isolation: each STEP is re-imported through smlibpy (`heal=False`, so repair cannot
+mask a writer defect) and through OCCT (`occt_measure.measure_file`, no mesh). Checks:
+bodies equal, **faces exact**, area and volume within **1e-4 relative** (flags to change),
+body valid/closed. Failing fixtures get `writer_ok: false`, the reasons in `failures`,
+and must be excluded from the conway comparison. Later steps compare conway with
+`reimport_smlib` / `reimport_occt`, not `source`.
+
+`manifest.json`: per fixture `{file, base, radius, radius_start, continuity, variable, edges,
+smlibpy_call, source, reimport_smlib, reimport_occt, writer_ok, failures?, sha256, size_bytes,
+deterministic_modulo_stamp, zebra}`; top level has versions, tolerances, `render_headless`,
+`summary` and `authoring_gaps`. `continuity` is `circular|G1|G2|G3`.
+
+Determinism: smlibpy's `write_step` stamps `datetime.now()` (seconds) into `FILE_NAME`,
+and derives the product/solid names from the file name. With the same name, the stamp
+is the only differing byte (verified by diff); the script rewrites it to
+`1970-01-01T00:00:00`, after which every STEP, PNG and the manifest are byte-identical
+across separate processes (sha256 compared).
+
+Zebra PNGs (`render(zebra=True)`) work headless and land in `zebra/`.
