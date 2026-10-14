@@ -6,6 +6,7 @@ performance investigation needs already exists here.
 | Script | Use |
 |---|---|
 | [`debug/model_report.mjs`](debug/README.md) | Why does *this* model look wrong — probes the geometry pipeline and names the entities responsible |
+| [`kernel_compare/`](kernel_compare/README.md) | Side by side against SMLib (`@classcad/smlibwasm`, smlibpy) and OCCT (`cadquery-ocp`): one JSON row per model per arm (exact/mesh area, bbox extents in mm over placed instances, peak RSS, failure taxonomy), a sequential runner with the T3 size-band rule, a synthetic scale-ladder generator, and a G0–G3 blend fixture generator. Also the quickest exact-area cross-check of one conway model against OCCT. Plan and results in `design/new/kernel-compare-smlib.md` |
 | `render_glb.cjs` | GLB → PNG with a pure-JS software rasterizer. No browser, no native deps, bit-deterministic across machines. `--pair` renders before/after with one shared camera |
 | `visual_diff_report.cjs` | Per-model before/after image comparison for a PR's regression run |
 | `gen_delta_csv.cjs`, `run_gen_deltas.cjs` | Digest CSV deltas between two conway versions |
