@@ -242,12 +242,14 @@ function metricsFor(m, keys) {
   const s = m.arms.get(keys.smlib)
   const o = m.arms.get(keys.occt)
   const both = (a, b) => isOk(a) && isOk(b)
+  // An OCCT exact area flagged unstable is not a reference (README, F5).
+  const occtArea = o?.exact_area_unstable === true ? null : o?.exact_area_mm2
   const bbox = (a, b) => AXES.map((_, i) => both(a, b) ? ratio(a.bbox_extent_mm?.[i], b.bbox_extent_mm?.[i]) : null)
   const match = (a, b) => both(a, b) && num(a.bodies) && num(b.bodies) ? a.bodies === b.bodies : null
   return {
     areaConwaySmlib: both(c, s) ? ratio(c.mesh_area_mm2, s.exact_area_mm2) : null,
-    areaConwayOcct: both(c, o) ? ratio(c.mesh_area_mm2, o.exact_area_mm2) : null,
-    areaSmlibOcct: both(s, o) ? ratio(s.exact_area_mm2, o.exact_area_mm2) : null,
+    areaConwayOcct: both(c, o) ? ratio(c.mesh_area_mm2, occtArea) : null,
+    areaSmlibOcct: both(s, o) ? ratio(s.exact_area_mm2, occtArea) : null,
     rssConwaySmlib: both(c, s) ? ratio(c.peak_rss_bytes, s.peak_rss_bytes) : null,
     bboxConwaySmlib: bbox(c, s),
     bboxConwayOcct: bbox(c, o),

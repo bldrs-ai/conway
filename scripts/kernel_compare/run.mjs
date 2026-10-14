@@ -678,8 +678,13 @@ function loadDone(out) {
     }
     try {
       const r = JSON.parse(line)
-      if (r.status !== 'crash') {
-        done.set(`${r.model}|${r.arm}|${r.variant}`, r)
+      // The last row for a key decides: a later crash (e.g. a --force re-run)
+      // makes the key incomplete again, so the next run retries it.
+      const key = `${r.model}|${r.arm}|${r.variant}`
+      if (r.status === 'crash') {
+        done.delete(key)
+      } else {
+        done.set(key, r)
       }
     } catch {
       log(`warn: rows.jsonl line ${i + 1} is not JSON, ignored`)

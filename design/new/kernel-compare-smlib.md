@@ -290,13 +290,14 @@ Unlike SMLib's two walls, conway's moves with RAM. "Opens what others can't" has
 ### Fidelity (T0–T2): P3, P4
 
 Per-copy conway area is conway's area minus the coincident re-emissions the harness identifies (conway#731, #733), divided by OCCT's exact area.
+An OCCT exact area flagged `exact_area_unstable` (one T2 model, the ultrasound probe part) is not used as a reference: it is left out of both conway/OCCT and SMLib/OCCT, which is why the T2 denominators are 52 and 50.
 A placement counts as a re-emission only with positive evidence that its route is one of those two defect shapes (a `PROPERTY_DEFINITION` on a `SHAPE_ASPECT` of the same product, for #731; saved-view `DRAUGHTING_MODEL` content, for #733). A different owner placing the same item at the same transform with no such evidence is counted as `coincident_cross_owner` and is not subtracted. In T0–T2 that bucket is empty (0 placements), so no model's per-copy ratio depends on the distinction.
 
 | Tier | conway within 1% of OCCT, raw | per-copy | median per-copy | SMLib within 1e-3 of OCCT |
 |---|---|---|---|---|
 | T0 | 48/48 | 48/48 | 0.99997 (worst 0.026%) | 48/48 (≤ 1.4e-8) |
 | T1 | 4/6 | 4/6 | 1.0051 | 5/6 |
-| T2 | 29/53 | 42/53 | 1.00001 | 38/51 (all 38 within 1.2e-4) |
+| T2 | 29/52 | 42/52 | 1.00001 | 38/50 (all 38 within 1.2e-4) |
 
 **Every SMLib-vs-OCCT disagreement is attributed** (triage, with causal tests where marked):
 
@@ -335,11 +336,12 @@ Medians in ms, over models where all arms are `ok`:
 
 | Tier | conway:st read | conway:st read+geometry | smlib-js read | smlib-js read+mesh | OCCT read | OCCT read+mesh | conway:st total | smlib-js total | OCCT total |
 |---|---|---|---|---|---|---|---|---|---|
-| T0 (48) | 10 | 95 | 116 | 168 | 56 | 70 | 973 | 288 | 304 |
-| T1 (6) | 45 | 728 | 5,373 | 9,721 | 413 | 683 | 1,724 | 10,498 | 4,266 |
-| T2 (51) | 39 | 327 | 1,130 | 1,803 | 211 | 363 | 1,222 | 2,075 | 931 |
+| T0 (48) | 10 | 93 | 116 | 168 | 57 | 141 | 1,032 | 288 | 384 |
+| T1 (6) | 46 | 784 | 5,373 | 9,721 | 425 | 1,744 | 1,818 | 10,498 | 5,381 |
+| T2 (51) | 41 | 333 | 1,130 | 1,803 | 210 | 522 | 1,324 | 2,075 | 994 |
 
 - conway's `total` includes about 1 s of wasm start-up, which dominates tiny files.
+- OCCT meshes each body at max(1e-3 × that body's bbox diagonal, 1e-6) mm, the same default rule as SMLib. The T0–T2 OCCT rows were re-run after that change; the T3 OCCT rows predate it (one tolerance from the union bbox), which affects their mesh time but not their status or peak RSS reading.
 - OCCT is native C++ through Python, so it is not a browser number. Don't set its speed beside the two wasm arms.
 - SMLib's read (its JS regex parser plus B-rep build) is the slowest step on real files: about 3.5× (T2) to 7× (T1) conway's whole read + geometry.
 

@@ -460,17 +460,37 @@ def measure_shape(
 
     # ---- mesh ---------------------------------------------------------------
     if do_mesh:
+        ang = math.radians(angle_deg)
+        t0 = time.perf_counter()
         if tolerance is None:
+            # Per body, like smlibpy/smlibwasm: max(DEFAULT_REL_TOL x the body's
+            # own bbox diagonal, 1e-6) mm. A single tolerance from the union
+            # bbox would let placement distance coarsen every body's mesh.
+            tols = []
+            for b in solids + free_shells:
+                ext = _bbox_extent([b]) or [0, 0, 0]
+                tol_b = max(DEFAULT_REL_TOL * math.sqrt(sum(e * e for e in ext)), 1e-6)
+                BRepMesh_IncrementalMesh(b, float(tol_b), False, ang, bool(parallel))
+                tols.append(tol_b)
+            # Faces outside any body (loose faces) still get a mesh; faces already
+            # meshed finer keep their triangulation.
             ext = row["bbox_extent_mm"] or [0, 0, 0]
             diag = math.sqrt(sum(e * e for e in ext))
-            tolerance = DEFAULT_REL_TOL * diag if diag > 0 else 0.1
-            notes.append(f"mesh tolerance defaulted to {DEFAULT_REL_TOL:g} x bbox diagonal (matches smlibpy default)")
-        t0 = time.perf_counter()
-        mesher = BRepMesh_IncrementalMesh(shape, float(tolerance), False, math.radians(angle_deg), bool(parallel))
+            fallback = DEFAULT_REL_TOL * diag if diag > 0 else 0.1
+            mesher = BRepMesh_IncrementalMesh(shape, float(fallback), False, ang, bool(parallel))
+            tolerance = max(tols) if tols else fallback
+            notes.append(
+                f"mesh tolerance per body = max({DEFAULT_REL_TOL:g} x body bbox diagonal, 1e-6) mm (smlib's default); "
+                f"mesh_tolerance_mm is the largest used"
+                + (f", smallest {min(tols):g} mm" if tols else "")
+                + f"; loose faces at {fallback:g} mm"
+            )
+        else:
+            mesher = BRepMesh_IncrementalMesh(shape, float(tolerance), False, ang, bool(parallel))
         row["geometry_ms"] = _ms(t0)
         row["mesh_tolerance_mm"] = float(tolerance)
         notes.append(
-            f"BRepMesh_IncrementalMesh lin={tolerance:g} mm absolute, ang={angle_deg:g} deg, "
+            f"BRepMesh_IncrementalMesh ang={angle_deg:g} deg, "
             f"{'parallel' if parallel else 'serial'}; IsDone={mesher.IsDone() if hasattr(mesher, 'IsDone') else '?'}"
         )
         tris, marea, missing = _mesh_stats(faces)

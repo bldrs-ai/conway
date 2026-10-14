@@ -724,7 +724,7 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName, gen
     let group = byGeometry.get(mesh.localID)
 
     if (group === undefined) {
-      group = {geometry: mesh.geometry, placements: []}
+      group = {geometry: mesh.geometry, localID: mesh.localID, placements: []}
       byGeometry.set(mesh.localID, group)
       itemClass.set(mesh.localID, classifyItem(model.getElementByLocalID(mesh.localID), ap214TypeName))
     }
@@ -841,7 +841,9 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName, gen
       const key = transform === undefined ? 'identity' : Array.prototype.join.call(transform, ',')
       const seen = seenAt.get(key)
 
-      if (instance.triangles > 0) {
+      // Bodies only: a styled-face or other item mesh would pull the median
+      // (and the body-derived tolerance bound) down to face size.
+      if (instance.triangles > 0 && itemClass.get(group.localID)?.kind === 'body') {
         diagonals.push(instance.diagonal)
       }
 
@@ -1237,8 +1239,10 @@ async function main() {
     row.conway_tessellation = {
       relative_deflection: RELATIVE_DEFLECTION,
       arc_samples: ARC_SAMPLES,
-      median_body_diagonal_mm: round(census.medianBodyDiagonal * MM_PER_M, 4),
-      tolerance_upper_bound_mm: round(census.medianBodyDiagonal * MM_PER_M * RELATIVE_DEFLECTION, 6),
+      // null when no body produced triangles (null * MM_PER_M would be 0).
+      median_body_diagonal_mm: census.medianBodyDiagonal === null ? null : round(census.medianBodyDiagonal * MM_PER_M, 4),
+      tolerance_upper_bound_mm: census.medianBodyDiagonal === null ? null :
+        round(census.medianBodyDiagonal * MM_PER_M * RELATIVE_DEFLECTION, 6),
     }
 
     if (totals.triangles > 0) {
