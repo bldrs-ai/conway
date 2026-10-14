@@ -83,21 +83,63 @@ const OOM_RE = new RegExp([
   'allocation failed',
   'Aborted\\(OOM',
   'Failed to allocate',
+  // The kernel's C++ allocator failure when the wasm32 heap (4 GiB) is exhausted. smlibwasm's
+  // kernelCall (dist/kernel.js) re-throws it as a KernelError whose message is only
+  // "<operation> failed (<SM_ERR>): <hint>"; the original `Error: std::bad_alloc` is `.cause`.
+  'bad_alloc',
 ].join('|'), 'i')
 
+/**
+ * The error and every error behind it: `.cause` chain (smlibwasm's KernelError sets it), capped
+ * so a cyclic chain cannot loop.
+ * @param {unknown} e
+ * @returns {unknown[]}
+ */
+function causeChain(e) {
+  const chain = []
+  let cur = e
+  while (cur !== undefined && cur !== null && chain.length < 8 && !chain.includes(cur)) {
+    chain.push(cur)
+    cur = cur instanceof Error ? cur.cause : undefined
+  }
+  return chain
+}
+
 /** @param {unknown} e */
+function describe(e) {
+  return e instanceof Error ? `${e.name}: ${e.message}` : String(e)
+}
+
+/** Memory-shaped anywhere in the cause chain (outer message alone misses a wrapped bad_alloc). */
 function classify(e) {
-  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e)
-  if (OOM_RE.test(msg) || /\bOOM\b/.test(msg)) {
-    return 'oom'
+  for (const link of causeChain(e)) {
+    const msg = describe(link)
+    if (OOM_RE.test(msg) || /\bOOM\b/.test(msg)) {
+      return 'oom'
+    }
   }
   return 'error'
+}
+
+/**
+ * Messages of the causes behind `e` (not `e` itself), or null when there are none.
+ * @param {unknown} e
+ */
+function causeMessages(e) {
+  const rest = causeChain(e).slice(1).map((c) => describe(c).split('\n')[0].slice(0, 500))
+  return rest.length > 0 ? rest : null
 }
 
 /** @param {unknown} e */
 function firstLine(e) {
   const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e)
   return msg.split('\n')[0].slice(0, 500)
+}
+
+/** firstLine plus the first cause, for per-body failure notes that keep no separate cause field. */
+function firstLineWithCause(e) {
+  const causes = causeMessages(e)
+  return causes === null ? firstLine(e) : `${firstLine(e)} [cause: ${causes[0]}]`
 }
 
 const round = (v, d = 3) => (v === null || v === undefined || !Number.isFinite(v) ? null : Number(v.toFixed(d)))
@@ -215,7 +257,7 @@ async function measure(args, row, notes) {
     } catch (e) {
       measureFailures += 1
       if (firstFailures.length < 3) {
-        firstFailures.push(firstLine(e))
+        firstFailures.push(firstLineWithCause(e))
       }
       if (classify(e) === 'oom') {
         throw e
@@ -259,7 +301,7 @@ async function measure(args, row, notes) {
     } catch (e) {
       meshFailures += 1
       if (meshFirst.length < 3) {
-        meshFirst.push(firstLine(e))
+        meshFirst.push(firstLineWithCause(e))
       }
       if (classify(e) === 'oom') {
         throw e
@@ -304,6 +346,7 @@ async function main() {
     size_bytes: null,
     status: 'error',
     error: null,
+    error_cause: null,
     read_ms: null,
     geometry_ms: null,
     measure_ms: null,
@@ -336,8 +379,12 @@ async function main() {
   } catch (e) {
     row.status = classify(e)
     row.error = firstLine(e)
+    row.error_cause = causeMessages(e)
     if (row.status === 'oom') {
       notes.push('memory-shaped failure; if the message is "Invalid string length" it is raised inside smlibwasm (_text / parse), not by the harness')
+    }
+    if (row.error_cause !== null) {
+      notes.push('error is the outer smlibwasm KernelError message; error_cause is its .cause chain (the kernel\'s own error). The wrapper\'s hint text (e.g. "faces the kernel cannot rebuild") is generic, attached to every failure of that call, and is not a diagnosis; read error_cause')
     }
   }
   row.total_ms = round(performance.now() - T0, 1)

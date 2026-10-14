@@ -40,6 +40,7 @@ Fields (null when the arm cannot measure it — never 0 as a stand-in):
 | `size_bytes` | int | file size |
 | `status` | string | `ok` / `empty` / `error` / `timeout` / `oom` / `crash` (taxonomy below) |
 | `error` | string\|null | first line of the error message |
+| `error_cause` | string[]\|null | SMLib arms only (extra field): first lines of the errors behind a wrapped one, `.cause` chain in JS, `KernelError.detail` / `__cause__` in Python. smlibwasm's and smlibpy's kernel-call wrapper re-throws any kernel failure as `KernelError: <op> failed ...: <generic hint>`, so the real message (e.g. `Error: std::bad_alloc` when the wasm32 4 GiB heap is exhausted) is only here. `status` is classified over the whole chain, so a wrapped `std::bad_alloc` is `oom` |
 | `read_ms` | number | file read + parse (+ B-rep build for SMLib/OCCT) |
 | `geometry_ms` | number\|null | tessellation / geometry extraction (conway: geometry phase; SMLib: `mesh`; OCCT: `BRepMesh`) |
 | `measure_ms` | number\|null | exact mass-property integration time (SMLib/OCCT) |
@@ -128,6 +129,15 @@ Within a band an arm skips the remaining files only after
 neighbour in the same band and arm was also `oom`. The state is per
 (arm/variant, band), so `conway:mt` and `conway:st` are tracked separately,
 and it is rebuilt from `rows.jsonl` on resume.
+
+One exemption: the **smallest T3 file in the run whose size exceeds V8's
+string limit** (`buffer.constants.MAX_STRING_LENGTH`, 536,870,888 bytes on
+Node 22; chosen among the models selected by `--tiers`/`--only`) is the P1
+probe and always runs in every arm, whatever the latch says. Without it, two
+consecutive below-limit `oom`s in the 500-600 band would skip every
+above-limit file and P1 would never be tested. Only that one file is exempt;
+later files in the band still skip, and its own row still feeds the latch.
+The runner logs the chosen file at start-up (`P1 probe (never band-skipped)`).
 
 `summary.md` labels anything from the private corpus root or `t3_synthetic`
 as `T<tier>-<band>#<n>` (n = rank by size among such files in that tier and
@@ -232,11 +242,24 @@ built `compiled/` and a fresh `Dist/` for the variant it runs (checked through
   - `coincident_occurrences` (+ `_area_mm2`): same owner, different occurrence
     path. Two assembly occurrences of one part at one place. **Model content**:
     OCCT and SMLib count it too. Do not subtract it.
-  - `coincident_reemissions` (+ `_area_mm2`): a different owner, or the same
-    owner and path again. One item placed through two representations
-    (conway#731, #733). **The defect**; subtract this area for a per-copy ratio.
-  - `coincident_duplicates` / `coincident_duplicate_area_mm2`: the sum of the two,
-    kept for the first-pass rows (which called all of it a defect).
+  - `coincident_reemissions` (+ `_area_mm2`, + `coincident_reemission_kinds`):
+    the same item reached through a second route to the same product, **with
+    positive evidence** that the second route is one of the known defect
+    shapes. This is the only bucket to subtract for a per-copy ratio. Kinds:
+    `pd_shape_aspect` (conway#731: the owner is a `PROPERTY_DEFINITION` on a
+    `SHAPE_ASPECT` whose `of_shape` belongs to the same `PRODUCT_DEFINITION` as
+    the other placement's owner), `presentation_rep` (conway#733: the owner is a
+    `DRAUGHTING_MODEL` free root, or a representation only reachable from one
+    through `REPRESENTATION_MAP` / `MAPPED_ITEM`; an SDR-bound representation is
+    never one; a #731 or #733 owner placing the item a further time counts under
+    its own kind), and `same_route` (an ordinary owner and the same occurrence
+    path walked twice).
+  - `coincident_cross_owner` (+ `_area_mm2`): a different owner with **no**
+    such evidence. Two products can legitimately place one item at one
+    transform, so this is not called a defect and is **not** to be subtracted.
+    It is counted so a reader can look at it.
+  - `coincident_duplicates` / `coincident_duplicate_area_mm2`: the sum of all
+    three buckets, kept for the first-pass rows (which called all of it a defect).
   - `nonfinite_vertices`, `nonfinite_triangles_skipped`: see below.
 - **Non-finite vertices.** A native vertex with a NaN/Inf coordinate is left out of
   the reification centre, and any triangle touching one (its cross product is

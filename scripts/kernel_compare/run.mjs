@@ -18,7 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import {fileURLToPath} from 'node:url'
-import {Buffer} from 'node:buffer'
+import {Buffer, constants as bufferConstants} from 'node:buffer'
 import {performance} from 'node:perf_hooks'
 import {setTimeout, clearTimeout} from 'node:timers'
 
@@ -60,6 +60,14 @@ const BANDS = [
   {name: '500-600', test: (b) => b <= BAND_EDGES_MIB.limit * MIB},
   {name: '>600', test: () => true},
 ]
+
+/**
+ * V8's longest string, in UTF-16 code units (a latin-1 decode of a file of this many bytes is the
+ * longest `readFileSync(..., 'latin1')` can return). 536,870,888 on Node 22. The smallest T3 file
+ * strictly above it is the P1 probe: the one file whose point is to find out what the string limit
+ * does to each arm, so the band rule never skips it (see `probeFileFor`).
+ */
+const MAX_STRING_BYTES = bufferConstants.MAX_STRING_LENGTH
 
 const T2_T3_BOUNDARY_BYTES = BAND_EDGES_MIB.small * MIB
 
@@ -713,6 +721,28 @@ function updateBandState(st, row, stderrText) {
   return reason
 }
 
+/**
+ * The P1 probe: the smallest T3 model in this run whose size exceeds V8's string limit.
+ *
+ * The within-band latch ("oom on two consecutive files") can fire on two below-limit files in the
+ * 500-600 MiB band, and the next file in the band, or the whole > 600 band, would then be skipped,
+ * so the above-limit file that answers "what happens past the string limit" would never run. This
+ * file therefore runs in every arm regardless of the latch. Only this one file is exempt: later
+ * files in the band still skip. It is chosen among the models planned for this run (after `--only`).
+ *
+ * @param {object[]} models Planned models.
+ * @return {object|null} The model, or null when no planned T3 file exceeds the limit.
+ */
+function probeFileFor(models) {
+  let probe = null
+  for (const m of models) {
+    if (m.tier === 'T3' && m.size > MAX_STRING_BYTES && (probe === null || m.size < probe.size)) {
+      probe = m
+    }
+  }
+  return probe
+}
+
 let interrupted = false
 
 /**
@@ -785,6 +815,10 @@ async function main() {
   const done = cfg.force ? new Map() : loadDone(cfg.out)
   const rowsFile = path.join(cfg.out, 'rows.jsonl')
   const bandState = new Map()
+  const probe = probeFileFor(models)
+  if (probe) {
+    log(`P1 probe (never band-skipped): ${(probe.size / MIB).toFixed(1)} MiB ${path.basename(probe.path)} > MAX_STRING_LENGTH ${MAX_STRING_BYTES}`)
+  }
   const counts = {ran: 0, resumed: 0, skipped: 0}
   let idx = 0
 
@@ -819,7 +853,7 @@ async function main() {
       let stderrText = ''
       if (lfs) {
         row = skippedRow(armDef, m, 'Git LFS pointer stub (file not fetched)')
-      } else if (st?.latched) {
+      } else if (st?.latched && m !== probe) {
         row = skippedRow(armDef, m, `size-monotonic failure earlier in band ${m.band} for ${armDef.key}: ${st.reason}`)
       } else {
         const raw = await runChild(commandFor(armDef, m.path, cfg), {timeoutMs: cfg.timeoutS * MS_PER_S, timeBin: cfg.timeBin})

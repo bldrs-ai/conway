@@ -279,7 +279,7 @@ Peak RSS (MiB) / peak-RSS-per-file-byte / status. "syn" marks a synthetic assemb
    - With the instance's `WebAssembly.Memory` captured during import:
      - the 191 MiB file (756 bodies) succeeds with a 3,549 MiB heap;
      - the 382 MiB file fails at 4,095.9 MiB with cause `std::bad_alloc`.
-   - SMLib surfaces this as `KernelError: … the file may hold faces the kernel cannot rebuild`: `kernelCall` attaches that hint to any kernel runtime error. It is a memory wall, not a geometry failure. Every copy is the same part, and that part rebuilds at 191 MiB.
+   - SMLib surfaces this as `KernelError: … the file may hold faces the kernel cannot rebuild`: `kernelCall` attaches that hint to any kernel runtime error. The harness first graded these rows `error`, because the wrapper's message hides the cause; it now classifies over the `.cause` chain (`error_cause`), so they are `oom`. It is a memory wall, not a geometry failure. Every copy is the same part, and that part rebuilds at 191 MiB.
 
 **conway's wall is machine RAM.**
 - On these synthetic files it peaks at about 12–13 bytes per file byte. That is in line with the 9.8× figure in [`load-performance-ledger.md`](load-performance-ledger.md); the synthetic content is mostly analytic B-rep with no instancing.
@@ -290,6 +290,7 @@ Unlike SMLib's two walls, conway's moves with RAM. "Opens what others can't" has
 ### Fidelity (T0–T2): P3, P4
 
 Per-copy conway area is conway's area minus the coincident re-emissions the harness identifies (conway#731, #733), divided by OCCT's exact area.
+A placement counts as a re-emission only with positive evidence that its route is one of those two defect shapes (a `PROPERTY_DEFINITION` on a `SHAPE_ASPECT` of the same product, for #731; saved-view `DRAUGHTING_MODEL` content, for #733). A different owner placing the same item at the same transform with no such evidence is counted as `coincident_cross_owner` and is not subtracted. In T0–T2 that bucket is empty (0 placements), so no model's per-copy ratio depends on the distinction.
 
 | Tier | conway within 1% of OCCT, raw | per-copy | median per-copy | SMLib within 1e-3 of OCCT |
 |---|---|---|---|---|

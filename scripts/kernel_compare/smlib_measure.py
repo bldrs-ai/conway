@@ -39,10 +39,38 @@ OOM_RE = re.compile(
 )
 
 
+def cause_chain(e: BaseException) -> list[BaseException]:
+    """`e` and every exception behind it (explicit `raise ... from`, else implicit context).
+
+    smlibpy's kernel_call (_kernel.py) re-raises a kernel RuntimeError as KernelError(...) from e;
+    the KernelError message is only "<operation> failed (<SM_ERR>): <hint>", so a wrapped
+    std::bad_alloc is visible only on __cause__ (and KernelError.detail).
+    """
+    chain: list[BaseException] = []
+    cur: BaseException | None = e
+    while cur is not None and len(chain) < 8 and not any(cur is c for c in chain):
+        chain.append(cur)
+        cur = cur.__cause__ or cur.__context__
+    return chain
+
+
 def classify(e: BaseException) -> str:
-    if isinstance(e, MemoryError) or OOM_RE.search(f"{type(e).__name__}: {e}"):
-        return "oom"
+    for link in cause_chain(e):
+        if isinstance(link, MemoryError) or OOM_RE.search(f"{type(link).__name__}: {link}"):
+            return "oom"
+        detail = getattr(link, "detail", None)  # KernelError keeps the kernel's own text here
+        if isinstance(detail, str) and OOM_RE.search(detail):
+            return "oom"
     return "error"
+
+
+def cause_messages(e: BaseException) -> list[str] | None:
+    """Messages behind `e` (not `e` itself): the cause chain, plus KernelError.detail when it adds text."""
+    out = [f"{type(c).__name__}: {c}".split("\n")[0][:500] for c in cause_chain(e)[1:]]
+    detail = getattr(e, "detail", None)
+    if isinstance(detail, str) and not any(detail in m for m in out):
+        out.insert(0, f"detail: {detail}".split("\n")[0][:500])
+    return out or None
 
 
 def first_line(e: BaseException) -> str:
@@ -240,6 +268,7 @@ def main() -> dict:
         "size_bytes": None,
         "status": "error",
         "error": None,
+        "error_cause": None,
         "read_ms": None,
         "geometry_ms": None,
         "measure_ms": None,
@@ -271,6 +300,9 @@ def main() -> dict:
     except BaseException as e:  # noqa: BLE001
         row["status"] = classify(e)
         row["error"] = first_line(e)
+        row["error_cause"] = cause_messages(e)
+        if row["error_cause"] is not None:
+            notes.append("error is the outer smlibpy KernelError message; error_cause is KernelError.detail / its __cause__ chain (the kernel's own error). The wrapper's hint text (e.g. 'faces the kernel cannot rebuild') is generic, attached to every failure of that call, and is not a diagnosis; read error_cause")
     row["total_ms"] = rnd((time.perf_counter() - T0) * 1000, 1)
     row["peak_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KiB on Linux
     return row

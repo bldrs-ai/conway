@@ -503,6 +503,182 @@ function classifyItem(element, ap214TypeName) {
 
 
 /**
+ * Positive evidence that a second placement of an item is an ALTERNATE ROUTE
+ * to a product the first placement already reaches, rather than a different
+ * product that happens to place the same item at the same transform.
+ *
+ * What the walk reports as a placement's owner (`walkWithOccurrence()` entry
+ * [4]), established on the NIST files by the probe described in
+ * design/new/kernel-compare-smlib.md:
+ *
+ *  - the normal route: the part's PRODUCT_DEFINITION_SHAPE;
+ *  - conway#731 (ctc_02_rc, ftc_09_rd): the PROPERTY_DEFINITION of a
+ *    SHAPE_ASPECT whose of_shape is that same PRODUCT_DEFINITION_SHAPE;
+ *  - conway#733, ftc_10_e2: the saved-view `(DRAUGHTING_MODEL()
+ *    REPRESENTATION() SHAPE_REPRESENTATION() TESSELLATED_SHAPE_REPRESENTATION())`
+ *    complex itself, a free root (it types as TESSELLATED_SHAPE_REPRESENTATION
+ *    and is also in model.types(draughting_model));
+ *  - conway#733 variant, stc_07: the per-view SHAPE_REPRESENTATION ("MBD_A"...)
+ *    reachable only via REPRESENTATION_MAP <- MAPPED_ITEM <- DRAUGHTING_MODEL.
+ *
+ * Anything else is not evidence: it is a cross-owner coincidence.
+ */
+class RouteTests {
+  /**
+   * @param {object} model The loaded AP214 model
+   * @param {object} gen AP214E3_2010_gen exports
+   */
+  constructor(model, gen) {
+    this.model = model
+    this.gen = gen
+    this.presentation_ = undefined
+    this.sdrBound_ = undefined
+  }
+
+  /**
+   * Local ids of the presentation representations: every DRAUGHTING_MODEL
+   * and every representation reached from one through MAPPED_ITEM ->
+   * REPRESENTATION_MAP (transitively), minus any representation that an SDR
+   * binds to a product (those are owned by their PDS, never by themselves).
+   * Built on first use: most models never have a different-owner coincidence.
+   *
+   * @return {Set<number>} Representation local ids
+   */
+  presentation() {
+    if (this.presentation_ !== undefined) {
+      return this.presentation_
+    }
+
+    const {gen, model} = this
+    const bound = new Set()
+
+    for (const sdr of model.types(gen.shape_definition_representation)) {
+      const used = safely(() => sdr.used_representation)
+
+      if (used !== undefined) {
+        bound.add(used.localID)
+      }
+    }
+
+    const found = new Set()
+    const queue = []
+
+    for (const dm of model.types(gen.draughting_model)) {
+      found.add(dm.localID)
+      queue.push(dm)
+    }
+
+    while (queue.length > 0) {
+      const rep = queue.pop()
+
+      for (const item of safely(() => rep.items) ?? []) {
+        if (!(item instanceof gen.mapped_item)) {
+          continue
+        }
+
+        const target = safely(() => item.mapping_source.mapped_representation)
+
+        if (target !== undefined && !found.has(target.localID)) {
+          found.add(target.localID)
+          queue.push(target)
+        }
+      }
+    }
+
+    for (const id of bound) {
+      found.delete(id)
+    }
+
+    this.presentation_ = found
+
+    return found
+  }
+
+  /**
+   * The product_definition a route's owner reaches, and whether it got there
+   * through a SHAPE_ASPECT (conway#731's route).
+   *
+   * @param {object|undefined} owner The walk's owner element
+   * @return {{product: number, viaShapeAspect: boolean}|undefined} The product
+   */
+  product(owner) {
+    const {gen} = this
+
+    if (owner instanceof gen.product_definition_shape) {
+      const definition = safely(() => owner.definition)
+
+      return definition === undefined ? undefined : {product: definition.localID, viaShapeAspect: false}
+    }
+
+    if (owner instanceof gen.property_definition) {
+      const aspect = safely(() => owner.definition)
+
+      if (aspect instanceof gen.shape_aspect) {
+        const definition = safely(() => aspect.of_shape.definition)
+
+        return definition === undefined ? undefined : {product: definition.localID, viaShapeAspect: true}
+      }
+    }
+
+    return undefined
+  }
+
+  /**
+   * @param {object|undefined} owner The walk's owner element
+   * @return {boolean} True for a presentation (saved-view) representation
+   */
+  isPresentation(owner) {
+    return owner !== undefined && this.presentation().has(owner.localID)
+  }
+
+  /**
+   * Is the new placement's route an alternate route to one the item already
+   * has? Symmetric in the pair, because which of two routes the scene walks
+   * first is not meaningful.
+   *
+   * @param {object|undefined} owner Owner element of the new placement
+   * @param {Iterable<object|undefined>} priors Owner elements already seen at this place
+   * @return {'pd_shape_aspect'|'presentation_rep'|null} Evidence kind, or null for none
+   */
+  alternateRoute(owner, priors) {
+    const mine = this.product(owner)
+
+    for (const prior of priors) {
+      if (prior === undefined || owner === undefined) {
+        continue
+      }
+
+      const theirs = this.product(prior)
+
+      if (mine !== undefined && theirs !== undefined && mine.product === theirs.product &&
+          (mine.viaShapeAspect || theirs.viaShapeAspect)) {
+        return 'pd_shape_aspect'
+      }
+
+      if (this.isPresentation(owner) || this.isPresentation(prior)) {
+        return 'presentation_rep'
+      }
+    }
+
+    return null
+  }
+}
+
+
+/**
+ * @param {Function} fn Accessor that may throw on a malformed reference
+ * @return {*} Its result, or undefined if it threw
+ */
+function safely(fn) {
+  try {
+    return fn()
+  } catch {
+    return undefined
+  }
+}
+
+
+/**
  * Walk the scene and sum over placed instances, one unique geometry at a
  * time so at most one local mesh is held in JS at once.
  *
@@ -511,9 +687,13 @@ function classifyItem(element, ap214TypeName) {
  * @param {object} wasmModule The module owning the geometry heap
  * @param {Function} wasmHeapView Heap view constructor
  * @param {Function} ap214TypeName Type id to STEP keyword
+ * @param {object} gen The AP214 entity classes (AP214E3_2010_gen), for the
+ *   route tests that tell a re-emission from a cross-owner coincidence
  * @return {object} Totals and instance census
  */
-function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
+function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName, gen) {
+  const routes = new RouteTests(model, gen)
+
   const byGeometry = new Map()
   const itemClass = new Map()
   const otherTypes = new Map()
@@ -554,6 +734,7 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
     // of one item at one place are told apart by these two (see below).
     group.placements.push({
       transform,
+      ownerElement: entry[4],
       owner: entry[4]?.expressID ?? 'none',
       path: Array.prototype.join.call(entry[5] ?? [], '>'),
     })
@@ -585,6 +766,9 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
   let occurrenceArea = 0
   let reemissions = 0
   let reemissionArea = 0
+  let crossOwner = 0
+  let crossOwnerArea = 0
+  const reemissionKinds = {pd_shape_aspect: 0, presentation_rep: 0, same_route: 0}
   let nonFiniteVertices = 0
   const diagonals = []
   let uniqueWithTriangles = 0
@@ -624,18 +808,35 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
     // A second placement of the same item under an identical transform is
     // coincident geometry, counted twice. It stays in the totals, because the
     // totals are what conway produced; the counts and areas below let a reader
-    // subtract it. Two kinds, told apart by owner element:
+    // subtract it. Three kinds, told apart by owner element, occurrence path
+    // and (for the defect) positive evidence about the route:
     //
     //  - occurrence: same owner, different occurrence path. Two assembly
     //    occurrences of one part that happen to sit at one place. Model
     //    content: OCCT and SMLib count it too (4927 Fox Gate Stair).
-    //  - re-emission: a different owner, or the same owner AND path again.
-    //    One item reached through two representations (PD vs PDS for
-    //    conway#731, TSR/SR vs PDS for the AP242 set, ORSI faces for #732).
-    //    The defect.
+    //  - re-emission: the same item reached through a second route to the
+    //    SAME product, and the second route is one of the known defect
+    //    shapes. Only these are subtracted in the doc's per-copy numbers:
+    //      pd_shape_aspect  conway#731: an owner that is a PROPERTY_DEFINITION
+    //                       on a SHAPE_ASPECT of the same product as the other
+    //                       placement's owner (SHAPE_ASPECT -> PROPERTY_
+    //                       DEFINITION -> SDR re-emission).
+    //      presentation_rep conway#733: an owner that is saved-view content, a
+    //                       DRAUGHTING_MODEL or a representation only
+    //                       reachable from one by REPRESENTATION_MAP /
+    //                       MAPPED_ITEM, walked as a free root.
+    //      same_route       the same ordinary owner AND the same occurrence
+    //                       path again: one route walked twice. (The same
+    //                       owner again is first judged on what it is: a
+    //                       #731 or #733 owner placing the item a further
+    //                       time counts under that kind.)
+    //  - cross_owner: a different owner with no such evidence. Two products
+    //    may legitimately place one item at one transform, so this is NOT
+    //    called a defect and is not subtracted; it is counted so a reader can
+    //    look at it (e.g. conway#732's ORSI faces, if they land here).
     const seenAt = new Map()
 
-    for (const {transform, owner, path} of group.placements) {
+    for (const {transform, owner, ownerElement, path} of group.placements) {
       const instance = accumulateInstance(totals, mesh, transform, scratch)
       const key = transform === undefined ? 'identity' : Array.prototype.join.call(transform, ',')
       const seen = seenAt.get(key)
@@ -645,23 +846,42 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
       }
 
       if (seen === undefined) {
-        seenAt.set(key, {owners: new Set([owner]), pairs: new Set([`${owner}|${path}`])})
+        seenAt.set(key, {
+          owners: new Set([owner]),
+          ownerElements: new Map([[owner, ownerElement]]),
+          pairs: new Set([`${owner}|${path}`]),
+        })
 
         continue
       }
 
       const pair = `${owner}|${path}`
-      const isOccurrence = seen.owners.has(owner) && !seen.pairs.has(pair)
+      const sameOwner = seen.owners.has(owner)
+      const isOccurrence = sameOwner && !seen.pairs.has(pair)
+      let kind = null
+
+      if (!isOccurrence) {
+        // The same owner again is judged on what that owner is (a #731 PROPERTY_DEFINITION or a
+        // saved-view representation placing the item a further time is still that defect); only
+        // an ordinary owner walked twice with one path is the bare same_route.
+        kind = routes.alternateRoute(ownerElement, sameOwner ? [ownerElement] : seen.ownerElements.values()) ??
+          (sameOwner ? 'same_route' : null)
+      }
 
       seen.owners.add(owner)
+      seen.ownerElements.set(owner, ownerElement)
       seen.pairs.add(pair)
 
       if (isOccurrence) {
         ++occurrences
         occurrenceArea += instance.area
-      } else {
+      } else if (kind !== null) {
         ++reemissions
         reemissionArea += instance.area
+        ++reemissionKinds[kind]
+      } else {
+        ++crossOwner
+        crossOwnerArea += instance.area
       }
     }
   }
@@ -678,6 +898,9 @@ function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
     occurrenceArea,
     reemissions,
     reemissionArea,
+    reemissionKinds,
+    crossOwner,
+    crossOwnerArea,
     nonFiniteVertices,
     medianBodyDiagonal: diagonals.length > 0 ? diagonals[Math.floor((diagonals.length - 1) / 2)] : null,
     walked,
@@ -838,6 +1061,7 @@ async function main() {
       {default: Environment},
       {wasmHeapView},
       {ap214TypeName},
+      ap214Gen,
     ] = await Promise.all([
       compiled('dependencies/conway-geom/index.js'),
       compiled('src/AP214E3_2010/ap214_geometry_extraction.js'),
@@ -847,6 +1071,7 @@ async function main() {
       compiled('src/utilities/environment.js'),
       compiled('src/core/wasm_heap.js'),
       compiled('src/AP214E3_2010/ap214_tessellated_types.js'),
+      compiled('src/AP214E3_2010/AP214E3_2010_gen/index.js'),
     ])
 
     Environment.checkEnvironment()
@@ -956,7 +1181,7 @@ async function main() {
     }
 
     const walkStart = performance.now()
-    const census = measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName)
+    const census = measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName, ap214Gen)
 
     phases.walk_ms = performance.now() - walkStart
 
@@ -986,12 +1211,18 @@ async function main() {
       unreadable: census.unreadable,
       coincident_occurrences: census.occurrences,
       coincident_occurrence_area_mm2: round(census.occurrenceArea * MM_PER_M * MM_PER_M, 3),
+      // Re-emission: positive evidence of an alternate route to the same product
+      // (conway#731 / #733 shapes, or one route walked twice); kinds below.
       coincident_reemissions: census.reemissions,
       coincident_reemission_area_mm2: round(census.reemissionArea * MM_PER_M * MM_PER_M, 3),
-      // Sum of the two kinds, kept for readers of the first-pass rows.
-      coincident_duplicates: census.occurrences + census.reemissions,
+      coincident_reemission_kinds: census.reemissionKinds,
+      // Different owner, no such evidence: not called a defect, not to be subtracted.
+      coincident_cross_owner: census.crossOwner,
+      coincident_cross_owner_area_mm2: round(census.crossOwnerArea * MM_PER_M * MM_PER_M, 3),
+      // Sum of all three buckets, kept for readers of the first-pass rows.
+      coincident_duplicates: census.occurrences + census.reemissions + census.crossOwner,
       coincident_duplicate_area_mm2:
-        round((census.occurrenceArea + census.reemissionArea) * MM_PER_M * MM_PER_M, 3),
+        round((census.occurrenceArea + census.reemissionArea + census.crossOwnerArea) * MM_PER_M * MM_PER_M, 3),
       styled_face_meshes: census.styledFaceMeshes,
       other_items: census.otherItems,
       other_item_types: census.otherTypes,
@@ -1056,10 +1287,20 @@ async function main() {
 
     if (census.reemissions > 0) {
       row.notes.push(
-          `${census.reemissions} coincident re-emission(s) (same item, identical transform, a DIFFERENT owner ` +
-          'element or the same occurrence path again) are INCLUDED in triangles/mesh_area_mm2; they contribute ' +
-          `${row.conway_instances.coincident_reemission_area_mm2} mm2 (conway defect: one item placed ` +
-          'through two representations, conway#731/#733)')
+          `${census.reemissions} coincident re-emission(s) (same item, identical transform, and positive evidence ` +
+          `of a second route to the same product: ${JSON.stringify(census.reemissionKinds)}) are INCLUDED in ` +
+          `triangles/mesh_area_mm2; they contribute ${row.conway_instances.coincident_reemission_area_mm2} mm2 ` +
+          '(conway defect: one item placed through two representations, conway#731/#733)')
+    }
+
+    if (census.crossOwner > 0) {
+      row.notes.push(
+          `${census.crossOwner} coincident cross-owner placement(s) (same item, identical transform, a DIFFERENT ` +
+          'owner element, but no evidence that the second route is an alternate representation route of the same ' +
+          'product: not a conway#731 PROPERTY_DEFINITION/SHAPE_ASPECT route, not saved-view content) are INCLUDED ' +
+          `in triangles/mesh_area_mm2 and contribute ${row.conway_instances.coincident_cross_owner_area_mm2} mm2. ` +
+          'They are not classified as a defect and must not be subtracted for a per-copy ratio: two products can ' +
+          'legitimately place one item at one place')
     }
 
     if (census.occurrences > 0) {
