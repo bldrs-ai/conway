@@ -39,6 +39,7 @@ scripts/test_runs/
 # not descend into an excluded directory looking for negations.
 scripts/*/
 !scripts/debug/
+!scripts/kernel_compare/
 !scripts/schemas/
 benchmarks/*private
 
@@ -54,3 +55,4 @@ benchmarks/*private
 
 # Subagent git worktrees (transient scaffolding created per agent run)
 .claude/worktrees/
+__pycache__/

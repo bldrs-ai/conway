@@ -1,9 +1,13 @@
 # conway vs SMLib (vs OCCT) — side-by-side test plan
 
-Status: **plan, not yet run.** Written 2026-10-13, the day NVIDIA's SMLib
-landed as open source and AWV Informatik shipped `smlibpy` /
-`@classcad/smlibwasm` on top of it. The results section at the bottom is
-empty on purpose; fill it in from the harness, don't paraphrase.
+Status: **first full run done 2026-10-14** (harness in
+[`scripts/kernel_compare/`](../../scripts/kernel_compare/README.md)).
+Results, prediction grades and the defects it found are in
+[§Results](#results) at the bottom. The plan above it is kept as
+written, so the predictions can be read against what they were. Where
+the run proved a pre-run statement wrong, the result section says so.
+Written 2026-10-13, the day NVIDIA's SMLib landed as open source and
+AWV Informatik shipped `smlibpy` / `@classcad/smlibwasm` on top of it.
 
 ## Why this doc exists
 
@@ -206,11 +210,163 @@ reusable input for it.
 
 ## Results
 
-_Empty. Fill from `summary.md`._
+First full run, 2026-10-13/14.
+
+**Versions:**
+- conway `2d6ff58` (NodeMT and single-thread Node, both built from that tree)
+- `@classcad/smlibwasm` 0.2.3
+- `cadquery-ocp` 8.0.1.1.0
+- Node 22.22.0, CPython 3.13
+
+**Machine:** a cloud container, 4 × Xeon @ 2.1 GHz, 15.7 GiB, cgroup memory cap about 13.7 GB.
+
+**How the run was done:**
+- One process per (model, arm), sequential, `--max-old-space-size=8192` for both Node arms.
+- Two passes: the first pass, then a re-run of the conway and OCCT arms after the triage harness fixes (`2d6ff58`).
+- The T3 rows that overlapped the triage runs were re-timed.
+
+**Treat timings as indicative.** A shared VM is not a citable benchmark machine; re-run on a quiet, named machine before quoting a time. Peak RSS and every geometric number are deterministic.
+
+Corpus as run:
+
+| Tier | Contents |
+|---|---|
+| T0 | 48 smlibpy blend fixtures. All passed the writer check: re-import through smlibpy and OCCT agrees on area/volume to ≤ 1.3e-7, faces exact. |
+| T1 | The 6 smoke STEP models |
+| T2 | 55 public and private STEP files < 50 MiB |
+| T3 | 3 real files (55, 106, 269 MiB) plus 7 synthetic assemblies from `gen_scale.mjs` (48 MiB to 1.1 GiB) |
+
+There is no `box-fillet-r8`: Create's proof catalogue was not available to this run.
+
+### Headline table
+
+From `summary.md`. Headline arms are `conway:mt` vs `smlib-js:heal=false`. Medians are over models where both are `ok`.
 
 | Tier | Models | conway ok | smlib-js ok | Median area ratio conway/SMLib | Median peak RSS ratio conway/SMLib | Notes |
 |---|---|---|---|---|---|---|
-| T0 | | | | | | |
-| T1 | | | | | | |
-| T2 | | | | | | |
-| T3 | | | | | | |
+| T0 | 48 | 48/48 | 48/48 | 1.0000 | 1.97 | conway's wasm/pthread start-up dominates tiny files |
+| T1 | 6 | 6/6 | 6/6 | 1.0096 | 0.88 | ratio inflated by conway#731/#732/#735 |
+| T2 | 55 | 53/55 | 51/55 | 1.0001 | 1.14 | 2 empty in all arms (no faces); SMLib: 1 tessellated-only empty, 1 whole-file error |
+| T3 | 10 | 9/10 | 5/10 | 1.0002 | 0.45 | see the ladder below |
+
+`heal=true` and `heal=false` gave identical area and body counts on every model. The `heal=false` headline costs SMLib nothing.
+
+### Scale ladder (T3): P1, P2
+
+Peak RSS (MiB) / peak-RSS-per-file-byte / status. "syn" marks a synthetic assembly: K renumbered copies of NIST ctc_01, the "K unique parts, no instancing" worst case.
+
+| File | conway:mt | smlib-js | OCCT |
+|---|---|---|---|
+| 48 MiB syn | 736 / 15.4 / ok | 1,708 / 35.8 / ok | 1,239 / 26.0 / ok |
+| 55 MiB real | 937 / 16.9 / ok | 1,680 / 30.3 / ok | 1,340 / 24.1 / ok |
+| 106 MiB real | 963 / 9.1 / ok | 1,669 / 15.8 / ok | 1,081 / 10.2 / ok |
+| 191 MiB syn | 2,279 / 12.0 / ok | 6,158 / 32.3 / ok | 3,878 / 20.3 / ok |
+| 269 MiB real (private) | 1,958 / 7.3 / ok | 4,381 / 16.3 / ok | 2,049 / 7.6 / ok |
+| 382 MiB syn | 4,956 / 13.0 / ok | 9,308 / — / **`std::bad_alloc`** | 7,443 / 19.5 / ok |
+| 512.0 MiB syn, 14 KB under the string limit | 6,502 / 12.7 / ok | 11,191 / — / **`std::bad_alloc`** | 9,796 / 19.1 / ok |
+| 512.3 MiB syn, 265 KB over | 6,512 / 12.7 / ok | — / **`RangeError: Invalid string length`** after 26 s | 9,802 / 19.1 / ok |
+| 700 MiB syn | 8,879 / 12.7 / ok | — / **`RangeError`** after 26 s | 13,010 / 18.6 / ok |
+| 1.1 GiB syn | **OOM-killed** at 13.4 GB | skipped (band rule) | **OOM-killed** at 13.6 GB |
+
+**SMLib-JS has two walls, not one.**
+
+1. **The string wall P1 predicted.**
+   - The limit on Node 22 is 2²⁹−24 = 536,870,888 characters (`buffer.constants.MAX_STRING_LENGTH`).
+   - `_text()` in smlibwasm's `dist/step_import.js` builds the whole file as one Latin-1 string, byte for byte, so the wall is on bytes regardless of encoding. `parse()` makes two more whole-file copies.
+   - It fails before parsing starts.
+2. **A 4 GiB kernel heap, which sits below the string wall.**
+   - `smlibwasm.wasm` is wasm32 with a declared maximum of 65,536 pages.
+   - With the instance's `WebAssembly.Memory` captured during import:
+     - the 191 MiB file (756 bodies) succeeds with a 3,549 MiB heap;
+     - the 382 MiB file fails at 4,095.9 MiB with cause `std::bad_alloc`.
+   - SMLib surfaces this as `KernelError: … the file may hold faces the kernel cannot rebuild`: `kernelCall` attaches that hint to any kernel runtime error. The harness first graded these rows `error`, because the wrapper's message hides the cause; it now classifies over the `.cause` chain (`error_cause`), so they are `oom`. It is a memory wall, not a geometry failure. Every copy is the same part, and that part rebuilds at 191 MiB.
+
+**conway's wall is machine RAM.**
+- On these synthetic files it peaks at about 12–13 bytes per file byte. That is in line with the 9.8× figure in [`load-performance-ledger.md`](load-performance-ledger.md); the synthetic content is mostly analytic B-rep with no instancing.
+- So on a 16 GB machine it is cut off somewhere between 700 MiB and 1.1 GiB. OCCT is cut off at the same point. Real files sat lower: 7–17×.
+
+Unlike SMLib's two walls, conway's moves with RAM. "Opens what others can't" has to be stated with that size band and that machine, not as unbounded.
+
+### Fidelity (T0–T2): P3, P4
+
+Per-copy conway area is conway's area minus the coincident re-emissions the harness identifies (conway#731, #733), divided by OCCT's exact area.
+An OCCT exact area flagged `exact_area_unstable` (one T2 model, the ultrasound probe part) is not used as a reference: it is left out of both conway/OCCT and SMLib/OCCT, which is why the T2 denominators are 52 and 50.
+A placement counts as a re-emission only with positive evidence that its route is one of those two defect shapes (a `PROPERTY_DEFINITION` on a `SHAPE_ASPECT` of the same product, for #731; saved-view `DRAUGHTING_MODEL` content, for #733). A different owner placing the same item at the same transform with no such evidence is counted as `coincident_cross_owner` and is not subtracted. In T0–T2 that bucket is empty (0 placements), so no model's per-copy ratio depends on the distinction.
+
+| Tier | conway within 1% of OCCT, raw | per-copy | median per-copy | SMLib within 1e-3 of OCCT |
+|---|---|---|---|---|
+| T0 | 48/48 | 48/48 | 0.99997 (worst 0.026%) | 48/48 (≤ 1.4e-8) |
+| T1 | 4/6 | 4/6 | 1.0051 | 5/6 |
+| T2 | 29/52 | 42/52 | 1.00001 | 38/50 (all 38 within 1.2e-4) |
+
+**Every SMLib-vs-OCCT disagreement is attributed** (triage, with causal tests where marked):
+
+| Count | Who is wrong | Cause |
+|---|---|---|
+| 10 NIST AP242 files | SMLib | Each saved view (`DRAUGHTING_MODEL` → `MAPPED_ITEM`) becomes a coincident copy of the part, 2–19×. Causal test on 2 files. |
+| 1 (ctc_04_rd) | SMLib | Supplemental-geometry planes counted as bodies, +4.7% |
+| 1 (Right_Hand) | SMLib | One solid rebuilt differently per placement, −19% on 2 of 4 instances |
+| 1 (ctc_02_ap203) | SMLib | Two closed B-spline faces with no outer bound |
+| 1 (an ultrasound probe part) | OCCT | `BRepGProp` unstable on one B-spline face. Now flagged as `exact_area_unstable`. |
+
+The kernel's exact integration was never the problem: all five SMLib causes are in the STEP reader wrapper. A write-up for upstream (awv-informatik/smlibpy), with file:line references, has been drafted but not filed from here.
+
+**Every remaining conway outlier is attributed except one:**
+
+| Models | Cause | Issue |
+|---|---|---|
+| ~9 NIST models | solid re-emitted through SHAPE_ASPECT → PROPERTY_DEFINITION → SDR | [#731](https://github.com/bldrs-ai/conway/issues/731) |
+| supercap ×3 | OVER_RIDING_STYLED_ITEM faces emitted standalone; folded tori | [#732](https://github.com/bldrs-ai/conway/issues/732) |
+| 11 NIST AP242 | saved views re-emitted as part geometry | [#733](https://github.com/bldrs-ai/conway/issues/733) |
+| stc_06 (0.345 per copy) | FACE_OUTER_BOUND on the inner loop | [#734](https://github.com/bldrs-ai/conway/issues/734) |
+| ftc_06_rd, stc_06, Right_Hand | spherical faces on the complementary side | [#735](https://github.com/bldrs-ai/conway/issues/735) |
+| ctc_01_e1, ctc_02 ×3, ftc_11_e2, one private | apex cones, folded tori, circle+B-spline cylinders, closed B-spline faces many times their area | [#736](https://github.com/bldrs-ai/conway/issues/736) |
+| supercap, one private | BREP_WITH_VOIDS void shells never extracted | [#737](https://github.com/bldrs-ai/conway/issues/737) |
+| ftc_08_tg (0.983) | SHAPE_ASPECT-only geometry not emitted for the tessellated twin, while the B-rep twin emits it via #731's route | not filed (low); bears on the scope of #731's fix |
+| ultrasound probe (+2.3%) | **unexplained**: two B-spline faces about 2% high with intact boundaries | — |
+
+**The tessellation floor, not a defect:**
+- Circle and ellipse edges always get 24 samples (23 chords), so a planar face bounded by a full circle keeps 0.98761 of its area (−1.24%). That was measured exactly on several models.
+- Cylinders lose about 0.19%.
+- **conway has no chord tolerance to match.** It refines relative to each face's and curve's own size. The plan's "set SMLib's tolerance to conway's chord tolerance" rule cannot be applied. Mesh-to-mesh triangle counts are indicative only; mesh-to-exact area is the fidelity signal.
+
+### Speed (P6)
+
+Medians in ms, over models where all arms are `ok`:
+
+| Tier | conway:st read | conway:st read+geometry | smlib-js read | smlib-js read+mesh | OCCT read | OCCT read+mesh | conway:st total | smlib-js total | OCCT total |
+|---|---|---|---|---|---|---|---|---|---|
+| T0 (48) | 10 | 93 | 116 | 168 | 57 | 141 | 1,032 | 288 | 384 |
+| T1 (6) | 46 | 784 | 5,373 | 9,721 | 425 | 1,744 | 1,818 | 10,498 | 5,381 |
+| T2 (51) | 41 | 333 | 1,130 | 1,803 | 210 | 522 | 1,324 | 2,075 | 994 |
+
+- conway's `total` includes about 1 s of wasm start-up, which dominates tiny files.
+- OCCT meshes each body at max(1e-3 × that body's bbox diagonal, 1e-6) mm, the same default rule as SMLib. The T0–T2 OCCT rows were re-run after that change; the T3 OCCT rows predate it (one tolerance from the union bbox), which affects their mesh time but not their status or peak RSS reading.
+- OCCT is native C++ through Python, so it is not a browser number. Don't set its speed beside the two wasm arms.
+- SMLib's read (its JS regex parser plus B-rep build) is the slowest step on real files: about 3.5× (T2) to 7× (T1) conway's whole read + geometry.
+
+### Prediction grades
+
+| # | Grade | Why |
+|---|---|---|
+| P1 | **Holds** | Both over-limit files fail with `RangeError: Invalid string length` inside smlibwasm after 26 s, before parsing; conway opens both. conway fails at 1.1 GiB, but only from machine RAM, on a file SMLib also can't open. |
+| P2 | **Holds, mechanism wrong** | SMLib's peak/file exceeds conway's on every file > 50 MB that either opened (1.7–2.7×). The early failure is **not** the Node heap, though: it is the 4 GiB wasm32 heap at 382 MiB. |
+| P3 | **Partly falsified** | SMLib is > 0.1% off OCCT on a healthy solid (Right_Hand), from its reader. On T0 it holds to 1e-8. conway is within 1% on T0 and on 4/6 of T1. The T1 misses are new conway defects (#731, #732), not the predicted `box-fillet-r8` gap, which was not tested. |
+| P4 | **Holds** | G2 and G3 are never worse than the circular twin (0/12 each), and all 48 are within 0.026%. G1 constant-radius is worse on 4/6 by at most 0.007 points. Area cannot see curvature continuity: zebra comparison in conway is not done. |
+| P5 | **Falsified** | 17/51 body-count mismatches on T2, none from mirrors or wireframe (the corpus has no mirrored placement). Causes: SMLib saved views and supplemental planes, conway re-emissions. Also, SMLib does not "drop" a mirrored placement: `_buildBody` throws for the whole import (reading of source; untested). |
+| P6 | — | See Speed. |
+
+### Corrections to "What we know before running anything"
+
+- **Mirrored placements** are an error for the whole import, not a silent drop. A mirrored `CARTESIAN_TRANSFORMATION_OPERATOR_3D` *is* probably skipped silently by the `MAPPED_ITEM` handler's `catch { continue }` (reading of source).
+- **Measurements in smlibpy** have different names: `mass_properties`, `is_valid()`, `tessellate(tolerance, angle)`, `import_step` / `read_step`. The names in the plan are the JS API.
+- **SMLib's default mesh tolerance** is per body: `max(0.001 × bbox diagonal, 1e-6)` mm at 15°.
+- **SMLib also fails, besides the size walls:**
+  - one unrebuildable body fails the whole file (1 private T2 model);
+  - tessellated-only AP242 files read as empty.
+
+### Oracle (question 5)
+
+**Not as proposed.** SMLib's *kernel* matches OCCT to 1e-8 wherever its reader is right, and it is exact by construction on fixtures it authored. That makes the T0 blend family, with its smlibpy manifest values, a clean regression reference that needs no OCCT.
+
+Its *STEP reader*, though, is wrong on 13 of 51 T2 models, mostly the NIST AP242 PMI set that is our best exporter coverage. Replacing the borrowed OCCT ground truth for read-from-STEP comparisons would import those errors. Keep OCCT as the reading reference, and use SMLib for authored fixtures.
