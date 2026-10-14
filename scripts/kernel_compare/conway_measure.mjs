@@ -97,6 +97,40 @@ const EXIT_STALE = 3
 const CSG_DEPTH = 20
 
 /**
+ * STEP keywords of the representation items that are a whole solid or shell:
+ * what OCCT counts as a solid / free shell and SMLib as a Part / Shell. conway
+ * adds a geometry for each such item per placement (`tessellated_shell` is not
+ * extracted by conway today; it is listed so the count stays right if it is).
+ * faceted_brep and brep_with_voids are subtypes of manifold_solid_brep, but
+ * ap214TypeName() reports the most-derived keyword, so all are named.
+ */
+const BODY_ITEM_TYPES = new Set([
+  'MANIFOLD_SOLID_BREP',
+  'BREP_WITH_VOIDS',
+  'FACETED_BREP',
+  'SHELL_BASED_SURFACE_MODEL',
+  'TESSELLATED_SOLID',
+  'TESSELLATED_SHELL',
+  'BOOLEAN_RESULT',
+  'BOOLEAN_CLIPPING_RESULT',
+  'EXTRUDED_AREA_SOLID',
+  'EXTRUDED_FACE_SOLID',
+])
+
+/**
+ * Keywords of single-face items. conway emits one when a face carries its own
+ * STYLED_ITEM (per-face colour): the face becomes a separate mesh of its own,
+ * placed like a body, and the solid that owns it keeps only the unstyled faces.
+ */
+const FACE_ITEM_TYPES = new Set([
+  'ADVANCED_FACE',
+  'FACE_SURFACE',
+  'FACE',
+  'COMPLEX_TRIANGULATED_FACE',
+  'TRIANGULATED_FACE',
+])
+
+/**
  * The row being built, so a failure that escapes main() (an async throw out
  * of the wasm glue) still emits it rather than a contract-less fragment.
  */
@@ -244,23 +278,34 @@ function time(target, method, record) {
  * @param {object} geometry conway-geom GeometryObject
  * @param {object} wasmModule The module owning its heap
  * @param {Function} wasmHeapView compiled/src/core/wasm_heap.js export
- * @return {{positions: Float64Array, indices: Uint32Array}|{problem: string}}
- *   The local mesh, or why it could not be read
+ * @return {{positions: Float64Array, indices: Uint32Array, nonFiniteVertices: number}|{problem: string}}
+ *   The local mesh, or why it could not be read (`problem` only when no
+ *   native vertex is finite)
  */
 function readMesh(geometry, wasmModule, wasmHeapView) {
   const nativeCount = geometry.getVertexCount()
 
   if (nativeCount === 0) {
-    return {positions: new Float64Array(0), indices: new Uint32Array(0)}
+    return {positions: new Float64Array(0), indices: new Uint32Array(0), nonFiniteVertices: 0}
   }
 
-  // Local bbox centre in double, as the reification offset.
+  // Local bbox centre in double, as the reification offset. Non-finite
+  // vertices are counted and left out of the centre (one NaN would make the
+  // centre NaN and drop the whole geometry: NEMA 23, nist_ctc_04_asme1_ap242-e1,
+  // nist_ftc_07_asme1_ap242-e2). Triangles that touch one are skipped later,
+  // in accumulateInstance.
   const min = [Infinity, Infinity, Infinity]
   const max = [-Infinity, -Infinity, -Infinity]
+  let nonFiniteVertices = 0
 
   for (let i = 0; i < nativeCount; ++i) {
     const point = geometry.getPoint(i)
     const coords = [point.x, point.y, point.z]
+
+    if (!coords.every(Number.isFinite)) {
+      ++nonFiniteVertices
+      continue
+    }
 
     for (let axis = 0; axis < XYZ; ++axis) {
       min[axis] = Math.min(min[axis], coords[axis])
@@ -306,7 +351,7 @@ function readMesh(geometry, wasmModule, wasmHeapView) {
       }
     }
 
-    return {positions, indices}
+    return {positions, indices, nonFiniteVertices}
   } finally {
     geometry.clearReification?.()
   }
@@ -371,7 +416,16 @@ function accumulateInstance(totals, mesh, transform, scratch) {
     const cy = (uz * vx) - (ux * vz)
     const cz = (ux * vy) - (uy * vx)
 
-    area2 += Math.sqrt((cx * cx) + (cy * cy) + (cz * cz))
+    const magnitude = Math.sqrt((cx * cx) + (cy * cy) + (cz * cz))
+
+    // A triangle that touches a non-finite vertex has a non-finite cross
+    // product: skip it, so it adds to neither area, count nor bounds.
+    if (!Number.isFinite(magnitude)) {
+      totals.nonFiniteTriangles += 1
+      continue
+    }
+
+    area2 += magnitude
     triangles += 1
 
     for (let corner = 0; corner < CORNERS; ++corner) {
@@ -427,21 +481,50 @@ function linearDeterminant(m) {
 
 
 /**
+ * Classify a representation item for the body count.
+ *
+ * @param {object|undefined} element The item (`model.getElementByLocalID`)
+ * @param {Function} ap214TypeName Type id to STEP keyword
+ * @return {{kind: 'body'|'face'|'other', type: string}} Class and keyword
+ */
+function classifyItem(element, ap214TypeName) {
+  if (element === undefined) {
+    return {kind: 'other', type: 'UNKNOWN'}
+  }
+
+  const type = ap214TypeName(element.type)
+
+  if (BODY_ITEM_TYPES.has(type)) {
+    return {kind: 'body', type}
+  }
+
+  return {kind: FACE_ITEM_TYPES.has(type) ? 'face' : 'other', type}
+}
+
+
+/**
  * Walk the scene and sum over placed instances, one unique geometry at a
  * time so at most one local mesh is held in JS at once.
  *
  * @param {object} scene The loaded AP214 scene
+ * @param {object} model The loaded AP214 model (to type each mesh's item)
  * @param {object} wasmModule The module owning the geometry heap
  * @param {Function} wasmHeapView Heap view constructor
+ * @param {Function} ap214TypeName Type id to STEP keyword
  * @return {object} Totals and instance census
  */
-function measureScene(scene, wasmModule, wasmHeapView) {
+function measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName) {
   const byGeometry = new Map()
+  const itemClass = new Map()
+  const otherTypes = new Map()
   let walked = 0
   let identityPlacements = 0
   let mirrored = 0
+  let bodies = 0
+  let styledFaceMeshes = 0
+  let otherItems = 0
 
-  for (const entry of scene.walk()) {
+  for (const entry of scene.walkWithOccurrence()) {
     const transform = entry[0]
     const mesh = entry[2]
 
@@ -461,11 +544,32 @@ function measureScene(scene, wasmModule, wasmHeapView) {
     let group = byGeometry.get(mesh.localID)
 
     if (group === undefined) {
-      group = {geometry: mesh.geometry, transforms: []}
+      group = {geometry: mesh.geometry, placements: []}
       byGeometry.set(mesh.localID, group)
+      itemClass.set(mesh.localID, classifyItem(model.getElementByLocalID(mesh.localID), ap214TypeName))
     }
 
-    group.transforms.push(transform)
+    // Owner = the element the walk attributes this placement to (entry[4]);
+    // path = the occurrence path (NAUO express ids, entry[5]). Two placements
+    // of one item at one place are told apart by these two (see below).
+    group.placements.push({
+      transform,
+      owner: entry[4]?.expressID ?? 'none',
+      path: Array.prototype.join.call(entry[5] ?? [], '>'),
+    })
+
+    // bodies: solid/shell items per placement, whether or not they produced
+    // triangles (a solid whose faces are all individually styled has none).
+    const {kind, type} = itemClass.get(mesh.localID)
+
+    if (kind === 'body') {
+      ++bodies
+    } else if (kind === 'face') {
+      ++styledFaceMeshes
+    } else {
+      ++otherItems
+      otherTypes.set(type, (otherTypes.get(type) ?? 0) + 1)
+    }
   }
 
   const totals = {
@@ -474,11 +578,14 @@ function measureScene(scene, wasmModule, wasmHeapView) {
     min: [Infinity, Infinity, Infinity],
     max: [-Infinity, -Infinity, -Infinity],
     badIndices: 0,
+    nonFiniteTriangles: 0,
   }
 
-  let bodies = 0
-  let duplicates = 0
-  let duplicateArea = 0
+  let occurrences = 0
+  let occurrenceArea = 0
+  let reemissions = 0
+  let reemissionArea = 0
+  let nonFiniteVertices = 0
   const diagonals = []
   let uniqueWithTriangles = 0
   let unreadable = 0
@@ -489,7 +596,7 @@ function measureScene(scene, wasmModule, wasmHeapView) {
     const geometry = group.geometry
 
     if (typeof geometry?.getVertexCount !== 'function') {
-      unreadable += group.transforms.length
+      unreadable += group.placements.length
       problems.add('mesh without a GeometryObject')
       continue
     }
@@ -497,10 +604,12 @@ function measureScene(scene, wasmModule, wasmHeapView) {
     const mesh = readMesh(geometry, wasmModule, wasmHeapView)
 
     if (mesh.problem !== undefined) {
-      unreadable += group.transforms.length
+      unreadable += group.placements.length
       problems.add(mesh.problem)
       continue
     }
+
+    nonFiniteVertices += mesh.nonFiniteVertices
 
     if (mesh.indices.length === 0) {
       continue
@@ -513,27 +622,46 @@ function measureScene(scene, wasmModule, wasmHeapView) {
     }
 
     // A second placement of the same item under an identical transform is
-    // coincident geometry, counted twice. It is a conway defect when it
-    // happens (one item reached through two representations), and it stays
-    // in the totals because the totals are what conway produced; this count
-    // and its area let a reader subtract it.
-    const placements = new Set()
+    // coincident geometry, counted twice. It stays in the totals, because the
+    // totals are what conway produced; the counts and areas below let a reader
+    // subtract it. Two kinds, told apart by owner element:
+    //
+    //  - occurrence: same owner, different occurrence path. Two assembly
+    //    occurrences of one part that happen to sit at one place. Model
+    //    content: OCCT and SMLib count it too (4927 Fox Gate Stair).
+    //  - re-emission: a different owner, or the same owner AND path again.
+    //    One item reached through two representations (PD vs PDS for
+    //    conway#731, TSR/SR vs PDS for the AP242 set, ORSI faces for #732).
+    //    The defect.
+    const seenAt = new Map()
 
-    for (const transform of group.transforms) {
+    for (const {transform, owner, path} of group.placements) {
       const instance = accumulateInstance(totals, mesh, transform, scratch)
       const key = transform === undefined ? 'identity' : Array.prototype.join.call(transform, ',')
-      const coincident = placements.has(key)
-
-      placements.add(key)
+      const seen = seenAt.get(key)
 
       if (instance.triangles > 0) {
-        ++bodies
         diagonals.push(instance.diagonal)
       }
 
-      if (coincident) {
-        ++duplicates
-        duplicateArea += instance.area
+      if (seen === undefined) {
+        seenAt.set(key, {owners: new Set([owner]), pairs: new Set([`${owner}|${path}`])})
+
+        continue
+      }
+
+      const pair = `${owner}|${path}`
+      const isOccurrence = seen.owners.has(owner) && !seen.pairs.has(pair)
+
+      seen.owners.add(owner)
+      seen.pairs.add(pair)
+
+      if (isOccurrence) {
+        ++occurrences
+        occurrenceArea += instance.area
+      } else {
+        ++reemissions
+        reemissionArea += instance.area
       }
     }
   }
@@ -543,8 +671,14 @@ function measureScene(scene, wasmModule, wasmHeapView) {
   return {
     totals,
     bodies,
-    duplicates,
-    duplicateArea,
+    styledFaceMeshes,
+    otherItems,
+    otherTypes: Object.fromEntries([...otherTypes].sort((x, y) => y[1] - x[1])),
+    occurrences,
+    occurrenceArea,
+    reemissions,
+    reemissionArea,
+    nonFiniteVertices,
     medianBodyDiagonal: diagonals.length > 0 ? diagonals[Math.floor((diagonals.length - 1) / 2)] : null,
     walked,
     uniqueGeometries: byGeometry.size,
@@ -703,6 +837,7 @@ async function main() {
       {default: Logger},
       {default: Environment},
       {wasmHeapView},
+      {ap214TypeName},
     ] = await Promise.all([
       compiled('dependencies/conway-geom/index.js'),
       compiled('src/AP214E3_2010/ap214_geometry_extraction.js'),
@@ -711,6 +846,7 @@ async function main() {
       compiled('src/logging/logger.js'),
       compiled('src/utilities/environment.js'),
       compiled('src/core/wasm_heap.js'),
+      compiled('src/AP214E3_2010/ap214_tessellated_types.js'),
     ])
 
     Environment.checkEnvironment()
@@ -820,7 +956,7 @@ async function main() {
     }
 
     const walkStart = performance.now()
-    const census = measureScene(scene, wasmModule, wasmHeapView)
+    const census = measureScene(scene, model, wasmModule, wasmHeapView, ap214TypeName)
 
     phases.walk_ms = performance.now() - walkStart
 
@@ -848,8 +984,19 @@ async function main() {
       identity_placements: census.identityPlacements,
       mirrored: census.mirrored,
       unreadable: census.unreadable,
-      coincident_duplicates: census.duplicates,
-      coincident_duplicate_area_mm2: round(census.duplicateArea * MM_PER_M * MM_PER_M, 3),
+      coincident_occurrences: census.occurrences,
+      coincident_occurrence_area_mm2: round(census.occurrenceArea * MM_PER_M * MM_PER_M, 3),
+      coincident_reemissions: census.reemissions,
+      coincident_reemission_area_mm2: round(census.reemissionArea * MM_PER_M * MM_PER_M, 3),
+      // Sum of the two kinds, kept for readers of the first-pass rows.
+      coincident_duplicates: census.occurrences + census.reemissions,
+      coincident_duplicate_area_mm2:
+        round((census.occurrenceArea + census.reemissionArea) * MM_PER_M * MM_PER_M, 3),
+      styled_face_meshes: census.styledFaceMeshes,
+      other_items: census.otherItems,
+      other_item_types: census.otherTypes,
+      nonfinite_vertices: census.nonFiniteVertices,
+      nonfinite_triangles_skipped: totals.nonFiniteTriangles,
     }
 
     // conway has no absolute chord tolerance (see the header); this is the
@@ -894,8 +1041,12 @@ async function main() {
         `B-spline curves to ${RELATIVE_DEFLECTION} x control-hull diagonal, circle/ellipse arcs take a ` +
         `fixed ${ARC_SAMPLES} samples per arc`)
 
-    row.notes.push('bodies = placed instances (walk entries, one per representation item placement) ' +
-      'with >= 1 triangle; faces/exact_*: not measurable by conway')
+    row.notes.push('bodies = placements of solid/shell items (manifold_solid_brep, brep_with_voids, ' +
+      'faceted_brep, shell_based_surface_model, tessellated_solid/shell, boolean_result, extruded solids), ' +
+      'whether or not they produced triangles; per-face meshes (a face with its own STYLED_ITEM) are counted ' +
+      `separately in conway_instances.styled_face_meshes (${census.styledFaceMeshes}) and are not bodies; ` +
+      `${census.otherItems} placement(s) of other item types (conway_instances.other_item_types). ` +
+      'triangles/mesh_area_mm2 are over all of them. faces/exact_*: not measurable by conway')
 
     if (census.identityPlacements > 0) {
       row.notes.push(
@@ -903,11 +1054,27 @@ async function main() {
           'either: they are in raw file units, and the x1000 is only right for a metre file')
     }
 
-    if (census.duplicates > 0) {
+    if (census.reemissions > 0) {
       row.notes.push(
-          `${census.duplicates} coincident duplicate placement(s) (same item, identical transform) are ` +
-          `INCLUDED in bodies/triangles/mesh_area_mm2; they contribute ` +
-          `${row.conway_instances.coincident_duplicate_area_mm2} mm2 (conway defect, not model content)`)
+          `${census.reemissions} coincident re-emission(s) (same item, identical transform, a DIFFERENT owner ` +
+          'element or the same occurrence path again) are INCLUDED in triangles/mesh_area_mm2; they contribute ' +
+          `${row.conway_instances.coincident_reemission_area_mm2} mm2 (conway defect: one item placed ` +
+          'through two representations, conway#731/#733)')
+    }
+
+    if (census.occurrences > 0) {
+      row.notes.push(
+          `${census.occurrences} coincident occurrence(s) (same item, identical transform, same owner element, ` +
+          'different occurrence path) are INCLUDED in triangles/mesh_area_mm2; they contribute ' +
+          `${row.conway_instances.coincident_occurrence_area_mm2} mm2 (model content: two assembly ` +
+          'occurrences of one part at one place, which OCCT and SMLib count too)')
+    }
+
+    if (census.nonFiniteVertices > 0 || totals.nonFiniteTriangles > 0) {
+      row.notes.push(
+          `${census.nonFiniteVertices} non-finite native vertex(es) (counted once per unique geometry) and ` +
+          `${totals.nonFiniteTriangles} triangle(s) touching one (counted per placement) were SKIPPED; ` +
+          'the rest of each geometry is in triangles/mesh_area_mm2/bbox')
     }
 
     if (census.mirrored > 0) {

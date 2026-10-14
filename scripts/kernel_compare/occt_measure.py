@@ -97,6 +97,7 @@ def _empty_row(model: str, variant: str) -> dict[str, Any]:
         "invalid_bodies": None,
         "bbox_extent_mm": None,
         "bbox_extent_all_mm": None,
+        "exact_area_unstable": None,
         "mesh_tolerance_mm": None,
         "versions": _versions(),
         "notes": [],
@@ -221,8 +222,14 @@ def _solid_is_closed(solid) -> bool:
     return n > 0
 
 
-def _bbox_extent(shapes) -> list[float] | None:
-    """Axis-aligned extents of one shape or a list of shapes (union box)."""
+def _bbox_extent(shapes, *, use_triangulation: bool = False) -> list[float] | None:
+    """Axis-aligned extents of one shape or a list of shapes (union box).
+
+    ``use_triangulation=False`` is the headline setting (exact surfaces). It
+    leaves the box void for faces that carry only a triangulation and no
+    surface (STEP tessellated geometry, e.g. nist_ftc_08_asme1_ap242-e1-tg.stp):
+    those need ``use_triangulation=True``.
+    """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
@@ -230,7 +237,7 @@ def _bbox_extent(shapes) -> list[float] | None:
     # AddOptimal_s, not Add: Add inflates by edge/vertex tolerance and by
     # control-polygon hulls. useTriangulation=False so a prior mesh can't leak in.
     for sh in (shapes if isinstance(shapes, list) else [shapes]):
-        BRepBndLib.AddOptimal_s(sh, box, False, False)
+        BRepBndLib.AddOptimal_s(sh, box, use_triangulation, False)
     if box.IsVoid():
         return None
     if box.GetGap() != 0.0:
@@ -275,6 +282,41 @@ def _mesh_stats(faces: list) -> tuple[int, float, int]:
         area += float(0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum())
         tris += nt
     return tris, area, missing
+
+
+# A mesh is inscribed in the surface, so its area is at or just below the exact
+# area on every healthy model. Over the 115 other OCCT rows in the first pass
+# mesh/exact is 0.9983 .. 1.0000809 (the top is nist_ftc_09 / stc_09, 8e-5 high
+# from the chord tolerance); Equiptment_UltrasoundProbe.step is 1.00265. 5e-4
+# sits ~6x above the benign maximum and ~5x below the known case, and under the
+# 1e-3 SMLib/OCCT threshold the triage used, so a flagged exact area is one that
+# could change that comparison.
+EXACT_AREA_UNSTABLE_REL = 5e-4
+
+
+def _check_exact_area_stable(row: dict[str, Any]) -> None:
+    """Set ``exact_area_unstable`` from mesh area vs exact area.
+
+    GProp's reported error is not reliable on some B-spline faces (the adaptive
+    integrator can stop early with a small reported error and a wrong value),
+    and nothing in the integration says so. The mesh is an independent estimate
+    that should fall short of the surface, so mesh > exact x (1 + EXACT_AREA_UNSTABLE_REL)
+    means the exact figure is wrong. Null when there is no mesh to compare.
+    """
+    exact, mesh = row.get("exact_area_mm2"), row.get("mesh_area_mm2")
+    if not (exact and mesh):
+        return
+    ratio = mesh / exact
+    row["exact_area_unstable"] = ratio > 1.0 + EXACT_AREA_UNSTABLE_REL
+    if row["exact_area_unstable"]:
+        row["notes"].append(
+            f"exact area unstable: OCCT mesh area {mesh:.6g} mm2 exceeds exact area {exact:.6g} mm2 by "
+            f"{(ratio - 1.0):.3g} (> {EXACT_AREA_UNSTABLE_REL:g}); an inscribed mesh should not be larger "
+            "than the surface, so BRepGProp's adaptive integration did not converge here even though it "
+            "reports a small error. exact_area_mm2 is wrong by an unknown amount (in either direction, per "
+            "face) and exact_volume_mm3 may be too. Exclude this row from exact-area comparisons; "
+            "mesh_area_mm2 is the better OCCT figure"
+        )
 
 
 def measure_shape(
@@ -338,6 +380,7 @@ def measure_shape(
     # (GEOMETRIC_CURVE_SET etc., e.g. nist_ctc_01: 1170x650 with wireframe vs
     # 800x450 for the solid) which conway and SMLib do not read.
     body_list = solids + free_shells
+    bbox_targets = body_list or faces
     if body_list:
         row["bbox_extent_mm"] = _bbox_extent(body_list)
         notes.append("bbox_extent_mm = union over the counted bodies (solids + free shells), "
@@ -348,7 +391,20 @@ def measure_shape(
     else:
         row["bbox_extent_mm"] = None
         notes.append("bbox_extent_mm null: no solids, shells or faces")
+    if row["bbox_extent_mm"] is None and bbox_targets:
+        # Exact-geometry bbox is void when no face has a surface (tessellated-
+        # only STEP). Fall back to the faces' own triangulation (the reader's,
+        # not a BRepMesh result: meshing happens below).
+        row["bbox_extent_mm"] = _bbox_extent(bbox_targets, use_triangulation=True)
+        if row["bbox_extent_mm"] is not None:
+            notes.append("bbox_extent_mm from triangulation (BRepBndLib.AddOptimal_s useTriangulation=True): "
+                         "the exact-geometry box was void because the faces carry no surface "
+                         "(tessellated-only STEP)")
+        else:
+            notes.append("bbox_extent_mm null: void with and without triangulation")
     row["bbox_extent_all_mm"] = _bbox_extent(shape)
+    if row["bbox_extent_all_mm"] is None and shape is not None:
+        row["bbox_extent_all_mm"] = _bbox_extent(shape, use_triangulation=True)
     if row["bbox_extent_all_mm"] != row["bbox_extent_mm"]:
         notes.append(f"bbox_extent_all_mm (whole transferred shape, incl. wireframe/other) differs: "
                      f"{row['bbox_extent_all_mm']}")
@@ -422,6 +478,7 @@ def measure_shape(
         row["mesh_area_mm2"] = marea if tris else None
         if missing:
             notes.append(f"{missing} of {len(faces)} faces have no triangulation after meshing")
+        _check_exact_area_stable(row)
 
 
 def _finish_status(row: dict[str, Any], do_mesh: bool = True) -> None:

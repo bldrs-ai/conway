@@ -45,11 +45,12 @@ Fields (null when the arm cannot measure it — never 0 as a stand-in):
 | `measure_ms` | number\|null | exact mass-property integration time (SMLib/OCCT) |
 | `total_ms` | number | wall time from process start of measurement to row emit |
 | `peak_rss_bytes` | int | `process.resourceUsage().maxRSS * 1024` (Node) / `ru_maxrss * 1024` (Python, Linux) |
-| `bodies` | int\|null | SMLib/OCCT: solid/shell bodies returned. conway: placed instances that carry geometry |
+| `bodies` | int\|null | SMLib/OCCT: solid/shell bodies returned. conway: placements of solid/shell items (`manifold_solid_brep`, `brep_with_voids`, `faceted_brep`, `shell_based_surface_model`, `tessellated_solid`/`_shell`, `boolean_result`, extruded solids), whether or not they produced triangles. Per-face styled meshes are not bodies (`conway_instances.styled_face_meshes`) |
 | `faces` | int\|null | B-rep face count (SMLib/OCCT); null for conway |
 | `triangles` | int\|null | tessellated triangle count over placed instances |
 | `mesh_area_mm2` | number\|null | Σ triangle area over placed instances, mm² |
 | `exact_area_mm2` | number\|null | exact surface area (SMLib `massProperties`, OCCT `BRepGProp.SurfaceProperties_s`), mm² |
+| `exact_area_unstable` | bool\|null | OCCT only (extra field): `true` when OCCT's own mesh area exceeds its exact area by more than 5e-4 relative, which an inscribed mesh should not do, so `exact_area_mm2` is not trustworthy and comparisons against it should exclude the row (`compare.csv` column `occt_exact_area_unstable`). `false` when checked and fine, null when there is no mesh to compare |
 | `exact_volume_mm3` | number\|null | exact volume summed over bodies that are closed **and** valid; null if none |
 | `closed_valid_bodies` | int\|null | how many bodies contributed to `exact_volume_mm3` |
 | `invalid_bodies` | int\|null | bodies failing `isValid` / `BRepCheck_Analyzer` |
@@ -208,12 +209,41 @@ built `compiled/` and a fresh `Dist/` for the variant it runs (checked through
 - **Placed instances.** Every walk entry is one placement of one
   representation item. Triangles, area and bounds are summed per entry, with
   the entry's absolute transform applied to each vertex. Area is the area of
-  the transformed triangle, so non-uniform scale is handled. `bodies` counts
-  the entries that have at least one triangle. `conway_instances` reports
-  walked versus unique geometries, mirrored (det < 0) placements, and
-  **coincident duplicates**: one item placed twice under the same transform.
-  Duplicates stay in the totals, because the totals are what conway produced,
-  and their area is given so a reader can subtract it.
+  the transformed triangle, so non-uniform scale is handled.
+- **`bodies`.** The walk entries whose item (`model.getElementByLocalID(mesh.localID)`,
+  named by `ap214TypeName`) is a solid or shell: `MANIFOLD_SOLID_BREP`,
+  `BREP_WITH_VOIDS`, `FACETED_BREP`, `SHELL_BASED_SURFACE_MODEL`,
+  `TESSELLATED_SOLID`, `TESSELLATED_SHELL`, `BOOLEAN_RESULT`,
+  `BOOLEAN_CLIPPING_RESULT`, `EXTRUDED_AREA_SOLID`, `EXTRUDED_FACE_SOLID`, one per
+  placement, **whether or not the item produced triangles** (a solid whose faces
+  all carry their own STYLED_ITEM has none: `nist_ctc_01_asme1_ap242-e1` is 1 body, 117
+  face meshes). A face with its own STYLED_ITEM becomes a separate placed mesh, and is
+  counted in `conway_instances.styled_face_meshes` (`ADVANCED_FACE`, `FACE_SURFACE`,
+  `FACE`, `COMPLEX_TRIANGULATED_FACE`, `TRIANGULATED_FACE`), not in `bodies`. Any other
+  item type is `other_items`, listed by keyword in `other_item_types` (so an unlisted
+  solid type shows up there rather than silently missing from `bodies`). `triangles`,
+  `mesh_area_mm2` and the bbox cover all three kinds.
+- **`conway_instances`** reports walked versus unique geometries, mirrored
+  (det < 0) placements, `styled_face_meshes`, `other_items`, and the
+  **coincident placements**: one item placed twice under the same transform.
+  They stay in the totals, because the totals are what conway produced, and their
+  area is given so a reader can subtract it. The owner element (walk entry
+  [4]) and occurrence path (entry [5], from `walkWithOccurrence()`) split them:
+  - `coincident_occurrences` (+ `_area_mm2`): same owner, different occurrence
+    path. Two assembly occurrences of one part at one place. **Model content**:
+    OCCT and SMLib count it too. Do not subtract it.
+  - `coincident_reemissions` (+ `_area_mm2`): a different owner, or the same
+    owner and path again. One item placed through two representations
+    (conway#731, #733). **The defect**; subtract this area for a per-copy ratio.
+  - `coincident_duplicates` / `coincident_duplicate_area_mm2`: the sum of the two,
+    kept for the first-pass rows (which called all of it a defect).
+  - `nonfinite_vertices`, `nonfinite_triangles_skipped`: see below.
+- **Non-finite vertices.** A native vertex with a NaN/Inf coordinate is left out of
+  the reification centre, and any triangle touching one (its cross product is
+  non-finite) is skipped, so it adds to no total. The rest of the geometry is kept.
+  `nonfinite_vertices` is counted once per unique geometry, `nonfinite_triangles_skipped`
+  per placement; both are 0 on most models, and a note is written when either is not.
+  A geometry whose vertices are *all* non-finite is still `unreadable`.
 - **Triangles are the reified mesh**, the welded mesh with zero-area
   triangles removed that consumers render. There is no per-triangle
   accessor, so the index and float vertex streams are copied out of fresh
@@ -232,7 +262,7 @@ built `compiled/` and a fresh `Dist/` for the variant it runs (checked through
   take a fixed 24 samples per arc whatever its sweep, which is 23 chords:
   about 15.7° per chord on a full circle, a sag of 0.93% of the radius.
   `conway_tessellation.tolerance_upper_bound_mm` is 1e-3 × the median placed
-  body's diagonal. It is the closest single absolute figure, and an upper
+  mesh's diagonal (every placement with triangles, face meshes included). It is the closest single absolute figure, and an upper
   bound on conway's per-face target. `--tolerance` is accepted, recorded in
   `notes` and has no effect.
 - **Memory.** `peak_rss_bytes` follows the contract (end of process, so it
@@ -300,8 +330,12 @@ Facts verified against `cadquery-ocp` 8.0.1.1 (do not assume them for another bu
   instance counted separately (`IsSame` = TShape + Location). Loose faces and
   wireframe are not bodies; loose faces are noted.
 - **`bbox_extent_mm`** covers those same bodies (`BRepBndLib.AddOptimal_s`,
-  `useTriangulation=False`, `useShapeTolerance=False`, gap asserted 0) and
-  **excludes wireframe**: on `nist_ctc_01_asme1_rd.stp` it is 800x450x150, whereas the
+  `useTriangulation=False`, `useShapeTolerance=False`, gap asserted 0). That box is
+  void when no face has a surface (tessellated-only STEP, e.g.
+  `nist_ftc_08_asme1_ap242-e1-tg.stp`); then it is recomputed with
+  `useTriangulation=True` from the reader's triangulation, and a note says so (the
+  box is the reader's triangles, 311.59 x 222.69 x 48.26 there, matching conway).
+  The bbox **excludes wireframe**: on `nist_ctc_01_asme1_rd.stp` it is 800x450x150, whereas the
   whole transferred shape (`bbox_extent_all_mm`, an extra non-contract field) is
   1170x650x150 because of `GEOMETRIC_CURVE_SET` content.
 - **Closed check.** `BRep_Tool.IsClosed_s(solid)` returns `False` for *every* solid
@@ -312,6 +346,12 @@ Facts verified against `cadquery-ocp` 8.0.1.1 (do not assume them for another bu
   `invalid_bodies` was likewise checked to fire (a bow-tie face is invalid).
 - **Exact area/volume** use the adaptive `GProp` overloads, `--gprop-eps` default
   `1e-6` (`0` = OCCT's fixed-order Gauss); the reached error is in `notes`.
+  `BRepGProp`'s reported error is not reliable on every B-spline face
+  (`Equiptment_UltrasoundProbe.step`: reports 6.9e-7, body total off by about 0.4 % against a fine mesh, and a
+  tighter eps does not converge to the right value either). `exact_area_unstable`
+  is `true` when the mesh area exceeds the exact area by more than 5e-4 relative
+  (an inscribed mesh should not); the first-pass rows put every other OCCT model
+  between 0.9983 and 1.0000809, this one at 1.00265. A flagged row also gets a note.
   `measure_ms` is that integration only; `BRepCheck_Analyzer` time is in `total_ms`.
 - **Mesh.** Default chord tolerance is 0.1 % of the body bbox diagonal at 15 deg,
   the same defaults as smlibpy's `tessellate`; pass `--tolerance` to match conway.

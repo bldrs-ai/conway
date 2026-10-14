@@ -275,7 +275,8 @@ function buildCsv(models, armKeys) {
   for (const pair of ['conway_smlib', 'conway_occt']) {
     AXES.forEach((a) => head.push(`bbox_ratio_${pair}_${a}`))
   }
-  head.push('bodies_match_conway_smlib', 'bodies_match_conway_occt', 'bodies_match_smlib_occt')
+  head.push('bodies_match_conway_smlib', 'bodies_match_conway_occt', 'bodies_match_smlib_occt',
+      'occt_exact_area_unstable')
 
   const lines = [csvRow(head)]
   for (const m of models) {
@@ -291,7 +292,8 @@ function buildCsv(models, armKeys) {
     for (const k of armKeys) {
       f.push(ratio(m.arms.get(k)?.peak_rss_bytes, m.size))
     }
-    f.push(...x.bboxConwaySmlib, ...x.bboxConwayOcct, x.bodiesConwaySmlib, x.bodiesConwayOcct, x.bodiesSmlibOcct)
+    f.push(...x.bboxConwaySmlib, ...x.bboxConwayOcct, x.bodiesConwaySmlib, x.bodiesConwayOcct, x.bodiesSmlibOcct,
+      x.occt?.exact_area_unstable)
     lines.push(csvRow(f))
   }
   return `${lines.join('\n')}\n`
