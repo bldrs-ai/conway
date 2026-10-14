@@ -840,7 +840,13 @@ async function main() {
       const tag = `[${idx}/${total}] ${m.tier}${m.band ? ` ${m.band}` : ''} ${(m.size / MIB).toFixed(1)} MiB ${armDef.key} ${path.basename(m.path)}`
       const stKey = `${armDef.key}|${m.band}`
       const st = m.tier === 'T3' ? (bandState.get(stKey) ?? bandState.set(stKey, {prevOom: false, latched: false, reason: ''}).get(stKey)) : null
-      const prior = done.get(`${m.path}|${armDef.arm}|${armDef.variant}`)
+      let prior = done.get(`${m.path}|${armDef.arm}|${armDef.variant}`)
+      // The P1 probe is exempt from band skips on resume too: a `skipped` row
+      // for it (written by a runner without the exemption) is not a result.
+      if (prior && m === probe && !lfs && prior.status === 'skipped') {
+        log(`${tag} -> prior band-rule skip of the P1 probe ignored; running it`)
+        prior = undefined
+      }
       if (prior) {
         counts.resumed++
         log(`${tag} -> resumed (${prior.status})`)
