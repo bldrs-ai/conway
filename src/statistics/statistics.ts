@@ -72,7 +72,162 @@ export class Statistics {
 
   private extentDegenerateFaceCount: number | undefined
 
+  /**
+   * Distinct products (IFC) or product definitions / representations (STEP)
+   * that own at least one placed geometry whose mesh was built — the
+   * numerator of a partial-load fraction against productCount
+   * (conway#740). Grows as a demand pump extracts.
+   */
+  private productsWithGeometryCount: number | undefined
+
+  /**
+   * Engine diagnostics counted against this load (conway#740), maintained
+   * by Logger as entries are logged — see Logger.createStatistics for the
+   * window a load's counts cover. Kept here rather than read back from
+   * Logger's buffer because that buffer is deduplicated, cleared by
+   * StreamAllMeshes, and global to every model.
+   */
+  private errorCount = 0
+  private warningCount = 0
+  private dataDefectCount = 0
+  private distinctErrorCount = 0
+  private distinctWarningCount = 0
+  private distinctDataDefectCount = 0
+  private readonly distinctDiagnostics = new Set<string>()
+
   // Getters and setters
+
+  /**
+   * Count one warning or error logged during this load. Called by Logger;
+   * `message` is the entry's dedup key (the message with any express ID
+   * kept out of it), so "distinct" here means what it means in Logger's
+   * buffer and in the regression run's errors.csv.
+   *
+   * @param level - 'warning' or 'error'
+   * @param message - the entry's base message
+   * @param category - the entry's machine-readable kind, if any
+   */
+  countDiagnostic(
+      level: 'warning' | 'error', message: string, category?: string ): void {
+
+    const key = `${level}\u0000${category ?? ''}\u0000${message}`
+    const distinct = !this.distinctDiagnostics.has(key)
+
+    if (distinct) {
+      this.distinctDiagnostics.add(key)
+    }
+
+    if (level === 'error') {
+      ++this.errorCount
+      this.distinctErrorCount += distinct ? 1 : 0
+    } else {
+      ++this.warningCount
+      this.distinctWarningCount += distinct ? 1 : 0
+    }
+
+    if (category === 'dataDefect') {
+      ++this.dataDefectCount
+      this.distinctDataDefectCount += distinct ? 1 : 0
+    }
+  }
+
+  /**
+   * Carry another statistics object's diagnostic counts into this one —
+   * used when an open replaces its own statistics part-way (the compat
+   * factory, then the proxy it constructs, each create one), so the
+   * diagnostics logged before the replacement still count for the load.
+   *
+   * @param from - the statistics being replaced
+   */
+  inheritDiagnostics(from: Statistics): void {
+    this.errorCount += from.errorCount
+    this.warningCount += from.warningCount
+    this.dataDefectCount += from.dataDefectCount
+    this.distinctErrorCount += from.distinctErrorCount
+    this.distinctWarningCount += from.distinctWarningCount
+    this.distinctDataDefectCount += from.distinctDataDefectCount
+    for (const key of from.distinctDiagnostics) {
+      this.distinctDiagnostics.add(key)
+    }
+  }
+
+  /**
+   * Errors conway logged during this load, counting every occurrence —
+   * one per skipped entity for a defect that repeats — not one per
+   * distinct message (conway#740). Share reads this as
+   * `stats_errorCount` (ShareIfcLoader.js).
+   *
+   * @return {number} total error occurrences
+   */
+  getErrorCount(): number {
+    return this.errorCount
+  }
+
+  /**
+   * @return {number} total warning occurrences (see getErrorCount)
+   */
+  getWarningCount(): number {
+    return this.warningCount
+  }
+
+  /**
+   * @return {number} distinct error messages (Logger's dedup identity)
+   */
+  getDistinctErrorCount(): number {
+    return this.distinctErrorCount
+  }
+
+  /**
+   * @return {number} distinct warning messages (Logger's dedup identity)
+   */
+  getDistinctWarningCount(): number {
+    return this.distinctWarningCount
+  }
+
+  /**
+   * Occurrences classified `dataDefect` — bad input conway skipped, at
+   * whatever level each call site logged (so these are also in the error
+   * or warning totals).
+   *
+   * @return {number} total data-defect occurrences
+   */
+  getDataDefectCount(): number {
+    return this.dataDefectCount
+  }
+
+  /**
+   * @return {number} distinct data-defect messages
+   */
+  getDistinctDataDefectCount(): number {
+    return this.distinctDataDefectCount
+  }
+
+  /**
+   * @return {number | undefined} products with at least one built,
+   * placed geometry (see productsWithGeometryCount), or undefined before
+   * the load has recorded one
+   */
+  getProductsWithGeometryCount(): number | undefined {
+    return this.productsWithGeometryCount
+  }
+
+  /**
+   * @param value - products with at least one built, placed geometry
+   */
+  setProductsWithGeometryCount(value: number) {
+    this.productsWithGeometryCount = value
+  }
+
+  /**
+   * Add pump time to the geometry time — a deferred (demand) open records
+   * 0 at open because no geometry has run yet; each pump call then adds
+   * the wall time it spent (conway#740).
+   *
+   * @param milliseconds - time spent extracting
+   */
+  addGeometryTime(milliseconds: number) {
+    this.geometryTime = (this.geometryTime ?? 0) + milliseconds
+  }
 
   /**
    *

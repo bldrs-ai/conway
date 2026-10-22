@@ -431,12 +431,20 @@ export class IfcAPI {
 
     const modelIdResult = this.globalModelIDCounter
 
-    const result =
-      IfcApiModelPassthroughFactory.from(
-          modelIdResult,
-          data,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = IfcApiModelPassthroughFactory.from(
+            modelIdResult,
+            data,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -468,12 +476,20 @@ export class IfcAPI {
     // failed open burns an ID, which is harmless (IDs are only keys).
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromAsync(
-          modelIdResult,
-          data,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromAsync(
+            modelIdResult,
+            data,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -508,12 +524,20 @@ export class IfcAPI {
     // Reserve the ID before the first await — see OpenModelAsync.
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromStreamed(
-          modelIdResult,
-          data,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromStreamed(
+            modelIdResult,
+            data,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -546,12 +570,20 @@ export class IfcAPI {
 
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromStore(
-          modelIdResult,
-          store,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromStore(
+            modelIdResult,
+            store,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -595,13 +627,21 @@ export class IfcAPI {
 
     const modelIdResult = this.globalModelIDCounter++
 
-    const result =
-      await IfcApiModelPassthroughFactory.fromIndex(
-          modelIdResult,
-          store,
-          sidecar,
-          this.wasmModule,
-          settings)
+    // conway#740: this load's diagnostic window — see Logger.beginOpen.
+    Logger.beginOpen( modelIdResult )
+
+    let result: IfcApiModelPassthrough | undefined
+
+    try {
+      result = await IfcApiModelPassthroughFactory.fromIndex(
+            modelIdResult,
+            store,
+            sidecar,
+            this.wasmModule,
+            settings)
+    } finally {
+      Logger.endOpen( modelIdResult )
+    }
 
     if ( result === void 0 ) {
       return -1
@@ -1334,7 +1374,69 @@ export class IfcAPI {
       return {extracted: 0, remaining: 0}
     }
 
-    return result.extractGeometryBatch(batchSize, meshCallback)
+    const start = performance.now()
+    const pumped = result.extractGeometryBatch(batchSize, meshCallback)
+
+    this.recordPumpStatistics_(modelID, result, pumped, performance.now() - start)
+
+    return pumped
+  }
+
+  /**
+   * Fold one demand-pump call into the model's statistics (conway#740).
+   *
+   * A deferred open reports `geometryTimeInMs: 0` because no geometry has
+   * run yet, so without this `getGeometryTime()` stays 0 on the demand path
+   * however long the pump takes. Each call that did work adds its wall time
+   * — the time spent inside the pump, not the embedder's own time between
+   * calls — and the products-with-geometry count is refreshed, so both are
+   * final once `remaining` reaches 0. A call that finds nothing to do (a
+   * fully-extracted model, or the drained tail call) adds nothing.
+   *
+   * @param modelID The pumped model.
+   * @param result Its passthrough.
+   * @param pumped What the call returned.
+   * @param milliseconds Wall time the call took.
+   */
+  /**
+   * Refresh the products-with-geometry count after a whole-model ask
+   * (conway#740), which on a deferred model may itself have drained the
+   * pump. Geometry time is not added here: on a classic model this call
+   * extracts nothing, and the internal drain of a deferred one is not
+   * separable from the serve.
+   *
+   * @param modelID The model.
+   * @param result Its passthrough.
+   */
+  private refreshProductsWithGeometry_(
+      modelID: number, result: IfcApiModelPassthrough ): void {
+
+    const withGeometry = result.getProductsWithGeometryCount?.()
+
+    if (withGeometry !== void 0) {
+      Logger.getStatistics(modelID)?.setProductsWithGeometryCount(withGeometry)
+    }
+  }
+
+  private recordPumpStatistics_(
+      modelID: number,
+      result: IfcApiModelPassthrough,
+      pumped: {extracted: number, remaining: number},
+      milliseconds: number ): void {
+
+    const statistics = Logger.getStatistics(modelID)
+
+    if (statistics === void 0 || (pumped.extracted === 0 && pumped.remaining === 0)) {
+      return
+    }
+
+    statistics.addGeometryTime(milliseconds)
+
+    const withGeometry = result.getProductsWithGeometryCount?.()
+
+    if (withGeometry !== void 0) {
+      statistics.setProductsWithGeometryCount(withGeometry)
+    }
   }
 
   /**
@@ -1358,14 +1460,20 @@ export class IfcAPI {
     const result = this.models.get(modelID)
 
     if (result?.extractGeometryBatchAsync !== void 0) {
-      return result.extractGeometryBatchAsync(batchSize, meshCallback)
+
+      const start = performance.now()
+      const pumped = await result.extractGeometryBatchAsync(batchSize, meshCallback)
+
+      this.recordPumpStatistics_(modelID, result, pumped, performance.now() - start)
+
+      return pumped
     }
 
     if (result?.extractGeometryBatch === void 0) {
       return {extracted: 0, remaining: 0}
     }
 
-    return result.extractGeometryBatch(batchSize, meshCallback)
+    return this.ExtractGeometryBatch(modelID, batchSize, meshCallback)
   }
 
   /**
@@ -1419,6 +1527,7 @@ export class IfcAPI {
     if (result !== void 0) {
 
       result.streamAllMeshes(meshCallback)
+      this.refreshProductsWithGeometry_(modelID, result)
     }
 
     Logger.displayLogs()
@@ -1472,6 +1581,8 @@ export class IfcAPI {
       } else {
         result.streamAllMeshes(meshCallback)
       }
+
+      this.refreshProductsWithGeometry_(modelID, result)
     }
 
     Logger.displayLogs()

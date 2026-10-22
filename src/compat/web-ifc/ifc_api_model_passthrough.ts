@@ -73,6 +73,15 @@ export interface IfcApiModelPassthrough {
     batchSize: number,
     meshCallback?: (mesh: FlatMesh) => void):
     Promise<{extracted: number, remaining: number}>
+
+  /**
+   * Distinct owning elements (IFC products; STEP product definitions or
+   * representations) that so far own at least one placed geometry whose
+   * mesh was built (conway#740). Grows as a demand pump extracts; IfcAPI
+   * copies it onto the model's Statistics.
+   */
+  getProductsWithGeometryCount?(): number
+
   getCoordinationMatrix(): number[]
 
   /**

@@ -111,6 +111,10 @@ export default class Logger {
   private static logs: LogEntry[] = []
   private static proxies: LoggingProxy[] = []
   private static statistics: Map<number, Statistics> = new Map<number, Statistics>()
+  /** The statistics that warnings/errors are counted against (conway#740). */
+  private static activeStatistics: Statistics | undefined
+  /** The id of the open in progress, between beginOpen and endOpen. */
+  private static openingModelID: number | undefined
   private static threshold: LogLevel = LogLevel.INFO
   private static sink: LogSink = defaultSink
 
@@ -249,6 +253,13 @@ export default class Logger {
       Logger.logs.push(logEntry)
     }
 
+    // Per-load counts (conway#740), on every occurrence and independent of
+    // the buffer above, which is global, deduplicated and cleared by
+    // StreamAllMeshes before an embedder gets to read it.
+    if (level === 'error' || level === 'warning') {
+      Logger.activeStatistics?.countDiagnostic(level, baseMessage, category)
+    }
+
     // Echo only the first occurrence of each distinct entry — repeats keep
     // deduplicating silently into the buffer (visible via displayLogs()).
     //
@@ -350,10 +361,64 @@ export default class Logger {
    */
   public static createStatistics(modelID: number): Statistics {
     const statistics: Statistics = new Statistics()
+    const previous = Logger.statistics.get(modelID)
 
-    this.statistics.set(modelID, statistics)
+    // An open replaces its own statistics part-way: IfcAPI begins the load
+    // (beginOpen), then the proxy it constructs creates its own object, and
+    // a streamed open that falls back to the classic one creates a third.
+    // Diagnostics logged before each replacement belong to the same load,
+    // so carry their counts across — but only within one open, so that an
+    // unrelated later load reusing the id (ids restart at 0 per IfcAPI,
+    // while this map is module-level) starts from zero.
+    if (Logger.openingModelID === modelID &&
+        previous !== void 0 && previous === Logger.activeStatistics) {
+      statistics.inheritDiagnostics(previous)
+    }
+
+    Logger.statistics.set(modelID, statistics)
+    Logger.activeStatistics = statistics
 
     return statistics
+  }
+
+  /**
+   * Start a load's diagnostic window (conway#740): give `modelID` fresh
+   * statistics and route every warning/error logged from now on into its
+   * counts, until another load's statistics are created. Called by the
+   * web-ifc compat OpenModel* entry points; paired with {@link endOpen}.
+   *
+   * The window deliberately outlives the open itself: a deferred (demand)
+   * open does its geometry in later ExtractGeometryBatch* calls, and those
+   * diagnostics are this load's too. What ends the window is the next
+   * load's statistics, which is also why counts are only per-load when
+   * loads do not overlap — Logger has no way to tell which of two
+   * interleaved loads a message came from, and attributes it to the one
+   * that started last.
+   *
+   * @param modelID The id the open is attempted under.
+   * @return {Statistics} The load's statistics.
+   */
+  public static beginOpen(modelID: number): Statistics {
+    Logger.openingModelID = void 0
+
+    const statistics = Logger.createStatistics(modelID)
+
+    Logger.openingModelID = modelID
+
+    return statistics
+  }
+
+  /**
+   * End the open phase begun by {@link beginOpen}. Counting continues on
+   * the load's statistics; this only stops later createStatistics calls for
+   * the same id from inheriting them.
+   *
+   * @param modelID The id passed to beginOpen.
+   */
+  public static endOpen(modelID: number): void {
+    if (Logger.openingModelID === modelID) {
+      Logger.openingModelID = void 0
+    }
   }
 
   /**

@@ -110,6 +110,17 @@ export class AP214ModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Whether a mesh is held for this local ID (conway#740's
+   * products-with-geometry count; mirrors IfcModelGeometry.hasLocalID).
+   *
+   * @param localID The geometry's local ID.
+   * @return {boolean} True if a mesh is held for it.
+   */
+  public hasLocalID(localID: number): boolean {
+    return this.meshes_.has(localID)
+  }
+
+  /**
    *
    * @return {IterableIterator<CanonicalMesh>}
    */

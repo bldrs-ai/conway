@@ -43,6 +43,7 @@ import {
   buildIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
+import { product_definition } from '../../AP214E3_2010/AP214E3_2010_gen'
 import {
   ap214PreviewAdapter,
   StreamedPreviewChannel,
@@ -434,6 +435,24 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     statistics?.setGeometryTime(executionTimeInMs)
     // eslint-disable-next-line no-magic-numbers
     statistics?.setGeometryMemory(scene.model.geometry.calculateGeometrySize() / (1024 * 1024))
+
+    // conway#740: the denominator and numerator of a partial-load fraction.
+    // A STEP "product" here is a PRODUCT_DEFINITION (one per part or
+    // assembly version), the closest STEP analogue of an IfcProduct; the IFC
+    // proxy counts IfcProduct. On a deferred open the numerator is 0 until
+    // the pump runs, and IfcAPI refreshes it as it does.
+    statistics?.setProductCount(model.typeCount(product_definition))
+    statistics?.setProductsWithGeometryCount(scene.geometryOwnerCount)
+  }
+
+  /**
+   * Distinct owning elements with at least one built, placed geometry so
+   * far (conway#740) — see AP214SceneBuilder.geometryOwnerCount.
+   *
+   * @return {number} The count.
+   */
+  getProductsWithGeometryCount(): number {
+    return this.model[1].geometryOwnerCount
   }
 
   /**
