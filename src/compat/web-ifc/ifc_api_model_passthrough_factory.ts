@@ -386,6 +386,12 @@ export class IfcApiModelPassthroughFactory {
     // rejects its promise instead of returning −1, breaking the contract
     // stated above at exactly the moment a caller most needs the explicit
     // `OpenModelStream` fallback (conway#541 review round 3).
+    //
+    // The attempt's own statistics come first, outside the try, for the same
+    // reason as in fromStore: so that neither the IFC-only refusal below nor
+    // the catch can leave an earlier IfcAPI's object under this id.
+    beginOpenStatistics( modelID )
+
     try {
 
       const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
@@ -409,6 +415,10 @@ export class IfcApiModelPassthroughFactory {
 
       Logger.warning(
           `Index-first open failed for model ${modelID}: ${message}` )
+
+      // A restore or schema-validation throw keeps the status the proxy set
+      // (INDEX_RESTORE_FAIL); a store read that rejected becomes OPEN_FAIL.
+      recordOpenFailure( modelID, e )
     }
   }
 

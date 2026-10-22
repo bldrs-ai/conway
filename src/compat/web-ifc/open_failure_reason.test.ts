@@ -14,6 +14,9 @@ import * as fs from 'fs'
 import { afterEach, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
+import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
+import { hashSource, serializeIndexSidecarFromColumns } from '../../step/parsing/index_sidecar'
+import { ParseResult } from '../../step/parsing/step_parser'
 import Logger, { DATA_DEFECT, LogEntry } from '../../logging/logger'
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
 import { IfcAPI } from './ifc_api'
@@ -322,6 +325,40 @@ describe( 'a store open refused before the IFC branch does not inherit a stale s
     expect( statistics.getLoadStatus() ).not.toBe( 'UNSUPPORTED_SCHEMA' )
     expect( statistics.getLoadFailureReason() ).toBeUndefined()
   }, 120000 )
+} )
+
+describe( 'an index-first open that fails says why', () => {
+
+  test( 'a sidecar that does not match records the failure and its message', async () => {
+
+    jest.spyOn( console, 'error' ).mockImplementation( () => {} )
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const source = bytes( INDEX_IFC )
+    const cold = await openStreamedIfcModelFromStore(
+        new InMemoryStepByteStore( source ), { pool: 1024 * 1024 } )
+
+    expect( cold.result ).toBe( ParseResult.COMPLETE )
+
+    const sidecar = serializeIndexSidecarFromColumns(
+        cold.columns, source.byteLength, hashSource( source ) )
+
+    // A store one byte short of the file the sidecar was built from.
+    const attemptedID = api.globalModelIDCounter
+    const id = await api.OpenModelFromIndex(
+        new InMemoryStepByteStore( source.subarray( 0, source.byteLength - 1 ) ),
+        sidecar,
+        SETTINGS )
+
+    expect( id ).toBe( -1 )
+
+    const statistics = api.getStatistics( attemptedID )
+
+    expect( statistics.getLoadStatus() ).toBeDefined()
+    expect( statistics.getLoadStatus() ).not.toBe( 'OK' )
+    expect( statistics.getLoadFailureReason() ).toBeDefined()
+    expect( statistics.getLoadFailureReason()!.length ).toBeGreaterThan( 0 )
+  } )
 } )
 
 describe( 'the synchronous demand pump skips a throwing product', () => {
