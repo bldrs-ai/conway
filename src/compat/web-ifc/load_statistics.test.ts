@@ -341,55 +341,45 @@ describe( 'STEP products with geometry: owners that are not product_definitions'
   } )
 } )
 
-describe( 'geometry time on a whole-model drain of a deferred model', () => {
+describe( 'products with geometry after a whole-model drain of a deferred model', () => {
 
+  // Geometry time is NOT claimed for these calls (see
+  // IfcAPI.refreshProductsWithGeometry_): only explicit pumping adds to it.
   test.each( [ 'data/index.ifc', 'data/nema-23-76mm.step' ] )( '%s', async ( fixture ) => {
 
     await observeDiagnostics( async () => {
 
+      const classicID = api.OpenModel( read( fixture ), SETTINGS )
+
+      api.StreamAllMeshes( classicID, () => {} )
+
+      const expected = api.getStatistics( classicID ).getProductsWithGeometryCount()
+
+      expect( expected ).toBeGreaterThan( 0 )
+
       const syncID = await api.OpenModelStreamed( read( fixture ), DEFER )
 
-      expect( api.getStatistics( syncID ).getGeometryTime() ).toBe( 0 )
+      expect( api.getStatistics( syncID ).getProductsWithGeometryCount() ).toBe( 0 )
 
       api.StreamAllMeshes( syncID, () => {} )
 
-      const drained = api.getStatistics( syncID ).getGeometryTime()
-
-      expect( drained ).toBeGreaterThan( 0 )
-
-      // Serving it again extracts nothing, so it adds no geometry time.
-      api.StreamAllMeshes( syncID, () => {} )
-
-      expect( api.getStatistics( syncID ).getGeometryTime() ).toBe( drained )
+      expect( api.getStatistics( syncID ).getProductsWithGeometryCount() ).toBe( expected )
 
       const asyncID = await api.OpenModelStreamed( read( fixture ), DEFER )
 
       await api.StreamAllMeshesAsync( asyncID, () => {} )
 
-      expect( api.getStatistics( asyncID ).getGeometryTime() ).toBeGreaterThan( 0 )
+      expect( api.getStatistics( asyncID ).getProductsWithGeometryCount() ).toBe( expected )
 
-      // A classic model's geometry time is the open's; serving it adds none.
-      const classicID = api.OpenModel( read( fixture ), SETTINGS )
-      const atOpen = api.getStatistics( classicID ).getGeometryTime()
-
-      api.StreamAllMeshes( classicID, () => {} )
-
-      expect( api.getStatistics( classicID ).getGeometryTime() ).toBe( atOpen )
-
-      // LoadAllGeometry and StreamAllMeshesWithTypes drain a deferred model too.
       const loadAllID = await api.OpenModelStreamed( read( fixture ), DEFER )
-
-      expect( api.getStatistics( loadAllID ).getProductsWithGeometryCount() ).toBe( 0 )
 
       api.LoadAllGeometry( loadAllID )
 
-      expect( api.getStatistics( loadAllID ).getProductsWithGeometryCount() )
-          .toBe( api.getStatistics( syncID ).getProductsWithGeometryCount() )
-      expect( api.getStatistics( loadAllID ).getGeometryTime() ).toBeGreaterThan( 0 )
+      expect( api.getStatistics( loadAllID ).getProductsWithGeometryCount() ).toBe( expected )
 
+      api.CloseModel( classicID )
       api.CloseModel( syncID )
       api.CloseModel( asyncID )
-      api.CloseModel( classicID )
       api.CloseModel( loadAllID )
     } )
   } )

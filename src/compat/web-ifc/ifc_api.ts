@@ -1387,32 +1387,27 @@ export class IfcAPI {
   /**
    * Refresh the products-with-geometry count after a whole-model ask
    * (conway#740), which on a deferred model may itself have drained the
-   * pump. When the call raised the count it extracted geometry, so its wall
-   * time is added to the geometry time like a pump call's; when it did not
-   * (a classic model, whose geometry time the open already recorded, or a
-   * deferred model already drained) nothing is added, so a second
-   * StreamAllMeshes cannot count the same geometry twice. The time includes
-   * the embedder's mesh callback, as a pump call's does.
+   * pump.
+   *
+   * Geometry time is deliberately NOT added here. `getGeometryTime()` covers
+   * explicit pumping (ExtractGeometryBatch*) plus a classic open's own
+   * extraction. Whether a whole-model call drained pending work is not
+   * observable through the passthrough (the products-with-geometry count
+   * is no proxy for it: a model whose products all lack geometry drains
+   * fully and leaves it at 0), so a drain through StreamAllMeshes* /
+   * LoadAllGeometry leaves the time at the open's value. See conway#745.
    *
    * @param modelID The model.
    * @param result Its passthrough.
-   * @param milliseconds Wall time the whole-model call took.
    */
   private refreshProductsWithGeometry_(
-      modelID: number, result: IfcApiModelPassthrough, milliseconds: number ): void {
+      modelID: number, result: IfcApiModelPassthrough ): void {
 
     const withGeometry = result.getProductsWithGeometryCount?.()
-    const statistics = Logger.getStatistics(modelID)
 
-    if (withGeometry === void 0 || statistics === void 0) {
-      return
+    if (withGeometry !== void 0) {
+      Logger.getStatistics(modelID)?.setProductsWithGeometryCount(withGeometry)
     }
-
-    if (withGeometry > (statistics.getProductsWithGeometryCount() ?? 0)) {
-      statistics.addGeometryTime(milliseconds)
-    }
-
-    statistics.setProductsWithGeometryCount(withGeometry)
   }
 
   /**
@@ -1541,10 +1536,8 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      const start = performance.now()
-
       Logger.withStatistics(modelID, () => result.streamAllMeshes(meshCallback))
-      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
+      this.refreshProductsWithGeometry_(modelID, result)
     }
 
     Logger.displayLogs()
@@ -1593,8 +1586,6 @@ export class IfcAPI {
       // Passthroughs predating conway#660 (and any future non-conway one)
       // have no async twin; the sync entry point is the whole of what they
       // can do, and on a resident source it is equivalent.
-      const start = performance.now()
-
       await Logger.withStatistics(modelID, async () => {
         if (result.streamAllMeshesAsync !== void 0) {
           await result.streamAllMeshesAsync(meshCallback)
@@ -1603,7 +1594,7 @@ export class IfcAPI {
         }
       })
 
-      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
+      this.refreshProductsWithGeometry_(modelID, result)
     }
 
     Logger.displayLogs()
@@ -1625,10 +1616,11 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      const start = performance.now()
-
+      // Diagnostics are routed to this model, but no statistics refresh: this
+      // entry point does not pump a deferred model (the IFC proxy has no
+      // deferred branch, the AP214 one is a no-op), so it extracts nothing
+      // that would change the counts. See conway#746.
       Logger.withStatistics(modelID, () => result.streamAllMeshesWithTypes(types, meshCallback))
-      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
     }
   }
 
@@ -1657,11 +1649,10 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      const start = performance.now()
       const meshes = Logger.withStatistics(modelID, () => result.loadAllGeometry())
 
       // Drains a deferred model the way StreamAllMeshes does (conway#740).
-      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
+      this.refreshProductsWithGeometry_(modelID, result)
 
       return meshes
     }
