@@ -376,9 +376,21 @@ describe( 'geometry time on a whole-model drain of a deferred model', () => {
 
       expect( api.getStatistics( classicID ).getGeometryTime() ).toBe( atOpen )
 
+      // LoadAllGeometry and StreamAllMeshesWithTypes drain a deferred model too.
+      const loadAllID = await api.OpenModelStreamed( read( fixture ), DEFER )
+
+      expect( api.getStatistics( loadAllID ).getProductsWithGeometryCount() ).toBe( 0 )
+
+      api.LoadAllGeometry( loadAllID )
+
+      expect( api.getStatistics( loadAllID ).getProductsWithGeometryCount() )
+          .toBe( api.getStatistics( syncID ).getProductsWithGeometryCount() )
+      expect( api.getStatistics( loadAllID ).getGeometryTime() ).toBeGreaterThan( 0 )
+
       api.CloseModel( syncID )
       api.CloseModel( asyncID )
       api.CloseModel( classicID )
+      api.CloseModel( loadAllID )
     } )
   } )
 } )

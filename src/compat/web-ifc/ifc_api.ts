@@ -1625,7 +1625,10 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
+      const start = performance.now()
+
       Logger.withStatistics(modelID, () => result.streamAllMeshesWithTypes(types, meshCallback))
+      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
     }
   }
 
@@ -1654,7 +1657,13 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      return Logger.withStatistics(modelID, () => result.loadAllGeometry())
+      const start = performance.now()
+      const meshes = Logger.withStatistics(modelID, () => result.loadAllGeometry())
+
+      // Drains a deferred model the way StreamAllMeshes does (conway#740).
+      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
+
+      return meshes
     }
 
     // dummy vars

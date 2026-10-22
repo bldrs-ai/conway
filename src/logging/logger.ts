@@ -390,7 +390,19 @@ export default class Logger {
    * The window closes at {@link endOpen}. A deferred (demand) open does its
    * geometry later, in ExtractGeometryBatch* / StreamAllMeshes* calls; those
    * re-enter this load's routing through {@link withStatistics}, so
-   * interleaved loads each keep their own counts.
+   * deferred models pumped one after another each keep their own counts.
+   *
+   * **Limit: the open window itself is a module-global singleton**
+   * (`openingModelID`, `activeStatistics`). Two *overlapping* asynchronous
+   * opens (for example `Promise.all` over `OpenModelStreamed`) therefore
+   * cross-attribute: the later beginOpen overwrites the earlier's routing,
+   * and either endOpen can close the other's window. Nothing in-tree
+   * overlaps opens on one Logger: Share serialises loads (CadView's
+   * `onViewerInFlightRef` dedupes, and replays a different model after the
+   * in-flight one ends), and conway's regression harness and the m3 pump
+   * scripts run each file in its own child process or worker, each with its
+   * own Logger. A per-open diagnostic context would fix it; see the
+   * follow-up issue linked from the PR #743 review thread.
    *
    * @param modelID The id the open is attempted under.
    * @return {Statistics} The load's statistics.
