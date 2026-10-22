@@ -1,4 +1,7 @@
-import ModelFormatDetector, {ModelFormatType } from '../../format_detection/model_format_detector'
+import ModelFormatDetector, {
+  ModelFormatType,
+  describeUnrecognizedModel,
+} from '../../format_detection/model_format_detector'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { Loadersettings } from './ifc_api'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
@@ -7,10 +10,77 @@ import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { HEADER_PREFIX_RETRY_BYTES } from '../../ifc/ifc_stream_open'
+import { UnrecognizedIfc4x3SchemaError } from '../../ifc/ifc_schema_selection'
 
 /** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
 // eslint-disable-next-line no-magic-numbers
 const STORE_DETECT_PREFIX_BYTES = 64 * 1024
+
+/**
+ * Give this open attempt its own statistics object before anything can
+ * fail, so the failure recorders below never write onto a stale one.
+ *
+ * Logger's statistics map is module-level and outlives an IfcAPI, while
+ * model ids restart at 0 per IfcAPI — so without this, an open that throws
+ * before its proxy creates statistics would find (and annotate) an earlier
+ * load's object under the same id. The proxy still creates its own as it
+ * starts, replacing this one; that is the object a failure is then recorded
+ * on, together with whatever status the proxy set before throwing.
+ *
+ * @param modelID The id the open is attempted under.
+ */
+function beginOpenStatistics( modelID: number ): void {
+  Logger.createStatistics( modelID )
+}
+
+/**
+ * Record why an open is about to return -1 because conway did not
+ * recognise the bytes (conway#741). Logs the same "No type detected"
+ * message as before with the reason appended, and leaves status
+ * `UNRECOGNIZED_FORMAT` plus the reason on the attempt's statistics, where
+ * an embedder can read them under the id it attempted the open with.
+ *
+ * @param modelID The id the open was attempted under.
+ * @param data The bytes (or prefix) detection rejected.
+ */
+function recordUnrecognizedFormat( modelID: number, data: Uint8Array ): void {
+  const reason = describeUnrecognizedModel( data )
+  const statistics = Logger.getStatistics( modelID ) ?? Logger.createStatistics( modelID )
+
+  statistics.setLoadStatus( 'UNRECOGNIZED_FORMAT' )
+  statistics.setLoadFailureReason( reason )
+
+  Logger.error( `No type detected when constructing model: ${reason}` )
+}
+
+/**
+ * Record why an open is about to return -1 because the model constructor
+ * threw (conway#741). Keeps any status the proxy already set on the way
+ * down (`UNSUPPORTED_SCHEMA`, `PARSE_FAIL`, `HEADER PARSE: ...`) — embedders
+ * key on those, Share's 4x3 refusal dialog among them — and otherwise sets
+ * `OPEN_FAIL`. The reason is the exception's message.
+ *
+ * @param modelID The id the open was attempted under.
+ * @param error What the constructor threw.
+ */
+function recordOpenFailure( modelID: number, error: unknown ): void {
+  const statistics = Logger.getStatistics( modelID ) ?? Logger.createStatistics( modelID )
+  const status = statistics.getLoadStatus()
+
+  if ( error instanceof UnrecognizedIfc4x3SchemaError ) {
+
+    // A FILE_SCHEMA spelling of the IFC4X3 family that conway has not
+    // verified (e.g. IFC4X3_RC4) is refused by selectIfcSchemaKindForHeader
+    // during the parse — a schema refusal like the IFC4X3 ones that already
+    // record UNSUPPORTED_SCHEMA, and the only one that did not say so. Seen
+    // in production (conway#741) reaching Share as a generic crash.
+    statistics.setLoadStatus( 'UNSUPPORTED_SCHEMA' )
+  } else if ( status === void 0 || status === 'OK' ) {
+    statistics.setLoadStatus( 'OPEN_FAIL' )
+  }
+
+  statistics.setLoadFailureReason( error instanceof Error ? error.message : String( error ) )
+}
 
 /**
  * The factory to construct models.
@@ -30,6 +100,8 @@ export class IfcApiModelPassthroughFactory {
       data: Uint8Array,
       wasmModule: any,
       settings?: Loadersettings ): IfcApiModelPassthrough | undefined {
+
+    beginOpenStatistics( modelID )
 
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
@@ -73,6 +145,7 @@ export class IfcApiModelPassthroughFactory {
             Logger.error( `Unknown error loading AP214 model in passthrough factory ${modelID}` )
           }
 
+          recordOpenFailure( modelID, e )
         }
 
         break
@@ -94,13 +167,14 @@ export class IfcApiModelPassthroughFactory {
             Logger.error( `Unknown error loading IFC model in passthrough factory ${modelID}` )
           }
 
+          recordOpenFailure( modelID, e )
         }
 
         break
 
       default:
 
-        Logger.error( 'No type detected when constructing model')
+        recordUnrecognizedFormat( modelID, data )
     }
   }
 
@@ -197,6 +271,8 @@ export class IfcApiModelPassthroughFactory {
 
     if ( modelFormat === ModelFormatType.IFC ) {
 
+      beginOpenStatistics( modelID )
+
       try {
 
         return await IfcApiProxyIfc.createFromStore(
@@ -207,8 +283,15 @@ export class IfcApiModelPassthroughFactory {
 
         Logger.warning(
             `Store-backed open failed for model ${modelID}: ${message}` )
+
+        recordOpenFailure( modelID, e )
       }
     } else {
+
+      // No UNRECOGNIZED_FORMAT here, unlike from()/fromAsync(): this sniff
+      // sees only a 64 KiB prefix, so a long header reads as unrecognised
+      // here and opens fine through the buffered path the caller is told to
+      // use next (see detectFromStore).
 
       Logger.warning(
           'Store-backed open is IFC-only; use OpenModelStreamed with a buffer ' +
@@ -345,6 +428,8 @@ export class IfcApiModelPassthroughFactory {
       wasmModule: any,
       settings?: Loadersettings ): Promise<IfcApiModelPassthrough | undefined> {
 
+    beginOpenStatistics( modelID )
+
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( data ) )
 
     try {
@@ -374,7 +459,7 @@ export class IfcApiModelPassthroughFactory {
 
         default:
 
-          Logger.error( 'No type detected when constructing model')
+          recordUnrecognizedFormat( modelID, data )
           return void 0
       }
     } catch ( e ) {
@@ -388,6 +473,7 @@ export class IfcApiModelPassthroughFactory {
         Logger.error( `Unknown error loading model in passthrough factory ${modelID}` )
       }
 
+      recordOpenFailure( modelID, e )
     }
   }
 }

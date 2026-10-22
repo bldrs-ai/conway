@@ -43,6 +43,7 @@ function formatRetained(value: number | undefined): string {
  */
 export class Statistics {
   private loadStatus: string | undefined
+  private loadFailureReason: string | undefined
   private writer: string | undefined
   private projectName: string | undefined
   private version: string | undefined
@@ -88,6 +89,31 @@ export class Statistics {
    */
   setLoadStatus(value: string) {
     this.loadStatus = value
+  }
+
+  /**
+   * Why an open of this model returned -1, when it did (conway#741).
+   *
+   * Set by the web-ifc compat factory on the id the failed open was
+   * attempted under, next to a load status of `UNRECOGNIZED_FORMAT` (the
+   * bytes are not a STEP file conway recognises — the reason names the
+   * shape: zip, UTF-16, header syntax error at byte N, unknown
+   * FILE_SCHEMA, ...) or `OPEN_FAIL` (the model constructor threw — the
+   * reason is the exception message). A more specific status an open
+   * already recorded, such as `UNSUPPORTED_SCHEMA`, is kept and only the
+   * reason is added. Undefined on a load that opened.
+   *
+   * @return {string | undefined} The failure reason, or undefined.
+   */
+  getLoadFailureReason(): string | undefined {
+    return this.loadFailureReason
+  }
+
+  /**
+   * @param value - why the open failed (see getLoadFailureReason)
+   */
+  setLoadFailureReason(value: string) {
+    this.loadFailureReason = value
   }
 
   /**

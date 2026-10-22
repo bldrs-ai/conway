@@ -147,6 +147,10 @@ import {
   IfcMaterialConstituent,
   IfcMaterialProfile,
   IfcProject,
+  IfcUnitAssignment,
+  IfcDerivedUnit,
+  IfcMonetaryUnit,
+  IfcNamedUnit,
   IfcSIUnit,
   IfcSIPrefix,
   IfcUnitEnum,
@@ -6730,13 +6734,39 @@ export class IfcGeometryExtraction {
     }
 
     // Logger.info(`UnitsInContext expressID: ${unitsInContext.expressID}`)
-    for (const unit of unitsInContext.Units) {
+    for (const unit of this.readProjectUnits_(unitsInContext)) {
       // Logger.info(`Unit type: ${EntityTypesIfc[unit.type]}, expressID: ${unit.expressID}`)
 
       if (unit instanceof IfcSIUnit) {
-        const unitType = unit.UnitType
-        const unitName = unit.Name
-        const unitPrefix = unit.Prefix
+        let unitType: IfcUnitEnum
+        let unitName: IfcSIUnitName
+        let unitPrefix: IfcSIPrefix | null
+
+        // Every SI unit in the assignment is decoded here, not just the
+        // length unit this loop is looking for — so before conway#741 one
+        // unit whose UnitType or Name enum did not decode (extractLambda's
+        // "Value in STEP was incorrectly typed") threw out of the model
+        // constructor, and every open entry point returned -1 for a file
+        // whose geometry was fine. That is the production signature in
+        // conway#741 (store, streamed and classic opens all failing on
+        // "incorrectly typed" from extractLambda). Skip the unit instead:
+        // an unreadable AREAUNIT says nothing about length, and an
+        // unreadable LENGTHUNIT leaves the factor at its default (metres),
+        // which is what a file with no length unit already gets.
+        try {
+          unitType = unit.UnitType
+          unitName = unit.Name
+          unitPrefix = unit.Prefix
+        } catch (ex) {
+          if (!MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+            throw ex
+          }
+          Logger.error(
+              'Skipping an IfcSIUnit whose unit type or name could not be read',
+              unit.expressID,
+              DATA_DEFECT)
+          continue
+        }
 
         if (unitPrefix === null) {
           continue
@@ -6761,6 +6791,62 @@ export class IfcGeometryExtraction {
     }
   }
  
+
+  /**
+   * Read a project's IfcUnitAssignment.Units, keeping every element that
+   * resolves to a unit even when another element does not.
+   *
+   * The generated `Units` getter is all-or-nothing: one element that is not
+   * an IfcDerivedUnit / IfcMonetaryUnit / IfcNamedUnit — a `$`, a literal,
+   * or a reference to some other entity — throws "Value in select must be
+   * populated" for the whole list. extractLinearScalingFactor runs inside
+   * every open (classic, streamed, deferred and store-backed alike), so
+   * that one bad element made OpenModel* return -1 (conway#741). When the
+   * getter throws, walk the same field reference by reference instead and
+   * drop only the elements that do not resolve to a unit.
+   *
+   * @param assignment The project's UnitsInContext.
+   * @return {Array} The readable units, in file order.
+   */
+  private readProjectUnits_(
+      assignment: IfcUnitAssignment ): Array<IfcDerivedUnit | IfcMonetaryUnit | IfcNamedUnit> {
+
+    try {
+      return assignment.Units
+    } catch (ex) {
+      if (!MATERIAL_RELATED_OBJECTS_PERMISSIVE) {
+        throw ex
+      }
+    }
+
+    const units: Array<IfcDerivedUnit | IfcMonetaryUnit | IfcNamedUnit> = []
+
+    // IfcUnitAssignment.Units is the entity's only attribute, so it sits at
+    // vtable (0, 0, 0) — the same slot the generated getter reads.
+    assignment.forEachReferenceInField(0, 0, 0, (expressID) => {
+
+      const localID =
+        expressID !== void 0 ? this.model.resolveExpressID(expressID) : void 0
+      const element =
+        localID !== void 0 ? this.model.getElementByLocalID(localID) : void 0
+
+      if (element instanceof IfcDerivedUnit ||
+          element instanceof IfcMonetaryUnit ||
+          element instanceof IfcNamedUnit) {
+        units.push(element)
+      } else {
+        // One entry per skipped element, so `count` is how many were lost.
+        Logger.error(
+            'Skipping an IfcUnitAssignment element that is not a unit',
+            assignment.expressID,
+            DATA_DEFECT)
+      }
+
+      return true
+    })
+
+    return units
+  }
 
   /* eslint-disable no-magic-numbers */ // No magic numbers disabled
   /**

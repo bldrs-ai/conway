@@ -4004,8 +4004,22 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
       const localID = products[this.demandCursor_]
 
-      if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
-        ++extracted
+      // Same per-product guard as the async twin (pumpGeometryBatchAsync_)
+      // and the classic whole-model walk: one product that throws is logged
+      // and skipped. Without it the throw escaped ExtractGeometryBatch and
+      // stranded the cursor on that product, so a synchronous embedder could
+      // not get past it — data/grid_placement_tail_axes.ifc (an
+      // IfcVirtualGridIntersection with a mistyped axis reference) renders 3
+      // meshes classically and through the async pump, and threw here on the
+      // first batch (conway#741).
+      try {
+        if (this.conwayGeometry_.extractProductGeometryByLocalID(localID)) {
+          ++extracted
+        }
+      } catch (error) {
+        Logger.error(
+            `Error extracting product localID ${localID}: ` +
+            `${error instanceof Error ? error.message : String(error)}`)
       }
     }
 
