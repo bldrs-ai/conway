@@ -269,9 +269,12 @@ export class IfcApiModelPassthroughFactory {
     const prefix = await store.read( 0, prefixLen )
     const modelFormat = ModelFormatDetector.detect( new ParsingBuffer( prefix ) )
 
-    if ( modelFormat === ModelFormatType.IFC ) {
+    // Before the format branch, so the IFC-only refusal below also leaves
+    // this attempt's own (status-less) statistics under `modelID` rather
+    // than an earlier IfcAPI's object with a stale UNSUPPORTED_SCHEMA.
+    beginOpenStatistics( modelID )
 
-      beginOpenStatistics( modelID )
+    if ( modelFormat === ModelFormatType.IFC ) {
 
       try {
 

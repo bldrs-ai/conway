@@ -288,6 +288,42 @@ describe( 'a -1 open says why on its statistics', () => {
   } )
 } )
 
+describe( 'a store open refused before the IFC branch does not inherit a stale status', () => {
+
+  test( 'a fresh IfcAPI reusing id 0 gets its own statistics, not an earlier UNSUPPORTED_SCHEMA', async () => {
+
+    jest.spyOn( console, 'error' ).mockImplementation( () => {} )
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    // Logger's statistics map is module-level and every IfcAPI numbers its
+    // models from 0, so an earlier API's id-0 object is what a later
+    // refusal would otherwise find.
+    const earlier = new IfcAPI()
+
+    await earlier.Init()
+
+    const refused = new Uint8Array(
+        fs.readFileSync( 'data/ifc4x3_road_entities_ineligible.ifc' ) )
+
+    expect( earlier.OpenModel( refused, SETTINGS ) ).toBe( -1 )
+    expect( earlier.getStatistics( 0 ).getLoadStatus() ).toBe( 'UNSUPPORTED_SCHEMA' )
+
+    const later = new IfcAPI()
+
+    await later.Init()
+
+    // STEP AP214: not IFC, so the store open (IFC-only) returns -1 at the sniff.
+    const step = new Uint8Array( fs.readFileSync( 'data/nema-23-76mm.step' ) )
+
+    expect( await later.OpenModelStream( new InMemoryStepByteStore( step ), DEFER ) ).toBe( -1 )
+
+    const statistics = later.getStatistics( 0 )
+
+    expect( statistics.getLoadStatus() ).not.toBe( 'UNSUPPORTED_SCHEMA' )
+    expect( statistics.getLoadFailureReason() ).toBeUndefined()
+  }, 120000 )
+} )
+
 describe( 'the synchronous demand pump skips a throwing product', () => {
 
   test( 'grid_placement_tail_axes.ifc drains through ExtractGeometryBatch', async () => {
