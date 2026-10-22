@@ -1375,11 +1375,44 @@ export class IfcAPI {
     }
 
     const start = performance.now()
-    const pumped = result.extractGeometryBatch(batchSize, meshCallback)
+    const extract = result.extractGeometryBatch.bind(result)
+    const pumped = Logger.withStatistics(
+        modelID, () => extract(batchSize, meshCallback))
 
     this.recordPumpStatistics_(modelID, result, pumped, performance.now() - start)
 
     return pumped
+  }
+
+  /**
+   * Refresh the products-with-geometry count after a whole-model ask
+   * (conway#740), which on a deferred model may itself have drained the
+   * pump. When the call raised the count it extracted geometry, so its wall
+   * time is added to the geometry time like a pump call's; when it did not
+   * (a classic model, whose geometry time the open already recorded, or a
+   * deferred model already drained) nothing is added, so a second
+   * StreamAllMeshes cannot count the same geometry twice. The time includes
+   * the embedder's mesh callback, as a pump call's does.
+   *
+   * @param modelID The model.
+   * @param result Its passthrough.
+   * @param milliseconds Wall time the whole-model call took.
+   */
+  private refreshProductsWithGeometry_(
+      modelID: number, result: IfcApiModelPassthrough, milliseconds: number ): void {
+
+    const withGeometry = result.getProductsWithGeometryCount?.()
+    const statistics = Logger.getStatistics(modelID)
+
+    if (withGeometry === void 0 || statistics === void 0) {
+      return
+    }
+
+    if (withGeometry > (statistics.getProductsWithGeometryCount() ?? 0)) {
+      statistics.addGeometryTime(milliseconds)
+    }
+
+    statistics.setProductsWithGeometryCount(withGeometry)
   }
 
   /**
@@ -1398,26 +1431,6 @@ export class IfcAPI {
    * @param pumped What the call returned.
    * @param milliseconds Wall time the call took.
    */
-  /**
-   * Refresh the products-with-geometry count after a whole-model ask
-   * (conway#740), which on a deferred model may itself have drained the
-   * pump. Geometry time is not added here: on a classic model this call
-   * extracts nothing, and the internal drain of a deferred one is not
-   * separable from the serve.
-   *
-   * @param modelID The model.
-   * @param result Its passthrough.
-   */
-  private refreshProductsWithGeometry_(
-      modelID: number, result: IfcApiModelPassthrough ): void {
-
-    const withGeometry = result.getProductsWithGeometryCount?.()
-
-    if (withGeometry !== void 0) {
-      Logger.getStatistics(modelID)?.setProductsWithGeometryCount(withGeometry)
-    }
-  }
-
   private recordPumpStatistics_(
       modelID: number,
       result: IfcApiModelPassthrough,
@@ -1462,7 +1475,9 @@ export class IfcAPI {
     if (result?.extractGeometryBatchAsync !== void 0) {
 
       const start = performance.now()
-      const pumped = await result.extractGeometryBatchAsync(batchSize, meshCallback)
+      const extractAsync = result.extractGeometryBatchAsync.bind(result)
+      const pumped = await Logger.withStatistics(
+        modelID, () => extractAsync(batchSize, meshCallback))
 
       this.recordPumpStatistics_(modelID, result, pumped, performance.now() - start)
 
@@ -1526,8 +1541,10 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      result.streamAllMeshes(meshCallback)
-      this.refreshProductsWithGeometry_(modelID, result)
+      const start = performance.now()
+
+      Logger.withStatistics(modelID, () => result.streamAllMeshes(meshCallback))
+      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
     }
 
     Logger.displayLogs()
@@ -1576,13 +1593,17 @@ export class IfcAPI {
       // Passthroughs predating conway#660 (and any future non-conway one)
       // have no async twin; the sync entry point is the whole of what they
       // can do, and on a resident source it is equivalent.
-      if (result.streamAllMeshesAsync !== void 0) {
-        await result.streamAllMeshesAsync(meshCallback)
-      } else {
-        result.streamAllMeshes(meshCallback)
-      }
+      const start = performance.now()
 
-      this.refreshProductsWithGeometry_(modelID, result)
+      await Logger.withStatistics(modelID, async () => {
+        if (result.streamAllMeshesAsync !== void 0) {
+          await result.streamAllMeshesAsync(meshCallback)
+        } else {
+          result.streamAllMeshes(meshCallback)
+        }
+      })
+
+      this.refreshProductsWithGeometry_(modelID, result, performance.now() - start)
     }
 
     Logger.displayLogs()
@@ -1604,7 +1625,7 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      result.streamAllMeshesWithTypes(types, meshCallback)
+      Logger.withStatistics(modelID, () => result.streamAllMeshesWithTypes(types, meshCallback))
     }
   }
 
@@ -1633,7 +1654,7 @@ export class IfcAPI {
 
     if (result !== void 0) {
 
-      return result.loadAllGeometry()
+      return Logger.withStatistics(modelID, () => result.loadAllGeometry())
     }
 
     // dummy vars

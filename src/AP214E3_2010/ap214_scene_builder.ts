@@ -602,6 +602,20 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   }
 
   /**
+   * The owning-element local IDs behind geometryOwnerCount. These are NOT
+   * all one entity type: extraction stamps a product_definition_shape for an
+   * SDR-bound representation and a shape_representation for a free root, so
+   * a caller that wants a count over one identity (product_definition, as
+   * the compat proxy does) must map them rather than use the size.
+   *
+   * @return {ReadonlySet<number>} The owner local IDs.
+   */
+  public get geometryOwnerIDs(): ReadonlySet<number> {
+
+    return this.geometryOwners_
+  }
+
+  /**
    * Does this scene have a particular piece of geometry?
    *
    * @param localID The local ID of the geometry

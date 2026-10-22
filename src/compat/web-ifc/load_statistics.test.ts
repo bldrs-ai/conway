@@ -175,6 +175,37 @@ describe( 'error and warning counts', () => {
     api.CloseModel( second )
     other.CloseModel( reused )
   } )
+
+  test( 'pumping an earlier deferred model counts against it, not the later one', async () => {
+
+    let bad = -1
+    let clean = -1
+
+    await observeDiagnostics( async () => {
+      bad = await api.OpenModelStream(
+          new InMemoryStepByteStore( read( 'data/grid_placement_tail_axes.ifc' ) ), DEFER )
+      // A second load begins before the first is pumped.
+      clean = await api.OpenModelStreamed( read( 'data/index.ifc' ), DEFER )
+
+      const badAtOpen = api.getStatistics( bad ).getErrorCount()
+
+      await drain( bad )
+
+      expect( api.getStatistics( bad ).getErrorCount() ).toBeGreaterThan( badAtOpen )
+
+      await drain( clean )
+
+      // Diagnostics outside any load's own calls belong to no load.
+      api.CloseModel( 987654 )
+      api.GetGeometry( clean, 987654 )
+    } )
+
+    expect( api.getStatistics( clean ).getErrorCount() ).toBe( 0 )
+    expect( api.getStatistics( clean ).getWarningCount() ).toBe( 0 )
+
+    api.CloseModel( bad )
+    api.CloseModel( clean )
+  } )
 } )
 
 describe( 'products with geometry', () => {
@@ -219,6 +250,135 @@ describe( 'products with geometry', () => {
 
       api.CloseModel( classicID )
       api.CloseModel( deferredID )
+    } )
+  } )
+} )
+
+describe( 'STEP products with geometry stay on the product_definition identity', () => {
+
+  // The numerator maps geometry owners (product_definition_shape for an
+  // SDR-bound representation, shape_representation for a free root) back to
+  // product_definition, the denominator's identity, so it can never exceed it.
+  test.each( [
+    'data/ap214-multibody-part.step',
+    'data/ap214-reachability-arms.step',
+    'data/ap214-assembly-root-unit-scale.step',
+    'data/create-a-tube.step',
+    'data/ap242-tessellated-solid.step',
+    'data/a-gear-with-3-inch-diameter-and-20-curved-teeth.step',
+    'data/nema-23-76mm.step',
+    'data/as1-assembly.step',
+    'data/ap214-two-representations.step',
+    'data/ap214-two-representations-one-unit.step',
+    'data/ap214-two-root-parts-nested-pds.step',
+    'data/as1-oc-214.stp',
+  ] )( '%s', async ( fixture ) => {
+
+    await observeDiagnostics( async () => {
+
+      const classicID = api.OpenModel( read( fixture ), SETTINGS )
+
+      api.StreamAllMeshes( classicID, () => {} )
+
+      const classic = api.getStatistics( classicID )
+
+      expect( classic.getProductsWithGeometryCount() ).toBeLessThanOrEqual( classic.getProductCount() )
+
+      const deferredID = await api.OpenModelStreamed( read( fixture ), DEFER )
+
+      await drain( deferredID )
+
+      const deferred = api.getStatistics( deferredID )
+
+      expect( deferred.getProductCount() ).toBe( classic.getProductCount() )
+      expect( deferred.getProductsWithGeometryCount() ).toBe( classic.getProductsWithGeometryCount() )
+
+      api.CloseModel( classicID )
+      api.CloseModel( deferredID )
+    } )
+  } )
+} )
+
+describe( 'STEP products with geometry: owners that are not product_definitions', () => {
+
+  test( 'two representations of one product count the product once', async () => {
+
+    await observeDiagnostics( async () => {
+
+      const modelID = api.OpenModel( read( 'data/ap214-two-representations.step' ), SETTINGS )
+
+      api.StreamAllMeshes( modelID, () => {} )
+
+      const statistics = api.getStatistics( modelID )
+
+      // Two geometry owners, one PRODUCT_DEFINITION: a fraction of 2/1 is
+      // what counting owners directly produced.
+      expect( statistics.getProductCount() ).toBe( 1 )
+      expect( statistics.getProductsWithGeometryCount() ).toBe( 1 )
+
+      api.CloseModel( modelID )
+    } )
+  } )
+
+  test( 'assembly occurrences count the parts they place', async () => {
+
+    await observeDiagnostics( async () => {
+
+      const modelID = api.OpenModel( read( 'data/as1-oc-214.stp' ), SETTINGS )
+
+      api.StreamAllMeshes( modelID, () => {} )
+
+      const statistics = api.getStatistics( modelID )
+
+      // Every owner here is a PDS bound to a NEXT_ASSEMBLY_USAGE_OCCURRENCE;
+      // dropping them would read as "no geometry" for a real assembly.
+      expect( statistics.getProductCount() ).toBe( 9 )
+      expect( statistics.getProductsWithGeometryCount() ).toBeGreaterThan( 0 )
+      expect( statistics.getProductsWithGeometryCount() ).toBeLessThanOrEqual( 9 )
+
+      api.CloseModel( modelID )
+    } )
+  } )
+} )
+
+describe( 'geometry time on a whole-model drain of a deferred model', () => {
+
+  test.each( [ 'data/index.ifc', 'data/nema-23-76mm.step' ] )( '%s', async ( fixture ) => {
+
+    await observeDiagnostics( async () => {
+
+      const syncID = await api.OpenModelStreamed( read( fixture ), DEFER )
+
+      expect( api.getStatistics( syncID ).getGeometryTime() ).toBe( 0 )
+
+      api.StreamAllMeshes( syncID, () => {} )
+
+      const drained = api.getStatistics( syncID ).getGeometryTime()
+
+      expect( drained ).toBeGreaterThan( 0 )
+
+      // Serving it again extracts nothing, so it adds no geometry time.
+      api.StreamAllMeshes( syncID, () => {} )
+
+      expect( api.getStatistics( syncID ).getGeometryTime() ).toBe( drained )
+
+      const asyncID = await api.OpenModelStreamed( read( fixture ), DEFER )
+
+      await api.StreamAllMeshesAsync( asyncID, () => {} )
+
+      expect( api.getStatistics( asyncID ).getGeometryTime() ).toBeGreaterThan( 0 )
+
+      // A classic model's geometry time is the open's; serving it adds none.
+      const classicID = api.OpenModel( read( fixture ), SETTINGS )
+      const atOpen = api.getStatistics( classicID ).getGeometryTime()
+
+      api.StreamAllMeshes( classicID, () => {} )
+
+      expect( api.getStatistics( classicID ).getGeometryTime() ).toBe( atOpen )
+
+      api.CloseModel( syncID )
+      api.CloseModel( asyncID )
+      api.CloseModel( classicID )
     } )
   } )
 } )

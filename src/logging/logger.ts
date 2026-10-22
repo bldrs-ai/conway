@@ -387,13 +387,10 @@ export default class Logger {
    * counts, until another load's statistics are created. Called by the
    * web-ifc compat OpenModel* entry points; paired with {@link endOpen}.
    *
-   * The window deliberately outlives the open itself: a deferred (demand)
-   * open does its geometry in later ExtractGeometryBatch* calls, and those
-   * diagnostics are this load's too. What ends the window is the next
-   * load's statistics, which is also why counts are only per-load when
-   * loads do not overlap — Logger has no way to tell which of two
-   * interleaved loads a message came from, and attributes it to the one
-   * that started last.
+   * The window closes at {@link endOpen}. A deferred (demand) open does its
+   * geometry later, in ExtractGeometryBatch* / StreamAllMeshes* calls; those
+   * re-enter this load's routing through {@link withStatistics}, so
+   * interleaved loads each keep their own counts.
    *
    * @param modelID The id the open is attempted under.
    * @return {Statistics} The load's statistics.
@@ -409,15 +406,68 @@ export default class Logger {
   }
 
   /**
-   * End the open phase begun by {@link beginOpen}. Counting continues on
-   * the load's statistics; this only stops later createStatistics calls for
-   * the same id from inheriting them.
+   * Run `fn` with warnings/errors counted against `modelID`'s statistics
+   * (conway#740), then put the previous routing back. This is what keeps a
+   * deferred model's pump-time diagnostics on that model when another load
+   * has since begun, and what stops unrelated calls (an invalid
+   * `GetGeometry`, a `CloseModel`) from being counted against whichever load
+   * started last: outside beginOpen..endOpen and a scope like this one,
+   * nothing is counted.
+   *
+   * An async `fn` holds the routing until its promise settles. Two scopes
+   * that overlap in time (two models pumped concurrently) can still
+   * misattribute one another's messages, because Logger cannot see which
+   * caller a message came from; sequential use, which is how Share pumps,
+   * is exact.
+   *
+   * @param modelID The model whose statistics should receive the counts.
+   * @param fn The work to run.
+   * @return {T} Whatever `fn` returns (a promise stays a promise).
+   */
+  public static withStatistics<T>(modelID: number, fn: () => T): T {
+    const previous = Logger.activeStatistics
+
+    Logger.activeStatistics = Logger.statistics.get(modelID)
+
+    const restore = () => {
+      Logger.activeStatistics = previous
+    }
+
+    let result: T
+
+    try {
+      result = fn()
+    } catch (e) {
+      restore()
+      throw e
+    }
+
+    if (result instanceof Promise) {
+      return result.finally(restore) as T
+    }
+
+    restore()
+
+    return result
+  }
+
+  /**
+   * End the open phase begun by {@link beginOpen}. The load's window closes
+   * with it: later diagnostics are counted only inside
+   * {@link withStatistics}, which the pump and whole-model entry points use.
+   * Also stops later createStatistics calls for the same id from inheriting
+   * the open's counts.
    *
    * @param modelID The id passed to beginOpen.
    */
   public static endOpen(modelID: number): void {
     if (Logger.openingModelID === modelID) {
       Logger.openingModelID = void 0
+    }
+
+    if (Logger.activeStatistics !== void 0 &&
+        Logger.activeStatistics === Logger.statistics.get(modelID)) {
+      Logger.activeStatistics = void 0
     }
   }
 
