@@ -818,6 +818,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     statistics?.setGeometryTime(executionTimeInMs)
     // eslint-disable-next-line no-magic-numbers
     statistics?.setGeometryMemory(scene.model.geometry.calculateGeometrySize() / (1024 * 1024))
+
+    // conway#740: numerator of the partial-load fraction against the
+    // IfcProduct count the parse already recorded. On a deferred open it is
+    // 0 until the pump runs, and IfcAPI refreshes it as it does.
+    statistics?.setProductsWithGeometryCount(scene.geometryOwnerCount)
+  }
+
+  /**
+   * Distinct products with at least one built, placed geometry so far
+   * (conway#740) — see IfcSceneBuilder.geometryOwnerCount.
+   *
+   * @return {number} The count.
+   */
+  getProductsWithGeometryCount(): number {
+    return this.model[1].geometryOwnerCount
   }
 
   /**

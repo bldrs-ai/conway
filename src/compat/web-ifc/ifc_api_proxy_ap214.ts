@@ -44,6 +44,11 @@ import {
 } from '../../step/parsing/streaming_index_builder'
 import EntityTypesAP214 from '../../AP214E3_2010/AP214E3_2010_gen/entity_types_ap214.gen'
 import {
+  product_definition,
+  product_definition_relationship,
+  product_definition_shape,
+} from '../../AP214E3_2010/AP214E3_2010_gen'
+import {
   ap214PreviewAdapter,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
@@ -434,7 +439,79 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     statistics?.setGeometryTime(executionTimeInMs)
     // eslint-disable-next-line no-magic-numbers
     statistics?.setGeometryMemory(scene.model.geometry.calculateGeometrySize() / (1024 * 1024))
+
+    // conway#740: the denominator and numerator of a partial-load fraction.
+    // A STEP "product" here is a PRODUCT_DEFINITION (one per part or
+    // assembly version), the closest STEP analogue of an IfcProduct; the IFC
+    // proxy counts IfcProduct. On a deferred open the numerator is 0 until
+    // the pump runs, and IfcAPI refreshes it as it does.
+    statistics?.setProductCount(model.typeCount(product_definition))
+    statistics?.setProductsWithGeometryCount(this.getProductsWithGeometryCount())
   }
+
+  /**
+   * Distinct PRODUCT_DEFINITIONs that own at least one built, placed
+   * geometry so far (conway#740), the numerator over the same identity the
+   * product count uses.
+   *
+   * The scene builder's owners are mixed identities (see
+   * AP214SceneBuilder.geometryOwnerIDs), so each is mapped to the
+   * product_definition it stands for: a product_definition_shape through its
+   * `definition`, a product_definition as itself, and an assembly occurrence
+   * (a PDS bound to a NEXT_ASSEMBLY_USAGE_OCCURRENCE, the usual owner in a
+   * real assembly) through the part it places. Owners with no such
+   * product_definition (a free shape_representation root, an unresolvable
+   * shape_representation_relationship) are left out, which keeps the fraction
+   * at or below 1 rather than adding to the numerator what the denominator
+   * never counted.
+   *
+   * @return {number} The count.
+   */
+  getProductsWithGeometryCount(): number {
+
+    const model = this.model[0]
+    const definitions = new Set<number>()
+
+    for ( const ownerLocalID of this.model[1].geometryOwnerIDs ) {
+
+      let definitionLocalID = this.definitionByOwner_.get( ownerLocalID )
+
+      if ( definitionLocalID === void 0 ) {
+
+        definitionLocalID = -1
+
+        try {
+          const owner = model.getElementByLocalID( ownerLocalID )
+          let definition: unknown =
+            owner instanceof product_definition_shape ? owner.definition : owner
+
+          // An occurrence (NEXT_ASSEMBLY_USAGE_OCCURRENCE, a
+          // product_definition_relationship) carries the geometry of the part
+          // it places: its related (child) product_definition.
+          if ( definition instanceof product_definition_relationship ) {
+            definition = definition.related_product_definition
+          }
+
+          if ( definition instanceof product_definition ) {
+            definitionLocalID = definition.localID
+          }
+        } catch {
+          // Malformed owner record: it maps to no product definition.
+        }
+
+        this.definitionByOwner_.set( ownerLocalID, definitionLocalID )
+      }
+
+      if ( definitionLocalID !== -1 ) {
+        definitions.add( definitionLocalID )
+      }
+    }
+
+    return definitions.size
+  }
+
+  /** Owner local ID to the product_definition it stands for, or -1 (memo). */
+  private readonly definitionByOwner_ = new Map<number, number>()
 
   /**
    * Cooperative construction (conway extension, used by OpenModelAsync):

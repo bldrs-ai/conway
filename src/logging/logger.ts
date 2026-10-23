@@ -111,6 +111,10 @@ export default class Logger {
   private static logs: LogEntry[] = []
   private static proxies: LoggingProxy[] = []
   private static statistics: Map<number, Statistics> = new Map<number, Statistics>()
+  /** The statistics that warnings/errors are counted against (conway#740). */
+  private static activeStatistics: Statistics | undefined
+  /** The id of the open in progress, between beginOpen and endOpen. */
+  private static openingModelID: number | undefined
   private static threshold: LogLevel = LogLevel.INFO
   private static sink: LogSink = defaultSink
 
@@ -249,6 +253,13 @@ export default class Logger {
       Logger.logs.push(logEntry)
     }
 
+    // Per-load counts (conway#740), on every occurrence and independent of
+    // the buffer above, which is global, deduplicated and cleared by
+    // StreamAllMeshes before an embedder gets to read it.
+    if (level === 'error' || level === 'warning') {
+      Logger.activeStatistics?.countDiagnostic(level, baseMessage, category)
+    }
+
     // Echo only the first occurrence of each distinct entry — repeats keep
     // deduplicating silently into the buffer (visible via displayLogs()).
     //
@@ -350,10 +361,126 @@ export default class Logger {
    */
   public static createStatistics(modelID: number): Statistics {
     const statistics: Statistics = new Statistics()
+    const previous = Logger.statistics.get(modelID)
 
-    this.statistics.set(modelID, statistics)
+    // An open replaces its own statistics part-way: IfcAPI begins the load
+    // (beginOpen), then the proxy it constructs creates its own object, and
+    // a streamed open that falls back to the classic one creates a third.
+    // Diagnostics logged before each replacement belong to the same load,
+    // so carry their counts across — but only within one open, so that an
+    // unrelated later load reusing the id (ids restart at 0 per IfcAPI,
+    // while this map is module-level) starts from zero.
+    if (Logger.openingModelID === modelID &&
+        previous !== void 0 && previous === Logger.activeStatistics) {
+      statistics.inheritDiagnostics(previous)
+    }
+
+    Logger.statistics.set(modelID, statistics)
+    Logger.activeStatistics = statistics
 
     return statistics
+  }
+
+  /**
+   * Start a load's diagnostic window (conway#740): give `modelID` fresh
+   * statistics and route every warning/error logged from now on into its
+   * counts, until another load's statistics are created. Called by the
+   * web-ifc compat OpenModel* entry points; paired with {@link endOpen}.
+   *
+   * The window closes at {@link endOpen}. A deferred (demand) open does its
+   * geometry later, in ExtractGeometryBatch* / StreamAllMeshes* calls; those
+   * re-enter this load's routing through {@link withStatistics}, so
+   * deferred models pumped one after another each keep their own counts.
+   *
+   * **Limit: the open window itself is a module-global singleton**
+   * (`openingModelID`, `activeStatistics`). Two *overlapping* asynchronous
+   * opens (for example `Promise.all` over `OpenModelStreamed`) therefore
+   * cross-attribute: the later beginOpen overwrites the earlier's routing,
+   * and either endOpen can close the other's window. Nothing in-tree
+   * overlaps opens on one Logger: Share serialises loads (CadView's
+   * `onViewerInFlightRef` dedupes, and replays a different model after the
+   * in-flight one ends), and conway's regression harness and the m3 pump
+   * scripts run each file in its own child process or worker, each with its
+   * own Logger. A per-open diagnostic context would fix it; see the
+   * follow-up issue linked from the PR #743 review thread.
+   *
+   * @param modelID The id the open is attempted under.
+   * @return {Statistics} The load's statistics.
+   */
+  public static beginOpen(modelID: number): Statistics {
+    Logger.openingModelID = void 0
+
+    const statistics = Logger.createStatistics(modelID)
+
+    Logger.openingModelID = modelID
+
+    return statistics
+  }
+
+  /**
+   * Run `fn` with warnings/errors counted against `modelID`'s statistics
+   * (conway#740), then put the previous routing back. This is what keeps a
+   * deferred model's pump-time diagnostics on that model when another load
+   * has since begun, and what stops unrelated calls (an invalid
+   * `GetGeometry`, a `CloseModel`) from being counted against whichever load
+   * started last: outside beginOpen..endOpen and a scope like this one,
+   * nothing is counted.
+   *
+   * An async `fn` holds the routing until its promise settles. Two scopes
+   * that overlap in time (two models pumped concurrently) can still
+   * misattribute one another's messages, because Logger cannot see which
+   * caller a message came from; sequential use, which is how Share pumps,
+   * is exact.
+   *
+   * @param modelID The model whose statistics should receive the counts.
+   * @param fn The work to run.
+   * @return {T} Whatever `fn` returns (a promise stays a promise).
+   */
+  public static withStatistics<T>(modelID: number, fn: () => T): T {
+    const previous = Logger.activeStatistics
+
+    Logger.activeStatistics = Logger.statistics.get(modelID)
+
+    const restore = () => {
+      Logger.activeStatistics = previous
+    }
+
+    let result: T
+
+    try {
+      result = fn()
+    } catch (e) {
+      restore()
+      throw e
+    }
+
+    if (result instanceof Promise) {
+      return result.finally(restore) as T
+    }
+
+    restore()
+
+    return result
+  }
+
+  /**
+   * End the open phase begun by {@link beginOpen}. The load's window closes
+   * with it: later diagnostics are counted only inside
+   * {@link withStatistics}, which the pump and whole-model entry points use.
+   * Also stops later createStatistics calls for the same id from inheriting
+   * the open's counts.
+   *
+   * @param modelID The id passed to beginOpen.
+   */
+  public static endOpen(modelID: number): void {
+    if (Logger.openingModelID === modelID) {
+      Logger.openingModelID = void 0
+    }
+
+    if (Logger.activeStatistics !== void 0 &&
+        Logger.activeStatistics === Logger.statistics.get(modelID)) {
+      Logger.activeStatistics = void 0
+    }
   }
 
   /**

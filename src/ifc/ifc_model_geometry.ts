@@ -128,6 +128,19 @@ export class IfcModelGeometry implements ModelGeometry {
   }
 
   /**
+   * Whether a mesh is held for this local ID, WITHOUT touching residency
+   * recency the way {@link getByLocalID} does — for bookkeeping that must
+   * not reorder eviction (conway#740's products-with-geometry count).
+   *
+   * @param localID The geometry's local ID.
+   * @return {boolean} True if a mesh is held for it.
+   */
+  public hasLocalID(localID: number): boolean {
+
+    return this.meshes_.has(localID)
+  }
+
+  /**
    * Get an mesh by its matching local ID.
    *
    * @param localID

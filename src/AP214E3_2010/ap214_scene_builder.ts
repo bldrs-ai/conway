@@ -107,6 +107,13 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   private scene_: AP214SceneNode[] = []
   private sceneLocalIdMap_ = new Map<number, number>()
   private geometrySet_ = new Set< number >()
+  /**
+   * Owning elements that received at least one geometry node whose mesh
+   * existed when the node was added (conway#740). A node is added even for
+   * an item whose extraction produced nothing (an unsupported type, a
+   * failed face) — those leave no mesh, so they do not count here.
+   */
+  private geometryOwners_ = new Set< number >()
 
   private sceneStack_: AP214SceneTransform[] = []
   private currentParent_?: AP214SceneTransform
@@ -586,6 +593,29 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
   }
 
   /**
+   * @return {number} Distinct owning elements with at least one built,
+   * placed geometry so far (see geometryOwners_).
+   */
+  public get geometryOwnerCount(): number {
+
+    return this.geometryOwners_.size
+  }
+
+  /**
+   * The owning-element local IDs behind geometryOwnerCount. These are NOT
+   * all one entity type: extraction stamps a product_definition_shape for an
+   * SDR-bound representation and a shape_representation for a free root, so
+   * a caller that wants a count over one identity (product_definition, as
+   * the compat proxy does) must map them rather than use the size.
+   *
+   * @return {ReadonlySet<number>} The owner local IDs.
+   */
+  public get geometryOwnerIDs(): ReadonlySet<number> {
+
+    return this.geometryOwners_
+  }
+
+  /**
    * Does this scene have a particular piece of geometry?
    *
    * @param localID The local ID of the geometry
@@ -613,6 +643,10 @@ export class AP214SceneBuilder implements WalkableScene< StepEntityBase< EntityT
     let parentIndex: number | undefined
 
     this.geometrySet_.add( localID )
+
+    if ( owningElementLocalID !== void 0 && this.model.geometry.hasLocalID( localID ) ) {
+      this.geometryOwners_.add( owningElementLocalID )
+    }
 
     if (this.currentParent_ !== void 0) {
 

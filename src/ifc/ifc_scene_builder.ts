@@ -94,6 +94,13 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   private scene_: IfcSceneNode[] = []
   private sceneLocalIdMap_ = new Map<number, number>()
   private geometrySet_ = new Set< number >()
+  /**
+   * Owning elements that received at least one geometry node whose mesh
+   * existed when the node was added (conway#740). A node is added even for
+   * an item whose extraction produced nothing (an unsupported type, a
+   * failed face) — those leave no mesh, so they do not count here.
+   */
+  private geometryOwners_ = new Set< number >()
 
   private sceneStack_: IfcSceneTransform[] = []
   private currentParent_?: IfcSceneTransform
@@ -650,6 +657,15 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
   }
 
   /**
+   * @return {number} Distinct owning elements with at least one built,
+   * placed geometry so far (see geometryOwners_).
+   */
+  public get geometryOwnerCount(): number {
+
+    return this.geometryOwners_.size
+  }
+
+  /**
    * Does this scene have a particular piece of geometry?
    *
    * @param localID The local ID of the geometry
@@ -679,6 +695,10 @@ export class IfcSceneBuilder implements WalkableScene< StepEntityBase< EntityTyp
     let parentIndex: number | undefined
 
     this.geometrySet_.add( localID )
+
+    if ( owningElementLocalID !== void 0 && this.model.geometry.hasLocalID( localID ) ) {
+      this.geometryOwners_.add( owningElementLocalID )
+    }
 
     if (this.currentParent_ !== void 0) {
 
