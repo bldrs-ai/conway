@@ -1,5 +1,6 @@
 {
   "name": "@bldrs-ai/conway",
+  "packageManager": "yarn@1.22.22",
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
