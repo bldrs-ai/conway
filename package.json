@@ -1,5 +1,6 @@
 {
   "name": "@bldrs-ai/conway",
+  "packageManager": "yarn@1.22.22",
   "description": "bldrs.ai datamodel",
   "author": "bldrs.ai",
   "license": "AGPL-3.0",
@@ -60,7 +61,7 @@
     }
   },
   "scripts": {
-    "setup": "yarn install && yarn submodule-update && yarn extract-wasm-dependencies && yarn build-incremental && yarn wasm-prebuilt",
+    "setup": "yarn install --frozen-lockfile --non-interactive && yarn submodule-update && yarn extract-wasm-dependencies && yarn build-incremental && yarn wasm-prebuilt && yarn check-compiled-fresh && yarn check-wasm-fresh",
     "codex-setup-emsdk": "bash ./scripts/setup-emsdk.sh",
     "clean": "run-script-os",
     "clean:win32": "rd /s /q compiled & rd /s /q \"dependencies/conway-geom/bin/release\" & del /q \"dependencies/conway-geom/Dist/*.map\" && del /q \"dependencies/conway-geom/Dist/*.js\" & yarn \"clean-conway_geom\"",
