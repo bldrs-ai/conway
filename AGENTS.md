@@ -6,18 +6,27 @@ consumed by [Share](https://github.com/bldrs-ai/Share).
 
 ## Build and test
 
-Do not try and run `yarn setup` again **in the container's main clone** —
-it has already been run there by the environment setup. A **worktree you
-create yourself inherits none of that state**, so it needs setup run in
-it: `yarn submodule-update && yarn extract-wasm-dependencies` at minimum,
-or `yarn setup` if you want a full build. The symptom is
-`yarn build-codex-node` failing on missing `glm` / `tinynurbs` (nested
-submodules under `dependencies/conway-geom/external/`, which is why the
-init is `--recursive`) or on the unextracted
-`dependencies/conway-geom/dependencies/wasm/dependencies.zip`. Two agents
-have read the "already been run" sentence in a worktree and hand-rolled
-those steps as if they were undocumented; they are not, they are `setup`'s
-own named pieces.
+Use `yarn setup` as the common entry point in local development, CI and
+cloud environments. It is safe to repeat in an existing checkout: dependency
+installation uses the frozen lockfile, submodules stay at their recorded
+revisions, TypeScript builds incrementally, and populated WASM is reused.
+Setup ends with compiled-output and WASM freshness checks; a mismatched
+geometry revision fails with instructions to rebuild. These are readiness
+checks, not a substitute for `yarn test` after code changes.
+
+Do not assume setup has already run based on the checkout's location.
+Missing `glm` / `tinynurbs` or `dependencies/wasm/dependencies.zip` means
+the setup prerequisites are incomplete; use the same entry point rather
+than hand-rolling its steps. Cloud tasks already have isolated checkouts;
+use those rather than creating a worktree for setup.
+
+Fresh WASM installs default to the latest green published release. Repeated
+setup reuses the installed bundle so it stays fast and preserves native
+builds. To explicitly refresh, run `yarn wasm-prebuilt --force`, then
+`yarn check-wasm-fresh`. To select a particular release, run
+`CONWAY_PREBUILT_WASM_VERSION=<version> yarn wasm-prebuilt --force`, then
+the same freshness check. A pin does not override compatibility with the
+checked-out conway-geom revision.
 
 To build, run `yarn build-codex-node`. To test, run `yarn test`. If only
 making changes to the TypeScript code in conway, you can run `yarn
