@@ -19,6 +19,7 @@ import * as fs from 'fs'
 import { afterEach, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { IfcGeometryExtraction } from '../../ifc/ifc_geometry_extraction'
+import { IfcStyledItem } from '../../ifc/ifc4_gen'
 import { AP214GeometryExtraction } from '../../AP214E3_2010/ap214_geometry_extraction'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { FlatMesh, IfcAPI } from './ifc_api'
@@ -304,6 +305,108 @@ describe( 'conway#748: deferred opens prepare the extraction maps lazily', () =>
     api.CloseModel( modelID )
   }, 240000 )
 
+  test( 'a sync prep during the async paging is refused, not run unpaged', async () => {
+
+    // codex on conway#751: the residency flag used to be set after the
+    // units were paged but BEFORE the material-definition and relationship
+    // records were, so a sync prep landing in one of those later awaits
+    // passed the guard and swept non-resident rows — empty maps, prepared.
+    const buffer = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+
+    const residentID = await api.OpenModelStreamed( buffer, DEFERRED )
+    const resident = await pumpAsync( residentID )
+
+    const modelID = await api.OpenModelStreamed( buffer, DEFERRED )
+
+    api.SpillModelSource( modelID, new InMemoryStepByteStore( buffer ), 512, 3 )
+
+    const extraction = extractionOf( modelID )
+    const model = extraction.model
+
+    // Hold the paging at the first styled item — a record the sweeps read,
+    // paged well after the units.
+    const styledLocalIDs = new Set< number >()
+
+    for ( const expressID of model.expressIDsOfTypes( IfcStyledItem ) ) {
+
+      const localID = model.resolveExpressID( expressID )
+
+      if ( localID !== void 0 ) {
+        styledLocalIDs.add( localID )
+      }
+    }
+
+    expect( styledLocalIDs.size ).toBeGreaterThan( 0 )
+
+    const original = model.ensureResidentByLocalID.bind( model )
+    let reached: () => void = () => { /* replaced below */ }
+    let release: () => void = () => { /* replaced below */ }
+    const reachedPromise = new Promise< void >( ( resolve ) => {
+      reached = resolve
+    } )
+    const gate = new Promise< void >( ( resolve ) => {
+      release = resolve
+    } )
+    let held = false
+
+    jest.spyOn( model, 'ensureResidentByLocalID' ).mockImplementation(
+        async ( localID: number ) => {
+          if ( !held && styledLocalIDs.has( localID ) ) {
+            held = true
+            reached()
+            await gate
+          }
+          return original( localID )
+        } )
+
+    const pending = extraction.prepareDemandExtractionAsync()
+
+    await reachedPromise
+
+    expect( () => extraction.prepareDemandExtraction() ).toThrow( /paged first/ )
+    expect( extraction.isDemandExtractionPrepared ).toBe( false )
+
+    release()
+    await pending
+
+    expect( extraction.isDemandExtractionPrepared ).toBe( true )
+    expect( await pumpAsync( modelID ) ).toEqual( resident )
+
+    api.CloseModel( residentID )
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'a sweep that throws latches the prep failed, for every later caller', async () => {
+
+    // codex on conway#751: the cursor used to advance before a sweep ran,
+    // so a strict-mode throw left the next prep call to skip that sweep and
+    // mark the maps prepared. Re-running it instead would append to maps the
+    // partial run already wrote. The failure must stay a failure.
+    const buffer = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+    const modelID = await api.OpenModelStreamed( buffer, DEFERRED )
+    const extraction = extractionOf( modelID )
+
+    const failure = new Error( 'malformed relationship (test)' )
+    const voids = jest.spyOn( IfcGeometryExtraction.prototype, 'populateRelVoidsMap' )
+        .mockImplementationOnce( () => {
+          throw failure
+        } )
+    const styled =
+      jest.spyOn( IfcGeometryExtraction.prototype, 'populateStyledItemsMap' )
+
+    expect( () => extraction.prepareDemandExtraction() ).toThrow( failure )
+    expect( () => extraction.prepareDemandExtraction() ).toThrow( failure )
+    await expect( extraction.prepareDemandExtractionAsync() ).rejects.toBe( failure )
+    expect( () => api.ExtractGeometryBatch( modelID, 1 ) ).toThrow( failure )
+
+    expect( extraction.isDemandExtractionPrepared ).toBe( false )
+    // Not re-run, and nothing after it ran either.
+    expect( voids ).toHaveBeenCalledTimes( 1 )
+    expect( styled ).not.toHaveBeenCalled()
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
   test( 'a pump whose product worklist is empty still prepares', async () => {
 
     // Every product here is an aggregate target — the assembly is
@@ -402,6 +505,34 @@ describe( 'conway#748: deferred opens prepare the extraction maps lazily', () =>
     }
 
     // Planned exactly once, by the first batch, not by the open.
+    expect( spy ).toHaveBeenCalledTimes( 1 )
+
+    api.CloseModel( modelID )
+  }, 240000 )
+
+  test( 'AP214: a planning that throws stays failed', async () => {
+
+    // The AP214 twin of the IFC latch above: since the plan moved from the
+    // open to the first batch, a throw no longer ends the load, and a second
+    // pump call must neither re-plan nor proceed.
+    const buffer = new Uint8Array(
+        fs.readFileSync( 'data/nema-23-76mm.step' ) )
+    const modelID = await api.OpenModelStreamed( buffer, DEFERRED )
+
+    const failure = new Error( 'malformed styled item (test)' )
+    const spy =
+      jest.spyOn( AP214GeometryExtraction.prototype, 'populateStyledItemsMap' )
+          .mockImplementationOnce( () => {
+            throw failure
+          } )
+
+    expect( () => api.ExtractGeometryBatch( modelID, 1 ) ).toThrow( failure )
+    expect( () => api.ExtractGeometryBatch( modelID, 1 ) ).toThrow( failure )
+
+    const extraction = ( api.getPassthrough( modelID ) as unknown as
+      { conwayGeometry_: AP214GeometryExtraction } ).conwayGeometry_
+
+    expect( extraction.isDemandExtractionPrepared ).toBe( false )
     expect( spy ).toHaveBeenCalledTimes( 1 )
 
     api.CloseModel( modelID )

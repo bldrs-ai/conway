@@ -6943,11 +6943,12 @@ export class IfcGeometryExtraction {
 
   // The prep's sweeps and how many have run. Shared by the synchronous
   // prep and prepareDemandExtractionAsync (conway#748), so whichever entry
-  // point arrives runs only the sweeps still outstanding. Advanced before
-  // a sweep runs, so a sweep that throws (strict mode) is not retried —
-  // the pre-#748 prep did not retry either, it set its done flag first.
+  // point arrives runs only the sweeps still outstanding. Advanced only
+  // after a sweep returns; a sweep that throws latches
+  // extractionPrepFailure_ instead (see runExtractionPrepStep_).
   private prepSteps_?: ( () => void )[]
   private extractionPrepCursor_ = 0
+  private extractionPrepFailure_?: { error: unknown }
 
   // extractLinearScalingFactor has run (prepareUnits). Separate from the
   // maps flag because a deferred open reads the units at open and the
@@ -7299,6 +7300,8 @@ export class IfcGeometryExtraction {
       return
     }
 
+    this.throwIfExtractionPrepFailed_()
+
     // A windowed source must have its prep records paged and pinned first,
     // or every sweep's field reads throw StepBufferNotResidentError and
     // handleMapPrepError_ swallows them in permissive mode: a model that
@@ -7318,7 +7321,7 @@ export class IfcGeometryExtraction {
     const steps = this.extractionPrepSteps_()
 
     while ( this.extractionPrepCursor_ < steps.length ) {
-      steps[ this.extractionPrepCursor_++ ]()
+      this.runExtractionPrepStep_( steps )
     }
 
     this.finishExtractionPrep_()
@@ -7346,6 +7349,8 @@ export class IfcGeometryExtraction {
       return
     }
 
+    this.throwIfExtractionPrepFailed_()
+
     const pins = await this.ensureResidentForDemandPrep()
 
     try {
@@ -7354,7 +7359,7 @@ export class IfcGeometryExtraction {
 
       while ( this.extractionPrepCursor_ < steps.length ) {
 
-        steps[ this.extractionPrepCursor_++ ]()
+        this.runExtractionPrepStep_( steps )
 
         // After every sweep, the last included: the caller's next work —
         // the pump's first batch of extraction — would otherwise run in the
@@ -7405,6 +7410,38 @@ export class IfcGeometryExtraction {
     ]
 
     return this.prepSteps_
+  }
+
+  /**
+   * Run the sweep at the cursor, advancing past it only once it has
+   * returned. A sweep that throws — strict mode rethrows a malformed
+   * relationship from handleMapPrepError_ — latches the failure instead,
+   * and every later prep call rethrows it ({@link throwIfExtractionPrepFailed_}).
+   * Neither skipping the sweep nor re-running it is safe: skipping leaves
+   * its map incomplete under a prepared flag, and a re-run appends to maps
+   * the partial run already wrote (populateRelVoidsMap pushes) (codex on
+   * conway#751).
+   *
+   * @param steps The step list.
+   */
+  private runExtractionPrepStep_( steps: ( () => void )[] ): void {
+
+    try {
+      steps[ this.extractionPrepCursor_ ]()
+    } catch ( ex ) {
+      this.extractionPrepFailure_ = { error: ex }
+      throw ex
+    }
+
+    ++this.extractionPrepCursor_
+  }
+
+  /** Rethrow a latched prep failure — see {@link runExtractionPrepStep_}. */
+  private throwIfExtractionPrepFailed_(): void {
+
+    if ( this.extractionPrepFailure_ !== void 0 ) {
+      throw this.extractionPrepFailure_.error
+    }
   }
 
   /** Mark the maps complete and drop the step list. */
@@ -7744,8 +7781,6 @@ export class IfcGeometryExtraction {
       return pinned
     }
 
-    this.demandPrepResidencyEnsured_ = true
-
     // Small trees: material-definition style stacks (the project's units
     // were paged above).
     for ( const expressID of
@@ -7819,6 +7854,13 @@ export class IfcGeometryExtraction {
         }
       }
     }
+
+    // Only now, with every record the sweeps read paged and pinned. Set any
+    // earlier and a synchronous prep landing in one of the awaits above
+    // would pass prepareExtractionMaps_'s guard and sweep rows that are not
+    // resident yet — the silent empty maps the guard exists to refuse
+    // (codex on conway#751).
+    this.demandPrepResidencyEnsured_ = true
 
     return pinned
   }
