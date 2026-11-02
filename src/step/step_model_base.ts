@@ -1,9 +1,14 @@
 import { StepIndexEntry } from './parsing/step_parser'
 import { StepIndexColumns } from './parsing/columnar_index'
-import { releaseScratchParsingBuffer } from './parsing/step_deserialization_functions'
+import {
+  releaseScratchParsingBuffer,
+  stepExtractReference,
+} from './parsing/step_deserialization_functions'
 import { scanExpressRefs } from './parsing/express_ref_scan'
 import {
   ResidentStepBufferProvider,
+  StepBufferAcquisition,
+  StepBufferNotResidentError,
   StepBufferProvider,
   StepExternalByteStore,
   WindowedStepBufferProvider,
@@ -44,6 +49,17 @@ implements Iterable<BaseEntity>, Model {
   private static readonly LEAF_SPAN_COALESCE_GAP_ = 1024
 
   private readonly vtableBuilder_: StepVtableBuilder = new StepVtableBuilder()
+
+  // Scratch for forEachReferenceInFieldOfTypes: one record's field starts at
+  // a time, cleared per record. Kept apart from vtableBuilder_ because that
+  // one's buffer is shared by every descriptor's retained vtable, which is
+  // exactly the per-record retention that sweep exists to avoid.
+  private scratchVtable_?: StepVtableBuilder
+
+  // typeID -> 1 (is the type or a subtype) / 2 (is not), per queried
+  // constructor — see typeIDIsA.
+  private readonly typeIsACache_ = new Map< unknown, Uint8Array >()
+
   private readonly expressIDMap_: InterpolationSearchTable32
   private readonly inlineAddressMap_: InterpolationSearchTable32
 
@@ -655,6 +671,234 @@ implements Iterable<BaseEntity>, Model {
 
     return this.extractIntegerArrayByLocalIDInto(
         localID, offset, expectedTypeID, sink )
+  }
+
+
+  /**
+   * Is a schema type ID the given entity class or one of its subclasses?
+   *
+   * The same predicate {@link getTypedElementByLocalID} applies before it
+   * constructs a single-class record (`type === constructor ||
+   * constructor.prototype instanceof type`), answered from the type ID
+   * alone so no entity has to be built to ask it. Deliberately the
+   * prototype chain and not `type.query`: AP214's generated `query`
+   * arrays are not full subtype closures (`representation_item.query`
+   * omits `geometric_representation_item`), so a `query` test would
+   * reject records the typed getter accepts.
+   *
+   * @param typeID A schema type ID (from {@link typeIDOf}).
+   * @param type The entity class to test against.
+   * @return {boolean} True if a record of `typeID` reads as `type`.
+   */
+  public typeIDIsA(
+      typeID: number,
+      type: StepEntityConstructorAbstract< EntityTypeIDs > ): boolean {
+
+    const constructors = this.schema.constructors as
+      ( StepEntityConstructor< EntityTypeIDs, BaseEntity > | undefined )[]
+
+    let cache = this.typeIsACache_.get( type )
+
+    if ( cache === void 0 ) {
+      cache = new Uint8Array( constructors.length )
+      this.typeIsACache_.set( type, cache )
+    }
+
+    let answer = cache[ typeID ]
+
+    if ( answer === 0 ) {
+
+      const constructorRead = constructors[ typeID ]
+      const isA = constructorRead !== void 0 &&
+        ( ( type as unknown ) === constructorRead ||
+          constructorRead.prototype instanceof ( type as unknown as typeof Object ) )
+
+      answer = isA ? 1 : 2
+
+      if ( typeID < cache.length ) {
+        cache[ typeID ] = answer
+      }
+    }
+
+    return answer === 1
+  }
+
+
+  /**
+   * Visit, for every record of `types`, the record that one of its
+   * single-reference fields names — read straight from the record's
+   * source bytes, without materialising a descriptor, an entity or a
+   * retained vtable for it.
+   *
+   * This is the walk `populateStyledItemsMap` does in both IFC and AP214
+   * (styled item → the representation item it styles). Through
+   * `model.types()` it cost one descriptor + entity + vtable per record,
+   * all retained: on a 231 MB IFC with 194k styled items, ~1.6–2.4 s and
+   * ~120–136 MB of heap in one synchronous stretch at the end of the open.
+   *
+   * Only the plain case is answered here, and everything else is handed
+   * back to the caller **in the same position in the walk**, so a caller
+   * that runs its existing entity-based code in `onOther` gets exactly the
+   * old results, in exactly the old order (a `Map` it fills keeps the same
+   * insertion order). A record is plain when it:
+   *
+   *  - is a single-class, top-level record (not complex/multi-mapped, not
+   *    an inline entity), with no field mask ({@link setFieldMasks});
+   *  - has the field, and the field is a `#<digits>` reference, parsed by
+   *    the same `stepExtractReference` the generated getters use;
+   *  - names a record this model indexes (a dangling reference goes to
+   *    `onOther`, where an AP214 getter throws and logs it); and
+   *  - when `targetType` is given, names a single-class record that
+   *    {@link typeIDIsA} that type — the check a typed getter
+   *    (`extractElement(..., type)`) makes. Anything it would reject goes
+   *    to `onOther`, where the getter throws the same error it always did.
+   *
+   * Field 0 is read at the record's stored address (the data-block start,
+   * the same identity {@link extractIntegerArrayByLocalIDInto} relies on);
+   * other fields are located with the schema tokenizer into a scratch
+   * vtable that is cleared per record.
+   *
+   * On a windowed source a record that is not resident goes to `onOther`
+   * too: `acquire` throws `StepBufferNotResidentError` for it, and the
+   * caller's entity path then throws the same error inside its own
+   * try/catch, as it did before this helper existed.
+   *
+   * @param types The entity classes whose `query` to walk — the same cursor
+   * {@link types} walks, so the visit order is identical.
+   * @param fieldIndex The field's position in a single-class record.
+   * @param onReference Called with (record local ID, target local ID) for a
+   * plain record.
+   * @param onOther Called with the record's local ID for every other record.
+   * @param targetType If given, the class the target must be (see above).
+   */
+  public forEachReferenceInFieldOfTypes(
+      types: StepEntityConstructorAbstract< EntityTypeIDs >[],
+      fieldIndex: number,
+      onReference: ( localID: number, targetLocalID: number ) => void,
+      onOther: ( localID: number ) => void,
+      targetType?: StepEntityConstructorAbstract< EntityTypeIDs > ): void {
+
+    const distinctTypes = types.length === 1 ? ( types[ 0 ].query ) :
+      ( new Set( types.flatMap( ( type ) => type.query ) ) )
+
+    const cursor = this.typeIndex.cursor( ...distinctTypes )
+
+    try {
+      while ( cursor.step() ) {
+
+        const high = cursor.high
+        let low = cursor.low
+
+        while ( low !== 0 ) {
+
+          const lowestOneHot = extractOneHotLow( low )
+
+          low ^= ( 1 << lowestOneHot )
+
+          const localID = ( high | lowestOneHot )
+          const target = this.plainFieldReference_( localID, fieldIndex, targetType )
+
+          if ( target === void 0 ) {
+            onOther( localID )
+          } else {
+            onReference( localID, target )
+          }
+        }
+      }
+    } finally {
+      cursor.free()
+    }
+  }
+
+
+  /**
+   * The plain-case read behind {@link forEachReferenceInFieldOfTypes}.
+   *
+   * @param localID The record.
+   * @param fieldIndex The field's position.
+   * @param targetType Optional class the target must be.
+   * @return {number | undefined} The target's local ID, or undefined when
+   * the record is not plain and the caller's entity path must decide.
+   */
+  private plainFieldReference_(
+      localID: number,
+      fieldIndex: number,
+      targetType: StepEntityConstructorAbstract< EntityTypeIDs > | undefined ):
+      number | undefined {
+
+    if ( localID >= this.firstInlineElement_ ||
+         this.complexEntries_?.has( localID ) ||
+         this.fieldMasks_?.has( localID ) ) {
+      return void 0
+    }
+
+    const address = this.address_[ localID ]
+    const length = this.length_[ localID ]
+
+    let acquisition: StepBufferAcquisition
+
+    try {
+      acquisition = this.bufferProvider_.acquire( address, length )
+    } catch ( error ) {
+      if ( error instanceof StepBufferNotResidentError ) {
+        return void 0
+      }
+
+      throw error
+    }
+
+    const buffer = acquisition.buffer
+    const start = address - acquisition.offset
+    const end = start + length
+
+    let fieldStart = start
+    let fieldEnd = end
+
+    if ( fieldIndex !== 0 ) {
+
+      const scratch = this.scratchVtable_ ??= new StepVtableBuilder()
+
+      scratch.clear()
+
+      const extracted = this.schema.parser.extractDataEntry( buffer, start, end, scratch )
+
+      if ( extracted === void 0 || fieldIndex >= extracted[ 1 ] ) {
+        return void 0
+      }
+
+      const vtable = scratch.buffer
+
+      fieldStart = vtable[ extracted[ 0 ] + fieldIndex ]
+      // Same end bound StepEntityBase.getOffsetAndEndCursor gives a field.
+      fieldEnd = fieldIndex + 1 !== extracted[ 1 ] ?
+        vtable[ extracted[ 0 ] + fieldIndex + 1 ] - 1 :
+        extracted[ 2 ]
+    }
+
+    const expressID = stepExtractReference( buffer, fieldStart, fieldEnd )
+
+    if ( expressID === void 0 ) {
+      return void 0
+    }
+
+    const targetLocalID = this.resolveExpressID( expressID )
+
+    if ( targetLocalID === void 0 ) {
+      return void 0
+    }
+
+    if ( targetType !== void 0 ) {
+
+      const targetTypeID = this.typeID_[ targetLocalID ]
+
+      if ( targetTypeID < 0 ||
+           this.complexEntries_?.has( targetLocalID ) ||
+           !this.typeIDIsA( targetTypeID, targetType ) ) {
+        return void 0
+      }
+    }
+
+    return targetLocalID
   }
 
 
