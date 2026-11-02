@@ -701,8 +701,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // capture walks, so meshes appear to consumers as units extract.
     if (deferGeometry) {
 
-      conwayGeometry.prepareDemandExtraction()
-
+      // No prep at open (conway#748, the IFC proxy's twin): the assembly
+      // tree and unit list are built by the first ExtractGeometryBatch, so
+      // an open that never asks for geometry never pays for them. Unlike
+      // IFC there are no units to read first — AP214's linear scaling
+      // factor is a constant 1 — so the constructor's read is unaffected.
       return {
         conwaywasm,
         deferred: true,
@@ -1496,8 +1499,13 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    */
   releaseGeometry(): boolean {
 
+    // Unplanned is not drained. Before conway#748 a deferred open planned
+    // its units at open, so an unpumped model read as 0 of N and was refused
+    // here; planned lazily it reads as 0 of 0, and would be marked released
+    // before anything had been extracted.
     if (this.deferredMode_ && !this.demandFinished_ &&
-        this.conwayGeometry_.demandUnitCursor < this.conwayGeometry_.demandUnitCount) {
+        (!this.conwayGeometry_.isDemandExtractionPrepared ||
+          this.conwayGeometry_.demandUnitCursor < this.conwayGeometry_.demandUnitCount)) {
       Logger.warning(
           '[ReleaseModelGeometry]: deferred pump not drained — not releasing')
       return false
@@ -1584,6 +1592,10 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     }
 
     const extraction = this.conwayGeometry_
+
+    // The prep a deferred open used to run (conway#748). Idempotent, and
+    // before the progress phase below, which is sized by its unit count.
+    extraction.prepareDemandExtraction()
 
     // Scale the consumer's IFC-shaped batch size onto AP214 units, which
     // are finer than a product since conway#579. The count is only a

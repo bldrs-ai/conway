@@ -6392,12 +6392,39 @@ export class AP214GeometryExtraction {
    * exactly — the classic {@link extractAP214GeometryData} runs through
    * this same path. Idempotent.
    */
-  // eslint-disable-next-line max-lines-per-function
   public prepareDemandExtraction(): void {
 
     if ( this.demandUnits_ !== void 0 ) {
       return
     }
+
+    // A planning that threw stays failed: rethrown to every later caller,
+    // never re-run. Since conway#748 the plan is built by the first batch
+    // rather than by the open, so a throw no longer ends the load — the
+    // pump can be called again — and a re-run would start over on state
+    // the failed run already changed (the styled-item map, the memoization
+    // flag it saves for restoration). The IFC prep latches the same way
+    // (IfcGeometryExtraction#runExtractionPrepStep_; codex on conway#751).
+    if ( this.demandPrepFailure_ !== void 0 ) {
+      throw this.demandPrepFailure_.error
+    }
+
+    try {
+      this.planDemandUnits_()
+    } catch ( ex ) {
+      this.demandPrepFailure_ = { error: ex }
+      throw ex
+    }
+  }
+
+  // A thrown planning, latched — see prepareDemandExtraction.
+  private demandPrepFailure_?: { error: unknown }
+
+  /**
+   * The planning behind {@link prepareDemandExtraction}, which guards it.
+   */
+  // eslint-disable-next-line max-lines-per-function
+  private planDemandUnits_(): void {
 
     const model = this.model
 
@@ -7701,6 +7728,18 @@ export class AP214GeometryExtraction {
   private demandUnits_?: ( () => void )[]
   private demandCursor_ = 0
   private demandMemoizationRestore_?: boolean
+
+  /**
+   * True once {@link prepareDemandExtraction} has run — the IFC
+   * extraction's getter of the same name, so a proxy can ask either format
+   * the same question (conway#748). Before it, {@link demandUnitCount} is 0
+   * because nothing has been planned, not because nothing is left.
+   *
+   * @return {boolean} Whether the units have been built.
+   */
+  public get isDemandExtractionPrepared(): boolean {
+    return this.demandUnits_ !== void 0
+  }
 
   /**
    * Total demand units (see prepareDemandExtraction).
