@@ -1469,17 +1469,23 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // walks, so meshes appear to consumers as batches extract.
     if (deferGeometry) {
 
-      conwayGeometry.prepareDemandExtraction()
+      // Units only (conway#748). The rest of the prep — every relationship
+      // sweep and the styled-item map, 0.3–0.4 s on sp-231MB — waits for the
+      // first geometry batch, so an open that never asks for geometry (the
+      // spatial tree, properties: a CLI/MCP-style read) never pays for it.
+      // The units cannot wait: the proxy constructor reads
+      // getLinearScalingFactor() at open, and so do the imposters below.
+      conwayGeometry.prepareUnits()
 
       if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
 
         try {
-          // After prepareDemandExtraction, not before: the plates are
-          // composed under the coordination frame, whose scaling comes
-          // from getLinearScalingFactor() — which reads 1 until the
-          // extraction maps (and with them the unit assignment) are
-          // prepared. Both calls run in the same synchronous stretch
-          // after the parse, so nothing reaches the screen any later.
+          // After prepareUnits, not before: the plates are composed under
+          // the coordination frame, whose scaling comes from
+          // getLinearScalingFactor() — which reads 1 until the unit
+          // assignment has been read. Both calls run in the same
+          // synchronous stretch after the parse, so nothing reaches the
+          // screen any later.
           await emitSpatialStructureImposters(
               model,
               settings.ON_PREVIEW_MESH,
@@ -1592,10 +1598,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const conwayGeometry = new IfcGeometryExtraction(conwaywasm, model)
 
-    const prepPins = await conwayGeometry.ensureResidentForDemandPrep()
+    // A deferred open reads only the units here, paging just the project's
+    // closure; the full prep — and the much larger residency it needs —
+    // waits for the first ExtractGeometryBatchAsync (conway#748; see the
+    // resident path's note). A non-deferred open extracts everything next,
+    // so it still prepares everything now.
+    const prepPins = deferGeometry ?
+      await conwayGeometry.ensureResidentForUnits() :
+      await conwayGeometry.ensureResidentForDemandPrep()
 
     try {
-      conwayGeometry.prepareDemandExtraction()
+      if ( deferGeometry ) {
+        conwayGeometry.prepareUnits()
+      } else {
+        conwayGeometry.prepareDemandExtraction()
+      }
     } finally {
       model.releaseSourceViews( prepPins )
       model.unpinLocalIDs( prepPins )
@@ -1604,8 +1621,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( settings?.ON_PREVIEW_MESH !== void 0 ) {
 
       try {
-        // Emitted after demand prep so getLinearScalingFactor() reports
-        // the model's real units — see the resident path's note.
+        // Emitted after the units are read so getLinearScalingFactor()
+        // reports the model's real units — see the resident path's note.
         await emitSpatialStructureImposters(
             model,
             settings.ON_PREVIEW_MESH,
@@ -1861,7 +1878,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * prefix extract pages product closures from the store and emits
    * placed meshes (same COORDINATE_TO_ORIGIN frame as durable). After
    * the index exists, spatial-structure AABB plates go out too.
-   * Deferred opens page prep closures before prepareDemandExtraction;
+   * Deferred opens page only the project's units at open and prepare the
+   * extraction maps on the first ExtractGeometryBatchAsync (conway#748);
    * non-deferred opens drain the demand pump with per-product residency.
    *
    * @param modelID The model ID being opened.
@@ -2773,6 +2791,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     this.checkShardPreconditions_()
     this.ensureDemandWorklists_()
 
+    // The prep a deferred open used to run at open (conway#748). Here
+    // rather than left to the first extractProductGeometryByLocalID, which
+    // would also prepare: the product worklist can be empty while
+    // rel-aggregates entries remain — every product an aggregate target, or
+    // a shard's empty slice — and that pass extracts through
+    // extractProductGeometry directly, reading the styled-item, material and
+    // rel-voids maps without going through the per-product seam.
+    // Idempotent; one synchronous block, the same one the open used to
+    // carry — the async pump below is the one that yields through it.
+    this.conwayGeometry_.prepareDemandExtraction()
+
     return this.pumpGeometryBatch_(batchSize, meshCallback)
   }
 
@@ -2857,6 +2886,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.checkShardPreconditions_()
     await this.ensureDemandWorklistsAsync_()
+
+    // The extraction maps, on the first call (conway#748): paged and pinned
+    // on a windowed source, and swept with a yield between sweeps on
+    // either, so the prep a deferred open used to carry is neither paid by
+    // opens that never extract nor one long task when it is paid. Under
+    // the pump lock, so no batch can run against half-built maps. See
+    // extractGeometryBatch's note for why it is not left to the first
+    // per-product extract.
+    await this.conwayGeometry_.prepareDemandExtractionAsync()
 
     if (!this.model[0].isSourceExternal) {
       return this.pumpGeometryBatch_(batchSize, meshCallback)

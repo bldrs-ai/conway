@@ -6937,8 +6937,27 @@ export class IfcGeometryExtraction {
 
 
   // Guards prepareExtractionMaps_ so the demand path and the whole-model
-  // walk can both trigger it without duplicating work.
+  // walk can both trigger it without duplicating work. Set when the LAST
+  // sweep has run, not the first — see extractionPrepCursor_.
   private extractionMapsPrepared_ = false
+
+  // The prep's sweeps and how many have run. Shared by the synchronous
+  // prep and prepareDemandExtractionAsync (conway#748), so whichever entry
+  // point arrives runs only the sweeps still outstanding. Advanced before
+  // a sweep runs, so a sweep that throws (strict mode) is not retried —
+  // the pre-#748 prep did not retry either, it set its done flag first.
+  private prepSteps_?: ( () => void )[]
+  private extractionPrepCursor_ = 0
+
+  // extractLinearScalingFactor has run (prepareUnits). Separate from the
+  // maps flag because a deferred open reads the units at open and the
+  // sweeps later.
+  private unitsPrepared_ = false
+
+  // ensureResidentForDemandPrep has paged and pinned the prep records, so a
+  // synchronous prep on a windowed source can read them. See the guard in
+  // prepareExtractionMaps_.
+  private demandPrepResidencyEnsured_ = false
 
   /* Relationship records paged and scanned at once by
    * ensureAggregateTargetLocalIDs. Each is a single small row, and the scan
@@ -7265,6 +7284,14 @@ export class IfcGeometryExtraction {
    * per-product demand path (Phase B2): linear scaling factor and the
    * cross-product maps (materials, material definitions, rel-voids, styled
    * items). Idempotent.
+   *
+   * Synchronous. A deferred compat open no longer runs this at open
+   * (conway#748): the pumps run it before their first batch, and the async
+   * pump runs it through {@link prepareDemandExtractionAsync}, which
+   * yields between the sweeps. Both drive the same step list, so a sync
+   * caller that arrives while the async prep is suspended between two
+   * sweeps finishes the remaining sweeps itself rather than extracting
+   * against half-built maps.
    */
   private prepareExtractionMaps_(): void {
 
@@ -7272,9 +7299,147 @@ export class IfcGeometryExtraction {
       return
     }
 
-    this.extractionMapsPrepared_ = true
+    // A windowed source must have its prep records paged and pinned first,
+    // or every sweep's field reads throw StepBufferNotResidentError and
+    // handleMapPrepError_ swallows them in permissive mode: a model that
+    // extracts with no materials, voids or colours and says nothing. Before
+    // conway#748 every windowed deferred open ran the prep at open, after
+    // ensureResidentForDemandPrep, so no later caller could reach this
+    // unpaged. Now the prep waits for the first batch, and only the async
+    // pump pages for it — so a synchronous route into extraction on such a
+    // model has to fail here, loudly, rather than silently mis-extract.
+    if ( this.model.isSourceExternal && !this.demandPrepResidencyEnsured_ ) {
+      throw new Error(
+          'extraction maps on a windowed source need their records paged ' +
+          'first — call prepareDemandExtractionAsync (or ' +
+          'ensureResidentForDemandPrep then prepareDemandExtraction)' )
+    }
 
+    const steps = this.extractionPrepSteps_()
+
+    while ( this.extractionPrepCursor_ < steps.length ) {
+      steps[ this.extractionPrepCursor_++ ]()
+    }
+
+    this.finishExtractionPrep_()
+  }
+
+  /**
+   * Async twin of {@link prepareDemandExtraction} for the pump (conway#748):
+   * pages and pins the prep records on a windowed source, then runs the
+   * same sweeps as the synchronous prep with an event-loop yield between
+   * each, so the ~0.3–0.4 s a large model's prep costs (sp-231MB) is several
+   * tasks instead of one. Idempotent, and a no-op once prepared.
+   *
+   * The pins are held across the yields: the sweeps read the records they
+   * pin, and a yield that released them would let the LRU evict a record
+   * the next sweep reads. Nothing else can extract while this runs on the
+   * proxy's pump — the pump lock serialises it — and a synchronous caller
+   * that does arrive between sweeps finishes them itself (see
+   * {@link prepareExtractionMaps_}).
+   *
+   * @return {Promise<void>} Resolves once the maps are complete.
+   */
+  public async prepareDemandExtractionAsync(): Promise<void> {
+
+    if ( this.extractionMapsPrepared_ ) {
+      return
+    }
+
+    const pins = await this.ensureResidentForDemandPrep()
+
+    try {
+
+      const steps = this.extractionPrepSteps_()
+
+      while ( this.extractionPrepCursor_ < steps.length ) {
+
+        steps[ this.extractionPrepCursor_++ ]()
+
+        // After every sweep, the last included: the caller's next work —
+        // the pump's first batch of extraction — would otherwise run in the
+        // same task as the final sweep (measured on sp-231MB: the styled-item
+        // sweep plus a 64-product batch made a 0.6 s block).
+        await yieldToEventLoop()
+      }
+
+      this.finishExtractionPrep_()
+
+    } finally {
+      this.model.releaseSourceViews( pins )
+      this.model.unpinLocalIDs( pins )
+      // The pins are gone, so a later synchronous prep — reachable only if
+      // a sweep threw — must not read as paged.
+      this.demandPrepResidencyEnsured_ = false
+    }
+  }
+
+  /**
+   * True once the cross-product extraction maps are complete, through
+   * either prep entry point. A lightweight (preview) prep also reports
+   * true, as it always has: it is the whole prep that instance will get.
+   *
+   * @return {boolean} Whether extraction may run without preparing.
+   */
+  public get isDemandExtractionPrepared(): boolean {
+    return this.extractionMapsPrepared_
+  }
+
+  /**
+   * The prep, as an ordered list of sweeps both entry points walk with the
+   * shared {@link extractionPrepCursor_}. Built once; the order is the
+   * pre-conway#748 order, which matters: the type-material inheritance
+   * must follow the direct association sweep, and nothing else here reads
+   * another sweep's output.
+   *
+   * @return {(() => void)[]} The sweeps.
+   */
+  private extractionPrepSteps_(): ( () => void )[] {
+
+    this.prepSteps_ ??= [
+      () => this.prepareUnits(),
+      () => this.populateRelMaterialsMap_(),
+      () => this.populateMaterialDefinitionsMap(),
+      () => this.populateRelVoidsMap(),
+      () => this.populateStyledItemsMap(),
+    ]
+
+    return this.prepSteps_
+  }
+
+  /** Mark the maps complete and drop the step list. */
+  private finishExtractionPrep_(): void {
+    this.extractionMapsPrepared_ = true
+    this.prepSteps_ = void 0
+  }
+
+  /**
+   * The units half of the prep, alone: the project's linear scaling factor
+   * (and its name). Exactly once per extraction — extractLinearScalingFactor
+   * multiplies into the factor, so a second call would square the unit
+   * prefix — which is what lets a deferred open read the real factor at
+   * open (the proxy's linearScalingFactor, the spatial imposters' frame)
+   * while the expensive sweeps wait for the first geometry batch
+   * (conway#748). On a windowed source the caller pages the project's
+   * closure first ({@link ensureResidentForUnits}).
+   */
+  public prepareUnits(): void {
+
+    if ( this.unitsPrepared_ ) {
+      return
+    }
+
+    this.unitsPrepared_ = true
     this.extractLinearScalingFactor()
+  }
+
+  /**
+   * IfcRelAssociatesMaterial → relMaterialsMap, then the type-level
+   * materials pushed down onto occurrences ({@link inheritTypeMaterials_}).
+   * One step, because the inheritance must run strictly after the whole
+   * direct sweep.
+   */
+  private populateRelMaterialsMap_(): void {
 
     // populate relMaterialsMap
     const relAssociatesMaterials = this.model.types(IfcRelAssociatesMaterial)
@@ -7343,14 +7508,6 @@ export class IfcGeometryExtraction {
     // strictly after the sweep above so direct entries always win.
     this.inheritTypeMaterials_( typeMaterialsMap, productTypes )
 
-    // populate MaterialDefinitionsMap
-    this.populateMaterialDefinitionsMap()
-
-    // populate relvoids map
-    this.populateRelVoidsMap()
-
-    // populate styled items map
-    this.populateStyledItemsMap()
   }
 
   /**
@@ -7500,7 +7657,7 @@ export class IfcGeometryExtraction {
 
     if ( lightweightPreview && !this.extractionMapsPrepared_ ) {
       this.extractionMapsPrepared_ = true
-      this.extractLinearScalingFactor()
+      this.prepareUnits()
       this.populateMaterialDefinitionsMap()
       this.populateStyledItemsMap()
       return
@@ -7541,6 +7698,31 @@ export class IfcGeometryExtraction {
   }
 
   /**
+   * Page in and pin the project's closure — what {@link prepareUnits} reads
+   * (IfcProject → IfcUnitAssignment → its units) — on a windowed source.
+   * A small tree, which is why a deferred store-backed open can afford it
+   * at open while the full prep residency waits for the first batch
+   * (conway#748). A no-op returning an empty set on a resident source.
+   *
+   * @param pinned Set to add the pinned local IDs to.
+   * @return {Promise<Set<number>>} `pinned` — caller must
+   * {@link StepModelBase.unpinLocalIDs} once the units are read.
+   */
+  public async ensureResidentForUnits(
+      pinned: Set< number > = new Set< number >() ): Promise< Set< number > > {
+
+    if ( !this.model.isSourceExternal ) {
+      return pinned
+    }
+
+    for ( const expressID of this.model.expressIDsOfTypes( IfcProject ) ) {
+      await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
+    }
+
+    return pinned
+  }
+
+  /**
    * Page in every record {@link prepareDemandExtraction} will read, so
    * the relationship sweeps succeed on a windowed source. Call before
    * the first prepare on a model whose source is external.
@@ -7556,18 +7738,19 @@ export class IfcGeometryExtraction {
    */
   public async ensureResidentForDemandPrep(): Promise< Set< number > > {
 
-    const pinned = new Set< number >()
+    const pinned = await this.ensureResidentForUnits()
 
     if ( !this.model.isSourceExternal ) {
       return pinned
     }
 
-    // Small trees: project units, material-definition style stacks.
-    for ( const type of [IfcProject, IfcMaterialDefinitionRepresentation] ) {
+    this.demandPrepResidencyEnsured_ = true
 
-      for ( const expressID of this.model.expressIDsOfTypes( type ) ) {
-        await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
-      }
+    // Small trees: material-definition style stacks (the project's units
+    // were paged above).
+    for ( const expressID of
+      this.model.expressIDsOfTypes( IfcMaterialDefinitionRepresentation ) ) {
+      await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
     }
 
     // Every relationship prepareExtractionMaps_ sweeps has to be listed

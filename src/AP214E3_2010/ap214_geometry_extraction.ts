@@ -7703,6 +7703,18 @@ export class AP214GeometryExtraction {
   private demandMemoizationRestore_?: boolean
 
   /**
+   * True once {@link prepareDemandExtraction} has run — the IFC
+   * extraction's getter of the same name, so a proxy can ask either format
+   * the same question (conway#748). Before it, {@link demandUnitCount} is 0
+   * because nothing has been planned, not because nothing is left.
+   *
+   * @return {boolean} Whether the units have been built.
+   */
+  public get isDemandExtractionPrepared(): boolean {
+    return this.demandUnits_ !== void 0
+  }
+
+  /**
    * Total demand units (see prepareDemandExtraction).
    *
    * @return {number} The unit count (0 before preparation).
