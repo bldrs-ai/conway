@@ -176,6 +176,10 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] }
 // GetBasisFromCoplanarPoints needs downstream.
 const MINIMUM_BOUND_POINTS = 3
 
+// styled_item.item's position in a single-class record (name, styles, item);
+// the generated getter reads it as extractElement( 2, 1, 1, ... ).
+const STYLED_ITEM_ITEM_FIELD = 2
+
 /**
  * Render flat triangle indices as the STEP array text
  * `Geometry::ExtractTriangles` parses — `((a,b,c),(a,b,c),...)`, 1-based.
@@ -6143,56 +6147,100 @@ export class AP214GeometryExtraction {
    */
   populateStyledItemsMap() {
 
-    const overridingStyledItems = this.model.types(over_riding_styled_item)
-    const styledItems = this.model.types(styled_item)
+    const model = this.model
     const styledItemMap = this.materials.styledItemMap
 
-    for ( const styledItem of styledItems ) {
+    // styled_item.item is field 2 (name, styles, item), typed
+    // representation_item. The shared StepModelBase walk (the one IFC's
+    // populateStyledItemsMap uses) answers a plain `#n` whose target is a
+    // single-class representation_item — the only case the getter below
+    // resolves without throwing — straight from the record bytes, with the
+    // getter's own instanceof test (typeIDIsA). Everything else (complex
+    // records, `$`, dangling or mistyped references, non-resident bytes)
+    // runs the getter at the same point in the walk, so it throws and is
+    // reported exactly as before, and the map keeps its order.
+    //
+    // Overriding styled items still go second so they win. Note the
+    // generated `query` arrays here are exact types, not subtype closures:
+    // types(styled_item) never yields a single-class over_riding_styled_item
+    // (only a complex record can be both, and those take the entity path,
+    // where the instanceof skip below still applies), and
+    // context_dependent_over_riding_styled_item records are not walked by
+    // either pass — both unchanged from before.
+    model.forEachReferenceInFieldOfTypes(
+        [ styled_item ],
+        STYLED_ITEM_ITEM_FIELD,
+        // Plain records here are exactly STYLED_ITEM (the query above), never
+        // an over_riding_styled_item, so the skip the entity path needs has
+        // nothing to skip on this side.
+        ( styledItemLocalID, itemLocalID ) => {
+          styledItemMap.set( itemLocalID, styledItemLocalID )
+        },
+        ( styledItemLocalID ) => {
 
-      if ( styledItem instanceof over_riding_styled_item ) {
-        continue
-      }
+          const styledItem = model.getElementByLocalID( styledItemLocalID )
 
-      try {
-        if ( styledItem.item !== null ) {
-          styledItemMap.set( styledItem.item.localID, styledItem.localID )
-        }
-      } catch (error) {
-        if ( !this.quietRecoverableLogging ) {
-          // toString(), not localID: localID is the dense internal index and
-          // means nothing against the source file, and these land in the
-          // regression run's `expressids` column where the whole point is to
-          // be able to go look at the record. It also spells the inline case
-          // honestly rather than passing off an index as a reference.
-          //
-          // `${error}` stays out of the message for the family that carries
-          // the express ID in its own text — a dangling reference reads
-          // "Reference to #4211 is not in the index", and Logger dedups on
-          // the message, so interpolating it gave 7 users' worth of one
-          // SolidWorks defect (Sentry SHARE-1NA) one entry apiece with
-          // count 1. Marked as a data defect so Share can tag it without
-          // reading the prose (conway#708).
-          this.reportStyledItemDefect_(
-            'Error populating styled item map', error, styledItem.toString() )
-        }
-      }
-    }
-    
-    for ( const overridingStyledItem of overridingStyledItems ) {
+          // model.types() skips a record with no entity the same way.
+          if ( styledItem === void 0 || styledItem instanceof over_riding_styled_item ) {
+            return
+          }
 
-      try {
-        if ( overridingStyledItem.item !== null ) {
-          styledItemMap.set( overridingStyledItem.item.localID, overridingStyledItem.localID )
-        }
-      } catch (error) {
-        if ( !this.quietRecoverableLogging ) {
-          this.reportStyledItemDefect_(
-            'Error populating overriding styled item map',
-            error,
-            overridingStyledItem.toString() )
-        }
-      }
-    }
+          try {
+            if ( ( styledItem as styled_item ).item !== null ) {
+              styledItemMap.set( ( styledItem as styled_item ).item.localID, styledItem.localID )
+            }
+          } catch (error) {
+            if ( !this.quietRecoverableLogging ) {
+              // toString(), not localID: localID is the dense internal index and
+              // means nothing against the source file, and these land in the
+              // regression run's `expressids` column where the whole point is to
+              // be able to go look at the record. It also spells the inline case
+              // honestly rather than passing off an index as a reference.
+              //
+              // `${error}` stays out of the message for the family that carries
+              // the express ID in its own text — a dangling reference reads
+              // "Reference to #4211 is not in the index", and Logger dedups on
+              // the message, so interpolating it gave 7 users' worth of one
+              // SolidWorks defect (Sentry SHARE-1NA) one entry apiece with
+              // count 1. Marked as a data defect so Share can tag it without
+              // reading the prose (conway#708).
+              this.reportStyledItemDefect_(
+                  'Error populating styled item map', error, styledItem.toString() )
+            }
+          }
+        },
+        representation_item )
+
+    model.forEachReferenceInFieldOfTypes(
+        [ over_riding_styled_item ],
+        STYLED_ITEM_ITEM_FIELD,
+        ( overridingLocalID, itemLocalID ) => {
+          styledItemMap.set( itemLocalID, overridingLocalID )
+        },
+        ( overridingLocalID ) => {
+
+          const overridingStyledItem = model.getElementByLocalID( overridingLocalID )
+
+          if ( overridingStyledItem === void 0 ) {
+            return
+          }
+
+          try {
+            if ( ( overridingStyledItem as over_riding_styled_item ).item !== null ) {
+              styledItemMap.set(
+                  ( overridingStyledItem as over_riding_styled_item ).item.localID,
+                  overridingStyledItem.localID )
+            }
+          } catch (error) {
+            if ( !this.quietRecoverableLogging ) {
+              this.reportStyledItemDefect_(
+                  'Error populating overriding styled item map',
+                  error,
+                  overridingStyledItem.toString() )
+            }
+          }
+        },
+        representation_item )
   }
 
   /**

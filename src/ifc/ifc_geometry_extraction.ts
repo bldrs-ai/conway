@@ -6639,23 +6639,47 @@ export class IfcGeometryExtraction {
    *
    */
   populateStyledItemsMap() {
-    const styledItems = this.model.types(IfcStyledItem)
 
-    for (const styledItem of styledItems) {
-      try {
-        // IfcStyledItem.Item — same vtable slot as the generated
-        // getter's extractElement(0, 0, 1, true, ...). Hydrating Item
-        // would acquire the faceset record (often the packed geometry
-        // itself) for every styled item at once.
-        const itemLocalID = styledItem.extractReferenceLocalID(0, 0, 1, true)
+    const model = this.model
+    const styledItemMap = this.materials.styledItemMap
 
-        if (itemLocalID !== null) {
-          this.materials.styledItemMap.set(itemLocalID, styledItem.localID)
-        }
-      } catch (ex) {
-        this.handleMapPrepError_('IfcStyledItem', styledItem.expressID, ex)
-      }
-    }
+    // IfcStyledItem.Item is field 0. A plain `#n` reference is read from
+    // the record bytes (no descriptor or entity per styled item, which on
+    // sp-231MB was ~1.6–2.4 s and ~120 MB retained in one synchronous
+    // stretch); every other record — complex, inline, `$`, dangling,
+    // non-resident — takes the entity path below, at the same point in the
+    // walk, so the map and its insertion order are what they always were.
+    // No target type check: the entity path never had one either
+    // (extractReferenceLocalID only resolves).
+    model.forEachReferenceInFieldOfTypes(
+        [ IfcStyledItem ],
+        0,
+        ( styledItemLocalID, itemLocalID ) => {
+          styledItemMap.set( itemLocalID, styledItemLocalID )
+        },
+        ( styledItemLocalID ) => {
+
+          const styledItem = model.getElementByLocalID( styledItemLocalID )
+
+          // model.types() skips a record with no entity the same way.
+          if ( styledItem === void 0 ) {
+            return
+          }
+
+          try {
+            // IfcStyledItem.Item — same vtable slot as the generated
+            // getter's extractElement(0, 0, 1, true, ...). Hydrating Item
+            // would acquire the faceset record (often the packed geometry
+            // itself) for every styled item at once.
+            const itemLocalID = styledItem.extractReferenceLocalID(0, 0, 1, true)
+
+            if (itemLocalID !== null) {
+              styledItemMap.set(itemLocalID, styledItem.localID)
+            }
+          } catch (ex) {
+            this.handleMapPrepError_('IfcStyledItem', styledItem.expressID, ex)
+          }
+        } )
   }
 
   /**
