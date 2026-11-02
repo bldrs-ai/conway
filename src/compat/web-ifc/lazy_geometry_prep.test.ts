@@ -376,6 +376,77 @@ describe( 'conway#748: deferred opens prepare the extraction maps lazily', () =>
     api.CloseModel( modelID )
   }, 240000 )
 
+  test( 'a paging that rejects partway leaves nothing pinned, and can be retried', async () => {
+
+    // codex on conway#751: the prep paging pins into a set it only hands
+    // back on success. A store read rejecting partway left every hold taken
+    // so far pinned for the model's life — immune to LRU, outside the
+    // budget — and a retry pinned a second set on top.
+    const buffer = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+
+    const residentID = await api.OpenModelStreamed( buffer, DEFERRED )
+    const resident = await pumpAsync( residentID )
+
+    const modelID = await api.OpenModelStreamed( buffer, DEFERRED )
+
+    api.SpillModelSource( modelID, new InMemoryStepByteStore( buffer ), 512, 3 )
+
+    const extraction = extractionOf( modelID )
+    const model = extraction.model
+
+    // Holds outstanding: every pin minus every unpin from here on. The
+    // originals are bound before the spies replace them.
+    let outstanding = 0
+    const pin = model.pinByLocalID.bind( model )
+    const unpin = model.unpinByLocalID.bind( model )
+
+    jest.spyOn( model, 'pinByLocalID' ).mockImplementation( ( localID: number ) => {
+      ++outstanding
+      pin( localID )
+    } )
+    jest.spyOn( model, 'unpinByLocalID' ).mockImplementation( ( localID: number ) => {
+      --outstanding
+      unpin( localID )
+    } )
+
+    const styledLocalIDs = new Set< number >()
+
+    for ( const expressID of model.expressIDsOfTypes( IfcStyledItem ) ) {
+
+      const localID = model.resolveExpressID( expressID )
+
+      if ( localID !== void 0 ) {
+        styledLocalIDs.add( localID )
+      }
+    }
+
+    // Fail the paging at the first styled item, after the units' and the
+    // material definitions' closures (and earlier relationships) are pinned.
+    const failure = new Error( 'store read failed (test)' )
+    const original = model.ensureResidentByLocalID.bind( model )
+    const paging = jest.spyOn( model, 'ensureResidentByLocalID' ).mockImplementation(
+        async ( localID: number ) => {
+          if ( styledLocalIDs.has( localID ) ) {
+            throw failure
+          }
+          return original( localID )
+        } )
+
+    await expect( extraction.prepareDemandExtractionAsync() ).rejects.toBe( failure )
+
+    expect( outstanding ).toBe( 0 )
+    expect( extraction.isDemandExtractionPrepared ).toBe( false )
+
+    // A transient failure: the store recovers, and the pump simply works.
+    paging.mockRestore()
+
+    expect( await pumpAsync( modelID ) ).toEqual( resident )
+    expect( outstanding ).toBe( 0 )
+
+    api.CloseModel( residentID )
+    api.CloseModel( modelID )
+  }, 240000 )
+
   test( 'a sweep that throws latches the prep failed, for every later caller', async () => {
 
     // codex on conway#751: the cursor used to advance before a sweep ran,

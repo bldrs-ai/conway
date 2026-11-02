@@ -7741,22 +7741,57 @@ export class IfcGeometryExtraction {
    * at open while the full prep residency waits for the first batch
    * (conway#748). A no-op returning an empty set on a resident source.
    *
-   * @param pinned Set to add the pinned local IDs to.
-   * @return {Promise<Set<number>>} `pinned` — caller must
-   * {@link StepModelBase.unpinLocalIDs} once the units are read.
+   * @return {Promise<Set<number>>} The pinned local IDs — caller must
+   * {@link StepModelBase.unpinLocalIDs} once the units are read. On a
+   * rejection nothing stays pinned (see {@link pinForPrep_}).
    */
-  public async ensureResidentForUnits(
-      pinned: Set< number > = new Set< number >() ): Promise< Set< number > > {
+  public async ensureResidentForUnits(): Promise< Set< number > > {
+    return await this.pinForPrep_( ( pinned ) => this.pageForUnits_( pinned ) )
+  }
+
+  /**
+   * Run a paging walk into a fresh pin set, releasing everything it pinned
+   * if the walk rejects (a store read failing partway). Without this the
+   * partial set never reaches the caller — the walk's own `await` is what
+   * threw, before any caller's `finally` exists — so its holds stay pinned
+   * for the model's life, immune to LRU eviction, and a retry pins a
+   * second set on top (codex on conway#751). Each local ID in the set
+   * carries exactly one hold: the closure walk claims-then-pins, and the
+   * relationship loops pin only after a successful page.
+   *
+   * @param walk Pages and pins into the set it is given.
+   * @return {Promise<Set<number>>} The pinned set, on success.
+   */
+  private async pinForPrep_(
+      walk: ( pinned: Set< number > ) => Promise< void > ): Promise< Set< number > > {
+
+    const pinned = new Set< number >()
+
+    try {
+      await walk( pinned )
+    } catch ( ex ) {
+      this.model.releaseSourceViews( pinned )
+      this.model.unpinLocalIDs( pinned )
+      throw ex
+    }
+
+    return pinned
+  }
+
+  /**
+   * The walk behind {@link ensureResidentForUnits}.
+   *
+   * @param pinned Set to add the pinned local IDs to.
+   */
+  private async pageForUnits_( pinned: Set< number > ): Promise< void > {
 
     if ( !this.model.isSourceExternal ) {
-      return pinned
+      return
     }
 
     for ( const expressID of this.model.expressIDsOfTypes( IfcProject ) ) {
       await this.model.ensureResidentClosureByExpressID( expressID, void 0, pinned )
     }
-
-    return pinned
   }
 
   /**
@@ -7771,14 +7806,24 @@ export class IfcGeometryExtraction {
    * before the first product extract.
    *
    * @return {Promise<Set<number>>} Pinned local IDs — caller must
-   * {@link StepModelBase.unpinLocalIDs} after prepare/extract.
+   * {@link StepModelBase.unpinLocalIDs} after prepare/extract. On a
+   * rejection nothing stays pinned (see {@link pinForPrep_}).
    */
   public async ensureResidentForDemandPrep(): Promise< Set< number > > {
+    return await this.pinForPrep_( ( pinned ) => this.pageForDemandPrep_( pinned ) )
+  }
 
-    const pinned = await this.ensureResidentForUnits()
+  /**
+   * The walk behind {@link ensureResidentForDemandPrep}.
+   *
+   * @param pinned Set to add the pinned local IDs to.
+   */
+  private async pageForDemandPrep_( pinned: Set< number > ): Promise< void > {
+
+    await this.pageForUnits_( pinned )
 
     if ( !this.model.isSourceExternal ) {
-      return pinned
+      return
     }
 
     // Small trees: material-definition style stacks (the project's units
@@ -7861,8 +7906,6 @@ export class IfcGeometryExtraction {
     // resident yet — the silent empty maps the guard exists to refuse
     // (codex on conway#751).
     this.demandPrepResidencyEnsured_ = true
-
-    return pinned
   }
 
   /**
