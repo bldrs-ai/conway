@@ -2301,6 +2301,24 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * Call `visit` once per record with that record resident, paging a
+   * spilled source in file order rather than the caller's order (see
+   * StepModelBase.visitResidentInFileOrder, conway#752). Use this for
+   * walks that read many scattered records, where an `ensureLineResident`
+   * per record in walk order re-reads the same windows over and over.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Synchronous reader; copy out what you need, as views are
+   * released after it returns.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  async visitLinesInFileOrder(
+      expressIDs: Iterable<number>,
+      visit: (expressID: number) => void): Promise<void> {
+    await this.model[0].visitResidentInFileOrder(expressIDs, visit)
+  }
+
+  /**
    * Lazily iterate the express IDs of all IfcRoot-derived entities
    * (products, relationships, property sets, quantities — everything
    * carrying a GlobalId) straight from the type index, without

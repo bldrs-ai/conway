@@ -108,13 +108,62 @@ export class IfcProperties implements PropertiesPassthrough {
     const allLines = await this.api.getLineIDsWithType(IFCPROJECT)
     const projectID = allLines.get(0)
     const project = IfcProperties.newIfcProject(projectID)
+    // 'names' mode reads every node's Name/LongName/GlobalId up front, in
+    // file order (conway#752). On a spilled source the walk below used to
+    // page each node in tree order, which jumps across the file; on PSB
+    // (860 MB, ~124 MB window) that re-read about 25x the file. The tree
+    // is still assembled in its own order from the prefetched names.
+    let names: Map<number, object> | undefined
     if (includeProperties === 'names') {
-      await this.ensureLine(projectID)
-      Object.assign(project, this.api.getLineNameAttributes(projectID))
+      names = await this.readNameAttributes(
+          IfcProperties.reachableIDs(projectID, chunks))
+      Object.assign(project, names.get(projectID))
     }
-    await this.getSpatialNode(project, chunks, includeProperties)
+    await this.getSpatialNode(project, chunks, includeProperties, names)
     this.cleanupTypes()
     return project
+  }
+
+  /**
+   * Every express ID the spatial walk will visit from `rootID`, the root
+   * included. Order is not significant: the result only feeds the file-order
+   * prefetch.
+   *
+   * @param rootID The walk's root (the IfcProject).
+   * @param treeChunks Relating ID -> related IDs, from getSpatialTreeChunks.
+   * @return {Set<number>} The reachable IDs.
+   */
+  private static reachableIDs(rootID: number, treeChunks: any): Set<number> {
+    const reachable = new Set<number>([rootID])
+    const frontier = [rootID]
+    while (frontier.length > 0) {
+      const children = treeChunks[frontier.pop()!]
+      if (children == undefined) {
+        continue
+      }
+      for (const child of children) {
+        if (!reachable.has(child)) {
+          reachable.add(child)
+          frontier.push(child)
+        }
+      }
+    }
+    return reachable
+  }
+
+  /**
+   * Name/LongName/GlobalId handles for each ID, read in one file-order pass
+   * over a spilled source (a plain loop over a resident one).
+   *
+   * @param ids The records to read.
+   * @return {Promise<Map<number, object>>} expressID -> name attributes.
+   */
+  private async readNameAttributes(ids: Iterable<number>): Promise<Map<number, object>> {
+    const names = new Map<number, object>()
+    await this.api.visitLinesInFileOrder(ids, (id) => {
+      names.set(id, this.api.getLineNameAttributes(id))
+    })
+    return names
   }
 
   async getAllItemsOfType(type: number, verbose: boolean) {
@@ -146,10 +195,19 @@ export class IfcProperties implements PropertiesPassthrough {
 
   private async getChunks(chunks: any, propNames: pName) {
     const relation = await this.api.getLineIDsWithType(propNames.name)
+    const ids: number[] = []
     for (let i = 0; i < relation.size(); i++) {
-      await this.ensureLine(relation.get(i))
-      const rel = await this.api.getLine(relation.get(i), false)
-      this.saveChunk(chunks, propNames, rel)
+      ids.push(relation.get(i))
+    }
+    // Read the relationship rows in one file-order pass, then save them in
+    // type-index order: saveChunk concatenates, so its order is the
+    // children's order in the tree (conway#752).
+    const rels = new Map<number, any>()
+    await this.api.visitLinesInFileOrder(ids, (id) => {
+      rels.set(id, this.api.getLine(id, false))
+    })
+    for (const id of ids) {
+      this.saveChunk(chunks, propNames, rels.get(id))
     }
   }
 
@@ -170,12 +228,36 @@ export class IfcProperties implements PropertiesPassthrough {
     }
   }
 
-  private async getSpatialNode(node: Node, treeChunks: any, includeProperties?: IncludeProperties) {
-    await this.getChildren(node, treeChunks, PropsNames.aggregates, includeProperties)
-    await this.getChildren(node, treeChunks, PropsNames.spatial, includeProperties)
+  /**
+   * Populate `node.children`, recursively.
+   *
+   * Aggregation and spatial containment both save into the same
+   * `treeChunks`, keyed by the relating ID, so one list holds a node's
+   * children of both kinds (aggregates first, in type-index order). This
+   * used to walk that list once per relationship kind, both times writing
+   * `children`, so the second walk replaced the first's identical result.
+   * Done at every level, that is 2^depth walks of each subtree (conway#752).
+   * One walk gives the same tree.
+   *
+   * @param node The node to fill.
+   * @param treeChunks Relating ID -> related IDs.
+   * @param includeProperties The properties mode.
+   * @param names Prefetched name attributes for 'names' mode.
+   */
+  private async getSpatialNode(
+      node: Node,
+      treeChunks: any,
+      includeProperties?: IncludeProperties,
+      names?: Map<number, object>) {
+    await this.getChildren(node, treeChunks, PropsNames.aggregates, includeProperties, names)
   }
 
-  private async getChildren(node: Node, treeChunks: any, propNames: pName, includeProperties?: IncludeProperties) {
+  private async getChildren(
+      node: Node,
+      treeChunks: any,
+      propNames: pName,
+      includeProperties?: IncludeProperties,
+      names?: Map<number, object>) {
     const children = treeChunks[node.expressID]
     if (children == undefined) {
       return
@@ -186,15 +268,15 @@ export class IfcProperties implements PropertiesPassthrough {
       const child = children[i]
       let node = this.newNode(child)
       if (includeProperties === 'names') {
-        // Light mode: Name/LongName/GlobalId handles only — decodes just
-        // those vtable slots instead of flattening the whole record.
-        await this.ensureLine(node.expressID)
-        Object.assign(node, this.api.getLineNameAttributes(node.expressID))
+        // Light mode: Name/LongName/GlobalId handles only, which decodes
+        // just those vtable slots instead of flattening the whole record.
+        // Prefetched in file order by getSpatialStructure.
+        Object.assign(node, names?.get(node.expressID))
       } else if (includeProperties) {
         const properties = await this.getItemProperties(node.expressID) as any
         node = {...properties, ...node}
       }
-      await this.getSpatialNode(node, treeChunks, includeProperties)
+      await this.getSpatialNode(node, treeChunks, includeProperties, names)
       nodes.push(node)
     }
     (node[prop] as Node[]) = nodes

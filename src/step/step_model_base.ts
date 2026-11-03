@@ -1440,6 +1440,100 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Call `visit` once per record with that record's bytes resident,
+   * paging a windowed source in **file order**, so each source window
+   * is read about once however scattered the records are in the
+   * caller's order (conway#752).
+   *
+   * Callers that need results in their own order collect them here and
+   * reorder after. The visit order is by source address, which is not
+   * the iteration order of `expressIDs`.
+   *
+   * On a windowed source, each record is pinned across its await, so an
+   * interleaved paging (e.g. a concurrent geometry pump) cannot evict it
+   * before `visit` reads it. After `visit` returns, its captured window
+   * views are dropped ({@link releaseSourceViews}), so a walk over
+   * thousands of records does not keep every window it touched
+   * reachable past the LRU budget. `visit` must therefore copy out what
+   * it needs, not hold views.
+   *
+   * Fully resident sources visit in iteration order, with no awaits.
+   * Unknown express IDs are visited too (a read of one resolves to
+   * nothing, exactly as it would on a resident source), and a repeated
+   * express ID is visited once.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Called synchronously with each express ID while its
+   * record is resident.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  public async visitResidentInFileOrder(
+      expressIDs: Iterable< number >,
+      visit: ( expressID: number ) => void ): Promise< void > {
+
+    const seenExpressIDs = new Set< number >()
+
+    if ( !this.isSourceExternal ) {
+
+      for ( const expressID of expressIDs ) {
+
+        if ( !seenExpressIDs.has( expressID ) ) {
+
+          seenExpressIDs.add( expressID )
+          visit( expressID )
+        }
+      }
+
+      return
+    }
+
+    const localIDs: number[] = []
+    const localToExpress = new Map< number, number >()
+
+    for ( const expressID of expressIDs ) {
+
+      if ( seenExpressIDs.has( expressID ) ) {
+        continue
+      }
+
+      seenExpressIDs.add( expressID )
+
+      const localID = this.resolveExpressID( expressID )
+
+      if ( localID === void 0 || localID >= this.count_ ) {
+        // Nothing to page: the read resolves to nothing, as on a
+        // resident source.
+        visit( expressID )
+        continue
+      }
+
+      localIDs.push( localID )
+      localToExpress.set( localID, expressID )
+    }
+
+    const address = this.address_
+
+    localIDs.sort( ( a, b ) => address[ a ] - address[ b ] )
+
+    for ( const localID of localIDs ) {
+
+      this.pinByLocalID( localID )
+
+      try {
+
+        await this.ensureResidentByLocalID( localID )
+        visit( localToExpress.get( localID )! )
+
+      } finally {
+
+        this.unpinByLocalID( localID )
+        this.releaseSourceViews( [ localID ] )
+      }
+    }
+  }
+
+
+  /**
    * Express-ID twin of {@link ensureResidentClosureByLocalID}. Unknown
    * IDs resolve to an empty visit set.
    *
