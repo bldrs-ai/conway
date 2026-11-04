@@ -96,7 +96,11 @@ function recordShapes(text) {
       }
       ++i
     }
-    out.set(Number(match[1]), { keyword: match[2], a, b })
+    // A complex record's text is classified like any other above, but its
+    // shapes are not reported: they are its member entities' own lists.
+    out.set(Number(match[1]), match[2] === '' ?
+      { keyword: '(complex)', a: false, b: false } :
+      { keyword: match[2], a, b })
   }
   return out
 }
