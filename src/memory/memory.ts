@@ -23,6 +23,7 @@ export default class Memory {
   static checkMemoryUsage(): string {
     switch (Environment.environmentType) {
       case EnvironmentType.BROWSER:
+      case EnvironmentType.WORKER:
         return this.checkBrowserMemory()
       case EnvironmentType.NODE:
         return this.checkNodeMemory()
@@ -48,10 +49,11 @@ export default class Memory {
     /* eslint-disable no-magic-numbers */
     switch (Environment.environmentType) {
       case EnvironmentType.BROWSER:
-        if (typeof window !== 'undefined' && window.performance?.memory) {
-          return window.performance.memory.usedJSHeapSize / 1024 / 1024
-        }
-        return void 0
+      case EnvironmentType.WORKER: {
+        // Off `globalThis`: a worker has no `window` (conway#540).
+        const memory = globalThis.performance?.memory
+        return memory ? memory.usedJSHeapSize / 1024 / 1024 : void 0
+      }
       case EnvironmentType.NODE:
       case EnvironmentType.BOTH_FEATURES:
         return process.memoryUsage().heapUsed / 1024 / 1024
@@ -66,8 +68,10 @@ export default class Memory {
    * @return {string} - memory usage result for browser systems
    */
   private static checkBrowserMemory(): string {
-    if (window && window.performance && window.performance.memory) {
-      const memoryUsage = window.performance.memory
+    // `globalThis`, not `window`, which is a ReferenceError in a worker
+    // (conway#540); a worker reaches here through EnvironmentType.WORKER.
+    const memoryUsage = globalThis.performance?.memory
+    if (memoryUsage) {
       // eslint-disable-next-line no-magic-numbers
       const usedJSHeapSize = (memoryUsage.usedJSHeapSize / 1024 / 1024).toFixed(3)
 

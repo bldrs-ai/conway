@@ -1,6 +1,9 @@
 import { ConwayGeometry, FileHandlerFunction as FileHandlerCallback,
   setModulePrefix,
  } from '../../index'
+// Not re-exported from the package index: an internal platform check
+// (conway#540), not public API.
+import { isWebPlatform } from '../../../dependencies/conway-geom'
 import {versionString} from '../../version/version'
 import Logger, { LogLevel as ConwayLogLevel } from '../../logging/logger'
 import { ProgressCallback } from '../../core/progress'
@@ -389,9 +392,12 @@ export class IfcAPI {
     // prefix makes conway-geom import the engine module from the
     // directory it is actually served from, so import.meta.url — and
     // therefore the worker script URL — is correct. Web wasm paths are
-    // site-root-relative by convention; no-op outside isolated windows.
-    if (typeof window !== 'undefined' &&
-        (window as { crossOriginIsolated?: boolean }).crossOriginIsolated === true) {
+    // site-root-relative by convention; no-op outside isolated web contexts.
+    // Isolation is read off globalThis and the platform from conway-geom,
+    // not `window`, so an isolated Web Worker takes the same branch as an
+    // isolated window (conway#540).
+    if (isWebPlatform() &&
+        (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true) {
       setModulePrefix(webWasmDirectory(this.wasmPath))
     }
     const locateFileHandler: LocateFileHandlerFn = (path, prefix) => {
