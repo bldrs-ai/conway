@@ -467,7 +467,7 @@ implements Iterable<BaseEntity>, Model {
    *
    * These are the model's OWN arrays, not copies: the index is fixed for a
    * model's lifetime (nothing writes a column after construction), so a
-   * view is safe to read and a copy of a PSB-class index (~150 MB) would be
+   * view is safe to read and a copy of a 9 M-row index (~150 MB) would be
    * pure waste. **Do not mutate them.**
    *
    * Identity, not equivalence, is the point. Both constructor paths leave
