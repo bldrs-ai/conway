@@ -56,9 +56,22 @@ const PropsNames = {
   },
 }
 
+/**
+ * Element -> relating IDs for one relationship kind (property sets, types,
+ * materials): parallel arrays sorted by `related`, so an element's pairs
+ * are one contiguous run. 8 bytes per pair. See IfcProperties.relatedIndex.
+ */
+interface RelatedIndex {
+  related: Uint32Array
+  relating: Uint32Array
+}
+
 export class IfcProperties implements PropertiesPassthrough {
 
   private types: any
+
+  /** Relationship type code -> its index, built on first use. */
+  private readonly relatedIndexes_ = new Map<number, Promise<RelatedIndex>>()
 
   constructor(private api: IfcApiProxyIfc) {
   }
@@ -81,13 +94,9 @@ export class IfcProperties implements PropertiesPassthrough {
   }
 
   async getItemProperties(id: number, recursive = false) {
-    // NOTE: with a spilled source, `recursive` flattening follows
-    // references synchronously and only this record's range is
-    // ensured here — recursive reads on spilled models require the
-    // closure to be resident. No lazy-load consumer uses recursive
-    // reads; revisit if one appears.
-    await this.ensureLine(id)
-    return this.api.getLine(id, recursive)
+    // On a spilled source a recursive read pages in the record's whole
+    // #ref closure first; see IfcApiProxyIfc.getLineResident (conway#761).
+    return await this.api.getLineResident(id, recursive)
   }
 
   async getPropertySets(elementID: number, recursive = false) {
@@ -184,11 +193,11 @@ export class IfcProperties implements PropertiesPassthrough {
   }
 
   private async getProperty(elementID: number, recursive = false, propName: pName) {
-    const propSetIds = await this.getAllRelatedItemsOfType(elementID, propName)
+    const index = await this.relatedIndex(propName)
+    const propSetIds = IfcProperties.relatingIDsOf(index, elementID)
     const result: any[] = []
     for (let i = 0; i < propSetIds.length; i++) {
-      await this.ensureLine(propSetIds[i])
-      result.push(await this.api.getLine(propSetIds[i], recursive))
+      result.push(await this.api.getLineResident(propSetIds[i], recursive))
     }
     return result
   }
@@ -209,15 +218,6 @@ export class IfcProperties implements PropertiesPassthrough {
     for (const id of ids) {
       this.saveChunk(chunks, propNames, rels.get(id))
     }
-  }
-
-  private static isRelated(id: number, rel: any, propNames: pName) {
-    const relatedItems = rel[propNames.related]
-    if (Array.isArray(relatedItems)) {
-      const values = relatedItems.map((item) => item.value)
-      return values.includes(id)
-    }
-    return relatedItems.value === id
   }
 
   private static newIfcProject(id: number): Node {
@@ -322,16 +322,124 @@ export class IfcProperties implements PropertiesPassthrough {
     }
   }
 
-  private async getAllRelatedItemsOfType(id: number, propNames: pName) {
+  /**
+   * The element -> relating-IDs index for one relationship kind, built on
+   * the first property read of that kind and kept for the model's life.
+   *
+   * Each `getProperty` used to read every relationship record of the kind
+   * to find the few naming its element, paging in the window under each
+   * and never releasing one. On an 860 MB model whose property-set
+   * relationships sit in every one of its windows, every read, first or
+   * not, paged the whole file again (conway#755). Now the records are read once, as
+   * coalesced record spans in file order that page in no window at all
+   * (IfcApiProxyIfc.visitLineDataInFileOrder), and a read is a binary
+   * search.
+   *
+   * Lazy, not part of the index build: a load that never reads properties
+   * (geometry only, a CLI tree dump) never pays for it. Concurrent first
+   * reads share one build; a build that throws is forgotten, so the next
+   * read retries it.
+   *
+   * @param propNames The relationship kind.
+   * @return {Promise<RelatedIndex>} The index.
+   */
+  private relatedIndex(propNames: pName): Promise<RelatedIndex> {
+    let index = this.relatedIndexes_.get(propNames.name)
+    if (index === undefined) {
+      index = this.buildRelatedIndex(propNames)
+      this.relatedIndexes_.set(propNames.name, index)
+      index.catch(() => this.relatedIndexes_.delete(propNames.name))
+    }
+    return index
+  }
+
+  /**
+   * One pass over the kind's relationship records: a pair per
+   * (related, relating), sorted by related ID.
+   *
+   * An element's relating IDs come out in the order the old per-read scan
+   * produced them: relationships in type-index order, then each
+   * relationship's own relating order, and once per relationship even if
+   * it lists the element twice. The file-order pass does not visit in
+   * type-index order, hence the ordinal.
+   *
+   * @param propNames The relationship kind.
+   * @return {Promise<RelatedIndex>} The index.
+   */
+  private async buildRelatedIndex(propNames: pName): Promise<RelatedIndex> {
     const lines = await this.api.getLineIDsWithType(propNames.name)
-    const IDs: number[] = []
+    const ids: number[] = []
+    const ordinal = new Map<number, number>()
     for (let i = 0; i < lines.size(); i++) {
-      await this.ensureLine(lines.get(i))
-      const rel = await this.api.getLine(lines.get(i))
-      const isRelated = IfcProperties.isRelated(id, rel, propNames)
-      if (isRelated) {
-        this.getRelated(rel, propNames, IDs)
+      const id = lines.get(i)
+      ids.push(id)
+      ordinal.set(id, i)
+    }
+    const related: number[] = []
+    const relating: number[] = []
+    const relOrdinal: number[] = []
+    const relatingOfRel: number[] = []
+    const seenInRel = new Set<number>()
+    await this.api.visitLineDataInFileOrder(ids, (id, rel) => {
+      if (rel === undefined) {
+        return
       }
+      relatingOfRel.length = 0
+      this.getRelated(rel, propNames, relatingOfRel)
+      const relatedItems = rel[propNames.related]
+      const handles = Array.isArray(relatedItems) ? relatedItems : [relatedItems]
+      const order = ordinal.get(id)!
+      seenInRel.clear()
+      for (const handle of handles) {
+        const relatedID = handle.value
+        if (seenInRel.has(relatedID)) {
+          continue
+        }
+        seenInRel.add(relatedID)
+        for (const relatingID of relatingOfRel) {
+          related.push(relatedID)
+          relating.push(relatingID)
+          relOrdinal.push(order)
+        }
+      }
+    })
+    // Stable sort, so equal (related, relationship) keys keep the
+    // relationship's own relating order.
+    const permutation = Array.from(related, (_, i) => i)
+    permutation.sort((a, b) => (related[a] - related[b]) || (relOrdinal[a] - relOrdinal[b]))
+    const index: RelatedIndex = {
+      related: new Uint32Array(permutation.length),
+      relating: new Uint32Array(permutation.length),
+    }
+    for (let i = 0; i < permutation.length; i++) {
+      index.related[i] = related[permutation[i]]
+      index.relating[i] = relating[permutation[i]]
+    }
+    return index
+  }
+
+  /**
+   * The relating IDs `index` holds for `elementID`, in order.
+   *
+   * @param index From relatedIndex.
+   * @param elementID The related element.
+   * @return {number[]} Its relating IDs (empty if none).
+   */
+  private static relatingIDsOf(index: RelatedIndex, elementID: number): number[] {
+    const related = index.related
+    let lo = 0
+    let hi = related.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (related[mid] < elementID) {
+        lo = mid + 1
+      } else {
+        hi = mid
+      }
+    }
+    const IDs: number[] = []
+    for (let i = lo; i < related.length && related[i] === elementID; i++) {
+      IDs.push(index.relating[i])
     }
     return IDs
   }

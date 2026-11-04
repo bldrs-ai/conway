@@ -270,6 +270,21 @@ export interface StepBufferProvider {
   ensureResident( address: number, length: number ): Promise< void >
 
   /**
+   * Read a byte range once, without making it resident: the bytes come
+   * from resident chunks when every covering one is held, and straight
+   * from the store otherwise — no window is paged in, cached or evicted,
+   * and the residency policy does not see the read. For sparse sweeps
+   * that need a few hundred bytes from each of many windows (conway#755),
+   * where paging each window in would read the whole file.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {Promise< Uint8Array >} Exactly the range's bytes, as a view
+   * the caller may hold but must not write to.
+   */
+  readSpan( address: number, length: number ): Promise< Uint8Array >
+
+  /**
    * Hold a range against LRU eviction until a matching
    * {@link unpinRange}. No-op on a fully-resident source. Refcounted.
    *
@@ -336,6 +351,17 @@ export class ResidentStepBufferProvider implements StepBufferProvider {
    */
   public ensureResident(): Promise< void > {
     return Promise.resolve()
+  }
+
+  /**
+   * A view of the range over the resident buffer.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {Promise< Uint8Array >} The range's bytes.
+   */
+  public readSpan( address: number, length: number ): Promise< Uint8Array > {
+    return Promise.resolve( this.buffer_.subarray( address, address + length ) )
   }
 }
 
@@ -577,6 +603,41 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     }
 
     return { buffer: merged, offset: address }
+  }
+
+  /**
+   * Read a byte range without paging it in — see
+   * {@link StepBufferProvider.readSpan}.
+   *
+   * @param address Absolute start of the range.
+   * @param length Length of the range.
+   * @return {Promise< Uint8Array >} The range's bytes.
+   */
+  public async readSpan( address: number, length: number ): Promise< Uint8Array > {
+
+    const chunkBytes = this.chunkBytes_
+    const firstChunk = Math.floor( address / chunkBytes )
+    const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
+    let resident = true
+
+    for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
+
+      if ( !this.chunks_.has( chunkIndex ) ) {
+        resident = false
+        break
+      }
+    }
+
+    if ( !resident ) {
+      return await this.store_.read( address, length )
+    }
+
+    // acquire answers a single chunk whole (base = the chunk's start) and a
+    // straddling range as a copy of exactly the range (base = address).
+    const { buffer, offset } = this.acquire( address, length )
+    const start = address - offset
+
+    return buffer.subarray( start, start + length )
   }
 
   /**
