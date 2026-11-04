@@ -688,6 +688,38 @@ export function serializeIndexSidecar<TypeIDType extends number>(
 
 
 /**
+ * Refuse a blob that is not a sidecar this module reads: wrong magic, or any
+ * version but {@link SIDECAR_VERSION}. One helper for both the header-only
+ * read and the full decode, so the v1 explanation — the one an embedder
+ * holding persisted v1 sidecars needs, "rebuild the index" — reads the same
+ * whichever runs first (conway#760 round 3).
+ *
+ * @param view A view over at least the first 8 bytes.
+ * @return {number} The version (always {@link SIDECAR_VERSION}).
+ */
+function requireSidecarMagicAndVersion( view: DataView ): number {
+
+  const magic = view.getUint32( 0, true )
+
+  if ( magic !== MAGIC ) {
+    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
+  }
+
+  const version = view.getUint32( U32_BYTES, true )
+
+  if ( version !== SIDECAR_VERSION ) {
+    throw new Error(
+        `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` +
+        ( version === SIDECAR_VERSION_TOP_LEVEL_ONLY ?
+          ': v1 carries top-level rows only and would silently drop every ' +
+          'inline entity — rebuild the index' : '' ) )
+  }
+
+  return version
+}
+
+
+/**
  * Read only a sidecar's header: its source identity, without restoring the
  * index. Checks the magic and version exactly as the full decode does, and
  * throws on the same blobs, so a caller can apply the trust gate before
@@ -706,18 +738,8 @@ export function readSidecarSourceIdentity( bytes: Uint8Array ): SidecarSourceIde
   }
 
   const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
-  const magic = view.getUint32( 0, true )
 
-  if ( magic !== MAGIC ) {
-    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
-  }
-
-  const version = view.getUint32( U32_BYTES, true )
-
-  if ( version !== SIDECAR_VERSION ) {
-    throw new Error(
-        `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` )
-  }
+  requireSidecarMagicAndVersion( view )
 
   return {
     sourceByteLength: view.getFloat64( U32_BYTES * 2, true ),
@@ -743,23 +765,9 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
 
   const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
 
-  let offset = 0
+  const version = requireSidecarMagicAndVersion( view )
 
-  const magic = view.getUint32( offset, true ); offset += U32_BYTES
-
-  if ( magic !== MAGIC ) {
-    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
-  }
-
-  const version = view.getUint32( offset, true ); offset += U32_BYTES
-
-  if ( version !== SIDECAR_VERSION ) {
-    throw new Error(
-        `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` +
-        ( version === SIDECAR_VERSION_TOP_LEVEL_ONLY ?
-          ': v1 carries top-level rows only and would silently drop every ' +
-          'inline entity — rebuild the index' : '' ) )
-  }
+  let offset = 2 * U32_BYTES
 
   const sourceByteLength = view.getFloat64( offset, true ); offset += F64_BYTES
   const sourceHash = view.getUint32( offset, true ); offset += U32_BYTES

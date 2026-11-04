@@ -1188,8 +1188,11 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // reads one resident buffer with no windowed source to fold into, so it
     // is a pass of its own — taken now, while `data` is still the bytes that
     // were parsed, and after `parseEndTime` so the reported parse time is
-    // the parse's. Skipped for the IFC4X3 compat route, which never exports.
-    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true && !model.hasFieldMasks ) {
+    // the parse's. Skipped for an IFC4X3 header, which never exports (the
+    // header, not `hasFieldMasks`: an eligible 4X3 file can have nothing to
+    // mask).
+    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
+      !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
       model.indexedSourceHash = hashSource( data )
     }
 
@@ -1299,7 +1302,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     // See parseAndExtract: the parse-time digest for the sidecar export,
     // here cooperative so the open keeps yielding (conway#756).
-    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true && !model.hasFieldMasks ) {
+    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
+      !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
       model.indexedSourceHash = await hashSourceAsync( new BufferByteSource( data ) )
     }
 

@@ -644,6 +644,11 @@ describe( 'a stale sidecar fails the open as INDEX_STALE (conway#756)', () => {
     expect( await api.OpenModelFromIndex(
         new InMemoryStepByteStore( source ), broken, DEFER ) ).toBe( -1 )
     expect( api.getStatistics( attemptedID ).getLoadStatus() ).toBe( 'OPEN_FAIL' )
+
+    // ...and it still says why, now that the header-only read runs first
+    // (conway#760 round 3, P3-a).
+    expect( api.getStatistics( attemptedID ).getLoadFailureReason() )
+        .toMatch( /rebuild the index/ )
   } )
 
   test( '...nor on the not-IFC branch, where its identity cannot be read', async () => {
@@ -823,6 +828,25 @@ describe( 'what ExportIndexSidecar refuses (conway#756)', () => {
     }
 
     expect( warnings.join( '\n' ) ).toMatch( /RECORD_SOURCE_HASH/ )
+  } )
+
+  test( '...but an index-first open needs no flag to be exported again', async () => {
+
+    // Share's evict → reopen-from-index → evict-again cycle: the index-first
+    // open has no reason to set RECORD_SOURCE_HASH, and must not need to
+    // (conway#760 round 3, P3-b).
+    const source = fixture( 'index.ifc' )
+    const fresh = await api.OpenModelStream( new InMemoryStepByteStore( source ), DEFER )
+    const sidecar = ( await api.ExportIndexSidecar( fresh ) )!
+    const reopened = await api.OpenModelFromIndex(
+        new InMemoryStepByteStore( source ), sidecar, { ...NO_RECORD, DEFER_GEOMETRY: true } )
+
+    expect( reopened ).toBeGreaterThanOrEqual( 0 )
+    expect( Buffer.from( ( await api.ExportIndexSidecar( reopened ) )! )
+        .equals( Buffer.from( sidecar ) ) ).toBe( true )
+
+    api.CloseModel( fresh )
+    api.CloseModel( reopened )
   } )
 
   test( 'an IFC4X3 model on the compat route', async () => {

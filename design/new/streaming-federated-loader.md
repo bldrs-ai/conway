@@ -1179,7 +1179,9 @@ Deliberately small first step; each has a measurable exit.
     `recordSourceHash` on the engine ones. The fold measured ~+1.3 s
     (~12 %) on the bare index build of a 902 MB model. That is too much
     to charge every open for a feature most never use. A model opened
-    without it cannot be exported unless the caller supplies a hash.
+    without it cannot be exported. `IfcAPI.ExportIndexSidecar` refuses;
+    only an engine caller can supply a hash (`exportIfcIndexSidecar`'s
+    `sourceHash`).
     The fold is `Math.imul`, because `indexing/hashing.ts`'s shift-and-add
     `fnv1a` measured ~6× slower in Node 22. A faster digest is a
     format-version question, tracked with the sampled digest in
