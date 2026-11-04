@@ -1,0 +1,405 @@
+name: Perf A/A null test (paired-configuration noise floor)
+
+# EXPERIMENT, not part of CI, and deliberately NOT wired into rc-regression.
+# It answers one question that conway#632 asserts rather than measures.
+#
+# THE GAP IN #632's ARGUMENT. Pairing two engine pins inside one rc job cancels
+# the ~11.24% between-machine factor, and the residual is quoted as the
+# perf-counter probe's within-job CV of 0.111%
+# (design/new/perf-run-comparability.md). But that figure was measured on a
+# workload whose own header says it does "no I/O, no network, no filesystem
+# reads (page-cache state would leak in)" —
+# .github/probe/perf-counter-probe.mjs. The paired passes do precisely the I/O
+# the probe excluded: each reads the whole corpus off disk, in a fixed order,
+# the first pass cold and the second warm. conway#562 moved `loadStartMs` to
+# BEFORE `readFileSync`, so the gate's own column, `totalTimeMs`, now contains
+# that read. 0.111% therefore cannot bound the paired configuration, and codex
+# said so on #632.
+#
+# THE TEST. Run the IDENTICAL engine over the corpus three times back to back
+# in one job. Under perfect pairing every pass-to-pass delta is ~0; anything
+# systematic is methodology bias, measured instead of argued.
+#
+# WHY THREE PASSES AND NOT TWO. Two passes prove an effect exists; three say
+# what shape it has, and the shape is what decides #632's fix:
+#   P1 slow, P2 == P3  -> a one-time cold-start cost. Discarding a pre-warm
+#                         pass removes it completely.
+#   P1 > P2 > P3       -> something cumulative (thermal, allocator, host
+#                         scheduling). A pre-warm is not enough.
+#   all three equal    -> there is no pass-order term to remove.
+#
+# THE ANSWER (run 33192612782, four passes, same engine throughout). The third
+# case. Not cold-cache shaped: median |delta| of the P1->P2 gap over the
+# P2->P3 gap is 0.88, there is no monotone decline, and P1 came out marginally
+# FASTER than P2 -- the sign is backwards for a cold start. The reason is that
+# there was no cold pass: vmtouch reported the corpus 100% resident (2,065,763
+# / 2,065,763 pages, 7G/7G) BEFORE P1, because actions/checkout with LFS
+# writes every byte through the page cache and rc-regression checks out the
+# same way. P4, which forces the cold state, costs +0.13% of corpus total
+# (140.2 -> 140.4 s) and 0.000% on the median model. Pass wall clock across
+# all four, cold included: 289.85 / 290.56 / 290.55 / 290.44 s, max-min 0.24%.
+#
+# WHAT IT MEASURED INSTEAD, and this is the durable output: the paired gate's
+# own noise floor, which is TWO numbers and they are not interchangeable.
+# Whole-corpus aggregate 0.13-0.24%. Per model, 1.27-1.58% median |delta| with
+# p10/p90 near -3%/+4% -- and against an IDENTICAL engine, ~60 of 97 models
+# moved >1%, ~38 >2% and 10 >5%. So a per-model regression call below ~5% is
+# inside the floor, while the corpus median is stable to under ~0.75%.
+# Recorded in design/new/perf-run-comparability.md Evidence 4; no pre-warm and
+# no counterbalancing were added to rc-regression as a result.
+#
+# WHAT THE 97 IS 97 OF. The batch walks 99 models at that corpus pin under the
+# exclude below, and every pass wrote 97 rows: the per-model perf CSV is named
+# `<stem>.perf.csv` and written with an overwrite, so two pairs sharing a stem
+# (`ifc/index.ifc` vs `ifc/bldrs/index.ifc`, conway#633; and
+# `step/zoo.dev/a-gear.step` vs its `a-gear.stp` symlink) each collapse to one
+# row. Nothing above moves as a result -- the two lost models produce no rows
+# to skew a median with -- but the floors are measured over 97 of 99 models,
+# and the analyser now derives that denominator from a walk of the corpus
+# (`--corpus`) rather than from the passes, so it cannot silently drift again.
+#
+# THE FLOORS ARE PUBLIC-CORPUS EVIDENCE. They are not a measured bound on a
+# private-corpus snapshot, and nothing generated from them may say otherwise:
+# see "PUBLIC CORPUS ONLY" below and perf-run-comparability.md Evidence 4,
+# "What this does not bound".
+#
+# WHY A FOURTH, EVICTED PASS. P1..P3 are faithful to what an rc job actually
+# does, and that is the headline. But their P1 is only as cold as the corpus
+# happens to be after `actions/checkout` has just written every byte of it
+# through the page cache — on the PUBLIC corpus, which fits comfortably in the
+# runner's RAM (16 GB: MemTotal 16373448 kB = 15,989 MB, so the `8gb` in the
+# runner LABEL is not the machine's memory), P1 may be fully warm already and
+# the faithful test would then understate the bias that the PRIVATE corpus
+# (larger than RAM) would suffer.
+# P4 evicts ONLY the corpus files (`vmtouch -e`, not `drop_caches`, so node,
+# the wasm Dist and node_modules stay warm) and re-runs. P3->P4 is then a
+# clean measurement of the corpus-read term on its own, and it is what the
+# private-corpus extrapolation rests on. Non-blocking: if vmtouch is
+# unavailable the pass is skipped and P1..P3 still answer the headline.
+#
+# PUBLIC CORPUS ONLY. It is where the problem was observed, two extra passes
+# are affordable there (~5 min each against private's ~20), and the effect
+# under test is a property of the runner and the harness, not of which models
+# are in the folder. The cost of that choice — the public corpus fitting in
+# RAM where private would not — is exactly what P4 exists to quantify.
+#
+# Self-contained on purpose: this workflow plus .github/probe/aa-pass.sh (the
+# one pass invocation every pass shares) and .github/probe/perf-aa-null.cjs
+# (the analyser). It must not be merged into, or depended on by, build.yml or
+# rc-regression.yml, and it blesses nothing.
+
+on:
+  # Scoped to its own files and its analyser's dependencies, so it runs from
+  # the branch it is developed on
+  # without firing on every unrelated commit. `workflow_dispatch` alone is not
+  # dispatchable until the workflow reaches the default branch, which is the
+  # trap perf-counter-probe.yml documents; this experiment is not on main.
+  push:
+    paths:
+      - '.github/workflows/perf-aa-null.yml'
+      - '.github/probe/perf-aa-null.cjs'
+      - '.github/probe/aa-pass.sh'
+      # The analyser's demand is seeded by the paired gate's own corpus walk
+      # (`collectCorpusModels` in bless_perf_snapshot.cjs), so PRODUCTION code
+      # decides what this experiment considers complete coverage. Without
+      # these, a change to that walk or to MODEL_EXTENSIONS silently moves the
+      # denominator with no re-run. This is the analyser's full local require
+      # closure, not just its three direct imports: it is small enough (five
+      # files) that listing all of it beats a rule about which layer counts.
+      # To re-derive after an import changes, follow `require('../../scripts/`
+      # out of the analyser and `require('./` out of each file it reaches.
+      - 'scripts/bless_perf_snapshot.cjs'
+      - 'scripts/perf_ab_compare.cjs'
+      - 'scripts/gen_delta_csv.cjs'
+      - 'scripts/version_order.cjs'
+      - 'scripts/csv_rfc4180.cjs'
+  workflow_dispatch:
+    inputs:
+      passes:
+        description: 'Number of back-to-back identical passes (3 answers the shape question)'
+        default: '3'
+      evict_pass:
+        description: 'Add a final pass with the corpus evicted from page cache'
+        type: boolean
+        default: true
+
+concurrency:
+  group: perf-aa-null-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  EMSDK_VERSION: '6.0.2'
+  EMSDK_CACHE_FOLDER: 'cache/emsdk'
+  # Same knob build.yml uses, resolved to a concrete SHA below so the corpus is
+  # pinned and recorded rather than floating.
+  TEST_MODELS_REF: ${{ vars.TEST_MODELS_REF || 'main' }}
+  # rc-regression's blessed-pass exclude, written ONCE for this workflow.
+  # `aa-pass.sh` gives it to every pass and the analyser walks the corpus under
+  # the same regex to derive what those passes were supposed to measure. Two
+  # copies of this literal would let the demand and the measurement disagree
+  # about which models are in scope, which is the failure the corpus-seeded
+  # demand exists to prevent.
+  AA_EXCLUDE: 'sp-.*\.ifc|cg4.*-cylinder\.stp'
+
+jobs:
+  aa-null:
+    # The SAME dedicated runner label rc-regression's `rebless` job uses
+    # (.github/workflows/rc-regression.yml). Measuring a different pool would
+    # answer a question nobody asked — the runner IS the subject here, exactly
+    # as it is for perf-counter-probe.yml.
+    runs-on: ubuntu-24.04-4vcpu-8gb-150gbssd
+    # Build (~5 min on a wasm cache hit, ~30 on a miss) + LFS checkout + up to
+    # four ~5-minute passes. 120 leaves room for a cold wasm build without
+    # having to re-dispatch.
+    timeout-minutes: 120
+    steps:
+      # --- Build the engine, mirroring rc-regression's rebless job exactly ---
+      # The A/A test does not care WHICH engine it runs, only that all passes
+      # run the same one. It builds from source anyway so that the thing being
+      # characterised is the configuration #632 actually ships.
+      - name: Checkout conway
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: 'yarn'
+
+      - name: Compute conway-geom submodule SHA
+        id: subsha
+        run: echo "sha=$(git -C dependencies/conway-geom rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Same cache key as build.yml and rc-regression.yml, so this normally
+      # hits the Dist those jobs populated for this conway-geom SHA.
+      - name: Restore WASM build cache
+        id: wasm-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dependencies/conway-geom/Dist
+            dependencies/conway-geom/bin/release
+            compiled/dependencies/conway-geom/Dist
+          key: wasm-${{ runner.os }}-emsdk${{ env.EMSDK_VERSION }}-${{ steps.subsha.outputs.sha }}
+
+      # --- WASM build fallback on cache miss (mirrors rc-regression) ---
+      - name: Restore GENie cache
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        id: genie-cache
+        uses: actions/cache@v4
+        with:
+          path: bin/linux/genie
+          key: genie-${{ runner.os }}
+
+      - name: Build GENie
+        if: steps.wasm-cache.outputs.cache-hit != 'true' && steps.genie-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/bkaradzic/GENie.git GENie
+          (cd GENie && make)
+          mkdir -p bin/linux
+          cp GENie/bin/linux/genie bin/linux/genie
+
+      - name: Cache Emscripten system libraries
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.EMSDK_CACHE_FOLDER }}
+          key: ${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: ${{ env.EMSDK_CACHE_FOLDER }}
+
+      - name: Export EMSDK paths for subsequent steps
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: |
+          EMSDK=$(which em++ | sed 's|upstream/emscripten/em++||')
+          EMSCRIPTEN=$(which em++ | sed 's|/em++||')
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSCRIPTEN=$EMSCRIPTEN" >> "$GITHUB_ENV"
+
+      - name: Extract WASM build dependencies
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn extract-wasm-dependencies
+
+      - name: Build WASM
+        if: steps.wasm-cache.outputs.cache-hit != 'true'
+        run: yarn build-GHA-all
+
+      - name: TypeScript build
+        run: yarn build-incremental
+
+      # --- The corpus ---
+      # Resolved to a concrete SHA (build.yml's logic) so the run records which
+      # corpus it measured; a floating ref would make the numbers unreproducible
+      # for the same reason perf-baseline-oneoff.yml pins its refs.
+      - name: Resolve test-models SHA
+        id: tmsha
+        run: |
+          set -euo pipefail
+          URL=https://github.com/bldrs-ai/test-models.git
+          REFS=$(git ls-remote "$URL" "$TEST_MODELS_REF")
+          SHA=$(printf '%s\n' "$REFS" | awk '$2 ~ /\^\{\}$/ { print $1; found=1; exit } NR==1 { first=$1 } END { if (!found && first) print first }')
+          if [ -z "$SHA" ]; then SHA="$TEST_MODELS_REF"; fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve TEST_MODELS_REF='$TEST_MODELS_REF' to a commit SHA (got '$SHA')."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved test-models ref '$TEST_MODELS_REF' -> $SHA"
+
+      # actions/checkout with lfs, into `models` — the SAME shape rc-regression
+      # uses, so P1 meets the corpus in the same page-cache state a real paired
+      # rc pass does. Deliberately NOT restored from an actions/cache: a cache
+      # restore tar-extracts every byte immediately before the first pass and
+      # would warm the page cache differently from the LFS smudge a real rc job
+      # performs, i.e. it would change the very thing being measured.
+      - name: Checkout test-models
+        uses: actions/checkout@v4
+        with:
+          repository: bldrs-ai/test-models
+          ref: ${{ steps.tmsha.outputs.sha }}
+          lfs: true
+          path: models
+
+      # Corpus bytes against runner RAM is a first-class result, not context:
+      # if the public corpus fits in page cache and the private one does not,
+      # then P1..P3 UNDERSTATE the bias for private and the report has to say
+      # so. vmtouch turns "fits" from an inference into a measurement — it
+      # reports how many of the corpus's pages are actually resident.
+      - name: Machine and corpus census
+        id: census
+        run: |
+          set -u
+          echo "AA_RUNNER_LABEL=ubuntu-24.04-4vcpu-8gb-150gbssd"
+          echo "AA_CPU_MODEL=$(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//')"
+          echo "AA_NPROC=$(nproc)"
+          echo "AA_RUN_ID=${{ github.run_id }} AA_RUN_ATTEMPT=${{ github.run_attempt }}"
+          echo "AA_TEST_MODELS_SHA=${{ steps.tmsha.outputs.sha }}"
+          echo "AA_MEMTOTAL_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+          free -m || true
+          # Model bytes only — the checkout also carries the committed baseline
+          # CSVs and .git, which no pass reads.
+          #
+          # `-xtype f` rather than `-type f`: the corpus contains at least one
+          # model that is a SYMLINK to another (`step/zoo.dev/a-gear.stp` ->
+          # `a-gear.step`), and the batch walks it as a model like any other
+          # (`collectIFCFiles()` splits on `isDirectory()`, so a symlink to a
+          # file is a file). `-type f` skips it and undercounts the corpus by
+          # one against what the passes actually process. Bytes are then
+          # double-counted for such a pair, which is right for "how much does a
+          # pass read" and wrong for "how big is the checkout" — the latter is
+          # the `du` line below.
+          MODEL_BYTES=$(find models -xtype f \
+            \( -iname '*.ifc' -o -iname '*.step' -o -iname '*.stp' \) \
+            -printf '%s\n' | awk '{s+=$1} END {print s+0}')
+          MODEL_COUNT=$(find models -xtype f \
+            \( -iname '*.ifc' -o -iname '*.step' -o -iname '*.stp' \) | wc -l)
+          echo "AA_CORPUS_MODEL_FILES=${MODEL_COUNT}"
+          echo "AA_CORPUS_MODEL_BYTES=${MODEL_BYTES}"
+          echo "AA_CORPUS_MODEL_MIB=$(awk -v b="$MODEL_BYTES" 'BEGIN{printf "%.1f", b/1048576}')"
+          echo "AA_CHECKOUT_BYTES=$(du -sb models | cut -f1)"
+          sudo apt-get update -qq || true
+          if sudo apt-get install -y -qq vmtouch; then
+            echo "AA_VMTOUCH=available"
+            echo "vmtouch=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "AA_VMTOUCH=unavailable (P4 will be skipped)"
+            echo "vmtouch=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Four near-identical pass steps rather than a loop, because GitHub's
+      # own step timestamps are then the pass wall-clock record — a loop would
+      # collapse all of them into one step duration.
+      - name: Pass P1
+        timeout-minutes: 35
+        env:
+          CONWAY_PERF_EXPOSE_GC: '1'
+        run: .github/probe/aa-pass.sh P1
+
+      - name: Pass P2
+        timeout-minutes: 35
+        env:
+          CONWAY_PERF_EXPOSE_GC: '1'
+        run: .github/probe/aa-pass.sh P2
+
+      - name: Pass P3
+        if: ${{ (github.event.inputs.passes || '3') != '2' }}
+        timeout-minutes: 35
+        env:
+          CONWAY_PERF_EXPOSE_GC: '1'
+        run: .github/probe/aa-pass.sh P3
+
+      # Evict ONLY the corpus, leaving node/wasm/node_modules warm, so P3->P4
+      # isolates the model-file read. `drop_caches` would evict those too and
+      # measure a different, larger thing.
+      - name: Evict the corpus from page cache
+        id: evict
+        if: ${{ steps.census.outputs.vmtouch == '1' && (github.event.inputs.evict_pass || 'true') == 'true' }}
+        continue-on-error: true
+        run: |
+          set -u
+          echo "--- residency before eviction ---"
+          vmtouch models || true
+          sudo vmtouch -e models
+          echo "--- residency after eviction ---"
+          vmtouch models || true
+
+      - name: Pass P4 (corpus evicted)
+        if: ${{ steps.evict.outcome == 'success' }}
+        timeout-minutes: 35
+        env:
+          CONWAY_PERF_EXPOSE_GC: '1'
+        run: .github/probe/aa-pass.sh P4
+
+      - name: Analyse
+        if: ${{ !cancelled() }}
+        run: |
+          set -u
+          PASSES=""
+          for NAME in P1 P2 P3 P4; do
+            if [ -f "perf-${NAME}.csv" ]; then PASSES="$PASSES ${NAME}=perf-${NAME}.csv"; fi
+          done
+          echo "Analysing passes:$PASSES"
+          # shellcheck disable=SC2086
+          # `--corpus` is what stops this report describing whatever the
+          # passes happened to emit as whole-corpus statistics: the demand is
+          # seeded from the filesystem, which ran no pass, under the same
+          # exclude every pass used.
+          node .github/probe/perf-aa-null.cjs \
+            --markdown aa-report.md \
+            --csv aa-per-model.csv \
+            --label "public @ ${{ steps.tmsha.outputs.sha }}" \
+            --corpus models \
+            --corpus-exclude "$AA_EXCLUDE" \
+            $PASSES | tee aa-grep.txt
+          {
+            echo "**Runner:** \`ubuntu-24.04-4vcpu-8gb-150gbssd\`, $(grep -m1 '^model name' /proc/cpuinfo | sed 's/^model name[[:space:]]*:[[:space:]]*//'), $(awk '/^MemTotal:/ {printf "%.1f GB", $2/1048576}' /proc/meminfo) RAM."
+            echo ""
+            cat aa-report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "===== REPORT ====="
+          cat aa-report.md
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: perf-aa-null-${{ github.run_id }}
+          path: |
+            perf-P*.csv
+            aa-report.md
+            aa-per-model.csv
+            aa-grep.txt
+            aa-residency-*.txt
+          if-no-files-found: warn

@@ -2,19 +2,81 @@ const fs = require('fs');
 const { csvRow, parseCsv } = require('./csv_rfc4180.cjs');
 
 /**
+ * The two ways the left-hand side of a delta can have been obtained, and the
+ * only legal values of the `measurementBasis` column.
+ *
+ * `crossRun` is the historical shape: `engine1`'s numbers are read out of a
+ * `performance-detail.csv` a PREVIOUS run committed, on a machine nobody
+ * recorded. That comparison has a measured 13.66% median noise floor —
+ * see design/new/perf-run-comparability.md — so a `crossRun` timing row is a
+ * lead, not a measurement.
+ *
+ * `paired` means both sides were measured in ONE job on ONE machine, which
+ * cancels the machine factor exactly. What it leaves was measured by an A/A
+ * null test (run 33192612782, .github/workflows/perf-aa-null.yml): the corpus
+ * AGGREGATE is stable to 0.13-0.24%, but PER MODEL the floor is ~1.4% median
+ * absolute change with p10/p90 near -3%/+4%. Read the median of a `paired`
+ * file as the gate; a single `paired` row below ~5% is still inside the
+ * floor. Those figures are the PUBLIC corpus's (97 of the 99 models the batch
+ * walks there); no null test has run against the private corpus, so on a
+ * private snapshot they are the best evidence available and not a measured
+ * bound — see perf-run-comparability.md Evidence 4, "What this does not
+ * bound".
+ *
+ * The label is per-file, not per-row, but it is written on every row on
+ * purpose: rows get copied into summaries, issue comments and spreadsheets
+ * without their filename, and the whole reason this column exists is that a
+ * cross-run row was being read as signal.
+ */
+const MEASUREMENT_BASIS = { PAIRED: 'paired', CROSS_RUN: 'crossRun' };
+
+/**
  * Generate a delta CSV from two performance-detail CSV files.
  *
  * @param {string} csvPath1 Path to first CSV file (older run).
  * @param {string} csvPath2 Path to second CSV file (newer run).
  * @param {string} outputCsvPath Where to write the resulting delta CSV.
  * @param {boolean} [isWebIfc=false] If true, compute only selected deltas and output a limited set of columns.
+ * @param {string} [measurementBasis='crossRun'] One of MEASUREMENT_BASIS.
+ *   Stamped into every row's `measurementBasis` column. A `paired` delta also
+ *   DROPS its one-sided rows — see isTwoSided.
  */
-function generateDeltaCSV(csvPath1, csvPath2, outputCsvPath, isWebIfc = false) {
+function generateDeltaCSV(
+    csvPath1, csvPath2, outputCsvPath, isWebIfc = false,
+    measurementBasis = MEASUREMENT_BASIS.CROSS_RUN) {
   const data1 = readDataFromCsv(csvPath1);
   const data2 = readDataFromCsv(csvPath2);
 
   const deltas = computeDeltas(data1, data2, isWebIfc);
-  writeDataToCsv(deltas, outputCsvPath, isWebIfc);
+
+  // computeDeltas unions its two inputs, emitting an all-N/A row for a model
+  // only one side measured. That is right for `crossRun` — the archive's
+  // whole job is continuity, and a model added to or dropped from the corpus
+  // between two releases is a fact about the corpus worth carrying — but it
+  // is a false claim in a `paired` file, where the label asserts of EVERY ROW
+  // that both engines were timed in one job on one machine. A row whose
+  // `engine1` is `N/A` was not, so it is absent here rather than present and
+  // mislabelled.
+  const written = measurementBasis === MEASUREMENT_BASIS.PAIRED ?
+    deltas.filter(isTwoSided) :
+    deltas;
+
+  writeDataToCsv(written, outputCsvPath, isWebIfc, measurementBasis);
+}
+
+/**
+ * Did BOTH sides of the delta contribute a row to this one?
+ *
+ * computeDeltas marks the missing half of a one-sided row by writing `N/A`
+ * into every column it would have filled from that side, `engine1`/`engine2`
+ * included — and a real detail CSV always names its engine, so those two
+ * cells are an unambiguous marker rather than a value that could occur.
+ *
+ * @param {Object} delta One row as built by computeDeltas.
+ * @return {boolean} True when the row differences two measurements.
+ */
+function isTwoSided(delta) {
+  return delta.engine1 !== 'N/A' && delta.engine2 !== 'N/A';
 }
 
 /**
@@ -238,8 +300,12 @@ function readDataFromCsv(filepath) {
  * @param {Array<Object>} data
  * @param {string} csvFilename
  * @param {boolean} [isWebIfc=false] If true, use the limited CSV header.
+ * @param {string} [measurementBasis='crossRun'] One of MEASUREMENT_BASIS,
+ *   stamped into every row's `measurementBasis` column.
  */
-function writeDataToCsv(data, csvFilename, isWebIfc = false) {
+function writeDataToCsv(
+    data, csvFilename, isWebIfc = false,
+    measurementBasis = MEASUREMENT_BASIS.CROSS_RUN) {
   const csvHeader = isWebIfc
     ? [
         'loadStatus1',
@@ -265,6 +331,7 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'retainedRssMbDelta',
         'retainedHeapUsedMbDelta',
         'retainedExternalMbDelta',
+        'measurementBasis',
       ]
     : [
         'timestamp',
@@ -294,15 +361,24 @@ function writeDataToCsv(data, csvFilename, isWebIfc = false) {
         'retainedRssMbDelta',
         'retainedHeapUsedMbDelta',
         'retainedExternalMbDelta',
+        'measurementBasis',
       ];
 
   const lines = [];
   // write the header
   lines.push(csvRow(csvHeader));
 
-  // write each row
+  // write each row. `measurementBasis` is stamped here rather than carried on
+  // every delta object because it is a property of HOW THE TWO FILES WERE
+  // OBTAINED, which computeDeltas cannot see: it is handed two arrays of rows
+  // and has no idea whether they came off one machine or two.
   data.forEach((row) => {
-    lines.push(csvRow(csvHeader.map((col) => (row[col] != null ? row[col] : ''))));
+    lines.push(csvRow(csvHeader.map((col) => {
+      if (col === 'measurementBasis') {
+        return measurementBasis;
+      }
+      return row[col] != null ? row[col] : '';
+    })));
   });
 
   fs.writeFileSync(csvFilename, lines.join('\n'), 'utf8');
@@ -976,16 +1052,27 @@ function parseValue(value) {
 // If you want to run it as a standalone script:
 // node delta.js oldCsvPath newCsvPath outCsvPath [isWebIfc]
 if (require.main === module) {
-  if (process.argv.length < 5 || process.argv.length > 6) {
+  if (process.argv.length < 5 || process.argv.length > 7) {
     console.error(
-      `Usage: node ${process.argv[1]} <run_name1.csv> <run_name2.csv> <output_csv_filename> [isWebIfc]`
+      `Usage: node ${process.argv[1]} <run_name1.csv> <run_name2.csv> <output_csv_filename> [isWebIfc] [measurementBasis]`
     );
     process.exit(1);
   }
 
-  const [ , , runName1, runName2, outputCsv, isWebIfcArg ] = process.argv;
+  const [ , , runName1, runName2, outputCsv, isWebIfcArg, basisArg ] =
+    process.argv;
   const isWebIfc = isWebIfcArg ? true : false;
-  generateDeltaCSV(runName1, runName2, outputCsv, isWebIfc);
+  // Unknown labels are rejected rather than written through: this column's
+  // whole job is to let a reader trust one word, so a typo that lands
+  // 'pared' in the archive would be worse than no column.
+  const basis = basisArg || MEASUREMENT_BASIS.CROSS_RUN;
+  if (!Object.values(MEASUREMENT_BASIS).includes(basis)) {
+    console.error(
+      `measurementBasis must be one of ${Object.values(MEASUREMENT_BASIS).join('|')}, got '${basis}'.`
+    );
+    process.exit(1);
+  }
+  generateDeltaCSV(runName1, runName2, outputCsv, isWebIfc, basis);
 }
 
 // Export so we can use from benchmark.js or other modules
@@ -997,4 +1084,4 @@ if (require.main === module) {
 // carry the column at all — so it passed because the value was ABSENT, not
 // because it was withheld, and could never have failed. A set the test
 // iterates cannot drift from the set the code enforces.
-module.exports = { generateDeltaCSV, MEASUREMENT_COLUMNS };
+module.exports = { generateDeltaCSV, MEASUREMENT_COLUMNS, MEASUREMENT_BASIS };
