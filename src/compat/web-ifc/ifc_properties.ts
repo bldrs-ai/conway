@@ -11,7 +11,9 @@ import {
   IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
 } from './ifc2x4'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc';
-import { IncludeProperties, Node, PropertiesPassthrough } from './properties_passthrough';
+import {
+  IncludeProperties, Node, PropertiesPassthrough, PropertyReadOptions,
+} from './properties_passthrough';
 
 import { IfcElements, IfcTypesMap } from './types-map'
 
@@ -93,22 +95,24 @@ export class IfcProperties implements PropertiesPassthrough {
     }
   }
 
-  async getItemProperties(id: number, recursive = false) {
-    // On a spilled source a recursive read pages in the record's whole
-    // #ref closure first; see IfcApiProxyIfc.getLineResident (conway#761).
-    return await this.api.getLineResident(id, recursive)
+  // A recursive read leaves geometry representations as handles unless
+  // `options.includeRepresentations`, and on a spilled source pages in the
+  // record's #ref closure first; see IfcApiProxyIfc.getLineResident
+  // (conway#761).
+  async getItemProperties(id: number, recursive = false, options?: PropertyReadOptions) {
+    return await this.api.getLineResident(id, recursive, options?.includeRepresentations === true)
   }
 
-  async getPropertySets(elementID: number, recursive = false) {
-    return await this.getProperty(elementID, recursive, PropsNames.psets)
+  async getPropertySets(elementID: number, recursive = false, options?: PropertyReadOptions) {
+    return await this.getProperty(elementID, recursive, PropsNames.psets, options)
   }
 
-  async getTypeProperties(elementID: number, recursive = false) {
-    return await this.getProperty(elementID, recursive, PropsNames.type)
+  async getTypeProperties(elementID: number, recursive = false, options?: PropertyReadOptions) {
+    return await this.getProperty(elementID, recursive, PropsNames.type, options)
   }
 
-  async getMaterialsProperties(elementID: number, recursive = false) {
-    return await this.getProperty(elementID, recursive, PropsNames.materials)
+  async getMaterialsProperties(elementID: number, recursive = false, options?: PropertyReadOptions) {
+    return await this.getProperty(elementID, recursive, PropsNames.materials, options)
   }
 
   async getSpatialStructure(includeProperties?: IncludeProperties): Promise< Node > {
@@ -192,12 +196,14 @@ export class IfcProperties implements PropertiesPassthrough {
     return result
   }
 
-  private async getProperty(elementID: number, recursive = false, propName: pName) {
+  private async getProperty(
+      elementID: number, recursive = false, propName: pName, options?: PropertyReadOptions) {
     const index = await this.relatedIndex(propName)
     const propSetIds = IfcProperties.relatingIDsOf(index, elementID)
     const result: any[] = []
     for (let i = 0; i < propSetIds.length; i++) {
-      result.push(await this.api.getLineResident(propSetIds[i], recursive))
+      result.push(await this.api.getLineResident(
+          propSetIds[i], recursive, options?.includeRepresentations === true))
     }
     return result
   }

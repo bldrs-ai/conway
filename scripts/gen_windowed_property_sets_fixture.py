@@ -100,4 +100,22 @@ new(f"IFCRELASSOCIATESMATERIAL('{gid(501)}',$,$,$,(" + ",".join(f"#{w}" for w in
 # Walls 7..9 get their sets last: the second relationship for wall 7.
 filler(8)
 rel([walls[7], walls[8], walls[9]], s0)
+# A proxy with a representation, and a type with a representation map, for
+# the default flatten that leaves geometry representations as handles. The
+# shape records sit behind padding of their own, away from the proxy.
+filler(8)
+# Forward references, filled in once the shape records have IDs.
+proxy = new(f"IFCBUILDINGELEMENTPROXY('{gid(600)}',$,'Proxy',$,$,$,@PDS@,$,$)")
+ptype = new(f"IFCBUILDINGELEMENTPROXYTYPE('{gid(601)}',$,'Proxy type',$,$,$,(@MAP@),$,$,.NOTDEFINED.)")
+new(f"IFCRELDEFINESBYTYPE('{gid(602)}',$,$,$,(#{proxy}),#{ptype})")
+rel([proxy], s0)
+filler(16)
+origin = new("IFCCARTESIANPOINT((0.,0.,0.))")
+axis = new(f"IFCAXIS2PLACEMENT3D(#{origin},$,$)")
+context = new(f"IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#{axis},$)")
+corners = [new(f"IFCCARTESIANPOINT(({k}.,0.,0.))") for k in range(3)]
+shape = new(f"IFCSHAPEREPRESENTATION(#{context},'Annotation','Point',(" + ",".join(f"#{c}" for c in corners) + "))")
+pds = new(f"IFCPRODUCTDEFINITIONSHAPE($,$,(#{shape}))")
+pmap = new(f"IFCREPRESENTATIONMAP(#{axis},#{shape})")
+out = [line.replace("@PDS@", f"#{pds}").replace("@MAP@", f"#{pmap}") for line in out]
 sys.stdout.write(hdr + "\n" + "\n".join(out) + "\nENDSEC;\nEND-ISO-10303-21;\n")

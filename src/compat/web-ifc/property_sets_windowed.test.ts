@@ -37,6 +37,10 @@ const MAX_RESIDENT_CHUNKS = 3
 const WALL_0 = 207
 const WALL_1 = 208
 const WALL_7 = 220
+const PROXY = 349
+const SHAPE = 375
+const PRODUCT_SHAPE = 376
+const REPRESENTATION_MAP = 377
 
 let api: IfcAPI
 let buffer: Uint8Array
@@ -88,15 +92,19 @@ function allExpressIDs(): number[] {
 type Reads = { item?: any, psets?: any[], types?: any[], materials?: any[] }
 
 /** The record itself and all three relationship kinds' reads, for every ID. */
-async function readAll(modelID: number, recursive: boolean): Promise<Map<number, Reads>> {
+async function readAll(
+    modelID: number,
+    recursive: boolean,
+    includeRepresentations = false): Promise<Map<number, Reads>> {
   const reads = new Map<number, Reads>()
+  const options = { includeRepresentations }
 
   for (const id of allExpressIDs()) {
     reads.set(id, {
-      item: await api.properties.getItemProperties(modelID, id, recursive),
-      psets: await api.properties.getPropertySets(modelID, id, recursive),
-      types: await api.properties.getTypeProperties(modelID, id, recursive),
-      materials: await api.properties.getMaterialsProperties(modelID, id, recursive),
+      item: await api.properties.getItemProperties(modelID, id, recursive, options),
+      psets: await api.properties.getPropertySets(modelID, id, recursive, options),
+      types: await api.properties.getTypeProperties(modelID, id, recursive, options),
+      materials: await api.properties.getMaterialsProperties(modelID, id, recursive, options),
     })
   }
   return reads
@@ -115,6 +123,7 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     const resident = api.OpenModel(buffer, SETTINGS)
     const expected = await readAll(resident, true)
     const expectedFlat = await readAll(resident, false)
+    const expectedFull = await readAll(resident, true, true)
 
     api.CloseModel(resident)
 
@@ -141,6 +150,7 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     // complex properties being the IDs whose flatten reaches other windows.
     expect(await readAll(modelID, true)).toEqual(expected)
     expect(await readAll(modelID, false)).toEqual(expectedFlat)
+    expect(await readAll(modelID, true, true)).toEqual(expectedFull)
 
     api.CloseModel(modelID)
   }, 120000)
@@ -154,7 +164,7 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     expect(await api.properties.getPropertySets(modelID, 0x7fffffff, true)).toEqual([])
 
     // Record spans read straight from the store. Paging the relationship
-    // records' windows instead loads each of the 8 that hold one, and
+    // records' windows instead loads each of the 9 that hold one, and
     // leaves the last 3 resident.
     expect(log.length).toBeGreaterThan(0)
     expect(provider.bufferProvider_.residentChunkCount).toBe(0)
@@ -173,7 +183,7 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     expect(first).toHaveLength(2)
 
     // Every later read is a lookup plus its own sets. The old per-read scan
-    // paged every relationship window again for each of these: 98 reads.
+    // paged every relationship window again for each of these.
     const wallIDs = api.GetLineIDsWithType(modelID, IFCWALL)
     const walls = Array.from({ length: wallIDs.size() }, (_, i) => wallIDs.get(i))
     expect(walls).toHaveLength(12)
@@ -343,4 +353,51 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     expect(await ids(2)).toEqual([101, 102])
     expect(await ids(3)).toEqual([])
   })
+
+  test('a recursive read leaves representations as handles by default, and inlines them on request', async () => {
+    const resident = api.OpenModel(buffer, SETTINGS)
+    const full = { includeRepresentations: true }
+
+    // Default: the product's and the type's representations stay handles.
+    const proxy = await api.properties.getItemProperties(resident, PROXY, true)
+    expect(proxy.Representation).toEqual({ type: 5, value: PRODUCT_SHAPE })
+    const proxyType = (await api.properties.getTypeProperties(resident, PROXY, true))![0]
+    expect(proxyType.RepresentationMaps).toEqual([{ type: 5, value: REPRESENTATION_MAP }])
+    // A representation read as the seed is still flattened.
+    const seed = await api.properties.getItemProperties(resident, PRODUCT_SHAPE, true)
+    expect(seed.Representations[0].Items).toHaveLength(3)
+
+    // Opt-in: web-ifc's full flatten, which GetLine(…, true) still is, for
+    // every record in the fixture.
+    const proxyFull = await api.properties.getItemProperties(resident, PROXY, true, full)
+    expect(proxyFull.Representation.Representations[0].Items).toHaveLength(3)
+    for (const id of allExpressIDs()) {
+      expect(await api.properties.getItemProperties(resident, id, true, full))
+          .toEqual(api.GetLine(resident, id, true))
+    }
+
+    // Spilled: the default closure pins the representation root but nothing
+    // under it; the opt-in pins the shape too.
+    const modelID = spilledModel(new InMemoryStepByteStore(buffer))
+    const model = (api.getPassthrough(modelID) as IfcApiProxyIfc).model[0]
+    const walk = model.ensureResidentClosureByLocalID.bind(model)
+    let pinned = new Set<number>()
+    model.ensureResidentClosureByLocalID = (localID, extra, seen, ...rest) => {
+      pinned = seen!
+      return walk(localID, extra, seen, ...rest)
+    }
+    const shape = model.resolveExpressID(SHAPE)!
+
+    expect(await api.properties.getItemProperties(modelID, PROXY, true)).toEqual(proxy)
+    expect(pinned.has(model.resolveExpressID(PRODUCT_SHAPE)!)).toBe(true)
+    expect(pinned.has(shape)).toBe(false)
+    const small = pinned.size
+
+    expect(await api.properties.getItemProperties(modelID, PROXY, true, full)).toEqual(proxyFull)
+    expect(pinned.has(shape)).toBe(true)
+    expect(pinned.size).toBeGreaterThan(small)
+
+    api.CloseModel(resident)
+    api.CloseModel(modelID)
+  }, 120000)
 })

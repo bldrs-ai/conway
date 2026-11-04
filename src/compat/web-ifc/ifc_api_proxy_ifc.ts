@@ -83,7 +83,9 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
-import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
+import {
+  IfcProduct, IfcProductRepresentation, IfcRelAggregates, IfcRepresentationMap, IfcRoot,
+} from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 import { isNativeDeleted } from './native_geometry_liveness'
 
@@ -2201,9 +2203,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param modelID
    * @param expressID
    * @param flatten
+   * @param skipRepresentations With `flatten`, leave references to
+   * geometry representations (see isRepresentationRoot) as handles rather
+   * than inlining them. The web-ifc-parity default is false.
    * @return {any} line data
    */
-  getLine(expressID: number, flatten: boolean = false) {
+  getLine(expressID: number, flatten: boolean = false, skipRepresentations: boolean = false) {
 
 
     const rawLineData = this.getRawLineData(expressID)
@@ -2223,7 +2228,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const lineData = typeConverter(rawLineData)
     if (flatten) {
 
-      this.flattenLine(lineData)
+      this.flattenLine(lineData, skipRepresentations)
     }
 
     return lineData
@@ -2397,37 +2402,47 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
-   * `getLine(expressID, flatten)` that is safe on a spilled source.
+   * `getLine(expressID, flatten)` that is safe on a spilled source, and
+   * that by default leaves geometry representations out of a flatten.
    *
    * Flattening follows `#ref`s synchronously, so on a windowed source
    * every record it reaches has to be resident first, not just the seed:
    * ensuring only the seed threw `StepBufferNotResidentError` whenever
    * a referenced record (an IfcProperty, a unit) sat in a window the LRU
-   * had dropped (conway#761). This pins the seed's whole `#ref` closure
+   * had dropped (conway#761). This pins the seed's `#ref` closure
    * (StepModelBase.ensureResidentClosureByLocalID — the same walk
-   * geometry extraction uses), reads, then unpins and drops the captured
-   * window views so the LRU can evict them again.
+   * geometry extraction uses), reads, then unpins, drops the captured
+   * window views and trims the window back to its cap.
    *
-   * Unflattened, or on a fully resident source, it is a plain getLine
-   * after paging in just the record.
+   * Representations: unless `includeRepresentations`, a reference to a
+   * representation root (an IfcProductRepresentation such as a product's
+   * IfcProductDefinitionShape, or a type's IfcRepresentationMap) stays a
+   * `{type: 5, value}` handle, and the closure walk does not descend past
+   * it. These are property reads, and a product's representation is its
+   * whole shape graph down to every face and point: one 860 MB model's
+   * largest sampled product reached 9,659 records, which pinned at once
+   * holds the window far over its cap. web-ifc's flatten inlines them;
+   * pass `includeRepresentations` for that (head-to-heads). The seed itself
+   * is always flattened, even when it is a representation.
    *
-   * Cost: a flatten inlines everything the record reaches, as web-ifc's
-   * does, and this pins all of it at once. For a property set that is the
-   * set, its properties and their units. For a product it is the whole
-   * placement and representation graph, down to every face and point;
-   * that is unbounded by the window cap (one 860 MB model's largest
-   * sampled product reached 9,659 records), and the window can sit above
-   * its cap for the read's duration. It is trimmed back to the cap when
-   * the read returns.
+   * Unflattened, or on a fully resident source, it is a getLine after
+   * paging in just the record.
    *
    * @param expressID The record's express ID.
    * @param flatten Inline every referenced record, recursively.
+   * @param includeRepresentations Inline geometry representations too
+   * (web-ifc parity).
    * @return {Promise<any>} The line data, as getLine returns it.
    */
-  async getLineResident(expressID: number, flatten: boolean = false): Promise<any> {
+  async getLineResident(
+      expressID: number,
+      flatten: boolean = false,
+      includeRepresentations: boolean = false): Promise<any> {
+
+    const skip = !includeRepresentations
 
     if (!this.sourceIsExternal) {
-      return this.getLine(expressID, flatten)
+      return this.getLine(expressID, flatten, skip)
     }
 
     const model = this.model[0]
@@ -2446,14 +2461,25 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       }
     }
 
+    const seed = model.resolveExpressID(expressID)
+    // A representation root is pinned (its handle is all the flatten
+    // reads of it) but not descended into. Without a spanLeaf, the walk
+    // would page such records as unvisited leaf spans the caller has to
+    // unpin separately; visiting them keeps every pin in `pinned`.
+    const descend = skip ?
+      (localID: number) => localID === seed || !this.isRepresentationRootLocal(localID) :
+      void 0
+    const spanLeaf = skip ? () => false : void 0
     // Our own `seen`, so a throw part-way through the closure walk still
     // leaves every pin it took reachable for the unpin below.
     const pinned = new Set<number>()
 
     try {
-      await model.ensureResidentClosureByExpressID(expressID, void 0, pinned)
+      if (seed !== void 0) {
+        await model.ensureResidentClosureByLocalID(seed, void 0, pinned, descend, void 0, spanLeaf)
+      }
 
-      return this.getLine(expressID, true)
+      return this.getLine(expressID, true, skip)
     } finally {
       model.unpinLocalIDs(pinned)
       model.releaseSourceViews(pinned)
@@ -2604,22 +2630,58 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param modelID
    * @param line
    */
-  flattenLine(line: any): void {
+  flattenLine(line: any, skipRepresentations: boolean = false): void {
     Logger.warning('[FlattenLine]: Shim - implemented')
+    const inline = (handle: any) =>
+      skipRepresentations && this.isRepresentationRoot(handle.value) ?
+        handle : this.getLine(handle.value, true, skipRepresentations)
     Object.keys(line).forEach((propertyName) => {
       const property = line[propertyName]
       // eslint-disable-next-line no-magic-numbers
       if (property && property.type === 5) {
 
-        line[propertyName] = this.getLine(property.value, true)
+        line[propertyName] = inline(property)
         // eslint-disable-next-line no-magic-numbers
       } else if (Array.isArray(property) && property.length > 0 && property[0].type === 5) {
         for (let i = 0; i < property.length; i++) {
 
-          line[propertyName][i] = this.getLine(property[i].value, true)
+          line[propertyName][i] = inline(property[i])
         }
       }
     })
+  }
+
+  /**
+   * Is this record the root of a geometry representation, which a
+   * property read's flatten leaves as a handle: an IfcProductRepresentation
+   * (a product's `Representation`, e.g. IfcProductDefinitionShape) or an
+   * IfcRepresentationMap (a type's `RepresentationMaps`)? Everything below
+   * one is shape — representations, items, faces, points — and a
+   * product's can run to thousands of records.
+   *
+   * @param expressID The record.
+   * @return {boolean} True for a representation root.
+   */
+  private isRepresentationRoot(expressID: number): boolean {
+    const model = this.model[0]
+    const localID = model.resolveExpressID(expressID)
+
+    return localID !== void 0 && this.isRepresentationRootLocal(localID)
+  }
+
+  /**
+   * Local-ID twin of {@link isRepresentationRoot}.
+   *
+   * @param localID The record.
+   * @return {boolean} True for a representation root.
+   */
+  private isRepresentationRootLocal(localID: number): boolean {
+    const model = this.model[0]
+    const typeID = model.typeIDOf(localID)
+
+    return typeID !== void 0 &&
+      (model.typeIDIsA(typeID, IfcProductRepresentation) ||
+        model.typeIDIsA(typeID, IfcRepresentationMap))
   }
 
   /**
