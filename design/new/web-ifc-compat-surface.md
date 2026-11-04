@@ -219,7 +219,10 @@ departs from web-ifc's flatten in one way, on purpose:
   `IfcProductRepresentation` (a product's `Representation`, e.g.
   `IfcProductDefinitionShape`) or an `IfcRepresentationMap` (a type's
   `RepresentationMaps`) is left as its `{type: 5, value}` handle, and nothing
-  under it is read. Those are shape, not properties, and a product's can run
+  under it is read. The rule keys on those two root types only:
+  `ObjectPlacement` chains, material profiles and the like stay inlined
+  (bounded, and not shape), and `IfcRepresentation` itself is not a stop
+  type, so a representation read as the seed still flattens its items. Those are shape, not properties, and a product's can run
   to thousands of records (9,659 for the largest sampled product of one 860 MB
   model). On a windowed source that whole closure would be pinned at once,
   well past the window's budget. A record read as the seed is still flattened,

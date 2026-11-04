@@ -376,8 +376,8 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
           .toEqual(api.GetLine(resident, id, true))
     }
 
-    // Spilled: the default closure pins the representation root but nothing
-    // under it; the opt-in pins the shape too.
+    // Spilled: the default closure leaves the representation root and
+    // everything under it unpinned; the opt-in pins the shape too.
     const modelID = spilledModel(new InMemoryStepByteStore(buffer))
     const model = (api.getPassthrough(modelID) as IfcApiProxyIfc).model[0]
     const walk = model.ensureResidentClosureByLocalID.bind(model)
@@ -389,7 +389,7 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     const shape = model.resolveExpressID(SHAPE)!
 
     expect(await api.properties.getItemProperties(modelID, PROXY, true)).toEqual(proxy)
-    expect(pinned.has(model.resolveExpressID(PRODUCT_SHAPE)!)).toBe(true)
+    expect(pinned.has(model.resolveExpressID(PRODUCT_SHAPE)!)).toBe(false)
     expect(pinned.has(shape)).toBe(false)
     const small = pinned.size
 
@@ -398,6 +398,33 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     expect(pinned.size).toBeGreaterThan(small)
 
     api.CloseModel(resident)
+    api.CloseModel(modelID)
+  }, 120000)
+
+  test('a read holds its record\'s window while a concurrent recursive read trims residency', async () => {
+    const modelID = spilledModel(new InMemoryStepByteStore(buffer))
+    const model = (api.getPassthrough(modelID) as IfcApiProxyIfc).model[0]
+    const wall = model.resolveExpressID(WALL_0)!
+    const ensure = model.ensureResidentByLocalID.bind(model)
+    let recursive: Promise<any> | undefined
+
+    // Run a recursive read to completion between the wall's ensure and its
+    // synchronous read. The set's closure pins 8 windows against a cap of 3
+    // and none of them is the wall's, so its trim evicts oldest first: the
+    // wall's window, unless the wall's read holds it.
+    model.ensureResidentByLocalID = async (localID: number) => {
+      await ensure(localID)
+      if (localID === wall && recursive === undefined) {
+        recursive = api.properties.getPropertySets(modelID, WALL_1, true)
+        expect(await recursive).toHaveLength(2)
+      }
+    }
+
+    const line = await api.properties.getItemProperties(modelID, WALL_0, false)
+
+    expect(recursive).toBeDefined()
+    expect(line.Name.value).toBe('Wall 0')
+
     api.CloseModel(modelID)
   }, 120000)
 })

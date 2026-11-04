@@ -1384,6 +1384,11 @@ implements Iterable<BaseEntity>, Model {
    * the chunk once it lands, but its read is still in flight. Anything
    * that must synchronously read a record's bytes after this returns
    * has to iterate `claimed`, never `seen` (conway#526).
+   * @param skip If set, referenced records for which this returns true are
+   * left out entirely: not visited, pinned, paged or spanned, and their
+   * `#refs` not followed. For a reader that will not touch their bytes (a
+   * property flatten leaving representations as handles). Seeds are never
+   * skipped.
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
@@ -1393,7 +1398,8 @@ implements Iterable<BaseEntity>, Model {
       descend?: ( localID: number ) => boolean,
       leafSpans?: { address: number, length: number }[],
       spanLeaf?: ( localID: number ) => boolean,
-      claimed?: Set< number > ): Promise< Set< number > > {
+      claimed?: Set< number >,
+      skip?: ( localID: number ) => boolean ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -1461,7 +1467,8 @@ implements Iterable<BaseEntity>, Model {
 
           const referenced = this.expressIDMap_.get( expressID )
 
-          if ( referenced === void 0 || seen.has( referenced ) ) {
+          if ( referenced === void 0 || seen.has( referenced ) ||
+               skip?.( referenced ) ) {
             continue
           }
 

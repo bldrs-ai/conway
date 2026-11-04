@@ -2417,8 +2417,9 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * Representations: unless `includeRepresentations`, a reference to a
    * representation root (an IfcProductRepresentation such as a product's
    * IfcProductDefinitionShape, or a type's IfcRepresentationMap) stays a
-   * `{type: 5, value}` handle, and the closure walk does not descend past
-   * it. These are property reads, and a product's representation is its
+   * `{type: 5, value}` handle, and the closure walk leaves the root out:
+   * its handle is read from the parent's bytes, so neither the root nor
+   * anything under it is paged in. These are property reads, and a product's representation is its
    * whole shape graph down to every face and point: one 860 MB model's
    * largest sampled product reached 9,659 records, which pinned at once
    * holds the window far over its cap. web-ifc's flatten inlines them;
@@ -2447,36 +2448,40 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const model = this.model[0]
 
+    const seed = model.resolveExpressID(expressID)
+
     if (!flatten) {
-      await model.ensureResidentByExpressID(expressID)
+      if (seed === void 0) {
+        return this.getLine(expressID, false)
+      }
+
+      // Pinned across the await, as the closure walk pins: another read's
+      // eviction (a concurrent ensure, or a recursive read's trim back to
+      // the cap) can otherwise drop the window between the ensure and the
+      // synchronous read below.
+      model.pinByLocalID(seed)
 
       try {
+        await model.ensureResidentByLocalID(seed)
+
         return this.getLine(expressID, false)
       } finally {
-        const localID = model.resolveExpressID(expressID)
-
-        if (localID !== void 0) {
-          model.releaseSourceViews([localID])
-        }
+        model.unpinByLocalID(seed)
+        model.releaseSourceViews([seed])
       }
     }
 
-    const seed = model.resolveExpressID(expressID)
-    // A representation root is pinned (its handle is all the flatten
-    // reads of it) but not descended into. Without a spanLeaf, the walk
-    // would page such records as unvisited leaf spans the caller has to
-    // unpin separately; visiting them keeps every pin in `pinned`.
-    const descend = skip ?
-      (localID: number) => localID === seed || !this.isRepresentationRootLocal(localID) :
-      void 0
-    const spanLeaf = skip ? () => false : void 0
+    // The flatten reads a representation root's handle from its parent's
+    // bytes, never the root's own, so the walk leaves roots out entirely.
+    const skipRoot = skip ? (localID: number) => this.isRepresentationRootLocal(localID) : void 0
     // Our own `seen`, so a throw part-way through the closure walk still
     // leaves every pin it took reachable for the unpin below.
     const pinned = new Set<number>()
 
     try {
       if (seed !== void 0) {
-        await model.ensureResidentClosureByLocalID(seed, void 0, pinned, descend, void 0, spanLeaf)
+        await model.ensureResidentClosureByLocalID(
+            seed, void 0, pinned, void 0, void 0, void 0, void 0, skipRoot)
       }
 
       return this.getLine(expressID, true, skip)
