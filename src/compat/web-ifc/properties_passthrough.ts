@@ -69,17 +69,38 @@ export interface SpatialStructureOptions {
   includeSolids?: boolean
 }
 
+/**
+ * Optional shaping of a recursive property read, beyond web-ifc parity.
+ */
+export interface PropertyReadOptions {
+
+  /**
+   * IFC only, default **false**: inline geometry representations in a
+   * recursive read. By default a reference to an IfcProductRepresentation
+   * (a product's `Representation`) or an IfcRepresentationMap (a type's
+   * `RepresentationMaps`) stays a `{type: 5, value}` handle: those are
+   * shape, not properties, and a product's can run to thousands of
+   * records. `true` restores web-ifc's full flatten, for head-to-heads.
+   * Ignored by the STEP surface.
+   */
+  includeRepresentations?: boolean
+}
+
 export interface PropertiesPassthrough {
 
   getIfcType(type: number): string | undefined
 
-  getItemProperties(id: number, recursive?: boolean ): Promise< any >
+  getItemProperties(
+    id: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any >
 
-  getPropertySets(elementID: number, recursive?: boolean ): Promise< any[] >
+  getPropertySets(
+    elementID: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any[] >
 
-  getTypeProperties(elementID: number, recursive?: boolean ): Promise< any[] >
+  getTypeProperties(
+    elementID: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any[] >
 
-  getMaterialsProperties(elementID: number, recursive?: boolean): Promise< any[] >
+  getMaterialsProperties(
+    elementID: number, recursive?: boolean, options?: PropertyReadOptions ): Promise< any[] >
 
   getSpatialStructure(
     includeProperties?: IncludeProperties,

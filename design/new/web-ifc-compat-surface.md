@@ -208,6 +208,37 @@ natively (`src/ifc/ifc4_gen/Ifc*.gen.ts`). Two ways to handle it:
 immediately), with (b) scheduled as the property-surface slice shared with
 `step-support.md` so the duplicate entity layer doesn't become permanent.
 
+## Recursive property reads: where they depart from web-ifc (conway#761)
+
+The `properties.*` reads keep web-ifc's shapes, but a **recursive** read
+(`getItemProperties(modelID, id, true)`, and `getPropertySets` /
+`getTypeProperties` / `getMaterialsProperties` with `recursive = true`)
+departs from web-ifc's flatten in one way, on purpose:
+
+- **Geometry representations stay handles by default.** A reference to an
+  `IfcProductRepresentation` (a product's `Representation`, e.g.
+  `IfcProductDefinitionShape`) or an `IfcRepresentationMap` (a type's
+  `RepresentationMaps`) is left as its `{type: 5, value}` handle, and nothing
+  under it is read. The rule keys on those two root types only:
+  `ObjectPlacement` chains, material profiles and the like stay inlined
+  (bounded, and not shape), and `IfcRepresentation` itself is not a stop
+  type, so a representation read as the seed still flattens its items. Those are shape, not properties, and a product's can run
+  to thousands of records (9,659 for the largest sampled product of one 860 MB
+  model). On a windowed source that whole closure would be pinned at once,
+  well past the window's budget. A record read as the seed is still flattened,
+  even when it is a representation.
+- **`{ includeRepresentations: true }`** (the fourth argument,
+  `PropertyReadOptions`) restores web-ifc's full flatten, for head-to-heads.
+  `IfcAPI.GetLine(modelID, id, true)` is unchanged and still inlines
+  everything.
+
+On a windowed (store-backed) source, a recursive read pages in the record's
+`#ref` closure before it flattens, then unpins it and trims the window back to
+its cap (`IfcApiProxyIfc.getLineResident`). Before, it paged in only the seed,
+and threw `StepBufferNotResidentError` whenever the flatten reached an evicted
+window. Share's properties panel reads non-recursively, so neither change
+reaches it.
+
 ## Cross-references / open items
 
 - **Closes `step-support.md` gap #1**: this `./web-ifc` export is (part

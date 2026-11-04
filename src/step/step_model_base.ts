@@ -31,6 +31,19 @@ import { SceneNodeGeometry } from '../core/scene_node'
 import { CanonicalMesh } from '../core/canonical_mesh'
 import { ModelMaterials } from '../core/model_materials'
 
+/* Span reads for visitRecordBytesInFileOrder (conway#755). Over one
+ * 860 MB model's IfcRelDefinesByProperties records, a 4 KiB gap gives
+ * 1,711 reads for 9.8 MB, 64 KiB 1,075 for 19 MB, and 256 KiB 964 for
+ * 31 MB: past 64 KiB the reads barely drop while the bytes climb, and below it a store round
+ * trip costs more than the gap's bytes. A 1 MiB span cap keeps one read
+ * well under a 4 MiB window. Four in flight hides a store's per-read
+ * latency without holding more than ~4 MiB of span bytes. */
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (64KiB)
+const DEFAULT_SPAN_GAP_BYTES = 64 * 1024
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (1MiB)
+const DEFAULT_MAX_SPAN_BYTES = 1024 * 1024
+const SPAN_READS_IN_FLIGHT = 4
+
 
 /**
  * The base for models parsed from STEP.
@@ -1371,6 +1384,11 @@ implements Iterable<BaseEntity>, Model {
    * the chunk once it lands, but its read is still in flight. Anything
    * that must synchronously read a record's bytes after this returns
    * has to iterate `claimed`, never `seen` (conway#526).
+   * @param skip If set, referenced records for which this returns true are
+   * left out entirely: not visited, pinned, paged or spanned, and their
+   * `#refs` not followed. For a reader that will not touch their bytes (a
+   * property flatten leaving representations as handles). Seeds are never
+   * skipped.
    * @return {Promise<Set<number>>} The local IDs that were visited.
    */
   public async ensureResidentClosureByLocalID(
@@ -1380,7 +1398,8 @@ implements Iterable<BaseEntity>, Model {
       descend?: ( localID: number ) => boolean,
       leafSpans?: { address: number, length: number }[],
       spanLeaf?: ( localID: number ) => boolean,
-      claimed?: Set< number > ): Promise< Set< number > > {
+      claimed?: Set< number >,
+      skip?: ( localID: number ) => boolean ): Promise< Set< number > > {
 
     if ( !this.isSourceExternal ) {
       return seen
@@ -1448,7 +1467,8 @@ implements Iterable<BaseEntity>, Model {
 
           const referenced = this.expressIDMap_.get( expressID )
 
-          if ( referenced === void 0 || seen.has( referenced ) ) {
+          if ( referenced === void 0 || seen.has( referenced ) ||
+               skip?.( referenced ) ) {
             continue
           }
 
@@ -1563,6 +1583,17 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Evict unpinned source windows until residency is back within the
+   * window cap. Eviction otherwise runs only inside an ensure, so a walk
+   * that pinned more windows than the cap and has just unpinned them
+   * stays over budget until the next ensure. No-op while resident.
+   */
+  public trimSourceResidency(): void {
+    this.bufferProvider_.trimToCap?.()
+  }
+
+
+  /**
    * Unpin every local ID in `localIDs` (best-effort; missing IDs are
    * ignored). Use after {@link ensureResidentClosureByLocalID}, which
    * pins as it walks.
@@ -1668,6 +1699,153 @@ implements Iterable<BaseEntity>, Model {
         this.releaseSourceViews( [ localID ] )
       }
     }
+  }
+
+
+  /**
+   * Call `visit` with each record's own source bytes (its argument list,
+   * the `[address, address + length)` range that `extractLineArguments`
+   * reads) in **file order**, reading a windowed source as coalesced
+   * record spans straight from the store instead of paging whole windows.
+   *
+   * For sweeps over a sparse type: one 860 MB model's 23.5 k
+   * IfcRelDefinesByProperties records hold 1.2 MB between them but sit in
+   * every one of its 215 4 MiB windows, so {@link visitResidentInFileOrder}
+   * over them reads the whole file, where these spans read ~20 MB
+   * (conway#755).
+   *
+   * Records closer than `maxGapBytes` share one read, up to `maxSpanBytes`
+   * a span (a record longer than that is a span of its own), and up to
+   * {@link SPAN_READS_IN_FLIGHT} reads are in flight at once. Nothing is
+   * paged in or cached and no descriptor captures a view, so the sweep
+   * leaves the window as it found it (StepBufferProvider.readSpan).
+   *
+   * Complex (multi-mapped) records keep their fields in their mapped
+   * records' ranges, so they are not visited; their local IDs are returned
+   * for the caller to read through {@link visitResidentInFileOrder}. Local
+   * IDs out of range are skipped, and a repeated one is visited once. On a
+   * resident source every record is a view over the buffer, visited
+   * without an await.
+   *
+   * @param localIDs The records to visit.
+   * @param visit Called synchronously with each record's local ID and its
+   * bytes. The bytes are only valid during the call.
+   * @param maxGapBytes Largest gap between records read as one span.
+   * @param maxSpanBytes Longest span to read at once.
+   * @return {Promise<number[]>} The complex records, in file order, that
+   * were not visited.
+   */
+  public async visitRecordBytesInFileOrder(
+      localIDs: Iterable< number >,
+      visit: ( localID: number, bytes: Uint8Array ) => void,
+      maxGapBytes: number = DEFAULT_SPAN_GAP_BYTES,
+      maxSpanBytes: number = DEFAULT_MAX_SPAN_BYTES ): Promise< number[] > {
+
+    const address = this.address_
+    const length  = this.length_
+    const sorted: number[] = []
+    const complex: number[] = []
+    const seen = new Set< number >()
+
+    for ( const localID of localIDs ) {
+
+      if ( localID >= this.count_ || seen.has( localID ) ) {
+        continue
+      }
+
+      seen.add( localID )
+      sorted.push( localID )
+    }
+
+    sorted.sort( ( a, b ) => address[ a ] - address[ b ] )
+
+    // Coalesce into spans: [first, end) indices into `sorted`, and the
+    // byte range covering them.
+    const spans: { first: number, end: number, start: number, stop: number }[] = []
+
+    for ( let i = 0; i < sorted.length; ++i ) {
+
+      const localID = sorted[ i ]
+
+      if ( this.complexEntries_?.get( localID )?.multiMapping !== void 0 ) {
+        complex.push( localID )
+        continue
+      }
+
+      const start = address[ localID ]
+      const stop  = start + length[ localID ]
+      const last  = spans[ spans.length - 1 ]
+
+      if ( last !== void 0 && start - last.stop <= maxGapBytes &&
+           Math.max( stop, last.stop ) - last.start <= maxSpanBytes ) {
+
+        last.end  = i + 1
+        last.stop = Math.max( stop, last.stop )
+        continue
+      }
+
+      spans.push( { first: i, end: i + 1, start, stop } )
+    }
+
+    const buffer = this.buffer_
+
+    if ( buffer !== void 0 ) {
+
+      for ( const span of spans ) {
+        for ( let i = span.first; i < span.end; ++i ) {
+
+          const localID = sorted[ i ]
+
+          if ( this.complexEntries_?.get( localID )?.multiMapping === void 0 ) {
+            visit( localID, buffer.subarray( address[ localID ], address[ localID ] + length[ localID ] ) )
+          }
+        }
+      }
+
+      return complex
+    }
+
+    const provider = this.bufferProvider_
+    const read = ( span: typeof spans[ number ] ) => {
+      const bytes = provider.readSpan( span.start, span.stop - span.start )
+      // A failed read surfaces at its await below; this keeps the reads
+      // queued behind it from rejecting unobserved once that throws.
+      bytes.catch( () => void 0 )
+      return bytes
+    }
+    const inflight: Promise< Uint8Array >[] = []
+
+    for ( let next = 0; next < Math.min( SPAN_READS_IN_FLIGHT, spans.length ); ++next ) {
+      inflight.push( read( spans[ next ] ) )
+    }
+
+    for ( let s = 0; s < spans.length; ++s ) {
+
+      const span  = spans[ s ]
+      const bytes = await inflight[ s ]
+
+      if ( s + SPAN_READS_IN_FLIGHT < spans.length ) {
+        inflight.push( read( spans[ s + SPAN_READS_IN_FLIGHT ] ) )
+      }
+
+      // Drop our hold on the span's bytes once it is visited.
+      delete inflight[ s ]
+
+      for ( let i = span.first; i < span.end; ++i ) {
+
+        const localID = sorted[ i ]
+
+        if ( this.complexEntries_?.get( localID )?.multiMapping !== void 0 ) {
+          continue
+        }
+
+        const from = address[ localID ] - span.start
+
+        visit( localID, bytes.subarray( from, from + length[ localID ] ) )
+      }
+    }
+
+    return complex
   }
 
 

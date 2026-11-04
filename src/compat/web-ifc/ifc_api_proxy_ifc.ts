@@ -83,7 +83,9 @@ import Memory from '../../memory/memory'
 import { FromRawLineData } from './ifc2x4_helper'
 import { shimIfcEntityMap, shimIfcEntityReverseMap } from './shim_schema_mapping'
 import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
-import { IfcProduct, IfcRelAggregates, IfcRoot } from '../../ifc/ifc4_gen'
+import {
+  IfcProduct, IfcProductRepresentation, IfcRelAggregates, IfcRepresentationMap, IfcRoot,
+} from '../../ifc/ifc4_gen'
 import { CanonicalMeshType } from '../../index'
 import { isNativeDeleted } from './native_geometry_liveness'
 
@@ -2201,9 +2203,12 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param modelID
    * @param expressID
    * @param flatten
+   * @param skipRepresentations With `flatten`, leave references to
+   * geometry representations (see isRepresentationRoot) as handles rather
+   * than inlining them. The web-ifc-parity default is false.
    * @return {any} line data
    */
-  getLine(expressID: number, flatten: boolean = false) {
+  getLine(expressID: number, flatten: boolean = false, skipRepresentations: boolean = false) {
 
 
     const rawLineData = this.getRawLineData(expressID)
@@ -2223,7 +2228,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const lineData = typeConverter(rawLineData)
     if (flatten) {
 
-      this.flattenLine(lineData)
+      this.flattenLine(lineData, skipRepresentations)
     }
 
     return lineData
@@ -2397,6 +2402,97 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
   }
 
   /**
+   * `getLine(expressID, flatten)` that is safe on a spilled source, and
+   * that by default leaves geometry representations out of a flatten.
+   *
+   * Flattening follows `#ref`s synchronously, so on a windowed source
+   * every record it reaches has to be resident first, not just the seed:
+   * ensuring only the seed threw `StepBufferNotResidentError` whenever
+   * a referenced record (an IfcProperty, a unit) sat in a window the LRU
+   * had dropped (conway#761). This pins the seed's `#ref` closure
+   * (StepModelBase.ensureResidentClosureByLocalID — the same walk
+   * geometry extraction uses), reads, then unpins, drops the captured
+   * window views and trims the window back to its cap.
+   *
+   * Representations: unless `includeRepresentations`, a reference to a
+   * representation root (an IfcProductRepresentation such as a product's
+   * IfcProductDefinitionShape, or a type's IfcRepresentationMap) stays a
+   * `{type: 5, value}` handle, and the closure walk leaves the root out:
+   * its handle is read from the parent's bytes, so neither the root nor
+   * anything under it is paged in. These are property reads, and a product's representation is its
+   * whole shape graph down to every face and point: one 860 MB model's
+   * largest sampled product reached 9,659 records, which pinned at once
+   * holds the window far over its cap. web-ifc's flatten inlines them;
+   * pass `includeRepresentations` for that (head-to-heads). The seed itself
+   * is always flattened, even when it is a representation.
+   *
+   * Unflattened, or on a fully resident source, it is a getLine after
+   * paging in just the record.
+   *
+   * @param expressID The record's express ID.
+   * @param flatten Inline every referenced record, recursively.
+   * @param includeRepresentations Inline geometry representations too
+   * (web-ifc parity).
+   * @return {Promise<any>} The line data, as getLine returns it.
+   */
+  async getLineResident(
+      expressID: number,
+      flatten: boolean = false,
+      includeRepresentations: boolean = false): Promise<any> {
+
+    const skip = !includeRepresentations
+
+    if (!this.sourceIsExternal) {
+      return this.getLine(expressID, flatten, skip)
+    }
+
+    const model = this.model[0]
+
+    const seed = model.resolveExpressID(expressID)
+
+    if (!flatten) {
+      if (seed === void 0) {
+        return this.getLine(expressID, false)
+      }
+
+      // Pinned across the await, as the closure walk pins: another read's
+      // eviction (a concurrent ensure, or a recursive read's trim back to
+      // the cap) can otherwise drop the window between the ensure and the
+      // synchronous read below.
+      model.pinByLocalID(seed)
+
+      try {
+        await model.ensureResidentByLocalID(seed)
+
+        return this.getLine(expressID, false)
+      } finally {
+        model.unpinByLocalID(seed)
+        model.releaseSourceViews([seed])
+      }
+    }
+
+    // The flatten reads a representation root's handle from its parent's
+    // bytes, never the root's own, so the walk leaves roots out entirely.
+    const skipRoot = skip ? (localID: number) => this.isRepresentationRootLocal(localID) : void 0
+    // Our own `seen`, so a throw part-way through the closure walk still
+    // leaves every pin it took reachable for the unpin below.
+    const pinned = new Set<number>()
+
+    try {
+      if (seed !== void 0) {
+        await model.ensureResidentClosureByLocalID(
+            seed, void 0, pinned, void 0, void 0, void 0, void 0, skipRoot)
+      }
+
+      return this.getLine(expressID, true, skip)
+    } finally {
+      model.unpinLocalIDs(pinned)
+      model.releaseSourceViews(pinned)
+      model.trimSourceResidency()
+    }
+  }
+
+  /**
    * Call `visit` once per record with that record resident, paging a
    * spilled source in file order rather than the caller's order (see
    * StepModelBase.visitResidentInFileOrder, conway#752). Use this for
@@ -2412,6 +2508,76 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       expressIDs: Iterable<number>,
       visit: (expressID: number) => void): Promise<void> {
     await this.model[0].visitResidentInFileOrder(expressIDs, visit)
+  }
+
+  /**
+   * Call `visit` once per record with its unflattened line data, exactly
+   * as `getLine(expressID)` returns it, reading a spilled source as
+   * coalesced record spans in file order rather than paging whole windows
+   * (StepModelBase.visitRecordBytesInFileOrder, conway#755). For sweeps
+   * over a sparse type, where the windows holding its records add up to
+   * most of the file. No window is paged in and no entity is materialised,
+   * so nothing is left cached.
+   *
+   * Records the span path cannot parse (complex or untyped records, an
+   * unknown ID) are read through {@link visitLinesInFileOrder} after the
+   * rest, so the visit order is file order only within each of the two
+   * passes. A fully resident source reads through getLine.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Synchronous receiver of each record's line data.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  async visitLineDataInFileOrder(
+      expressIDs: Iterable<number>,
+      visit: (expressID: number, line: any) => void): Promise<void> {
+
+    const model = this.model[0]
+
+    if (!this.sourceIsExternal) {
+      await model.visitResidentInFileOrder(expressIDs, (expressID) => {
+        visit(expressID, this.getLine(expressID, false))
+      })
+      return
+    }
+
+    const localToExpress = new Map<number, number>()
+    const fallback: number[] = []
+
+    for (const expressID of expressIDs) {
+      const localID = model.resolveExpressID(expressID)
+
+      if (localID === void 0 || model.typeIDOf(localID) === void 0) {
+        fallback.push(expressID)
+      } else {
+        localToExpress.set(localID, expressID)
+      }
+    }
+
+    const complex = await model.visitRecordBytesInFileOrder(
+        localToExpress.keys(), (localID, bytes) => {
+          const expressID = localToExpress.get(localID)!
+          const typeID = model.typeIDOf(localID)!
+          const raw = this.rawLineDataFromArguments(expressID, localID, typeID, bytes)
+          const converter = raw === void 0 ? void 0 : FromRawLineData[raw.type]
+
+          if (typeof converter !== 'function') {
+            fallback.push(expressID)
+            return
+          }
+
+          visit(expressID, converter(raw))
+        })
+
+    for (const localID of complex) {
+      fallback.push(localToExpress.get(localID)!)
+    }
+
+    if (fallback.length > 0) {
+      await this.visitLinesInFileOrder(fallback, (expressID) => {
+        visit(expressID, this.getLine(expressID, false))
+      })
+    }
   }
 
   /**
@@ -2469,22 +2635,96 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * @param modelID
    * @param line
    */
-  flattenLine(line: any): void {
+  flattenLine(line: any, skipRepresentations: boolean = false): void {
     Logger.warning('[FlattenLine]: Shim - implemented')
+    const inline = (handle: any) =>
+      skipRepresentations && this.isRepresentationRoot(handle.value) ?
+        handle : this.getLine(handle.value, true, skipRepresentations)
     Object.keys(line).forEach((propertyName) => {
       const property = line[propertyName]
       // eslint-disable-next-line no-magic-numbers
       if (property && property.type === 5) {
 
-        line[propertyName] = this.getLine(property.value, true)
+        line[propertyName] = inline(property)
         // eslint-disable-next-line no-magic-numbers
       } else if (Array.isArray(property) && property.length > 0 && property[0].type === 5) {
         for (let i = 0; i < property.length; i++) {
 
-          line[propertyName][i] = this.getLine(property[i].value, true)
+          line[propertyName][i] = inline(property[i])
         }
       }
     })
+  }
+
+  /**
+   * Is this record the root of a geometry representation, which a
+   * property read's flatten leaves as a handle: an IfcProductRepresentation
+   * (a product's `Representation`, e.g. IfcProductDefinitionShape) or an
+   * IfcRepresentationMap (a type's `RepresentationMaps`)? Everything below
+   * one is shape — representations, items, faces, points — and a
+   * product's can run to thousands of records.
+   *
+   * @param expressID The record.
+   * @return {boolean} True for a representation root.
+   */
+  private isRepresentationRoot(expressID: number): boolean {
+    const model = this.model[0]
+    const localID = model.resolveExpressID(expressID)
+
+    return localID !== void 0 && this.isRepresentationRootLocal(localID)
+  }
+
+  /**
+   * Local-ID twin of {@link isRepresentationRoot}.
+   *
+   * @param localID The record.
+   * @return {boolean} True for a representation root.
+   */
+  private isRepresentationRootLocal(localID: number): boolean {
+    const model = this.model[0]
+    const typeID = model.typeIDOf(localID)
+
+    return typeID !== void 0 &&
+      (model.typeIDIsA(typeID, IfcProductRepresentation) ||
+        model.typeIDIsA(typeID, IfcRepresentationMap))
+  }
+
+  /**
+   * Parse a record's argument bytes into raw line data — the step of
+   * getRawLineData after it has the bytes, shared with
+   * visitLineDataInFileOrder, which reads them without materialising the
+   * entity.
+   *
+   * @param expressID The record's express ID.
+   * @param localID The record's local ID.
+   * @param typeID The record's schema type.
+   * @param lineArguments The record's argument list bytes.
+   * @return {RawLineData | undefined} The raw line, or undefined when the
+   * arguments do not parse completely.
+   */
+  private rawLineDataFromArguments(
+      expressID: number,
+      localID: number,
+      typeID: EntityTypesIfc,
+      lineArguments: Uint8Array): RawLineData | undefined {
+
+    const parsingBuffer = new ParsingBuffer(lineArguments)
+    const result_ = IfcStepParser.Instance.extractArguments(parsingBuffer, expressID)
+
+    if (result_[1] !== ParseResult.COMPLETE) {
+      return
+    }
+
+    // A record translated from IFC4X3 (ifc4x3_ifc4_compat.ts) must not
+    // expose its masked tail through the raw path either.
+    const decodedFieldCount = this.model[0].fieldMaskOf(localID)
+
+    return {
+      ID: expressID,
+      type: shimIfcEntityReverseMap[typeID],
+      arguments: decodedFieldCount === void 0 ? result_[0] :
+        maskRawArguments(result_[0], typeID, decodedFieldCount),
+    }
   }
 
   /**
@@ -2505,20 +2745,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if (element !== void 0) {
       const lineArguments = element.extractLineArguments()
 
-      const parsingBuffer = new ParsingBuffer(lineArguments)
       if (element.expressID !== void 0) {
-        const result_ = IfcStepParser.Instance.extractArguments(parsingBuffer, element.expressID)
-        if (result_[1] === ParseResult.COMPLETE) {
-          // A record translated from IFC4X3 (ifc4x3_ifc4_compat.ts) must not
-          // expose its masked tail through the raw path either.
-          const decodedFieldCount = model.fieldMaskOf(element.localID)
-          const rawLineData: RawLineData = {
-            ID: expressID,
-            type: shimIfcEntityReverseMap[element.type],
-            arguments: decodedFieldCount === void 0 ? result_[0] :
-              maskRawArguments(result_[0], element.type, decodedFieldCount),
-          }
-
+        const rawLineData = this.rawLineDataFromArguments(
+            expressID, element.localID, element.type, lineArguments)
+        if (rawLineData !== void 0) {
           return rawLineData
         }
       } else {
