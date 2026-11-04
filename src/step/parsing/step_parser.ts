@@ -1186,17 +1186,13 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
     // (the CLOSE_PAREN arm of the record loop; conway#764).
     const containerStack: any[][] = []
 
-    // Where a value parsed at record level goes: the innermost open list,
-    // else the record's own arguments.
-    const recordTarget = (): any[] =>
-      containerStack.length > 0 ? containerStack[containerStack.length - 1] : indexResult
-
     // An inline element is a typed value written in place, e.g.
     // `IFCLABEL('a')` or `IFCPROPERTYSETDEFINITIONSET((#20,#21))`; the raw
     // line keeps only its value, not its type. That value goes where the
     // inline element itself sits (`enclosing`): an open list, or the
     // record's arguments. A list written inside the element is built as a
-    // list and lands there whole.
+    // list and lands there whole. `enclosing` is resolved by the caller:
+    // nothing can open or close a list around the element while it parses.
     //
     // This used to push every value to the record's top-level arguments,
     // ignoring both, and to open the element's own lists on the record-level
@@ -1205,13 +1201,13 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
     // following attributes, and typed values inside a list (an enumerated
     // value's `(IFCLABEL('a'),IFCLABEL('b'))`) left their list empty, with
     // the same spill (conway#763).
-    const parseInlineElement = (enclosing: () => any[]): [Argument[], ParseResult] | undefined => {
+    const parseInlineElement = (enclosing: any[]): [Argument[], ParseResult] | undefined => {
 
       // Lists open inside this inline element, innermost last.
       const inlineContainerStack: any[][] = []
       const target = (): any[] =>
         inlineContainerStack.length > 0 ?
-          inlineContainerStack[inlineContainerStack.length - 1] : enclosing()
+          inlineContainerStack[inlineContainerStack.length - 1] : enclosing
 
       whitespace()
 
@@ -1268,10 +1264,12 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
           case ATTRIBUTE_PARSE_TYPE.INLINE_INSTANCE: {
 
-            const elementResult = parseInlineElement(target)
+            const elementResult = parseInlineElement(target())
 
-            if (elementResult !== (void 0)) {
-              //     indexResult.push(elementResult[0])
+            // A failure inside the element leaves the cursor part-way
+            // through it, so the parse cannot continue.
+            if (elementResult?.[1] === ParseResult.SYNTAX_ERROR) {
+              return syntaxError()
             }
             break
           }
@@ -1437,10 +1435,14 @@ export default class StepParser<TypeIDType> extends StepHeaderParser {
 
         case ATTRIBUTE_PARSE_TYPE.INLINE_INSTANCE: {
 
-          const elementResult = parseInlineElement(recordTarget)
+          const elementResult = parseInlineElement(
+              containerStack.length > 0 ? containerStack[containerStack.length - 1] : indexResult)
 
-          if (elementResult !== (void 0)) {
-            // indexResult.push(elementResult[0])
+          // As in the nested arm above: a failure inside the element used to
+          // be ignored, and the record could come back COMPLETE with its
+          // arguments shifted.
+          if (elementResult?.[1] === ParseResult.SYNTAX_ERROR) {
+            return syntaxError()
           }
           break
         }

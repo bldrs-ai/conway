@@ -1,0 +1,18 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('AP214 fixture for typed values inside a list in the raw line parse (bldrs-ai/conway#763): a trimmed curve whose trims are lists of PARAMETER_VALUE and a point.'),'2;1');
+FILE_NAME('ap214-trimmed-curve','2026-11-04T00:00:00',('test'),('bldrs'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2010,#2);
+#2 = APPLICATION_CONTEXT('mechanical design');
+#10 = CARTESIAN_POINT('',(0.,0.,0.));
+#11 = CARTESIAN_POINT('',(1.,0.,0.));
+#20 = DIRECTION('',(0.,0.,1.));
+#21 = DIRECTION('',(1.,0.,0.));
+#30 = AXIS2_PLACEMENT_3D('',#10,#20,#21);
+#40 = CIRCLE('',#30,1.);
+#50 = TRIMMED_CURVE('Arc',#40,(PARAMETER_VALUE(0.)),(#11,PARAMETER_VALUE(1.5)),.T.,.PARAMETER.);
+ENDSEC;
+END-ISO-10303-21;

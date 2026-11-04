@@ -261,26 +261,47 @@ Typed values inside a list stay in it:
 as does a trimmed curve's `Trim1` = `(IFCPARAMETERVALUE(0.5))`.
 
 Until conway#763 the parse pushed every value inside an inline element to
-the record's top-level arguments. A definition set read as its first member
-only, so `getPropertySets` lost every set after the first; the other
-members, and every typed value inside a list, spilled into the attributes
-that follow (`IfcPropertySingleValue.Unit` read the complex number's
-imaginary part). The element → relating-IDs index behind
-`getPropertySets` (conway#755) already took an array of relating IDs, so it
-now records every member of a set, in the set's order. web-ifc 0.0.34
-drops these aggregate values entirely (`{type: 2, label, valueType: 7}`
-with no value), so this is a place conway's shape is richer than the one
-it was copied from.
+the record's top-level arguments, and opened the element's own lists on
+the record-level stack without closing them, so those lists swallowed the
+record's later values. A definition set read as its first member only, so
+`getPropertySets` lost every set after the first. The other members, and
+every typed value inside a list, spilled into the attributes that follow:
+`IFCPROPERTYSINGLEVALUE('Complex',$,IFCCOMPLEXNUMBER((1.5,-2.)),#100)`
+read as `['Complex', null, 1.5, -2, [#100]]`. The element → relating-IDs
+index behind `getPropertySets` (conway#755, built from record spans since
+conway#762) already took an array of relating IDs, so it now records every
+member of a set, in the set's order. web-ifc 0.0.34 drops these aggregate
+values entirely (`{type: 2, label, valueType: 7}` with no value), so here
+conway's shape is richer than the one it was copied from.
+
+**Consumers must handle the array.** Code that reads
+`RelatingPropertyDefinition.value` or `NominalValue.value` as a scalar
+handle gets `undefined` for a definition set or a complex or compound
+value, where it used to get the first member. Share's pset sweep and
+properties panel do exactly this, and are fixed alongside the pin
+(bldrs-ai/Share#2069).
+
+A syntax error inside an inline element now fails the record. It used to
+be ignored, and the record could come back `COMPLETE` with its arguments
+shifted.
 
 An IFC4X3 file with a definition set does not reach this parse at all.
 The IFC4-compatible decoding route refuses it, because the deriver gives
 an aggregate of an entity no value shape (conway#765).
 
-Two defects of the same parse remain, outside conway#763: a list nested
-in a record-level list (`IfcCartesianPointList.CoordList`) closes into the
-record's top-level arguments rather than its parent list, and a derived
-`*` (`IFCSIUNIT(*,…)`) is dropped rather than kept as a placeholder, so
-the attributes after either shift. See conway#764.
+Three defects of the same parse remain, outside conway#763, and the
+attributes after each one shift:
+- A list nested in a record-level list (`IfcCartesianPointList.CoordList`)
+  closes into the record's top-level arguments, not its parent list.
+- A derived `*` (`IFCSIUNIT(*,…)`) is dropped rather than kept as a
+  placeholder.
+- A binary value (`"0FF"`) is matched but not kept. That includes one
+  written in place, `IFCBINARY("0FF")` as an `IfcValue`.
+
+See conway#764. A zero written with an exponent (`0.E0`) fails the record
+outright (conway#767). `scripts/raw_line_parity.mjs` is the before/after
+check for any change here: geometry reads through the generated
+entities, so the regression digests never see this parse.
 
 ## Cross-references / open items
 

@@ -13,7 +13,10 @@
 // data/property_definition_set.ifc has every aggregate-valued select member
 // IFC4 and IFC4X3 define: IfcPropertySetDefinitionSet, IfcComplexNumber,
 // IfcCompoundPlaneAngleMeasure, IfcLineIndex / IfcArcIndex; plus typed values
-// inside a list (IfcPropertyEnumeratedValue, IfcPropertyListValue).
+// inside a list (IfcPropertyEnumeratedValue, IfcPropertyListValue, and a
+// trimmed curve's trims, which are most of what changed on real models,
+// IFC and STEP alike). The parse itself is pinned on synthetic lines in
+// src/step/parsing/step_parser_inline_arguments.test.ts.
 import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
@@ -37,6 +40,10 @@ const ANGLE = 32
 const ENUMERATED = 33
 const LIST = 34
 const POLY_CURVE = 41
+const TRIMMED_CURVE = 54
+
+const AP214_FIXTURE = 'data/ap214-trimmed-curve.step'
+const AP214_TRIMMED_CURVE = 50
 
 let api: IfcAPI
 let buffer: Uint8Array
@@ -132,6 +139,14 @@ describe('typed values written in place keep their lists (conway#763)', () => {
   test('typed values inside a list stay in it', () => {
     const modelID = api.OpenModel(buffer, SETTINGS)
 
+    // These read Trim1 0, Trim2 an empty list, SenseAgreement 1.5 and
+    // MasterRepresentation the point's list.
+    const trimmed = line(modelID, TRIMMED_CURVE)
+    expect(trimmed.Trim1).toEqual([real(0)])
+    expect(trimmed.Trim2).toEqual([ref(51), real(1.5)])
+    expect(trimmed.SenseAgreement).toEqual({ type: 3, value: 'T' })
+    expect(trimmed.MasterRepresentation).toEqual({ type: 3, value: 'PARAMETER' })
+
     // These read EnumerationValues 'a' and EnumerationReference 'b'.
     const enumerated = line(modelID, ENUMERATED)
     expect(enumerated.EnumerationValues).toEqual([label('a'), label('b')])
@@ -157,6 +172,22 @@ describe('typed values written in place keep their lists (conway#763)', () => {
     }
 
     api.CloseModel(ifc4)
+    api.CloseModel(modelID)
+  }, 120000)
+
+  test('the AP214 raw path keeps a trimmed curve\'s trims in their lists', () => {
+    // The same parse, through the AP214 proxy's getRawLineData.
+    const modelID = api.OpenModel(new Uint8Array(fs.readFileSync(AP214_FIXTURE)), SETTINGS)
+
+    expect(api.GetRawLineData(modelID, AP214_TRIMMED_CURVE).arguments).toEqual([
+      label('Arc'),
+      ref(40),
+      [real(0)],
+      [ref(11), real(1.5)],
+      { type: 3, value: 'T' },
+      { type: 3, value: 'PARAMETER' },
+    ])
+
     api.CloseModel(modelID)
   }, 120000)
 })
