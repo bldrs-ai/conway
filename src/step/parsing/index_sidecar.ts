@@ -124,15 +124,34 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  *    hashed; the only divergence is a concurrent rewrite, which would
  *    equally corrupt the per-worker parse it replaces.
  *
- *    **Nothing in this repo wires that yet.** `HashingByteSource` is the
- *    mechanism and is exported for it, but every present use — including
- *    `openIfcModelFromIndex`'s `verifySourceHash` — is a standalone
- *    whole-file pass. The compat surface can *consume* a sidecar
- *    (`OpenModelFromIndex`) but has no method that *produces* one, so a
- *    coordinator has to go through the engine API (`openStreamedIfcModel*`
- *    → `columns` → `serializeIndexSidecarFromColumns`) to build one at all.
+ *    Every streaming IFC open does that fold when asked to
+ *    (`RECORD_SOURCE_HASH` / `recordSourceHash`), recording the digest on
+ *    the model (`StepModelBase.indexedSourceHash`, conway#756), so the
+ *    coordinator half of this gate has its hash in hand when the parse
+ *    ends.
  *  - **Revisit** (a persisted sidecar, where the file really may have
  *    changed): full {@link sidecarMatchesSource} against `hashSource`.
+ *
+ * ## The producer: export from an open model (conway#756)
+ *
+ * `exportIfcIndexSidecar` (`src/ifc/ifc_index_sidecar_export.ts`) and the
+ * compat `IfcAPI.ExportIndexSidecar` write a sidecar from a model that is
+ * already open — resident, windowed from birth, spilled, or itself opened
+ * from a sidecar — so an embedder that terminates an engine to free it can
+ * bring the next one up index-first instead of re-parsing. The columns come
+ * straight off the model (`StepModelBase.indexColumns`), and the hash is
+ * the one the open recorded (`StepModelBase.indexedSourceHash`) — folded
+ * into the streaming parse's own pass through `HashingByteSource`, so it is
+ * the digest of exactly the bytes the index describes, never of whatever
+ * the source holds by the time the export runs (codex review of
+ * conway#760).
+ *
+ * A mismatch at open is an {@link IndexSidecarStaleError}, not a generic
+ * throw, so a caller can tell "this sidecar is for another file — parse"
+ * from "the store failed"; the compat surface records it as load status
+ * `INDEX_STALE`. A model whose index the format cannot carry (the IFC4X3
+ * compat route's field masks; any non-IFC schema) is refused at export
+ * with an {@link IndexSidecarUnsupportedError}, never written lossily.
  *
  * FNV-1a is not collision-resistant and this is deliberately not a
  * security boundary — it detects a *changed* file, not an *attacker's*
@@ -197,6 +216,63 @@ const COMPLEX_ENTRY_FIXED_BYTES = 6 * U32_BYTES
 // back to the explicit DataView path and produces the same bytes.
 const IS_LITTLE_ENDIAN =
   new Uint8Array( new Uint32Array( [ 1 ] ).buffer )[ 0 ] === 1
+
+
+/** Which half of the trust gate an {@link IndexSidecarStaleError} failed. */
+export type IndexSidecarStaleReason = 'length' | 'hash'
+
+
+/**
+ * A sidecar that does not describe the source it is being opened against:
+ * the source's length differs from the one recorded, or (when the full gate
+ * runs) its hash does. The caller's move is a cold parse — the index
+ * addresses some other byte string, and trusting it would serve wrong
+ * records rather than fail (conway#756).
+ *
+ * Typed rather than a plain `Error` so that move can be keyed on: a store
+ * that rejected a read, or a corrupt blob, is a different failure with a
+ * different remedy.
+ */
+export class IndexSidecarStaleError extends Error {
+
+  /**
+   * @param reason Which check failed.
+   * @param expected What the sidecar recorded (length in bytes, or hash).
+   * @param actual What the source actually has.
+   */
+  constructor(
+      public readonly reason: IndexSidecarStaleReason,
+      public readonly expected: number,
+      public readonly actual: number ) {
+
+    super( reason === 'length' ?
+      `Sidecar was built against ${expected} bytes but the store holds ` +
+      `${actual}` :
+      `Sidecar hash does not match the store contents (sidecar ` +
+      `0x${( expected >>> 0 ).toString( HEX )}, store ` +
+      `0x${( actual >>> 0 ).toString( HEX )})` )
+
+    this.name = 'IndexSidecarStaleError'
+  }
+}
+
+
+/**
+ * An open model whose index the sidecar format cannot represent, refused at
+ * export rather than written lossily (conway#756) — e.g. an IFC4X3 model on
+ * the IFC4-compatible route, whose per-record field masks have no slot in
+ * v2, or a model of a schema the index-first open does not take.
+ */
+export class IndexSidecarUnsupportedError extends Error {
+
+  /**
+   * @param message Why the export was refused.
+   */
+  constructor( message: string ) {
+    super( message )
+    this.name = 'IndexSidecarUnsupportedError'
+  }
+}
 
 
 /**
@@ -612,6 +688,67 @@ export function serializeIndexSidecar<TypeIDType extends number>(
 
 
 /**
+ * Refuse a blob that is not a sidecar this module reads: wrong magic, or any
+ * version but {@link SIDECAR_VERSION}. One helper for both the header-only
+ * read and the full decode, so the v1 explanation — the one an embedder
+ * holding persisted v1 sidecars needs, "rebuild the index" — reads the same
+ * whichever runs first (conway#760 round 3).
+ *
+ * @param view A view over at least the first 8 bytes.
+ * @return {number} The version (always {@link SIDECAR_VERSION}).
+ */
+function requireSidecarMagicAndVersion( view: DataView ): number {
+
+  const magic = view.getUint32( 0, true )
+
+  if ( magic !== MAGIC ) {
+    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
+  }
+
+  const version = view.getUint32( U32_BYTES, true )
+
+  if ( version !== SIDECAR_VERSION ) {
+    throw new Error(
+        `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` +
+        ( version === SIDECAR_VERSION_TOP_LEVEL_ONLY ?
+          ': v1 carries top-level rows only and would silently drop every ' +
+          'inline entity — rebuild the index' : '' ) )
+  }
+
+  return version
+}
+
+
+/**
+ * Read only a sidecar's header: its source identity, without restoring the
+ * index. Checks the magic and version exactly as the full decode does, and
+ * throws on the same blobs, so a caller can apply the trust gate before
+ * paying for the column copy — or before some other refusal would mask a
+ * stale sidecar as a different failure (codex review of conway#760).
+ *
+ * @param bytes The sidecar bytes.
+ * @return {SidecarSourceIdentity} The recorded source length and hash.
+ */
+export function readSidecarSourceIdentity( bytes: Uint8Array ): SidecarSourceIdentity {
+
+  if ( bytes.byteLength < HEADER_BYTES ) {
+    throw new Error(
+        `Truncated sidecar: ${bytes.byteLength} bytes is shorter than the ` +
+        `${HEADER_BYTES}-byte header` )
+  }
+
+  const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
+
+  requireSidecarMagicAndVersion( view )
+
+  return {
+    sourceByteLength: view.getFloat64( U32_BYTES * 2, true ),
+    sourceHash: view.getUint32( U32_BYTES * 2 + F64_BYTES, true ),
+  }
+}
+
+
+/**
  * Deserialise a sidecar blob straight to a columnar index — the index-first
  * open path: no per-record objects at any point between the sidecar bytes
  * and a constructed model.
@@ -628,23 +765,9 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
 
   const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
 
-  let offset = 0
+  const version = requireSidecarMagicAndVersion( view )
 
-  const magic = view.getUint32( offset, true ); offset += U32_BYTES
-
-  if ( magic !== MAGIC ) {
-    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
-  }
-
-  const version = view.getUint32( offset, true ); offset += U32_BYTES
-
-  if ( version !== SIDECAR_VERSION ) {
-    throw new Error(
-        `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` +
-        ( version === SIDECAR_VERSION_TOP_LEVEL_ONLY ?
-          ': v1 carries top-level rows only and would silently drop every ' +
-          'inline entity — rebuild the index' : '' ) )
-  }
+  let offset = 2 * U32_BYTES
 
   const sourceByteLength = view.getFloat64( offset, true ); offset += F64_BYTES
   const sourceHash = view.getUint32( offset, true ); offset += U32_BYTES

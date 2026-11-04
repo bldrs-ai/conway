@@ -1,5 +1,5 @@
 import { StepIndexEntry } from './parsing/step_parser'
-import { StepIndexColumns } from './parsing/columnar_index'
+import { StepIndexColumns, cloneIndexEntry } from './parsing/columnar_index'
 import {
   releaseScratchParsingBuffer,
   stepExtractReference,
@@ -78,6 +78,56 @@ implements Iterable<BaseEntity>, Model {
   private readonly expressID_: Uint32Array     // real (non-inline) entries only
   private readonly count_: number
   private readonly firstInlineElement_: number
+
+  // Whether the top-level express IDs arrived in non-decreasing order. The
+  // lookup table already knows, but the index sidecar's `flags` word carries
+  // it too, and `indexColumns()` must hand back the same verdict the parse
+  // produced or an exported sidecar differs from one serialised off the
+  // parse's own columns by that one bit (conway#756).
+  private readonly expressIdsSorted_: boolean
+
+  // True once `setFieldMasks` has run, whatever it was given. Every caller is
+  // the IFC4-compatible IFC4X3 route, whose index is TRANSLATED (4X3 records
+  // re-typed as IFC4 ones) and whose masks the v2 sidecar has no slot for —
+  // and an eligible file can have nothing to mask, so `fieldMasks_` being
+  // unset does not mean the index is untranslated. See `hasFieldMasks`.
+  private fieldMasksApplied_: boolean = false
+
+  // Parse-order copies of the complex entries' index fields, taken at
+  // construction. The retained descriptors in `complexEntries_` are not a
+  // safe source for the index once an entity has been read:
+  // `getElementByLocalID` / `getTypedElementByLocalID` sort a holder's
+  // `multiMapping` IN PLACE (deepest type first) before materialising it,
+  // so serialising the live map after a read writes a reordered mapping and
+  // the export stops being byte-identical to a fresh parse's (codex review
+  // of conway#760). Complex entries are rare (0 on every corpus model), so
+  // a copy costs nothing measurable. `cloneIndexEntry` keeps
+  // `inlineEntities` by reference; that is safe because nothing writes an
+  // entry's `inlineEntities` after the parse, and the sidecar writer never
+  // reads the field.
+  private readonly complexIndexEntries_?:
+    Map< number, StepIndexEntry< EntityTypeIDs > >
+
+  /**
+   * The FNV-1a (`hashSource`) of the exact bytes this model's index was
+   * built from, recorded by the open that built it: folded into the parse's
+   * own pass on the streaming opens, taken over the resident buffer on the
+   * classic ones, and adopted from the sidecar on an index-first open (the
+   * index there IS the sidecar's, so its recorded hash is the identity of
+   * the bytes the index describes). Recording is opt-in on the parsing
+   * opens (`RECORD_SOURCE_HASH` / `recordSourceHash`); undefined when it
+   * was off, or for a model built some other way.
+   *
+   * This, not a hash of the source at export time, is what an exported
+   * index sidecar records (conway#756, codex review of conway#760): the
+   * index describes the bytes that were PARSED, and a resident buffer
+   * mutated after open — or a same-length store swapped in by
+   * `spillSourceToExternalStore`, which checks only the length — would
+   * otherwise be written under the new bytes' hash and pass a verified
+   * reopen with the old offsets. Recorded this way, that reopen is refused
+   * as stale instead.
+   */
+  public indexedSourceHash?: number
 
   /**
    * Is this model's index a mid-parse PREFIX? True only for a model built
@@ -196,9 +246,11 @@ implements Iterable<BaseEntity>, Model {
       this.expressID_          = columns.expressID
       this.count_              = columns.count
       this.firstInlineElement_ = firstInline
+      this.expressIdsSorted_   = columns.expressIdsSorted
       this.indexIsPrefix       = columns.indexIsPrefix ?? false
       this.complexEntries_     = columns.complexEntries as unknown as
         Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined
+      this.complexIndexEntries_ = StepModelBase.snapshotComplexEntries( columns.complexEntries )
       return
     }
 
@@ -306,10 +358,38 @@ implements Iterable<BaseEntity>, Model {
     this.expressID_          = expressIDs
     this.count_              = count
     this.firstInlineElement_ = firstInlineElement
+    this.expressIdsSorted_   = expressIdsAlreadySorted
     this.complexEntries_     = complexEntries
+    this.complexIndexEntries_ = StepModelBase.snapshotComplexEntries(
+        complexEntries as unknown as Map< number, StepIndexEntry< EntityTypeIDs > > | undefined )
 
     // The object index is only ever produced by a completed parse.
     this.indexIsPrefix       = false
+  }
+
+
+  /**
+   * Copy complex entries down to their index fields, in parse order — see
+   * `complexIndexEntries_`.
+   *
+   * @param entries The complex entries as the index arrived.
+   * @return {Map | undefined} Independent copies, or undefined for none.
+   */
+  private static snapshotComplexEntries< TypeIDs extends number >(
+      entries: Map< number, StepIndexEntry< TypeIDs > > | undefined ):
+      Map< number, StepIndexEntry< TypeIDs > > | undefined {
+
+    if ( entries === void 0 ) {
+      return
+    }
+
+    const copies = new Map< number, StepIndexEntry< TypeIDs > >()
+
+    for ( const [ localID, entry ] of entries ) {
+      copies.set( localID, cloneIndexEntry( entry ) as StepIndexEntry< TypeIDs > )
+    }
+
+    return copies
   }
 
 
@@ -417,7 +497,65 @@ implements Iterable<BaseEntity>, Model {
     }
 
     this.fieldMasks_ = byLocalID.size > 0 ? byLocalID : void 0
+    this.fieldMasksApplied_ = true
     this.descriptorCache_ = []
+  }
+
+
+  /**
+   * Has {@link setFieldMasks} been applied to this model — even with nothing
+   * to mask?
+   *
+   * The only caller is the IFC4-compatible IFC4X3 route
+   * (`ifc4x3_ifc4_compat.ts`), so this is also "is this index a translated
+   * one". The index sidecar uses it to refuse an export it cannot represent
+   * (conway#756): v2 has no slot for the masks, and an index-first open
+   * refuses every IFC4X3 header anyway.
+   *
+   * @return {boolean} True after any setFieldMasks call.
+   */
+  public get hasFieldMasks(): boolean {
+    return this.fieldMasksApplied_
+  }
+
+
+  /**
+   * The model's entity index, as the columns it reads from — the shape
+   * `serializeIndexSidecarFromColumns` takes, so an open model can write
+   * the sidecar an index-first open restores (conway#756).
+   *
+   * These are the model's OWN arrays, not copies: the index is fixed for a
+   * model's lifetime (nothing writes a column after construction), so a
+   * view is safe to read and a copy of a 9 M-row index (~150 MB) would be
+   * pure waste. **Do not mutate them.**
+   *
+   * Identity, not equivalence, is the point. Both constructor paths leave
+   * the same layout — the object path's breadth-first `inlineEntities`
+   * unfold is the order `ColumnarIndexSink` assigns — so the columns here
+   * are the columns the parse produced, and a sidecar written from them is
+   * byte-identical to one written from the parse's own columns. The parity
+   * suite (`ifc_index_sidecar_export.test.ts`) pins that for both a
+   * resident and a windowed open.
+   *
+   * `complexEntries` is NOT the live retained descriptor map but the
+   * parse-order copy taken at construction (`complexIndexEntries_`): reading
+   * a complex entity sorts its live `multiMapping` in place.
+   *
+   * @return {StepIndexColumns} The index columns.
+   */
+  public indexColumns(): StepIndexColumns< EntityTypeIDs > {
+
+    return {
+      address: this.address_,
+      length: this.length_,
+      typeID: this.typeID_,
+      expressID: this.expressID_,
+      count: this.count_,
+      firstInlineElement: this.firstInlineElement_,
+      complexEntries: this.complexIndexEntries_,
+      expressIdsSorted: this.expressIdsSorted_,
+      indexIsPrefix: this.indexIsPrefix ? true : void 0,
+    }
   }
 
 

@@ -216,6 +216,25 @@ export interface Loadersettings {
    * does not establish.
    */
   VERIFY_INDEX_SOURCE_HASH?: boolean
+
+  /**
+   * Conway extension (every IFC open; conway#756): record the FNV-1a of the
+   * exact bytes the model's index is built from, so {@link
+   * IfcAPI.ExportIndexSidecar} can write a sidecar whose hash describes the
+   * bytes that were parsed. The streaming opens fold it into the parse's
+   * own pass; the classic resident opens hash the parsed buffer after the
+   * parse (reported outside `parseTime`). `OpenModelFromIndex` needs no
+   * flag — it adopts the sidecar's hash.
+   *
+   * **Default off, because it is not free:** ~1.3 s on a 902 MB model, about
+   * 12 % of the bare index build (conway#760 round 2), paid by every open
+   * whether or not it is ever exported. Turn it on for the models an
+   * embedder may evict and reopen from a sidecar. Without it,
+   * `ExportIndexSidecar` refuses (returns `undefined`) rather than hash
+   * the source as it stands later, which could bind the index to bytes it
+   * does not describe.
+   */
+  RECORD_SOURCE_HASH?: boolean
 }
 
 /* MB as the API's unit, bytes as the engine's: the budget is a number a
@@ -621,6 +640,18 @@ export class IfcAPI {
    * internal cold-parse fallback: taking one silently would spend the
    * whole cost the call exists to avoid and make a stale index invisible.
    *
+   * A sidecar that does not match the store (wrong length, or — under
+   * `VERIFY_INDEX_SOURCE_HASH` — wrong hash) records load status
+   * **`INDEX_STALE`** on the statistics of the id the open was attempted
+   * under (`globalModelIDCounter` before the call), with the mismatch as
+   * the failure reason (conway#756). That is the "parse instead" signal;
+   * any other status is a failure of something other than the sidecar.
+   *
+   * The sidecar usually comes from {@link ExportIndexSidecar} on an earlier
+   * engine's open of the same source. Pass `VERIFY_INDEX_SOURCE_HASH: true`
+   * when it was persisted (an evicted model reopened later), since the
+   * length check alone does not see a same-length rewrite.
+   *
    * @param store External store holding the source bytes (OPFS File).
    * @param sidecar The serialised index.
    * @param settings settings for loading the model
@@ -656,6 +687,75 @@ export class IfcAPI {
     this.models.set( modelIdResult, result )
 
     return modelIdResult
+  }
+
+  /**
+   * Serialise an open model's entity index to a v2 index sidecar (conway
+   * extension, conway#756; feature-detect with
+   * `typeof api.ExportIndexSidecar === 'function'`), so a later engine —
+   * after this one is terminated to free the model — can come back with
+   * {@link OpenModelFromIndex} instead of re-parsing the source.
+   *
+   * Works on every IFC open: resident (`OpenModel`, `OpenModelAsync`,
+   * `OpenModelStreamed`), windowed from birth (`OpenModelStream`), spilled
+   * (`SpillModelSource`), and index-first itself. The sidecar is
+   * byte-identical to one serialised off a fresh parse's own columns, and
+   * a model opened from it reads back the same express IDs, spatial tree
+   * and properties (`ifc_index_sidecar_export.test.ts`).
+   *
+   * **Open the model with `RECORD_SOURCE_HASH: true`**, or this refuses.
+   * It reads no source bytes: the sidecar's hash is the one the open
+   * recorded, folded into the parse's own pass, so it is the digest of the
+   * bytes the index describes rather than of whatever the source holds now
+   * (a buffer mutated after open, a different store spilled to) — a
+   * verified reopen over changed bytes is then refused as `INDEX_STALE`.
+   * The export itself is a serialise: a few memcpys of the index columns
+   * (~0.1 s for a 9 M-row index).
+   *
+   * Returns `undefined` — with a warning naming why — for an unknown model
+   * id, a model opened without `RECORD_SOURCE_HASH`, a non-IFC model (the format has no schema slot; STEP is not
+   * covered), or an IFC4X3 model (the IFC4-compatible route's field masks
+   * have no slot, and the index-first open refuses IFC4X3 headers). The
+   * embedder's fallback for any of those is the parse it would have done
+   * anyway.
+   *
+   * @param modelID handle of an open model
+   * @return {Promise<Uint8Array | undefined>} The sidecar bytes, or
+   * undefined when this model cannot be exported.
+   */
+  async ExportIndexSidecar( modelID: number ): Promise<Uint8Array | undefined> {
+
+    const result = this.models.get( modelID )
+
+    if ( result === void 0 ) {
+      Logger.warning( `[ExportIndexSidecar]: no open model ${modelID}` )
+      return
+    }
+
+    if ( result.exportIndexSidecar === void 0 ) {
+      Logger.warning(
+          `[ExportIndexSidecar]: model ${modelID} is not IFC; the index ` +
+          'sidecar covers IFC only' )
+      return
+    }
+
+    try {
+
+      const exported = await result.exportIndexSidecar()
+
+      Logger.info(
+          `[ExportIndexSidecar]: model ${modelID}: ` +
+          `${exported.sidecar.byteLength} bytes for a ` +
+          `${exported.sourceByteLength}-byte source (serialise ` +
+          `${exported.serializeMs} ms)` )
+
+      return exported.sidecar
+    } catch ( error ) {
+
+      Logger.warning(
+          `[ExportIndexSidecar]: model ${modelID}: ` +
+          `${error instanceof Error ? error.message : String( error )}` )
+    }
   }
 
   /**

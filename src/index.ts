@@ -51,6 +51,7 @@ export {
   openStreamedIfcModelAsync,
   openStreamedIfcModelFromStore,
   openIfcModelFromIndex,
+  assertSidecarDescribesStore,
   ifcPrefixTypeIndex,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
@@ -102,8 +103,21 @@ export {
   SIDECAR_VERSION,
   DecodedSidecarColumns,
   SidecarSourceIdentity,
+  IndexSidecarStaleError,
+  IndexSidecarStaleReason,
+  IndexSidecarUnsupportedError,
+  readSidecarSourceIdentity,
 } from './step/parsing/index_sidecar'
-export { HashingByteSource } from './step/parsing/source_hash'
+export {
+  HashingByteSource,
+  HashingSyncByteSource,
+  hashSourceAsync,
+} from './step/parsing/source_hash'
+export {
+  exportIfcIndexSidecar,
+  IfcIndexSidecarExport,
+  IfcIndexSidecarExportOptions,
+} from './ifc/ifc_index_sidecar_export'
 export { StreamingRecordDispatcher, RecordHandler } from './step/parsing/streaming_record_dispatcher'
 export { PrefixTypeIndex } from './step/parsing/prefix_type_index'
 export { StepTypeIndexer } from './step/indexing/step_type_indexer'

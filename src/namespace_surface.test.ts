@@ -26,6 +26,10 @@ describe( 'plane namespace surface', () => {
     expect( typeof stream.sidecarMatchesSourceLength ).toBe( 'function' )
     expect( typeof stream.hashSource ).toBe( 'function' )
     expect( typeof stream.HashingByteSource ).toBe( 'function' )
+    expect( typeof stream.hashSourceAsync ).toBe( 'function' )
+    expect( typeof stream.exportIfcIndexSidecar ).toBe( 'function' )
+    expect( typeof stream.IndexSidecarStaleError ).toBe( 'function' )
+    expect( typeof stream.IndexSidecarUnsupportedError ).toBe( 'function' )
 
     // A value, not a function — and the one embedders have to branch on, so
     // an accidental bump is worth a failing test rather than a surprise.

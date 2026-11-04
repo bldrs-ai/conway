@@ -7,11 +7,42 @@
 // streaming builder produces.
 import * as fs from 'fs'
 
-import { describe, expect, test } from '@jest/globals'
+import { beforeEach, describe, expect, test } from '@jest/globals'
 
 import { BufferByteSource } from './byte_source'
-import { HashingByteSource } from './source_hash'
+import { HashingByteSource, HashingSyncByteSource } from './source_hash'
 import { hashSource } from './index_sidecar'
+
+
+/**
+ * The two hashers behind one async face, so every contract below is pinned
+ * on both (conway#760 round 2): the async one the cooperative opens wrap,
+ * and the synchronous twin `openStreamedIfcModel` wraps.
+ */
+interface Hasher {
+  readonly covered: number
+  read( offset: number, length: number, into: Uint8Array, intoOffset: number ): Promise<number>
+  finishAsync(): Promise<number>
+}
+
+const HASHERS: [ string, ( bytes: Uint8Array ) => Hasher ][] = [
+  [ 'HashingByteSource', ( bytes ) => new HashingByteSource( new BufferByteSource( bytes ) ) ],
+  [ 'HashingSyncByteSource', ( bytes ) => {
+
+    const sync = new HashingSyncByteSource( new BufferByteSource( bytes ) )
+
+    return {
+      get covered() {
+        return sync.covered
+      },
+      read: async ( offset, length, into, intoOffset ) =>
+        sync.read( offset, length, into, intoOffset ),
+      finishAsync: async () => sync.finish(),
+    }
+  } ],
+]
+
+let makeHasher: ( bytes: Uint8Array ) => Hasher
 
 
 /**
@@ -29,7 +60,7 @@ async function hashThroughWindow(
     windowBytes: number,
     tailBytes: number ): Promise<number> {
 
-  const source = new HashingByteSource( new BufferByteSource( bytes ) )
+  const source = makeHasher( bytes )
   const window = new Uint8Array( windowBytes )
 
   let windowStart = 0
@@ -53,7 +84,11 @@ async function hashThroughWindow(
 }
 
 
-describe( 'HashingByteSource', () => {
+describe.each( HASHERS )( '%s', ( _name, make ) => {
+
+  beforeEach( () => {
+    makeHasher = make
+  } )
 
   test( 'reproduces hashSource over a real file, window shape and all', async () => {
     const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
@@ -87,7 +122,7 @@ describe( 'HashingByteSource', () => {
     // A parse ends at END-ISO-10303-21, which can be before the window
     // reaches EOF. The digest still has to cover the whole file.
     const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
-    const source = new HashingByteSource( new BufferByteSource( bytes ) )
+    const source = makeHasher( bytes )
     const window = new Uint8Array( 4096 )
 
     await source.read( 0, 4096, window, 0 )
@@ -102,7 +137,7 @@ describe( 'HashingByteSource', () => {
     // record will not fit. Those bytes are already hashed; re-folding them
     // would silently produce a digest of a different byte string.
     const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
-    const source = new HashingByteSource( new BufferByteSource( bytes ) )
+    const source = makeHasher( bytes )
 
     const small = new Uint8Array( 2048 )
     await source.read( 0, 2048, small, 0 )
@@ -117,8 +152,7 @@ describe( 'HashingByteSource', () => {
   test( 'throws rather than hash a gap', async () => {
     // A hash that quietly means nothing is the failure worth being loud
     // about: it would still compare equal to itself and pass every gate.
-    const source =
-      new HashingByteSource( new BufferByteSource( new Uint8Array( 4096 ) ) )
+    const source = makeHasher( new Uint8Array( 4096 ) )
     const into = new Uint8Array( 256 )
 
     await source.read( 0, 256, into, 0 )

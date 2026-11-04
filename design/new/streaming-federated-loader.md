@@ -1151,6 +1151,70 @@ Deliberately small first step; each has a measurable exit.
     (`openStreamedIfcModel*` → `columns` →
     `serializeIndexSidecarFromColumns`). Both are M4d, Share-side, and
     should be planned as work rather than assumed present.
+  - **M4d (producer half) — export a sidecar from an open model (engine
+    core, landed; conway#756).** `exportIfcIndexSidecar` and the compat
+    `IfcAPI.ExportIndexSidecar(modelID)` write the v2 sidecar for an IFC
+    model that is already open. That covers every way of opening one:
+    resident, windowed from birth, spilled, and index-first itself. So an
+    embedder that terminates an engine to free a model can bring the next
+    one up with `OpenModelFromIndex`. The columns come straight off the
+    model (`StepModelBase.indexColumns`, the model's own arrays). Both
+    constructor paths leave the parse's layout, so the export is
+    **byte-identical** to `serializeIndexSidecarFromColumns` over a fresh
+    parse.
+
+    The hash is the one the **open** recorded
+    (`StepModelBase.indexedSourceHash`). Every streaming IFC open folds it
+    into its own parse pass with `HashingByteSource` /
+    `HashingSyncByteSource`; the classic resident opens take it over the
+    buffer they parsed; an index-first open adopts the sidecar's. It is
+    *not* re-derived at export. The index describes the bytes that were
+    parsed. Hashing whatever the source holds at export time would bind
+    those offsets to a resident buffer mutated after open, or to a
+    same-length store swapped in by `SpillModelSource`, and a verified
+    reopen would then accept them (codex review of conway#760). So the
+    export reads no source at all.
+
+    Recording is **opt-in**: `RECORD_SOURCE_HASH` on the compat opens,
+    `recordSourceHash` on the engine ones. The fold measured ~+1.3 s
+    (~12 %) on the bare index build of a 902 MB model. That is too much
+    to charge every open for a feature most never use. A model opened
+    without it cannot be exported. `IfcAPI.ExportIndexSidecar` refuses;
+    only an engine caller can supply a hash (`exportIfcIndexSidecar`'s
+    `sourceHash`).
+    The fold is `Math.imul`, because `indexing/hashing.ts`'s shift-and-add
+    `fnv1a` measured ~6× slower in Node 22. A faster digest is a
+    format-version question, tracked with the sampled digest in
+    conway#758. A mismatch at open is an
+    `IndexSidecarStaleError` (`reason: 'length' | 'hash'`), which the
+    compat surface records as load status `INDEX_STALE`. That status is
+    the "parse instead" signal. The compat open checks the sidecar
+    against the store *before* refusing a source that no longer sniffs
+    as IFC, so a source truncated inside its header still reports as
+    stale.
+
+    The parity suite (`ifc_api_export_index_sidecar.test.ts`) runs every
+    in-repo IFC4 fixture through five opens. It checks the bytes, the
+    express IDs, the spatial tree, the compat property reads *and* the
+    engine's typed attribute reads. Typed reads are needed because the
+    compat reads decode raw bytes and resolve an inline value whether or
+    not the index carries the inline range. Dropping that range is caught
+    only by the typed path. The suite also includes mutants that show
+    each comparison can fail.
+
+    **Refused, not written lossily:** IFC4X3 models (the compat route's
+    field masks have no slot, and the index-first open refuses IFC4X3
+    headers anyway; conway#758), and every STEP schema (no schema slot,
+    and no STEP index-first open; conway#757).
+
+    **Measured** (Node, store-backed, deferred, warm page cache). On a
+    902 MB / 9.4 M-row model:
+    - parse to index: 15.6 s;
+    - export: a 0.11 s serialise, since the hash comes from the parse; the
+      sidecar is 151 MB;
+    - restore from the sidecar under the length check: 0.46 s;
+    - the full-hash verify: another 2.5–2.8 s, ~85 % of verified time to
+      index. That is the case conway#758's sampled digest is for.
 - **M5 — Federation MVP.** Two cross-referenced files, shared budgets,
   link navigation, composed skeleton. Exit: a 2-file project browses
   under the same memory budget as either file alone.
