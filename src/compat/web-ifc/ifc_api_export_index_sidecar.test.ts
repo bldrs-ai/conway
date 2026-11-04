@@ -42,9 +42,20 @@ const VERIFY = { ...DEFER, VERIFY_INDEX_SOURCE_HASH: true }
 // Every in-repo IFC fixture the index-first open can take. The IFC4X3 ones
 // are excluded by design and have their own test below: the index-first
 // open refuses IFC4X3 headers, and the compat route's masks have no slot.
-const FIXTURES = fs.readdirSync( 'data' )
-    .filter( ( name ) => name.endsWith( '.ifc' ) && !name.startsWith( 'ifc4x3_' ) )
-    .sort()
+//
+// Plus one synthetic fixture, because no in-repo IFC has a complex
+// (multi-mapping) instance and the export must keep those in PARSE order:
+// reading one sorts its live `multiMapping` in place (codex review of
+// conway#760). IfcGeometricRepresentationItem is the deeper type, so a read
+// reorders this mapping relative to how it is written.
+const COMPLEX_FIXTURE = 'index.ifc + complex instance'
+const COMPLEX_EXPRESS_ID = 9001
+const FIXTURES = [
+  ...fs.readdirSync( 'data' )
+      .filter( ( name ) => name.endsWith( '.ifc' ) && !name.startsWith( 'ifc4x3_' ) )
+      .sort(),
+  COMPLEX_FIXTURE,
+]
 
 let api: IfcAPI
 
@@ -63,6 +74,19 @@ afterEach( () => {
  * @return {Uint8Array} Its bytes.
  */
 function fixture( name: string ): Uint8Array {
+
+  if ( name === COMPLEX_FIXTURE ) {
+
+    const text = fs.readFileSync( 'data/index.ifc', 'latin1' )
+    const end = text.lastIndexOf( 'ENDSEC;' )
+
+    return Uint8Array.from(
+        `${text.slice( 0, end )}#${COMPLEX_EXPRESS_ID}=` +
+        '(IFCREPRESENTATIONITEM()IFCGEOMETRICREPRESENTATIONITEM());\n' +
+        text.slice( end ),
+        ( character ) => character.charCodeAt( 0 ) & 0xff )
+  }
+
   return new Uint8Array( fs.readFileSync( `data/${name}` ) )
 }
 
@@ -303,6 +327,38 @@ describe( 'IfcAPI.ExportIndexSidecar parity with a fresh parse (conway#756)', ()
     expect( FIXTURES ).toContain( 'index.ifc' )
   } )
 
+  test( 'the complex fixture has a complex entry that a read reorders', async () => {
+
+    const source = fixture( COMPLEX_FIXTURE )
+    const decoded = deserializeIndexSidecarToColumns<EntityTypesIfc>(
+        await referenceSidecar( source ) )
+    const complex = [ ...decoded.columns.complexEntries?.values() ?? [] ]
+
+    expect( complex.length ).toBe( 1 )
+
+    const parseOrder = complex[ 0 ].multiMapping!.map( ( entry ) => entry.typeID )
+
+    expect( parseOrder ).toEqual(
+        [ EntityTypesIfc.IFCREPRESENTATIONITEM, EntityTypesIfc.IFCGEOMETRICREPRESENTATIONITEM ] )
+
+    // ...and reading it does reorder the live descriptor, which is the
+    // hazard the export has to be immune to.
+    const modelID = await api.OpenModelStream( new InMemoryStepByteStore( source ), DEFER )
+    const model = ( api.getPassthrough( modelID ) as unknown as IfcApiProxyIfc ).model[ 0 ]
+
+    await model.ensureResidentByExpressID( COMPLEX_EXPRESS_ID )
+    model.getElementByExpressID( COMPLEX_EXPRESS_ID )
+
+    const live = ( model as unknown as {
+      complexEntries_: Map<number, { multiMapping: { typeID: number }[] }>
+    } ).complexEntries_
+
+    expect( [ ...live.values() ][ 0 ].multiMapping.map( ( entry ) => entry.typeID ) )
+        .not.toEqual( parseOrder )
+
+    api.CloseModel( modelID )
+  } )
+
   test.each( FIXTURES )( '%s: every open exports the fresh parse\'s sidecar', async ( name ) => {
 
     const source = fixture( name )
@@ -323,6 +379,11 @@ describe( 'IfcAPI.ExportIndexSidecar parity with a fresh parse (conway#756)', ()
     for ( const [ how, modelID ] of opens ) {
 
       expect( [ how, modelID >= 0 ] ).toEqual( [ how, true ] )
+
+      // Read every record first: materialising an entity mutates retained
+      // index state (a complex holder's `multiMapping` is sorted in place),
+      // and an embedder exports a model it has been using, not a fresh one.
+      await typedReads( modelID )
 
       const exported = await api.ExportIndexSidecar( modelID )
 
@@ -541,6 +602,32 @@ describe( 'a stale sidecar fails the open as INDEX_STALE (conway#756)', () => {
     api.CloseModel( unverified )
   } )
 
+  // codex review of conway#760 (P2): a source damaged badly enough that it
+  // no longer sniffs as IFC must still report as stale, not as a bare -1 —
+  // the format refusal used to return before the sidecar was consulted.
+  test( 'a source truncated inside its header is stale, not unrecognised', async () => {
+
+    const { modelID, status } = await attempt( source.subarray( 0, 64 ), DEFER )
+
+    expect( modelID ).toBe( -1 )
+    expect( status ).toBe( 'INDEX_STALE' )
+  } )
+
+  test( 'a same-length rewrite that breaks the format sniff is stale by hash', async () => {
+
+    const text = new TextDecoder().decode( source )
+    const at = text.indexOf( 'FILE_SCHEMA' )
+    const rewritten = source.slice()
+
+    expect( at ).toBeGreaterThan( 0 )
+    rewritten.set( new TextEncoder().encode( 'XXXX_SCHEMA' ), at )
+
+    const { modelID, status } = await attempt( rewritten, VERIFY )
+
+    expect( modelID ).toBe( -1 )
+    expect( status ).toBe( 'INDEX_STALE' )
+  } )
+
   test( 'a sidecar that is not stale but broken is not INDEX_STALE', async () => {
 
     jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
@@ -553,6 +640,113 @@ describe( 'a stale sidecar fails the open as INDEX_STALE (conway#756)', () => {
     expect( await api.OpenModelFromIndex(
         new InMemoryStepByteStore( source ), broken, DEFER ) ).toBe( -1 )
     expect( api.getStatistics( attemptedID ).getLoadStatus() ).not.toBe( 'INDEX_STALE' )
+  } )
+} )
+
+
+describe( 'the exported hash is the hash of the bytes that were parsed (conway#760)', () => {
+
+  // codex review of conway#760 (P1). The index describes the bytes the open
+  // PARSED. If the export hashed the source as it stands at export time, a
+  // buffer mutated after open (or a same-length store spilled to) would be
+  // recorded under the new bytes' hash, and a verified reopen over those
+  // bytes would accept offsets that describe the old ones. With the
+  // parse-time hash, that reopen is refused as stale.
+
+  /**
+   * One byte of a string value changed: same length, same record bounds.
+   *
+   * @param bytes The original.
+   * @return {Uint8Array} The rewrite.
+   */
+  function rewrite( bytes: Uint8Array ): Uint8Array {
+
+    const at = new TextDecoder().decode( bytes ).indexOf( '\'' ) + 1
+    const rewritten = bytes.slice()
+
+    rewritten[ at ] = rewritten[ at ] === 0x41 ? 0x42 : 0x41
+
+    return rewritten
+  }
+
+  /**
+   * Reopen from `sidecar` over `bytes` with the full gate, returning the
+   * attempt's status.
+   *
+   * @param bytes What the store holds.
+   * @param sidecar The sidecar.
+   * @return {Promise<object>} The id and status.
+   */
+  async function reopen( bytes: Uint8Array, sidecar: Uint8Array ) {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const attemptedID = api.globalModelIDCounter
+    const modelID =
+      await api.OpenModelFromIndex( new InMemoryStepByteStore( bytes ), sidecar, VERIFY )
+
+    return { modelID, status: api.getStatistics( attemptedID ).getLoadStatus() }
+  }
+
+  test( 'a resident buffer mutated after open', async () => {
+
+    const original = fixture( 'index.ifc' )
+    const buffer = original.slice()
+    const modelID = api.OpenModel( buffer, SETTINGS )
+
+    buffer.set( rewrite( original ) )
+
+    const sidecar = ( await api.ExportIndexSidecar( modelID ) )!
+
+    expect( deserializeIndexSidecarToColumns( sidecar ).sourceHash ).toBe( hashSource( original ) )
+
+    const stale = await reopen( buffer, sidecar )
+
+    expect( stale.modelID ).toBe( -1 )
+    expect( stale.status ).toBe( 'INDEX_STALE' )
+
+    // The bytes it was parsed from still reopen.
+    const good = await reopen( original, sidecar )
+
+    expect( good.modelID ).toBeGreaterThanOrEqual( 0 )
+
+    api.CloseModel( modelID )
+    api.CloseModel( good.modelID )
+  } )
+
+  test( 'a same-length store spilled to after open', async () => {
+
+    const original = fixture( 'index.ifc' )
+    const other = rewrite( original )
+    const modelID = api.OpenModel( original, SETTINGS )
+
+    expect( api.SpillModelSource( modelID, new InMemoryStepByteStore( other ) ) ).toBe( true )
+
+    const sidecar = ( await api.ExportIndexSidecar( modelID ) )!
+    const stale = await reopen( other, sidecar )
+
+    expect( stale.modelID ).toBe( -1 )
+    expect( stale.status ).toBe( 'INDEX_STALE' )
+
+    api.CloseModel( modelID )
+  } )
+
+  test( 'a windowed open records the hash of the bytes it streamed', async () => {
+
+    const original = fixture( 'index.ifc' )
+    const buffer = original.slice()
+    const modelID = await api.OpenModelStream( new InMemoryStepByteStore( buffer ), DEFER )
+
+    // InMemoryStepByteStore serves the array it was given, so this changes
+    // what the model's store holds from here on.
+    buffer.set( rewrite( original ) )
+
+    const sidecar = ( await api.ExportIndexSidecar( modelID ) )!
+
+    expect( deserializeIndexSidecarToColumns( sidecar ).sourceHash ).toBe( hashSource( original ) )
+    expect( ( await reopen( buffer, sidecar ) ).status ).toBe( 'INDEX_STALE' )
+
+    api.CloseModel( modelID )
   } )
 } )
 

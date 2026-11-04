@@ -20,7 +20,11 @@ import { ParseResult } from '../step/parsing/step_parser'
 import { InMemoryStepByteStore } from '../step/step_buffer_provider'
 import { exportIfcIndexSidecar } from './ifc_index_sidecar_export'
 import { buildIfc4x3CompatIndex, ifc4x3CompatModel } from './ifc4x3_ifc4_compat'
-import { openIfcModelFromIndex, openStreamedIfcModelFromStore } from './ifc_stream_open'
+import {
+  openIfcModelFromIndex,
+  openStreamedIfcModel,
+  openStreamedIfcModelFromStore,
+} from './ifc_stream_open'
 
 let bytes: Uint8Array
 
@@ -69,15 +73,60 @@ describe( 'exportIfcIndexSidecar', () => {
             opened.columns, bytes.length, hashSource( bytes ) ) ) ) ).toBe( true )
   } )
 
-  test( 'a supplied hash skips the source pass and is what gets recorded', async () => {
+  test( 'the hash is the parse-time one, not the source as it is at export', async () => {
+
+    const buffer = bytes.slice()
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( buffer ) )
+
+    expect( opened.model!.indexedSourceHash ).toBe( hashSource( bytes ) )
+
+    // Rewrite the store's bytes in place after the parse (same length).
+    buffer[ buffer.length - 3 ] ^= 0x01
+
+    const exported = await exportIfcIndexSidecar( opened.model! )
+
+    expect( exported.sourceHash ).toBe( hashSource( bytes ) )
+
+    // ...so a verified reopen over the rewritten bytes is refused as stale.
+    await expect( openIfcModelFromIndex(
+        new InMemoryStepByteStore( buffer ), exported.sidecar, { verifySourceHash: true } ) )
+        .rejects.toBeInstanceOf( IndexSidecarStaleError )
+  } )
+
+  test( 'the synchronous streaming open records the hash too', () => {
+
+    const opened = openStreamedIfcModel(
+        new BufferByteSource( bytes ), new InMemoryStepByteStore( bytes ), { pool: 4096 } )
+
+    expect( opened.result ).toBe( ParseResult.COMPLETE )
+    expect( opened.model!.indexedSourceHash ).toBe( hashSource( bytes ) )
+  } )
+
+  test( 'an index-first open adopts the sidecar\'s hash, so a re-export is identical', async () => {
 
     const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
-    const exported = await exportIfcIndexSidecar( opened.model!, { sourceHash: 0x12345678 } )
+    const sidecar = ( await exportIfcIndexSidecar( opened.model! ) ).sidecar
+    const reopened = await openIfcModelFromIndex( new InMemoryStepByteStore( bytes ), sidecar )
 
-    expect( exported.hashMs ).toBe( 0 )
+    expect( Buffer.from( ( await exportIfcIndexSidecar( reopened.model! ) ).sidecar )
+        .equals( Buffer.from( sidecar ) ) ).toBe( true )
+  } )
+
+  test( 'a model with no recorded hash needs one supplied, and records it', async () => {
+
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
+    const model = opened.model!
+
+    model.indexedSourceHash = void 0
+
+    await expect( exportIfcIndexSidecar( model ) )
+        .rejects.toBeInstanceOf( IndexSidecarUnsupportedError )
+
+    const exported = await exportIfcIndexSidecar( model, { sourceHash: 0x12345678 } )
+
     expect( exported.sourceHash ).toBe( 0x12345678 )
 
-    // ...and a verified open then refuses it, which is the point of the gate.
+    // ...and a verified open refuses a wrong one, which is the point of the gate.
     await expect( openIfcModelFromIndex(
         new InMemoryStepByteStore( bytes ), exported.sidecar, { verifySourceHash: true } ) )
         .rejects.toBeInstanceOf( IndexSidecarStaleError )

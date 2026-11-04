@@ -678,11 +678,13 @@ export class IfcAPI {
    * a model opened from it reads back the same express IDs, spatial tree
    * and properties (`ifc_index_sidecar_export.test.ts`).
    *
-   * **Run it after the load settles, not during it.** Most of the cost is
-   * one whole-source FNV-1a pass for the sidecar's trust gate (~1.5 s per
-   * 900 MB; it reads the store directly, around the windowed LRU, and
-   * yields between 4 MiB chunks); serialising the columns is a few memcpys.
-   * A second export of the same model reuses the hash.
+   * **It reads no source bytes.** The sidecar's hash is the one the open
+   * recorded, folded into the parse's own pass, so it is the digest of the
+   * bytes the index describes rather than of whatever the source holds now
+   * (a buffer mutated after open, a different store spilled to) — a
+   * verified reopen over changed bytes is then refused as `INDEX_STALE`.
+   * The export itself is a serialise: a few memcpys of the index columns
+   * (~0.1 s for a 9 M-row index).
    *
    * Returns `undefined` — with a warning naming why — for an unknown model
    * id, a non-IFC model (the format has no schema slot; STEP is not
@@ -718,8 +720,8 @@ export class IfcAPI {
       Logger.info(
           `[ExportIndexSidecar]: model ${modelID}: ` +
           `${exported.sidecar.byteLength} bytes for a ` +
-          `${exported.sourceByteLength}-byte source (hash ${exported.hashMs} ms, ` +
-          `serialise ${exported.serializeMs} ms)` )
+          `${exported.sourceByteLength}-byte source (serialise ` +
+          `${exported.serializeMs} ms)` )
 
       return exported.sidecar
     } catch ( error ) {

@@ -51,6 +51,7 @@ export {
   openStreamedIfcModelAsync,
   openStreamedIfcModelFromStore,
   openIfcModelFromIndex,
+  assertSidecarDescribesStore,
   ifcPrefixTypeIndex,
   StreamedIfcOpen,
   StreamedIfcOpenOptions,
@@ -105,8 +106,13 @@ export {
   IndexSidecarStaleError,
   IndexSidecarStaleReason,
   IndexSidecarUnsupportedError,
+  readSidecarSourceIdentity,
 } from './step/parsing/index_sidecar'
-export { HashingByteSource, hashSourceAsync } from './step/parsing/source_hash'
+export {
+  HashingByteSource,
+  HashingSyncByteSource,
+  hashSourceAsync,
+} from './step/parsing/source_hash'
 export {
   exportIfcIndexSidecar,
   IfcIndexSidecarExport,

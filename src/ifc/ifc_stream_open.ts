@@ -3,10 +3,15 @@ import { ColumnarIndexSink, StepIndexColumns } from '../step/parsing/columnar_in
 import {
   deserializeIndexSidecarToColumns,
   IndexSidecarStaleError,
+  SidecarSourceIdentity,
   sidecarMatchesSource,
   sidecarMatchesSourceLength,
 } from '../step/parsing/index_sidecar'
-import { hashSourceAsync } from '../step/parsing/source_hash'
+import {
+  HashingByteSource,
+  HashingSyncByteSource,
+  hashSourceAsync,
+} from '../step/parsing/source_hash'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { RecordEventHandler } from '../step/parsing/record_event'
 import {
@@ -219,8 +224,13 @@ export function openStreamedIfcModel(
   // emitted. So `Ifc4x3CompatRouteRequired` propagates here as a refusal of
   // every 4X3 file. Use the loader, the compat surface or
   // `IfcStepParser.parseStreamToModel` for those.
+  //
+  // The source is read through a hasher so the model records the digest of
+  // exactly the bytes its index came from (conway#756; see
+  // `StepModelBase.indexedSourceHash`).
+  const hashing = new HashingSyncByteSource( source )
   const { header, columns, result, stats } = buildColumnarIndexStreaming(
-      source,
+      hashing,
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
       options?.onRecordIndexed,
@@ -234,8 +244,12 @@ export function openStreamedIfcModel(
   const provider = new WindowedStepBufferProvider(
       store, options?.chunkBytes, options?.maxResidentChunks )
 
+  const model = new IfcStepModel( void 0, columns, provider )
+
+  model.indexedSourceHash = hashing.finish()
+
   return {
-    model: new IfcStepModel( void 0, columns, provider ),
+    model,
     result,
     header,
     columns,
@@ -307,8 +321,12 @@ export async function openStreamedIfcModelAsync(
   // `onRecordIndexed`/`onProgress`/`indexSink` side effect of the
   // (potentially long-running, cooperative) build below — codex review of
   // #713, P1/P2/round 4.
+  //
+  // Read through a hasher, as in the synchronous open: the model records the
+  // digest of exactly the bytes its index came from (conway#756).
+  const hashing = new HashingByteSource( source )
   const { header, columns, result, stats } = await buildColumnarIndexStreamingAsync(
-      source,
+      hashing,
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
       options?.onRecordIndexed,
@@ -324,8 +342,12 @@ export async function openStreamedIfcModelAsync(
   const provider = new WindowedStepBufferProvider(
       store, options?.chunkBytes, options?.maxResidentChunks )
 
+  const model = new IfcStepModel( void 0, columns, provider )
+
+  model.indexedSourceHash = await hashing.finishAsync()
+
   return {
-    model: new IfcStepModel( void 0, columns, provider ),
+    model,
     result,
     header,
     columns,
@@ -381,6 +403,48 @@ export interface IndexFirstIfcOpenOptions {
 
 
 /**
+ * The sidecar trust gate, on its own: refuse with an
+ * {@link IndexSidecarStaleError} unless `identity` (a decoded sidecar's
+ * source identity) describes what `store` holds — its length always, and
+ * its hash when `verifyHash` is set (see `index_sidecar.ts` §"The trust
+ * gate" for which callers want which).
+ *
+ * Exported so the compat factory can classify a source it is about to
+ * refuse for another reason: a store truncated inside its header no longer
+ * sniffs as IFC, and without this check first that open would report "not
+ * IFC" rather than "this sidecar is for another file" (codex review of
+ * conway#760).
+ *
+ * @param identity The sidecar's recorded source identity.
+ * @param store The store being opened.
+ * @param verifyHash Whether to re-read the store and compare hashes.
+ */
+export async function assertSidecarDescribesStore(
+    identity: SidecarSourceIdentity,
+    store: StepExternalByteStore,
+    verifyHash: boolean ): Promise<void> {
+
+  if ( !sidecarMatchesSourceLength( identity, store.byteLength ) ) {
+    throw new IndexSidecarStaleError(
+        'length', identity.sourceByteLength, store.byteLength )
+  }
+
+  if ( verifyHash ) {
+
+    // Chunked, rather than materialising the file to call `hashSource` —
+    // the digest is identical either way (one chained FNV-1a), and a
+    // windowed open must not need the whole file resident to check its own
+    // index. Yields between chunks so a worker stays responsive through it.
+    const hashed = await hashSourceAsync( new StoreByteSource( store ) )
+
+    if ( !sidecarMatchesSource( identity, store.byteLength, hashed ) ) {
+      throw new IndexSidecarStaleError( 'hash', identity.sourceHash, hashed )
+    }
+  }
+}
+
+
+/**
  * Open a windowed IFC model **from a prebuilt index** instead of parsing
  * one: the sidecar supplies the entity index, and the model reads source
  * bytes on demand through the same windowed provider a streamed open uses.
@@ -418,24 +482,7 @@ export async function openIfcModelFromIndex(
 
   const restored = deserializeIndexSidecarToColumns<EntityTypesIfc>( sidecar )
 
-  if ( !sidecarMatchesSourceLength( restored, store.byteLength ) ) {
-    throw new IndexSidecarStaleError(
-        'length', restored.sourceByteLength, store.byteLength )
-  }
-
-  if ( options?.verifySourceHash === true ) {
-
-    // Chunked, rather than materialising the file to call `hashSource` —
-    // the digest is identical either way (one chained FNV-1a), and a
-    // windowed open must not need the whole file resident to check its own
-    // index. The same pass the export took (`hashSourceAsync`), yielding
-    // between chunks so a worker stays responsive through it.
-    const hashed = await hashSourceAsync( new StoreByteSource( store ) )
-
-    if ( !sidecarMatchesSource( restored, store.byteLength, hashed ) ) {
-      throw new IndexSidecarStaleError( 'hash', restored.sourceHash, hashed )
-    }
-  }
+  await assertSidecarDescribesStore( restored, store, options?.verifySourceHash === true )
 
   const { header, result: headerResult, prefixLength } =
     await parseIfcHeaderFromStore( store )
@@ -461,8 +508,15 @@ export async function openIfcModelFromIndex(
   const provider = new WindowedStepBufferProvider(
       store, options?.chunkBytes, options?.maxResidentChunks )
 
+  const model = new IfcStepModel( void 0, restored.columns, provider )
+
+  // The index is the sidecar's, so the sidecar's recorded hash is the
+  // identity of the bytes it describes — re-exporting this model reproduces
+  // the sidecar byte for byte (conway#756).
+  model.indexedSourceHash = restored.sourceHash
+
   return {
-    model: new IfcStepModel( void 0, restored.columns, provider ),
+    model,
     result: ParseResult.COMPLETE,
     header,
     columns: restored.columns,

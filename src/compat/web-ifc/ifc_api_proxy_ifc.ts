@@ -58,9 +58,10 @@ import {
   exportIfcIndexSidecar,
   IfcIndexSidecarExport,
 } from '../../ifc/ifc_index_sidecar_export'
-import { IndexSidecarUnsupportedError } from '../../step/parsing/index_sidecar'
+import { hashSource, IndexSidecarUnsupportedError } from '../../step/parsing/index_sidecar'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
+import { HashingByteSource, hashSourceAsync } from '../../step/parsing/source_hash'
 import {
   buildIndexStreamingAsync,
   buildColumnarIndexStreamingAsync,
@@ -608,14 +609,6 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * checkShardPreconditions_ were ever protecting.
    */
   private coordinationSupplied_: boolean = false
-
-  /**
-   * The source hash an earlier {@link exportIndexSidecar} took, so a second
-   * export of the same model costs a serialise rather than another
-   * whole-source pass. The source of an open model does not change (see
-   * `exportIfcIndexSidecar`'s contract), so neither does its hash.
-   */
-  private indexSidecarSourceHash_?: number
 
   /**
    * Did this model open from an IFC4X3 header? Retained from the load state
@@ -1187,6 +1180,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const parseStartTime = Date.now()
     const model = IfcApiProxyIfc.ifc4x3CompatOrRefuseSync( modelID, () =>
       parser.parseDataToModelForHeader(stepHeader, bufferInput, parseTick)[1] )
+
+    // The digest of the bytes this index was built from, for the index
+    // sidecar export (conway#756). The object parse reads one resident
+    // buffer with no windowed source to fold into, so it is a pass of its
+    // own here — taken now, while `data` is still the bytes that were
+    // parsed, not at export time.
+    if ( model !== void 0 ) {
+      model.indexedSourceHash = hashSource( data )
+    }
+
     const parseEndTime = Date.now()
 
     tracker?.endPhase(data.length)
@@ -1290,6 +1293,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const parseStartTime = Date.now()
     const model = await IfcApiProxyIfc.ifc4x3CompatOrRefuse( modelID, async () =>
       ( await parser.parseDataToModelForHeaderAsync(stepHeader, bufferInput, parseTick) )[1] )
+
+    // See parseAndExtract: the parse-time digest for the sidecar export,
+    // here cooperative so the open keeps yielding (conway#756).
+    if ( model !== void 0 ) {
+      model.indexedSourceHash = await hashSourceAsync( new BufferByteSource( data ) )
+    }
+
     const parseEndTime = Date.now()
 
     tracker?.endPhase(data.length)
@@ -1431,10 +1441,14 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let result: ParseResult
     let compatIndex: Ifc4x3CompatIndex | undefined
 
+    // Folds the source digest into the parse's own pass, for the index
+    // sidecar export (conway#756; StepModelBase.indexedSourceHash).
+    const hashingSource = new HashingByteSource( new BufferByteSource(data) )
+
     try {
       try {
         ( { result } = await buildIndexStreamingAsync(
-            new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+            hashingSource, parser, STREAMED_PARSE_POOL_BYTES,
             void 0, sink, parseProgress, void 0,
             // codex review of #713 (P1/round 4): gate through the builder's
             // own seam — see streaming_index_builder.ts's doc-comment —
@@ -1479,6 +1493,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if ( compatIndex !== void 0 ) {
       model.setFieldMasks( compatIndex.fieldMasks )
+    } else {
+      model.indexedSourceHash = await hashingSource.finishAsync()
     }
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -1966,10 +1982,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let stepHeader
     let compatIndex: Ifc4x3CompatIndex | undefined
 
+    // Folds the source digest into the parse's own pass, for the index
+    // sidecar export (conway#756; StepModelBase.indexedSourceHash) — zero
+    // extra I/O on the path whose source is never materialised.
+    const hashingSource = new HashingByteSource( new StoreByteSource( store ) )
+
     try {
       try {
         ( { result, header: stepHeader } = await buildIndexStreamingAsync(
-            new StoreByteSource( store ),
+            hashingSource,
             parser,
             STORE_PARSE_POOL_BYTES,
             void 0,
@@ -2034,6 +2055,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     if ( compatIndex !== void 0 ) {
       model.setFieldMasks( compatIndex.fieldMasks )
+    } else {
+      model.indexedSourceHash = await hashingSource.finishAsync()
     }
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -2347,12 +2370,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           'index-first open refuses IFC4X3 headers); reopen with a parse' )
     }
 
-    const exported = await exportIfcIndexSidecar(
-        this.model[0], { sourceHash: this.indexSidecarSourceHash_ } )
-
-    this.indexSidecarSourceHash_ = exported.sourceHash
-
-    return exported
+    return await exportIfcIndexSidecar( this.model[0] )
   }
 
   /**

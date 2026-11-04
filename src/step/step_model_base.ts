@@ -1,10 +1,5 @@
 import { StepIndexEntry } from './parsing/step_parser'
-import { StepIndexColumns } from './parsing/columnar_index'
-import {
-  BufferByteSource,
-  ReadableByteSource,
-  StoreByteSource,
-} from './parsing/byte_source'
+import { StepIndexColumns, cloneIndexEntry } from './parsing/columnar_index'
 import {
   releaseScratchParsingBuffer,
   stepExtractReference,
@@ -97,6 +92,38 @@ implements Iterable<BaseEntity>, Model {
   // and an eligible file can have nothing to mask, so `fieldMasks_` being
   // unset does not mean the index is untranslated. See `hasFieldMasks`.
   private fieldMasksApplied_: boolean = false
+
+  // Parse-order copies of the complex entries' index fields, taken at
+  // construction. The retained descriptors in `complexEntries_` are not a
+  // safe source for the index once an entity has been read:
+  // `getElementByLocalID` / `getTypedElementByLocalID` sort a holder's
+  // `multiMapping` IN PLACE (deepest type first) before materialising it,
+  // so serialising the live map after a read writes a reordered mapping and
+  // the export stops being byte-identical to a fresh parse's (codex review
+  // of conway#760). Complex entries are rare (0 on every corpus model), so
+  // a copy costs nothing measurable.
+  private readonly complexIndexEntries_?:
+    Map< number, StepIndexEntry< EntityTypeIDs > >
+
+  /**
+   * The FNV-1a (`hashSource`) of the exact bytes this model's index was
+   * built from, recorded by the open that built it: folded into the parse's
+   * own pass on the streaming opens, taken over the resident buffer on the
+   * classic ones, and adopted from the sidecar on an index-first open (the
+   * index there IS the sidecar's, so its recorded hash is the identity of
+   * the bytes the index describes). Undefined for a model built some other
+   * way.
+   *
+   * This, not a hash of the source at export time, is what an exported
+   * index sidecar records (conway#756, codex review of conway#760): the
+   * index describes the bytes that were PARSED, and a resident buffer
+   * mutated after open — or a same-length store swapped in by
+   * `spillSourceToExternalStore`, which checks only the length — would
+   * otherwise be written under the new bytes' hash and pass a verified
+   * reopen with the old offsets. Recorded this way, that reopen is refused
+   * as stale instead.
+   */
+  public indexedSourceHash?: number
 
   /**
    * Is this model's index a mid-parse PREFIX? True only for a model built
@@ -219,6 +246,7 @@ implements Iterable<BaseEntity>, Model {
       this.indexIsPrefix       = columns.indexIsPrefix ?? false
       this.complexEntries_     = columns.complexEntries as unknown as
         Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined
+      this.complexIndexEntries_ = StepModelBase.snapshotComplexEntries( columns.complexEntries )
       return
     }
 
@@ -328,9 +356,36 @@ implements Iterable<BaseEntity>, Model {
     this.firstInlineElement_ = firstInlineElement
     this.expressIdsSorted_   = expressIdsAlreadySorted
     this.complexEntries_     = complexEntries
+    this.complexIndexEntries_ = StepModelBase.snapshotComplexEntries(
+        complexEntries as unknown as Map< number, StepIndexEntry< EntityTypeIDs > > | undefined )
 
     // The object index is only ever produced by a completed parse.
     this.indexIsPrefix       = false
+  }
+
+
+  /**
+   * Copy complex entries down to their index fields, in parse order — see
+   * `complexIndexEntries_`.
+   *
+   * @param entries The complex entries as the index arrived.
+   * @return {Map | undefined} Independent copies, or undefined for none.
+   */
+  private static snapshotComplexEntries< TypeIDs extends number >(
+      entries: Map< number, StepIndexEntry< TypeIDs > > | undefined ):
+      Map< number, StepIndexEntry< TypeIDs > > | undefined {
+
+    if ( entries === void 0 ) {
+      return
+    }
+
+    const copies = new Map< number, StepIndexEntry< TypeIDs > >()
+
+    for ( const [ localID, entry ] of entries ) {
+      copies.set( localID, cloneIndexEntry( entry ) as StepIndexEntry< TypeIDs > )
+    }
+
+    return copies
   }
 
 
@@ -478,9 +533,9 @@ implements Iterable<BaseEntity>, Model {
    * suite (`ifc_index_sidecar_export.test.ts`) pins that for both a
    * resident and a windowed open.
    *
-   * `complexEntries` is the retained descriptor map. The sidecar writer
-   * reads only the index fields of each entry (address, length, typeID,
-   * expressID, multiMapping), which no lazy materialisation changes.
+   * `complexEntries` is NOT the live retained descriptor map but the
+   * parse-order copy taken at construction (`complexIndexEntries_`): reading
+   * a complex entity sorts its live `multiMapping` in place.
    *
    * @return {StepIndexColumns} The index columns.
    */
@@ -493,38 +548,10 @@ implements Iterable<BaseEntity>, Model {
       expressID: this.expressID_,
       count: this.count_,
       firstInlineElement: this.firstInlineElement_,
-      complexEntries: this.complexEntries_ as unknown as
-        Map< number, StepIndexEntry< EntityTypeIDs > > | undefined,
+      complexEntries: this.complexIndexEntries_,
       expressIdsSorted: this.expressIdsSorted_,
       indexIsPrefix: this.indexIsPrefix ? true : void 0,
     }
-  }
-
-
-  /**
-   * A sequential reader over the model's whole source — the resident
-   * buffer, or the external store a windowed (or spilled) model pages
-   * from. For whole-file passes that must not disturb residency: reading
-   * through this bypasses the windowed provider's LRU, so hashing the
-   * source for a sidecar (conway#756) does not evict the windows a demand
-   * pump is using.
-   *
-   * @return {ReadableByteSource | undefined} The reader, or undefined if
-   * the provider is neither resident nor store-backed.
-   */
-  public sourceReader(): ReadableByteSource | undefined {
-
-    if ( this.buffer_ !== void 0 ) {
-      return new BufferByteSource( this.buffer_ )
-    }
-
-    const provider = this.bufferProvider_
-
-    if ( provider instanceof WindowedStepBufferProvider ) {
-      return new StoreByteSource( provider.store )
-    }
-
-    return void 0
   }
 
 

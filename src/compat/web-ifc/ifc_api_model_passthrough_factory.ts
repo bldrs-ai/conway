@@ -9,9 +9,16 @@ import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
-import { HEADER_PREFIX_RETRY_BYTES } from '../../ifc/ifc_stream_open'
+import {
+  HEADER_PREFIX_RETRY_BYTES,
+  assertSidecarDescribesStore,
+} from '../../ifc/ifc_stream_open'
 import { UnrecognizedIfc4x3SchemaError } from '../../ifc/ifc_schema_selection'
-import { IndexSidecarStaleError } from '../../step/parsing/index_sidecar'
+import {
+  IndexSidecarStaleError,
+  SidecarSourceIdentity,
+  readSidecarSourceIdentity,
+} from '../../step/parsing/index_sidecar'
 
 /** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
 // eslint-disable-next-line no-magic-numbers
@@ -404,6 +411,26 @@ export class IfcApiModelPassthroughFactory {
       const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
 
       if ( modelFormat !== ModelFormatType.IFC ) {
+
+        // Classify against the sidecar BEFORE refusing the format (codex
+        // review of conway#760). A source truncated inside its header, or
+        // rewritten so it no longer sniffs as IFC, is stale with respect to
+        // a sidecar written for the original file — and `INDEX_STALE` is the
+        // status an embedder keys its parse fallback on. Without this, that
+        // open ends as a bare -1 with no status at all. A blob too broken to
+        // carry an identity falls through to the format refusal, as before.
+        let identity: SidecarSourceIdentity | undefined
+
+        try {
+          identity = readSidecarSourceIdentity( sidecar )
+        } catch {
+          identity = void 0
+        }
+
+        if ( identity !== void 0 ) {
+          await assertSidecarDescribesStore(
+              identity, store, settings?.VERIFY_INDEX_SOURCE_HASH === true )
+        }
 
         // Deliberately a different message from the catch below: both end in
         // −1, so the log line is the only thing that separates "this is not

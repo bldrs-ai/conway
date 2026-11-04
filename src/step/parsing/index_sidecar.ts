@@ -124,10 +124,10 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  *    hashed; the only divergence is a concurrent rewrite, which would
  *    equally corrupt the per-worker parse it replaces.
  *
- *    **Nothing in this repo folds the hash into a parse yet.**
- *    `HashingByteSource` is the mechanism and is exported for it, but every
- *    present use — including `openIfcModelFromIndex`'s `verifySourceHash` —
- *    is a standalone whole-file pass.
+ *    Every streaming IFC open now does that fold, recording the digest on
+ *    the model (`StepModelBase.indexedSourceHash`, conway#756), so the
+ *    coordinator half of this gate has its hash in hand when the parse
+ *    ends.
  *  - **Revisit** (a persisted sidecar, where the file really may have
  *    changed): full {@link sidecarMatchesSource} against `hashSource`.
  *
@@ -139,9 +139,11 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  * from a sidecar — so an embedder that terminates an engine to free it can
  * bring the next one up index-first instead of re-parsing. The columns come
  * straight off the model (`StepModelBase.indexColumns`), and the hash is
- * taken by a chunked, yielding pass over the model's own source
- * (`hashSourceAsync`), deliberately AFTER the load rather than folded into
- * it: the export is a background job, and the parse is the critical path.
+ * the one the open recorded (`StepModelBase.indexedSourceHash`) — folded
+ * into the streaming parse's own pass through `HashingByteSource`, so it is
+ * the digest of exactly the bytes the index describes, never of whatever
+ * the source holds by the time the export runs (codex review of
+ * conway#760).
  *
  * A mismatch at open is an {@link IndexSidecarStaleError}, not a generic
  * throw, so a caller can tell "this sidecar is for another file — parse"
@@ -681,6 +683,45 @@ export function serializeIndexSidecar<TypeIDType extends number>(
 
   return serializeIndexSidecarFromColumns(
       sink.finalize(), sourceByteLength, sourceHash )
+}
+
+
+/**
+ * Read only a sidecar's header: its source identity, without restoring the
+ * index. Checks the magic and version exactly as the full decode does, and
+ * throws on the same blobs, so a caller can apply the trust gate before
+ * paying for the column copy — or before some other refusal would mask a
+ * stale sidecar as a different failure (codex review of conway#760).
+ *
+ * @param bytes The sidecar bytes.
+ * @return {SidecarSourceIdentity} The recorded source length and hash.
+ */
+export function readSidecarSourceIdentity( bytes: Uint8Array ): SidecarSourceIdentity {
+
+  if ( bytes.byteLength < HEADER_BYTES ) {
+    throw new Error(
+        `Truncated sidecar: ${bytes.byteLength} bytes is shorter than the ` +
+        `${HEADER_BYTES}-byte header` )
+  }
+
+  const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
+  const magic = view.getUint32( 0, true )
+
+  if ( magic !== MAGIC ) {
+    throw new Error( `Not a sidecar: bad magic 0x${magic.toString( HEX )}` )
+  }
+
+  const version = view.getUint32( U32_BYTES, true )
+
+  if ( version !== SIDECAR_VERSION ) {
+    throw new Error(
+        `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` )
+  }
+
+  return {
+    sourceByteLength: view.getFloat64( U32_BYTES * 2, true ),
+    sourceHash: view.getUint32( U32_BYTES * 2 + F64_BYTES, true ),
+  }
 }
 
 

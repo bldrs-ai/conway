@@ -1163,15 +1163,25 @@ Deliberately small first step; each has a measurable exit.
     **byte-identical** to `serializeIndexSidecarFromColumns` over a fresh
     parse.
 
-    The hash is a chunked, yielding FNV-1a over the model's own source
-    (`hashSourceAsync`, which reads around the windowed LRU). It is taken
-    after the load, not folded into it: the export is a background job
-    and the parse is the critical path. That pass now uses a `Math.imul`
-    fold, because `indexing/hashing.ts`'s shift-and-add `fnv1a` measured
-    ~6× slower in Node 22. A mismatch at open is an
+    The hash is the one the **open** recorded
+    (`StepModelBase.indexedSourceHash`). Every streaming IFC open folds it
+    into its own parse pass with `HashingByteSource` /
+    `HashingSyncByteSource`; the classic resident opens take it over the
+    buffer they parsed; an index-first open adopts the sidecar's. It is
+    *not* re-derived at export. The index describes the bytes that were
+    parsed. Hashing whatever the source holds at export time would bind
+    those offsets to a resident buffer mutated after open, or to a
+    same-length store swapped in by `SpillModelSource`, and a verified
+    reopen would then accept them (codex review of conway#760). So the
+    export reads no source at all, and the fold costs the parse ~0.27 s
+    per 200 MiB. The fold is `Math.imul`, because `indexing/hashing.ts`'s
+    shift-and-add `fnv1a` measured ~6× slower in Node 22. A mismatch at open is an
     `IndexSidecarStaleError` (`reason: 'length' | 'hash'`), which the
     compat surface records as load status `INDEX_STALE`. That status is
-    the "parse instead" signal.
+    the "parse instead" signal. The compat open checks the sidecar
+    against the store *before* refusing a source that no longer sniffs
+    as IFC, so a source truncated inside its header still reports as
+    stale.
 
     The parity suite (`ifc_api_export_index_sidecar.test.ts`) runs every
     in-repo IFC4 fixture through five opens. It checks the bytes, the
@@ -1190,8 +1200,8 @@ Deliberately small first step; each has a measurable exit.
     **Measured** (Node, store-backed, deferred, warm page cache). On a
     902 MB / 9.4 M-row model:
     - parse to index: 15.6 s;
-    - export: 2.3 s, of which 2.2 s is the hash and 0.11 s the serialise;
-      the sidecar is 151 MB;
+    - export: a 0.11 s serialise, since the hash comes from the parse; the
+      sidecar is 151 MB;
     - restore from the sidecar under the length check: 0.46 s;
     - the full-hash verify: another 2.5–2.8 s, ~85 % of verified time to
       index. That is the case conway#758's sampled digest is for.
