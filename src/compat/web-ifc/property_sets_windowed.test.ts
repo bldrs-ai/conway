@@ -323,9 +323,10 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     // A stub API whose relationships visit in a different order from the
     // type index, as a file-order pass over a type index that is not in
     // address order would, and whose relationships each carry several
-    // relating IDs (an IfcPropertySetDefinitionSet). The fixture has
-    // neither: its type index is in file order, and the parser keeps only
-    // the first member of a definition set.
+    // relating IDs (an IfcPropertySetDefinitionSet). The fixture's type
+    // index is in file order, so it cannot show the first. Definition sets
+    // read from a real file are pinned in property_definition_set.test.ts
+    // (conway#763).
     const typeIndex = [30, 10, 20]
     const rels: { [id: number]: any } = {
       10: { RelatedObjects: [{ value: 1 }, { value: 2 }], RelatingPropertyDefinition: [{ value: 101 }, { value: 102 }] },

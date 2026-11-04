@@ -239,6 +239,45 @@ and threw `StepBufferNotResidentError` whenever the flatten reached an evicted
 window. Share's properties panel reads non-recursively, so neither change
 reaches it.
 
+## Typed values written in place: the raw line shape (conway#763)
+
+`getLine` and every `properties.*` read go through the raw line parse
+(`StepParser.extractArguments`, shared by every IFC schema and AP214), not
+the generated entities. A typed value written in place, an *inline
+element* such as `IFCLABEL('a')`, contributes only its value there: a
+scalar handle (`{type: 1, value: 'a'}`), not web-ifc's
+`{type: 2, label, valueType, value}`. An aggregate-valued one contributes
+an array of handles, the shape `ifc2x4_helper.ts` declares for it
+(`IfcPropertySetDefinitionSet = Array<IfcPropertySetDefinition>`):
+
+| Select member (IFC4, IFC4X3) | Example | Raw value |
+|---|---|---|
+| `IfcPropertySetDefinitionSet` | `RelatingPropertyDefinition` = `IFCPROPERTYSETDEFINITIONSET((#20,#21))` | `[{type: 5, value: 20}, {type: 5, value: 21}]` |
+| `IfcComplexNumber`, `IfcCompoundPlaneAngleMeasure` | `NominalValue` = `IFCCOMPLEXNUMBER((1.5,-2.))` | `[{type: 4, value: 1.5}, {type: 4, value: -2}]` |
+| `IfcLineIndex`, `IfcArcIndex` | `Segments` = `(IFCLINEINDEX((1,2)),IFCARCINDEX((2,3,4)))` | an array of arrays |
+
+Typed values inside a list stay in it:
+`EnumerationValues` = `(IFCLABEL('a'),IFCLABEL('b'))` reads as two handles,
+as does a trimmed curve's `Trim1` = `(IFCPARAMETERVALUE(0.5))`.
+
+Until conway#763 the parse pushed every value inside an inline element to
+the record's top-level arguments. A definition set read as its first member
+only, so `getPropertySets` lost every set after the first; the other
+members, and every typed value inside a list, spilled into the attributes
+that follow (`IfcPropertySingleValue.Unit` read the complex number's
+imaginary part). The element → relating-IDs index behind
+`getPropertySets` (conway#755) already took an array of relating IDs, so it
+now records every member of a set, in the set's order. web-ifc 0.0.34
+drops these aggregate values entirely (`{type: 2, label, valueType: 7}`
+with no value), so this is a place conway's shape is richer than the one
+it was copied from.
+
+Two defects of the same parse remain, outside conway#763: a list nested
+in a record-level list (`IfcCartesianPointList.CoordList`) closes into the
+record's top-level arguments rather than its parent list, and a derived
+`*` (`IFCSIUNIT(*,…)`) is dropped rather than kept as a placeholder, so
+the attributes after either shift. See conway#764.
+
 ## Cross-references / open items
 
 - **Closes `step-support.md` gap #1**: this `./web-ifc` export is (part
