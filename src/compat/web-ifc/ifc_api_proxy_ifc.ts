@@ -2411,6 +2411,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    * Unflattened, or on a fully resident source, it is a plain getLine
    * after paging in just the record.
    *
+   * Cost: a flatten inlines everything the record reaches, as web-ifc's
+   * does, and this pins all of it at once. For a property set that is the
+   * set, its properties and their units. For a product it is the whole
+   * placement and representation graph, down to every face and point;
+   * that is unbounded by the window cap (one 860 MB model's largest
+   * sampled product reached 9,659 records), and the window can sit above
+   * its cap for the read's duration. It is trimmed back to the cap when
+   * the read returns.
+   *
    * @param expressID The record's express ID.
    * @param flatten Inline every referenced record, recursively.
    * @return {Promise<any>} The line data, as getLine returns it.
@@ -2448,6 +2457,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     } finally {
       model.unpinLocalIDs(pinned)
       model.releaseSourceViews(pinned)
+      model.trimSourceResidency()
     }
   }
 

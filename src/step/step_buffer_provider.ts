@@ -271,9 +271,10 @@ export interface StepBufferProvider {
 
   /**
    * Read a byte range once, without making it resident: the bytes come
-   * from resident chunks when every covering one is held, and straight
-   * from the store otherwise — no window is paged in, cached or evicted,
-   * and the residency policy does not see the read. For sparse sweeps
+   * from the covering chunks when every one is resident or already
+   * loading, and straight from the store otherwise — no window is paged
+   * in, cached, evicted or moved in LRU order, and the residency policy
+   * does not see the read. For sparse sweeps
    * that need a few hundred bytes from each of many windows (conway#755),
    * where paging each window in would read the whole file.
    *
@@ -300,6 +301,12 @@ export interface StepBufferProvider {
    * @param length Length of the range.
    */
   unpinRange?( address: number, length: number ): void
+
+  /**
+   * Evict unpinned chunks until residency is within the cap. No-op on a
+   * fully-resident source.
+   */
+  trimToCap?(): void
 }
 
 /**
@@ -618,26 +625,72 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     const chunkBytes = this.chunkBytes_
     const firstChunk = Math.floor( address / chunkBytes )
     const lastChunk  = Math.floor( ( address + Math.max( length, 1 ) - 1 ) / chunkBytes )
-    let resident = true
+
+    // Take each covering chunk, or the load already in flight for it,
+    // synchronously, so an eviction or a load landing during the awaits
+    // below cannot change what is read: an evicted chunk's bytes stay
+    // valid for as long as we hold them. Neither path touches LRU order.
+    const covering: ( Uint8Array | Promise< Uint8Array > )[] = []
 
     for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
 
-      if ( !this.chunks_.has( chunkIndex ) ) {
-        resident = false
+      const chunk = this.chunks_.get( chunkIndex ) ?? this.loading_.get( chunkIndex )
+
+      if ( chunk === void 0 ) {
+        return await this.store_.read( address, length )
+      }
+
+      covering.push( chunk )
+    }
+
+    if ( covering.length === 1 ) {
+
+      const start = address - firstChunk * chunkBytes
+
+      return ( await covering[ 0 ] ).subarray( start, start + length )
+    }
+
+    const merged = new Uint8Array( length )
+
+    for ( let i = 0; i < covering.length; ++i ) {
+
+      const chunk     = await covering[ i ]
+      const chunkBase = ( firstChunk + i ) * chunkBytes
+      const copyFrom  = Math.max( address, chunkBase )
+      const copyTo    = Math.min( address + length, chunkBase + chunk.byteLength )
+
+      merged.set( chunk.subarray( copyFrom - chunkBase, copyTo - chunkBase ), copyFrom - address )
+    }
+
+    return merged
+  }
+
+  /**
+   * Evict least-recently-used chunks until residency is back within the
+   * cap, sparing pinned ones — the eviction {@link ensureResident} runs
+   * after a load. For a caller that pinned more than the cap and has just
+   * unpinned it (a recursive read's closure), which would otherwise stay
+   * over budget until the next ensure.
+   */
+  public trimToCap(): void {
+
+    if ( this.chunks_.size <= this.maxResidentChunks_ ) {
+      return
+    }
+
+    for ( const candidate of this.chunks_.keys() ) {
+
+      if ( this.chunks_.size <= this.maxResidentChunks_ ) {
         break
       }
+
+      if ( ( this.ensurePins_.get( candidate ) ?? 0 ) > 0 ) {
+        continue
+      }
+
+      this.chunks_.delete( candidate )
+      this.rememberEvicted_( candidate )
     }
-
-    if ( !resident ) {
-      return await this.store_.read( address, length )
-    }
-
-    // acquire answers a single chunk whole (base = the chunk's start) and a
-    // straddling range as a copy of exactly the range (base = address).
-    const { buffer, offset } = this.acquire( address, length )
-    const start = address - offset
-
-    return buffer.subarray( start, start + length )
   }
 
   /**
@@ -712,22 +765,7 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
       // Evict beyond the cap, oldest first, sparing pinned chunks
       // (this call's own range is pinned above).
-      if ( this.chunks_.size > this.maxResidentChunks_ ) {
-
-        for ( const candidate of this.chunks_.keys() ) {
-
-          if ( this.chunks_.size <= this.maxResidentChunks_ ) {
-            break
-          }
-
-          if ( ( this.ensurePins_.get( candidate ) ?? 0 ) > 0 ) {
-            continue
-          }
-
-          this.chunks_.delete( candidate )
-          this.rememberEvicted_( candidate )
-        }
-      }
+      this.trimToCap()
 
     } finally {
 

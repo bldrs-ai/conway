@@ -1576,6 +1576,17 @@ implements Iterable<BaseEntity>, Model {
 
 
   /**
+   * Evict unpinned source windows until residency is back within the
+   * window cap. Eviction otherwise runs only inside an ensure, so a walk
+   * that pinned more windows than the cap and has just unpinned them
+   * stays over budget until the next ensure. No-op while resident.
+   */
+  public trimSourceResidency(): void {
+    this.bufferProvider_.trimToCap?.()
+  }
+
+
+  /**
    * Unpin every local ID in `localIDs` (best-effort; missing IDs are
    * ignored). Use after {@link ensureResidentClosureByLocalID}, which
    * pins as it walks.
@@ -1694,12 +1705,13 @@ implements Iterable<BaseEntity>, Model {
    * IfcRelDefinesByProperties records hold 1.2 MB between them but sit in
    * every one of its 215 4 MiB windows, so {@link visitResidentInFileOrder}
    * over them reads the whole file, where these spans read ~20 MB
-   * (conway#755). Records closer
-   * than `maxGapBytes` share one read, up to `maxSpanBytes` a span (a record
-   * longer than that is a span of its own); up to {@link SPAN_READS_IN_FLIGHT}
-   * reads are in flight at once. Nothing is paged in or cached and no
-   * descriptor captures a view, so the sweep leaves the window as it found
-   * it.
+   * (conway#755).
+   *
+   * Records closer than `maxGapBytes` share one read, up to `maxSpanBytes`
+   * a span (a record longer than that is a span of its own), and up to
+   * {@link SPAN_READS_IN_FLIGHT} reads are in flight at once. Nothing is
+   * paged in or cached and no descriptor captures a view, so the sweep
+   * leaves the window as it found it (StepBufferProvider.readSpan).
    *
    * Complex (multi-mapped) records keep their fields in their mapped
    * records' ranges, so they are not visited; their local IDs are returned

@@ -2,24 +2,30 @@
 //
 // getPropertySets used to (a) read every IfcRelDefinesByProperties record on
 // every call, paging each in turn, to find the few naming the element — on a
-// windowed 860 MB model every read, first or later, paged the whole file; and (b) page in only each set's own record before
-// a recursive (flattened) read, so a set whose properties sat in an evicted
-// window threw StepBufferNotResidentError. These pin the fix: an element ->
-// relating-IDs index built in one file-order pass on first use, and recursive
-// reads that page in the set's whole #ref closure first.
+// windowed 860 MB model every read, first or later, paged the whole file;
+// and (b) page in only each set's own record before a recursive (flattened)
+// read, so a set whose properties sat in an evicted window threw
+// StepBufferNotResidentError. These pin the fix: an element -> relating-IDs
+// index built on first use from record spans read in file order, and
+// recursive reads that page in the record's whole #ref closure first.
 //
-// data/windowed_property_sets.ifc puts the properties well ahead of the sets
-// that reference them (some after, as forward references), nests a complex
-// property two hops deep, and pads the relationship records apart so they
-// span many more 512 B windows than the three kept resident here.
+// data/windowed_property_sets.ifc (written by
+// scripts/gen_windowed_property_sets_fixture.py) puts the properties well
+// ahead of the sets that reference them (some after, as forward
+// references), nests a complex property two hops deep, and pads the
+// relationship records apart so they span many more 512 B windows than the
+// three kept resident here.
 import * as fs from 'fs'
 
 import { beforeAll, describe, expect, test } from '@jest/globals'
 
-import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
-import { IFCWALL } from './ifc2x4'
+import {
+  InMemoryStepByteStore, StepBufferNotResidentError, WindowedStepBufferProvider,
+} from '../../step/step_buffer_provider'
+import { IFCRELDEFINESBYPROPERTIES, IFCWALL } from './ifc2x4'
 import { IfcAPI } from './ifc_api'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
+import { IfcProperties } from './ifc_properties'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
@@ -27,7 +33,7 @@ const FIXTURE = 'data/windowed_property_sets.ifc'
 const CHUNK_BYTES = 512
 const MAX_RESIDENT_CHUNKS = 3
 
-// Express IDs in the fixture (see its generator's layout).
+// Express IDs in the fixture.
 const WALL_0 = 207
 const WALL_1 = 208
 const WALL_7 = 220
@@ -79,14 +85,15 @@ function allExpressIDs(): number[] {
   return [...ids, 0x7fffffff]
 }
 
-type Reads = { psets?: any[], types?: any[], materials?: any[] }
+type Reads = { item?: any, psets?: any[], types?: any[], materials?: any[] }
 
-/** All three relationship kinds' reads for every ID, in ID order. */
+/** The record itself and all three relationship kinds' reads, for every ID. */
 async function readAll(modelID: number, recursive: boolean): Promise<Map<number, Reads>> {
   const reads = new Map<number, Reads>()
 
   for (const id of allExpressIDs()) {
     reads.set(id, {
+      item: await api.properties.getItemProperties(modelID, id, recursive),
       psets: await api.properties.getPropertySets(modelID, id, recursive),
       types: await api.properties.getTypeProperties(modelID, id, recursive),
       materials: await api.properties.getMaterialsProperties(modelID, id, recursive),
@@ -129,7 +136,9 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     const modelID = spilledModel(new InMemoryStepByteStore(buffer))
 
     // Seeding only each set's own record threw StepBufferNotResidentError
-    // here: on the first nested property in an evicted window.
+    // here: on the first nested property in an evicted window. The `item`
+    // reads cover getItemProperties(id, true) the same way, the sets and
+    // complex properties being the IDs whose flatten reaches other windows.
     expect(await readAll(modelID, true)).toEqual(expected)
     expect(await readAll(modelID, false)).toEqual(expectedFlat)
 
@@ -225,6 +234,9 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
     // Every record a flatten of the sets touched is unpinned, so the LRU
     // can evict its window again, and holds no captured window view.
     expect(model.bufferProvider_.ensurePins_.size).toBe(0)
+    // The closure pinned more windows than the cap; residency is trimmed
+    // back as the read returns, not at the next ensure.
+    expect(model.bufferProvider_.residentChunkCount).toBeLessThanOrEqual(MAX_RESIDENT_CHUNKS)
     for (let localID = 0; localID < model.count_; localID++) {
       const item = model.complexEntries_?.get(localID) ?? model.descriptorCache_[localID]
 
@@ -233,4 +245,102 @@ describe('property reads on a spilled source (conway#755, conway#761)', () => {
 
     api.CloseModel(modelID)
   }, 120000)
+
+  test('visitLineDataInFileOrder gives what getLine gives, for every record', async () => {
+    const resident = api.OpenModel(buffer, SETTINGS)
+    const residentProxy = api.getPassthrough(resident) as IfcApiProxyIfc
+    const modelID = spilledModel(new InMemoryStepByteStore(buffer))
+    const passthrough = api.getPassthrough(modelID) as IfcApiProxyIfc
+    const ids = allExpressIDs()
+    const visited = new Map<number, any>()
+    let visits = 0
+
+    await passthrough.visitLineDataInFileOrder(ids, (expressID, line) => {
+      visits++
+      visited.set(expressID, line)
+    })
+
+    // Each ID once, the unknown one too (through the getLine fallback).
+    expect(visits).toBe(ids.length)
+    expect(visited.has(0x7fffffff)).toBe(true)
+    for (const id of ids) {
+      expect(visited.get(id)).toEqual(residentProxy.getLine(id, false))
+    }
+
+    api.CloseModel(resident)
+    api.CloseModel(modelID)
+  }, 120000)
+
+  test('readSpan reads without paging, keeps LRU order, and shares an in-flight load', async () => {
+    const { store, log } = countingStore(buffer)
+    const provider = new WindowedStepBufferProvider(store, CHUNK_BYTES, MAX_RESIDENT_CHUNKS)
+    const chunk = (i: number) => i * CHUNK_BYTES
+
+    for (const i of [0, 1, 2]) {
+      await provider.ensureResident(chunk(i), 1)
+    }
+    log.length = 0
+
+    // A resident hit is served from the chunk, and does not make chunk 0
+    // the most recently used: the next load still evicts it first.
+    expect(Array.from(await provider.readSpan(chunk(0) + 10, 20)))
+        .toEqual(Array.from(buffer.subarray(chunk(0) + 10, chunk(0) + 30)))
+    // Straddling two resident chunks: a copy of exactly the range.
+    expect(Array.from(await provider.readSpan(chunk(1) + 500, 30)))
+        .toEqual(Array.from(buffer.subarray(chunk(1) + 500, chunk(1) + 530)))
+    expect(log).toHaveLength(0)
+    await provider.ensureResident(chunk(3), 1)
+    expect(() => provider.acquire(chunk(0), 1)).toThrow(StepBufferNotResidentError)
+    expect(() => provider.acquire(chunk(1), 1)).not.toThrow()
+
+    // A miss reads just the range from the store and pages nothing in.
+    log.length = 0
+    expect(Array.from(await provider.readSpan(chunk(0) + 3, 7)))
+        .toEqual(Array.from(buffer.subarray(chunk(0) + 3, chunk(0) + 10)))
+    expect(log).toEqual([{ offset: chunk(0) + 3, length: 7 }])
+    expect(() => provider.acquire(chunk(0), 1)).toThrow(StepBufferNotResidentError)
+
+    // A chunk still loading is awaited, not read a second time.
+    log.length = 0
+    const loading = provider.ensureResident(chunk(5), 1)
+    const span = await provider.readSpan(chunk(5) + 1, 4)
+    await loading
+    expect(Array.from(span)).toEqual(Array.from(buffer.subarray(chunk(5) + 1, chunk(5) + 5)))
+    expect(log).toEqual([{ offset: chunk(5), length: CHUNK_BYTES }])
+  }, 120000)
+
+  test('relating IDs keep type-index order across relationships, and their own order within one', async () => {
+    // A stub API whose relationships visit in a different order from the
+    // type index, as a file-order pass over a type index that is not in
+    // address order would, and whose relationships each carry several
+    // relating IDs (an IfcPropertySetDefinitionSet). The fixture has
+    // neither: its type index is in file order, and the parser keeps only
+    // the first member of a definition set.
+    const typeIndex = [30, 10, 20]
+    const rels: { [id: number]: any } = {
+      10: { RelatedObjects: [{ value: 1 }, { value: 2 }], RelatingPropertyDefinition: [{ value: 101 }, { value: 102 }] },
+      20: { RelatedObjects: [{ value: 1 }, { value: 1 }], RelatingPropertyDefinition: { value: 201 } },
+      30: { RelatedObjects: { value: 1 }, RelatingPropertyDefinition: [{ value: 302 }, { value: 301 }] },
+    }
+    const stub = {
+      getLineIDsWithType: (type: number) => {
+        expect(type).toBe(IFCRELDEFINESBYPROPERTIES)
+        return { size: () => typeIndex.length, get: (i: number) => typeIndex[i] }
+      },
+      visitLineDataInFileOrder: async (ids: Iterable<number>, visit: (id: number, line: any) => void) => {
+        for (const id of [...ids].sort((a, b) => a - b)) {
+          visit(id, rels[id])
+        }
+      },
+      getLineResident: async (id: number) => ({ id }),
+    }
+    const properties = new IfcProperties(stub as unknown as IfcApiProxyIfc)
+    const ids = async (element: number) =>
+      (await properties.getPropertySets(element)).map((line: any) => line.id)
+
+    // 30, then 10, then 20 (listed twice, counted once).
+    expect(await ids(1)).toEqual([302, 301, 101, 102, 201])
+    expect(await ids(2)).toEqual([101, 102])
+    expect(await ids(3)).toEqual([])
+  })
 })
