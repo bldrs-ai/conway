@@ -1181,16 +1181,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const model = IfcApiProxyIfc.ifc4x3CompatOrRefuseSync( modelID, () =>
       parser.parseDataToModelForHeader(stepHeader, bufferInput, parseTick)[1] )
 
-    // The digest of the bytes this index was built from, for the index
-    // sidecar export (conway#756). The object parse reads one resident
-    // buffer with no windowed source to fold into, so it is a pass of its
-    // own here — taken now, while `data` is still the bytes that were
-    // parsed, not at export time.
-    if ( model !== void 0 ) {
+    const parseEndTime = Date.now()
+
+    // RECORD_SOURCE_HASH: the digest of the bytes this index was built
+    // from, for the index sidecar export (conway#756). The object parse
+    // reads one resident buffer with no windowed source to fold into, so it
+    // is a pass of its own — taken now, while `data` is still the bytes that
+    // were parsed, and after `parseEndTime` so the reported parse time is
+    // the parse's. Skipped for the IFC4X3 compat route, which never exports.
+    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true && !model.hasFieldMasks ) {
       model.indexedSourceHash = hashSource( data )
     }
-
-    const parseEndTime = Date.now()
 
     tracker?.endPhase(data.length)
 
@@ -1294,13 +1295,13 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const model = await IfcApiProxyIfc.ifc4x3CompatOrRefuse( modelID, async () =>
       ( await parser.parseDataToModelForHeaderAsync(stepHeader, bufferInput, parseTick) )[1] )
 
+    const parseEndTime = Date.now()
+
     // See parseAndExtract: the parse-time digest for the sidecar export,
     // here cooperative so the open keeps yielding (conway#756).
-    if ( model !== void 0 ) {
+    if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true && !model.hasFieldMasks ) {
       model.indexedSourceHash = await hashSourceAsync( new BufferByteSource( data ) )
     }
-
-    const parseEndTime = Date.now()
 
     tracker?.endPhase(data.length)
 
@@ -1441,14 +1442,15 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let result: ParseResult
     let compatIndex: Ifc4x3CompatIndex | undefined
 
-    // Folds the source digest into the parse's own pass, for the index
-    // sidecar export (conway#756; StepModelBase.indexedSourceHash).
-    const hashingSource = new HashingByteSource( new BufferByteSource(data) )
+    // RECORD_SOURCE_HASH folds the source digest into the parse's own pass,
+    // for the index sidecar export (conway#756; StepModelBase.indexedSourceHash).
+    const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
+      new HashingByteSource( new BufferByteSource(data) ) : void 0
 
     try {
       try {
         ( { result } = await buildIndexStreamingAsync(
-            hashingSource, parser, STREAMED_PARSE_POOL_BYTES,
+            hashingSource ?? new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
             void 0, sink, parseProgress, void 0,
             // codex review of #713 (P1/round 4): gate through the builder's
             // own seam — see streaming_index_builder.ts's doc-comment —
@@ -1494,7 +1496,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( compatIndex !== void 0 ) {
       model.setFieldMasks( compatIndex.fieldMasks )
     } else {
-      model.indexedSourceHash = await hashingSource.finishAsync()
+      model.indexedSourceHash = await hashingSource?.finishAsync()
     }
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -1982,15 +1984,16 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     let stepHeader
     let compatIndex: Ifc4x3CompatIndex | undefined
 
-    // Folds the source digest into the parse's own pass, for the index
-    // sidecar export (conway#756; StepModelBase.indexedSourceHash) — zero
-    // extra I/O on the path whose source is never materialised.
-    const hashingSource = new HashingByteSource( new StoreByteSource( store ) )
+    // RECORD_SOURCE_HASH folds the source digest into the parse's own pass,
+    // for the index sidecar export (conway#756; StepModelBase.indexedSourceHash)
+    // — zero extra I/O on the path whose source is never materialised.
+    const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
+      new HashingByteSource( new StoreByteSource( store ) ) : void 0
 
     try {
       try {
         ( { result, header: stepHeader } = await buildIndexStreamingAsync(
-            hashingSource,
+            hashingSource ?? new StoreByteSource( store ),
             parser,
             STORE_PARSE_POOL_BYTES,
             void 0,
@@ -2056,7 +2059,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( compatIndex !== void 0 ) {
       model.setFieldMasks( compatIndex.fieldMasks )
     } else {
-      model.indexedSourceHash = await hashingSource.finishAsync()
+      model.indexedSourceHash = await hashingSource?.finishAsync()
     }
 
     statistics?.setParseTime(parseEndTime - parseStartTime)

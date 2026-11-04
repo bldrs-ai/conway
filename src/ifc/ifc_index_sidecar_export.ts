@@ -57,6 +57,8 @@ export interface IfcIndexSidecarExportOptions {
  *  - **the hash** is the one the OPEN recorded
  *    (`StepModelBase.indexedSourceHash`): folded into the streaming parse's
  *    own pass, or taken over the resident buffer the classic parse read.
+ *    Recording it is opt-in (`RECORD_SOURCE_HASH` / `recordSourceHash`):
+ *    it costs ~12 % of the index build, and most opens never export.
  *
  * The hash is deliberately NOT re-derived from the source at export time
  * (codex review of conway#760). The index describes the bytes that were
@@ -96,9 +98,10 @@ export async function exportIfcIndexSidecar(
   if ( sourceHash === void 0 ) {
     throw new IndexSidecarUnsupportedError(
         'This model\'s open recorded no hash of the bytes its index was ' +
-        'built from (StepModelBase.indexedSourceHash), and none was ' +
-        'supplied; hashing the source now could bind the index to bytes it ' +
-        'does not describe' )
+        'built from (StepModelBase.indexedSourceHash) — open it with ' +
+        'RECORD_SOURCE_HASH (compat) or recordSourceHash (engine) — and ' +
+        'none was supplied; hashing the source now could bind the index to ' +
+        'bytes it does not describe' )
   }
 
   const serializeStart = Date.now()

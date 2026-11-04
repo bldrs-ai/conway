@@ -101,7 +101,10 @@ implements Iterable<BaseEntity>, Model {
   // so serialising the live map after a read writes a reordered mapping and
   // the export stops being byte-identical to a fresh parse's (codex review
   // of conway#760). Complex entries are rare (0 on every corpus model), so
-  // a copy costs nothing measurable.
+  // a copy costs nothing measurable. `cloneIndexEntry` keeps
+  // `inlineEntities` by reference; that is safe because nothing writes an
+  // entry's `inlineEntities` after the parse, and the sidecar writer never
+  // reads the field.
   private readonly complexIndexEntries_?:
     Map< number, StepIndexEntry< EntityTypeIDs > >
 
@@ -111,8 +114,9 @@ implements Iterable<BaseEntity>, Model {
    * own pass on the streaming opens, taken over the resident buffer on the
    * classic ones, and adopted from the sidecar on an index-first open (the
    * index there IS the sidecar's, so its recorded hash is the identity of
-   * the bytes the index describes). Undefined for a model built some other
-   * way.
+   * the bytes the index describes). Recording is opt-in on the parsing
+   * opens (`RECORD_SOURCE_HASH` / `recordSourceHash`); undefined when it
+   * was off, or for a model built some other way.
    *
    * This, not a hash of the source at export time, is what an exported
    * index sidecar records (conway#756, codex review of conway#760): the

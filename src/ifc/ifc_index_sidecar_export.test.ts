@@ -26,6 +26,9 @@ import {
   openStreamedIfcModelFromStore,
 } from './ifc_stream_open'
 
+/** Opt in to the parse-time hash, as an exporting embedder does. */
+const RECORD = { recordSourceHash: true }
+
 let bytes: Uint8Array
 
 beforeAll( () => {
@@ -60,7 +63,7 @@ describe( 'exportIfcIndexSidecar', () => {
 
   test( 'a windowed model exports the sidecar its parse would have', async () => {
 
-    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ), RECORD )
 
     expect( opened.result ).toBe( ParseResult.COMPLETE )
 
@@ -76,7 +79,7 @@ describe( 'exportIfcIndexSidecar', () => {
   test( 'the hash is the parse-time one, not the source as it is at export', async () => {
 
     const buffer = bytes.slice()
-    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( buffer ) )
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( buffer ), RECORD )
 
     expect( opened.model!.indexedSourceHash ).toBe( hashSource( bytes ) )
 
@@ -96,7 +99,8 @@ describe( 'exportIfcIndexSidecar', () => {
   test( 'the synchronous streaming open records the hash too', () => {
 
     const opened = openStreamedIfcModel(
-        new BufferByteSource( bytes ), new InMemoryStepByteStore( bytes ), { pool: 4096 } )
+        new BufferByteSource( bytes ), new InMemoryStepByteStore( bytes ),
+        { pool: 4096, recordSourceHash: true } )
 
     expect( opened.result ).toBe( ParseResult.COMPLETE )
     expect( opened.model!.indexedSourceHash ).toBe( hashSource( bytes ) )
@@ -104,7 +108,7 @@ describe( 'exportIfcIndexSidecar', () => {
 
   test( 'an index-first open adopts the sidecar\'s hash, so a re-export is identical', async () => {
 
-    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ), RECORD )
     const sidecar = ( await exportIfcIndexSidecar( opened.model! ) ).sidecar
     const reopened = await openIfcModelFromIndex( new InMemoryStepByteStore( bytes ), sidecar )
 
@@ -114,7 +118,7 @@ describe( 'exportIfcIndexSidecar', () => {
 
   test( 'a model with no recorded hash needs one supplied, and records it', async () => {
 
-    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ), RECORD )
     const model = opened.model!
 
     model.indexedSourceHash = void 0
@@ -142,8 +146,25 @@ describe( 'exportIfcIndexSidecar', () => {
     const model = ifc4x3CompatModel( source, index )
 
     expect( model.hasFieldMasks ).toBe( true )
+
+    // Give it a hash, so the refusal can only come from the field-mask
+    // guard and not from the no-hash one (conway#760 round 2, P3-2).
+    model.indexedSourceHash = hashSource( source )
+
     await expect( exportIfcIndexSidecar( model ) )
-        .rejects.toBeInstanceOf( IndexSidecarUnsupportedError )
+        .rejects.toThrow( /field masks/ )
+  } )
+
+  test( 'records no hash unless asked, and then refuses to export', async () => {
+
+    const sync = openStreamedIfcModel(
+        new BufferByteSource( bytes ), new InMemoryStepByteStore( bytes ) )
+    const async = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
+
+    expect( sync.model!.indexedSourceHash ).toBeUndefined()
+    expect( async.model!.indexedSourceHash ).toBeUndefined()
+    await expect( exportIfcIndexSidecar( async.model! ) )
+        .rejects.toThrow( /recordSourceHash/ )
   } )
 } )
 
@@ -153,7 +174,7 @@ describe( 'openIfcModelFromIndex staleness is typed', () => {
   let sidecar: Uint8Array
 
   beforeAll( async () => {
-    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ) )
+    const opened = await openStreamedIfcModelFromStore( new InMemoryStepByteStore( bytes ), RECORD )
 
     sidecar = ( await exportIfcIndexSidecar( opened.model! ) ).sidecar
   } )

@@ -35,7 +35,11 @@ import { ParseResult } from '../../step/parsing/step_parser'
 import { StepIndexColumns } from '../../step/parsing/columnar_index'
 import EntityTypesIfc from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 
-const SETTINGS = { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true }
+// RECORD_SOURCE_HASH is opt-in (conway#760 round 2): every open here that is
+// meant to export sets it, as Share's engine worker does for models it may
+// evict. `NO_RECORD` is the default an embedder gets without it.
+const NO_RECORD = { COORDINATE_TO_ORIGIN: false, USE_FAST_BOOLS: true }
+const SETTINGS = { ...NO_RECORD, RECORD_SOURCE_HASH: true }
 const DEFER = { ...SETTINGS, DEFER_GEOMETRY: true, STREAMING_CONSUMER: true }
 const VERIFY = { ...DEFER, VERIFY_INDEX_SOURCE_HASH: true }
 
@@ -639,7 +643,45 @@ describe( 'a stale sidecar fails the open as INDEX_STALE (conway#756)', () => {
 
     expect( await api.OpenModelFromIndex(
         new InMemoryStepByteStore( source ), broken, DEFER ) ).toBe( -1 )
-    expect( api.getStatistics( attemptedID ).getLoadStatus() ).not.toBe( 'INDEX_STALE' )
+    expect( api.getStatistics( attemptedID ).getLoadStatus() ).toBe( 'OPEN_FAIL' )
+  } )
+
+  test( '...nor on the not-IFC branch, where its identity cannot be read', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const attemptedID = api.globalModelIDCounter
+    const broken = sidecar.slice()
+
+    new DataView( broken.buffer ).setUint32( 0, 0xDEADBEEF, true ) // bad magic
+
+    expect( await api.OpenModelFromIndex(
+        new InMemoryStepByteStore( source.subarray( 0, 64 ) ), broken, DEFER ) ).toBe( -1 )
+
+    // Refused for its format, with no status — never INDEX_STALE.
+    expect( api.getStatistics( attemptedID ).getLoadStatus() ).toBeUndefined()
+  } )
+
+  // conway#760 round 2 (P3-3): the identity is checked off the header before
+  // the body is decoded, so a valid header over a corrupt body against the
+  // wrong store is stale on the IFC branch exactly as on the not-IFC one —
+  // not a decode failure.
+  test( 'a stale sidecar with a corrupt body is stale, not a decode failure', async () => {
+
+    const corrupt = sidecar.slice( 0, 48 ) // header intact, columns gone
+
+    const ifcBranch = await attempt( source.subarray( 0, source.length - 1 ), DEFER )
+
+    expect( ifcBranch.status ).toBe( 'INDEX_STALE' )
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const attemptedID = api.globalModelIDCounter
+
+    expect( await api.OpenModelFromIndex(
+        new InMemoryStepByteStore( source.subarray( 0, source.length - 1 ) ),
+        corrupt, DEFER ) ).toBe( -1 )
+    expect( api.getStatistics( attemptedID ).getLoadStatus() ).toBe( 'INDEX_STALE' )
   } )
 } )
 
@@ -753,17 +795,67 @@ describe( 'the exported hash is the hash of the bytes that were parsed (conway#7
 
 describe( 'what ExportIndexSidecar refuses (conway#756)', () => {
 
+  test( 'a model opened without RECORD_SOURCE_HASH', async () => {
+
+    const warnings: string[] = []
+
+    jest.spyOn( console, 'warn' ).mockImplementation( ( message ) => {
+      warnings.push( String( message ) )
+    } )
+
+    const source = fixture( 'index.ifc' )
+    const opens = [
+      api.OpenModel( source, NO_RECORD ),
+      await api.OpenModelAsync( source, NO_RECORD ),
+      await api.OpenModelStreamed( source, { ...NO_RECORD, DEFER_GEOMETRY: true } ),
+      await api.OpenModelStream(
+          new InMemoryStepByteStore( source ), { ...NO_RECORD, DEFER_GEOMETRY: true } ),
+    ]
+
+    for ( const modelID of opens ) {
+
+      const model = ( api.getPassthrough( modelID ) as unknown as IfcApiProxyIfc ).model[ 0 ]
+
+      expect( model.indexedSourceHash ).toBeUndefined()
+      expect( await api.ExportIndexSidecar( modelID ) ).toBeUndefined()
+
+      api.CloseModel( modelID )
+    }
+
+    expect( warnings.join( '\n' ) ).toMatch( /RECORD_SOURCE_HASH/ )
+  } )
+
   test( 'an IFC4X3 model on the compat route', async () => {
 
-    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+    const warnings: string[] = []
+
+    jest.spyOn( console, 'warn' ).mockImplementation( ( message ) => {
+      warnings.push( String( message ) )
+    } )
 
     const source = fixture( 'ifc4x3_road_entities.ifc' )
-    const modelID = await api.OpenModelStreamed( source, DEFER )
 
-    expect( modelID ).toBeGreaterThanOrEqual( 0 )
-    expect( await api.ExportIndexSidecar( modelID ) ).toBeUndefined()
+    for ( const modelID of [
+      api.OpenModel( source, SETTINGS ),
+      await api.OpenModelAsync( source, SETTINGS ),
+      await api.OpenModelStreamed( source, DEFER ),
+    ] ) {
 
-    api.CloseModel( modelID )
+      expect( modelID ).toBeGreaterThanOrEqual( 0 )
+
+      // Give the model a hash so the refusal can only come from the proxy's
+      // IFC4X3 header guard, which runs first — not from the no-hash guard
+      // (conway#760 round 2, P3-2). The engine test pins the field-mask one.
+      const model = ( api.getPassthrough( modelID ) as unknown as IfcApiProxyIfc ).model[ 0 ]
+
+      model.indexedSourceHash = hashSource( source )
+      warnings.length = 0
+
+      expect( await api.ExportIndexSidecar( modelID ) ).toBeUndefined()
+      expect( warnings.join( '\n' ) ).toMatch( /IFC4X3 models cannot be reopened/ )
+
+      api.CloseModel( modelID )
+    }
   } )
 
   test( 'a STEP model', async () => {

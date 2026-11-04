@@ -3,6 +3,7 @@ import { ColumnarIndexSink, StepIndexColumns } from '../step/parsing/columnar_in
 import {
   deserializeIndexSidecarToColumns,
   IndexSidecarStaleError,
+  readSidecarSourceIdentity,
   SidecarSourceIdentity,
   sidecarMatchesSource,
   sidecarMatchesSourceLength,
@@ -63,6 +64,14 @@ export interface StreamedIfcOpenOptions {
    * open returns, which is too late for anything mid-parse.
    */
   indexSink?: ColumnarIndexSink<EntityTypesIfc>
+
+  /**
+   * Fold the FNV-1a of the parsed bytes into the parse and record it on the
+   * model (`StepModelBase.indexedSourceHash`), so `exportIfcIndexSidecar`
+   * can write a sidecar for it (conway#756). Off by default: ~12 % of the
+   * index build, for a feature most opens never use.
+   */
+  recordSourceHash?: boolean
 }
 
 
@@ -225,12 +234,13 @@ export function openStreamedIfcModel(
   // every 4X3 file. Use the loader, the compat surface or
   // `IfcStepParser.parseStreamToModel` for those.
   //
-  // The source is read through a hasher so the model records the digest of
-  // exactly the bytes its index came from (conway#756; see
-  // `StepModelBase.indexedSourceHash`).
-  const hashing = new HashingSyncByteSource( source )
+  // Under `recordSourceHash` the source is read through a hasher so the
+  // model records the digest of exactly the bytes its index came from
+  // (conway#756; see `StepModelBase.indexedSourceHash`).
+  const hashing = options?.recordSourceHash === true ?
+    new HashingSyncByteSource( source ) : void 0
   const { header, columns, result, stats } = buildColumnarIndexStreaming(
-      hashing,
+      hashing ?? source,
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
       options?.onRecordIndexed,
@@ -246,7 +256,7 @@ export function openStreamedIfcModel(
 
   const model = new IfcStepModel( void 0, columns, provider )
 
-  model.indexedSourceHash = hashing.finish()
+  model.indexedSourceHash = hashing?.finish()
 
   return {
     model,
@@ -322,11 +332,13 @@ export async function openStreamedIfcModelAsync(
   // (potentially long-running, cooperative) build below — codex review of
   // #713, P1/P2/round 4.
   //
-  // Read through a hasher, as in the synchronous open: the model records the
-  // digest of exactly the bytes its index came from (conway#756).
-  const hashing = new HashingByteSource( source )
+  // Under `recordSourceHash`, read through a hasher as in the synchronous
+  // open: the model records the digest of exactly the bytes its index came
+  // from (conway#756).
+  const hashing = options?.recordSourceHash === true ?
+    new HashingByteSource( source ) : void 0
   const { header, columns, result, stats } = await buildColumnarIndexStreamingAsync(
-      hashing,
+      hashing ?? source,
       IfcStepParser.Instance,
       options?.pool ?? DEFAULT_STREAM_POOL_BYTES,
       options?.onRecordIndexed,
@@ -344,7 +356,7 @@ export async function openStreamedIfcModelAsync(
 
   const model = new IfcStepModel( void 0, columns, provider )
 
-  model.indexedSourceHash = await hashing.finishAsync()
+  model.indexedSourceHash = await hashing?.finishAsync()
 
   return {
     model,
@@ -480,9 +492,15 @@ export async function openIfcModelFromIndex(
     sidecar: Uint8Array,
     options?: IndexFirstIfcOpenOptions ): Promise<StreamedIfcOpen> {
 
-  const restored = deserializeIndexSidecarToColumns<EntityTypesIfc>( sidecar )
+  // Identity first, off the header alone (conway#760 round 2): a stale
+  // sidecar is refused as stale before paying for the column copy (~0.2 s
+  // and 151 MB on a 9 M-row index), and a valid header over a corrupt body
+  // against the wrong store reports INDEX_STALE here exactly as it does on
+  // the compat factory's not-IFC branch, rather than a decode failure.
+  await assertSidecarDescribesStore(
+      readSidecarSourceIdentity( sidecar ), store, options?.verifySourceHash === true )
 
-  await assertSidecarDescribesStore( restored, store, options?.verifySourceHash === true )
+  const restored = deserializeIndexSidecarToColumns<EntityTypesIfc>( sidecar )
 
   const { header, result: headerResult, prefixLength } =
     await parseIfcHeaderFromStore( store )

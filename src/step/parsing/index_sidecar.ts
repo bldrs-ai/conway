@@ -124,7 +124,8 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  *    hashed; the only divergence is a concurrent rewrite, which would
  *    equally corrupt the per-worker parse it replaces.
  *
- *    Every streaming IFC open now does that fold, recording the digest on
+ *    Every streaming IFC open does that fold when asked to
+ *    (`RECORD_SOURCE_HASH` / `recordSourceHash`), recording the digest on
  *    the model (`StepModelBase.indexedSourceHash`, conway#756), so the
  *    coordinator half of this gate has its hash in hand when the parse
  *    ends.

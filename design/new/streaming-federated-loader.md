@@ -1173,9 +1173,17 @@ Deliberately small first step; each has a measurable exit.
     those offsets to a resident buffer mutated after open, or to a
     same-length store swapped in by `SpillModelSource`, and a verified
     reopen would then accept them (codex review of conway#760). So the
-    export reads no source at all, and the fold costs the parse ~0.27 s
-    per 200 MiB. The fold is `Math.imul`, because `indexing/hashing.ts`'s
-    shift-and-add `fnv1a` measured ~6× slower in Node 22. A mismatch at open is an
+    export reads no source at all.
+
+    Recording is **opt-in**: `RECORD_SOURCE_HASH` on the compat opens,
+    `recordSourceHash` on the engine ones. The fold measured ~+1.3 s
+    (~12 %) on the bare index build of a 902 MB model. That is too much
+    to charge every open for a feature most never use. A model opened
+    without it cannot be exported unless the caller supplies a hash.
+    The fold is `Math.imul`, because `indexing/hashing.ts`'s shift-and-add
+    `fnv1a` measured ~6× slower in Node 22. A faster digest is a
+    format-version question, tracked with the sampled digest in
+    conway#758. A mismatch at open is an
     `IndexSidecarStaleError` (`reason: 'length' | 'hash'`), which the
     compat surface records as load status `INDEX_STALE`. That status is
     the "parse instead" signal. The compat open checks the sidecar

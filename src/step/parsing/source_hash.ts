@@ -65,8 +65,9 @@ function foldFnv1a( data: Uint8Array, start: number, end: number, hash: number )
  * by `source_hash.test.ts`, over the real window shapes the streaming
  * builder produces).
  *
- * **Every streaming IFC open now wraps its parse source in one of these**
- * (or {@link HashingSyncByteSource}) and records the digest on the model as
+ * **Every streaming IFC open wraps its parse source in one of these** (or
+ * {@link HashingSyncByteSource}) when asked to (`RECORD_SOURCE_HASH` /
+ * `recordSourceHash`, opt-in) and records the digest on the model as
  * `StepModelBase.indexedSourceHash` (conway#756). That is what binds an
  * exported sidecar's hash to the bytes its index was built from, rather
  * than to whatever the source holds when the export runs — a resident
@@ -206,6 +207,13 @@ export class HashingSyncByteSource implements ByteSource {
    */
   public get byteLength(): number {
     return this.inner_.byteLength
+  }
+
+  /**
+   * @return {number} Bytes hashed so far, counted from offset 0.
+   */
+  public get covered(): number {
+    return this.covered_
   }
 
   /**
