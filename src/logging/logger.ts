@@ -125,8 +125,11 @@ export default class Logger {
   public static initializeWasmCallbacks() {
     const environment = Environment.environmentType
 
-    if (environment === EnvironmentType.BROWSER) {
-      const globalScope = window;
+    if (environment === EnvironmentType.BROWSER ||
+        environment === EnvironmentType.WORKER) {
+      // `globalThis`, not `window`: a worker has no `window`, and the wasm
+      // glue looks the callbacks up on `globalThis` first (conway#540).
+      const globalScope = globalThis;
       (globalScope as any).logInfo = Logger.info;
       (globalScope as any).logWarning = Logger.warning;
       (globalScope as any).logError = Logger.error

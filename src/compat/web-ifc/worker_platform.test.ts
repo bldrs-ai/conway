@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals'
 import { isWebPlatform, pThreadsAllowed } from '../../../dependencies/conway-geom'
+import Environment, { EnvironmentType } from '../../utilities/environment'
+import Logger from '../../logging/logger'
+import Memory from '../../memory/memory'
 
 /**
  * conway in a Web Worker (bldrs-ai/conway#540).
@@ -82,5 +85,88 @@ describe('isWebPlatform / pThreadsAllowed in a worker', () => {
 
     g.crossOriginIsolated = true
     expect(pThreadsAllowed()).toBe(true)
+  })
+})
+
+
+/**
+ * conway's own environment probe in a worker (codex on #759). Before the
+ * fix a worker classified as UNKNOWN, so `Logger.initializeWasmCallbacks()`
+ * bound no `logInfo` / `logWarning` / `logError`, and the wasm glue (which
+ * looks them up on `globalThis` and skips a missing one) dropped every
+ * native diagnostic: the load report and the defect tally never saw them.
+ */
+describe('Environment / Logger wasm callbacks in a worker', () => {
+  const g = globalThis as Record<string, unknown>
+  const callbackNames = ['logInfo', 'logWarning', 'logError'] as const
+  let saved: Record<string, unknown>
+  let savedType: EnvironmentType
+  let savedVersions: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    saved = Object.fromEntries(callbackNames.map((name) => [name, g[name]]))
+    savedType = Environment.environmentType
+    // A worker has no Node `process.versions.node`. Hide it, so that with
+    // the fix reverted the probe falls through to UNKNOWN as it does in a
+    // real worker, instead of answering NODE and binding the callbacks on
+    // Node's `global` (which in Jest is globalThis, and would mask the bug).
+    savedVersions = Object.getOwnPropertyDescriptor(process, 'versions')
+    Object.defineProperty(process, 'versions', {value: {}, configurable: true})
+    for (const name of callbackNames) {
+      delete g[name]
+    }
+    function WorkerGlobalScope(): void {}
+    WorkerGlobalScope.prototype = Object.getPrototypeOf(globalThis)
+    g.WorkerGlobalScope = WorkerGlobalScope
+  })
+
+  afterEach(() => {
+    delete g.WorkerGlobalScope
+    if (savedVersions) {
+      Object.defineProperty(process, 'versions', savedVersions)
+    }
+    for (const name of callbackNames) {
+      if (saved[name] === undefined) {
+        delete g[name]
+      } else {
+        g[name] = saved[name]
+      }
+    }
+    Environment.environmentType = savedType
+  })
+
+  test('a WorkerGlobalScope classifies as WORKER, ahead of the Node probe', () => {
+    Environment.checkEnvironment()
+    expect(Environment.environmentType).toBe(EnvironmentType.WORKER)
+  })
+
+  test('each native diagnostic callback reaches the Logger through globalThis', () => {
+    Environment.checkEnvironment()
+    Logger.initializeWasmCallbacks()
+    const seen: Array<[string, string]> = []
+    const proxy = {log: (entry: {level: string, message: string}) => seen.push([entry.level, entry.message])}
+    Logger.addProxy(proxy)
+    try {
+      // Exactly how the glue calls them (ConwayGeomWasm*.js EM_JS bodies):
+      // looked up on globalThis by name, skipped when not a function.
+      for (const name of callbackNames) {
+        const callback = g[name]
+        expect(typeof callback).toBe('function')
+        ;(callback as (message: string) => void)(`native ${name} #540`)
+      }
+    } finally {
+      Logger.removeProxy(proxy)
+    }
+    expect(seen).toEqual(expect.arrayContaining([
+      ['info', 'native logInfo #540'],
+      ['warning', 'native logWarning #540'],
+      ['error', 'native logError #540'],
+    ]))
+  })
+
+  test('memory probes answer in a worker instead of reading window', () => {
+    Environment.checkEnvironment()
+    expect(() => Memory.checkMemoryUsage()).not.toThrow()
+    expect(() => Memory.usedHeapMb()).not.toThrow()
   })
 })
