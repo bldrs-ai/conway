@@ -1151,6 +1151,50 @@ Deliberately small first step; each has a measurable exit.
     (`openStreamedIfcModel*` → `columns` →
     `serializeIndexSidecarFromColumns`). Both are M4d, Share-side, and
     should be planned as work rather than assumed present.
+  - **M4d (producer half) — export a sidecar from an open model (engine
+    core, landed; conway#756).** `exportIfcIndexSidecar` and the compat
+    `IfcAPI.ExportIndexSidecar(modelID)` write the v2 sidecar for an IFC
+    model that is already open. That covers every way of opening one:
+    resident, windowed from birth, spilled, and index-first itself. So an
+    embedder that terminates an engine to free a model can bring the next
+    one up with `OpenModelFromIndex`. The columns come straight off the
+    model (`StepModelBase.indexColumns`, the model's own arrays). Both
+    constructor paths leave the parse's layout, so the export is
+    **byte-identical** to `serializeIndexSidecarFromColumns` over a fresh
+    parse.
+
+    The hash is a chunked, yielding FNV-1a over the model's own source
+    (`hashSourceAsync`, which reads around the windowed LRU). It is taken
+    after the load, not folded into it: the export is a background job
+    and the parse is the critical path. That pass now uses a `Math.imul`
+    fold, because `indexing/hashing.ts`'s shift-and-add `fnv1a` measured
+    ~6× slower in Node 22. A mismatch at open is an
+    `IndexSidecarStaleError` (`reason: 'length' | 'hash'`), which the
+    compat surface records as load status `INDEX_STALE`. That status is
+    the "parse instead" signal.
+
+    The parity suite (`ifc_api_export_index_sidecar.test.ts`) runs every
+    in-repo IFC4 fixture through five opens. It checks the bytes, the
+    express IDs, the spatial tree, the compat property reads *and* the
+    engine's typed attribute reads. Typed reads are needed because the
+    compat reads decode raw bytes and resolve an inline value whether or
+    not the index carries the inline range. Dropping that range is caught
+    only by the typed path. The suite also includes mutants that show
+    each comparison can fail.
+
+    **Refused, not written lossily:** IFC4X3 models (the compat route's
+    field masks have no slot, and the index-first open refuses IFC4X3
+    headers anyway; conway#758), and every STEP schema (no schema slot,
+    and no STEP index-first open; conway#757).
+
+    **Measured** (Node, store-backed, deferred, warm page cache). On a
+    902 MB / 9.4 M-row model:
+    - parse to index: 15.6 s;
+    - export: 2.3 s, of which 2.2 s is the hash and 0.11 s the serialise;
+      the sidecar is 151 MB;
+    - restore from the sidecar under the length check: 0.46 s;
+    - the full-hash verify: another 2.5–2.8 s, ~85 % of verified time to
+      index. That is the case conway#758's sampled digest is for.
 - **M5 — Federation MVP.** Two cross-referenced files, shared budgets,
   link navigation, composed skeleton. Exit: a 2-file project browses
   under the same memory budget as either file alone.

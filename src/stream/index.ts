@@ -76,8 +76,16 @@ export {
   SIDECAR_VERSION,
   DecodedSidecarColumns,
   SidecarSourceIdentity,
+  IndexSidecarStaleError,
+  IndexSidecarStaleReason,
+  IndexSidecarUnsupportedError,
 } from '../step/parsing/index_sidecar'
-export { HashingByteSource } from '../step/parsing/source_hash'
+export { HashingByteSource, hashSourceAsync } from '../step/parsing/source_hash'
+export {
+  exportIfcIndexSidecar,
+  IfcIndexSidecarExport,
+  IfcIndexSidecarExportOptions,
+} from '../ifc/ifc_index_sidecar_export'
 export {
   StreamingRecordDispatcher,
   RecordHandler,

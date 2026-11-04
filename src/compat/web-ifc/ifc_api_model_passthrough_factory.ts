@@ -11,6 +11,7 @@ import Logger from '../../logging/logger'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { HEADER_PREFIX_RETRY_BYTES } from '../../ifc/ifc_stream_open'
 import { UnrecognizedIfc4x3SchemaError } from '../../ifc/ifc_schema_selection'
+import { IndexSidecarStaleError } from '../../step/parsing/index_sidecar'
 
 /** Prefix used to sniff FILE_SCHEMA without paging the whole file. */
 // eslint-disable-next-line no-magic-numbers
@@ -67,7 +68,13 @@ function recordOpenFailure( modelID: number, error: unknown ): void {
   const statistics = Logger.getStatistics( modelID ) ?? Logger.createStatistics( modelID )
   const status = statistics.getLoadStatus()
 
-  if ( error instanceof UnrecognizedIfc4x3SchemaError ) {
+  if ( error instanceof IndexSidecarStaleError ) {
+
+    // conway#756: the index-first open's "this sidecar is for some other
+    // file" — the one failure whose remedy is a parse. Its own status, so an
+    // embedder can key that fallback on it instead of on a message.
+    statistics.setLoadStatus( 'INDEX_STALE' )
+  } else if ( error instanceof UnrecognizedIfc4x3SchemaError ) {
 
     // A FILE_SCHEMA spelling of the IFC4X3 family that conway has not
     // verified (e.g. IFC4X3_RC4) is refused by selectIfcSchemaKindForHeader

@@ -54,6 +54,11 @@ import {
 } from '../../ifc/ifc4x3_ifc4_compat'
 import IfcStepParser from '../../ifc/ifc_step_parser'
 import { openIfcModelFromIndex } from '../../ifc/ifc_stream_open'
+import {
+  exportIfcIndexSidecar,
+  IfcIndexSidecarExport,
+} from '../../ifc/ifc_index_sidecar_export'
+import { IndexSidecarUnsupportedError } from '../../step/parsing/index_sidecar'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
 import {
@@ -604,6 +609,21 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    */
   private coordinationSupplied_: boolean = false
 
+  /**
+   * The source hash an earlier {@link exportIndexSidecar} took, so a second
+   * export of the same model costs a serialise rather than another
+   * whole-source pass. The source of an open model does not change (see
+   * `exportIfcIndexSidecar`'s contract), so neither does its hash.
+   */
+  private indexSidecarSourceHash_?: number
+
+  /**
+   * Did this model open from an IFC4X3 header? Retained from the load state
+   * (the proxy keeps no header) so the sidecar export can refuse it even
+   * when the compat route had nothing to mask — see `exportIndexSidecar`.
+   */
+  private readonly openedFromIfc4x3Header_: boolean
+
   _isCoordinated: boolean = false
   linearScalingFactor: number = 1
   identity: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -642,6 +662,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     this.conwaywasm = loadState.conwaywasm
     this.conwayGeometry_ = loadState.conwayGeometry
+    this.openedFromIfc4x3Header_ =
+      IfcApiProxyIfc.isIfc4x3Header( loadState.stepHeader )
     this.deferredMode_ = loadState.deferred === true
 
     // Only a deferred open has a pump, and only a pump accumulates — see
@@ -2282,6 +2304,55 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       chunkBytes?: number,
       maxResidentChunks?: number ): void {
     this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+  }
+
+  /**
+   * Does this header name the IFC4X3 family? Never throws: an unverified
+   * 4X3 spelling makes `selectIfcSchemaKindForHeader` throw, and every open
+   * path refuses one long before the constructor runs — but this is read in
+   * the constructor, where a throw would turn a sidecar-export detail into a
+   * failed open. An unreadable answer reads as 4X3, which only ever refuses
+   * an export.
+   *
+   * @param stepHeader The model's STEP header.
+   * @return {boolean} True for an IFC4X3 (or unclassifiable) header.
+   */
+  private static isIfc4x3Header( stepHeader: StepHeader ): boolean {
+
+    try {
+      return selectIfcSchemaKindForHeader( stepHeader ) === 'ifc4x3'
+    } catch {
+      return true
+    }
+  }
+
+  /**
+   * Serialise this model's entity index to a v2 index sidecar
+   * (conway#756) — see `exportIfcIndexSidecar` for what it reads and what
+   * it guarantees, and `IfcAPI.ExportIndexSidecar` for the embedder's view.
+   *
+   * Refuses an IFC4X3 model with {@link IndexSidecarUnsupportedError}. The
+   * engine function already refuses the compat route's masked index; the
+   * header check here covers an eligible file the route had nothing to mask,
+   * whose sidecar would be representable but useless — the index-first open
+   * refuses every IFC4X3 header, so it could never be opened.
+   *
+   * @return {Promise<IfcIndexSidecarExport>} The sidecar and its cost.
+   */
+  async exportIndexSidecar(): Promise<IfcIndexSidecarExport> {
+
+    if ( this.openedFromIfc4x3Header_ ) {
+      throw new IndexSidecarUnsupportedError(
+          'IFC4X3 models cannot be reopened from an index sidecar (the ' +
+          'index-first open refuses IFC4X3 headers); reopen with a parse' )
+    }
+
+    const exported = await exportIfcIndexSidecar(
+        this.model[0], { sourceHash: this.indexSidecarSourceHash_ } )
+
+    this.indexSidecarSourceHash_ = exported.sourceHash
+
+    return exported
   }
 
   /**

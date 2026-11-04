@@ -2,10 +2,11 @@ import { ByteSource, ReadableByteSource, StoreByteSource } from '../step/parsing
 import { ColumnarIndexSink, StepIndexColumns } from '../step/parsing/columnar_index'
 import {
   deserializeIndexSidecarToColumns,
+  IndexSidecarStaleError,
   sidecarMatchesSource,
   sidecarMatchesSourceLength,
 } from '../step/parsing/index_sidecar'
-import { HashingByteSource } from '../step/parsing/source_hash'
+import { hashSourceAsync } from '../step/parsing/source_hash'
 import ParsingBuffer from '../parsing/parsing_buffer'
 import { RecordEventHandler } from '../step/parsing/record_event'
 import {
@@ -392,7 +393,9 @@ export interface IndexFirstIfcOpenOptions {
  * whole model, which is what makes such a pool pay at all (conway#541).
  *
  * **No internal cold-parse fallback, deliberately.** A mismatched or
- * unreadable sidecar throws; it does not quietly re-parse the file. Silently
+ * unreadable sidecar throws — a mismatch as
+ * {@link IndexSidecarStaleError}, so the caller can key its fallback on it
+ * (conway#756) — and it does not quietly re-parse the file. Silently
  * spending a full parse is exactly the cost the caller asked to avoid, and
  * hiding a stale sidecar behind a slow success makes the mismatch
  * unobservable. Callers that want the fallback take it explicitly — the
@@ -416,22 +419,21 @@ export async function openIfcModelFromIndex(
   const restored = deserializeIndexSidecarToColumns<EntityTypesIfc>( sidecar )
 
   if ( !sidecarMatchesSourceLength( restored, store.byteLength ) ) {
-    throw new Error(
-        `Sidecar was built against ${restored.sourceByteLength} bytes but ` +
-        `the store holds ${store.byteLength}` )
+    throw new IndexSidecarStaleError(
+        'length', restored.sourceByteLength, store.byteLength )
   }
 
   if ( options?.verifySourceHash === true ) {
 
-    // Chunked through the same hasher the coordinator folds into its parse,
-    // rather than materialising the file to call `hashSource` — the digest is
-    // identical either way, and a windowed open must not need the whole file
-    // resident to check its own index.
-    const hashed =
-      await new HashingByteSource( new StoreByteSource( store ) ).finishAsync()
+    // Chunked, rather than materialising the file to call `hashSource` —
+    // the digest is identical either way (one chained FNV-1a), and a
+    // windowed open must not need the whole file resident to check its own
+    // index. The same pass the export took (`hashSourceAsync`), yielding
+    // between chunks so a worker stays responsive through it.
+    const hashed = await hashSourceAsync( new StoreByteSource( store ) )
 
     if ( !sidecarMatchesSource( restored, store.byteLength, hashed ) ) {
-      throw new Error( 'Sidecar hash does not match the store contents' )
+      throw new IndexSidecarStaleError( 'hash', restored.sourceHash, hashed )
     }
   }
 

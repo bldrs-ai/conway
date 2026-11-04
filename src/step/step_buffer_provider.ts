@@ -464,6 +464,17 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
   }
 
   /**
+   * The store this pages from. For whole-file passes that should read
+   * around the LRU rather than through it (see
+   * `StepModelBase.sourceReader`).
+   *
+   * @return {StepExternalByteStore} The backing store.
+   */
+  public get store(): StepExternalByteStore {
+    return this.store_
+  }
+
+  /**
    * Bytes currently held resident by the provider.
    *
    * @return {number} The resident byte count.

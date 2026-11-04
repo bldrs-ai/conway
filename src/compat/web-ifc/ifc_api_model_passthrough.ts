@@ -1,5 +1,6 @@
 import { DemandPrepYieldLike } from '../../core/progress_log'
 import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import { IfcIndexSidecarExport } from '../../ifc/ifc_index_sidecar_export'
 import { FlatMesh, IfcGeometry, RawLineData, Vector } from './ifc_api'
 import { PropertiesPassthrough } from './properties_passthrough'
 
@@ -152,4 +153,11 @@ export interface IfcApiModelPassthrough {
    * Multi-mapped entities may repeat; callers should dedupe.
    */
   rootExpressIDs?(): IterableIterator< number >
+
+  /**
+   * Optional: serialise the model's entity index to a v2 index sidecar, so
+   * a later engine can `OpenModelFromIndex` instead of re-parsing
+   * (conway#756). IFC only; see `IfcAPI.ExportIndexSidecar`.
+   */
+  exportIndexSidecar?(): Promise< IfcIndexSidecarExport >
 }

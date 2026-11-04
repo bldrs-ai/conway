@@ -1,6 +1,11 @@
 import { StepIndexEntry } from './parsing/step_parser'
 import { StepIndexColumns } from './parsing/columnar_index'
 import {
+  BufferByteSource,
+  ReadableByteSource,
+  StoreByteSource,
+} from './parsing/byte_source'
+import {
   releaseScratchParsingBuffer,
   stepExtractReference,
 } from './parsing/step_deserialization_functions'
@@ -78,6 +83,20 @@ implements Iterable<BaseEntity>, Model {
   private readonly expressID_: Uint32Array     // real (non-inline) entries only
   private readonly count_: number
   private readonly firstInlineElement_: number
+
+  // Whether the top-level express IDs arrived in non-decreasing order. The
+  // lookup table already knows, but the index sidecar's `flags` word carries
+  // it too, and `indexColumns()` must hand back the same verdict the parse
+  // produced or an exported sidecar differs from one serialised off the
+  // parse's own columns by that one bit (conway#756).
+  private readonly expressIdsSorted_: boolean
+
+  // True once `setFieldMasks` has run, whatever it was given. Every caller is
+  // the IFC4-compatible IFC4X3 route, whose index is TRANSLATED (4X3 records
+  // re-typed as IFC4 ones) and whose masks the v2 sidecar has no slot for —
+  // and an eligible file can have nothing to mask, so `fieldMasks_` being
+  // unset does not mean the index is untranslated. See `hasFieldMasks`.
+  private fieldMasksApplied_: boolean = false
 
   /**
    * Is this model's index a mid-parse PREFIX? True only for a model built
@@ -196,6 +215,7 @@ implements Iterable<BaseEntity>, Model {
       this.expressID_          = columns.expressID
       this.count_              = columns.count
       this.firstInlineElement_ = firstInline
+      this.expressIdsSorted_   = columns.expressIdsSorted
       this.indexIsPrefix       = columns.indexIsPrefix ?? false
       this.complexEntries_     = columns.complexEntries as unknown as
         Map< number, StepEntityInternalReferencePrivate< EntityTypeIDs, BaseEntity > > | undefined
@@ -306,6 +326,7 @@ implements Iterable<BaseEntity>, Model {
     this.expressID_          = expressIDs
     this.count_              = count
     this.firstInlineElement_ = firstInlineElement
+    this.expressIdsSorted_   = expressIdsAlreadySorted
     this.complexEntries_     = complexEntries
 
     // The object index is only ever produced by a completed parse.
@@ -417,7 +438,93 @@ implements Iterable<BaseEntity>, Model {
     }
 
     this.fieldMasks_ = byLocalID.size > 0 ? byLocalID : void 0
+    this.fieldMasksApplied_ = true
     this.descriptorCache_ = []
+  }
+
+
+  /**
+   * Has {@link setFieldMasks} been applied to this model — even with nothing
+   * to mask?
+   *
+   * The only caller is the IFC4-compatible IFC4X3 route
+   * (`ifc4x3_ifc4_compat.ts`), so this is also "is this index a translated
+   * one". The index sidecar uses it to refuse an export it cannot represent
+   * (conway#756): v2 has no slot for the masks, and an index-first open
+   * refuses every IFC4X3 header anyway.
+   *
+   * @return {boolean} True after any setFieldMasks call.
+   */
+  public get hasFieldMasks(): boolean {
+    return this.fieldMasksApplied_
+  }
+
+
+  /**
+   * The model's entity index, as the columns it reads from — the shape
+   * `serializeIndexSidecarFromColumns` takes, so an open model can write
+   * the sidecar an index-first open restores (conway#756).
+   *
+   * These are the model's OWN arrays, not copies: the index is fixed for a
+   * model's lifetime (nothing writes a column after construction), so a
+   * view is safe to read and a copy of a PSB-class index (~150 MB) would be
+   * pure waste. **Do not mutate them.**
+   *
+   * Identity, not equivalence, is the point. Both constructor paths leave
+   * the same layout — the object path's breadth-first `inlineEntities`
+   * unfold is the order `ColumnarIndexSink` assigns — so the columns here
+   * are the columns the parse produced, and a sidecar written from them is
+   * byte-identical to one written from the parse's own columns. The parity
+   * suite (`ifc_index_sidecar_export.test.ts`) pins that for both a
+   * resident and a windowed open.
+   *
+   * `complexEntries` is the retained descriptor map. The sidecar writer
+   * reads only the index fields of each entry (address, length, typeID,
+   * expressID, multiMapping), which no lazy materialisation changes.
+   *
+   * @return {StepIndexColumns} The index columns.
+   */
+  public indexColumns(): StepIndexColumns< EntityTypeIDs > {
+
+    return {
+      address: this.address_,
+      length: this.length_,
+      typeID: this.typeID_,
+      expressID: this.expressID_,
+      count: this.count_,
+      firstInlineElement: this.firstInlineElement_,
+      complexEntries: this.complexEntries_ as unknown as
+        Map< number, StepIndexEntry< EntityTypeIDs > > | undefined,
+      expressIdsSorted: this.expressIdsSorted_,
+      indexIsPrefix: this.indexIsPrefix ? true : void 0,
+    }
+  }
+
+
+  /**
+   * A sequential reader over the model's whole source — the resident
+   * buffer, or the external store a windowed (or spilled) model pages
+   * from. For whole-file passes that must not disturb residency: reading
+   * through this bypasses the windowed provider's LRU, so hashing the
+   * source for a sidecar (conway#756) does not evict the windows a demand
+   * pump is using.
+   *
+   * @return {ReadableByteSource | undefined} The reader, or undefined if
+   * the provider is neither resident nor store-backed.
+   */
+  public sourceReader(): ReadableByteSource | undefined {
+
+    if ( this.buffer_ !== void 0 ) {
+      return new BufferByteSource( this.buffer_ )
+    }
+
+    const provider = this.bufferProvider_
+
+    if ( provider instanceof WindowedStepBufferProvider ) {
+      return new StoreByteSource( provider.store )
+    }
+
+    return void 0
   }
 
 

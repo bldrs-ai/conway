@@ -1,4 +1,4 @@
-import { fnv1a } from '../../indexing/hashing'
+import { yieldToEventLoop } from '../../core/progress'
 import { AsyncByteSource, ReadableByteSource } from './byte_source'
 
 
@@ -8,6 +8,38 @@ const TAIL_CHUNK_BYTES = 4 * 1024 * 1024
 
 /** FNV-1a 32-bit offset basis — the seed `hashSource` starts from. */
 const FNV_OFFSET_BASIS = 2166136261
+
+/** FNV-1a 32-bit prime. */
+const FNV_PRIME = 16777619
+
+
+/**
+ * Fold `data[start, end)` into a running FNV-1a — `hashSource`'s loop, made
+ * range-scoped and resumable so chaining it over windows reproduces the
+ * whole-buffer digest.
+ *
+ * Deliberately not `src/indexing/hashing.ts`'s `fnv1a`, which computes the
+ * same digest by the shift-and-add expansion of the prime: that form lets
+ * the running value grow past 32 bits between iterations, so V8 keeps it as
+ * a double, and it measured **~6× slower** than this `Math.imul` loop on a
+ * 200 MiB buffer in Node 22 (1.55 s vs 0.27 s) — the difference between a
+ * ~1.5 s and a ~7 s hash on a 900 MB model (conway#756).
+ *
+ * @param data The bytes.
+ * @param start First byte to fold.
+ * @param end One past the last byte to fold.
+ * @param hash The running hash.
+ * @return {number} The updated hash, unsigned.
+ */
+function foldFnv1a( data: Uint8Array, start: number, end: number, hash: number ): number {
+
+  for ( let where = start; where < end; ++where ) {
+    hash ^= data[ where ]
+    hash = Math.imul( hash, FNV_PRIME )
+  }
+
+  return hash >>> 0
+}
 
 
 /**
@@ -26,18 +58,18 @@ const FNV_OFFSET_BASIS = 2166136261
  * the N-way I/O a shared index exists to remove (conway#541).
  *
  * The parse is already touching every byte in order, so wrapping its source
- * would fold the hash into that pass: ~1.5 s of CPU on a 900 MB model,
- * **zero** extra I/O, and no format or digest change — `src/indexing/
- * hashing.ts`'s `fnv1a` is range-scoped and resumable with the same basis
- * and prime, so chaining it over the parse's windows reproduces
- * `hashSource` byte for byte (pinned by `source_hash.test.ts`, over the
- * real window shapes the streaming builder produces).
+ * would fold the hash into that pass: ~1.2 s of CPU on a 900 MB model,
+ * **zero** extra I/O, and no format or digest change — {@link foldFnv1a}
+ * is range-scoped and resumable with the same basis and prime, so chaining
+ * it over the parse's windows reproduces `hashSource` byte for byte (pinned
+ * by `source_hash.test.ts`, over the real window shapes the streaming
+ * builder produces).
  *
  * **That wrapping does not exist in this repo yet**, and this comment is
- * about a mechanism rather than a wired path: every current caller —
- * `openIfcModelFromIndex`'s `verifySourceHash` included — constructs one of
- * these over a whole file and calls {@link finishAsync} straight away,
- * which is the *revisit* gate, not the distribution one. What makes it
+ * about a mechanism rather than a wired path: the whole-file passes that do
+ * exist — `openIfcModelFromIndex`'s `verifySourceHash` and the sidecar
+ * export — use {@link hashSourceAsync}, which yields between chunks and is
+ * the *revisit* gate, not the distribution one. What makes it
  * worth having anyway is that it is the piece a coordinator cannot add
  * cheaply from outside: `hashSource` needs the file materialised, and this
  * does not.
@@ -112,7 +144,7 @@ export class HashingByteSource implements AsyncByteSource {
 
       const fresh = intoOffset + ( this.covered_ - offset )
 
-      this.hash_ = fnv1a( into, fresh, intoOffset + got, this.hash_ )
+      this.hash_ = foldFnv1a( into, fresh, intoOffset + got, this.hash_ )
       this.covered_ = end
     }
 
@@ -143,11 +175,60 @@ export class HashingByteSource implements AsyncByteSource {
               'while completing its hash' )
         }
 
-        this.hash_ = fnv1a( chunk, 0, got, this.hash_ )
+        this.hash_ = foldFnv1a( chunk, 0, got, this.hash_ )
         this.covered_ += got
       }
     }
 
     return this.hash_ >>> 0
   }
+}
+
+
+/**
+ * Hash a whole source in bounded chunks, yielding to the event loop between
+ * them — the same digest as `hashSource( wholeFile )` (one chained FNV-1a,
+ * pinned by `source_hash.test.ts`), for a source that is not, or should not
+ * be, one materialised buffer.
+ *
+ * This is the hash an index sidecar EXPORT takes (conway#756). It runs after
+ * a load has settled, in a worker that still has to answer the embedder, so
+ * it gives the loop a task boundary per chunk rather than holding it for the
+ * ~1.5 s a 900 MB file costs. A {@link HashingByteSource} over the same
+ * source gives the same number but awaits only microtasks on a synchronous
+ * source, which never lets a message through.
+ *
+ * @param source The source to hash, read sequentially from offset 0.
+ * @param chunkBytes Read size (default 4 MiB).
+ * @return {Promise<number>} The 32-bit FNV-1a of every byte of `source`.
+ */
+export async function hashSourceAsync(
+    source: ReadableByteSource,
+    chunkBytes: number = TAIL_CHUNK_BYTES ): Promise<number> {
+
+  const total = source.byteLength
+  const chunk = new Uint8Array( Math.max( 1, Math.min( chunkBytes, total ) ) )
+
+  let hash = FNV_OFFSET_BASIS >>> 0
+  let covered = 0
+
+  while ( covered < total ) {
+
+    const got = await source.read(
+        covered, Math.min( chunk.length, total - covered ), chunk, 0 )
+
+    if ( got <= 0 ) {
+      throw new Error(
+          `Source ended at ${covered} of ${total} bytes while hashing it` )
+    }
+
+    hash = foldFnv1a( chunk, 0, got, hash )
+    covered += got
+
+    if ( covered < total ) {
+      await yieldToEventLoop()
+    }
+  }
+
+  return hash >>> 0
 }

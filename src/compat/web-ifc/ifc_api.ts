@@ -615,6 +615,18 @@ export class IfcAPI {
    * internal cold-parse fallback: taking one silently would spend the
    * whole cost the call exists to avoid and make a stale index invisible.
    *
+   * A sidecar that does not match the store (wrong length, or — under
+   * `VERIFY_INDEX_SOURCE_HASH` — wrong hash) records load status
+   * **`INDEX_STALE`** on the statistics of the id the open was attempted
+   * under (`globalModelIDCounter` before the call), with the mismatch as
+   * the failure reason (conway#756). That is the "parse instead" signal;
+   * any other status is a failure of something other than the sidecar.
+   *
+   * The sidecar usually comes from {@link ExportIndexSidecar} on an earlier
+   * engine's open of the same source. Pass `VERIFY_INDEX_SOURCE_HASH: true`
+   * when it was persisted (an evicted model reopened later), since the
+   * length check alone does not see a same-length rewrite.
+   *
    * @param store External store holding the source bytes (OPFS File).
    * @param sidecar The serialised index.
    * @param settings settings for loading the model
@@ -650,6 +662,72 @@ export class IfcAPI {
     this.models.set( modelIdResult, result )
 
     return modelIdResult
+  }
+
+  /**
+   * Serialise an open model's entity index to a v2 index sidecar (conway
+   * extension, conway#756; feature-detect with
+   * `typeof api.ExportIndexSidecar === 'function'`), so a later engine —
+   * after this one is terminated to free the model — can come back with
+   * {@link OpenModelFromIndex} instead of re-parsing the source.
+   *
+   * Works on every IFC open: resident (`OpenModel`, `OpenModelAsync`,
+   * `OpenModelStreamed`), windowed from birth (`OpenModelStream`), spilled
+   * (`SpillModelSource`), and index-first itself. The sidecar is
+   * byte-identical to one serialised off a fresh parse's own columns, and
+   * a model opened from it reads back the same express IDs, spatial tree
+   * and properties (`ifc_index_sidecar_export.test.ts`).
+   *
+   * **Run it after the load settles, not during it.** Most of the cost is
+   * one whole-source FNV-1a pass for the sidecar's trust gate (~1.5 s per
+   * 900 MB; it reads the store directly, around the windowed LRU, and
+   * yields between 4 MiB chunks); serialising the columns is a few memcpys.
+   * A second export of the same model reuses the hash.
+   *
+   * Returns `undefined` — with a warning naming why — for an unknown model
+   * id, a non-IFC model (the format has no schema slot; STEP is not
+   * covered), or an IFC4X3 model (the IFC4-compatible route's field masks
+   * have no slot, and the index-first open refuses IFC4X3 headers). The
+   * embedder's fallback for any of those is the parse it would have done
+   * anyway.
+   *
+   * @param modelID handle of an open model
+   * @return {Promise<Uint8Array | undefined>} The sidecar bytes, or
+   * undefined when this model cannot be exported.
+   */
+  async ExportIndexSidecar( modelID: number ): Promise<Uint8Array | undefined> {
+
+    const result = this.models.get( modelID )
+
+    if ( result === void 0 ) {
+      Logger.warning( `[ExportIndexSidecar]: no open model ${modelID}` )
+      return
+    }
+
+    if ( result.exportIndexSidecar === void 0 ) {
+      Logger.warning(
+          `[ExportIndexSidecar]: model ${modelID} is not IFC; the index ` +
+          'sidecar covers IFC only' )
+      return
+    }
+
+    try {
+
+      const exported = await result.exportIndexSidecar()
+
+      Logger.info(
+          `[ExportIndexSidecar]: model ${modelID}: ` +
+          `${exported.sidecar.byteLength} bytes for a ` +
+          `${exported.sourceByteLength}-byte source (hash ${exported.hashMs} ms, ` +
+          `serialise ${exported.serializeMs} ms)` )
+
+      return exported.sidecar
+    } catch ( error ) {
+
+      Logger.warning(
+          `[ExportIndexSidecar]: model ${modelID}: ` +
+          `${error instanceof Error ? error.message : String( error )}` )
+    }
   }
 
   /**
