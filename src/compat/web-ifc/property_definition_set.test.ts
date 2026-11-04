@@ -150,6 +150,8 @@ describe('typed values written in place keep their lists (conway#763)', () => {
     const modelID = api.OpenModel(ifc2x3, SETTINGS)
     const ifc4 = api.OpenModel(buffer, SETTINGS)
 
+    expect(line(modelID, COMPLEX).NominalValue).toEqual([real(1.5), real(-2)])
+    expect(line(modelID, ENUMERATED).EnumerationValues).toEqual([label('a'), label('b')])
     for (const id of [COMPLEX, ANGLE, ENUMERATED, LIST]) {
       expect(line(modelID, id)).toEqual(line(ifc4, id))
     }

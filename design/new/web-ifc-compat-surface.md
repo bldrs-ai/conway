@@ -272,6 +272,10 @@ drops these aggregate values entirely (`{type: 2, label, valueType: 7}`
 with no value), so this is a place conway's shape is richer than the one
 it was copied from.
 
+An IFC4X3 file with a definition set does not reach this parse at all.
+The IFC4-compatible decoding route refuses it, because the deriver gives
+an aggregate of an entity no value shape (conway#765).
+
 Two defects of the same parse remain, outside conway#763: a list nested
 in a record-level list (`IfcCartesianPointList.CoordList`) closes into the
 record's top-level arguments rather than its parent list, and a derived
