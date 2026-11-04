@@ -239,6 +239,70 @@ and threw `StepBufferNotResidentError` whenever the flatten reached an evicted
 window. Share's properties panel reads non-recursively, so neither change
 reaches it.
 
+## Typed values written in place: the raw line shape (conway#763)
+
+`getLine` and every `properties.*` read go through the raw line parse
+(`StepParser.extractArguments`, shared by every IFC schema and AP214), not
+the generated entities. A typed value written in place, an *inline
+element* such as `IFCLABEL('a')`, contributes only its value there: a
+scalar handle (`{type: 1, value: 'a'}`), not web-ifc's
+`{type: 2, label, valueType, value}`. An aggregate-valued one contributes
+an array of handles, the shape `ifc2x4_helper.ts` declares for it
+(`IfcPropertySetDefinitionSet = Array<IfcPropertySetDefinition>`):
+
+| Select member (IFC4, IFC4X3) | Example | Raw value |
+|---|---|---|
+| `IfcPropertySetDefinitionSet` | `RelatingPropertyDefinition` = `IFCPROPERTYSETDEFINITIONSET((#20,#21))` | `[{type: 5, value: 20}, {type: 5, value: 21}]` |
+| `IfcComplexNumber`, `IfcCompoundPlaneAngleMeasure` | `NominalValue` = `IFCCOMPLEXNUMBER((1.5,-2.))` | `[{type: 4, value: 1.5}, {type: 4, value: -2}]` |
+| `IfcLineIndex`, `IfcArcIndex` | `Segments` = `(IFCLINEINDEX((1,2)),IFCARCINDEX((2,3,4)))` | an array of arrays |
+
+Typed values inside a list stay in it:
+`EnumerationValues` = `(IFCLABEL('a'),IFCLABEL('b'))` reads as two handles,
+as does a trimmed curve's `Trim1` = `(IFCPARAMETERVALUE(0.5))`.
+
+Until conway#763 the parse pushed every value inside an inline element to
+the record's top-level arguments, and opened the element's own lists on
+the record-level stack without closing them, so those lists swallowed the
+record's later values. A definition set read as its first member only, so
+`getPropertySets` lost every set after the first. The other members, and
+every typed value inside a list, spilled into the attributes that follow:
+`IFCPROPERTYSINGLEVALUE('Complex',$,IFCCOMPLEXNUMBER((1.5,-2.)),#100)`
+read as `['Complex', null, 1.5, -2, [#100]]`. The element → relating-IDs
+index behind `getPropertySets` (conway#755, built from record spans since
+conway#762) already took an array of relating IDs, so it now records every
+member of a set, in the set's order. web-ifc 0.0.34 drops these aggregate
+values entirely (`{type: 2, label, valueType: 7}` with no value), so here
+conway's shape is richer than the one it was copied from.
+
+**Consumers must handle the array.** Code that reads
+`RelatingPropertyDefinition.value` or `NominalValue.value` as a scalar
+handle gets `undefined` for a definition set or a complex or compound
+value, where it used to get the first member. Share's pset sweep and
+properties panel do exactly this, and are fixed alongside the pin
+(bldrs-ai/Share#2069).
+
+A syntax error inside an inline element now fails the record. It used to
+be ignored, and the record could come back `COMPLETE` with its arguments
+shifted.
+
+An IFC4X3 file with a definition set does not reach this parse at all.
+The IFC4-compatible decoding route refuses it, because the deriver gives
+an aggregate of an entity no value shape (conway#765).
+
+Three defects of the same parse remain, outside conway#763, and the
+attributes after each one shift:
+- A list nested in a record-level list (`IfcCartesianPointList.CoordList`)
+  closes into the record's top-level arguments, not its parent list.
+- A derived `*` (`IFCSIUNIT(*,…)`) is dropped rather than kept as a
+  placeholder.
+- A binary value (`"0FF"`) is matched but not kept. That includes one
+  written in place, `IFCBINARY("0FF")` as an `IfcValue`.
+
+See conway#764. A zero written with an exponent (`0.E0`) fails the record
+outright (conway#767). `scripts/raw_line_parity.mjs` is the before/after
+check for any change here: geometry reads through the generated
+entities, so the regression digests never see this parse.
+
 ## Cross-references / open items
 
 - **Closes `step-support.md` gap #1**: this `./web-ifc` export is (part
