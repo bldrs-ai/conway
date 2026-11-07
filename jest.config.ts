@@ -225,6 +225,20 @@ const config: Config = {
   // Default timeout (ms) for tests and hooks. WASM init in beforeAll
   // routinely exceeds the 5s jest default on cold start.
   testTimeout: 30000,
+
+  // Recycle a worker between suites once its heap passes this (conway#770).
+  // Jest reuses a worker across suites, and on main the worker that ends on
+  // ifc4x3_step_model.test.js reached V8's ~2 GB default heap limit and died
+  // ("Reached heap limit", after a Mark-Compact at 2016 MB), failing the
+  // suite and with it every pre-commit hook, while the file alone peaks at
+  // 290 MB. What the earlier suites retain is not known yet (#770); this
+  // only keeps one worker from carrying it into the next suite. 1 GB is
+  // about three times the ifc4x3 suite's own peak (290 MB alone, 411 MB
+  // in-band after two AP214 suites, --logHeapUsage), so a worker is
+  // recycled only after it has carried several suites' worth. Jest ignores
+  // the option in-band (`--runInBand` / `-i`), and with it set a run of a
+  // single file forks a worker instead of running in the parent process.
+  workerIdleMemoryLimit: '1GB',
 }
 
 export default config
