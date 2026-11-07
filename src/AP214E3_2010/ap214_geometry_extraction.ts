@@ -7893,19 +7893,25 @@ export class AP214GeometryExtraction {
         } )
       }
 
+      // The extent table's membership walk, here rather than on the first
+      // face (conway#773): it is preparation, every advanced face's
+      // tessellation reads it, and paid inside a unit it is a cost no
+      // per-unit estimate can see. Representations are still descended
+      // lazily, per first face. Only advanced faces read the table
+      // (extractAdvancedFace), so a model with none — a faceted export —
+      // skips the walk here, as it always has; the type index answers that
+      // without materializing a face.
+      //
+      // BEFORE the unit list is published, not after: `demandUnits_` being
+      // set is what tells prepareDemandExtraction the plan is done, so a
+      // walk that threw after it would latch the failure once and then let
+      // every later call run the plan anyway (codex on #774).
+      if ( model.typeCount( advanced_face ) > 0 ) {
+        this.collectRepresentationExtents()
+      }
+
       this.demandUnits_ = units
       this.demandUnitCosts_ = unitCosts
-    }
-
-    // The extent table's membership walk, here rather than on the first
-    // face (conway#773): it is preparation, every advanced face's
-    // tessellation reads it, and paid inside a unit it is a cost no per-unit
-    // estimate can see. Representations are still descended lazily, per
-    // first face. Only advanced faces read the table (extractAdvancedFace),
-    // so a model with none — a faceted export — skips the walk here, as it
-    // always has; the type index answers that without materializing a face.
-    if ( model.typeCount( advanced_face ) > 0 ) {
-      this.collectRepresentationExtents()
     }
   }
 

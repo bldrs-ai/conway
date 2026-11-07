@@ -384,4 +384,28 @@ describe('AP214 representation-extent deflection floor (bldrs-ai/conway#564 §5)
           .toBeGreaterThanOrEqual(extents.get( 'small face' )! * LARGE_BODY_SPAN)
     }
   })
+
+  // The plan is published only once the membership walk has run: a walk that
+  // throws must leave the plan latched failed, so the pump keeps reporting
+  // the failure instead of running a plan whose preparation never finished
+  // (codex on #774).
+  test('a membership walk that throws leaves the demand plan failed, not half-built', () => {
+
+    const [, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+    const original = AP214GeometryExtraction.prototype.collectRepresentationExtents
+    const failure = new Error( 'membership walk failed' )
+
+    AP214GeometryExtraction.prototype.collectRepresentationExtents = () => {
+      throw failure
+    }
+
+    try {
+      expect(() => extraction.prepareDemandExtraction()).toThrow( failure )
+      expect(() => extraction.prepareDemandExtraction()).toThrow( failure )
+      expect(extraction.isDemandExtractionPrepared).toBe(false)
+      expect(extraction.demandUnitCount).toBe(0)
+    } finally {
+      AP214GeometryExtraction.prototype.collectRepresentationExtents = original
+    }
+  })
 })
