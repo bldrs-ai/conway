@@ -781,14 +781,24 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * without this tick neither puts a preview on screen before the durable
    * pump.
    *
-   * A no-op for other adapters: an IFC product list grows with the parse,
+   * Skipped when the parse-time ticks already put a mesh on screen (see the
+   * guard below for what the tick costs). A no-op for other adapters: an
+   * IFC product list grows with the parse,
    * and rebuilding PSB-class indexes costs ~700 ms a generation — the
    * store path's own end-of-parse pass is its spatial plates, not this.
    * Call only on a parse that completed; on a failed one call stop() only.
    */
   public finishParse(): void {
 
-    if (this.stopped_ || this.capped || this.adapter.retryEmptyUnits !== true) {
+    // Only for a parse that put nothing on screen. The tick's first unit pays
+    // the throwaway generation's lazy extraction prep (#751), which a
+    // per-face estimate cannot see and a tick cannot preempt: 0.2–0.5 s on
+    // the 58 and 111 MB corpus models, before the index. Where the parse's
+    // own ticks already delivered (DSA2, the pinball board) that buys a few
+    // more meshes twice over; where they delivered nothing (Arty_Z7's
+    // tail-written points) it is the only preview the load gets.
+    if (this.stopped_ || this.capped || this.adapter.retryEmptyUnits !== true ||
+        this.meshesEmitted_ > 0) {
       return
     }
 

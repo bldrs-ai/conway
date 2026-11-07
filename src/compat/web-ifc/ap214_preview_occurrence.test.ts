@@ -317,6 +317,28 @@ describe( 'retry-mode preview channel: cost and the parse-end tick', () => {
     channel.stop()
   }, 240000 )
 
+  test( 'finishParse is skipped once the parse-time ticks have emitted a mesh', () => {
+
+    const builds: number[] = []
+    const channel = new StreamedPreviewChannel(
+        new Uint8Array( 0 ), conwayGeometry, makeSink( { count: 2048 } ),
+        { retryEmptyUnits: true,
+          buildGeneration: () => {
+            builds.push( 1 )
+            return makeGeneration( [] )
+          } },
+        false, () => { /* no payloads */ }, void 0, void 0, 1 )
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    ;( channel as any ).meshesEmitted_ = 1
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    channel.finishParse()
+
+    expect( builds ).toEqual( [] )
+
+    channel.stop()
+  }, 240000 )
+
   test( 'finishParse is a no-op for a schema whose units grow with the parse (IFC)', () => {
 
     const builds: number[] = []
