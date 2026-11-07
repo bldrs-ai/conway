@@ -318,7 +318,8 @@ describe( 'v3 sidecar: the schema stamp (conway#757)', () => {
 
     for ( const expected of [
       IFC_SIDECAR_SCHEMA,
-      { schema: SidecarSchema.AP214, typeCount: AP214_SIDECAR_SCHEMA.typeCount + 1 },
+      { ...AP214_SIDECAR_SCHEMA, typeCount: AP214_SIDECAR_SCHEMA.typeCount + 1 },
+      { ...AP214_SIDECAR_SCHEMA, typeDigest: ( AP214_SIDECAR_SCHEMA.typeDigest + 1 ) >>> 0 },
     ] ) {
 
       let thrown: unknown

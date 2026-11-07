@@ -35,9 +35,13 @@ import {
 import {
   deserializeIndexSidecarToColumns,
   IFC_SIDECAR_SCHEMA,
+  IndexSidecarStaleError,
   serializeIndexSidecarFromColumns,
+  SidecarSchema,
+  sidecarSchemaStamp,
   SidecarSchemaStamp,
 } from '../../step/parsing/index_sidecar'
+import { ap214TypeName } from '../../AP214E3_2010/ap214_tessellated_types'
 import { BufferByteSource } from '../../step/parsing/byte_source'
 import { ColumnarIndexSink, StepIndexColumns } from '../../step/parsing/columnar_index'
 import { buildIndexStreaming } from '../../step/parsing/streaming_index_builder'
@@ -719,3 +723,86 @@ interface IfcStepModelLike {
   trackCapturedSourceViews: boolean
   capturedSourceViewCount: number
 }
+
+
+describe( 'the end of a windowed AP214 open holds no window views (codex review of conway#769)', () => {
+
+  test( 'non-deferred and deferred: the open\'s own last reads are released before it returns', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+    jest.spyOn( console, 'error' ).mockImplementation( () => {} )
+
+    const bytes = fixture( 'as1-oc-214.stp' )
+
+    for ( const settings of [
+      { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true },
+      DEFER,
+    ] ) {
+
+      api = new IfcAPI()
+      await api.Init()
+
+      const modelID = await api.OpenModelStream( syncStore( bytes ), settings )
+
+      expect( modelID ).toBeGreaterThanOrEqual( 0 )
+
+      const proxy = api.getPassthrough( modelID ) as unknown as IfcApiProxyAP214
+
+      expect( proxy.sourceIsExternal ).toBe( true )
+      expect( proxy.StepModel.trackCapturedSourceViews ).toBe( true )
+      expect( proxy.StepModel.capturedSourceViewCount ).toBe( 0 )
+
+      api.CloseModel( modelID )
+    }
+  }, 120000 )
+} )
+
+
+describe( 'the v3 stamp covers the whole type mapping, not just its size (codex review of conway#769)', () => {
+
+  test( 'a sidecar whose mapping digest differs, at the same count, is INDEX_STALE', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+    jest.spyOn( console, 'error' ).mockImplementation( () => {} )
+
+    const bytes = fixture( 'as1-oc-214.stp' )
+
+    api = new IfcAPI()
+    await api.Init()
+
+    const modelID = await api.OpenModelStreamed( bytes, DEFER )
+    const sidecar = ( await api.ExportIndexSidecar( modelID ) )!
+
+    api.CloseModel( modelID )
+
+    // Two members swapped: the same count, a different mapping.
+    const swapped = sidecarSchemaStamp( SidecarSchema.AP214, AP214_SIDECAR_SCHEMA.typeCount,
+        ( ordinal ) => ap214TypeName( ( ordinal === 1 ? 2 : ordinal === 2 ? 1 : ordinal ) as EntityTypesAP214 ) )
+
+    expect( swapped.typeCount ).toBe( AP214_SIDECAR_SCHEMA.typeCount )
+    expect( swapped.typeDigest ).not.toBe( AP214_SIDECAR_SCHEMA.typeDigest )
+
+    const restamped = mutate( sidecar, () => {}, swapped )
+    const attemptedID = api.globalModelIDCounter
+
+    expect( await api.OpenModelFromIndex( syncStore( bytes ), restamped, DEFER ) ).toBe( -1 )
+    expect( api.getStatistics( attemptedID ).getLoadStatus() ).toBe( 'INDEX_STALE' )
+
+    let thrown: unknown
+
+    try {
+      deserializeIndexSidecarToColumns( restamped, AP214_SIDECAR_SCHEMA )
+    } catch ( error ) {
+      thrown = error
+    }
+
+    expect( ( thrown as IndexSidecarStaleError ).reason ).toBe( 'schema' )
+
+    // The unmutated sidecar still opens.
+    const reopened = await api.OpenModelFromIndex( syncStore( bytes ), sidecar, DEFER )
+
+    expect( reopened ).toBeGreaterThanOrEqual( 0 )
+    api.CloseModel( reopened )
+  }, 120000 )
+} )
+

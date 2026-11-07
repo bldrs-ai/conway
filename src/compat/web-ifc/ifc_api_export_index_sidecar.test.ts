@@ -676,7 +676,7 @@ describe( 'a stale sidecar fails the open as INDEX_STALE (conway#756)', () => {
   // not a decode failure.
   test( 'a stale sidecar with a corrupt body is stale, not a decode failure', async () => {
 
-    const corrupt = sidecar.slice( 0, 64 ) // v3 header (56 bytes) intact, columns gone
+    const corrupt = sidecar.slice( 0, 64 ) // v3 header (60 bytes) intact, columns gone
 
     const ifcBranch = await attempt( source.subarray( 0, source.length - 1 ), DEFER )
 

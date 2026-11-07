@@ -2,6 +2,7 @@ import EntityTypesAP214 from './AP214E3_2010_gen/entity_types_ap214.gen'
 import StepModelBase from '../step/step_model_base'
 import SchemaAP214Tessellated, {
   EntityTypesAP214ExtendedCount,
+  ap214TypeName,
 } from './ap214_tessellated_types'
 import {StepIndexEntry} from '../step/parsing/step_parser'
 import {StepIndexColumns} from '../step/parsing/columnar_index'
@@ -10,6 +11,7 @@ import { StepBufferProvider } from '../step/step_buffer_provider'
 import {
   SidecarSchema,
   SidecarSchemaStamp,
+  sidecarSchemaStamp,
 } from '../step/parsing/index_sidecar'
 import {MultiIndexSet} from '../indexing/multi_index_set'
 import { AP214ModelGeometry } from './ap214_model_geometry'
@@ -32,10 +34,9 @@ const indexerInstance = new StepTypeIndexer< EntityTypesAP214 >( EntityTypesAP21
  * enum are typeIDs a model's index can hold. AP203 and AP242 files open
  * through this engine and stamp the same.
  */
-export const AP214_SIDECAR_SCHEMA: SidecarSchemaStamp = Object.freeze( {
-  schema: SidecarSchema.AP214,
-  typeCount: EntityTypesAP214ExtendedCount,
-} )
+export const AP214_SIDECAR_SCHEMA: SidecarSchemaStamp = sidecarSchemaStamp(
+    SidecarSchema.AP214, EntityTypesAP214ExtendedCount,
+    ( ordinal ) => ap214TypeName( ordinal as EntityTypesAP214 ) )
 
 /**
  * Represents an IFC model deserialized from step.

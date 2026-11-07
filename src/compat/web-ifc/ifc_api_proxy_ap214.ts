@@ -549,6 +549,14 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // the pump runs, and IfcAPI refreshes it as it does.
     statistics?.setProductCount(model.typeCount(product_definition))
     statistics?.setProductsWithGeometryCount(this.getProductsWithGeometryCount())
+
+    // The reads above (the product name, the owners behind the
+    // products-with-geometry count) are the open's last, and on a windowed
+    // model they captured views like any other; drop them here, at the true
+    // end of the open, or they would hold their windows for the model's
+    // lifetime on a non-deferred open, which has no pump batch to release
+    // them (codex review of conway#769). No-op when resident.
+    this.releaseCapturedViews_()
   }
 
   /**

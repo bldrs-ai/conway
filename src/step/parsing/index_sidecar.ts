@@ -1,6 +1,6 @@
 import { ColumnarIndexSink, StepIndexColumns } from './columnar_index'
 import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
-import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
+import EntityTypesIfc, { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 
 
 /**
@@ -25,6 +25,8 @@ import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
  *   schema              u32  which type enumeration `typeID` indexes
  *                            (SidecarSchema: 1 = IFC, 2 = AP214)
  *   schemaTypeCount     u32  that enumeration's size when written
+ *   schemaTypeDigest    u32  FNV-1a of its ordinal → name mapping
+ *                            (sidecarSchemaStamp)
  *   hashAlgorithm       u32  what `sourceHash` and `sampledHash` are
  *                            (1 = FNV-1a 32, chained)
  *   sampledHash         u32  digest of the sampled source blocks
@@ -45,11 +47,14 @@ import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
  * v2 did not say which schema built it (conway#757): `typeID` is an index
  * into a type enumeration, and an AP214 index read against IFC's would
  * restore rows typed as whatever IFC entity happens to share the ordinal.
- * v3 stamps the schema and the enumeration's size, and every reader that
- * builds a model refuses a mismatch with {@link IndexSidecarStaleError}
- * (reason `'schema'`), whose remedy — parse — is the right one: a persisted
- * sidecar written before a schema regeneration renumbered the enumeration
- * fails the size check rather than retyping the model.
+ * v3 stamps the schema, the enumeration's size, and a digest of its whole
+ * ordinal → name mapping, and every reader that builds a model refuses a
+ * mismatch with {@link IndexSidecarStaleError} (reason `'schema'`), whose
+ * remedy — parse — is the right one: a persisted sidecar written before a
+ * schema regeneration renumbered the enumeration is refused rather than
+ * retyping the model. The digest is what catches a regeneration that
+ * reorders members without changing their count (codex review of
+ * conway#769); the size alone would let that through.
  *
  * The same bump carries conway#758's two slots, so the format changes
  * once: the field-mask table the IFC4-compatible IFC4X3 route needs
@@ -231,22 +236,51 @@ export enum SidecarSchema {
 
 /**
  * The schema stamp a sidecar is written with and checked against: the
- * enumeration, and its size at the time, so an index written before a
- * schema regeneration renumbered it is refused rather than retyped.
+ * enumeration, its size, and a digest of its ordinal → name mapping at the
+ * time, so an index written before a schema regeneration renumbered it is
+ * refused rather than retyped. Build one with {@link sidecarSchemaStamp}.
  */
 export interface SidecarSchemaStamp {
   schema: SidecarSchema
   typeCount: number
+  typeDigest: number
 }
 
 
 /**
- * The IFC stamp — `EntityTypesIfc` at its current size. The default for
+ * Build a schema stamp from the enumeration itself: FNV-1a over every
+ * ordinal's name in ordinal order, newline-separated (an ordinal with no
+ * name contributes an empty one). Computed once per schema at module load
+ * — about a thousand names.
+ *
+ * @param schema The enumeration.
+ * @param typeCount Its size.
+ * @param nameOf The name of each ordinal.
+ * @return {SidecarSchemaStamp} The frozen stamp.
+ */
+export function sidecarSchemaStamp(
+    schema: SidecarSchema,
+    typeCount: number,
+    nameOf: ( ordinal: number ) => string | undefined ): SidecarSchemaStamp {
+
+  const encoder = new TextEncoder()
+  let digest = FNV_OFFSET_BASIS >>> 0
+
+  for ( let ordinal = 0; ordinal < typeCount; ++ordinal ) {
+    digest = foldFnv1a( digest, encoder.encode( `${nameOf( ordinal ) ?? ''}\n` ) )
+  }
+
+  return Object.freeze( { schema, typeCount, typeDigest: digest >>> 0 } )
+}
+
+
+/**
+ * The IFC stamp — `EntityTypesIfc` as generated now. The default for
  * {@link serializeIndexSidecarFromColumns}, since IFC was the only schema
  * that wrote sidecars before v3; every other schema passes its own.
  */
-export const IFC_SIDECAR_SCHEMA: SidecarSchemaStamp =
-  Object.freeze( { schema: SidecarSchema.IFC, typeCount: EntityTypesIfcCount } )
+export const IFC_SIDECAR_SCHEMA: SidecarSchemaStamp = sidecarSchemaStamp(
+    SidecarSchema.IFC, EntityTypesIfcCount, ( ordinal ) => EntityTypesIfc[ ordinal ] )
 
 
 /**
@@ -284,6 +318,7 @@ const HEADER_BYTES =
   4 + // complexCount (u32)
   4 + // schema (u32)
   4 + // schemaTypeCount (u32)
+  4 + // schemaTypeDigest (u32)
   4 + // hashAlgorithm (u32)
   4 + // sampledHash (u32)
   4   // fieldMaskCount (u32)
@@ -663,6 +698,23 @@ function packStamp( stamp: SidecarSchemaStamp ): number {
 
 
 /**
+ * The stamp field pair an {@link IndexSidecarStaleError} reports: the
+ * packed schema and size when those differ, else the two digests.
+ *
+ * @param actual The sidecar's stamp.
+ * @param expected The open's stamp.
+ * @return {[number, number]} `[sidecar's, open's]`.
+ */
+function stampDifference(
+    actual: SidecarSchemaStamp, expected: SidecarSchemaStamp ): [ number, number ] {
+
+  return packStamp( actual ) !== packStamp( expected ) ?
+    [ packStamp( actual ), packStamp( expected ) ] :
+    [ actual.typeDigest, expected.typeDigest ]
+}
+
+
+/**
  * Refuse a decoded sidecar whose schema stamp is not the one this open
  * types its model with — the check v2 had no slot for (conway#757). A
  * {@link IndexSidecarStaleError} with reason `'schema'`, because the remedy
@@ -679,12 +731,13 @@ export function assertSidecarSchema(
 
   if ( actual === void 0 ||
        actual.schema !== expected.schema ||
-       actual.typeCount !== expected.typeCount ) {
+       actual.typeCount !== expected.typeCount ||
+       actual.typeDigest !== expected.typeDigest ) {
 
-    throw new IndexSidecarStaleError(
-        'schema',
-        actual === void 0 ? 0 : packStamp( actual ),
-        packStamp( expected ) )
+    const [ sidecar, open ] =
+      actual === void 0 ? [ 0, packStamp( expected ) ] : stampDifference( actual, expected )
+
+    throw new IndexSidecarStaleError( 'schema', sidecar, open )
   }
 }
 
@@ -976,6 +1029,7 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   view.setUint32( offset, complexCount, true ); offset += U32_BYTES
   view.setUint32( offset, schema.schema, true ); offset += U32_BYTES
   view.setUint32( offset, schema.typeCount, true ); offset += U32_BYTES
+  view.setUint32( offset, schema.typeDigest >>> 0, true ); offset += U32_BYTES
   view.setUint32( offset, SIDECAR_HASH_FNV1A_32, true ); offset += U32_BYTES
   view.setUint32( offset, ( extras?.sampledHash ?? 0 ) >>> 0, true ); offset += U32_BYTES
   view.setUint32( offset, fieldMaskCount, true ); offset += U32_BYTES
@@ -1141,7 +1195,7 @@ const SCHEMA_OFFSET = U32_BYTES * 2 + F64_BYTES + U32_BYTES * 5
  */
 function readIdentityFields( view: DataView ): SidecarSourceIdentity {
 
-  const sampledHash = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 3, true )
+  const sampledHash = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 4, true )
 
   return {
     sourceByteLength: view.getFloat64( U32_BYTES * 2, true ),
@@ -1150,6 +1204,7 @@ function readIdentityFields( view: DataView ): SidecarSourceIdentity {
     schema: {
       schema: view.getUint32( SCHEMA_OFFSET, true ) as SidecarSchema,
       typeCount: view.getUint32( SCHEMA_OFFSET + U32_BYTES, true ),
+      typeDigest: view.getUint32( SCHEMA_OFFSET + U32_BYTES * 2, true ),
     },
   }
 }
@@ -1200,11 +1255,11 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
   const flags = view.getUint32( offset, true ); offset += U32_BYTES
   const complexCount = view.getUint32( offset, true ); offset += U32_BYTES
 
-  // schema, schemaTypeCount, hashAlgorithm, sampledHash — read above via
-  // readIdentityFields — then the field-mask count.
-  offset += U32_BYTES * 4
+  // schema, schemaTypeCount, schemaTypeDigest, hashAlgorithm, sampledHash —
+  // read above via readIdentityFields — then the field-mask count.
+  offset += U32_BYTES * 5
 
-  const hashAlgorithm = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 2, true )
+  const hashAlgorithm = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 3, true )
   const fieldMaskCount = view.getUint32( offset, true ); offset += U32_BYTES
 
   if ( hashAlgorithm !== SIDECAR_HASH_FNV1A_32 ) {
