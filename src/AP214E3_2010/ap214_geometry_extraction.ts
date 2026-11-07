@@ -161,6 +161,7 @@ import {
   tessellated_shape_representation,
   tessellated_solid,
 } from './ap214_tessellated_types'
+import { AP214DemandUnitCost } from './ap214_demand_unit_cost'
 import { AP214MaterialCache } from './ap214_material_cache'
 import AP214ModelCurves from './ap214_model_curves'
 import { AP214ProductShapeMap } from './ap214_product_shape_map'
@@ -7552,6 +7553,51 @@ export class AP214GeometryExtraction {
       // concatenated units reproduce the whole-model walk exactly.
       const units: ( () => void )[] = []
 
+      // Per unit, a deferred face-count estimate (ap214_demand_unit_cost.ts),
+      // parallel to `units`. Closures rather than numbers so planning stays
+      // as cheap as it was: only the preview channel asks, and only for the
+      // units it is about to consider.
+      const unitCosts: ( () => number )[] = []
+
+      const cost = new AP214DemandUnitCost()
+
+      const subtreeFaceCounts = new Map<MappedSceneNode, number>()
+
+      // Faces under a tree node and everything placed beneath it — the
+      // twin of subtreeItemCount, for a unit that runs a child whole.
+      const subtreeFaces = (
+          node: MappedSceneNode,
+          path: Set<MappedSceneNode> ): number => {
+
+        const memoized = subtreeFaceCounts.get( node )
+
+        if ( memoized !== void 0 ) {
+          return memoized
+        }
+
+        if ( path.has( node ) ) {
+          return 0
+        }
+
+        path.add( node )
+
+        let count = node.rep !== void 0 ? cost.representationFaces( node.rep ) : 0
+
+        for ( const [ childLocalID ] of node.children ?? [] ) {
+
+          const child = treeMap.get( childLocalID )
+
+          if ( child !== void 0 ) {
+            count += subtreeFaces( child, path )
+          }
+        }
+
+        path.delete( node )
+        subtreeFaceCounts.set( node, count )
+
+        return count
+      }
+
       // Recursive item count per tree node — the cost proxy that decides
       // whether descending into a child buys any granularity at all.
       // Cheap: `.items` is one dereference per representation, and each
@@ -7630,7 +7676,7 @@ export class AP214GeometryExtraction {
       const expandUnits = (
           node: MappedSceneNode,
           path: Set<MappedSceneNode>,
-          wrap: ( slice: ThunkSlice ) => void ): void => {
+          wrap: ( slice: ThunkSlice, faces: () => number ) => void ): void => {
 
         const childCount = node.children?.length ?? 0
 
@@ -7652,7 +7698,10 @@ export class AP214GeometryExtraction {
               this.demandItemsPerUnit
 
           if ( !descend ) {
-            wrap( { childStart: child, childEnd: child + 1, includeItems: false } )
+            wrap(
+                { childStart: child, childEnd: child + 1, includeItems: false },
+                () => childNode !== void 0 ?
+                  subtreeFaces( childNode, new Set<MappedSceneNode>() ) : 0 )
             continue
           }
 
@@ -7660,7 +7709,7 @@ export class AP214GeometryExtraction {
 
           path.add( descendant )
 
-          expandUnits( descendant, path, ( childSlice ) => {
+          expandUnits( descendant, path, ( childSlice, faces ) => {
 
             const childThunk = makeThunk(
                 descendant.rep!, descendant.owningLocalID, descendant, childSlice )
@@ -7670,7 +7719,7 @@ export class AP214GeometryExtraction {
               childEnd: child + 1,
               includeItems: false,
               childThunk,
-            } )
+            }, faces )
           } )
 
           path.delete( descendant )
@@ -7678,13 +7727,20 @@ export class AP214GeometryExtraction {
 
         const itemRanges = node.rep !== void 0 ? itemUnitRanges( node.rep ) : void 0
 
+        const rep = node.rep
+
         if ( itemRanges === void 0 ) {
-          wrap( { childStart: 0, childEnd: 0, includeItems: true } )
+          wrap(
+              { childStart: 0, childEnd: 0, includeItems: true },
+              () => rep !== void 0 ? cost.representationFaces( rep ) : 0 )
           return
         }
 
         for ( const range of itemRanges ) {
-          wrap( { childStart: 0, childEnd: 0, includeItems: true, ...range } )
+          wrap(
+              { childStart: 0, childEnd: 0, includeItems: true, ...range },
+              () => rep !== void 0 ?
+                cost.representationFaces( rep, range.itemStart, range.itemEnd ) : 0 )
         }
       }
 
@@ -7696,18 +7752,21 @@ export class AP214GeometryExtraction {
 
         if ( rep === void 0 ) {
           units.push( () => node.thunk!( void 0, scaleTransform ) )
+          unitCosts.push( () => subtreeFaces( node, new Set<MappedSceneNode>() ) )
           continue
         }
 
-        expandUnits( node, new Set<MappedSceneNode>( [ node ] ), ( slice ) => {
+        expandUnits( node, new Set<MappedSceneNode>( [ node ] ), ( slice, faces ) => {
 
           const sliced = makeThunk( rep, node.owningLocalID, node, slice )
 
           units.push( () => sliced( void 0, scaleTransform ) )
+          unitCosts.push( faces )
         } )
       }
 
       this.demandUnits_ = units
+      this.demandUnitCosts_ = unitCosts
     }
   }
 
@@ -7726,6 +7785,8 @@ export class AP214GeometryExtraction {
   // Ordered pending execution units built by prepareDemandExtraction;
   // demandCursor_ tracks how many have run (the pump's progress).
   private demandUnits_?: ( () => void )[]
+  private demandUnitCosts_?: ( () => number )[]
+  private readonly demandUnitFaces_ = new Map<number, number>()
   private demandCursor_ = 0
   private demandMemoizationRestore_?: boolean
 
@@ -7748,6 +7809,34 @@ export class AP214GeometryExtraction {
    */
   public get demandUnitCount(): number {
     return this.demandUnits_?.length ?? 0
+  }
+
+  /**
+   * Estimated faces under one demand unit (see AP214DemandUnitCost): what
+   * the parse-time preview channel weighs before running a unit it cannot
+   * preempt. Computed on first ask and memoized; reads record bytes only,
+   * so it never runs the unit or materializes its faces.
+   *
+   * @param ordinal The unit's ordinal.
+   * @return {number | undefined} The estimate, or undefined before
+   * preparation or past the unit list.
+   */
+  public demandUnitFaceEstimate( ordinal: number ): number | undefined {
+
+    const costs = this.demandUnitCosts_
+
+    if ( costs === void 0 || ordinal < 0 || ordinal >= costs.length ) {
+      return void 0
+    }
+
+    let faces = this.demandUnitFaces_.get( ordinal )
+
+    if ( faces === void 0 ) {
+      faces = costs[ ordinal ]()
+      this.demandUnitFaces_.set( ordinal, faces )
+    }
+
+    return faces
   }
 
   /**
