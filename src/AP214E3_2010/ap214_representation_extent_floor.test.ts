@@ -52,8 +52,19 @@ let conwayGeometry: ConwayGeometry
  * an extraction over it.
  */
 function load( fixture: string = FIXTURE ): [AP214StepModel, AP214GeometryExtraction] {
+  return loadBuffer( fs.readFileSync(fixture) )
+}
+
+
+/**
+ * Parse STEP bytes into a fresh model and extraction (see {@link load}).
+ *
+ * @param buffer The STEP file's bytes.
+ * @return {[AP214StepModel, AP214GeometryExtraction]} The parsed model and
+ * an extraction over it.
+ */
+function loadBuffer( buffer: Buffer ): [AP214StepModel, AP214GeometryExtraction] {
   const parser = AP214StepParser.Instance
-  const buffer: Buffer = fs.readFileSync(fixture)
   const bufferInput = new ParsingBuffer(buffer)
 
   expect(parser.parseHeader(bufferInput)[1]).toBe(ParseResult.COMPLETE)
@@ -278,5 +289,99 @@ describe('AP214 representation-extent deflection floor (bldrs-ai/conway#564 §5)
 
     expect(floored).toBeGreaterThan(0)
     expect(floored).toBeLessThan(unfloored)
+  })
+
+  // conway#773. The table used to be built whole on the first face: every
+  // representation descended to its points before that face could be
+  // tessellated, which put Arty_Z7's whole-model descent (238 ms) inside the
+  // first demand unit of every extraction. A representation is now
+  // descended the first time one of its own faces asks, so the first face
+  // pays for its representation alone. Counted at the descent itself
+  // (growBoxByFace runs once per sampled face), so the claim is about the
+  // work, not about a flag.
+  test('a face descends only the representations that define it', () => {
+
+    const [model, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const prototype = AP214GeometryExtraction.prototype as any
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    const original = prototype.growBoxByFace
+    const descended: number[] = []
+
+    prototype.growBoxByFace = function( face_: { localID: number }, ...rest: unknown[] ) {
+      descended.push( face_.localID )
+      return original.call( this, face_, ...rest )
+    }
+
+    try {
+      const small = faceNamed( model, 'small face' )
+      const large = faceNamed( model, 'large face' )
+
+      expect(extraction.representationExtentForFace( small )).toBeCloseTo(Math.sqrt(3), 9)
+      expect(descended).toEqual( [ small ] )
+
+      // Asked again: memoized, nothing descended twice.
+      expect(extraction.representationExtentForFace( small )).toBeCloseTo(Math.sqrt(3), 9)
+      expect(descended).toEqual( [ small ] )
+
+      expect(extraction.representationExtentForFace( large ))
+          .toBeCloseTo(Math.sqrt(3) * LARGE_BODY_SPAN, 6)
+      expect(descended).toEqual( [ small, large ] )
+    } finally {
+      prototype.growBoxByFace = original
+    }
+  })
+
+  // The other half of the same move: the membership walk is preparation, so
+  // the demand plan builds it and the first unit does not.
+  test('the demand plan builds the membership walk and descends nothing', () => {
+
+    const [, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const internals = extraction as any
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    expect(internals.extentTable_).toBeUndefined()
+
+    extraction.prepareDemandExtraction()
+
+    const table = internals.extentTable_
+
+    expect(table).toBeDefined()
+    expect(table.samples.length).toBe(2)
+    expect(Array.from( table.extents as Float64Array ).every( Number.isNaN )).toBe(true)
+  })
+
+  // A face two representations both list (a malformed file: here the small
+  // solid is also an item of the large body) still takes the SMALLER extent,
+  // whichever face asks first — which is only true if a face is answered
+  // over every representation that holds it, not just the first one to be
+  // descended.
+  test('a face two representations define takes the smaller extent, in either order', () => {
+
+    const text = fs.readFileSync( TWO_REPRESENTATION_FIXTURE, 'utf8' )
+    const listedTwice = text.replace(
+        "ADVANCED_BREP_SHAPE_REPRESENTATION('large body',(#313),#100)",
+        "ADVANCED_BREP_SHAPE_REPRESENTATION('large body',(#313,#413),#100)" )
+
+    expect(listedTwice).not.toBe(text)
+
+    for ( const order of [ [ 'small face', 'large face' ], [ 'large face', 'small face' ] ] ) {
+
+      const [model, extraction] = loadBuffer( Buffer.from( listedTwice ) )
+      const extents = new Map< string, number >()
+
+      for ( const name of order ) {
+        extents.set( name, extraction.representationExtentForFace( faceNamed( model, name ) ) )
+      }
+
+      expect(extents.get( 'small face' )).toBeCloseTo(Math.sqrt(3), 9)
+      // The large body's own extent, at least: the small solid adds its
+      // corner to that representation's box, it cannot shrink it.
+      expect(extents.get( 'large face' )!)
+          .toBeGreaterThanOrEqual(extents.get( 'small face' )! * LARGE_BODY_SPAN)
+    }
   })
 })
