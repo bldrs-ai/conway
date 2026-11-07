@@ -1,44 +1,21 @@
 import {
+  IFC_SIDECAR_SCHEMA,
   IndexSidecarUnsupportedError,
-  serializeIndexSidecarFromColumns,
 } from '../step/parsing/index_sidecar'
+import {
+  exportStepIndexSidecar,
+  StepIndexSidecarExport,
+  StepIndexSidecarExportOptions,
+} from '../step/step_index_sidecar_export'
 import IfcStepModel from './ifc_step_model'
 
 
-/**
- * What {@link exportIfcIndexSidecar} produced, with what it cost.
- */
-export interface IfcIndexSidecarExport {
-
-  /** The v2 sidecar bytes (`index_sidecar.ts`). */
-  sidecar: Uint8Array
-
-  /** The length of the source the sidecar was written against. */
-  sourceByteLength: number
-
-  /** The FNV-1a of that source, as recorded in the sidecar's header. */
-  sourceHash: number
-
-  /** Milliseconds spent serialising the columns. */
-  serializeMs: number
-}
+/** What {@link exportIfcIndexSidecar} produced (the schema-neutral shape). */
+export type IfcIndexSidecarExport = StepIndexSidecarExport
 
 
-/**
- * Options for {@link exportIfcIndexSidecar}.
- */
-export interface IfcIndexSidecarExportOptions {
-
-  /**
-   * The source's hash, for a model whose open did not record one
-   * (`StepModelBase.indexedSourceHash` unset — a model built outside the
-   * IFC open entry points). Ignored when the model has its own. **Must** be
-   * the FNV-1a (`hashSource`) of exactly the bytes the model's index was
-   * built from; a wrong value writes a sidecar that every verified open
-   * will refuse as stale, and that a length-only open will trust.
-   */
-  sourceHash?: number
-}
+/** Options for {@link exportIfcIndexSidecar} (the schema-neutral shape). */
+export type IfcIndexSidecarExportOptions = StepIndexSidecarExportOptions
 
 
 /**
@@ -71,8 +48,9 @@ export interface IfcIndexSidecarExportOptions {
  *
  * Refuses, with an {@link IndexSidecarUnsupportedError}, a model the format
  * cannot represent: one on the IFC4-compatible IFC4X3 route, whose
- * per-record field masks v2 has no slot for (and whose header the
- * index-first open refuses anyway); and one with no recorded hash when the
+ * per-record field masks (v3 has the slot, but the index-first open
+ * refuses an IFC4X3 header, so such a sidecar could never be opened —
+ * conway#758 wires that route); and one with no recorded hash when the
  * caller supplies none. Refuses a mid-parse prefix model through the
  * serialiser's own guard.
  *
@@ -87,34 +65,11 @@ export async function exportIfcIndexSidecar(
 
   if ( model.hasFieldMasks ) {
     throw new IndexSidecarUnsupportedError(
-        'This model was opened through the IFC4-compatible IFC4X3 route, ' +
-        'whose per-record field masks the v2 index sidecar cannot carry; ' +
-        'reopen it with a parse' )
+        'This model was opened through the IFC4-compatible IFC4X3 route; ' +
+        'its field masks have a v3 slot, but the index-first open refuses ' +
+        'IFC4X3 headers (conway#758), so its sidecar could never be ' +
+        'opened; reopen it with a parse' )
   }
 
-  const sourceByteLength = model.bufferBytesize
-  const sourceHash = model.indexedSourceHash ?? options?.sourceHash
-
-  if ( sourceHash === void 0 ) {
-    throw new IndexSidecarUnsupportedError(
-        'This model\'s open recorded no hash of the bytes its index was ' +
-        'built from (StepModelBase.indexedSourceHash) — open it with ' +
-        'RECORD_SOURCE_HASH (compat) or recordSourceHash (engine) — and ' +
-        'none was supplied; hashing the source now could bind the index to ' +
-        'bytes it does not describe' )
-  }
-
-  const serializeStart = Date.now()
-
-  const sidecar = serializeIndexSidecarFromColumns(
-      model.indexColumns(), sourceByteLength, sourceHash )
-
-  const serializeMs = Date.now() - serializeStart
-
-  return {
-    sidecar,
-    sourceByteLength,
-    sourceHash: sourceHash >>> 0,
-    serializeMs,
-  }
+  return await exportStepIndexSidecar( model, IFC_SIDECAR_SCHEMA, options )
 }

@@ -42,3 +42,12 @@ export {
   formatSeconds,
   stageLabel,
 } from '../../core/progress_log'
+
+// Conway extension (conway#757): what a store-backed open needs of its
+// store, per format — the table the factory's store opens and an
+// embedder's "hand the engine a store, or bytes?" decision both read.
+export {
+  StoreOpenRequirement,
+  storeOpenRequirement,
+  storeOpenRequirementOf,
+} from './store_open_support'

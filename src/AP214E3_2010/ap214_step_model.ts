@@ -6,6 +6,11 @@ import SchemaAP214Tessellated, {
 import {StepIndexEntry} from '../step/parsing/step_parser'
 import {StepIndexColumns} from '../step/parsing/columnar_index'
 import {StepTypeIndexer} from '../step/indexing/step_type_indexer'
+import { StepBufferProvider } from '../step/step_buffer_provider'
+import {
+  SidecarSchema,
+  SidecarSchemaStamp,
+} from '../step/parsing/index_sidecar'
 import {MultiIndexSet} from '../indexing/multi_index_set'
 import { AP214ModelGeometry } from './ap214_model_geometry'
 import { AP214ModelProfile } from './ap214_model_profile'
@@ -20,6 +25,17 @@ import { CsgMemoization } from '../core/csg_operations'
 // indexer built to the generated count would index off the end of its
 // counters for them.
 const indexerInstance = new StepTypeIndexer< EntityTypesAP214 >( EntityTypesAP214ExtendedCount )
+
+/**
+ * The index sidecar's schema stamp for an AP214 model (conway#757): the
+ * EXTENDED enumeration, since the AP242 shadow types past the generated
+ * enum are typeIDs a model's index can hold. AP203 and AP242 files open
+ * through this engine and stamp the same.
+ */
+export const AP214_SIDECAR_SCHEMA: SidecarSchemaStamp = Object.freeze( {
+  schema: SidecarSchema.AP214,
+  typeCount: EntityTypesAP214ExtendedCount,
+} )
 
 /**
  * Represents an IFC model deserialized from step.
@@ -38,13 +54,18 @@ export default class AP214StepModel extends StepModelBase< EntityTypesAP214 > {
    * Construct this model given a buffer containing the data and the parsed data index on that,
    * adding the typeIndex on top of that.
    *
-   * @param buffer The buffer to values from.
+   * @param buffer The buffer to values from, or `undefined` with `provider`
+   * for a source that is windowed from construction (a store-backed or
+   * index-first open — see StepModelBase's constructor).
    * @param elementIndex The parsed index to elements in the STEP.
+   * @param provider Optional pre-built buffer provider (the IfcStepModel
+   * twin's parameter, so both schemas open windowed through the same seam).
    */
   constructor(
-      buffer: Uint8Array,
-      elementIndex: StepIndexEntry< EntityTypesAP214 >[] | StepIndexColumns< EntityTypesAP214 > ) {
-    super( SchemaAP214Tessellated, buffer, elementIndex )
+      buffer: Uint8Array | undefined,
+      elementIndex: StepIndexEntry< EntityTypesAP214 >[] | StepIndexColumns< EntityTypesAP214 >,
+      provider?: StepBufferProvider ) {
+    super( SchemaAP214Tessellated, buffer, elementIndex, provider )
 
     this.typeIndex = indexerInstance.createFor( elementIndex )
   }

@@ -10,6 +10,7 @@ import { beforeAll, describe, expect, test } from '@jest/globals'
 
 import { BufferByteSource, StoreByteSource } from '../step/parsing/byte_source'
 import {
+  hashSampledBuffer,
   hashSource,
   IndexSidecarStaleError,
   IndexSidecarUnsupportedError,
@@ -73,7 +74,8 @@ describe( 'exportIfcIndexSidecar', () => {
     expect( exported.sourceHash ).toBe( hashSource( bytes ) )
     expect( Buffer.from( exported.sidecar ).equals( Buffer.from(
         serializeIndexSidecarFromColumns(
-            opened.columns, bytes.length, hashSource( bytes ) ) ) ) ).toBe( true )
+            opened.columns, bytes.length, hashSource( bytes ),
+            { sampledHash: hashSampledBuffer( bytes ) } ) ) ) ).toBe( true )
   } )
 
   test( 'the hash is the parse-time one, not the source as it is at export', async () => {

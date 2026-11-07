@@ -157,7 +157,22 @@ export interface IfcApiModelPassthrough {
   /**
    * Optional: serialise the model's entity index to a v2 index sidecar, so
    * a later engine can `OpenModelFromIndex` instead of re-parsing
-   * (conway#756). IFC only; see `IfcAPI.ExportIndexSidecar`.
+   * (conway#756; STEP since conway#757). See `IfcAPI.ExportIndexSidecar`.
    */
   exportIndexSidecar?(): Promise< IfcIndexSidecarExport >
+
+  /**
+   * Optional: `getLine` that is safe on a windowed source (IFC: pages the
+   * read's closure in; AP214: faults windows in synchronously).
+   */
+  getLineResident?(
+    expressID: number, flatten?: boolean, includeRepresentations?: boolean ): Promise< any >
+
+  /**
+   * Optional: visit records' line data in file order, paging a windowed
+   * source about once per window (conway#752/#755).
+   */
+  visitLineDataInFileOrder?(
+    expressIDs: Iterable< number >,
+    visit: ( expressID: number, line: any ) => void ): Promise< void >
 }

@@ -1,5 +1,6 @@
 import { ColumnarIndexSink, StepIndexColumns } from './columnar_index'
 import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
+import { EntityTypesIfcCount } from '../../ifc/ifc4_gen/entity_types_ifc.gen'
 
 
 /**
@@ -9,17 +10,26 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  * `IfcAPI.OpenModelFromIndex`): reconstruct the entity index without
  * re-scanning the source, then fetch only the byte ranges demand asks for.
  *
- * ## v2 layout (all little-endian)
+ * ## v3 layout (all little-endian)
  *
  * ```
  *   'CIDX'              4    magic
- *   version             u32  (= 2)
+ *   version             u32  (= 3)
  *   sourceByteLength    f64  length of the source the index was built from
- *   sourceHash          u32  FNV-1a over the source bytes — the handshake
+ *   sourceHash          u32  digest of the whole source — the handshake
  *   count               u32  TOTAL rows: top-level + inline
  *   firstInlineElement  u32  start of the inline range
- *   flags               u32  bit 0 = expressIdsSorted
+ *   flags               u32  bit 0 = expressIdsSorted,
+ *                            bit 1 = field-mask table present
  *   complexCount        u32  number of multi-mapping holders
+ *   schema              u32  which type enumeration `typeID` indexes
+ *                            (SidecarSchema: 1 = IFC, 2 = AP214)
+ *   schemaTypeCount     u32  that enumeration's size when written
+ *   hashAlgorithm       u32  what `sourceHash` and `sampledHash` are
+ *                            (1 = FNV-1a 32, chained)
+ *   sampledHash         u32  digest of the sampled source blocks
+ *                            (sampledSourceSpans), 0 = not recorded
+ *   fieldMaskCount      u32  rows in the field-mask table
  *   address[]           u32 × count
  *   length[]            u32 × count
  *   typeID[]            i32 × count      (−1 = no concrete type)
@@ -27,7 +37,28 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  *   complexEntries      complexCount × { localID u32, entry }
  *       entry:  address u32, length u32, typeID i32, flags u32,
  *               expressID u32, multiCount u32, multiCount × entry
+ *   fieldMasks          fieldMaskCount × { expressID u32, decodedFieldCount u32 }
  * ```
+ *
+ * ## Why v3 exists — the schema, and one bump for three asks
+ *
+ * v2 did not say which schema built it (conway#757): `typeID` is an index
+ * into a type enumeration, and an AP214 index read against IFC's would
+ * restore rows typed as whatever IFC entity happens to share the ordinal.
+ * v3 stamps the schema and the enumeration's size, and every reader that
+ * builds a model refuses a mismatch with {@link IndexSidecarStaleError}
+ * (reason `'schema'`), whose remedy — parse — is the right one: a persisted
+ * sidecar written before a schema regeneration renumbered the enumeration
+ * fails the size check rather than retyping the model.
+ *
+ * The same bump carries conway#758's two slots, so the format changes
+ * once: the field-mask table the IFC4-compatible IFC4X3 route needs
+ * (written when the caller supplies masks; the index-first open that would
+ * consume one for an IFC4X3 header is conway#758's), and a sampled digest
+ * beside the whole-source one, which lets a revisit verify a persisted
+ * sidecar against its store by reading about 0.5 MB instead of the file
+ * ({@link sampledSourceSpans}). `hashAlgorithm` makes a faster digest an
+ * algorithm id rather than another version.
  *
  * A complex entry's `expressID` is **unsigned**, with presence carried in
  * `flags` bit 0 rather than by a sentinel value. The obvious encoding — i32
@@ -87,16 +118,6 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
  * ~40 % off the blob.
  *
  * ## What the format still does not carry
- *
- * **The schema.** `typeID` is an index into whichever schema's type
- * enumeration built it, and nothing in the blob says which. An AP214
- * sidecar fed to an IFC open would restore rows typed against the wrong
- * enumeration. Not a live hazard — the only producer and the only consumer
- * are both IFC (`IfcApiModelPassthroughFactory.fromIndex` sniffs the
- * format off the store's prefix and refuses anything else), and
- * `openIfcModelFromIndex` is IFC-typed by signature — but it is the first
- * thing to add if a second schema ever writes one, and it is a header slot,
- * not a reshape.
  *
  * **The STEP header.** An index-first open parses that from a bounded
  * prefix of the source it is opening, which it has in hand anyway.
@@ -165,7 +186,10 @@ import { StepIndexEntry, StepIndexEntryBase } from './step_parser'
 const MAGIC = 0x58444943 // 'CIDX' little-endian
 
 /** The format version this module writes, and the only one it reads. */
-export const SIDECAR_VERSION = 2
+export const SIDECAR_VERSION = 3
+
+/** The schema-less version (conway#541/#756) — rejected on read. */
+export const SIDECAR_VERSION_UNSTAMPED = 2
 
 /** The first version, carrying top-level rows only — rejected on read. */
 export const SIDECAR_VERSION_TOP_LEVEL_ONLY = 1
@@ -186,6 +210,68 @@ const MAX_ADDRESSABLE = 0xFFFFFFFF
 /** `flags` bit 0 — the columns' `expressIdsSorted`. */
 const FLAG_EXPRESS_IDS_SORTED = 1
 
+/** `flags` bit 1 — a field-mask table follows the complex entries. */
+const FLAG_FIELD_MASKS = 2
+
+/** `hashAlgorithm`: chained FNV-1a 32 ({@link hashSource}). */
+export const SIDECAR_HASH_FNV1A_32 = 1
+
+
+/**
+ * Which type enumeration a sidecar's `typeID` column indexes. One value per
+ * enumeration, not per FILE_SCHEMA spelling: IFC2X3 and IFC4 files both
+ * index `EntityTypesIfc`, and AP203/AP242 files open through the AP214
+ * engine and index its extended enumeration.
+ */
+export enum SidecarSchema {
+  IFC = 1,
+  AP214 = 2,
+}
+
+
+/**
+ * The schema stamp a sidecar is written with and checked against: the
+ * enumeration, and its size at the time, so an index written before a
+ * schema regeneration renumbered it is refused rather than retyped.
+ */
+export interface SidecarSchemaStamp {
+  schema: SidecarSchema
+  typeCount: number
+}
+
+
+/**
+ * The IFC stamp — `EntityTypesIfc` at its current size. The default for
+ * {@link serializeIndexSidecarFromColumns}, since IFC was the only schema
+ * that wrote sidecars before v3; every other schema passes its own.
+ */
+export const IFC_SIDECAR_SCHEMA: SidecarSchemaStamp =
+  Object.freeze( { schema: SidecarSchema.IFC, typeCount: EntityTypesIfcCount } )
+
+
+/**
+ * Everything beyond the columns and the whole-source identity that a v3
+ * sidecar can carry. All optional.
+ */
+export interface SidecarExtras {
+
+  /** The schema stamp (default {@link IFC_SIDECAR_SCHEMA}). */
+  schema?: SidecarSchemaStamp
+
+  /**
+   * The sampled digest ({@link hashSampledSource}) of the same bytes as
+   * `sourceHash`; omitted, the slot reads 0 and a sampled verify of this
+   * sidecar falls back to the full one.
+   */
+  sampledHash?: number
+
+  /**
+   * Decoded-field counts by express ID (`StepModelBase.setFieldMasks`), for
+   * an index translated by the IFC4-compatible IFC4X3 route.
+   */
+  fieldMasks?: ReadonlyMap< number, number >
+}
+
 // Byte sizes of the fixed header fields, in order.
 const HEADER_BYTES =
   4 + // magic
@@ -195,7 +281,12 @@ const HEADER_BYTES =
   4 + // count (u32)
   4 + // firstInlineElement (u32)
   4 + // flags (u32)
-  4   // complexCount (u32)
+  4 + // complexCount (u32)
+  4 + // schema (u32)
+  4 + // schemaTypeCount (u32)
+  4 + // hashAlgorithm (u32)
+  4 + // sampledHash (u32)
+  4   // fieldMaskCount (u32)
 
 const U32_BYTES = 4
 const F64_BYTES = 8
@@ -219,7 +310,7 @@ const IS_LITTLE_ENDIAN =
 
 
 /** Which half of the trust gate an {@link IndexSidecarStaleError} failed. */
-export type IndexSidecarStaleReason = 'length' | 'hash'
+export type IndexSidecarStaleReason = 'length' | 'hash' | 'schema'
 
 
 /**
@@ -237,8 +328,9 @@ export class IndexSidecarStaleError extends Error {
 
   /**
    * @param reason Which check failed.
-   * @param expected What the sidecar recorded (length in bytes, or hash).
-   * @param actual What the source actually has.
+   * @param expected What the sidecar recorded (length in bytes, hash, or —
+   * for `'schema'` — the packed stamp, `schema * 1e6 + typeCount`).
+   * @param actual What the source or open actually has, in the same unit.
    */
   constructor(
       public readonly reason: IndexSidecarStaleReason,
@@ -248,9 +340,12 @@ export class IndexSidecarStaleError extends Error {
     super( reason === 'length' ?
       `Sidecar was built against ${expected} bytes but the store holds ` +
       `${actual}` :
-      `Sidecar hash does not match the store contents (sidecar ` +
-      `0x${( expected >>> 0 ).toString( HEX )}, store ` +
-      `0x${( actual >>> 0 ).toString( HEX )})` )
+      reason === 'schema' ?
+        `Sidecar indexes a different type enumeration (sidecar schema ` +
+        `${expected}, this open ${actual}); rebuild it with a parse` :
+        `Sidecar hash does not match the store contents (sidecar ` +
+        `0x${( expected >>> 0 ).toString( HEX )}, store ` +
+        `0x${( actual >>> 0 ).toString( HEX )})` )
 
     this.name = 'IndexSidecarStaleError'
   }
@@ -288,6 +383,15 @@ export interface SidecarSourceIdentity {
 
   /** Hash of the source bytes (see {@link hashSource}). */
   sourceHash: number
+
+  /**
+   * Sampled digest of the source ({@link hashSampledSource}), when the
+   * sidecar recorded one.
+   */
+  sampledHash?: number
+
+  /** The schema stamp, when the blob carries one (every v3 blob does). */
+  schema?: SidecarSchemaStamp
 }
 
 
@@ -307,6 +411,9 @@ export interface DecodedSidecarColumns<TypeIDType extends number>
 
   /** The reconstructed index. */
   columns: StepIndexColumns<TypeIDType>
+
+  /** The field-mask table, when the blob carries one. */
+  fieldMasks?: Map< number, number >
 }
 
 
@@ -328,6 +435,257 @@ export function hashSource( source: Uint8Array ): number {
   }
 
   return hash >>> 0
+}
+
+
+/** Bytes hashed at each end of the source by {@link sampledSourceSpans}. */
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (64 KiB)
+export const SAMPLED_HASH_EDGE_BYTES = 64 * 1024
+
+/** Bytes per interior block of {@link sampledSourceSpans}. */
+// eslint-disable-next-line no-magic-numbers -- byte-size arithmetic (4 KiB)
+export const SAMPLED_HASH_BLOCK_BYTES = 4 * 1024
+
+/** Interior blocks {@link sampledSourceSpans} takes, evenly strided. */
+export const SAMPLED_HASH_BLOCKS = 96
+
+
+/**
+ * The byte ranges the sampled digest covers for a source of this length
+ * (conway#758): the first and last {@link SAMPLED_HASH_EDGE_BYTES}, and
+ * {@link SAMPLED_HASH_BLOCKS} blocks of {@link SAMPLED_HASH_BLOCK_BYTES}
+ * strided evenly between them — about 0.5 MB on any file, with positions
+ * that depend on the length alone, so a writer and a later verifier agree
+ * on them without storing them. Sorted, non-overlapping, half-open; a
+ * source no longer than the samples would be is one span over the whole.
+ *
+ * What it catches: truncation and extension (the length check already
+ * does), replacement by a different file, and an edit that lands in any
+ * sampled block. What it misses: a same-length in-place edit outside every
+ * block — which a store keyed by content or revision (Share's OPFS cache)
+ * does not produce. The whole-source `sourceHash` stays for stores that
+ * might.
+ *
+ * @param byteLength The source length.
+ * @return {Array<[number, number]>} `[start, end)` spans in file order.
+ */
+export function sampledSourceSpans( byteLength: number ): Array< [ number, number ] > {
+
+  const sampledTotal =
+    2 * SAMPLED_HASH_EDGE_BYTES + SAMPLED_HASH_BLOCKS * SAMPLED_HASH_BLOCK_BYTES
+
+  if ( byteLength <= sampledTotal ) {
+    return byteLength > 0 ? [ [ 0, byteLength ] ] : []
+  }
+
+  const spans: Array< [ number, number ] > = [ [ 0, SAMPLED_HASH_EDGE_BYTES ] ]
+  const interiorStart = SAMPLED_HASH_EDGE_BYTES
+  const interiorEnd = byteLength - SAMPLED_HASH_EDGE_BYTES
+  const stride = ( interiorEnd - interiorStart ) / SAMPLED_HASH_BLOCKS
+
+  for ( let block = 0; block < SAMPLED_HASH_BLOCKS; ++block ) {
+
+    // Each block starts at the beginning of its stride and is clamped to
+    // it, so blocks never overlap each other or the tail span.
+    const start = interiorStart + Math.floor( block * stride )
+    const end = Math.min( start + SAMPLED_HASH_BLOCK_BYTES, interiorEnd )
+
+    if ( end > start ) {
+      spans.push( [ start, end ] )
+    }
+  }
+
+  spans.push( [ interiorEnd, byteLength ] )
+
+  return spans
+}
+
+
+/**
+ * FNV-1a over the {@link sampledSourceSpans} of a source, chained in file
+ * order and seeded with the length (so two sources whose samples happen to
+ * agree but whose lengths do not still differ in the digest, not only in
+ * the separate length check).
+ *
+ * @param byteLength The source length.
+ * @param read Reads one span's bytes.
+ * @return {Promise<number>} The 32-bit digest.
+ */
+export async function hashSampledSource(
+    byteLength: number,
+    read: ( offset: number, length: number ) => Uint8Array | Promise< Uint8Array > ):
+    Promise< number > {
+
+  let hash = foldFnv1a( FNV_OFFSET_BASIS >>> 0, lengthBytes( byteLength ) )
+
+  for ( const [ start, end ] of sampledSourceSpans( byteLength ) ) {
+    hash = foldFnv1a( hash, await read( start, end - start ) )
+  }
+
+  return hash >>> 0
+}
+
+
+/**
+ * {@link hashSampledSource}, folded incrementally from bytes that arrive
+ * once, in file order — the form a streaming parse can carry in the pass it
+ * already makes (`HashingByteSource`), so recording the sampled digest at
+ * open costs no read of its own. Feed every byte of the source exactly
+ * once, from offset 0 upward; {@link digest} then equals
+ * `hashSampledSource` over the same bytes.
+ */
+export class SampledHashFold {
+
+  private hash_: number
+
+  private readonly spans_: Array< [ number, number ] >
+
+  private span_ = 0
+
+  /**
+   * @param byteLength The length of the source that will be fed.
+   */
+  constructor( byteLength: number ) {
+    this.hash_ = foldFnv1a( FNV_OFFSET_BASIS >>> 0, lengthBytes( byteLength ) )
+    this.spans_ = sampledSourceSpans( byteLength )
+  }
+
+  /**
+   * Fold the sampled part of `bytes[from, to)`, which holds the source's
+   * bytes starting at absolute offset `absoluteStart`.
+   *
+   * @param bytes The buffer.
+   * @param from First index in `bytes`.
+   * @param to One past the last index in `bytes`.
+   * @param absoluteStart The source offset of `bytes[from]`.
+   */
+  public fold( bytes: Uint8Array, from: number, to: number, absoluteStart: number ): void {
+
+    const absoluteEnd = absoluteStart + ( to - from )
+
+    while ( this.span_ < this.spans_.length ) {
+
+      const [ spanStart, spanEnd ] = this.spans_[ this.span_ ]
+
+      if ( spanStart >= absoluteEnd ) {
+        return
+      }
+
+      const start = Math.max( spanStart, absoluteStart )
+      const end = Math.min( spanEnd, absoluteEnd )
+
+      if ( end > start ) {
+        this.hash_ = foldFnv1a(
+            this.hash_,
+            bytes.subarray( from + start - absoluteStart, from + end - absoluteStart ) )
+      }
+
+      if ( spanEnd > absoluteEnd ) {
+        return
+      }
+
+      ++this.span_
+    }
+  }
+
+  /**
+   * @return {number} The digest of what has been fed.
+   */
+  public get digest(): number {
+    return this.hash_ >>> 0
+  }
+}
+
+
+/**
+ * Synchronous twin of {@link hashSampledSource}, for a resident buffer.
+ *
+ * @param source The whole source.
+ * @return {number} The 32-bit digest.
+ */
+export function hashSampledBuffer( source: Uint8Array ): number {
+
+  let hash = foldFnv1a( FNV_OFFSET_BASIS >>> 0, lengthBytes( source.byteLength ) )
+
+  for ( const [ start, end ] of sampledSourceSpans( source.byteLength ) ) {
+    hash = foldFnv1a( hash, source.subarray( start, end ) )
+  }
+
+  return hash >>> 0
+}
+
+
+/**
+ * The length as 8 little-endian bytes (an f64), the digest's seed.
+ *
+ * @param byteLength The source length.
+ * @return {Uint8Array} The bytes.
+ */
+function lengthBytes( byteLength: number ): Uint8Array {
+
+  const bytes = new Uint8Array( F64_BYTES )
+
+  new DataView( bytes.buffer ).setFloat64( 0, byteLength, true )
+
+  return bytes
+}
+
+
+/**
+ * Continue an FNV-1a 32 over more bytes.
+ *
+ * @param hash The running hash.
+ * @param bytes The bytes to fold.
+ * @return {number} The updated hash.
+ */
+function foldFnv1a( hash: number, bytes: Uint8Array ): number {
+
+  for ( let where = 0; where < bytes.length; ++where ) {
+    hash ^= bytes[ where ]
+    hash = Math.imul( hash, FNV_PRIME ) >>> 0
+  }
+
+  return hash
+}
+
+
+/**
+ * Pack a schema stamp into one number, for {@link IndexSidecarStaleError}'s
+ * expected/actual pair.
+ *
+ * @param stamp The stamp.
+ * @return {number} `schema * 1e6 + typeCount`.
+ */
+function packStamp( stamp: SidecarSchemaStamp ): number {
+  // eslint-disable-next-line no-magic-numbers
+  return stamp.schema * 1e6 + stamp.typeCount
+}
+
+
+/**
+ * Refuse a decoded sidecar whose schema stamp is not the one this open
+ * types its model with — the check v2 had no slot for (conway#757). A
+ * {@link IndexSidecarStaleError} with reason `'schema'`, because the remedy
+ * is the same as for a changed file: parse.
+ *
+ * @param identity The decoded sidecar's identity.
+ * @param expected The stamp of the schema this open builds.
+ */
+export function assertSidecarSchema(
+    identity: SidecarSourceIdentity,
+    expected: SidecarSchemaStamp ): void {
+
+  const actual = identity.schema
+
+  if ( actual === void 0 ||
+       actual.schema !== expected.schema ||
+       actual.typeCount !== expected.typeCount ) {
+
+    throw new IndexSidecarStaleError(
+        'schema',
+        actual === void 0 ? 0 : packStamp( actual ),
+        packStamp( expected ) )
+  }
 }
 
 
@@ -523,12 +881,19 @@ function readColumn(
  * @param columns The columnar index, from a completed parse.
  * @param sourceByteLength The length of the source it was built from.
  * @param sourceHash The source hash (see {@link hashSource}).
+ * @param extras The schema stamp (default IFC), sampled digest and field
+ * masks — see {@link SidecarExtras}.
  * @return {Uint8Array} The sidecar bytes.
  */
 export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
     columns: StepIndexColumns<TypeIDType>,
     sourceByteLength: number,
-    sourceHash: number ): Uint8Array {
+    sourceHash: number,
+    extras?: SidecarExtras ): Uint8Array {
+
+  const schema = extras?.schema ?? IFC_SIDECAR_SCHEMA
+  const fieldMasks = extras?.fieldMasks
+  const fieldMaskCount = fieldMasks?.size ?? 0
 
   requireAddressableSource( sourceByteLength )
 
@@ -588,7 +953,8 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   const total =
     HEADER_BYTES +
     ( count * COLUMNS_OVER_ALL_ROWS + firstInlineElement ) * U32_BYTES +
-    complexBytes
+    complexBytes +
+    fieldMaskCount * 2 * U32_BYTES
 
   const bytes = new Uint8Array( total )
   const view = new DataView( bytes.buffer )
@@ -602,9 +968,17 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   view.setUint32( offset, count, true ); offset += U32_BYTES
   view.setUint32( offset, firstInlineElement, true ); offset += U32_BYTES
   view.setUint32(
-      offset, columns.expressIdsSorted ? FLAG_EXPRESS_IDS_SORTED : 0, true )
+      offset,
+      ( columns.expressIdsSorted ? FLAG_EXPRESS_IDS_SORTED : 0 ) |
+        ( fieldMasks !== void 0 ? FLAG_FIELD_MASKS : 0 ),
+      true )
   offset += U32_BYTES
   view.setUint32( offset, complexCount, true ); offset += U32_BYTES
+  view.setUint32( offset, schema.schema, true ); offset += U32_BYTES
+  view.setUint32( offset, schema.typeCount, true ); offset += U32_BYTES
+  view.setUint32( offset, SIDECAR_HASH_FNV1A_32, true ); offset += U32_BYTES
+  view.setUint32( offset, ( extras?.sampledHash ?? 0 ) >>> 0, true ); offset += U32_BYTES
+  view.setUint32( offset, fieldMaskCount, true ); offset += U32_BYTES
 
   writeColumn( bytes, view, offset, columns.address, count )
   offset += count * U32_BYTES
@@ -618,6 +992,11 @@ export function serializeIndexSidecarFromColumns<TypeIDType extends number>(
   for ( const [ localID, entry ] of complexEntries ?? [] ) {
     view.setUint32( offset, localID, true ); offset += U32_BYTES
     offset = writeComplexEntry( view, offset, entry )
+  }
+
+  for ( const [ expressID, decodedFieldCount ] of fieldMasks ?? [] ) {
+    view.setUint32( offset, expressID >>> 0, true ); offset += U32_BYTES
+    view.setUint32( offset, decodedFieldCount >>> 0, true ); offset += U32_BYTES
   }
 
   return bytes
@@ -712,7 +1091,10 @@ function requireSidecarMagicAndVersion( view: DataView ): number {
         `Unsupported sidecar version ${version} (expected ${SIDECAR_VERSION})` +
         ( version === SIDECAR_VERSION_TOP_LEVEL_ONLY ?
           ': v1 carries top-level rows only and would silently drop every ' +
-          'inline entity — rebuild the index' : '' ) )
+          'inline entity — rebuild the index' :
+          version === SIDECAR_VERSION_UNSTAMPED ?
+            ': v2 does not record which schema built it — rebuild the index' :
+            '' ) )
   }
 
   return version
@@ -741,9 +1123,34 @@ export function readSidecarSourceIdentity( bytes: Uint8Array ): SidecarSourceIde
 
   requireSidecarMagicAndVersion( view )
 
+  return readIdentityFields( view )
+}
+
+
+// Byte offset of the v3 header's schema slot: magic, version, length,
+// hash, count, firstInlineElement, flags, complexCount.
+const SCHEMA_OFFSET = U32_BYTES * 2 + F64_BYTES + U32_BYTES * 5
+
+
+/**
+ * Read the identity fields — length, hash, sampled hash, schema stamp — of
+ * a header already checked by {@link requireSidecarMagicAndVersion}.
+ *
+ * @param view A view over at least the header.
+ * @return {SidecarSourceIdentity} The identity.
+ */
+function readIdentityFields( view: DataView ): SidecarSourceIdentity {
+
+  const sampledHash = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 3, true )
+
   return {
     sourceByteLength: view.getFloat64( U32_BYTES * 2, true ),
     sourceHash: view.getUint32( U32_BYTES * 2 + F64_BYTES, true ),
+    sampledHash: sampledHash === 0 ? void 0 : sampledHash,
+    schema: {
+      schema: view.getUint32( SCHEMA_OFFSET, true ) as SidecarSchema,
+      typeCount: view.getUint32( SCHEMA_OFFSET + U32_BYTES, true ),
+    },
   }
 }
 
@@ -758,14 +1165,31 @@ export function readSidecarSourceIdentity( bytes: Uint8Array ): SidecarSourceIde
  * correctness requirement rather than a refinement.
  *
  * @param bytes The sidecar bytes.
+ * @param expectedSchema The stamp of the schema the caller will type the
+ * model with; a mismatch throws {@link IndexSidecarStaleError} (`'schema'`)
+ * before any column is read. Omit for a raw decode.
  * @return {DecodedSidecarColumns} Source identity + the columnar index.
  */
 export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
-    bytes: Uint8Array ): DecodedSidecarColumns<TypeIDType> {
+    bytes: Uint8Array,
+    expectedSchema?: SidecarSchemaStamp ): DecodedSidecarColumns<TypeIDType> {
+
+  if ( bytes.byteLength < HEADER_BYTES ) {
+    throw new Error(
+        `Truncated sidecar: ${bytes.byteLength} bytes is shorter than the ` +
+        `${HEADER_BYTES}-byte header` )
+  }
 
   const view = new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength )
 
   const version = requireSidecarMagicAndVersion( view )
+  const identity = readIdentityFields( view )
+
+  // Before any column is copied: an index typed against another
+  // enumeration is refused as stale, not decoded (conway#757).
+  if ( expectedSchema !== void 0 ) {
+    assertSidecarSchema( identity, expectedSchema )
+  }
 
   let offset = 2 * U32_BYTES
 
@@ -775,6 +1199,17 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
   const firstInlineElement = view.getUint32( offset, true ); offset += U32_BYTES
   const flags = view.getUint32( offset, true ); offset += U32_BYTES
   const complexCount = view.getUint32( offset, true ); offset += U32_BYTES
+
+  // schema, schemaTypeCount, hashAlgorithm, sampledHash — read above via
+  // readIdentityFields — then the field-mask count.
+  offset += U32_BYTES * 4
+
+  const hashAlgorithm = view.getUint32( SCHEMA_OFFSET + U32_BYTES * 2, true )
+  const fieldMaskCount = view.getUint32( offset, true ); offset += U32_BYTES
+
+  if ( hashAlgorithm !== SIDECAR_HASH_FNV1A_32 ) {
+    throw new Error( `Unsupported sidecar hash algorithm ${hashAlgorithm}` )
+  }
 
   requireAddressableSource( sourceByteLength )
 
@@ -797,7 +1232,8 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
   const columnBytes = ( count * COLUMNS_OVER_ALL_ROWS + firstInlineElement ) *
     U32_BYTES
   const minimumBytes = HEADER_BYTES + columnBytes +
-    complexCount * ( U32_BYTES + COMPLEX_ENTRY_FIXED_BYTES )
+    complexCount * ( U32_BYTES + COMPLEX_ENTRY_FIXED_BYTES ) +
+    fieldMaskCount * 2 * U32_BYTES
 
   if ( bytes.byteLength < minimumBytes ) {
     throw new Error(
@@ -824,11 +1260,11 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
 
   let complexEntries: Map<number, StepIndexEntry<TypeIDType>> | undefined
 
+  const cursor = { offset }
+
   if ( complexCount > 0 ) {
 
     complexEntries = new Map<number, StepIndexEntry<TypeIDType>>()
-
-    const cursor = { offset }
 
     for ( let where = 0; where < complexCount; ++where ) {
 
@@ -841,10 +1277,29 @@ export function deserializeIndexSidecarToColumns<TypeIDType extends number>(
     }
   }
 
+  let fieldMasks: Map< number, number > | undefined
+
+  if ( ( flags & FLAG_FIELD_MASKS ) !== 0 ) {
+
+    fieldMasks = new Map< number, number >()
+
+    for ( let where = 0; where < fieldMaskCount; ++where ) {
+
+      const expressID = view.getUint32( cursor.offset, true )
+      const decodedFieldCount = view.getUint32( cursor.offset + U32_BYTES, true )
+
+      cursor.offset += 2 * U32_BYTES
+      fieldMasks.set( expressID, decodedFieldCount )
+    }
+  }
+
   return {
     version,
     sourceByteLength,
     sourceHash,
+    sampledHash: identity.sampledHash,
+    schema: identity.schema,
+    fieldMasks,
     columns: {
       address,
       length,

@@ -763,10 +763,12 @@ Deliberately small first step; each has a measurable exit.
   is missing"* — not recovery.
 
     AP214 gets the entry point for format parity, and it is synchronous
-  underneath: that proxy has no async pump, and a store-backed open is
-  IFC-only (`IfcApiModelPassthroughFactory.fromStore` refuses every other
-  format), so a windowed AP214 model is not reachable through the public
-  API at all.
+  underneath: that proxy has no async pump. Since conway#757 a windowed
+  AP214 model *is* reachable (`OpenModelStream` and `OpenModelFromIndex`
+  take STEP), and the synchronous pump still serves it, because a windowed
+  AP214 model is only ever built over a store with `readSync`: its
+  synchronous reads fault their windows in rather than throw. See
+  "STEP windowed: synchronous fault-in" below.
 
   **PSB.ifc at batch 8 — the size Share pumps at:**
 
@@ -1528,3 +1530,51 @@ large parse (measured: 583 ms into Schependomlaan's 1.2 s parse). The
 post-parse durable pump re-extracts everything and replaces the
 preview, so final parity is untouched; the channel pins the
 coordination frame the pump then adopts.
+
+
+## STEP windowed: synchronous fault-in (conway#757)
+
+IFC opens windowed over any store because its extraction pages each
+product's record closure in *asynchronously* before it reads
+(`IfcGeometryExtraction.ensureResidentFor*`). AP214 has no such pager: its
+assembly walk, demand units and property extraction read records
+synchronously all over the model, and much of what they read is reached
+through inverse relationships no forward closure discovers. Writing one
+would be a second extraction-side pager to keep in step with the AP214
+geometry code.
+
+So the shared seam is one level down, in the provider.
+`StepExternalByteStore` gained an optional `readSync(offset, length)`, and
+`WindowedStepBufferProvider.acquire` uses it to page a missing window in
+on the spot instead of throwing `StepBufferNotResidentError`. The window
+goes through the same LRU cap, pin accounting and adaptive residency
+policy an `ensureResident` load does. Nothing in AP214 changed to run
+windowed; every synchronous read just works.
+
+- **Which stores qualify.** A worker's OPFS `FileSystemSyncAccessHandle`
+  (Share's engine worker, #2072), `FileReaderSync` in a worker, and
+  `fs.readSync` in Node. A main-thread `Blob` cannot, so a STEP over one is
+  refused with `StoreNotSynchronousError` (load status
+  `STORE_NOT_SYNCHRONOUS`), and the embedder opens it buffered. That
+  requirement is the one place the two formats differ on this path, and it
+  is data, not a second pipeline: `fromStore` / `fromIndex` pick the engine
+  by the sniffed format, and the AP214 engine states what it needs.
+- **Views are what hold memory, not the LRU.** A record read keeps a view
+  of its whole 4 MiB window on its descriptor, and a view keeps an evicted
+  window alive. A walk that reads everywhere would hold every window it
+  touched however small the cap. `StepModelBase.releaseCapturedSourceViews`
+  drops every view captured since the last call. The AP214 pump calls it
+  after each batch, and the AP214 property index build and the resident-safe
+  readers call it when they finish. That bounds a drain to about one
+  batch's windows plus the LRU cap.
+- **IFC is unchanged** unless its store offers `readSync`. When it does, a
+  read the async pager missed faults in rather than throws. A missed page
+  used to be a swallowed throw in permissive map prep, so a windowed IFC
+  open over such a store can only read more of the model than before,
+  never less.
+- **Measured** (Node, sync file store, deferred drain, conway#757's PR): see
+  the PR for the table. On the two large corpus STEP models the adaptive
+  policy grows the window to most of the file (55.5 of 55.5 MB, and 61.7 of
+  105.7 MB), so windowing takes the source out of the JS heap but not the
+  pages out of residency. Peak RSS is dominated by geometry either way.
+

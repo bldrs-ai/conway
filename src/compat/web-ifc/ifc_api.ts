@@ -202,8 +202,12 @@ export interface Loadersettings {
 
   /**
    * Conway extension (OpenModelFromIndex only): verify the sidecar's
-   * source hash by re-reading the whole store, rather than checking its
-   * byte length alone.
+   * source hash by re-reading the whole store (`true`), or by reading only
+   * its sampled blocks (`'sampled'`, about 0.5 MB on any size of file —
+   * conway#758; see `index_sidecar.ts#sampledSourceSpans` for what that
+   * catches and misses), rather than checking its byte length alone. A
+   * sidecar that recorded no sampled digest gets the full check under
+   * `'sampled'`, never none.
    *
    * Default off, and that default is the design rather than a shortcut.
    * The distribution case — a coordinator that folded the hash into its
@@ -215,10 +219,10 @@ export interface Loadersettings {
    * See `index_sidecar.ts` §"The trust gate" for what each gate does and
    * does not establish.
    */
-  VERIFY_INDEX_SOURCE_HASH?: boolean
+  VERIFY_INDEX_SOURCE_HASH?: boolean | 'sampled'
 
   /**
-   * Conway extension (every IFC open; conway#756): record the FNV-1a of the
+   * Conway extension (every IFC and STEP open; conway#756, #757): record the FNV-1a of the
    * exact bytes the model's index is built from, so {@link
    * IfcAPI.ExportIndexSidecar} can write a sidecar whose hash describes the
    * bytes that were parsed. The streaming opens fold it into the parse's
@@ -582,8 +586,13 @@ export class IfcAPI {
    * {@link ExtractGeometryBatchAsync} so product closures can be
    * paged in.
    *
-   * IFC only; other formats return -1 (caller should fall back to
-   * buffering + OpenModelStreamed).
+   * IFC and STEP (AP214, and the AP203/AP242 files that open through
+   * it — conway#757). Other formats return -1, as does a STEP over a store
+   * with no `readSync` (`StepExternalByteStore.readSync`): AP214's
+   * extraction reads records synchronously, so a windowed STEP model faults
+   * its windows in synchronously and needs a store that can. That -1
+   * records load status `STORE_NOT_SYNCHRONOUS`. Either way the caller
+   * falls back to buffering + OpenModelStreamed.
    *
    * @param store External store holding the source bytes (OPFS File).
    * @param settings settings for loading the model
@@ -634,8 +643,10 @@ export class IfcAPI {
    * contention (conway#541). One parse, N consumers of its index, is the
    * precondition rather than an optimisation.
    *
-   * IFC only, inheriting the store path's restriction. Returns **-1** on
-   * any failure — including a sidecar that does not match the store — so
+   * IFC and STEP, inheriting the store path's coverage and its
+   * synchronous-store requirement for STEP; a sidecar stamped for another
+   * schema than the store's format is refused as `INDEX_STALE` (conway#757).
+   * Returns **-1** on any failure — including a sidecar that does not match the store — so
    * the caller falls back to `OpenModelStream` **explicitly**. There is no
    * internal cold-parse fallback: taking one silently would spend the
    * whole cost the call exists to avoid and make a stale index invisible.
@@ -696,9 +707,12 @@ export class IfcAPI {
    * after this one is terminated to free the model — can come back with
    * {@link OpenModelFromIndex} instead of re-parsing the source.
    *
-   * Works on every IFC open: resident (`OpenModel`, `OpenModelAsync`,
-   * `OpenModelStreamed`), windowed from birth (`OpenModelStream`), spilled
-   * (`SpillModelSource`), and index-first itself. The sidecar is
+   * Works on every IFC and STEP (AP214-family) open: resident
+   * (`OpenModel`, `OpenModelAsync`, `OpenModelStreamed`), windowed from
+   * birth (`OpenModelStream`), spilled (`SpillModelSource`), and
+   * index-first itself. The sidecar is stamped with the schema whose type
+   * enumeration its index uses (v3, conway#757), and an index-first open
+   * refuses one stamped for another. The sidecar is
    * byte-identical to one serialised off a fresh parse's own columns, and
    * a model opened from it reads back the same express IDs, spatial tree
    * and properties (`ifc_index_sidecar_export.test.ts`).
@@ -713,8 +727,8 @@ export class IfcAPI {
    * (~0.1 s for a 9 M-row index).
    *
    * Returns `undefined` — with a warning naming why — for an unknown model
-   * id, a model opened without `RECORD_SOURCE_HASH`, a non-IFC model (the format has no schema slot; STEP is not
-   * covered), or an IFC4X3 model (the IFC4-compatible route's field masks
+   * id, a model opened without `RECORD_SOURCE_HASH`, a model of a format
+   * with no sidecar (glTF, OBJ, …), or an IFC4X3 model (the IFC4-compatible route's field masks
    * have no slot, and the index-first open refuses IFC4X3 headers). The
    * embedder's fallback for any of those is the parse it would have done
    * anyway.
@@ -734,8 +748,8 @@ export class IfcAPI {
 
     if ( result.exportIndexSidecar === void 0 ) {
       Logger.warning(
-          `[ExportIndexSidecar]: model ${modelID} is not IFC; the index ` +
-          'sidecar covers IFC only' )
+          `[ExportIndexSidecar]: model ${modelID} has no index sidecar ` +
+          '(the sidecar covers IFC and STEP models)' )
       return
     }
 

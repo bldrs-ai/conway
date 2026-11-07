@@ -33,7 +33,7 @@ describe( 'plane namespace surface', () => {
 
     // A value, not a function — and the one embedders have to branch on, so
     // an accidental bump is worth a failing test rather than a surprise.
-    expect( stream.SIDECAR_VERSION ).toBe( 2 )
+    expect( stream.SIDECAR_VERSION ).toBe( 3 )
     expect( typeof stream.StreamingRecordDispatcher ).toBe( 'function' )
     expect( typeof stream.PrefixTypeIndex ).toBe( 'function' )
     expect( typeof stream.ColumnarIndexSink ).toBe( 'function' )

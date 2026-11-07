@@ -538,6 +538,13 @@ export class AP214Properties {
         }
       }
     }
+
+    // A full-model sweep over a windowed source (conway#757) faulted in
+    // every window it read and left a view on each record; the indexes
+    // above hold copies, so drop the views and trim back to the cap. No-op
+    // when resident.
+    model.releaseCapturedSourceViews()
+    model.trimSourceResidency()
   }
 
   /**
