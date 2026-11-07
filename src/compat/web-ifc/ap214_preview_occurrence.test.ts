@@ -5,12 +5,13 @@
 // the durable geometry is the same with or without them.
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, test } from '@jest/globals'
+import { afterAll, beforeAll, describe, expect, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import {
+  PREVIEW_FINISH_PARSE,
   PreviewMeshPayload,
   PreviewPrefixGeneration,
   StreamedPreviewChannel,
@@ -37,7 +38,14 @@ let api: IfcAPI
 beforeAll( async () => {
   api = new IfcAPI()
   await api.Init()
+  // The parse-end tick is off by default until conway#773; these tests are
+  // about what it delivers, so they run with it on.
+  PREVIEW_FINISH_PARSE.enabled = true
 }, 120000 )
+
+afterAll( () => {
+  PREVIEW_FINISH_PARSE.enabled = false
+} )
 
 /**
  * Every durable placement of a model, flattened.
@@ -333,6 +341,30 @@ describe( 'retry-mode preview channel: cost and the parse-end tick', () => {
     ;( channel as any ).meshesEmitted_ = 1
     /* eslint-enable @typescript-eslint/no-explicit-any */
     channel.finishParse()
+
+    expect( builds ).toEqual( [] )
+
+    channel.stop()
+  }, 240000 )
+
+  test( 'finishParse is off by default (conway#773)', () => {
+
+    const builds: number[] = []
+    const channel = new StreamedPreviewChannel(
+        new Uint8Array( 0 ), conwayGeometry, makeSink( { count: 2048 } ),
+        { retryEmptyUnits: true,
+          buildGeneration: () => {
+            builds.push( 1 )
+            return makeGeneration( [] )
+          } },
+        false, () => { /* no payloads */ }, void 0, void 0, 1 )
+
+    PREVIEW_FINISH_PARSE.enabled = false
+    try {
+      channel.finishParse()
+    } finally {
+      PREVIEW_FINISH_PARSE.enabled = true
+    }
 
     expect( builds ).toEqual( [] )
 

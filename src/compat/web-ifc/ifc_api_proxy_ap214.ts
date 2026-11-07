@@ -1085,7 +1085,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
       // One budgeted tick over the whole index before the index is
       // published: the only preview a short or tail-written STEP parse gets
-      // (StreamedPreviewChannel.finishParse).
+      // (StreamedPreviewChannel.finishParse). Off by default until
+      // conway#773 (PREVIEW_FINISH_PARSE).
       if (result === ParseResult.COMPLETE) {
         previewChannel?.finishParse()
       }

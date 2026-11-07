@@ -61,6 +61,17 @@ const TICK_BUDGET_MS = 25
 const FINISH_BUDGET_MS = 100
 
 /**
+ * Whether {@link StreamedPreviewChannel.finishParse} runs at all. Off until
+ * conway#773: the tick's first unit pays the throwaway generation's lazy
+ * extraction prep (#751), which no estimate sees and no tick preempts, and
+ * measured on the corpus that put +0.5 s on Arty_Z7's open (time to index)
+ * and +0.3 s on DSA2's, for previews landing about when the old first
+ * durable mesh did. Turn it on once #773 makes the prep cheap. A mutable
+ * object rather than a const so tests can run the tick (they restore it).
+ */
+export const PREVIEW_FINISH_PARSE = { enabled: false }
+
+/**
  * Starting milliseconds per estimated face, for a generation that offers
  * {@link PreviewPrefixGeneration.unitFaceEstimate}, until the channel has
  * timed a unit of its own. Measured in Node over the complete index of
@@ -781,8 +792,9 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * without this tick neither puts a preview on screen before the durable
    * pump.
    *
-   * Skipped when the parse-time ticks already put a mesh on screen (see the
-   * guard below for what the tick costs). A no-op for other adapters: an
+   * Off by default ({@link PREVIEW_FINISH_PARSE}, conway#773), and skipped
+   * when the parse-time ticks already put a mesh on screen (see the guard
+   * below for what the tick costs). A no-op for other adapters: an
    * IFC product list grows with the parse,
    * and rebuilding PSB-class indexes costs ~700 ms a generation — the
    * store path's own end-of-parse pass is its spatial plates, not this.
@@ -797,7 +809,8 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     // own ticks already delivered (DSA2, the pinball board) that buys a few
     // more meshes twice over; where they delivered nothing (Arty_Z7's
     // tail-written points) it is the only preview the load gets.
-    if (this.stopped_ || this.capped || this.adapter.retryEmptyUnits !== true ||
+    if (!PREVIEW_FINISH_PARSE.enabled ||
+        this.stopped_ || this.capped || this.adapter.retryEmptyUnits !== true ||
         this.meshesEmitted_ > 0) {
       return
     }

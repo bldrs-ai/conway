@@ -1533,8 +1533,8 @@ coordination frame the pump then adopts.
 
 **STEP previews (AP214, Share engine-worker.md §11).** The same channel
 serves AP214 through `ap214PreviewAdapter`, and three things make it
-deliver on STEP files, all in the shared channel and switched on by the
-adapter's data rather than a STEP copy:
+deliver on STEP files (the first is parked; see it), all in the shared
+channel and switched on by the adapter's data rather than a STEP copy:
 
 - *A parse-end tick* (`StreamedPreviewChannel.finishParse`). A STEP parse
   is short against its geometry (0.4–2 s against 2–31 s on the corpus), so
@@ -1546,7 +1546,12 @@ adapter's data rather than a STEP copy:
   `finishParse` once the parse completes, which builds one generation over
   the whole index and runs one tick of `FINISH_BUDGET_MS` on it before the
   index is published. A no-op for IFC, whose product list grows with the
-  parse.
+  parse. **Off by default (`PREVIEW_FINISH_PARSE`) until conway#773**: the
+  tick's first unit pays the throwaway generation's lazy extraction prep
+  (#751), which put +0.5 s on Arty_Z7's open and +0.3 s on DSA2's (Node,
+  n=3, #772) for previews landing about when the old first durable mesh
+  did. Share#2084 makes the durable batches pickable from the first one,
+  which covers those files meanwhile.
 - *Units passed over by estimated cost.* A tick cannot preempt a unit, and
   a STEP unit's cost is uneven: the 14 MB pinball board's PCB is one unit
   of ~1.0 s, its neighbours 20–30 ms, and running it blind stalled the
