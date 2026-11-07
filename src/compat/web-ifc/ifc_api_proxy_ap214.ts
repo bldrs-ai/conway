@@ -252,6 +252,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       maxResidentChunks?: number ): void {
     this.properties.primeIndexes()
     this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+    // Post-spill AP214 reads drop their views wholesale, like a windowed
+    // open's (see parseColumnarFromStore).
+    this.model[0].trackCapturedSourceViews = true
   }
 
   /**
@@ -872,6 +875,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const model = new AP214StepModel(void 0, columns, new WindowedStepBufferProvider(store))
 
+    // AP214's walks cannot name what they read, so they drop window views
+    // wholesale (StepModelBase.releaseCapturedSourceViews), which needs the
+    // model to track them.
+    model.trackCapturedSourceViews = true
+
     model.indexedSourceHash = await hashingSource?.finishAsync()
     model.indexedSampledHash = hashingSource?.sampledHash
 
@@ -925,6 +933,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const model = new AP214StepModel(
         void 0, restored.columns, new WindowedStepBufferProvider(store))
+
+    // See parseColumnarFromStore.
+    model.trackCapturedSourceViews = true
 
     model.indexedSourceHash = restored.sourceHash
     model.indexedSampledHash = restored.sampledHash

@@ -133,8 +133,12 @@ describe( 'StepModelBase.releaseCapturedSourceViews (conway#757)', () => {
 
     expect( built.result ).toBe( ParseResult.COMPLETE )
 
-    return new AP214StepModel( void 0, sink.finalize(),
+    const model = new AP214StepModel( void 0, sink.finalize(),
         new WindowedStepBufferProvider( new InMemoryStepByteStore( bytes, true ), 4096, 2 ) )
+
+    model.trackCapturedSourceViews = true
+
+    return model
   }
 
   test( 'reads fault in, leave views, and a release drops every one', () => {
@@ -182,6 +186,8 @@ describe( 'StepModelBase.releaseCapturedSourceViews (conway#757)', () => {
         64 * 1024, void 0, sink )
 
     const model = new AP214StepModel( bytes, sink.finalize() )
+
+    model.trackCapturedSourceViews = true
 
     for ( const element of model ) {
       element.extractLineArguments()

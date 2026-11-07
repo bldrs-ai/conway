@@ -595,7 +595,11 @@ describe( 'AP214 over 4 KiB windows with a 2-window cap (conway#757)', () => {
 
       const store = syncStore( bytes )
       const provider = new WindowedStepBufferProvider( store, 4096, 2 )
-      const windowed = extract( new AP214StepModel( void 0, index(), provider ) )
+      const windowedModel = new AP214StepModel( void 0, index(), provider )
+
+      windowedModel.trackCapturedSourceViews = true
+
+      const windowed = extract( windowedModel )
 
       expect( windowed.placements ).toEqual( resident.placements )
       expect( windowed.tree ).toEqual( resident.tree )
@@ -630,3 +634,88 @@ describe( 'storeOpenRequirementOf: what a store-backed open needs of its store (
     expect( storeOpenRequirementOf( new Uint8Array( 0 ) ) ).toBeUndefined()
   } )
 } )
+
+
+describe( 'IFC windowed opens do not track window views (codex review of conway#769)', () => {
+
+  test( 'an IFC drain over many paging batches leaves nothing tracked, with or without readSync', async () => {
+
+    jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
+
+    const bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
+
+    for ( const store of [ syncStore( bytes ), new InMemoryStepByteStore( bytes ) ] ) {
+
+      api = new IfcAPI()
+      await api.Init()
+
+      const modelID = await api.OpenModelStream( store, DEFER )
+
+      expect( modelID ).toBeGreaterThanOrEqual( 0 )
+
+      const model = ( api.getPassthrough( modelID ) as unknown as { model: [ IfcStepModelLike ] } ).model[ 0 ]
+      let batches = 0
+
+      for ( ;; ) {
+        // One product per call: IFC pages each product's closure and drops
+        // its views with releaseSourceViews, over and over.
+        const { extracted, remaining } = await api.ExtractGeometryBatchAsync( modelID, 1 )
+
+        ++batches
+
+        if ( remaining === 0 && extracted === 0 ) {
+          break
+        }
+      }
+
+      expect( batches ).toBeGreaterThan( 5 )
+      expect( model.isSourceExternal ).toBe( true )
+      expect( model.trackCapturedSourceViews ).toBe( false )
+      expect( model.capturedSourceViewCount ).toBe( 0 )
+
+      api.CloseModel( modelID )
+    }
+  }, 120000 )
+
+  test( 'a tracked model holds each re-read record once, whatever cleared its view in between', () => {
+
+    const bytes = fixture( 'as1-oc-214.stp' )
+    const sink = new ColumnarIndexSink< EntityTypesAP214 >()
+
+    buildIndexStreaming( new BufferByteSource( bytes ), AP214StepParser.Instance,
+        64 * 1024, void 0, sink )
+
+    const model = new AP214StepModel( void 0, sink.finalize(),
+        new WindowedStepBufferProvider( syncStore( bytes ), 4096, 2 ) )
+
+    model.trackCapturedSourceViews = true
+
+    const localIDs: number[] = []
+
+    for ( const element of model ) {
+      element.extractLineArguments()
+      localIDs.push( element.localID )
+    }
+
+    const once = model.capturedSourceViewCount
+
+    expect( once ).toBeGreaterThan( 0 )
+
+    // IFC's per-closure release, then the same reads again.
+    model.releaseSourceViews( localIDs )
+
+    for ( const element of model ) {
+      element.extractLineArguments()
+    }
+
+    expect( model.capturedSourceViewCount ).toBe( once )
+  } )
+} )
+
+
+/** The slice of a StepModelBase the IFC tracking test reads. */
+interface IfcStepModelLike {
+  isSourceExternal: boolean
+  trackCapturedSourceViews: boolean
+  capturedSourceViewCount: number
+}

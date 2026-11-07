@@ -657,7 +657,7 @@ implements Iterable<BaseEntity>, Model {
       // the memory the old retained object array could never release. They
       // rematerialise from the columns on next access.
       this.descriptorCache_ = []
-      this.capturedViews_   = []
+      this.capturedViews_.clear()
 
       // Complex (multiMapping) entries are retained objects; clear their lazy
       // fields in place, matching the previous per-entry reset. The mapped
@@ -1176,23 +1176,51 @@ implements Iterable<BaseEntity>, Model {
    */
   private noteCapturedView_( reference: CapturedViewHolder ): void {
 
-    if ( this.buffer_ === void 0 ) {
-      this.capturedViews_.push( reference )
+    if ( this.trackCapturedSourceViews && this.buffer_ === void 0 ) {
+      this.capturedViews_.add( reference )
     }
   }
 
   /**
-   * References holding a window view captured since the last
-   * {@link releaseCapturedSourceViews}. Each reference captures at most once
-   * between releases (a capture only happens while its `buffer` is unset),
-   * so this grows with the records read, not with the reads.
+   * Opt in to {@link releaseCapturedSourceViews}: remember every reference
+   * that captures a window view, so a walk that cannot name the records it
+   * read can drop their views wholesale. Off by default, and only the AP214
+   * windowed opens turn it on (`IfcApiProxyAP214`, conway#757).
+   *
+   * Opt-in rather than always-on for IFC's sake (codex review of
+   * conway#769): IFC pages by named closures and drops their views with
+   * {@link releaseSourceViews}, which clears `buffer` without touching this
+   * set, so tracking on an IFC open would keep a reference to every
+   * descriptor it ever paged — memory nothing releases until close, for a
+   * mechanism IFC does not use. Off, IFC's windowed opens are exactly as
+   * they were.
    */
-  private capturedViews_: CapturedViewHolder[] = []
+  public trackCapturedSourceViews: boolean = false
+
+  /**
+   * References holding a window view captured since the last
+   * {@link releaseCapturedSourceViews}, while
+   * {@link trackCapturedSourceViews} is on. A Set, so a reference whose view
+   * {@link releaseSourceViews} dropped and that is read again is held once,
+   * not once per capture: the size is bounded by the records read since the
+   * last release, whatever else clears views in between.
+   */
+  private capturedViews_ = new Set< CapturedViewHolder >()
+
+  /**
+   * How many references hold a tracked window view right now (tests and
+   * telemetry; always 0 unless {@link trackCapturedSourceViews} is on).
+   *
+   * @return {number} The count.
+   */
+  public get capturedSourceViewCount(): number {
+    return this.capturedViews_.size
+  }
 
   /**
    * Drop every source-window view captured since the last call — the
    * whole-model form of {@link releaseSourceViews}, for a walk that cannot
-   * name the records it read.
+   * name the records it read. Needs {@link trackCapturedSourceViews}.
    *
    * A descriptor that read a record keeps a view of the 4 MiB window it
    * came from, and a view keeps its window alive after the LRU evicts it.
@@ -1213,7 +1241,7 @@ implements Iterable<BaseEntity>, Model {
 
     const captured = this.capturedViews_
 
-    if ( captured.length === 0 ) {
+    if ( captured.size === 0 ) {
       return 0
     }
 
@@ -1221,11 +1249,13 @@ implements Iterable<BaseEntity>, Model {
       reference.buffer = void 0
     }
 
-    this.capturedViews_ = []
+    const released = captured.size
+
+    captured.clear()
 
     releaseScratchParsingBuffer()
 
-    return captured.length
+    return released
   }
 
 
