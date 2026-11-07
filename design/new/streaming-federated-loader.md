@@ -1531,6 +1531,39 @@ post-parse durable pump re-extracts everything and replaces the
 preview, so final parity is untouched; the channel pins the
 coordination frame the pump then adopts.
 
+**STEP previews (AP214, Share engine-worker.md §11).** The same channel
+serves AP214 through `ap214PreviewAdapter`, and three things make it
+deliver on STEP files, all in the shared channel and switched on by the
+adapter's data rather than a STEP copy:
+
+- *A parse-end tick* (`StreamedPreviewChannel.finishParse`). A STEP parse
+  is short against its geometry (0.4–2 s against 2–31 s on the corpus), so
+  the parse-time ticks are few, and a file written leaf-at-tail cannot
+  place anything from any prefix: Arty_Z7 (Alibre) writes every
+  CARTESIAN_POINT and DIRECTION after record ~700k of 1.04M, and every
+  unit of every prefix generation failed on a dangling reference. For a
+  fixed-unit-list adapter (`retryEmptyUnits`) the proxy calls
+  `finishParse` once the parse completes, which builds one generation over
+  the whole index and runs one tick of `FINISH_BUDGET_MS` on it before the
+  index is published. A no-op for IFC, whose product list grows with the
+  parse.
+- *Units passed over by estimated cost.* A tick cannot preempt a unit, and
+  a STEP unit's cost is uneven: the 14 MB pinball board's PCB is one unit
+  of ~1.0 s, its neighbours 20–30 ms, and running it blind stalled the
+  parse for 0.8 s. A generation that offers `unitFaceEstimate` (AP214: faces
+  counted off the record bytes, `ap214_demand_unit_cost.ts`) has a unit
+  whose estimate, at the channel's learned ms-per-face, exceeds the tick's
+  remaining budget passed over; the durable pump draws it. The `Preview:`
+  line reports them as `N over budget` when there are any.
+- *The occurrence path on every payload.* The AP214 generation walks
+  `walkWithOccurrence`, so each `PreviewMeshPayload` carries the
+  `occurrencePath` of the durable placement it draws (`[]` at the root,
+  absent for IFC), and a pick on a preview selects the occurrence, not
+  every reuse of the part.
+
+The channel takes its prefix source opaquely (`StreamedPreviewChannel<TSource>`),
+so a windowed STEP open can hand its adapter whatever its prefix model reads
+through rather than a resident buffer.
 
 ## STEP windowed: synchronous fault-in (conway#757)
 

@@ -42,6 +42,38 @@ const TICK_INTERVAL_GROWTH = 1.1
  * the main thread (~25/150 ≈ 17% worst-case preview share). */
 const TICK_BUDGET_MS = 25
 
+/**
+ * Wall-clock budget for the one tick {@link StreamedPreviewChannel.finishParse}
+ * runs over the complete index, on top of building that generation.
+ *
+ * The same order as the store path's FLUSH_BUDGET_MS, and for the same
+ * reason: it sits between the parse and the caller's next step (here the
+ * index the consumer is waiting for), so it is paid in full by every load
+ * that reaches it. Arty_Z7 is the case it exists for: Alibre writes every
+ * CARTESIAN_POINT and DIRECTION after record ~700k of 1.04M, so every unit
+ * of every prefix generation fails on a dangling reference and the
+ * parse-time ticks cannot emit anything however long they run. This tick,
+ * over the whole index, is that file's only preview before the durable
+ * pump (Share engine-worker.md §11, "STEP previews").
+ */
+const FINISH_BUDGET_MS = 100
+
+/**
+ * Starting milliseconds per estimated face, for a generation that offers
+ * {@link PreviewPrefixGeneration.unitFaceEstimate}, until the channel has
+ * timed a unit of its own. Measured in Node over the complete index of
+ * the 14 MB pinball driver board: 0.15 / 0.23 / 0.38 ms per face at
+ * p10 / p50 / p90 of its units, and 1.17 for its PCB (603 faces, 0.70 s).
+ * The p90 is the start, because the two errors are not symmetric: an
+ * overestimate passes over a unit the budget could have afforded (the
+ * durable pump draws it a moment later), an underestimate stalls the parse
+ * or the index for as long as the unit takes.
+ */
+const INITIAL_MS_PER_FACE = 0.4
+
+/** Weight of the newest timed unit in the learned ms-per-face rate. */
+const MS_PER_FACE_LEARNING_RATE = 0.3
+
 /** Don't build the first generation before this many top-level records —
  * below it the prefix rarely contains a placeable product. */
 const FIRST_GENERATION_MIN_RECORDS = 1024
@@ -120,6 +152,16 @@ export interface PreviewMeshPayload {
    */
   aabb?: { min: [number, number, number], max: [number, number, number] }
   /**
+   * The placement's occurrence path, root to leaf (NAUO express ids, then a
+   * body's own id where the body is individually addressable) — exactly
+   * what the durable PlacedGeometry for the same placement carries, so a
+   * pick on a preview mesh resolves to the occurrence it draws rather than
+   * to every reuse of its part. Present on every AP214 payload; `[]` is a
+   * root-level placement, which is NOT the same as absent (Share#2067's
+   * `pathPresent`). Absent for IFC, whose elements are not occurrences.
+   */
+  occurrencePath?: number[]
+  /**
    * Filled volume. Share's aabb path renders wireframe unless this is
    * set. Nothing sets it today — the spatial-structure plates that used
    * to are wireframe by request — but it stays part of the consumer
@@ -147,7 +189,10 @@ export interface PreviewDeferral {
 export interface PreviewPrefixGeneration {
 
   /** Scene the capture walks (canonical placed-instance tuples — the
-   * exact tuple shape is schema-specific; the capture narrows it). */
+   * exact tuple shape is schema-specific; the capture narrows it). A
+   * schema with occurrence identity yields the occurrence path as a 6th
+   * tuple element (AP214SceneBuilder.walkWithOccurrence); the capture
+   * copies it onto the payload when present. */
   scene: { walk(): IterableIterator<unknown> }
 
   /** Total pumpable units in this prefix. */
@@ -181,6 +226,20 @@ export interface PreviewPrefixGeneration {
   takeDeferrals?(): PreviewDeferral[]
 
   /**
+   * Estimated faces under one unit, read before the unit runs — the only
+   * view the channel has of a unit's cost before it pays it, since a tick
+   * cannot preempt a unit once started. A unit whose estimate (converted
+   * by the channel's learned ms-per-face) exceeds what is left of the tick
+   * budget is passed over, not run; the durable pump renders it. Left
+   * unset by adapters whose units are cheap and even (IFC products), which
+   * then run exactly as before.
+   *
+   * @param ordinal The unit's ordinal.
+   * @return {number | undefined} The estimate, or undefined when unknown.
+   */
+  unitFaceEstimate?( ordinal: number ): number | undefined
+
+  /**
    * ExpressID identifying a walked geometry (payload identity / dedup).
    *
    * @param geometryLocalID The canonical mesh's localID.
@@ -208,7 +267,7 @@ export interface PreviewPrefixGeneration {
  * Builds throwaway prefix generations for one schema — the only piece of
  * the preview channel that knows what a "model" or a "unit" is.
  */
-export interface PreviewSchemaAdapter {
+export interface PreviewSchemaAdapter<TSource = Uint8Array> {
 
   /**
    * Retry semantics for schemas whose unit list is FIXED up front while
@@ -227,7 +286,10 @@ export interface PreviewSchemaAdapter {
   /**
    * Build a generation over the given prefix columns.
    *
-   * @param data The (fully resident) source buffer.
+   * @param source The prefix source the channel was constructed with —
+   * opaque to the channel. Today every caller hands the resident buffer;
+   * a windowed open hands whatever its schema's prefix model reads
+   * through, so one channel serves both.
    * @param conwaywasm The shared geometry wasm wrapper.
    * @param columns A prefix snapshot of the columnar index.
    * @return {PreviewPrefixGeneration | undefined} The generation, or
@@ -235,7 +297,7 @@ export interface PreviewSchemaAdapter {
    * tolerated — the channel retries on a later, larger prefix).
    */
   buildGeneration(
-    data: Uint8Array,
+    source: TSource,
     conwaywasm: ConwayGeometry,
     columns: unknown,
   ): PreviewPrefixGeneration | undefined
@@ -407,8 +469,12 @@ export function ap214PreviewAdapter(): PreviewSchemaAdapter {
         return void 0
       }
 
+      const scene = extraction.scene
+
       return {
-        scene: extraction.scene,
+        // walkWithOccurrence, not walk: the same nodes in the same order,
+        // plus each one's occurrence path, which the payload carries.
+        scene: { walk: () => scene.walkWithOccurrence() },
         unitCount: extraction.demandUnitCount,
         get linearScalingFactor() {
           return extraction.getLinearScalingFactor()
@@ -419,6 +485,8 @@ export function ap214PreviewAdapter(): PreviewSchemaAdapter {
           }
           return extraction.extractDemandUnitBatch( count )
         },
+        unitFaceEstimate: ( ordinal ) =>
+          extraction.demandUnitFaceEstimate( ordinal ),
         geometryExpressID: ( geometryLocalID ) =>
           model.getElementByLocalID( geometryLocalID )?.expressID,
         recenter: false,
@@ -452,7 +520,7 @@ export function ap214PreviewAdapter(): PreviewSchemaAdapter {
  * macrotasks every ~50ms; each pump tick runs in one of those gaps under
  * a hard time budget, so the parse keeps the bulk of the main thread.
  */
-export class StreamedPreviewChannel {
+export class StreamedPreviewChannel<TSource = Uint8Array> {
 
   /** Coordination matrix pinned from the first captured instance, exactly
    * the derivation the durable capture would perform — the proxy adopts it
@@ -510,6 +578,13 @@ export class StreamedPreviewChannel {
    */
   private emptyUnitsThisGeneration_ = 0
 
+  /** Units passed over because their estimated cost exceeded what was left
+   * of the tick budget (see PreviewPrefixGeneration.unitFaceEstimate). */
+  private skippedForCost_ = 0
+
+  /** Learned ms per estimated face (see INITIAL_MS_PER_FACE). */
+  private msPerFace_ = INITIAL_MS_PER_FACE
+
   /** Ms from channel construction to the first payload handed to `onMesh`
    * — time-to-first-pixel, the number conway#542 exists to move. */
   private firstMeshMs_?: number
@@ -545,7 +620,8 @@ export class StreamedPreviewChannel {
   private lastFailedSnapshotRecords_ = 0
 
   /**
-   * @param data The (fully resident) source buffer the parse is indexing.
+   * @param data The prefix source the parse is indexing, handed to the
+   * adapter unread (the resident buffer, for every caller today).
    * @param conwaywasm The shared geometry wasm wrapper (sequential use only
    * — ticks run between parse yields, never concurrently with the durable
    * extraction, which is created after the parse completes).
@@ -559,10 +635,10 @@ export class StreamedPreviewChannel {
    * snapshot (tests lower it for tiny fixtures).
    */
   constructor(
-      private readonly data: Uint8Array,
+      private readonly data: TSource,
       private readonly conwaywasm: ConwayGeometry,
       private readonly sink: ColumnarIndexSink<number>,
-      private readonly adapter: PreviewSchemaAdapter,
+      private readonly adapter: PreviewSchemaAdapter<TSource>,
       private readonly coordinateToOrigin: boolean,
       private readonly onMesh: (mesh: PreviewMeshPayload) => void,
       private readonly maxUnits: number = DEFAULT_MAX_PREVIEW_UNITS,
@@ -629,6 +705,41 @@ export class StreamedPreviewChannel {
   }
 
   /**
+   * The parse has COMPLETED: give a fixed-unit-list schema (the adapter's
+   * `retryEmptyUnits`, i.e. AP214) one last generation over the whole index
+   * and one tick of {@link FINISH_BUDGET_MS} on it, before {@link stop}.
+   *
+   * It is the last retry those semantics already promise — "re-run units
+   * that captured nothing against each richer generation" — taken at the
+   * one generation the growth gate would otherwise never build, the
+   * complete one. A STEP parse is short (0.4–2 s against 2–31 s of
+   * geometry on the corpus), so the parse-time ticks are few, and a file
+   * written leaf-at-tail (Arty_Z7) cannot place anything from any prefix;
+   * without this tick neither puts a preview on screen before the durable
+   * pump.
+   *
+   * A no-op for other adapters: an IFC product list grows with the parse,
+   * and rebuilding PSB-class indexes costs ~700 ms a generation — the
+   * store path's own end-of-parse pass is its spatial plates, not this.
+   * Call only on a parse that completed; on a failed one call stop() only.
+   */
+  public finishParse(): void {
+
+    if (this.stopped_ || this.capped || this.adapter.retryEmptyUnits !== true) {
+      return
+    }
+
+    try {
+      if (this.ensureGeneration_(true)) {
+        this.tick_(FINISH_BUDGET_MS)
+      }
+    } catch {
+      // A preview failure must never break the open.
+      this.stopped_ = true
+    }
+  }
+
+  /**
    * Stop ticking (call once the parse settles, before finalize/fallback).
    * Idempotent; no tick runs after this returns (ticks are synchronous and
    * scheduled on the same event loop).
@@ -686,7 +797,9 @@ export class StreamedPreviewChannel {
    * extract, `deferredOnPlacement` the subset waiting on a placement chain
    * the prefix does not hold, and `retried` the attempts that were second
    * looks at an earlier deferral — a retry path that has silently stopped
-   * firing shows up here rather than merely as a slower load.
+   * firing shows up here rather than merely as a slower load. `overBudget`
+   * counts units passed over unrun because their estimated cost exceeded
+   * the tick's remaining budget.
    *
    * The same shape as {@link StorePreviewChannel.previewYield}, so both
    * paths render through one formatter (core/progress_log).
@@ -696,7 +809,7 @@ export class StreamedPreviewChannel {
    */
   public get previewYield(): {
     firstMeshMs?: number, meshes: number, emitted: number, deferred: number,
-    deferredOnPlacement: number, retried: number } {
+    deferredOnPlacement: number, retried: number, overBudget: number } {
 
     return {
       firstMeshMs: this.firstMeshMs_,
@@ -705,6 +818,7 @@ export class StreamedPreviewChannel {
       deferred: this.deferredUnits_,
       deferredOnPlacement: this.deferredOnPlacement_,
       retried: this.retriedUnits_,
+      overBudget: this.skippedForCost_,
     }
   }
 
@@ -734,9 +848,9 @@ export class StreamedPreviewChannel {
    * One pump tick: ensure a generation with pending units exists, then
    * extract + capture under the time budget.
    */
-  private tick_(): void {
+  private tick_(budgetMs: number = this.tickBudgetMs_): void {
 
-    const deadline = Date.now() + this.tickBudgetMs_
+    const deadline = Date.now() + budgetMs
 
     if (!this.ensureGeneration_()) {
       return
@@ -764,11 +878,19 @@ export class StreamedPreviewChannel {
           continue
         }
 
+        if (this.overBudget_(generation, ordinal, deadline)) {
+          ++this.skippedForCost_
+          continue
+        }
+
         ++attempts
 
+        const startedMs = Date.now()
         const executed = generation.runUnits(ordinal, 1)
+        const elapsedMs = Date.now() - startedMs
 
         if (executed > 0 && this.captureNewInstances_() > 0) {
+          this.learnUnitCost_(generation, ordinal, elapsedMs)
           this.completedUnits_.add(ordinal)
           ++this.emittedUnits_
         } else {
@@ -810,6 +932,57 @@ export class StreamedPreviewChannel {
   }
 
   /**
+   * Whether a unit's estimated cost is more than the tick has left — the
+   * pass-over test for generations that can estimate (AP214). False for a
+   * generation without {@link PreviewPrefixGeneration.unitFaceEstimate},
+   * and for a unit it cannot estimate, which keeps every other schema on
+   * the old run-it-and-see behaviour.
+   *
+   * @param generation The active generation.
+   * @param ordinal The unit about to run.
+   * @param deadline The tick's wall-clock deadline (Date.now() ms).
+   * @return {boolean} True to pass the unit over.
+   */
+  private overBudget_(
+      generation: PreviewPrefixGeneration,
+      ordinal: number,
+      deadline: number): boolean {
+
+    const faces = generation.unitFaceEstimate?.(ordinal)
+
+    if (faces === void 0) {
+      return false
+    }
+
+    return faces * this.msPerFace_ > deadline - Date.now()
+  }
+
+  /**
+   * Fold one timed unit into the ms-per-face rate. Only units that place
+   * geometry teach it: a unit that failed on a dangling reference (every
+   * unit of a tail-written prefix) costs nothing per face, and learning
+   * from it would talk the channel into running the expensive ones.
+   *
+   * @param generation The generation that ran it.
+   * @param ordinal The unit.
+   * @param elapsedMs How long runUnits took.
+   */
+  private learnUnitCost_(
+      generation: PreviewPrefixGeneration,
+      ordinal: number,
+      elapsedMs: number): void {
+
+    const faces = generation.unitFaceEstimate?.(ordinal)
+
+    if (faces === void 0 || faces === 0 || elapsedMs <= 0) {
+      return
+    }
+
+    this.msPerFace_ +=
+      MS_PER_FACE_LEARNING_RATE * (elapsedMs / faces - this.msPerFace_)
+  }
+
+  /**
    * Take the deferrals the generation accumulated for the unit just run and
    * fold them into the counters, queueing the placement ones for a second
    * look at the next generation.
@@ -845,12 +1018,25 @@ export class StreamedPreviewChannel {
    * it has work; otherwise snapshot a fresh prefix model once the index
    * has grown enough to be worth the copy.
    *
+   * @param complete The parse has completed ({@link finishParse}): build
+   * over the whole index unless the active generation already is one,
+   * bypassing the growth gates, which exist to pace rebuilds DURING a
+   * parse.
    * @return {boolean} True when a generation with pending units exists.
    */
-  private ensureGeneration_(): boolean {
+  private ensureGeneration_(complete: boolean = false): boolean {
 
     const active = this.generation_
     const records = this.sink.topLevelCount
+
+    if (complete) {
+
+      if (active !== void 0 && this.lastSnapshotRecords_ === records) {
+        return this.hasPendingUnits_(active.generation)
+      }
+
+      return records > 0 && this.adoptGeneration_(records)
+    }
 
     // Rebuild on INDEX GROWTH, not on running out of units. The order of
     // these two tests is the whole behaviour of the channel on a large file.
@@ -904,6 +1090,20 @@ export class StreamedPreviewChannel {
       return false
     }
 
+    return this.adoptGeneration_(records)
+  }
+
+  /**
+   * Snapshot the sink, build a generation over it, and make it the active
+   * one if it has anything to run — the rebuild half of
+   * {@link ensureGeneration_}, whichever gate decided to rebuild.
+   *
+   * @param records The sink's top-level count at the decision.
+   * @return {boolean} True when the new generation was adopted.
+   */
+  private adoptGeneration_(records: number): boolean {
+
+    const active = this.generation_
     const columns = this.sink.snapshot()
 
     let generation: PreviewPrefixGeneration | undefined
@@ -1067,11 +1267,14 @@ export class StreamedPreviewChannel {
       },
       CanonicalMaterial | undefined,
       { localID?: number, expressID?: number } | undefined,
+      // Present only from a scene that walks with occurrence identity
+      // (AP214's walkWithOccurrence); IFC's 5-tuple leaves it undefined.
+      ( readonly number[] | undefined )?,
     ]
 
     for (const walked of scene.walk()) {
 
-      const [, nativeTransform, geometry, material, entity] =
+      const [, nativeTransform, geometry, material, entity, occurrencePath] =
         walked as WalkTuple
 
       if (entity?.localID === void 0 || entity.expressID === void 0) {
@@ -1145,6 +1348,13 @@ export class StreamedPreviewChannel {
           w: material_.legacyColor[3],
         },
         flatTransformation: Array.from(newTransform),
+      }
+
+      // A copy: the scene node's array belongs to the throwaway generation,
+      // and a consumer across a worker boundary clones it anyway. Kept even
+      // when empty — a root-level placement's `[]` is information.
+      if (occurrencePath !== void 0) {
+        payload.occurrencePath = Array.from(occurrencePath)
       }
 
       if (!this.emittedGeometry_.has(geometryExpressID)) {

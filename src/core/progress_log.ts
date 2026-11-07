@@ -184,6 +184,13 @@ export interface PreviewYieldLike {
   deferred: number
   deferredOnPlacement: number
   retried: number
+  /**
+   * Units passed over without running because their estimated cost was
+   * more than the tick had left (AP214 previews; the IFC channels never
+   * estimate). Optional so the store channel, which cannot skip, need not
+   * report it.
+   */
+  overBudget?: number
 }
 
 /**
@@ -221,7 +228,9 @@ export function formatPreviewLine( preview: PreviewYieldLike ): string {
     `from ${preview.emitted} units, ` +
     `${preview.deferred} deferred ` +
     `(${preview.deferredOnPlacement} on placements), ` +
-    `${preview.retried} retried`
+    `${preview.retried} retried` +
+    // Only when nonzero, so the line every IFC load prints is unchanged.
+    ( ( preview.overBudget ?? 0 ) > 0 ? `, ${preview.overBudget} over budget` : '' )
 }
 
 /**

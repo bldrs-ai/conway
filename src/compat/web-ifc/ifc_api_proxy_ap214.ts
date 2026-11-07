@@ -1049,6 +1049,13 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       ( { result } = await buildIndexStreamingAsync(
           hashingSource ?? new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
           void 0, sink, parseProgress) )
+
+      // One budgeted tick over the whole index before the index is
+      // published: the only preview a short or tail-written STEP parse gets
+      // (StreamedPreviewChannel.finishParse).
+      if (result === ParseResult.COMPLETE) {
+        previewChannel?.finishParse()
+      }
     } finally {
       previewChannel?.stop()
     }
