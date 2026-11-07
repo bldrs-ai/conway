@@ -59,6 +59,8 @@ import { ExtractResult } from '../core/shared_constants'
 import Logger, { DATA_DEFECT } from '../logging/logger'
 import { isUnresolvedReferenceError } from '../step/dangling_reference_error'
 import { arrayToWasmHeap, wasmHeapView } from '../core/wasm_heap'
+import { cursorIterator } from '../indexing/cursor_utilities'
+import { StepEntityConstructorAbstract } from '../step/step_entity_constructor'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -1322,7 +1324,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const definition of this.model.types( shape_definition_representation ) ) {
+    for ( const definition of this.extentWalkEntities_( shape_definition_representation ) ) {
       try {
         add( definition.used_representation )
       } catch {
@@ -1330,7 +1332,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const relationship of this.model.types( shape_representation_relationship ) ) {
+    for ( const relationship of this.extentWalkEntities_( shape_representation_relationship ) ) {
       try {
         add( relationship.rep_1 )
         add( relationship.rep_2 )
@@ -1339,7 +1341,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const map of this.model.types( representation_map ) ) {
+    for ( const map of this.extentWalkEntities_( representation_map ) ) {
       try {
         add( map.mapped_representation )
       } catch {
@@ -1349,7 +1351,7 @@ export class AP214GeometryExtraction {
 
     // Free-floating representations, which no relationship or definition
     // names. These are the concrete kinds extraction's own root scan uses.
-    for ( const free of this.model.types(
+    for ( const free of this.extentWalkEntities_(
         shape_representation,
         advanced_brep_shape_representation,
         geometrically_bounded_wireframe_shape_representation ) ) {
@@ -1358,6 +1360,63 @@ export class AP214GeometryExtraction {
     }
 
     return found.values()
+  }
+
+  /**
+   * `model.types(...)` for the extent walk, with each record materialized
+   * under its own catch.
+   *
+   * The walk is preparation (it runs in the demand plan), so a record that
+   * throws as it materializes, such as a malformed complex record, must not
+   * end the plan. A generator that throws cannot be resumed, so the catch
+   * has to sit inside the iteration, around each record. A skipped record's
+   * faces get no floor (the pre-#564 per-face target), which is the safe
+   * direction everywhere in this table. The throw is logged the way a
+   * failing demand unit's is.
+   *
+   * Before the walk moved into the plan, the same throw escaped
+   * `resolveRepresentationExtents` on the first advanced face. The table was
+   * never built, so every later face retried the walk and threw again: every
+   * advanced face of the model failed (codex on #774).
+   *
+   * Same records in the same order as `model.types`: the same type-index
+   * cursor, and a record with no entity is skipped as `StepModelBase.from`
+   * skips it.
+   *
+   * @param types The entity types to walk.
+   * @yields Each record of those types that materializes.
+   */
+  private *extentWalkEntities_<
+      T extends StepEntityConstructorAbstract< EntityTypesAP214 >[]>( ...types: T ):
+      IterableIterator< InstanceType< T[ number ] > > {
+
+    const distinctTypes = types.length === 1 ? types[ 0 ].query :
+      new Set( types.flatMap( ( type ) => type.query ) )
+    const cursor = this.model.typeIndex.cursor( ...distinctTypes )
+
+    try {
+      for ( const localID of cursorIterator( cursor ) ) {
+
+        let entity: unknown
+
+        try {
+          entity = this.model.getElementByLocalID( localID )
+        } catch ( ex ) {
+          if ( !this.quietRecoverableLogging ) {
+            Logger.error( ex instanceof Error ?
+              `Error collecting representation extents: \n\t${ex.name}\n\t${ex.message}` :
+              `Unknown exception collecting representation extents (${ex})` )
+          }
+          continue
+        }
+
+        if ( entity !== void 0 ) {
+          yield entity as InstanceType< T[ number ] >
+        }
+      }
+    } finally {
+      cursor.free()
+    }
   }
 
   /**
@@ -6542,6 +6601,16 @@ export class AP214GeometryExtraction {
       this.planDemandUnits_()
     } catch ( ex ) {
       this.demandPrepFailure_ = { error: ex }
+
+      // The plan may have turned element memoization off for a large
+      // buffer, and its restore lives in finishDemandExtraction, which a
+      // failed plan never reaches. Restore it here so a failed plan does
+      // not leave the model unmemoized (codex on #774).
+      if ( this.demandMemoizationRestore_ !== void 0 ) {
+        this.model.elementMemoization = this.demandMemoizationRestore_
+        this.demandMemoizationRestore_ = void 0
+      }
+
       throw ex
     }
   }
