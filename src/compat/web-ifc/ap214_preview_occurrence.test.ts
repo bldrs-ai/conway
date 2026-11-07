@@ -218,7 +218,7 @@ describe( 'AP214 previews on a windowed open (conway#757)', () => {
 
 describe( 'a windowed prefix model holds no window views between units', () => {
 
-  test( 'not after planning, not after estimating units it passes over, not after disposal', async () => {
+  test( 'not after planning, not after estimating a unit, not after disposal', async () => {
 
     // Codex on #772: estimates read records through the windowed prefix
     // model, and a unit the gate passes over never ran, so nothing released
@@ -248,16 +248,27 @@ describe( 'a windowed prefix model holds no window views between units', () => {
         } ),
         true, () => { /* no payloads */ }, void 0, void 0, 1 )
 
-    // Every unit over budget: a rate no estimate can fit under.
+    // Planning, then estimating every unit, with nothing run in between: a
+    // unit that runs releases on its own, which is what hid this (a unit the
+    // gate passes over never runs).
     /* eslint-disable @typescript-eslint/no-explicit-any */
-    ;( channel as any ).msPerFace_ = Number.MAX_SAFE_INTEGER
+    expect( ( channel as any ).ensureGeneration_( true ) ).toBe( true )
+
+    const generation = ( channel as any ).generation_.generation as PreviewPrefixGeneration
     /* eslint-enable @typescript-eslint/no-explicit-any */
-    channel.finishParse()
 
     expect( models.length ).toBe( 1 )
-    expect( channel.previewYield.overBudget ).toBeGreaterThan( 0 )
-    expect( channel.previewYield.meshes ).toBe( 0 )
     expect( models[ 0 ].capturedSourceViewCount ).toBe( 0 )
+
+    let faces = 0
+
+    for ( let ordinal = 0; ordinal < generation.unitCount; ++ordinal ) {
+      faces += generation.unitFaceEstimate!( ordinal ) ?? 0
+      expect( models[ 0 ].capturedSourceViewCount ).toBe( 0 )
+    }
+
+    // Non-vacuous: the estimates did read records through the window.
+    expect( faces ).toBeGreaterThan( 0 )
 
     channel.stop()
 
