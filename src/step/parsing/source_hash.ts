@@ -1,5 +1,6 @@
 import { yieldToEventLoop } from '../../core/progress'
 import { AsyncByteSource, ByteSource, ReadableByteSource } from './byte_source'
+import { SampledHashFold } from './index_sidecar'
 
 
 /** Tail read size when finishing a hash the parse did not reach the end of. */
@@ -101,7 +102,23 @@ export class HashingByteSource implements AsyncByteSource {
   /**
    * @param inner_ The source to read through.
    */
-  constructor( private readonly inner_: ReadableByteSource ) {}
+  constructor( private readonly inner_: ReadableByteSource ) {
+    this.sampled_ = new SampledHashFold( inner_.byteLength )
+  }
+
+  // The sampled digest (index_sidecar.ts#sampledSourceSpans), folded in the
+  // same pass, so an open records it with no read of its own (conway#758).
+  private readonly sampled_: SampledHashFold
+
+  /**
+   * The sampled digest of the bytes read so far; the whole source's once
+   * {@link finishAsync} has resolved.
+   *
+   * @return {number} The digest.
+   */
+  public get sampledHash(): number {
+    return this.sampled_.digest
+  }
 
   /**
    * @return {number} The wrapped source's length.
@@ -146,6 +163,7 @@ export class HashingByteSource implements AsyncByteSource {
       const fresh = intoOffset + ( this.covered_ - offset )
 
       this.hash_ = foldFnv1a( into, fresh, intoOffset + got, this.hash_ )
+      this.sampled_.fold( into, fresh, intoOffset + got, this.covered_ )
       this.covered_ = end
     }
 
@@ -177,6 +195,7 @@ export class HashingByteSource implements AsyncByteSource {
         }
 
         this.hash_ = foldFnv1a( chunk, 0, got, this.hash_ )
+        this.sampled_.fold( chunk, 0, got, this.covered_ )
         this.covered_ += got
       }
     }
@@ -200,7 +219,22 @@ export class HashingSyncByteSource implements ByteSource {
   /**
    * @param inner_ The source to read through.
    */
-  constructor( private readonly inner_: ByteSource ) {}
+  constructor( private readonly inner_: ByteSource ) {
+    this.sampled_ = new SampledHashFold( inner_.byteLength )
+  }
+
+  // See HashingByteSource's sampled_.
+  private readonly sampled_: SampledHashFold
+
+  /**
+   * The sampled digest of the bytes read so far; the whole source's once
+   * {@link finish} has run.
+   *
+   * @return {number} The digest.
+   */
+  public get sampledHash(): number {
+    return this.sampled_.digest
+  }
 
   /**
    * @return {number} The wrapped source's length.
@@ -245,6 +279,7 @@ export class HashingSyncByteSource implements ByteSource {
       const fresh = intoOffset + ( this.covered_ - offset )
 
       this.hash_ = foldFnv1a( into, fresh, intoOffset + got, this.hash_ )
+      this.sampled_.fold( into, fresh, intoOffset + got, this.covered_ )
       this.covered_ = end
     }
 
@@ -274,6 +309,7 @@ export class HashingSyncByteSource implements ByteSource {
         }
 
         this.hash_ = foldFnv1a( chunk, 0, got, this.hash_ )
+        this.sampled_.fold( chunk, 0, got, this.covered_ )
         this.covered_ += got
       }
     }

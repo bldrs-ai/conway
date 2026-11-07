@@ -1,19 +1,18 @@
 import { ByteSource, ReadableByteSource, StoreByteSource } from '../step/parsing/byte_source'
 import { ColumnarIndexSink, StepIndexColumns } from '../step/parsing/columnar_index'
-import {
-  deserializeIndexSidecarToColumns,
-  IndexSidecarStaleError,
-  readSidecarSourceIdentity,
-  SidecarSourceIdentity,
-  sidecarMatchesSource,
-  sidecarMatchesSourceLength,
-} from '../step/parsing/index_sidecar'
+import { IFC_SIDECAR_SCHEMA } from '../step/parsing/index_sidecar'
 import {
   HashingByteSource,
   HashingSyncByteSource,
-  hashSourceAsync,
 } from '../step/parsing/source_hash'
-import ParsingBuffer from '../parsing/parsing_buffer'
+import {
+  assertSidecarDescribesStore,
+  HEADER_PREFIX_BYTES,
+  HEADER_PREFIX_RETRY_BYTES,
+  parseStepHeaderFromStore,
+  restoreStepIndexFromSidecar,
+  SidecarVerifyMode,
+} from '../step/step_index_open'
 import { RecordEventHandler } from '../step/parsing/record_event'
 import {
   buildColumnarIndexStreaming,
@@ -117,68 +116,29 @@ export interface StreamedIfcOpen {
 // eslint-disable-next-line no-magic-numbers
 const DEFAULT_STREAM_POOL_BYTES = 1024 * 1024
 
-// The header prefix an index-first open reads. 64 KiB is the same slice the
-// store-backed open already pulls for format detection, so the common case
-// costs one read of bytes the caller has in hand anyway. A header longer
-// than that is legal STEP (a large FILE_DESCRIPTION), so the open grows the
-// prefix once before it refuses — a valid model must not be turned away by
-// the size of a buffer, least of all on the path with no CI coverage.
-// eslint-disable-next-line no-magic-numbers
-export const HEADER_PREFIX_BYTES = 64 * 1024
-
-// eslint-disable-next-line no-magic-numbers
-export const HEADER_PREFIX_RETRY_BYTES = 4 * 1024 * 1024
+// Re-exported from their schema-neutral home (step_index_open.ts,
+// conway#757), where the AP214 index-first open reads them too.
+export {
+  assertSidecarDescribesStore,
+  HEADER_PREFIX_BYTES,
+  HEADER_PREFIX_RETRY_BYTES,
+}
 
 
 /**
- * Read and parse a STEP header from a bounded prefix of a random-access
- * store, growing the prefix once (to {@link HEADER_PREFIX_RETRY_BYTES}) on
- * failure before giving up.
- *
- * Factored out of {@link openIfcModelFromIndex}, this function's only
- * remaining caller — the sidecar path has no data parse at all (the index
- * comes from the sidecar), so a bounded prefix sniff is the only place its
- * schema is ever visible; every other native open gates from the real
- * parse's own header via `buildIndexStreaming`'s `onHeaderParsed` seam
- * instead (streaming_index_builder.ts), which is what closed the gap this
- * function's sibling sniff used to leave (a header completing in the real
- * parse's window but not in a smaller bounded one — codex review of
- * bldrs-ai/conway#713, P1 round 4). Do not resurrect a second bounded sniff
- * as a substitute for the seam; this one stays only because
- * `openIfcModelFromIndex` has no parse for the seam to attach to.
+ * Read and parse an IFC file's STEP header from a bounded prefix of a
+ * store — {@link parseStepHeaderFromStore} with the IFC parser. See that
+ * function for the prefix, its one retry, and why only the index-first open
+ * may sniff a header this way.
  *
  * @param store The random-access store to read the header prefix from.
  * @return {Promise<{header: StepHeader, result: ParseResult, prefixLength: number}>}
- * The parsed header, the parse result (check against `ParseResult.COMPLETE`
- * before trusting `header`), and the prefix length actually read — callers
- * that report byte counts (e.g. `StreamingIndexStats.bytesRead`) want it.
+ * The parsed header, the parse result, and the prefix length read.
  */
-export async function parseIfcHeaderFromStore( store: StepExternalByteStore ):
+export function parseIfcHeaderFromStore( store: StepExternalByteStore ):
     Promise<{ header: StepHeader, result: ParseResult, prefixLength: number }> {
 
-  let prefixLength = Math.min( store.byteLength, HEADER_PREFIX_BYTES )
-
-  let [ header, headerResult ] =
-    IfcStepParser.Instance.parseHeader(
-        new ParsingBuffer( await store.read( 0, prefixLength ) ) )
-
-  // Retried on ANY non-COMPLETE result, not on some "truncated" one:
-  // `parseHeader` runs off the end of a short buffer into its ordinary
-  // `syntaxError()` returns (step_parser.ts — it never reports INCOMPLETE),
-  // so a header that simply did not fit is indistinguishable from a
-  // malformed one at this point. The retry is bounded and only happens on
-  // the path that was about to throw, so the cost of being unable to tell
-  // them apart is one read of at most 4 MiB on a failing open.
-  if ( headerResult !== ParseResult.COMPLETE && prefixLength < store.byteLength ) {
-
-    prefixLength = Math.min( store.byteLength, HEADER_PREFIX_RETRY_BYTES )
-
-    ;( [ header, headerResult ] =
-      IfcStepParser.Instance.parseHeader(
-          new ParsingBuffer( await store.read( 0, prefixLength ) ) ) )
-  }
-
-  return { header, result: headerResult, prefixLength }
+  return parseStepHeaderFromStore( store, IfcStepParser.Instance )
 }
 
 
@@ -257,6 +217,7 @@ export function openStreamedIfcModel(
   const model = new IfcStepModel( void 0, columns, provider )
 
   model.indexedSourceHash = hashing?.finish()
+  model.indexedSampledHash = hashing?.sampledHash
 
   return {
     model,
@@ -357,6 +318,7 @@ export async function openStreamedIfcModelAsync(
   const model = new IfcStepModel( void 0, columns, provider )
 
   model.indexedSourceHash = await hashing?.finishAsync()
+  model.indexedSampledHash = hashing?.sampledHash
 
   return {
     model,
@@ -399,8 +361,9 @@ export interface IndexFirstIfcOpenOptions {
   maxResidentChunks?: number
 
   /**
-   * Re-read the whole store to verify the sidecar's source hash, rather
-   * than checking `byteLength` alone (the default).
+   * Re-read the whole store to verify the sidecar's source hash (`true`),
+   * or just its sampled blocks (`'sampled'`, conway#758), rather than
+   * checking `byteLength` alone (the default).
    *
    * Off is right for **distribution** — a coordinator that hashed the
    * bytes during its own parse, handing the index to consumers addressing
@@ -410,49 +373,7 @@ export interface IndexFirstIfcOpenOptions {
    * describe a file that has since changed. See `index_sidecar.ts`
    * §"The trust gate".
    */
-  verifySourceHash?: boolean
-}
-
-
-/**
- * The sidecar trust gate, on its own: refuse with an
- * {@link IndexSidecarStaleError} unless `identity` (a decoded sidecar's
- * source identity) describes what `store` holds — its length always, and
- * its hash when `verifyHash` is set (see `index_sidecar.ts` §"The trust
- * gate" for which callers want which).
- *
- * Exported so the compat factory can classify a source it is about to
- * refuse for another reason: a store truncated inside its header no longer
- * sniffs as IFC, and without this check first that open would report "not
- * IFC" rather than "this sidecar is for another file" (codex review of
- * conway#760).
- *
- * @param identity The sidecar's recorded source identity.
- * @param store The store being opened.
- * @param verifyHash Whether to re-read the store and compare hashes.
- */
-export async function assertSidecarDescribesStore(
-    identity: SidecarSourceIdentity,
-    store: StepExternalByteStore,
-    verifyHash: boolean ): Promise<void> {
-
-  if ( !sidecarMatchesSourceLength( identity, store.byteLength ) ) {
-    throw new IndexSidecarStaleError(
-        'length', identity.sourceByteLength, store.byteLength )
-  }
-
-  if ( verifyHash ) {
-
-    // Chunked, rather than materialising the file to call `hashSource` —
-    // the digest is identical either way (one chained FNV-1a), and a
-    // windowed open must not need the whole file resident to check its own
-    // index. Yields between chunks so a worker stays responsive through it.
-    const hashed = await hashSourceAsync( new StoreByteSource( store ) )
-
-    if ( !sidecarMatchesSource( identity, store.byteLength, hashed ) ) {
-      throw new IndexSidecarStaleError( 'hash', identity.sourceHash, hashed )
-    }
-  }
+  verifySourceHash?: SidecarVerifyMode
 }
 
 
@@ -492,27 +413,15 @@ export async function openIfcModelFromIndex(
     sidecar: Uint8Array,
     options?: IndexFirstIfcOpenOptions ): Promise<StreamedIfcOpen> {
 
-  // Identity first, off the header alone (conway#760 round 2): a stale
-  // sidecar is refused as stale before paying for the column copy (~0.2 s
-  // and 151 MB on a 9 M-row index), and a valid header over a corrupt body
-  // against the wrong store reports INDEX_STALE here exactly as it does on
-  // the compat factory's not-IFC branch, rather than a decode failure.
-  await assertSidecarDescribesStore(
-      readSidecarSourceIdentity( sidecar ), store, options?.verifySourceHash === true )
+  // The trust gate, the schema stamp (conway#757), the column copy and the
+  // bounded header read — the schema-neutral half every index-first open
+  // shares (step_index_open.ts). A sidecar for another file or another
+  // schema throws IndexSidecarStaleError before any column is copied.
+  const restored = await restoreStepIndexFromSidecar< EntityTypesIfc >(
+      store, sidecar, IfcStepParser.Instance, IFC_SIDECAR_SCHEMA,
+      options?.verifySourceHash ?? false )
 
-  const restored = deserializeIndexSidecarToColumns<EntityTypesIfc>( sidecar )
-
-  const { header, result: headerResult, prefixLength } =
-    await parseIfcHeaderFromStore( store )
-
-  if ( headerResult !== ParseResult.COMPLETE ) {
-    // The length check passed but the bytes are not the file the index
-    // describes (or not a STEP file at all). Loud, because the alternative
-    // is a model built over an index that addresses someone else's bytes.
-    throw new Error(
-        `Index-first open could not parse a STEP header from the first ` +
-        `${prefixLength} bytes (result ${headerResult})` )
-  }
+  const { header, prefixLength } = restored
 
   // Gate before constructing/returning a model (codex review of #713, P1).
   // Every other native open passes this function as `buildIndexStreaming`'s
@@ -532,6 +441,7 @@ export async function openIfcModelFromIndex(
   // identity of the bytes it describes — re-exporting this model reproduces
   // the sidecar byte for byte (conway#756).
   model.indexedSourceHash = restored.sourceHash
+  model.indexedSampledHash = restored.sampledHash
 
   return {
     model,

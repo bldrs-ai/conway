@@ -58,7 +58,11 @@ import {
   exportIfcIndexSidecar,
   IfcIndexSidecarExport,
 } from '../../ifc/ifc_index_sidecar_export'
-import { hashSource, IndexSidecarUnsupportedError } from '../../step/parsing/index_sidecar'
+import {
+  hashSampledBuffer,
+  hashSource,
+  IndexSidecarUnsupportedError,
+} from '../../step/parsing/index_sidecar'
 import ParsingBuffer from '../../parsing/parsing_buffer'
 import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
 import { HashingByteSource, hashSourceAsync } from '../../step/parsing/source_hash'
@@ -1196,6 +1200,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
       !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
       model.indexedSourceHash = hashSource( data )
+      model.indexedSampledHash = hashSampledBuffer( data )
     }
 
     tracker?.endPhase(data.length)
@@ -1307,6 +1312,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     if ( model !== void 0 && settings?.RECORD_SOURCE_HASH === true &&
       !IfcApiProxyIfc.isIfc4x3Header( stepHeader ) ) {
       model.indexedSourceHash = await hashSourceAsync( new BufferByteSource( data ) )
+      model.indexedSampledHash = hashSampledBuffer( data )
     }
 
     tracker?.endPhase(data.length)
@@ -1503,6 +1509,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       model.setFieldMasks( compatIndex.fieldMasks )
     } else {
       model.indexedSourceHash = await hashingSource?.finishAsync()
+      model.indexedSampledHash = hashingSource?.sampledHash
     }
 
     statistics?.setParseTime(parseEndTime - parseStartTime)
@@ -1870,7 +1877,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     const restoreStartTime = Date.now()
 
     const opened = await openIfcModelFromIndex( store, sidecar, {
-      verifySourceHash: settings?.VERIFY_INDEX_SOURCE_HASH === true,
+      verifySourceHash: settings?.VERIFY_INDEX_SOURCE_HASH ?? false,
     } )
 
     const restoreEndTime = Date.now()
@@ -2066,6 +2073,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
       model.setFieldMasks( compatIndex.fieldMasks )
     } else {
       model.indexedSourceHash = await hashingSource?.finishAsync()
+      model.indexedSampledHash = hashingSource?.sampledHash
     }
 
     statistics?.setParseTime(parseEndTime - parseStartTime)

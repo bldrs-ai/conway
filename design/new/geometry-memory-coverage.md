@@ -777,8 +777,10 @@ it by default:
    format-agnostic in its *class* but not in its *wiring*, and the wiring
    is what protects a load.** Inheriting `StepModelBase` does **not** get a
    format windowed automatically: the provider is installed by the open
-   path, so a buffer-backed open is unwindowed in either format, and AP214
-   has no open-time installation at all. The policy ask is therefore the
+   path, so a buffer-backed open is unwindowed in either format. AP214 got
+   its open-time installation in conway#757 (`OpenModelStream` /
+   `OpenModelFromIndex` over a store with `readSync`; see
+   streaming-federated-loader.md §"STEP windowed: synchronous fault-in"). The policy ask is therefore the
    mirror of item 3's: **state which open modes are expected to be
    windowed, and make an unwindowed open of a large source a deliberate,
    recorded choice rather than a property of which entry point the caller

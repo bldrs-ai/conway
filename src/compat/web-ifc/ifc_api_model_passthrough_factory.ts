@@ -8,12 +8,16 @@ import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import { IfcApiProxyAP214 } from './ifc_api_proxy_ap214'
 import { IfcApiProxyIfc } from './ifc_api_proxy_ifc'
 import Logger from '../../logging/logger'
-import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import {
+  StepExternalByteStore,
+  StoreNotSynchronousError,
+} from '../../step/step_buffer_provider'
 import {
   HEADER_PREFIX_RETRY_BYTES,
   assertSidecarDescribesStore,
-} from '../../ifc/ifc_stream_open'
+} from '../../step/step_index_open'
 import { UnrecognizedIfc4x3SchemaError } from '../../ifc/ifc_schema_selection'
+import { storeOpenRequirement } from './store_open_support'
 import {
   IndexSidecarStaleError,
   SidecarSourceIdentity,
@@ -75,7 +79,13 @@ function recordOpenFailure( modelID: number, error: unknown ): void {
   const statistics = Logger.getStatistics( modelID ) ?? Logger.createStatistics( modelID )
   const status = statistics.getLoadStatus()
 
-  if ( error instanceof IndexSidecarStaleError ) {
+  if ( error instanceof StoreNotSynchronousError ) {
+
+    // conway#757: a windowed STEP open over a store with no synchronous
+    // read. Not a failure of the file — the same bytes open buffered — so
+    // its own status, which an embedder keys its buffered fallback on.
+    statistics.setLoadStatus( 'STORE_NOT_SYNCHRONOUS' )
+  } else if ( error instanceof IndexSidecarStaleError ) {
 
     // conway#756: the index-first open's "this sidecar is for some other
     // file" — the one failure whose remedy is a parse. Its own status, so an
@@ -262,10 +272,12 @@ export class IfcApiModelPassthroughFactory {
   }
 
   /**
-   * Store-backed open (M1b): IFC models parse through a moving window
-   * over `store` and stay windowed from birth. Non-IFC formats are not
-   * implemented on this path — the caller should fall back to buffering
-   * and fromStreamed.
+   * Store-backed open (M1b; STEP since conway#757): IFC and AP214-family
+   * models parse through a moving window over `store` and stay windowed
+   * from birth. An AP214-family model needs a store with `readSync`
+   * (otherwise status STORE_NOT_SYNCHRONOUS); other formats are not on
+   * this path. Either way the caller falls back to buffering and
+   * fromStreamed.
    *
    * @param modelID
    * @param store External store holding the source bytes.
@@ -288,12 +300,18 @@ export class IfcApiModelPassthroughFactory {
     // than an earlier IfcAPI's object with a stale UNSUPPORTED_SCHEMA.
     beginOpenStatistics( modelID )
 
-    if ( modelFormat === ModelFormatType.IFC ) {
+    if ( storeOpenRequirement( modelFormat ) !== void 0 ) {
 
       try {
 
-        return await IfcApiProxyIfc.createFromStore(
-            modelID, store, wasmModule, settings )
+        // One store-backed open per engine, the same shape for both
+        // (conway#757). The AP214 one needs a store that reads
+        // synchronously, and refuses one that cannot with
+        // StoreNotSynchronousError (status STORE_NOT_SYNCHRONOUS), so the
+        // caller buffers instead — see IfcApiProxyAP214.createFromStore.
+        return modelFormat === ModelFormatType.IFC ?
+          await IfcApiProxyIfc.createFromStore( modelID, store, wasmModule, settings ) :
+          await IfcApiProxyAP214.createFromStore( modelID, store, wasmModule, settings )
       } catch ( e ) {
 
         const message = e instanceof Error ? e.message : String( e )
@@ -311,8 +329,8 @@ export class IfcApiModelPassthroughFactory {
       // use next (see detectFromStore).
 
       Logger.warning(
-          'Store-backed open is IFC-only; use OpenModelStreamed with a buffer ' +
-          `for format ${modelFormat}` )
+          'Store-backed open covers IFC and STEP (AP214/AP203/AP242); use ' +
+          `OpenModelStreamed with a buffer for format ${modelFormat}` )
     }
   }
 
@@ -369,8 +387,9 @@ export class IfcApiModelPassthroughFactory {
    * Index-first open (conway#541): the caller already holds the entity
    * index — a sidecar a coordinator built during its own parse, or one
    * persisted from a previous visit — so there is nothing to parse. IFC
-   * only, inheriting the store path's restriction; the format is sniffed
-   * from the same bounded prefix `fromStore` reads.
+   * and the AP214 family, as `fromStore`; the format is sniffed from the
+   * same bounded prefix `fromStore` reads, and the sidecar's schema stamp
+   * must match the engine it picks.
    *
    * **No internal fallback.** Anything wrong with the sidecar (wrong
    * version, wrong source length, a header that will not parse) returns
@@ -410,7 +429,7 @@ export class IfcApiModelPassthroughFactory {
 
       const modelFormat = await IfcApiModelPassthroughFactory.detectFromStore( store )
 
-      if ( modelFormat !== ModelFormatType.IFC ) {
+      if ( storeOpenRequirement( modelFormat ) === void 0 ) {
 
         // Classify against the sidecar BEFORE refusing the format (codex
         // review of conway#760). A source truncated inside its header, or
@@ -429,20 +448,26 @@ export class IfcApiModelPassthroughFactory {
 
         if ( identity !== void 0 ) {
           await assertSidecarDescribesStore(
-              identity, store, settings?.VERIFY_INDEX_SOURCE_HASH === true )
+              identity, store, settings?.VERIFY_INDEX_SOURCE_HASH ?? false )
         }
 
         // Deliberately a different message from the catch below: both end in
         // −1, so the log line is the only thing that separates "this is not
-        // an IFC file" from "the store would not answer".
+        // a STEP file" from "the store would not answer".
         Logger.warning(
-            'Index-first open is IFC-only; use OpenModelStreamed with a buffer ' +
-            `for format ${modelFormat}` )
+            'Index-first open covers IFC and STEP (AP214/AP203/AP242); use ' +
+            `OpenModelStreamed with a buffer for format ${modelFormat}` )
         return
       }
 
-      return await IfcApiProxyIfc.createFromIndex(
-          modelID, store, sidecar, wasmModule, settings )
+      // The sidecar's schema stamp is checked against the engine chosen
+      // here (conway#757): an AP214 sidecar handed to an IFC store, or the
+      // reverse, is refused as stale before any column is copied.
+      return modelFormat === ModelFormatType.IFC ?
+        await IfcApiProxyIfc.createFromIndex(
+            modelID, store, sidecar, wasmModule, settings ) :
+        await IfcApiProxyAP214.createFromIndex(
+            modelID, store, sidecar, wasmModule, settings )
     } catch ( e ) {
 
       const message = e instanceof Error ? e.message : String( e )

@@ -28,6 +28,7 @@ import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import {
   deserializeIndexSidecarToColumns,
+  hashSampledBuffer,
   hashSource,
   serializeIndexSidecarFromColumns,
 } from '../../step/parsing/index_sidecar'
@@ -109,7 +110,8 @@ async function referenceSidecar( source: Uint8Array ): Promise<Uint8Array> {
   expect( cold.result ).toBe( ParseResult.COMPLETE )
 
   return serializeIndexSidecarFromColumns(
-      cold.columns, source.byteLength, hashSource( source ) )
+      cold.columns, source.byteLength, hashSource( source ),
+      { sampledHash: hashSampledBuffer( source ) } )
 }
 
 
@@ -130,7 +132,8 @@ function mutateSidecar(
   const columns = edit( decoded.columns ) ?? decoded.columns
 
   return serializeIndexSidecarFromColumns(
-      columns, decoded.sourceByteLength, decoded.sourceHash )
+      columns, decoded.sourceByteLength, decoded.sourceHash,
+      { sampledHash: decoded.sampledHash } )
 }
 
 
@@ -673,7 +676,7 @@ describe( 'a stale sidecar fails the open as INDEX_STALE (conway#756)', () => {
   // not a decode failure.
   test( 'a stale sidecar with a corrupt body is stale, not a decode failure', async () => {
 
-    const corrupt = sidecar.slice( 0, 48 ) // header intact, columns gone
+    const corrupt = sidecar.slice( 0, 64 ) // v3 header (60 bytes) intact, columns gone
 
     const ifcBranch = await attempt( source.subarray( 0, source.length - 1 ), DEFER )
 
@@ -882,11 +885,13 @@ describe( 'what ExportIndexSidecar refuses (conway#756)', () => {
     }
   } )
 
-  test( 'a STEP model', async () => {
+  test( 'a STEP model opened without RECORD_SOURCE_HASH', async () => {
 
+    // STEP exports since conway#757 (ap214_index_sidecar.test.ts covers the
+    // positive cases); like IFC, only when its open recorded the hash.
     jest.spyOn( console, 'warn' ).mockImplementation( () => {} )
 
-    const modelID = await api.OpenModelAsync( fixture( 'as1-oc-214.stp' ), SETTINGS )
+    const modelID = await api.OpenModelAsync( fixture( 'as1-oc-214.stp' ), NO_RECORD )
 
     expect( modelID ).toBeGreaterThanOrEqual( 0 )
     expect( await api.ExportIndexSidecar( modelID ) ).toBeUndefined()

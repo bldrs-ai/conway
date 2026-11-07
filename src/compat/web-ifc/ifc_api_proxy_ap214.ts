@@ -13,7 +13,12 @@ import {
   RawLineData,
   Vector,
 } from './ifc_api'
-import { StepExternalByteStore } from '../../step/step_buffer_provider'
+import {
+  StepExternalByteStore,
+  StoreNotSynchronousError,
+  storeReadsSynchronously,
+  WindowedStepBufferProvider,
+} from '../../step/step_buffer_provider'
 import { IfcApiModelPassthrough } from './ifc_api_model_passthrough'
 import * as glmatrix from 'gl-matrix'
 import { LARGE_COORDINATE_BUDGET_M, TRANSLATION_X, TRANSLATION_Y, TRANSLATION_Z,
@@ -24,7 +29,7 @@ import { ExtractResult } from '../../index'
 import { ParseResult } from '../../index'
 import Memory from '../../memory/memory'
 import { CanonicalMeshType } from '../../index'
-import AP214StepModel from '../../AP214E3_2010/ap214_step_model'
+import AP214StepModel, { AP214_SIDECAR_SCHEMA } from '../../AP214E3_2010/ap214_step_model'
 import { AP214SceneBuilder } from '../../AP214E3_2010/ap214_scene_builder'
 import { AP214GeometryExtraction } from '../../AP214E3_2010/ap214_geometry_extraction'
 import AP214StepParser from '../../AP214E3_2010/ap214_step_parser'
@@ -37,7 +42,17 @@ import {
 } from '../../core/wasm_heap'
 import { extractModelInfo } from '../../loaders/loading_utilities'
 import { StepHeader } from '../../step/parsing/step_parser'
-import { BufferByteSource } from '../../step/parsing/byte_source'
+import { BufferByteSource, StoreByteSource } from '../../step/parsing/byte_source'
+import { HashingByteSource } from '../../step/parsing/source_hash'
+import {
+  hashSampledBuffer,
+  hashSource,
+} from '../../step/parsing/index_sidecar'
+import { restoreStepIndexFromSidecar } from '../../step/step_index_open'
+import {
+  exportStepIndexSidecar,
+  StepIndexSidecarExport,
+} from '../../step/step_index_sidecar_export'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import {
   buildIndexStreamingAsync,
@@ -237,6 +252,9 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       maxResidentChunks?: number ): void {
     this.properties.primeIndexes()
     this.model[0].spillSourceToExternalStore(store, chunkBytes, maxResidentChunks)
+    // Post-spill AP214 reads drop their views wholesale, like a windowed
+    // open's (see parseColumnarFromStore).
+    this.model[0].trackCapturedSourceViews = true
   }
 
   /**
@@ -248,6 +266,90 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    */
   async ensureLineResident(expressID: number): Promise<void> {
     await this.model[0].ensureResidentByExpressID(expressID)
+  }
+
+  /**
+   * `getLine` that is safe on a windowed source — the IFC proxy's method
+   * of the same name, so an embedder reads both formats through one call
+   * (Share's GLB capture and property reads pick it when
+   * `sourceIsExternal`).
+   *
+   * Needs nothing of its own: a windowed AP214 model is only ever built
+   * over a store that reads synchronously (see {@link createFromStore}), so
+   * every record the read reaches faults its window in. The views it left
+   * are dropped after, as the IFC twin drops its closure's. Returns
+   * whatever `getLine` returns for AP214 (which has no web-ifc line
+   * converter; see {@link getLine}).
+   *
+   * @param expressID The record's express ID.
+   * @param flatten Inline every referenced record, recursively.
+   * @param includeRepresentations Accepted for signature parity with the
+   * IFC twin; AP214's getLine does not flatten.
+   * @return {Promise<any>} The line data, as getLine returns it.
+   */
+  // eslint-disable-next-line no-unused-vars
+  async getLineResident(
+      expressID: number,
+      flatten: boolean = false,
+      includeRepresentations: boolean = false): Promise<any> {
+
+    try {
+      return this.getLine(expressID, flatten)
+    } finally {
+      this.releaseCapturedViews_()
+    }
+  }
+
+  /**
+   * Call `visit` once per record with its line data, as `getLine` returns
+   * it, reading a windowed source in file order so each window is paged in
+   * about once however scattered `expressIDs` are — the IFC proxy's method
+   * of the same name (conway#752/#755), over the schema-neutral
+   * `StepModelBase.visitResidentInFileOrder`. A resident source visits in
+   * iteration order with no awaits.
+   *
+   * @param expressIDs The records to visit.
+   * @param visit Synchronous receiver of each record's line data.
+   * @return {Promise<void>} Resolves after every record is visited.
+   */
+  async visitLineDataInFileOrder(
+      expressIDs: Iterable<number>,
+      visit: (expressID: number, line: any) => void): Promise<void> {
+
+    try {
+      await this.model[0].visitResidentInFileOrder(expressIDs, (expressID) => {
+        visit(expressID, this.getLine(expressID, false))
+      })
+    } finally {
+      this.releaseCapturedViews_()
+    }
+  }
+
+  /**
+   * Serialise this model's entity index to an index sidecar, stamped
+   * AP214 (conway#757), so a later engine can `OpenModelFromIndex` instead
+   * of re-parsing — the IFC proxy's method of the same name, through the
+   * same schema-neutral export (`exportStepIndexSidecar`). Needs the open
+   * to have recorded the source hash (RECORD_SOURCE_HASH), exactly as IFC
+   * does. AP203 and AP242 files, which open through this proxy, export the
+   * same way.
+   *
+   * @return {Promise<StepIndexSidecarExport>} The sidecar and its cost.
+   */
+  async exportIndexSidecar(): Promise<StepIndexSidecarExport> {
+    return await exportStepIndexSidecar(this.model[0], AP214_SIDECAR_SCHEMA)
+  }
+
+  /**
+   * Drop the window views a synchronous read left behind and trim the
+   * window to its cap. No-op when resident.
+   */
+  private releaseCapturedViews_(): void {
+
+    const model = this.model[0]
+
+    model.releaseCapturedSourceViews()
+    model.trimSourceResidency()
   }
 
   /**
@@ -447,6 +549,14 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     // the pump runs, and IfcAPI refreshes it as it does.
     statistics?.setProductCount(model.typeCount(product_definition))
     statistics?.setProductsWithGeometryCount(this.getProductsWithGeometryCount())
+
+    // The reads above (the product name, the owners behind the
+    // products-with-geometry count) are the open's last, and on a windowed
+    // model they captured views like any other; drop them here, at the true
+    // end of the open, or they would hold their windows for the model's
+    // lifetime on a non-deferred open, which has no pump batch to release
+    // them (codex review of conway#769). No-op when resident.
+    this.releaseCapturedViews_()
   }
 
   /**
@@ -594,6 +704,267 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
   }
 
   /**
+   * Store-backed open (conway#757, the AP214 twin of
+   * `IfcApiProxyIfc.createFromStore`): parse through a moving window over
+   * `store` and keep the model windowed from birth, so the source is never
+   * one `ArrayBuffer` — the index build reads it chunk by chunk, and every
+   * record read afterwards goes through `WindowedStepBufferProvider`'s LRU.
+   *
+   * **The store must read synchronously** (`StepExternalByteStore.readSync`)
+   * — that is the one way this differs from IFC's open, and it is data, not
+   * a second pipeline. IFC's extraction pages each product's record closure
+   * in asynchronously before it reads (`ensureResidentFor*`), so IFC opens
+   * windowed over any store. AP214's assembly walk, demand units and
+   * property extraction read records synchronously across the whole model,
+   * with no closure pager, so on a windowed source each read that misses
+   * faults its window in on the spot, which needs a synchronous read.
+   * Without one this throws before reading anything, and the factory
+   * reports the open as not windowable (the embedder buffers instead).
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings.
+   * @return {Promise<IfcApiProxyAP214>} The constructed proxy.
+   */
+  public static async createFromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyAP214> {
+
+    IfcApiProxyAP214.requireSynchronousStore(store)
+
+    const loadState = await IfcApiProxyAP214.parseColumnarFromStore(
+        modelID, store, new ConwayGeometry(wasmModule), settings,
+        settings?.DEFER_GEOMETRY === true)
+
+    return new IfcApiProxyAP214(modelID, new Uint8Array(0), wasmModule, settings, loadState)
+  }
+
+  /**
+   * Index-first open (conway#757, the AP214 twin of
+   * `IfcApiProxyIfc.createFromIndex`): restore the entity index from a
+   * sidecar instead of parsing, then continue exactly as the store-backed
+   * open does. Same synchronous-store requirement as
+   * {@link createFromStore}, and the same "no internal fallback" contract
+   * as IFC's: a sidecar for another file or schema throws
+   * `IndexSidecarStaleError`, and the caller parses.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param wasmModule The wasm module.
+   * @param settings Loader settings.
+   * @return {Promise<IfcApiProxyAP214>} The constructed proxy.
+   */
+  public static async createFromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      wasmModule: any,
+      settings?: Loadersettings ): Promise<IfcApiProxyAP214> {
+
+    IfcApiProxyAP214.requireSynchronousStore(store)
+
+    const loadState = await IfcApiProxyAP214.parseColumnarFromIndex(
+        modelID, store, sidecar, new ConwayGeometry(wasmModule), settings,
+        settings?.DEFER_GEOMETRY === true)
+
+    return new IfcApiProxyAP214(modelID, new Uint8Array(0), wasmModule, settings, loadState)
+  }
+
+  /**
+   * Refuse a store a windowed AP214 model cannot be read through — see
+   * {@link createFromStore} for why it needs `readSync`.
+   *
+   * @param store The store.
+   */
+  private static requireSynchronousStore(store: StepExternalByteStore): void {
+
+    if (!storeReadsSynchronously(store)) {
+      throw new StoreNotSynchronousError()
+    }
+  }
+
+  /**
+   * Record the whole-source and sampled digests of a resident parse's
+   * buffer under RECORD_SOURCE_HASH, for the sidecar export — the IFC
+   * proxy's classic opens do the same, after the parse and outside its
+   * timing.
+   *
+   * @param model The parsed model, if the parse produced one.
+   * @param data The bytes it was parsed from.
+   * @param settings Loader settings.
+   */
+  private static recordResidentSourceHash(
+      model: AP214StepModel | undefined,
+      data: Uint8Array,
+      settings: Loadersettings | undefined ): void {
+
+    if (model !== void 0 && settings?.RECORD_SOURCE_HASH === true) {
+      model.indexedSourceHash = hashSource(data)
+      model.indexedSampledHash = hashSampledBuffer(data)
+    }
+  }
+
+  /**
+   * The store-backed parse behind {@link createFromStore}: one windowed
+   * pass over the store builds the columns (and, under
+   * RECORD_SOURCE_HASH, both digests in the same pass), the model is built
+   * over a `WindowedStepBufferProvider`, and the shared
+   * {@link finishColumnarOpen} takes it from there.
+   *
+   * The preview seam is here: a STEP store preview channel ticks from
+   * `parseProgress` and is flushed/stopped around the index build, as
+   * `StorePreviewChannel` is in IFC's twin, and its latched frame replaces
+   * the `undefined` passed to {@link finishColumnarOpen}.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings.
+   * @param deferGeometry Skip extraction (the deferred pump runs it).
+   * @return {Promise<Ap214ProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarFromStore(
+      modelID: number,
+      store: StepExternalByteStore,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<Ap214ProxyLoadState> {
+
+    const tracker = IfcApiProxyAP214.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const parser = AP214StepParser.Instance
+    const fileSize = store.byteLength
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const parseProgress = tracker !== void 0 ?
+      (cursorBytes: number) => tracker.update(cursorBytes) : void 0
+
+    const parseStartTime = Date.now()
+
+    const sink = new ColumnarIndexSink<EntityTypesAP214>()
+
+    const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
+      new HashingByteSource(new StoreByteSource(store)) : void 0
+
+    // The header comes out of the parse's own first window, so the store is
+    // read once, front to back.
+    const { result, header: stepHeader } = await buildIndexStreamingAsync(
+        hashingSource ?? new StoreByteSource(store), parser, STREAMED_PARSE_POOL_BYTES,
+        void 0, sink, parseProgress)
+
+    const columns = sink.finalize()
+
+    IfcApiProxyAP214.reportHeaderParseResult(
+        result, new ParsingBuffer(new Uint8Array(0)), modelID)
+
+    const modelInfo = extractModelInfo(stepHeader, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    const parseEndTime = Date.now()
+
+    tracker?.endPhase(fileSize)
+
+    if (result !== ParseResult.COMPLETE) {
+      Logger.warning(`[OpenModelStream]: streamed parse result ${result}`)
+      statistics?.setLoadStatus('PARSE_FAIL')
+      throw new Error( 'Streamed parse did not complete' )
+    }
+
+    const model = new AP214StepModel(void 0, columns, new WindowedStepBufferProvider(store))
+
+    // AP214's walks cannot name what they read, so they drop window views
+    // wholesale (StepModelBase.releaseCapturedSourceViews), which needs the
+    // model to track them.
+    model.trackCapturedSourceViews = true
+
+    model.indexedSourceHash = await hashingSource?.finishAsync()
+    model.indexedSampledHash = hashingSource?.sampledHash
+
+    statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    return IfcApiProxyAP214.finishColumnarOpen(
+        modelID, conwaywasm, model, stepHeader, allTimeStart, tracker,
+        deferGeometry, void 0)
+  }
+
+  /**
+   * The index-first twin of {@link parseColumnarFromStore}: the columns
+   * come from the sidecar (restoreStepIndexFromSidecar, the trust gate and
+   * the AP214 schema stamp included), the header from a bounded prefix of
+   * the store, and the rest is the shared {@link finishColumnarOpen}. No
+   * preview, as in IFC's: there is no parse to preview.
+   *
+   * @param modelID The model ID being opened.
+   * @param store External store holding the source bytes.
+   * @param sidecar The serialised index.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param settings Loader settings.
+   * @param deferGeometry Skip extraction (the deferred pump runs it).
+   * @return {Promise<Ap214ProxyLoadState>} Everything the constructor tail needs.
+   */
+  private static async parseColumnarFromIndex(
+      modelID: number,
+      store: StepExternalByteStore,
+      sidecar: Uint8Array,
+      conwaywasm: ConwayGeometry,
+      settings?: Loadersettings,
+      deferGeometry: boolean = false ): Promise<Ap214ProxyLoadState> {
+
+    const tracker = IfcApiProxyAP214.makeTracker(settings)
+    const allTimeStart = Date.now()
+    const fileSize = store.byteLength
+
+    Logger.createStatistics(modelID)
+
+    const statistics = Logger.getStatistics(modelID)
+
+    // Reported as the dataParse phase, the one it replaces (IFC's twin
+    // does the same), as one step.
+    tracker?.beginPhase('dataParse', 'bytes', fileSize)
+
+    const restoreStartTime = Date.now()
+
+    const restored = await restoreStepIndexFromSidecar<EntityTypesAP214>(
+        store, sidecar, AP214StepParser.Instance, AP214_SIDECAR_SCHEMA,
+        settings?.VERIFY_INDEX_SOURCE_HASH ?? false)
+
+    const model = new AP214StepModel(
+        void 0, restored.columns, new WindowedStepBufferProvider(store))
+
+    // See parseColumnarFromStore.
+    model.trackCapturedSourceViews = true
+
+    model.indexedSourceHash = restored.sourceHash
+    model.indexedSampledHash = restored.sampledHash
+
+    const restoreEndTime = Date.now()
+
+    const modelInfo = extractModelInfo(restored.header, fileSize)
+
+    Logger.info(formatModelLine(modelInfo))
+    settings?.ON_MODEL_INFO?.(modelInfo)
+
+    tracker?.endPhase(fileSize)
+
+    statistics?.setParseTime(restoreEndTime - restoreStartTime)
+
+    return IfcApiProxyAP214.finishColumnarOpen(
+        modelID, conwaywasm, model, restored.header, allTimeStart, tracker,
+        deferGeometry, void 0)
+  }
+
+  /**
    * Streamed twin of parseAndExtractAsync: cooperative columnar index
    * build (periodic event-loop yields, absolute byte-cursor progress),
    * then the model adopts the columns directly — no per-record object
@@ -669,9 +1040,14 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     let result: ParseResult
 
+    // RECORD_SOURCE_HASH folds the source digests into the parse's own pass,
+    // for the index sidecar export (conway#757; the IFC proxy's twin).
+    const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
+      new HashingByteSource( new BufferByteSource(data) ) : void 0
+
     try {
       ( { result } = await buildIndexStreamingAsync(
-          new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
+          hashingSource ?? new BufferByteSource(data), parser, STREAMED_PARSE_POOL_BYTES,
           void 0, sink, parseProgress) )
     } finally {
       previewChannel?.stop()
@@ -691,7 +1067,61 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     const model = new AP214StepModel(data, columns)
 
+    model.indexedSourceHash = await hashingSource?.finishAsync()
+    model.indexedSampledHash = hashingSource?.sampledHash
+
     statistics?.setParseTime(parseEndTime - parseStartTime)
+
+    return IfcApiProxyAP214.finishColumnarOpen(
+        modelID, conwaywasm, model, stepHeader, allTimeStart, tracker,
+        deferGeometry, previewChannel?.coordinationMatrix )
+  }
+
+  /**
+   * The half of a columnar open that does not care where the index or the
+   * bytes came from: everything from a constructed model onward — the
+   * deferred hand-off, or the whole-model extraction. Shared by the
+   * buffered streamed open ({@link parseColumnarAndExtractAsync}), the
+   * store-backed one ({@link parseColumnarFromStore}) and the index-first
+   * one ({@link parseColumnarFromIndex}) — the AP214 twin of
+   * `IfcApiProxyIfc.finishWindowedOpen`, and one body for the same reason:
+   * an open that diverged here would be a second extraction path with no
+   * coverage of its own.
+   *
+   * **The preview seam.** A parse-time preview channel latches the
+   * coordination frame its meshes were placed in, and the durable capture
+   * adopts it so preview and durable placements share one frame; that is
+   * all of the channel this tail sees, as `previewCoordinationMatrix`. The
+   * buffered open passes its `StreamedPreviewChannel`'s. The store-backed
+   * open has no channel yet (the STEP store preview is in flight
+   * separately) and passes `undefined`, as the index-first open always will
+   * — it has no parse to preview, exactly like IFC's. A store preview for
+   * STEP attaches in {@link parseColumnarFromStore} around its index build,
+   * where IFC's `StorePreviewChannel` sits in its twin, and hands its frame
+   * here.
+   *
+   * @param modelID The model ID being opened.
+   * @param conwaywasm The conway geometry wasm wrapper.
+   * @param model The model, resident or windowed.
+   * @param stepHeader The STEP header.
+   * @param allTimeStart Open start timestamp.
+   * @param tracker The progress tracker, if any.
+   * @param deferGeometry Skip extraction (the deferred pump runs it).
+   * @param previewCoordinationMatrix The frame a parse-time preview channel
+   * latched, when one ran.
+   * @return {Ap214ProxyLoadState} Everything the constructor tail needs.
+   */
+  private static finishColumnarOpen(
+      modelID: number,
+      conwaywasm: ConwayGeometry,
+      model: AP214StepModel,
+      stepHeader: StepHeader,
+      allTimeStart: number,
+      tracker: ProgressTracker | undefined,
+      deferGeometry: boolean,
+      previewCoordinationMatrix: number[] | undefined ): Ap214ProxyLoadState {
+
+    const statistics = Logger.getStatistics(modelID)
 
     const conwayGeometry = new AP214GeometryExtraction(conwaywasm, model)
 
@@ -709,7 +1139,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
       return {
         conwaywasm,
         deferred: true,
-        previewCoordinationMatrix: previewChannel?.coordinationMatrix,
+        previewCoordinationMatrix,
         allTimeStart,
         stepHeader,
         model,
@@ -727,6 +1157,14 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const startTime = Date.now()
     const [extractionResult, scene] =
       conwayGeometry.extractAP214GeometryData()
+
+    // A windowed source's walk captured a view of every window it read;
+    // drop them so the LRU's cap holds again (no-op when resident). The
+    // whole-model walk runs as one call, so on a windowed source it holds
+    // what it reads until here — the deferred pump, which is what a
+    // windowed embedder drives, releases between batches instead.
+    model.releaseCapturedSourceViews()
+    model.trimSourceResidency()
 
     const endTime = Date.now()
 
@@ -866,6 +1304,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const model = parser.parseDataToModel(bufferInput, parseTick)[1]
     const parseEndTime = Date.now()
 
+    IfcApiProxyAP214.recordResidentSourceHash(model, data, settings)
+
     tracker?.endPhase(data.length)
 
     if (model === void 0) {
@@ -960,6 +1400,8 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     const parseStartTime = Date.now()
     const model = (await parser.parseDataToModelAsync(bufferInput, parseTick))[1]
     const parseEndTime = Date.now()
+
+    IfcApiProxyAP214.recordResidentSourceHash(model, data, settings)
 
     tracker?.endPhase(data.length)
 
@@ -1629,6 +2071,12 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
     if (meshCallback !== void 0) {
       this.streamNewMeshes_(meshCallback)
     }
+
+    // On a windowed source the batch's reads faulted their windows in and
+    // left a view of each on the records they read; drop those views and
+    // trim back to the cap, so a drain holds about one batch's windows
+    // rather than every window it has ever touched (no-op when resident).
+    this.releaseCapturedViews_()
 
     return {extracted, remaining}
   }

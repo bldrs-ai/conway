@@ -48,6 +48,16 @@ const SPAN_READS_IN_FLIGHT = 4
 /**
  * The base for models parsed from STEP.
  */
+/**
+ * Anything that holds a source-window view in `buffer` — a descriptor, or
+ * a multi-mapped class reference — as {@link StepModelBase}'s view release
+ * sees it.
+ */
+interface CapturedViewHolder {
+  buffer?: Uint8Array
+}
+
+
 export default abstract class StepModelBase<
   EntityTypeIDs extends number,
   BaseEntity extends StepEntityBase<EntityTypeIDs> = StepEntityBase<EntityTypeIDs> >
@@ -141,6 +151,15 @@ implements Iterable<BaseEntity>, Model {
    * as stale instead.
    */
   public indexedSourceHash?: number
+
+  /**
+   * The sampled digest (`index_sidecar.ts#sampledSourceSpans`) of the same
+   * bytes as {@link indexedSourceHash}, recorded beside it by the same opens
+   * and adopted the same way from a sidecar. A v3 sidecar carries it so a
+   * revisit can verify about 0.5 MB of the store instead of all of it
+   * (conway#758). Undefined whenever `indexedSourceHash` is.
+   */
+  public indexedSampledHash?: number
 
   /**
    * Is this model's index a mid-parse PREFIX? True only for a model built
@@ -638,6 +657,7 @@ implements Iterable<BaseEntity>, Model {
       // the memory the old retained object array could never release. They
       // rematerialise from the columns on next access.
       this.descriptorCache_ = []
+      this.capturedViews_.clear()
 
       // Complex (multiMapping) entries are retained objects; clear their lazy
       // fields in place, matching the previous per-entry reset. The mapped
@@ -1082,6 +1102,8 @@ implements Iterable<BaseEntity>, Model {
     element.buffer = acquisition.buffer
     element.vtable = this.vtableBuilder_.buffer
 
+    this.noteCapturedView_( element )
+
     // setFieldMasks: drop the masked fields' cursors entirely, and end the
     // last kept field exactly where a non-final field ends (the byte before
     // the next field's start), so no read can reach the masked bytes.
@@ -1130,13 +1152,110 @@ implements Iterable<BaseEntity>, Model {
     element.buffer =
       this.bufferProvider_.acquire( element.address, element.length ).buffer
 
+    this.noteCapturedView_( element )
+
     if ( element.multiMapping !== void 0 ) {
 
       for ( const mapped of element.multiMapping ) {
         mapped.buffer =
           this.bufferProvider_.acquire( mapped.address, mapped.length ).buffer
+
+        this.noteCapturedView_( mapped )
       }
     }
+  }
+
+  /**
+   * Remember a reference that just captured a source-window view, so
+   * {@link releaseCapturedSourceViews} can drop it without knowing which
+   * records a walk read. Windowed sources only: a resident source's views
+   * are the source buffer itself, which nothing frees.
+   *
+   * @param reference The descriptor (or mapped class reference) whose
+   * `buffer` was just set.
+   */
+  private noteCapturedView_( reference: CapturedViewHolder ): void {
+
+    if ( this.trackCapturedSourceViews && this.buffer_ === void 0 ) {
+      this.capturedViews_.add( reference )
+    }
+  }
+
+  /**
+   * Opt in to {@link releaseCapturedSourceViews}: remember every reference
+   * that captures a window view, so a walk that cannot name the records it
+   * read can drop their views wholesale. Off by default, and only the AP214
+   * windowed opens turn it on (`IfcApiProxyAP214`, conway#757).
+   *
+   * Opt-in rather than always-on for IFC's sake (codex review of
+   * conway#769): IFC pages by named closures and drops their views with
+   * {@link releaseSourceViews}, which clears `buffer` without touching this
+   * set, so tracking on an IFC open would keep a reference to every
+   * descriptor it ever paged — memory nothing releases until close, for a
+   * mechanism IFC does not use. Off, IFC's windowed opens are exactly as
+   * they were.
+   */
+  public trackCapturedSourceViews: boolean = false
+
+  /**
+   * References holding a window view captured since the last
+   * {@link releaseCapturedSourceViews}, while
+   * {@link trackCapturedSourceViews} is on. A Set, so a reference whose view
+   * {@link releaseSourceViews} dropped and that is read again is held once,
+   * not once per capture: the size is bounded by the records read since the
+   * last release, whatever else clears views in between.
+   */
+  private capturedViews_ = new Set< CapturedViewHolder >()
+
+  /**
+   * How many references hold a tracked window view right now (tests and
+   * telemetry; always 0 unless {@link trackCapturedSourceViews} is on).
+   *
+   * @return {number} The count.
+   */
+  public get capturedSourceViewCount(): number {
+    return this.capturedViews_.size
+  }
+
+  /**
+   * Drop every source-window view captured since the last call — the
+   * whole-model form of {@link releaseSourceViews}, for a walk that cannot
+   * name the records it read. Needs {@link trackCapturedSourceViews}.
+   *
+   * A descriptor that read a record keeps a view of the 4 MiB window it
+   * came from, and a view keeps its window alive after the LRU evicts it.
+   * A walk that reads all over the model — AP214's assembly walk and its
+   * demand units, which read synchronously and fault their windows in
+   * (`StepExternalByteStore.readSync`) — would otherwise end up holding
+   * every window of the file, however small the LRU cap. Calling this at a
+   * quiescent point (between pump batches, after a property index build)
+   * returns those windows to the LRU's budget. Vtables stay, and the next
+   * read of a record re-acquires its view (see {@link releaseSourceViews}
+   * for why the base is stable).
+   *
+   * No-op while the source is fully resident.
+   *
+   * @return {number} How many views were dropped.
+   */
+  public releaseCapturedSourceViews(): number {
+
+    const captured = this.capturedViews_
+
+    if ( captured.size === 0 ) {
+      return 0
+    }
+
+    for ( const reference of captured ) {
+      reference.buffer = void 0
+    }
+
+    const released = captured.size
+
+    captured.clear()
+
+    releaseScratchParsingBuffer()
+
+    return released
   }
 
 
@@ -1157,6 +1276,21 @@ implements Iterable<BaseEntity>, Model {
    */
   public get isSourceExternal(): boolean {
     return this.buffer_ === void 0
+  }
+
+  /**
+   * Can a synchronous read of this model's source page a missing window in
+   * itself — a windowed source over a store with `readSync`
+   * (`StepExternalByteStore.readSync`)? Always true while the source is
+   * resident, where nothing is ever missing.
+   *
+   * This is what decides whether a schema without an asynchronous closure
+   * pager (AP214) can be read windowed at all.
+   *
+   * @return {boolean} True when every synchronous read can succeed.
+   */
+  public get sourceReadsSynchronously(): boolean {
+    return !this.isSourceExternal || this.bufferProvider_.faultsInSynchronously === true
   }
 
   /**

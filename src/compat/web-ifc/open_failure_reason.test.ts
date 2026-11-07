@@ -315,15 +315,17 @@ describe( 'a store open refused before the IFC branch does not inherit a stale s
 
     await later.Init()
 
-    // STEP AP214: not IFC, so the store open (IFC-only) returns -1 at the sniff.
+    // STEP AP214 over a store with no synchronous read: the store open
+    // refuses it (conway#757) before reading past the sniff, and says so
+    // under its own status rather than the earlier API's.
     const step = new Uint8Array( fs.readFileSync( 'data/nema-23-76mm.step' ) )
 
     expect( await later.OpenModelStream( new InMemoryStepByteStore( step ), DEFER ) ).toBe( -1 )
 
     const statistics = later.getStatistics( 0 )
 
-    expect( statistics.getLoadStatus() ).not.toBe( 'UNSUPPORTED_SCHEMA' )
-    expect( statistics.getLoadFailureReason() ).toBeUndefined()
+    expect( statistics.getLoadStatus() ).toBe( 'STORE_NOT_SYNCHRONOUS' )
+    expect( statistics.getLoadFailureReason() ).toMatch( /reads synchronously/ )
   }, 120000 )
 } )
 

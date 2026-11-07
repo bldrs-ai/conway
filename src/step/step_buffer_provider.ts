@@ -167,6 +167,62 @@ export interface StepExternalByteStore {
    * (byteOffset 0) of exactly `length` bytes.
    */
   read( offset: number, length: number ): Promise< Uint8Array >
+
+  /**
+   * Optional: read `length` bytes starting at `offset` **synchronously**.
+   *
+   * A store that offers this lets {@link WindowedStepBufferProvider} fault
+   * a missing window in on a synchronous read instead of throwing
+   * {@link StepBufferNotResidentError}. That is what lets a schema whose
+   * extraction has no asynchronous closure pager — AP214, whose assembly
+   * walk and property extraction read records synchronously all over the
+   * model — open windowed at all (conway#757): every read that misses pages
+   * its window in on the spot, under the same LRU cap and residency policy
+   * an `ensureResident` load runs under.
+   *
+   * Offer it only where the read really is synchronous and cheap: an OPFS
+   * `FileSystemSyncAccessHandle` or `FileReaderSync` in a worker, or
+   * `fs.readSync` in Node. A main-thread `Blob` cannot, and a store that
+   * cannot must leave this undefined rather than block on a promise.
+   *
+   * Same contract as {@link read}: exactly `length` bytes, as a standalone
+   * array (byteOffset 0) the provider may keep.
+   *
+   * @param offset Absolute offset of the first byte to read.
+   * @param length Number of bytes to read.
+   * @return {Uint8Array} The bytes.
+   */
+  readSync?( offset: number, length: number ): Uint8Array
+}
+
+/**
+ * Can this store be read synchronously (see
+ * {@link StepExternalByteStore.readSync})?
+ *
+ * @param store The store.
+ * @return {boolean} True when it offers `readSync`.
+ */
+export function storeReadsSynchronously( store: StepExternalByteStore ): boolean {
+  return typeof store.readSync === 'function'
+}
+
+/**
+ * A windowed open refused because its store cannot read synchronously, and
+ * the schema's reads need it (AP214 — see
+ * {@link StepExternalByteStore.readSync}). Not a defect of the file: the
+ * same bytes open buffered. Typed so an open can report "use a buffer"
+ * rather than "failed" (load status `STORE_NOT_SYNCHRONOUS`).
+ */
+export class StoreNotSynchronousError extends Error {
+
+  /** Construct this. */
+  constructor() {
+    super(
+        'A windowed STEP (AP214) open needs a store that reads synchronously ' +
+        '(StepExternalByteStore.readSync): its extraction reads records ' +
+        'synchronously and has no closure pager. Open it buffered instead.' )
+    this.name = 'StoreNotSynchronousError'
+  }
 }
 
 /**
@@ -180,8 +236,25 @@ export class InMemoryStepByteStore implements StepExternalByteStore {
    * Construct this around a byte array (not copied).
    *
    * @param bytes_ The backing bytes.
+   * @param synchronous Also offer {@link readSync}, so a windowed provider
+   * over this store faults misses in rather than throwing (default off).
    */
-  constructor( private readonly bytes_: Uint8Array ) {}
+  constructor( private readonly bytes_: Uint8Array, synchronous: boolean = false ) {
+
+    // Opt-in, so the many tests that build a windowed model over this store
+    // keep asserting that an unpaged synchronous read throws: with
+    // `readSync` present the provider would fault it in instead.
+    if ( synchronous ) {
+      this.readSync = ( offset: number, length: number ) =>
+        this.bytes_.slice( offset, offset + length )
+    }
+  }
+
+  /**
+   * Synchronous read, present only when constructed with `synchronous`
+   * (see {@link StepExternalByteStore.readSync}).
+   */
+  public readonly readSync?: ( offset: number, length: number ) => Uint8Array
 
   /**
    * Total size of the stored byte sequence.
@@ -307,6 +380,13 @@ export interface StepBufferProvider {
    * fully-resident source.
    */
   trimToCap?(): void
+
+  /**
+   * Optional: does a synchronous {@link acquire} page a missing range in
+   * itself rather than throw (a windowed provider over a store with
+   * `readSync`)? Absent reads as false.
+   */
+  readonly faultsInSynchronously?: boolean
 }
 
 /**
@@ -572,11 +652,8 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     if ( firstChunk === lastChunk ) {
 
-      const chunk = this.chunks_.get( firstChunk )
-
-      if ( chunk === void 0 ) {
-        throw new StepBufferNotResidentError( address, length )
-      }
+      const chunk = this.chunks_.get( firstChunk ) ??
+        this.faultInSync_( firstChunk, address, length )
 
       this.touch_( firstChunk, chunk )
 
@@ -590,11 +667,8 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
 
     for ( let chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex ) {
 
-      const chunk = this.chunks_.get( chunkIndex )
-
-      if ( chunk === void 0 ) {
-        throw new StepBufferNotResidentError( address, length )
-      }
+      const chunk = this.chunks_.get( chunkIndex ) ??
+        this.faultInSync_( chunkIndex, address, length )
 
       this.touch_( chunkIndex, chunk )
 
@@ -610,6 +684,82 @@ export class WindowedStepBufferProvider implements StepBufferProvider {
     }
 
     return { buffer: merged, offset: address }
+  }
+
+  /**
+   * Page one missing chunk in synchronously, for {@link acquire} — or throw
+   * {@link StepBufferNotResidentError} when the store cannot read
+   * synchronously, which is the provider's contract for every store that
+   * has no `readSync` (see {@link StepExternalByteStore.readSync}).
+   *
+   * The chunk goes through the same bookkeeping an `ensureResident` load
+   * does: the residency policy sees it as a load (so a thrashing
+   * synchronous walk grows the window exactly as an async one would), and
+   * the window is trimmed back to its cap afterwards, sparing pinned
+   * chunks. The chunk just read is the most recently used, so the trim
+   * reaches it only when every other resident chunk is pinned; it is
+   * returned to the caller either way, and a view of it stays valid after
+   * an eviction, as every evicted chunk's views do.
+   *
+   * A load already in flight for the chunk is not waited for (nothing
+   * synchronous can wait for it). The chunk is read again here, and
+   * whichever copy lands second replaces the first in the window; the
+   * bytes are the same, and views of either stay valid.
+   *
+   * @param chunkIndex The missing chunk.
+   * @param address Absolute start of the range being acquired (for the
+   * error).
+   * @param length Length of that range (for the error).
+   * @throws { StepBufferNotResidentError } When the store has no
+   * synchronous read.
+   * @return {Uint8Array} The chunk, now resident.
+   */
+  private faultInSync_( chunkIndex: number, address: number, length: number ): Uint8Array {
+
+    const readSync = this.store_.readSync
+
+    if ( readSync === void 0 ) {
+      throw new StepBufferNotResidentError( address, length )
+    }
+
+    const chunkBytes  = this.chunkBytes_
+    const chunkBase   = chunkIndex * chunkBytes
+    const chunkLength = Math.min( chunkBytes, this.store_.byteLength - chunkBase )
+
+    this.notePolicyRequest_( chunkIndex, true )
+
+    const chunk = tagBufferBase( readSync.call( this.store_, chunkBase, chunkLength ), chunkBase )
+
+    ++this.syncFaults_
+
+    this.chunks_.set( chunkIndex, chunk )
+    this.trimToCap()
+
+    return chunk
+  }
+
+  /** Windows {@link faultInSync_} has paged in (telemetry). */
+  private syncFaults_ = 0
+
+  /**
+   * How many windows synchronous reads have faulted in (telemetry/tests):
+   * 0 on a store without `readSync`, and on any load whose reads were all
+   * paged ahead of time.
+   *
+   * @return {number} The count.
+   */
+  public get syncFaultCount(): number {
+    return this.syncFaults_
+  }
+
+  /**
+   * Can a synchronous read on this provider page a missing window in
+   * itself (its store offers `readSync`)?
+   *
+   * @return {boolean} True when misses fault in rather than throw.
+   */
+  public get faultsInSynchronously(): boolean {
+    return this.store_.readSync !== void 0
   }
 
   /**
