@@ -235,7 +235,9 @@ const config: Config = {
   // only keeps one worker from carrying it into the next suite. 1 GB is
   // about three times the ifc4x3 suite's own peak (290 MB alone, 411 MB
   // in-band after two AP214 suites, --logHeapUsage), so a worker is
-  // recycled only after it has carried several suites' worth.
+  // recycled only after it has carried several suites' worth. Jest ignores
+  // the option in-band (`--runInBand` / `-i`), and with it set a run of a
+  // single file forks a worker instead of running in the parent process.
   workerIdleMemoryLimit: '1GB',
 }
 
