@@ -16,6 +16,7 @@ import {
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
 import { formatPreviewLine } from '../../core/progress_log'
+import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 
 const SETTINGS = { COORDINATE_TO_ORIGIN: true, USE_FAST_BOOLS: true }
 
@@ -176,6 +177,34 @@ describe( 'AP214 preview payloads', () => {
       } )
 
     expect( vertexBytes( modelID, previewed ) ).toEqual( vertexBytes( plainID, plain ) )
+  }, 240000 )
+} )
+
+describe( 'AP214 previews on a windowed open (conway#757)', () => {
+
+  test( 'a store-backed open emits previews, each on a placement the buffered open makes', async () => {
+
+    // The windowed open's channel builds its prefix models over the store
+    // (windowedAP214PrefixModel), faulting windows in synchronously as the
+    // durable model does. HOW MANY payloads fit is the tick budget's, a
+    // wall-clock matter, so the comparison is membership, not equality: every
+    // windowed payload is a placement the buffered open's durable model has.
+    const bytes = new Uint8Array( fs.readFileSync( OCCURRENCE_FIXTURE ) )
+    const placements = new Set( durable( ( await openWithPreview( OCCURRENCE_FIXTURE ) ).modelID ).map( key ) )
+    const payloads: PreviewMeshPayload[] = []
+
+    const modelID = await api.OpenModelStream( new InMemoryStepByteStore( bytes, true ), {
+      ...SETTINGS,
+      DEFER_GEOMETRY: true,
+      ON_PREVIEW_MESH: ( payload ) => payloads.push( payload ),
+    } )
+
+    expect( modelID ).toBeGreaterThanOrEqual( 0 )
+    expect( payloads.length ).toBeGreaterThan( 0 )
+    for ( const payload of payloads ) {
+      expect( placements.has( key( payload ) ) ).toBe( true )
+    }
+    expect( payloads.every( ( payload ) => Array.isArray( payload.occurrencePath ) ) ).toBe( true )
   }, 240000 )
 } )
 

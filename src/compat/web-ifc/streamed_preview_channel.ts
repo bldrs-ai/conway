@@ -9,6 +9,8 @@ import {
   AP214GeometryExtraction,
 } from '../../AP214E3_2010/ap214_geometry_extraction'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
+import { WindowedStepBufferProvider } from '../../step/step_buffer_provider'
+import type { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { cursorIterator } from '../../indexing/cursor_utilities'
 import { Vector3 } from '../../../dependencies/conway-geom'
 import * as glmatrix from 'gl-matrix'
@@ -438,6 +440,53 @@ export function releaseModelGeometry(
 }
 
 /**
+ * Builds an AP214 prefix model over the channel's source — the one part of
+ * the AP214 adapter that depends on whether the open is resident or
+ * windowed.
+ */
+export type AP214PrefixModelFactory<TSource> =
+  ( source: TSource, columns: ConstructorParameters<typeof AP214StepModel>[1] ) =>
+    AP214StepModel
+
+/**
+ * The resident open's prefix model: the source buffer itself.
+ *
+ * @param data The resident source.
+ * @param columns The prefix columns.
+ * @return {AP214StepModel} The prefix model.
+ */
+export function residentAP214PrefixModel(
+    data: Uint8Array,
+    columns: ConstructorParameters<typeof AP214StepModel>[1] ): AP214StepModel {
+
+  return new AP214StepModel( data, columns )
+}
+
+/**
+ * The windowed open's prefix model (conway#757's store-backed open): the
+ * same store the durable model reads, through a provider of its own, so the
+ * generation faults its windows in synchronously exactly as the durable
+ * extraction does (`StepExternalByteStore.readSync`). View tracking is on so
+ * the adapter can drop what a unit captured once it has run, which is what
+ * keeps a generation's residency to the provider's LRU rather than every
+ * window its units touched.
+ *
+ * @param store The store the open parses.
+ * @param columns The prefix columns.
+ * @return {AP214StepModel} The prefix model.
+ */
+export function windowedAP214PrefixModel(
+    store: StepExternalByteStore,
+    columns: ConstructorParameters<typeof AP214StepModel>[1] ): AP214StepModel {
+
+  const model = new AP214StepModel( void 0, columns, new WindowedStepBufferProvider( store ) )
+
+  model.trackCapturedSourceViews = true
+
+  return model
+}
+
+/**
  * AP214 adapter: units are assembly-tree units (see
  * AP214GeometryExtraction.prepareDemandExtraction). Unit ordinals are
  * only approximately stable across prefix growth (a root's child list
@@ -446,15 +495,23 @@ export function releaseModelGeometry(
  * placement (invisible overlap) or skips one (the durable pump renders
  * it later).
  *
+ * One adapter for both opens: `makeModel` is the only difference between a
+ * resident and a windowed source, and a windowed model's captured views are
+ * released after every unit.
+ *
+ * @param makeModel Builds the prefix model over the channel's source.
  * @return {PreviewSchemaAdapter} The adapter.
  */
-export function ap214PreviewAdapter(): PreviewSchemaAdapter {
+export function ap214PreviewAdapter<TSource = Uint8Array>(
+    makeModel: AP214PrefixModelFactory<TSource> =
+    residentAP214PrefixModel as unknown as AP214PrefixModelFactory<TSource> ):
+    PreviewSchemaAdapter<TSource> {
   return {
     retryEmptyUnits: true,
-    buildGeneration( data, conwaywasm, columns ) {
+    buildGeneration( source, conwaywasm, columns ) {
 
-      const model = new AP214StepModel(
-          data, columns as ConstructorParameters<typeof AP214StepModel>[1] )
+      const model = makeModel(
+          source, columns as ConstructorParameters<typeof AP214StepModel>[1] )
 
       const extraction = new AP214GeometryExtraction( conwaywasm, model )
 
@@ -483,7 +540,13 @@ export function ap214PreviewAdapter(): PreviewSchemaAdapter {
           if ( extraction.demandUnitCursor < from ) {
             extraction.skipDemandUnits( from - extraction.demandUnitCursor )
           }
-          return extraction.extractDemandUnitBatch( count )
+          const executed = extraction.extractDemandUnitBatch( count )
+
+          // A windowed prefix model: drop the window views the unit captured
+          // (a no-op on a resident one, which tracks none).
+          model.releaseCapturedSourceViews()
+
+          return executed
         },
         unitFaceEstimate: ( ordinal ) =>
           extraction.demandUnitFaceEstimate( ordinal ),

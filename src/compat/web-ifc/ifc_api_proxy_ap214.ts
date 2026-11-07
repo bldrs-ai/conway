@@ -65,6 +65,7 @@ import {
 } from '../../AP214E3_2010/AP214E3_2010_gen'
 import {
   ap214PreviewAdapter,
+  windowedAP214PrefixModel,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
 import { isNativeDeleted } from './native_geometry_liveness'
@@ -815,10 +816,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * over a `WindowedStepBufferProvider`, and the shared
    * {@link finishColumnarOpen} takes it from there.
    *
-   * The preview seam is here: a STEP store preview channel ticks from
-   * `parseProgress` and is flushed/stopped around the index build, as
-   * `StorePreviewChannel` is in IFC's twin, and its latched frame replaces
-   * the `undefined` passed to {@link finishColumnarOpen}.
+   * Previews: the resident open's `StreamedPreviewChannel`, its AP214
+   * adapter building prefix models over this store
+   * (`windowedAP214PrefixModel`), ticked from `parseProgress`, given its
+   * parse-end tick and stopped around the index build; its latched frame is
+   * what {@link finishColumnarOpen} hands the pump.
    *
    * @param modelID The model ID being opened.
    * @param store External store holding the source bytes.
@@ -845,21 +847,52 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     tracker?.beginPhase('dataParse', 'bytes', fileSize)
 
-    const parseProgress = tracker !== void 0 ?
+    const parseTick = tracker !== void 0 ?
       (cursorBytes: number) => tracker.update(cursorBytes) : void 0
 
     const parseStartTime = Date.now()
 
     const sink = new ColumnarIndexSink<EntityTypesAP214>()
 
+    // The resident open's preview channel, over the same store: its prefix
+    // models read through providers of their own, which fault windows in
+    // synchronously as the durable model does (windowedAP214PrefixModel).
+    // Same ticks, same parse-end tick, same frame handed to the pump.
+    const previewChannel =
+      deferGeometry && settings?.ON_PREVIEW_MESH !== void 0 ?
+        new StreamedPreviewChannel<StepExternalByteStore>(
+            store, conwaywasm, sink, ap214PreviewAdapter(windowedAP214PrefixModel),
+            settings.COORDINATE_TO_ORIGIN === true,
+            settings.ON_PREVIEW_MESH ) : void 0
+
+    previewChannel?.start()
+
+    const parseProgress = previewChannel !== void 0 ?
+      (cursorBytes: number) => {
+        parseTick?.(cursorBytes)
+        previewChannel.maybeTickInline()
+      } : parseTick
+
     const hashingSource = settings?.RECORD_SOURCE_HASH === true ?
       new HashingByteSource(new StoreByteSource(store)) : void 0
 
+    let result: ParseResult
+    let stepHeader: StepHeader
+
     // The header comes out of the parse's own first window, so the store is
     // read once, front to back.
-    const { result, header: stepHeader } = await buildIndexStreamingAsync(
-        hashingSource ?? new StoreByteSource(store), parser, STREAMED_PARSE_POOL_BYTES,
-        void 0, sink, parseProgress)
+    try {
+      ( { result, header: stepHeader } = await buildIndexStreamingAsync(
+          hashingSource ?? new StoreByteSource(store), parser, STREAMED_PARSE_POOL_BYTES,
+          void 0, sink, parseProgress) )
+
+      // As in the resident open (parseColumnarAndExtractAsync).
+      if (result === ParseResult.COMPLETE) {
+        previewChannel?.finishParse()
+      }
+    } finally {
+      previewChannel?.stop()
+    }
 
     const columns = sink.finalize()
 
@@ -895,7 +928,7 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
 
     return IfcApiProxyAP214.finishColumnarOpen(
         modelID, conwaywasm, model, stepHeader, allTimeStart, tracker,
-        deferGeometry, void 0)
+        deferGeometry, previewChannel?.coordinationMatrix)
   }
 
   /**
