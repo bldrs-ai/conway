@@ -332,7 +332,7 @@ describe( 'DanglingReferenceError wording', () => {
  * scanned yet was indistinguishable from a malformed one: the preview
  * channels counted the deferral and queued nothing, and their forward-only
  * unit cursor meant the product could never preview (see
- * `store_preview_channel.test.ts` for that end of it).
+ * `ifc_windowed_preview_channel.test.ts` for that end of it).
  *
  * The bet these three pin is the DISTINCTION, in both directions. An
  * absent record must classify — that is the recovery #543 dropped. An

@@ -34,10 +34,10 @@ const IFC4X3_FIXTURE_PATH = 'data/ifc4x3_road_entities_ineligible.ifc'
 const INELIGIBLE_TAIL =
   "#99=IFCALIGNMENT('3vP000000000000000099',$,'A',$,$,$,$,.NOTDEFINED.);\n"
 
-// StorePreviewChannel only ever builds its first generation (and so only
-// ever calls maybeEmitEarlySpatialPlates_/extracts a product) once the live
+// The windowed preview channel only ever builds its first generation (and
+// so only ever emits early plates or extracts a product) once the live
 // sink's topLevelCount reaches FIRST_GENERATION_MIN_RECORDS (1024,
-// store_preview_channel.ts) — below that, ensureGeneration_ returns false
+// streamed_preview_channel.ts) — below that, it builds nothing
 // unconditionally and the channel emits nothing, however the schema gate
 // is ordered. Every repo-local IFC fixture (all a few KB, a few hundred
 // records at most) sits under that floor, so the preview-ordering test
@@ -45,20 +45,20 @@ const INELIGIBLE_TAIL =
 // checked in as a data/ file: 1100 one-line filler records are cheap to
 // parse and keep the fixture out of the size budget a committed file would
 // cost. This is what makes the ordering assertion able to fail: without
-// enough records, StorePreviewChannel.flushAsync() is a no-op regardless
+// enough records, the channel's flushAsync() is a no-op regardless
 // of where the schema gate sits, and a test built on a small fixture would
 // pass whether the ordering fix is present or reverted.
 const FILLER_RECORDS = 1100
 
 /**
  * A synthetic IFC4X3_RC2 file large enough (see FILLER_RECORDS above) to
- * clear StorePreviewChannel's FIRST_GENERATION_MIN_RECORDS floor, with a
+ * clear the preview channel's FIRST_GENERATION_MIN_RECORDS floor, with a
  * minimal spatial hierarchy (Project/Site/Building/Storey + a contained
  * wall) and a length-unit assignment — the four preconditions
- * maybeEmitEarlySpatialPlates_ checks (IfcProject, IfcUnitAssignment,
+ * EarlySpatialPlates.maybeEmit checks (IfcProject, IfcUnitAssignment,
  * IfcBuildingStorey, IfcRelAggregates) before it will emit a plate. Shaped
  * after the equivalent IFC4 synthetic fixture in
- * store_preview_channel.test.ts's 'early plates defer until the unit
+ * ifc_windowed_preview_channel.test.ts's 'early plates defer until the unit
  * assignment is indexed' test, just relabelled IFC4X3_RC2 and padded out
  * past the record floor.
  *
@@ -110,7 +110,7 @@ const OLD_SNIFF_CAP_BYTES = 4 * 1024 * 1024
 
 /**
  * A synthetic IFC4X3_RC2 file combining {@link bigSyntheticIfc4x3}'s
- * FILLER_RECORDS (clearing StorePreviewChannel's 1024-record floor, so a
+ * FILLER_RECORDS (clearing the preview channel's 1024-record floor, so a
  * preview leak has something to leak) with a HEADER section exceeding
  * `OLD_SNIFF_CAP_BYTES` (so the old bounded sniff could not complete it,
  * while the real 16 MiB parse pool still does) — a legal STEP file (a
@@ -217,7 +217,7 @@ describe('IfcAPI: IFC4X3 schema gate on the web-ifc compat surface (#713 P1)', (
   // codex review of bldrs-ai/conway#713 (P1, ordering): OpenModelStream
   // (IfcApiProxyIfc.parseColumnarFromStore) used to gate AFTER
   // buildIndexStreamingAsync and storePreview.flushAsync() had already run
-  // -- so with ON_PREVIEW_MESH set, a live StorePreviewChannel could emit
+  // -- so with ON_PREVIEW_MESH set, a live preview channel could emit
   // wrongly IFC4-typed preview meshes for a 4X3 file before the rejection
   // ever fired. This is the compat-surface twin of the plain
   // 'OpenModelStream rejects a 4X3 file with zero preview callbacks' test
@@ -260,8 +260,8 @@ describe('IfcAPI: IFC4X3 schema gate on the web-ifc compat surface (#713 P1)', (
   // already had the chance to run during buildIndexStreamingAsync/
   // storePreview.flushAsync(). Uses bigSyntheticIfc4x3() rather than the
   // bare road-entities fixture or any other checked-in data/ file: none of
-  // them clear StorePreviewChannel's 1024-record floor (see that
-  // function's doc comment), so StorePreviewChannel never reaches its
+  // them clear the preview channel's 1024-record floor (see that
+  // function's doc comment), so the preview channel never reaches its
   // emission path for them regardless of gate placement, and a test built
   // on one would pass whether the ordering fix is present or reverted.
   // Verified by hand against a revert of the ordering fix (the gate moved

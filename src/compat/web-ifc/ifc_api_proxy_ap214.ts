@@ -1133,13 +1133,11 @@ export class IfcApiProxyAP214 implements IfcApiModelPassthrough {
    * coordination frame its meshes were placed in, and the durable capture
    * adopts it so preview and durable placements share one frame; that is
    * all of the channel this tail sees, as `previewCoordinationMatrix`. The
-   * buffered open passes its `StreamedPreviewChannel`'s. The store-backed
-   * open has no channel yet (the STEP store preview is in flight
-   * separately) and passes `undefined`, as the index-first open always will
-   * — it has no parse to preview, exactly like IFC's. A store preview for
-   * STEP attaches in {@link parseColumnarFromStore} around its index build,
-   * where IFC's `StorePreviewChannel` sits in its twin, and hands its frame
-   * here.
+   * buffered open and the store-backed one each pass their
+   * `StreamedPreviewChannel`'s (the store-backed one's prefix models read
+   * the store through `windowedAP214PrefixModel`, since conway#772). The
+   * index-first open passes `undefined`: it has no parse to preview,
+   * exactly like IFC's.
    *
    * @param modelID The model ID being opened.
    * @param conwaywasm The conway geometry wasm wrapper.

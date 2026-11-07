@@ -681,11 +681,10 @@ describe( 'StreamedPreviewChannel', () => {
 
   test( 'a grid-placed product blocked on a reference array is retried', () => {
 
-    // The resident twin of the store channel's conway#546 test — the two
-    // channels carry independent copies of the deferral catch
-    // (streamed_preview_channel.ts:322 against store_preview_channel.ts:498),
-    // so a classification fix has to be demonstrated on both or half of it
-    // is untested.
+    // The resident twin of the windowed channel's conway#546 test. Since
+    // conway#775 both opens share one deferral catch (ifcPreviewGeneration);
+    // the windowed adapter adds a second classification point, its
+    // residency step, so the fix is still demonstrated on both.
     //
     // data/grid_placement_tail_axes.ifc writes the reference-array hops of
     // a grid placement chain after the products that need them:

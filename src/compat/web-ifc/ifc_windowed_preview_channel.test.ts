@@ -13,8 +13,54 @@ import { buildIndexStreaming } from '../../step/parsing/streaming_index_builder'
 import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import { IfcAPI } from './ifc_api'
-import { StorePreviewChannel } from './store_preview_channel'
+import type { StepExternalByteStore } from '../../step/step_buffer_provider'
+import { windowedIfcPreviewAdapter } from './ifc_windowed_preview_adapter'
+import { StreamedPreviewChannel } from './streamed_preview_channel'
 import type { PreviewMeshPayload } from './streamed_preview_channel'
+
+
+/**
+ * The channel a windowed IFC open runs: the shared StreamedPreviewChannel
+ * with the windowed adapter (conway#775). These tests were the retired
+ * StorePreviewChannel's and pin the same behaviour; this keeps that
+ * channel's argument order so they read as they did.
+ *
+ * @param store The store the parse reads.
+ * @param sink The live sink.
+ * @param conwaywasm The geometry wasm wrapper.
+ * @param coordinateToOrigin COORDINATE_TO_ORIGIN.
+ * @param onMesh The consumer.
+ * @param maxUnits Unit cap.
+ * @param maxBytes Payload byte cap.
+ * @param firstGenerationMinRecords Records before the first generation.
+ * @return {StreamedPreviewChannel} The channel.
+ */
+function windowedChannel(
+    store: StepExternalByteStore,
+    sink: ColumnarIndexSink< number >,
+    conwaywasm: ConwayGeometry,
+    coordinateToOrigin: boolean,
+    onMesh: ( mesh: PreviewMeshPayload ) => void,
+    maxUnits?: number,
+    maxBytes?: number,
+    firstGenerationMinRecords?: number ): StreamedPreviewChannel< StepExternalByteStore > {
+
+  return new StreamedPreviewChannel< StepExternalByteStore >(
+      store, conwaywasm, sink, windowedIfcPreviewAdapter(), coordinateToOrigin,
+      onMesh, maxUnits, maxBytes, firstGenerationMinRecords )
+}
+
+/**
+ * Retire the channel's active generation, so the next tick takes the build
+ * path (the store channel's disposeGeneration_).
+ *
+ * @param internals The channel, untyped.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function retireGeneration( internals: any ): void {
+  internals.generation_?.generation.dispose()
+  internals.generation_ = void 0
+}
 
 
 /* data/grid_placement_tail_axes.ifc, by construction — see that file's
@@ -39,7 +85,7 @@ const GRID_TAIL_RETRYABLE = 3
 const TICKS_TO_EXHAUST = 16
 
 
-describe( 'StorePreviewChannel', () => {
+describe( 'windowed IFC preview channel (StreamedPreviewChannel + windowedIfcPreviewAdapter)', () => {
 
   let conwayGeometry: ConwayGeometry
   let bytes: Uint8Array
@@ -67,7 +113,7 @@ describe( 'StorePreviewChannel', () => {
     expect( sink.topLevelCount ).toBeGreaterThan( 0 )
 
     const payloads: PreviewMeshPayload[] = []
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store,
         sink,
         conwayGeometry,
@@ -77,7 +123,7 @@ describe( 'StorePreviewChannel', () => {
         48 * 1024 * 1024,
         1 )
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     expect( channel.lastFailReason ).toBeUndefined()
     expect( channel.productCount ).toBeGreaterThan( 0 )
@@ -120,7 +166,7 @@ describe( 'StorePreviewChannel', () => {
 
     expect( result ).toBe( ParseResult.COMPLETE )
 
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true, () => { /* counted below */ },
         64, 48 * 1024 * 1024, 1 )
 
@@ -173,7 +219,7 @@ describe( 'StorePreviewChannel', () => {
     const store = new InMemoryStepByteStore( tailBytes )
     const sink = new ColumnarIndexSink< number >()
 
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true, () => { /* counted via yield */ },
         64, 48 * 1024 * 1024, 1 )
 
@@ -280,7 +326,7 @@ describe( 'StorePreviewChannel', () => {
     const sink = new ColumnarIndexSink< number >()
     const payloads: PreviewMeshPayload[] = []
 
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true, ( mesh ) => payloads.push( mesh ),
         64, 48 * 1024 * 1024, 1 )
 
@@ -373,7 +419,7 @@ describe( 'StorePreviewChannel', () => {
     const store = new InMemoryStepByteStore( bytes )
     const sink = new ColumnarIndexSink< number >()
 
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true, () => { /* nothing asserted */ },
         64, 48 * 1024 * 1024, 1 )
 
@@ -463,24 +509,24 @@ describe( 'StorePreviewChannel', () => {
     } as unknown as ColumnarIndexSink< number >
 
     const payloads: PreviewMeshPayload[] = []
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, flakySink, conwayGeometry, true,
         ( mesh ) => payloads.push( mesh ), 64, 48 * 1024 * 1024, 1 )
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     expect( snapshots ).toBe( 1 )
     expect( payloads.length ).toBe( 0 )
 
     // Same record count: the failure gate must hold the retry.
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     expect( snapshots ).toBe( 1 )
 
     // The index grows past the gate: the retry builds and emits.
     reportedRecords *= 4
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     expect( snapshots ).toBe( 2 )
     expect( payloads.length ).toBeGreaterThan( 0 )
@@ -496,7 +542,7 @@ describe( 'StorePreviewChannel', () => {
     // such tick used to pay the interval decay anyway, cooling the
     // cadence toward its 600ms ceiling before there was ever anything
     // to extract.
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         new InMemoryStepByteStore( bytes ),
         sink, conwayGeometry, true, () => { /* nothing emits */ } )
 
@@ -528,7 +574,7 @@ describe( 'StorePreviewChannel', () => {
             sink )
 
         const payloads: PreviewMeshPayload[] = []
-        const channel = new StorePreviewChannel(
+        const channel = windowedChannel(
             store, sink, conwayGeometry, true,
             ( mesh ) => payloads.push( mesh ),
             64, 48 * 1024 * 1024, 1 )
@@ -550,11 +596,11 @@ describe( 'StorePreviewChannel', () => {
         // coordination frame, so it used the imposter walk's own
         // fallback derivation.
         /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-        expect( ( channel as any ).earlyPlatesUsedFallbackFrame_ ).toBe( true )
+        expect( ( channel as any ).adapter.plates.usedFallbackFrame ).toBe( true )
 
         const first = channel.earlyPlateCount
 
-        await channel.drainForTest()
+        await channel.drainForTestAsync()
 
         // Draining latches a real frame off the first captured product.
         expect( channel.coordinationMatrix ).toBeDefined()
@@ -577,17 +623,17 @@ describe( 'StorePreviewChannel', () => {
         sink )
 
     const payloads: PreviewMeshPayload[] = []
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true,
         ( mesh ) => payloads.push( mesh ),
         64, 48 * 1024 * 1024, 1 )
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const internals = channel as any
 
-    expect( internals.earlyPlatesUsedFallbackFrame_ ).toBe( true )
+    expect( internals.adapter.plates.usedFallbackFrame ).toBe( true )
     expect( channel.coordinationMatrix ).toBeDefined()
 
     const before = payloads.filter( ( p ) => p.aabb !== void 0 ).length
@@ -596,11 +642,11 @@ describe( 'StorePreviewChannel', () => {
     // an index doubling does this mid-parse. Retiring the active
     // generation is what makes ensureGeneration_ take the build path;
     // rewinding the ordinal alone would just keep the current one.
-    internals.disposeGeneration_()
+    retireGeneration( internals )
     internals.lastSnapshotRecords_ = 0
     internals.unitOrdinal_ = 0
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     const after = payloads.filter( ( p ) => p.aabb !== void 0 ).length
 
@@ -608,13 +654,13 @@ describe( 'StorePreviewChannel', () => {
     // the replace-by-expressID contract that is a correction, not a
     // duplicate — and it does not happen a third time.
     expect( after ).toBeGreaterThan( before )
-    expect( internals.earlyPlatesUsedFallbackFrame_ ).toBe( false )
+    expect( internals.adapter.plates.usedFallbackFrame ).toBe( false )
 
-    internals.disposeGeneration_()
+    retireGeneration( internals )
     internals.lastSnapshotRecords_ = 0
     internals.unitOrdinal_ = 0
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     expect( payloads.filter( ( p ) => p.aabb !== void 0 ).length ).toBe( after )
 
@@ -676,7 +722,7 @@ describe( 'StorePreviewChannel', () => {
           void 0,
           sink )
 
-      const channel = new StorePreviewChannel(
+      const channel = windowedChannel(
           new InMemoryStepByteStore( fileBytes ), sink, conwayGeometry, true,
           () => { /* plates counted via earlyPlateCount */ },
           64, 48 * 1024 * 1024, 1 )
@@ -751,10 +797,8 @@ describe( 'StorePreviewChannel', () => {
     // The bug is purely mechanical (which array wins the assignment), so
     // this seeds the private queue state directly and forces the growth
     // gate via lastSnapshotRecords_, rather than engineering a real
-    // multi-tick deferral sequence — store_preview_channel.ts's extraction
-    // seam isn't pluggable the way the resident channel's
-    // PreviewSchemaAdapter is, so a real gen1/gen2 pair here means real
-    // IfcStepModel/IfcGeometryExtraction builds regardless.
+    // multi-tick deferral sequence; a real gen1/gen2 pair here would mean
+    // real IfcStepModel/IfcGeometryExtraction builds over the store.
     const store = new InMemoryStepByteStore( bytes )
     const sink = new ColumnarIndexSink< number >()
 
@@ -765,7 +809,7 @@ describe( 'StorePreviewChannel', () => {
         void 0,
         sink ).result ).toBe( ParseResult.COMPLETE )
 
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true,
         () => { /* payloads not inspected */ }, 64, 48 * 1024 * 1024, 1 )
 
@@ -774,7 +818,7 @@ describe( 'StorePreviewChannel', () => {
 
     // Generation 1: a real, successful build (active must be defined for
     // the preemption branch to even be reachable).
-    expect( await internals.ensureGeneration_() ).toBe( true )
+    expect( await internals.ensureGenerationAsync_() ).toBe( true )
 
     // A retry queue spanning more than one tick's budget: 6 queued
     // retries, only the first 3 consumed (retryCursor_ short of
@@ -792,7 +836,7 @@ describe( 'StorePreviewChannel', () => {
 
     // Preemption fires: active is defined, growthReady (real topLevelCount
     // >= 1 * factor), and deferredForRetry_.length > 0.
-    expect( await internals.ensureGeneration_() ).toBe( true )
+    expect( await internals.ensureGenerationAsync_() ).toBe( true )
 
     // The unconsumed suffix of the old queue (indices 3..5) must survive,
     // carried ahead of this generation's own fresh deferral — not replaced
@@ -855,14 +899,14 @@ describe( 'StorePreviewChannel', () => {
         void 0,
         sink ).result ).toBe( ParseResult.COMPLETE )
 
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, sink, conwayGeometry, true, () => { /* not inspected */ },
         64, 48 * 1024 * 1024, 1 )
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const internals = channel as any
 
-    await channel.drainForTest()
+    await channel.drainForTestAsync()
 
     const observed = channel.previewYield
 
@@ -904,7 +948,7 @@ describe( 'StorePreviewChannel', () => {
     // Default firstGenerationMinRecords (1024): with topLevelCount pinned
     // at 0, ensureGeneration_ never builds a generation, so the channel
     // reaches stop() having attempted nothing at all.
-    const channel = new StorePreviewChannel(
+    const channel = windowedChannel(
         store, emptySink, conwayGeometry, false,
         () => { /* no payloads possible */ } )
 

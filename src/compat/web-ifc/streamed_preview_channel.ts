@@ -48,7 +48,7 @@ const TICK_BUDGET_MS = 25
  * Wall-clock budget for the one tick {@link StreamedPreviewChannel.finishParse}
  * runs over the complete index, on top of building that generation.
  *
- * The same order as the store path's FLUSH_BUDGET_MS, and for the same
+ * The same order as FLUSH_BUDGET_MS, and for the same
  * reason: it sits between the parse and the caller's next step (here the
  * index the consumer is waiting for), so it is paid in full by every load
  * that reaches it. Arty_Z7 is the case it exists for: Alibre writes every
@@ -59,6 +59,13 @@ const TICK_BUDGET_MS = 25
  * pump (Share engine-worker.md §11, "STEP previews").
  */
 const FINISH_BUDGET_MS = 100
+
+/**
+ * Wall-clock budget for {@link StreamedPreviewChannel.flushAsync}, the one
+ * async tick after a completed parse on the generation in hand. The retired
+ * StorePreviewChannel's flush, with the same value (conway#775).
+ */
+const FLUSH_BUDGET_MS = 100
 
 /**
  * Whether {@link StreamedPreviewChannel.finishParse} runs at all. Off until
@@ -98,7 +105,8 @@ const GENERATION_GROWTH_FACTOR = 2.0
 /**
  * Deferred units carried into the next generation for a second look.
  *
- * Twin of {@link StorePreviewChannel}'s queue, for the same defect: the
+ * Once a twin of the retired StorePreviewChannel's queue; one queue since
+ * conway#775. The defect it fixes: the
  * channel was strictly forward-only, so a unit whose placement chain lay
  * beyond the prefix was attempted once — at the earliest and therefore most
  * index-starved generation it appeared in — and never again, because
@@ -269,11 +277,50 @@ export interface PreviewPrefixGeneration {
   recenter: boolean
 
   /**
+   * Make one unit's records resident before {@link runUnits} runs it, for a
+   * prefix model whose source can only be read asynchronously (a windowed
+   * IFC open over a Blob store, conway#775). Resolves to a release, called
+   * once the unit has run. A unit whose residency fails is the adapter's to
+   * record (as a deferral) and to skip in runUnits; prepareUnit itself
+   * never rejects.
+   *
+   * Only the channel's async tick ({@link StreamedPreviewChannel.maybeTickAsync})
+   * calls it. A generation that offers it must be ticked that way.
+   *
+   * @param ordinal The unit about to run.
+   * @return {Promise<function(): void>} Releases what the call pinned.
+   */
+  prepareUnit?( ordinal: number ): Promise< () => void >
+
+  /**
+   * Called once, after the channel adopts this generation and before its
+   * first unit runs, from the async tick only. The windowed IFC adapter puts
+   * the spatial plates up from here (conway#518).
+   *
+   * @param context What the channel knows at adoption.
+   * @return {Promise<void>} Settles when the hook is done.
+   */
+  onAdopted?( context: PreviewAdoptionContext ): Promise< void >
+
+  /**
    * Free the generation's native geometry (payloads are copies, so a
    * retired generation holds nothing anyone can reference). Called by
    * the channel when a generation is replaced and at stop().
    */
   dispose(): void
+}
+
+/** What {@link PreviewPrefixGeneration.onAdopted} is told. */
+export interface PreviewAdoptionContext {
+
+  /** The frame the channel has latched so far, if any. */
+  coordinationMatrix?: number[]
+
+  /** The open's COORDINATE_TO_ORIGIN setting. */
+  coordinateToOrigin: boolean
+
+  /** The channel's consumer, for payloads the hook emits itself. */
+  onMesh( mesh: PreviewMeshPayload ): void
 }
 
 /**
@@ -297,6 +344,22 @@ export interface PreviewSchemaAdapter<TSource = Uint8Array> {
   readonly retryEmptyUnits?: boolean
 
   /**
+   * Units one tick may attempt, whatever the clock says; unbounded when
+   * unset. A windowed adapter sets it because every attempt pages source,
+   * including the ones that go on to defer (conway#542; the store channel's
+   * TICK_MAX_ATTEMPTS, conway#518).
+   */
+  readonly maxAttemptsPerTick?: number
+
+  /** Wall-clock budget per tick, when the adapter needs other than the
+   * channel's TICK_BUDGET_MS. */
+  readonly tickBudgetMs?: number
+
+  /** Spatial plates the adapter emitted from its prefix generations
+   * (windowed IFC, conway#518); undefined for adapters that emit none. */
+  readonly earlyPlateCount?: number
+
+  /**
    * Build a generation over the given prefix columns.
    *
    * @param source The prefix source the channel was constructed with —
@@ -305,16 +368,40 @@ export interface PreviewSchemaAdapter<TSource = Uint8Array> {
    * through, so one channel serves both.
    * @param conwaywasm The shared geometry wasm wrapper.
    * @param columns A prefix snapshot of the columnar index.
+   * @param wanted Whether a generation of this many units would give the
+   * channel anything to run; an adapter can ask it before paying for a
+   * generation's preparation, and return undefined on false (the store
+   * channel's pre-prep check, conway#542). Optional on both sides.
    * @return {PreviewPrefixGeneration | undefined} The generation, or
    * undefined when the prefix cannot build one yet (throw is also
-   * tolerated — the channel retries on a later, larger prefix).
+   * tolerated — the channel retries on a later, larger prefix). A promise
+   * of either from an adapter whose prefix model reads its source
+   * asynchronously; such an adapter is ticked with the channel's async
+   * tick only.
    */
   buildGeneration(
     source: TSource,
     conwaywasm: ConwayGeometry,
     columns: unknown,
-  ): PreviewPrefixGeneration | undefined
+    wanted?: ( unitCount: number ) => boolean,
+  ): PreviewPrefixGeneration | undefined |
+    Promise< PreviewPrefixGeneration | undefined >
 }
+
+/**
+ * An adapter whose generations are built synchronously: every one whose
+ * prefix model reads a resident buffer, or a store it can fault in
+ * synchronously (the windowed AP214 open). Ticked inline.
+ */
+export type SyncPreviewSchemaAdapter< TSource = Uint8Array > =
+  Omit< PreviewSchemaAdapter< TSource >, 'buildGeneration' > & {
+    buildGeneration(
+      source: TSource,
+      conwaywasm: ConwayGeometry,
+      columns: unknown,
+      wanted?: ( unitCount: number ) => boolean,
+    ): PreviewPrefixGeneration | undefined
+  }
 
 /**
  * IFC adapter: units are IfcProducts in localID order (stable across
@@ -322,104 +409,164 @@ export interface PreviewSchemaAdapter<TSource = Uint8Array> {
  *
  * @return {PreviewSchemaAdapter} The adapter.
  */
-export function ifcPreviewAdapter(): PreviewSchemaAdapter {
+export function ifcPreviewAdapter(): SyncPreviewSchemaAdapter {
   return {
-    buildGeneration( data, conwaywasm, columns ) {
+    buildGeneration( data, conwaywasm, columns, wanted ) {
 
       const model = new IfcStepModel(
           data, columns as ConstructorParameters<typeof IfcStepModel>[1] )
 
-      // Enumerate product localIDs straight off the type index — NO
-      // entity materialization (a per-generation sweep of 50k+ product
-      // entities was a dominant channel cost on PSB-class models).
-      const products: number[] = []
+      const products = ifcPreviewProducts( model )
 
-      for ( const localID of cursorIterator(
-          model.typeIndex.cursor( ...IfcProduct.query ) ) ) {
-        products.push( localID )
-      }
-
-      if ( products.length === 0 ) {
+      if ( products.length === 0 || wanted?.( products.length ) === false ) {
         return void 0
       }
 
-      const extraction = new IfcGeometryExtraction( conwaywasm, model )
-
-      // Prefix extractions hit representation items whose style/select
-      // references aren't parsed yet — expected on a truncated tail;
-      // don't flood the report (DOWA: 1164 styled-item errors).
-      extraction.quietRecoverableLogging = true
-
-      // A product whose placement records sit beyond this prefix must
-      // defer, not extract unplaced: Revit writes placements near the
-      // end of the file, so an early product can reference a placement
-      // the index does not hold yet. Lenient reads null the dangling
-      // reference and the product extracts at the origin — on a
-      // georeferenced model the emitted payloads then sit a site-offset
-      // away from the model (Share#1744: Snowdon's door #5014 put 88
-      // payloads ~425km out, and the camera follow framed them). The
-      // per-unit catch below already treats a throwing product as
-      // not-yet-extractable; this makes a dangling placement throw like
-      // any other unparsed forward reference. The classic-mode cursor
-      // does not re-run passed units, so a deferred product sits out
-      // the preview and the durable pump renders it — an empty slot,
-      // never geometry at the wrong placement.
-      extraction.deferDanglingPlacements = true
+      const extraction = ifcPreviewExtraction( conwaywasm, model )
 
       // Preview-only preparation: skip the relationship sweeps whose
       // entity materialization dominates per-generation cost.
       extraction.prepareDemandExtraction( true )
 
-      // Deferrals since the channel last drained them. Product ORDINALS,
-      // not localIDs: the channel replays them against a later generation,
-      // and `products` is enumerated off the type index in dense parse
-      // order, which a longer prefix only extends (see
-      // ColumnarIndexSink.snapshot) — so an ordinal means the same product
-      // in every generation that holds it.
-      let deferrals: PreviewDeferral[] = []
+      return ifcPreviewGeneration( model, extraction, products )
+    },
+  }
+}
 
-      return {
-        scene: extraction.scene,
-        unitCount: products.length,
-        get linearScalingFactor() {
-          return extraction.getLinearScalingFactor()
-        },
-        runUnits: ( from, count ) => {
-          const end = Math.min( from + count, products.length )
-          let executed = 0
-          for ( let where = from; where < end; ++where ) {
-            try {
-              if ( extraction.extractProductGeometryByLocalID( products[ where ] ) ) {
-                ++executed
-              }
-            } catch ( error ) {
-              // Unparsed forward reference — the durable pump extracts
-              // this product from the full model later. Recorded by cause:
-              // a dangling placement is a product the index will be able
-              // to place once it is longer, and is the one case worth
-              // attempting again (conway#542).
-              deferrals.push( {
-                ordinal: where,
-                onPlacement: error instanceof DanglingPlacementError,
-              } )
-            }
+/**
+ * A prefix model's products, in dense parse order.
+ *
+ * Enumerated straight off the type index, with NO entity materialization: a
+ * per-generation sweep of 50k+ product entities was a dominant channel cost
+ * on PSB-class models.
+ *
+ * @param model The prefix model.
+ * @return {number[]} Product localIDs.
+ */
+export function ifcPreviewProducts( model: IfcStepModel ): number[] {
+
+  const products: number[] = []
+
+  for ( const localID of cursorIterator(
+      model.typeIndex.cursor( ...IfcProduct.query ) ) ) {
+    products.push( localID )
+  }
+
+  return products
+}
+
+/**
+ * The throwaway extraction an IFC prefix generation runs, configured for a
+ * truncated prefix. Not yet prepared: a resident model prepares it at once,
+ * a windowed one pages the prep's closure in first.
+ *
+ * @param conwaywasm The shared geometry wasm wrapper.
+ * @param model The prefix model.
+ * @return {IfcGeometryExtraction} The extraction.
+ */
+export function ifcPreviewExtraction(
+    conwaywasm: ConwayGeometry, model: IfcStepModel ): IfcGeometryExtraction {
+
+  const extraction = new IfcGeometryExtraction( conwaywasm, model )
+
+  // Prefix extractions hit representation items whose style/select
+  // references aren't parsed yet — expected on a truncated tail;
+  // don't flood the report (DOWA: 1164 styled-item errors).
+  extraction.quietRecoverableLogging = true
+
+  // A product whose placement records sit beyond this prefix must
+  // defer, not extract unplaced: Revit writes placements near the
+  // end of the file, so an early product can reference a placement
+  // the index does not hold yet. Lenient reads null the dangling
+  // reference and the product extracts at the origin — on a
+  // georeferenced model the emitted payloads then sit a site-offset
+  // away from the model (Share#1744: Snowdon's door #5014 put 88
+  // payloads ~425km out, and the camera follow framed them). The
+  // per-unit catch in runUnits already treats a throwing product as
+  // not-yet-extractable; this makes a dangling placement throw like
+  // any other unparsed forward reference. The classic-mode cursor
+  // does not re-run passed units, so a deferred product sits out
+  // the preview and the durable pump renders it — an empty slot,
+  // never geometry at the wrong placement.
+  extraction.deferDanglingPlacements = true
+
+  return extraction
+}
+
+/**
+ * An IFC prefix generation over a prepared extraction: units are the
+ * products, in the order {@link ifcPreviewProducts} lists them. Shared by the
+ * resident adapter and the windowed one (ifc_windowed_preview_adapter.ts),
+ * which adds residency per unit on top.
+ *
+ * @param model The prefix model.
+ * @param extraction Its prepared extraction.
+ * @param products The products, as {@link ifcPreviewProducts} lists them.
+ * @param skipped Ordinals a caller has already given up on (the windowed
+ * adapter's failed residency), which runUnits passes over unrun.
+ * @return {PreviewPrefixGeneration} The generation.
+ */
+export function ifcPreviewGeneration(
+    model: IfcStepModel,
+    extraction: IfcGeometryExtraction,
+    products: number[],
+    skipped?: Set< number > ): PreviewPrefixGeneration & {
+      recordDeferral( deferral: PreviewDeferral ): void } {
+
+  // Deferrals since the channel last drained them. Product ORDINALS,
+  // not localIDs: the channel replays them against a later generation,
+  // and `products` is enumerated off the type index in dense parse
+  // order, which a longer prefix only extends (see
+  // ColumnarIndexSink.snapshot) — so an ordinal means the same product
+  // in every generation that holds it.
+  let deferrals: PreviewDeferral[] = []
+
+  return {
+    scene: extraction.scene,
+    unitCount: products.length,
+    get linearScalingFactor() {
+      return extraction.getLinearScalingFactor()
+    },
+    runUnits: ( from, count ) => {
+      const end = Math.min( from + count, products.length )
+      let executed = 0
+      for ( let where = from; where < end; ++where ) {
+        if ( skipped?.has( where ) === true ) {
+          continue
+        }
+        try {
+          if ( extraction.extractProductGeometryByLocalID( products[ where ] ) ) {
+            ++executed
           }
-          return executed
-        },
-        takeDeferrals: () => {
-          const drained = deferrals
-
-          deferrals = []
-
-          return drained
-        },
-        geometryExpressID: ( geometryLocalID ) =>
-          model.getElementByLocalID( geometryLocalID )?.expressID,
-        recenter: true,
-        dispose: () => {
-          releaseModelGeometry( model.geometry )
-        },
+        } catch ( error ) {
+          // Unparsed forward reference — the durable pump extracts
+          // this product from the full model later. Recorded by cause:
+          // a dangling placement is a product the index will be able
+          // to place once it is longer, and is the one case worth
+          // attempting again (conway#542).
+          deferrals.push( {
+            ordinal: where,
+            onPlacement: error instanceof DanglingPlacementError,
+          } )
+        }
       }
+      return executed
+    },
+    recordDeferral: ( deferral ) => {
+      deferrals.push( deferral )
+    },
+    takeDeferrals: () => {
+      const drained = deferrals
+
+      deferrals = []
+
+      return drained
+    },
+    geometryExpressID: ( geometryLocalID ) =>
+      model.getElementByLocalID( geometryLocalID )?.expressID,
+    recenter: true,
+    dispose: () => {
+      releaseModelGeometry( model.geometry )
     },
   }
 }
@@ -516,7 +663,7 @@ export function windowedAP214PrefixModel(
 export function ap214PreviewAdapter<TSource = Uint8Array>(
     makeModel: AP214PrefixModelFactory<TSource> =
     residentAP214PrefixModel as unknown as AP214PrefixModelFactory<TSource> ):
-    PreviewSchemaAdapter<TSource> {
+    SyncPreviewSchemaAdapter<TSource> {
   return {
     retryEmptyUnits: true,
     buildGeneration( source, conwaywasm, columns ) {
@@ -749,16 +896,24 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   // "this tick ran all N units" against a real 25ms budget is a coin flip on
   // a loaded runner: the retryEmptyUnits test expected [0,1,2] and got [0,1]
   // in CI while passing locally. Production behaviour is unchanged.
-  private tickBudgetMs_ = TICK_BUDGET_MS
+  private tickBudgetMs_ = this.adapter.tickBudgetMs ?? TICK_BUDGET_MS
 
-  // Companion seam to tickBudgetMs_, and unbounded in production: a resident
-  // unit attempt pages nothing (the store channel's TICK_MAX_ATTEMPTS exists
-  // because its attempts page source through a windowed provider), so the
-  // wall clock is the only bound worth paying for here. A test pins it so
+  // Companion seam to tickBudgetMs_. Unbounded for a resident adapter: a
+  // resident unit attempt pages nothing, so the wall clock is the only bound
+  // worth paying for. A windowed adapter sets one (maxAttemptsPerTick),
+  // because its attempts page source even when they defer. A test pins it so
   // "this tick left units unattempted" — which is what separates a
   // preemptive rebuild from an exhaustion one — is a fact rather than a race
   // against the budget.
-  private tickMaxAttempts_ = Number.MAX_SAFE_INTEGER
+  private tickMaxAttempts_ = this.adapter.maxAttemptsPerTick ?? Number.MAX_SAFE_INTEGER
+
+  /** Why the last generation build produced nothing, for tests and
+   * diagnosis; undefined after a build that was adopted. */
+  public lastFailReason?: string
+
+  /** An async tick is in flight (maybeTickAsync / flushAsync): the parse's
+   * progress callback can fire again while one awaits residency. */
+  private asyncTickInFlight_ = false
 
   /** Begin ticking (call just before awaiting the parse). */
   public start(): void {
@@ -796,6 +951,176 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       // A preview failure must never break the open.
       this.stopped_ = true
     }
+  }
+
+  /**
+   * The async twin of {@link maybeTickInline}, for an adapter whose
+   * generations page their source asynchronously (`prepareUnit`, a promised
+   * `buildGeneration`): the windowed IFC open, whose parse awaits its
+   * progress callback (conway#775, from the retired StorePreviewChannel).
+   *
+   * Same cadence, with one difference carried over from the store channel:
+   * the interval decays only after a tick that attempted a unit. A tick that
+   * found no generation (every tick through the opening seconds of a big
+   * parse, before the index reaches firstGenerationMinRecords) used to decay
+   * it anyway, so by the time there was anything to extract the cadence had
+   * already cooled toward TICK_INTERVAL_MAX_MS.
+   *
+   * @return {Promise<void>} Settles when this tick's units are captured.
+   */
+  public async maybeTickAsync(): Promise< void > {
+
+    if (this.stopped_ || this.capped || this.asyncTickInFlight_) {
+      return
+    }
+
+    const now = Date.now()
+
+    if (now - this.lastInlineTick_ < this.tickIntervalMs_) {
+      return
+    }
+
+    this.lastInlineTick_ = now
+
+    try {
+      if ((await this.tickAsync_(this.tickBudgetMs_)) > 0) {
+        this.tickIntervalMs_ =
+          Math.min(this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS)
+      }
+    } catch {
+      // A preview failure must never break the open.
+      this.stopped_ = true
+    }
+  }
+
+  /**
+   * After a completed parse: one last async tick of FLUSH_BUDGET_MS on the
+   * generation in hand, so a small file (or a prefix that never crossed a
+   * progress tick) still emits placed meshes before the open returns. The
+   * store channel's flush (conway#775). A schema whose unit list is fixed
+   * (`retryEmptyUnits`) takes {@link finishParse} instead.
+   *
+   * @return {Promise<void>} Settles when the flush ends.
+   */
+  public async flushAsync(): Promise< void > {
+
+    if (this.stopped_ || this.capped || this.asyncTickInFlight_ ||
+        this.adapter.retryEmptyUnits === true) {
+      return
+    }
+
+    try {
+      await this.tickAsync_(FLUSH_BUDGET_MS)
+    } catch {
+      this.stopped_ = true
+    }
+  }
+
+  /**
+   * Test seam: async ticks until the sink's current units are exhausted or
+   * a cap is hit, without the cadence or the clock.
+   *
+   * @return {Promise<void>} Settles when idle.
+   */
+  public async drainForTestAsync(): Promise< void > {
+
+    for (; ;) {
+      if (this.capped || (await this.tickAsync_(Number.MAX_SAFE_INTEGER, 1)) === 0) {
+        return
+      }
+    }
+  }
+
+  /** Units the current generation lists (test seam; 0 without one). */
+  public get productCount(): number {
+    return this.generation_?.generation.unitCount ?? 0
+  }
+
+  /** Spatial plates the adapter emitted from prefix generations. */
+  public get earlyPlateCount(): number {
+    return this.adapter.earlyPlateCount ?? 0
+  }
+
+  /**
+   * One async tick: ensure a generation, then attempt units until the budget
+   * or the attempt cap runs out, making each unit resident first. Classic
+   * mode only: the fixed-unit-list schema (AP214) reads its windowed source
+   * synchronously and ticks inline.
+   *
+   * Each unit's instances are captured before its residency is released:
+   * capture reads the entities it names, which a windowed source can only
+   * serve while they are pinned.
+   *
+   * @param budgetMs Wall clock for this tick.
+   * @param maxAttempts Attempts for this tick, at most.
+   * @return {Promise<number>} Units attempted.
+   */
+  private async tickAsync_(
+      budgetMs: number,
+      maxAttempts: number = this.tickMaxAttempts_ ): Promise< number > {
+
+    this.asyncTickInFlight_ = true
+
+    try {
+      const deadline = Date.now() + budgetMs
+
+      if (!(await this.ensureGenerationAsync_())) {
+        return 0
+      }
+
+      const { generation } = this.generation_!
+
+      let attempts = 0
+
+      while (this.generation_?.generation === generation &&
+          this.hasPendingUnits_(generation) &&
+          this.emittedUnits_ < this.maxUnits &&
+          !this.capped &&
+          attempts < maxAttempts &&
+          Date.now() < deadline) {
+
+        ++attempts
+
+        const ordinal = this.nextClassicOrdinal_()
+        const release = await generation.prepareUnit?.(ordinal)
+
+        try {
+          const executed = generation.runUnits(ordinal, 1)
+
+          this.drainDeferrals_(generation)
+
+          if (executed > 0) {
+            this.captureNewInstances_()
+            this.emittedUnits_ += executed
+          }
+        } finally {
+          release?.()
+        }
+      }
+
+      return attempts
+    } finally {
+      this.asyncTickInFlight_ = false
+    }
+  }
+
+  /**
+   * The next classic-mode ordinal: a queued retry first (they are the units
+   * the index has most recently become able to place, and cheaper than a
+   * fresh attempt whichever way they go), else the forward cursor.
+   *
+   * @return {number} The ordinal to attempt.
+   */
+  private nextClassicOrdinal_(): number {
+
+    const isRetry = this.retryCursor_ < this.retryQueue_.length
+
+    if (isRetry) {
+      ++this.retriedUnits_
+      return this.retryQueue_[this.retryCursor_++]
+    }
+
+    return this.unitOrdinal_++
   }
 
   /**
@@ -907,7 +1232,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * counts units passed over unrun because their estimated cost exceeded
    * the tick's remaining budget.
    *
-   * The same shape as {@link StorePreviewChannel.previewYield}, so both
+   * One shape for every open, resident or windowed, so all
    * paths render through one formatter (core/progress_log).
    *
    * @return {object} `{firstMeshMs, meshes, emitted, deferred,
@@ -1016,18 +1341,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
       ++attempts
 
-      // Retries first: they are the units the index has most recently
-      // become able to place, and they are cheaper than a fresh attempt
-      // whichever way they go.
-      const isRetry = this.retryCursor_ < this.retryQueue_.length
-      const ordinal = isRetry ?
-        this.retryQueue_[this.retryCursor_++] : this.unitOrdinal_++
-
-      if (isRetry) {
-        ++this.retriedUnits_
-      }
-
-      extractedThisTick += generation.runUnits(ordinal, 1)
+      extractedThisTick += generation.runUnits(this.nextClassicOrdinal_(), 1)
       this.drainDeferrals_(generation)
     }
 
@@ -1132,6 +1446,66 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   private ensureGeneration_(complete: boolean = false): boolean {
 
+    const decision = this.generationDecision_(complete)
+
+    return decision === 'build' ?
+      this.adoptGeneration_(this.sink.topLevelCount) : decision
+  }
+
+  /**
+   * {@link ensureGeneration_} for the async tick: the same decision, with a
+   * build that may be promised, and the adoption hook run before the first
+   * unit.
+   *
+   * @return {Promise<boolean>} True when a generation with pending units
+   * exists.
+   */
+  private async ensureGenerationAsync_(): Promise< boolean > {
+
+    const decision = this.generationDecision_(false)
+
+    if (decision !== 'build') {
+      return decision
+    }
+
+    const records = this.sink.topLevelCount
+    const active = this.generation_
+    let generation: PreviewPrefixGeneration | undefined
+
+    try {
+      generation = await this.adapter.buildGeneration(
+          this.data, this.conwaywasm, this.sink.snapshot(),
+          ( unitCount ) => this.wantsGeneration_(unitCount))
+    } catch (error) {
+      return this.buildFailed_(records, error)
+    }
+
+    if (!this.adoptBuilt_(records, active, generation)) {
+      return false
+    }
+
+    try {
+      await generation!.onAdopted?.({
+        coordinationMatrix: this.coordinationMatrix,
+        coordinateToOrigin: this.coordinateToOrigin,
+        onMesh: this.onMesh,
+      })
+    } catch {
+      // A hook is decoration; the generation's units still run.
+    }
+
+    return true
+  }
+
+  /**
+   * The decision behind {@link ensureGeneration_} and its async twin: keep
+   * the active generation (true), have none to run (false), or build one.
+   *
+   * @param complete See {@link ensureGeneration_}.
+   * @return {boolean | 'build'} The decision.
+   */
+  private generationDecision_(complete: boolean): boolean | 'build' {
+
     const active = this.generation_
     const records = this.sink.topLevelCount
 
@@ -1141,7 +1515,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
         return this.hasPendingUnits_(active.generation)
       }
 
-      return records > 0 && this.adoptGeneration_(records)
+      return records > 0 ? 'build' : false
     }
 
     // Rebuild on INDEX GROWTH, not on running out of units. The order of
@@ -1196,7 +1570,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       return false
     }
 
-    return this.adoptGeneration_(records)
+    return 'build'
   }
 
   /**
@@ -1212,40 +1586,92 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     const active = this.generation_
     const columns = this.sink.snapshot()
 
-    let generation: PreviewPrefixGeneration | undefined
+    let built: ReturnType< PreviewSchemaAdapter<TSource>[ 'buildGeneration' ] >
 
     try {
-      generation =
-        this.adapter.buildGeneration(this.data, this.conwaywasm, columns)
-    } catch {
-      // A mid-parse prefix can be structurally incomplete — dangling
-      // references throw schema-typed errors (AP214's assembly-tree
-      // prep especially; a bad prefix killed the whole STEP preview
-      // before this catch). That retires THIS attempt, not the
-      // channel: the growth gate above retries once the index has
-      // grown enough for a materially different prefix.
-      this.lastFailedSnapshotRecords_ = records
-      return false
+      built = this.adapter.buildGeneration(
+          this.data, this.conwaywasm, columns,
+          ( unitCount ) => this.wantsGeneration_(unitCount))
+    } catch (error) {
+      return this.buildFailed_(records, error)
     }
+
+    if (built instanceof Promise) {
+      // An async adapter ticked synchronously: a wiring error, not a prefix
+      // problem. Free whatever it builds, and count it as a failed build so
+      // the growth gate paces the retries.
+      built.then((late) => late?.dispose(), () => void 0)
+      return this.buildFailed_(records, new Error('async adapter on a sync tick'))
+    }
+
+    return this.adoptBuilt_(records, active, built)
+  }
+
+  /**
+   * Record a generation build that threw. A mid-parse prefix can be
+   * structurally incomplete — dangling references throw schema-typed errors
+   * (AP214's assembly-tree prep especially; a bad prefix killed the whole
+   * STEP preview before the catch that calls this). That retires THIS
+   * attempt, not the channel: the growth gate retries once the index has
+   * grown enough for a materially different prefix.
+   *
+   * @param records The sink's top-level count at the decision.
+   * @param error What the build threw.
+   * @return {boolean} Always false: no generation was adopted.
+   */
+  private buildFailed_(records: number, error: unknown): false {
+
+    this.lastFailedSnapshotRecords_ = records
+    this.lastFailReason = error instanceof Error ? error.message : String(error)
+
+    return false
+  }
+
+  /**
+   * Whether a generation of `unitCount` units would give this channel
+   * anything to run. What {@link adoptBuilt_} checks after a build, offered
+   * to the adapter beforehand so it can skip the preparation of one that
+   * would be disposed unread.
+   *
+   * A generation that adds no new units is still worth building when
+   * deferred ones are waiting: what changed is the INDEX behind them,
+   * which is the only reason a retry could now succeed.
+   *
+   * @param unitCount The prospective generation's units.
+   * @return {boolean} True when it is worth building.
+   */
+  private wantsGeneration_(unitCount: number): boolean {
+
+    return this.adapter.retryEmptyUnits === true ?
+      unitCount > 0 && this.completedUnits_.size < unitCount :
+      unitCount > this.unitOrdinal_ || this.deferredForRetry_.length > 0
+  }
+
+  /**
+   * Make a built generation the active one if it has anything to run —
+   * the bookkeeping half of a rebuild, shared by the sync and async ticks.
+   *
+   * @param records The sink's top-level count at the decision.
+   * @param active The generation active when the build started.
+   * @param generation What the adapter built.
+   * @return {boolean} True when it was adopted.
+   */
+  private adoptBuilt_(
+      records: number,
+      active: { generation: PreviewPrefixGeneration } | undefined,
+      generation: PreviewPrefixGeneration | undefined): boolean {
 
     this.lastFailedSnapshotRecords_ = 0
     this.lastSnapshotRecords_ = records
 
     if (generation === void 0) {
       // Prefix grew but cannot build yet — wait for more records.
+      this.lastFailReason = `no generation in ${records} records`
       return false
     }
 
-    // A generation that adds no new units is still worth building when
-    // deferred ones are waiting: what changed is the INDEX behind them,
-    // which is the only reason a retry could now succeed.
-    const newGenerationPending = this.adapter.retryEmptyUnits === true ?
-      generation.unitCount > 0 &&
-        this.completedUnits_.size < generation.unitCount :
-      generation.unitCount > this.unitOrdinal_ ||
-        this.deferredForRetry_.length > 0
-
-    if (!newGenerationPending) {
+    // See wantsGeneration_ for when a generation is worth keeping.
+    if (!this.wantsGeneration_(generation.unitCount)) {
       // Nothing this prefix can add — free it and wait for more records.
       // (The active generation, if any, keeps its scan state untouched.)
       try {
@@ -1290,6 +1716,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       generation,
       capturedCounts: new Map<number, number>(),
     }
+    this.lastFailReason = void 0
 
     return true
   }

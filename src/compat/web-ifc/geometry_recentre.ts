@@ -73,8 +73,8 @@
  *    measurement. The entry for the freed handle is simply garbage.
  *  - **Sharing is free but not required.** The durable walk
  *    (`IfcApiProxyIfc.streamNewMeshes_` and its classic siblings) and the
- *    two preview channels (`streamed_preview_channel`,
- *    `store_preview_channel`) do NOT share native geometry today: each
+ *    preview channel (`streamed_preview_channel`, resident and windowed
+ *    adapters alike) do NOT share native geometry today: each
  *    preview generation builds its own `IfcStepModel` +
  *    `IfcGeometryExtraction` and throws it away, so the preview scene owns
  *    separate instances and per-path caches would have sufficed. Keying on
