@@ -533,6 +533,14 @@ export function ap214PreviewAdapter<TSource = Uint8Array>(
 
       extraction.prepareDemandExtraction()
 
+      // Planning reads records all over the model; on a windowed prefix model
+      // each read keeps a view of its 4 MiB window. Drop them here, and after
+      // every estimate and every unit below: a unit the cost gate passes over
+      // never runs, so releasing only after runUnits left an over-budget
+      // generation pinning windows across the file, past the provider's cap
+      // (codex on #772). No-ops on a resident model, which tracks none.
+      model.releaseCapturedSourceViews()
+
       if ( extraction.demandUnitCount === 0 ) {
         return void 0
       }
@@ -559,12 +567,18 @@ export function ap214PreviewAdapter<TSource = Uint8Array>(
 
           return executed
         },
-        unitFaceEstimate: ( ordinal ) =>
-          extraction.demandUnitFaceEstimate( ordinal ),
+        unitFaceEstimate: ( ordinal ) => {
+          const faces = extraction.demandUnitFaceEstimate( ordinal )
+
+          model.releaseCapturedSourceViews()
+
+          return faces
+        },
         geometryExpressID: ( geometryLocalID ) =>
           model.getElementByLocalID( geometryLocalID )?.expressID,
         recenter: false,
         dispose: () => {
+          model.releaseCapturedSourceViews()
           releaseModelGeometry( model.geometry )
         },
       }

@@ -216,6 +216,55 @@ describe( 'AP214 previews on a windowed open (conway#757)', () => {
   }, 240000 )
 } )
 
+describe( 'a windowed prefix model holds no window views between units', () => {
+
+  test( 'not after planning, not after estimating units it passes over, not after disposal', async () => {
+
+    // Codex on #772: estimates read records through the windowed prefix
+    // model, and a unit the gate passes over never ran, so nothing released
+    // what its estimate captured.
+    const { ColumnarIndexSink: Sink } = await import( '../../step/parsing/columnar_index' )
+    const { buildIndexStreaming } = await import( '../../step/parsing/streaming_index_builder' )
+    const { BufferByteSource } = await import( '../../step/parsing/byte_source' )
+    const AP214StepParser = ( await import( '../../AP214E3_2010/ap214_step_parser' ) ).default
+    const { ap214PreviewAdapter, windowedAP214PrefixModel } = await import( './streamed_preview_channel' )
+
+    const bytes = new Uint8Array( fs.readFileSync( OCCURRENCE_FIXTURE ) )
+    const sink = new Sink<number>()
+
+    buildIndexStreaming( new BufferByteSource( bytes ), AP214StepParser.Instance, 1 << 20, void 0, sink )
+
+    const conwayGeometry = new ConwayGeometry()
+
+    expect( await conwayGeometry.initialize() ).toBe( true )
+
+    const models: { capturedSourceViewCount: number }[] = []
+    const channel = new StreamedPreviewChannel(
+        new InMemoryStepByteStore( bytes, true ), conwayGeometry, sink,
+        ap214PreviewAdapter( ( store, columns ) => {
+          const model = windowedAP214PrefixModel( store, columns )
+          models.push( model )
+          return model
+        } ),
+        true, () => { /* no payloads */ }, void 0, void 0, 1 )
+
+    // Every unit over budget: a rate no estimate can fit under.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    ;( channel as any ).msPerFace_ = Number.MAX_SAFE_INTEGER
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    channel.finishParse()
+
+    expect( models.length ).toBe( 1 )
+    expect( channel.previewYield.overBudget ).toBeGreaterThan( 0 )
+    expect( channel.previewYield.meshes ).toBe( 0 )
+    expect( models[ 0 ].capturedSourceViewCount ).toBe( 0 )
+
+    channel.stop()
+
+    expect( models[ 0 ].capturedSourceViewCount ).toBe( 0 )
+  }, 240000 )
+} )
+
 describe( 'retry-mode preview channel: cost and the parse-end tick', () => {
 
   const makeSink = ( records: { count: number } ) => ( {
