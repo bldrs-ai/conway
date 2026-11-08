@@ -156,10 +156,21 @@ const GENERATION_GROWTH_FACTOR = 2.0
  */
 const RETRY_QUEUE_MAX = 4096
 
-/** Default cap on units the preview channel ever extracts. Preview
- * generations are throwaway extractions whose native geometry is not
- * reclaimed until page teardown (the shim never frees classic scenes
- * either — see closeModel), so the cap bounds that one-time cost. */
+/**
+ * Cap on units the preview channel ever extracts, the same for every open:
+ * IFC and STEP, buffered and windowed. Preview generations are throwaway
+ * extractions whose native geometry is not reclaimed until page teardown
+ * (the shim never frees classic scenes either — see closeModel), so the cap
+ * bounds that one-time cost.
+ *
+ * It is a backstop, not the budget. What limits a preview in practice is the
+ * share-of-parse bound (PREVIEW_PARSE_SHARE), which stops all channel work
+ * at a fraction of the parse whatever the cap. The windowed IFC open used to
+ * stop at 512 units (StorePreviewChannel's cap); on PSB that froze the
+ * build-up at 484 meshes by 75% of the parse while the buffered open of the
+ * same file kept going to ~2,180. One cap makes the two opens of a file
+ * build up alike (conway#775).
+ */
 const DEFAULT_MAX_PREVIEW_UNITS = 4096
 
 /** Default cap on total payload bytes copied out to the consumer. */

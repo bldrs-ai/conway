@@ -72,7 +72,6 @@ import {
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import {
-  WINDOWED_IFC_MAX_PREVIEW_UNITS,
   windowedIfcPreviewAdapter,
 } from './ifc_windowed_preview_adapter'
 import {
@@ -1981,8 +1980,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
           sink,
           windowedIfcPreviewAdapter(),
           settings.COORDINATE_TO_ORIGIN === true,
-          settings.ON_PREVIEW_MESH,
-          WINDOWED_IFC_MAX_PREVIEW_UNITS ) : void 0
+          settings.ON_PREVIEW_MESH ) : void 0
 
     const parseProgress = async ( cursorBytes: number ): Promise< void > => {
       parseTick?.( cursorBytes )

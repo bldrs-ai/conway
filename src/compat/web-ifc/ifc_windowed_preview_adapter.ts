@@ -55,12 +55,6 @@ const WINDOWED_IFC_TICK_BUDGET_MS = 20
 const WINDOWED_IFC_MAX_ATTEMPTS_PER_TICK = 32
 
 /**
- * Cap on products the windowed IFC preview ever extracts: the store
- * channel's DEFAULT_MAX_PREVIEW_UNITS, which the open passes to the channel.
- */
-export const WINDOWED_IFC_MAX_PREVIEW_UNITS = 512
-
-/**
  * IFC adapter for the windowed (store-backed) open: the resident adapter's
  * generation (ifcPreviewGeneration), over a prefix model that pages its
  * source from `store` through a provider of its own, plus the two things a
