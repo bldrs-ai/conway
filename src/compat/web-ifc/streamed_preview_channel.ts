@@ -48,7 +48,7 @@ const TICK_BUDGET_MS = 25
  * Wall-clock budget for the one tick {@link StreamedPreviewChannel.finishParse}
  * runs over the complete index, on top of building that generation.
  *
- * The same order as the store path's FLUSH_BUDGET_MS, and for the same
+ * The same order as FLUSH_BUDGET_MS, and for the same
  * reason: it sits between the parse and the caller's next step (here the
  * index the consumer is waiting for), so it is paid in full by every load
  * that reaches it. Arty_Z7 is the case it exists for: Alibre writes every
@@ -61,6 +61,13 @@ const TICK_BUDGET_MS = 25
 const FINISH_BUDGET_MS = 100
 
 /**
+ * Wall-clock budget for {@link StreamedPreviewChannel.flushAsync}, the one
+ * async tick after a completed parse on the generation in hand. The retired
+ * StorePreviewChannel's flush, with the same value (conway#775).
+ */
+const FLUSH_BUDGET_MS = 100
+
+/**
  * Whether {@link StreamedPreviewChannel.finishParse} runs at all. Off until
  * conway#773: the tick's first unit pays the throwaway generation's lazy
  * extraction prep (#751), which no estimate sees and no tick preempts, and
@@ -70,6 +77,38 @@ const FINISH_BUDGET_MS = 100
  * object rather than a const so tests can run the tick (they restore it).
  */
 export const PREVIEW_FINISH_PARSE = { enabled: false }
+
+/**
+ * The share of the parse's wall clock the preview channel may spend, all of
+ * its work counted: generation builds (snapshot, prefix model, plan,
+ * residency), ticks, and the parse-end tick or flush (conway#775 stage 1).
+ *
+ * Before this, only a tick's own units were budgeted (TICK_BUDGET_MS per
+ * cadence interval). A generation build could not be, and a STEP parse
+ * rebuilds about ten times (GENERATION_GROWTH_FACTOR from
+ * FIRST_GENERATION_MIN_RECORDS), each over the whole index so far, so the
+ * builds were the bulk of the cost.
+ *
+ * The bound is enforced, not just measured:
+ * - a build runs only when its predicted cost (the last build's ms per
+ *   record, times the records now) fits what the share has left;
+ * - a tick's budget is cut to what is left.
+ * The worst overrun is one mispredicted build or one unit, neither of which
+ * can be preempted.
+ *
+ * Mutable so a test or a measurement can lift it (`Infinity`), as with
+ * PREVIEW_FINISH_PARSE.
+ */
+export const PREVIEW_PARSE_SHARE = { share: 0.2 }
+
+/**
+ * What the channel may always spend, whatever the share allows: so the first
+ * generation and its first tick fit before the share has accrued anything
+ * (at 0.2 the share covers 100 ms only after half a second of parse). This
+ * is what keeps the first preview where it was. PSB's first preview mesh
+ * lands about 0.2–0.4 s into its parse in Share's worker path.
+ */
+const PREVIEW_SHARE_FLOOR_MS = 100
 
 /**
  * Starting milliseconds per estimated face, for a generation that offers
@@ -98,7 +137,8 @@ const GENERATION_GROWTH_FACTOR = 2.0
 /**
  * Deferred units carried into the next generation for a second look.
  *
- * Twin of {@link StorePreviewChannel}'s queue, for the same defect: the
+ * Once a twin of the retired StorePreviewChannel's queue; one queue since
+ * conway#775. The defect it fixes: the
  * channel was strictly forward-only, so a unit whose placement chain lay
  * beyond the prefix was attempted once — at the earliest and therefore most
  * index-starved generation it appeared in — and never again, because
@@ -116,11 +156,22 @@ const GENERATION_GROWTH_FACTOR = 2.0
  */
 const RETRY_QUEUE_MAX = 4096
 
-/** Default cap on units the preview channel ever extracts. Preview
- * generations are throwaway extractions whose native geometry is not
- * reclaimed until page teardown (the shim never frees classic scenes
- * either — see closeModel), so the cap bounds that one-time cost. */
-const DEFAULT_MAX_PREVIEW_UNITS = 4096
+/**
+ * Cap on units the preview channel ever extracts, the same for every open:
+ * IFC and STEP, buffered and windowed. Preview generations are throwaway
+ * extractions whose native geometry is not reclaimed until page teardown
+ * (the shim never frees classic scenes either — see closeModel), so the cap
+ * bounds that one-time cost.
+ *
+ * It is a backstop, not the budget. What limits a preview in practice is the
+ * share-of-parse bound (PREVIEW_PARSE_SHARE), which stops all channel work
+ * at a fraction of the parse whatever the cap. The windowed IFC open used to
+ * stop at 512 units (StorePreviewChannel's cap); on PSB that froze the
+ * build-up at 484 meshes by 75% of the parse while the buffered open of the
+ * same file kept going to ~2,180. One cap makes the two opens of a file
+ * build up alike (conway#775).
+ */
+export const DEFAULT_MAX_PREVIEW_UNITS = 4096
 
 /** Default cap on total payload bytes copied out to the consumer. */
 const DEFAULT_MAX_PREVIEW_BYTES = 48 * 1024 * 1024
@@ -269,11 +320,50 @@ export interface PreviewPrefixGeneration {
   recenter: boolean
 
   /**
+   * Make one unit's records resident before {@link runUnits} runs it, for a
+   * prefix model whose source can only be read asynchronously (a windowed
+   * IFC open over a Blob store, conway#775). Resolves to a release, called
+   * once the unit has run. A unit whose residency fails is the adapter's to
+   * record (as a deferral) and to skip in runUnits; prepareUnit itself
+   * never rejects.
+   *
+   * Only the channel's async tick ({@link StreamedPreviewChannel.maybeTickAsync})
+   * calls it. A generation that offers it must be ticked that way.
+   *
+   * @param ordinal The unit about to run.
+   * @return {Promise<function(): void>} Releases what the call pinned.
+   */
+  prepareUnit?( ordinal: number ): Promise< () => void >
+
+  /**
+   * Called once, after the channel adopts this generation and before its
+   * first unit runs, from the async tick only. The windowed IFC adapter puts
+   * the spatial plates up from here (conway#518).
+   *
+   * @param context What the channel knows at adoption.
+   * @return {Promise<void>} Settles when the hook is done.
+   */
+  onAdopted?( context: PreviewAdoptionContext ): Promise< void >
+
+  /**
    * Free the generation's native geometry (payloads are copies, so a
    * retired generation holds nothing anyone can reference). Called by
    * the channel when a generation is replaced and at stop().
    */
   dispose(): void
+}
+
+/** What {@link PreviewPrefixGeneration.onAdopted} is told. */
+export interface PreviewAdoptionContext {
+
+  /** The frame the channel has latched so far, if any. */
+  coordinationMatrix?: number[]
+
+  /** The open's COORDINATE_TO_ORIGIN setting. */
+  coordinateToOrigin: boolean
+
+  /** The channel's consumer, for payloads the hook emits itself. */
+  onMesh( mesh: PreviewMeshPayload ): void
 }
 
 /**
@@ -297,6 +387,22 @@ export interface PreviewSchemaAdapter<TSource = Uint8Array> {
   readonly retryEmptyUnits?: boolean
 
   /**
+   * Units one tick may attempt, whatever the clock says; unbounded when
+   * unset. A windowed adapter sets it because every attempt pages source,
+   * including the ones that go on to defer (conway#542; the store channel's
+   * TICK_MAX_ATTEMPTS, conway#518).
+   */
+  readonly maxAttemptsPerTick?: number
+
+  /** Wall-clock budget per tick, when the adapter needs other than the
+   * channel's TICK_BUDGET_MS. */
+  readonly tickBudgetMs?: number
+
+  /** Spatial plates the adapter emitted from its prefix generations
+   * (windowed IFC, conway#518); undefined for adapters that emit none. */
+  readonly earlyPlateCount?: number
+
+  /**
    * Build a generation over the given prefix columns.
    *
    * @param source The prefix source the channel was constructed with —
@@ -305,16 +411,40 @@ export interface PreviewSchemaAdapter<TSource = Uint8Array> {
    * through, so one channel serves both.
    * @param conwaywasm The shared geometry wasm wrapper.
    * @param columns A prefix snapshot of the columnar index.
+   * @param wanted Whether a generation of this many units would give the
+   * channel anything to run; an adapter can ask it before paying for a
+   * generation's preparation, and return undefined on false (the store
+   * channel's pre-prep check, conway#542). Optional on both sides.
    * @return {PreviewPrefixGeneration | undefined} The generation, or
    * undefined when the prefix cannot build one yet (throw is also
-   * tolerated — the channel retries on a later, larger prefix).
+   * tolerated — the channel retries on a later, larger prefix). A promise
+   * of either from an adapter whose prefix model reads its source
+   * asynchronously; such an adapter is ticked with the channel's async
+   * tick only.
    */
   buildGeneration(
     source: TSource,
     conwaywasm: ConwayGeometry,
     columns: unknown,
-  ): PreviewPrefixGeneration | undefined
+    wanted?: ( unitCount: number ) => boolean,
+  ): PreviewPrefixGeneration | undefined |
+    Promise< PreviewPrefixGeneration | undefined >
 }
+
+/**
+ * An adapter whose generations are built synchronously: every one whose
+ * prefix model reads a resident buffer, or a store it can fault in
+ * synchronously (the windowed AP214 open). Ticked inline.
+ */
+export type SyncPreviewSchemaAdapter< TSource = Uint8Array > =
+  Omit< PreviewSchemaAdapter< TSource >, 'buildGeneration' > & {
+    buildGeneration(
+      source: TSource,
+      conwaywasm: ConwayGeometry,
+      columns: unknown,
+      wanted?: ( unitCount: number ) => boolean,
+    ): PreviewPrefixGeneration | undefined
+  }
 
 /**
  * IFC adapter: units are IfcProducts in localID order (stable across
@@ -322,104 +452,164 @@ export interface PreviewSchemaAdapter<TSource = Uint8Array> {
  *
  * @return {PreviewSchemaAdapter} The adapter.
  */
-export function ifcPreviewAdapter(): PreviewSchemaAdapter {
+export function ifcPreviewAdapter(): SyncPreviewSchemaAdapter {
   return {
-    buildGeneration( data, conwaywasm, columns ) {
+    buildGeneration( data, conwaywasm, columns, wanted ) {
 
       const model = new IfcStepModel(
           data, columns as ConstructorParameters<typeof IfcStepModel>[1] )
 
-      // Enumerate product localIDs straight off the type index — NO
-      // entity materialization (a per-generation sweep of 50k+ product
-      // entities was a dominant channel cost on PSB-class models).
-      const products: number[] = []
+      const products = ifcPreviewProducts( model )
 
-      for ( const localID of cursorIterator(
-          model.typeIndex.cursor( ...IfcProduct.query ) ) ) {
-        products.push( localID )
-      }
-
-      if ( products.length === 0 ) {
+      if ( products.length === 0 || wanted?.( products.length ) === false ) {
         return void 0
       }
 
-      const extraction = new IfcGeometryExtraction( conwaywasm, model )
-
-      // Prefix extractions hit representation items whose style/select
-      // references aren't parsed yet — expected on a truncated tail;
-      // don't flood the report (DOWA: 1164 styled-item errors).
-      extraction.quietRecoverableLogging = true
-
-      // A product whose placement records sit beyond this prefix must
-      // defer, not extract unplaced: Revit writes placements near the
-      // end of the file, so an early product can reference a placement
-      // the index does not hold yet. Lenient reads null the dangling
-      // reference and the product extracts at the origin — on a
-      // georeferenced model the emitted payloads then sit a site-offset
-      // away from the model (Share#1744: Snowdon's door #5014 put 88
-      // payloads ~425km out, and the camera follow framed them). The
-      // per-unit catch below already treats a throwing product as
-      // not-yet-extractable; this makes a dangling placement throw like
-      // any other unparsed forward reference. The classic-mode cursor
-      // does not re-run passed units, so a deferred product sits out
-      // the preview and the durable pump renders it — an empty slot,
-      // never geometry at the wrong placement.
-      extraction.deferDanglingPlacements = true
+      const extraction = ifcPreviewExtraction( conwaywasm, model )
 
       // Preview-only preparation: skip the relationship sweeps whose
       // entity materialization dominates per-generation cost.
       extraction.prepareDemandExtraction( true )
 
-      // Deferrals since the channel last drained them. Product ORDINALS,
-      // not localIDs: the channel replays them against a later generation,
-      // and `products` is enumerated off the type index in dense parse
-      // order, which a longer prefix only extends (see
-      // ColumnarIndexSink.snapshot) — so an ordinal means the same product
-      // in every generation that holds it.
-      let deferrals: PreviewDeferral[] = []
+      return ifcPreviewGeneration( model, extraction, products )
+    },
+  }
+}
 
-      return {
-        scene: extraction.scene,
-        unitCount: products.length,
-        get linearScalingFactor() {
-          return extraction.getLinearScalingFactor()
-        },
-        runUnits: ( from, count ) => {
-          const end = Math.min( from + count, products.length )
-          let executed = 0
-          for ( let where = from; where < end; ++where ) {
-            try {
-              if ( extraction.extractProductGeometryByLocalID( products[ where ] ) ) {
-                ++executed
-              }
-            } catch ( error ) {
-              // Unparsed forward reference — the durable pump extracts
-              // this product from the full model later. Recorded by cause:
-              // a dangling placement is a product the index will be able
-              // to place once it is longer, and is the one case worth
-              // attempting again (conway#542).
-              deferrals.push( {
-                ordinal: where,
-                onPlacement: error instanceof DanglingPlacementError,
-              } )
-            }
+/**
+ * A prefix model's products, in dense parse order.
+ *
+ * Enumerated straight off the type index, with NO entity materialization: a
+ * per-generation sweep of 50k+ product entities was a dominant channel cost
+ * on PSB-class models.
+ *
+ * @param model The prefix model.
+ * @return {number[]} Product localIDs.
+ */
+export function ifcPreviewProducts( model: IfcStepModel ): number[] {
+
+  const products: number[] = []
+
+  for ( const localID of cursorIterator(
+      model.typeIndex.cursor( ...IfcProduct.query ) ) ) {
+    products.push( localID )
+  }
+
+  return products
+}
+
+/**
+ * The throwaway extraction an IFC prefix generation runs, configured for a
+ * truncated prefix. Not yet prepared: a resident model prepares it at once,
+ * a windowed one pages the prep's closure in first.
+ *
+ * @param conwaywasm The shared geometry wasm wrapper.
+ * @param model The prefix model.
+ * @return {IfcGeometryExtraction} The extraction.
+ */
+export function ifcPreviewExtraction(
+    conwaywasm: ConwayGeometry, model: IfcStepModel ): IfcGeometryExtraction {
+
+  const extraction = new IfcGeometryExtraction( conwaywasm, model )
+
+  // Prefix extractions hit representation items whose style/select
+  // references aren't parsed yet — expected on a truncated tail;
+  // don't flood the report (DOWA: 1164 styled-item errors).
+  extraction.quietRecoverableLogging = true
+
+  // A product whose placement records sit beyond this prefix must
+  // defer, not extract unplaced: Revit writes placements near the
+  // end of the file, so an early product can reference a placement
+  // the index does not hold yet. Lenient reads null the dangling
+  // reference and the product extracts at the origin — on a
+  // georeferenced model the emitted payloads then sit a site-offset
+  // away from the model (Share#1744: Snowdon's door #5014 put 88
+  // payloads ~425km out, and the camera follow framed them). The
+  // per-unit catch in runUnits already treats a throwing product as
+  // not-yet-extractable; this makes a dangling placement throw like
+  // any other unparsed forward reference. The classic-mode cursor
+  // does not re-run passed units, so a deferred product sits out
+  // the preview and the durable pump renders it — an empty slot,
+  // never geometry at the wrong placement.
+  extraction.deferDanglingPlacements = true
+
+  return extraction
+}
+
+/**
+ * An IFC prefix generation over a prepared extraction: units are the
+ * products, in the order {@link ifcPreviewProducts} lists them. Shared by the
+ * resident adapter and the windowed one (ifc_windowed_preview_adapter.ts),
+ * which adds residency per unit on top.
+ *
+ * @param model The prefix model.
+ * @param extraction Its prepared extraction.
+ * @param products The products, as {@link ifcPreviewProducts} lists them.
+ * @param skipped Ordinals a caller has already given up on (the windowed
+ * adapter's failed residency), which runUnits passes over unrun.
+ * @return {PreviewPrefixGeneration} The generation.
+ */
+export function ifcPreviewGeneration(
+    model: IfcStepModel,
+    extraction: IfcGeometryExtraction,
+    products: number[],
+    skipped?: Set< number > ): PreviewPrefixGeneration & {
+      recordDeferral( deferral: PreviewDeferral ): void } {
+
+  // Deferrals since the channel last drained them. Product ORDINALS,
+  // not localIDs: the channel replays them against a later generation,
+  // and `products` is enumerated off the type index in dense parse
+  // order, which a longer prefix only extends (see
+  // ColumnarIndexSink.snapshot) — so an ordinal means the same product
+  // in every generation that holds it.
+  let deferrals: PreviewDeferral[] = []
+
+  return {
+    scene: extraction.scene,
+    unitCount: products.length,
+    get linearScalingFactor() {
+      return extraction.getLinearScalingFactor()
+    },
+    runUnits: ( from, count ) => {
+      const end = Math.min( from + count, products.length )
+      let executed = 0
+      for ( let where = from; where < end; ++where ) {
+        if ( skipped?.has( where ) === true ) {
+          continue
+        }
+        try {
+          if ( extraction.extractProductGeometryByLocalID( products[ where ] ) ) {
+            ++executed
           }
-          return executed
-        },
-        takeDeferrals: () => {
-          const drained = deferrals
-
-          deferrals = []
-
-          return drained
-        },
-        geometryExpressID: ( geometryLocalID ) =>
-          model.getElementByLocalID( geometryLocalID )?.expressID,
-        recenter: true,
-        dispose: () => {
-          releaseModelGeometry( model.geometry )
-        },
+        } catch ( error ) {
+          // Unparsed forward reference — the durable pump extracts
+          // this product from the full model later. Recorded by cause:
+          // a dangling placement is a product the index will be able
+          // to place once it is longer, and is the one case worth
+          // attempting again (conway#542).
+          deferrals.push( {
+            ordinal: where,
+            onPlacement: error instanceof DanglingPlacementError,
+          } )
+        }
       }
+      return executed
+    },
+    recordDeferral: ( deferral ) => {
+      deferrals.push( deferral )
+    },
+    takeDeferrals: () => {
+      const drained = deferrals
+
+      deferrals = []
+
+      return drained
+    },
+    geometryExpressID: ( geometryLocalID ) =>
+      model.getElementByLocalID( geometryLocalID )?.expressID,
+    recenter: true,
+    dispose: () => {
+      releaseModelGeometry( model.geometry )
     },
   }
 }
@@ -516,7 +706,7 @@ export function windowedAP214PrefixModel(
 export function ap214PreviewAdapter<TSource = Uint8Array>(
     makeModel: AP214PrefixModelFactory<TSource> =
     residentAP214PrefixModel as unknown as AP214PrefixModelFactory<TSource> ):
-    PreviewSchemaAdapter<TSource> {
+    SyncPreviewSchemaAdapter<TSource> {
   return {
     retryEmptyUnits: true,
     buildGeneration( source, conwaywasm, columns ) {
@@ -685,6 +875,25 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
   private readonly startedMs_ = Date.now()
 
+  /** Wall clock the channel has spent so far: builds, ticks, the parse-end
+   * tick or flush (see PREVIEW_PARSE_SHARE). */
+  private spentMs_ = 0
+
+  /** The last two generation builds, as [records, ms] — the predictor for
+   * the next one (see predictBuildMs_); empty before the first build. */
+  private readonly builds_: [number, number][] = []
+
+  /** affordsBuild_'s one-shot probe, armed until used (see there). */
+  private probeArmed_ = true
+
+  /** What the fit predicted for the build affordsBuild_ last let through;
+   * undefined when the probe, or no prediction, let it through. */
+  private admittedPredictionMs_?: number
+
+  /** PREVIEW_PARSE_SHARE at construction. A field so a test can lift it the
+   * way it lifts tickBudgetMs_. */
+  private parseShare_ = PREVIEW_PARSE_SHARE.share
+
   /** Ordinal cursor into the unit list (see the adapter's stability
    * notes). */
   private unitOrdinal_ = 0
@@ -749,16 +958,24 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   // "this tick ran all N units" against a real 25ms budget is a coin flip on
   // a loaded runner: the retryEmptyUnits test expected [0,1,2] and got [0,1]
   // in CI while passing locally. Production behaviour is unchanged.
-  private tickBudgetMs_ = TICK_BUDGET_MS
+  private tickBudgetMs_ = this.adapter.tickBudgetMs ?? TICK_BUDGET_MS
 
-  // Companion seam to tickBudgetMs_, and unbounded in production: a resident
-  // unit attempt pages nothing (the store channel's TICK_MAX_ATTEMPTS exists
-  // because its attempts page source through a windowed provider), so the
-  // wall clock is the only bound worth paying for here. A test pins it so
+  // Companion seam to tickBudgetMs_. Unbounded for a resident adapter: a
+  // resident unit attempt pages nothing, so the wall clock is the only bound
+  // worth paying for. A windowed adapter sets one (maxAttemptsPerTick),
+  // because its attempts page source even when they defer. A test pins it so
   // "this tick left units unattempted" — which is what separates a
   // preemptive rebuild from an exhaustion one — is a fact rather than a race
   // against the budget.
-  private tickMaxAttempts_ = Number.MAX_SAFE_INTEGER
+  private tickMaxAttempts_ = this.adapter.maxAttemptsPerTick ?? Number.MAX_SAFE_INTEGER
+
+  /** Why the last generation build produced nothing, for tests and
+   * diagnosis; undefined after a build that was adopted. */
+  public lastFailReason?: string
+
+  /** An async tick is in flight (maybeTickAsync / flushAsync): the parse's
+   * progress callback can fire again while one awaits residency. */
+  private asyncTickInFlight_ = false
 
   /** Begin ticking (call just before awaiting the parse). */
   public start(): void {
@@ -799,6 +1016,196 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   }
 
   /**
+   * The async twin of {@link maybeTickInline}, for an adapter whose
+   * generations page their source asynchronously (`prepareUnit`, a promised
+   * `buildGeneration`): the windowed IFC open, whose parse awaits its
+   * progress callback (conway#775, from the retired StorePreviewChannel).
+   *
+   * Same cadence, with one difference carried over from the store channel:
+   * the interval decays only after a tick that attempted a unit. A tick that
+   * found no generation (every tick through the opening seconds of a big
+   * parse, before the index reaches firstGenerationMinRecords) used to decay
+   * it anyway, so by the time there was anything to extract the cadence had
+   * already cooled toward TICK_INTERVAL_MAX_MS.
+   *
+   * @return {Promise<void>} Settles when this tick's units are captured.
+   */
+  public async maybeTickAsync(): Promise< void > {
+
+    if (this.stopped_ || this.capped || this.asyncTickInFlight_) {
+      return
+    }
+
+    const now = Date.now()
+
+    if (now - this.lastInlineTick_ < this.tickIntervalMs_) {
+      return
+    }
+
+    this.lastInlineTick_ = now
+
+    try {
+      if ((await this.tickAsync_(this.tickBudgetMs_)) > 0) {
+        this.tickIntervalMs_ =
+          Math.min(this.tickIntervalMs_ * TICK_INTERVAL_GROWTH, TICK_INTERVAL_MAX_MS)
+      }
+    } catch {
+      // A preview failure must never break the open.
+      this.stopped_ = true
+    }
+  }
+
+  /**
+   * After a completed parse: one last async tick of FLUSH_BUDGET_MS on the
+   * generation in hand, so a small file (or a prefix that never crossed a
+   * progress tick) still emits placed meshes before the open returns. The
+   * store channel's flush (conway#775). A schema whose unit list is fixed
+   * (`retryEmptyUnits`) takes {@link finishParse} instead.
+   *
+   * @return {Promise<void>} Settles when the flush ends.
+   */
+  public async flushAsync(): Promise< void > {
+
+    if (this.stopped_ || this.capped || this.asyncTickInFlight_ ||
+        this.adapter.retryEmptyUnits === true) {
+      return
+    }
+
+    try {
+      // The clock is the flush's only bound, as it was the store channel's:
+      // the per-tick attempt cap paces ticks that share the thread with a
+      // running parse, and this one runs after the parse.
+      await this.tickAsync_(FLUSH_BUDGET_MS, Number.MAX_SAFE_INTEGER)
+    } catch {
+      this.stopped_ = true
+    }
+  }
+
+  /**
+   * Test seam: async ticks until the sink's current units are exhausted or
+   * a cap is hit, without the cadence or the clock.
+   *
+   * @return {Promise<void>} Settles when idle.
+   */
+  public async drainForTestAsync(): Promise< void > {
+
+    for (; ;) {
+      if (this.capped ||
+          (await this.tickAsync_(Number.MAX_SAFE_INTEGER, 1, false)) === 0) {
+        return
+      }
+    }
+  }
+
+  /** Units the current generation lists (test seam; 0 without one). */
+  public get productCount(): number {
+    return this.generation_?.generation.unitCount ?? 0
+  }
+
+  /** Spatial plates the adapter emitted from prefix generations. */
+  public get earlyPlateCount(): number {
+    return this.adapter.earlyPlateCount ?? 0
+  }
+
+  /**
+   * One async tick: ensure a generation, then attempt units until the budget
+   * or the attempt cap runs out, making each unit resident first. Classic
+   * mode only: the fixed-unit-list schema (AP214) reads its windowed source
+   * synchronously and ticks inline.
+   *
+   * Each unit's instances are captured before its residency is released:
+   * capture reads the entities it names, which a windowed source can only
+   * serve while they are pinned.
+   *
+   * @param budgetMs Wall clock for this tick.
+   * @param maxAttempts Attempts for this tick, at most.
+   * @return {Promise<number>} Units attempted.
+   */
+  private async tickAsync_(
+      budgetMs: number,
+      maxAttempts: number = this.tickMaxAttempts_,
+      bounded: boolean = true ): Promise< number > {
+
+    this.asyncTickInFlight_ = true
+
+    const startedMs = Date.now()
+
+    try {
+      const deadline = Date.now() +
+        (bounded ? Math.min(budgetMs, this.shareLeftMs_()) : budgetMs)
+      const before = this.generation_?.generation
+
+      if (!(await this.ensureGenerationAsync_())) {
+        return 0
+      }
+
+      const { generation } = this.generation_!
+
+      // A generation built this tick runs at least one unit, even when the
+      // build itself used up the deadline or the share: the build is already
+      // paid for, and a windowed first build can cost more than the 100 ms
+      // floor on its own (residency, prep), which would otherwise leave the
+      // first preview to whenever the share recovers, on a short parse
+      // never (codex on conway#777). One unit is the retired store
+      // channel's guarantee, which attempted a product on every tick. The
+      // unit's time is charged like any other, so later ticks wait for it.
+      const builtNow = generation !== before
+
+      let attempts = 0
+
+      while (this.generation_?.generation === generation &&
+          this.hasPendingUnits_(generation) &&
+          this.emittedUnits_ < this.maxUnits &&
+          !this.capped &&
+          attempts < maxAttempts &&
+          (Date.now() < deadline || (builtNow && attempts === 0))) {
+
+        ++attempts
+
+        const ordinal = this.nextClassicOrdinal_()
+        const release = await generation.prepareUnit?.(ordinal)
+
+        try {
+          const executed = generation.runUnits(ordinal, 1)
+
+          this.drainDeferrals_(generation)
+
+          if (executed > 0) {
+            this.captureNewInstances_()
+            this.emittedUnits_ += executed
+          }
+        } finally {
+          release?.()
+        }
+      }
+
+      return attempts
+    } finally {
+      this.spentMs_ += Date.now() - startedMs
+      this.asyncTickInFlight_ = false
+    }
+  }
+
+  /**
+   * The next classic-mode ordinal: a queued retry first (they are the units
+   * the index has most recently become able to place, and cheaper than a
+   * fresh attempt whichever way they go), else the forward cursor.
+   *
+   * @return {number} The ordinal to attempt.
+   */
+  private nextClassicOrdinal_(): number {
+
+    const isRetry = this.retryCursor_ < this.retryQueue_.length
+
+    if (isRetry) {
+      ++this.retriedUnits_
+      return this.retryQueue_[this.retryCursor_++]
+    }
+
+    return this.unitOrdinal_++
+  }
+
+  /**
    * The parse has COMPLETED: give a fixed-unit-list schema (the adapter's
    * `retryEmptyUnits`, i.e. AP214) one last generation over the whole index
    * and one tick of {@link FINISH_BUDGET_MS} on it, before {@link stop}.
@@ -836,7 +1243,16 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     }
 
     try {
-      if (this.ensureGeneration_(true)) {
+      const startedMs = Date.now()
+      let ready: boolean
+
+      try {
+        ready = this.ensureGeneration_(true)
+      } finally {
+        this.spentMs_ += Date.now() - startedMs
+      }
+
+      if (ready) {
         this.tick_(FINISH_BUDGET_MS)
       }
     } catch {
@@ -907,7 +1323,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * counts units passed over unrun because their estimated cost exceeded
    * the tick's remaining budget.
    *
-   * The same shape as {@link StorePreviewChannel.previewYield}, so both
+   * One shape for every open, resident or windowed, so all
    * paths render through one formatter (core/progress_log).
    *
    * @return {object} `{firstMeshMs, meshes, emitted, deferred,
@@ -915,7 +1331,8 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   public get previewYield(): {
     firstMeshMs?: number, meshes: number, emitted: number, deferred: number,
-    deferredOnPlacement: number, retried: number, overBudget: number } {
+    deferredOnPlacement: number, retried: number, overBudget: number,
+    channelMs: number } {
 
     return {
       firstMeshMs: this.firstMeshMs_,
@@ -925,6 +1342,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       deferredOnPlacement: this.deferredOnPlacement_,
       retried: this.retriedUnits_,
       overBudget: this.skippedForCost_,
+      channelMs: this.spentMs_,
     }
   }
 
@@ -956,7 +1374,175 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   private tick_(budgetMs: number = this.tickBudgetMs_): void {
 
+    const startedMs = Date.now()
+
+    try {
+      this.tickBody_(Math.min(budgetMs, this.shareLeftMs_()))
+    } finally {
+      this.spentMs_ += Date.now() - startedMs
+    }
+  }
+
+  /**
+   * What the share (PREVIEW_PARSE_SHARE) still allows the channel to spend:
+   * the larger of the floor and the share of the wall clock since the parse
+   * started, less what it has spent.
+   *
+   * @return {number} Milliseconds, possibly negative.
+   */
+  private shareLeftMs_(): number {
+
+    // A lifted share is unbounded at every instant, including the first
+    // millisecond, where Infinity * 0 would be NaN and refuse everything.
+    if (this.parseShare_ === Infinity) {
+      return Infinity
+    }
+
+    const allowed = Math.max(
+        PREVIEW_SHARE_FLOOR_MS, this.parseShare_ * (Date.now() - this.startedMs_))
+
+    return allowed - this.spentMs_
+  }
+
+  /**
+   * Whether a generation build over `records` records is predicted to fit
+   * what the share has left. The first build is always allowed: there is
+   * nothing to predict from, and it is the cheapest one
+   * (FIRST_GENERATION_MIN_RECORDS).
+   *
+   * Every caller asks only when the build is needed: there is no active
+   * generation, or it is exhausted, or its deferrals want a longer index.
+   *
+   * The fit (predictBuildMs_) decides. When it refuses, one probe may still
+   * let a build through, priced at the cheapest rate an actual build has run
+   * at. That is for a fit spoiled by one transiently slow build: fitted
+   * through two samples, 10 ms at 1k records then 1,000 ms at 2k prices 4k
+   * at 2,980 ms, and only a build replaces a sample, so without the probe
+   * the channel would never build again and its retry queue would be
+   * stranded (codex on conway#777, round 1). Clamping the slope would not
+   * recover it: the outlier is also the fit's intercept.
+   *
+   * The probe is one-shot. It re-arms only when a build the FIT let through
+   * comes in at or under its prediction, i.e. once the fit is trustworthy
+   * again, which it is after an isolated outlier. It does not re-arm while
+   * costs grow faster than the fit expects (k·r² builds, codex round 2),
+   * where a standing cheap-rate minimum would underprice every build by 4×
+   * at each doubling. So the probe adds at most one underpriced build per
+   * stretch of mispredicting fit, and on growing costs one over the whole
+   * parse. Its time is charged like any build's, so later builds wait for
+   * the share to cover it.
+   *
+   * @param records The records the build would snapshot.
+   * @return {boolean} True to build.
+   */
+  private affordsBuild_(records: number): boolean {
+
+    if (this.builds_.length === 0) {
+      this.admittedPredictionMs_ = void 0
+      return true
+    }
+
+    const leftMs = this.shareLeftMs_()
+    const predictedMs = this.predictBuildMs_(records)
+
+    if (predictedMs <= leftMs) {
+      this.admittedPredictionMs_ = predictedMs
+      return true
+    }
+
+    if (this.probeArmed_ && this.cheapestBuildRateMs_() * records <= leftMs) {
+      this.probeArmed_ = false
+      this.admittedPredictionMs_ = void 0
+      return true
+    }
+
+    return false
+  }
+
+  /**
+   * The cheapest cost per record any kept build ran at; Infinity with none
+   * that had records.
+   *
+   * @return {number} Milliseconds per record.
+   */
+  private cheapestBuildRateMs_(): number {
+
+    let rate = Infinity
+
+    for (const [ count, ms ] of this.builds_) {
+      if (count > 0) {
+        rate = Math.min(rate, ms / count)
+      }
+    }
+
+    return rate
+  }
+
+  /**
+   * Predicted cost of a generation build over `records` records: a fixed
+   * part plus a part per record, fitted through the last two builds.
+   *
+   * Not the last build's cost per record. A build's cost is mostly fixed
+   * while the prefix is small (a prefix model, an extraction, a plan, the
+   * windowed prep's residency), so a per-record rate taken off the first
+   * build at FIRST_GENERATION_MIN_RECORDS extrapolates absurdly: measured
+   * on PSB in Share's worker path, a first build of ~1k records priced the
+   * next one, over the index the parse had reached by then, at more than
+   * the whole parse, and the channel never built again (137 meshes, where
+   * the unbounded channel made 484).
+   *
+   * With one build there is nothing to fit: the next is predicted to cost
+   * the same, and if it does not, the misprediction is one build, which the
+   * share's doc already allows for. The per-record part is never taken as
+   * negative (a second build cheaper than the first is noise, not a
+   * discount).
+   *
+   * An outlier build can spoil the fit; affordsBuild_'s probe is how it
+   * recovers.
+   *
+   * @param records The records the build would snapshot.
+   * @return {number} Milliseconds.
+   */
+  private predictBuildMs_(records: number): number {
+
+    const [ first, last ] = this.builds_.length === 1 ?
+      [ this.builds_[0], this.builds_[0] ] : this.builds_
+
+    const [ lastRecords, lastMs ] = last
+    const perRecord = last[0] > first[0] ?
+      Math.max(0, (last[1] - first[1]) / (last[0] - first[0])) : 0
+    return lastMs + perRecord * Math.max(0, records - lastRecords)
+  }
+
+  /**
+   * Fold one generation build's cost into the predictor.
+   *
+   * @param records The records it snapshotted.
+   * @param startedMs When it started (Date.now()).
+   */
+  private timeBuild_(records: number, startedMs: number): void {
+
+    const ms = Date.now() - startedMs
+
+    // The fit was right about a build it let through: re-arm the probe
+    // (see affordsBuild_).
+    if (this.admittedPredictionMs_ !== void 0 && ms <= this.admittedPredictionMs_) {
+      this.probeArmed_ = true
+    }
+
+    this.admittedPredictionMs_ = void 0
+    this.builds_.push([ records, ms ])
+
+    if (this.builds_.length > 2) {
+      this.builds_.shift()
+    }
+  }
+
+  // eslint-disable-next-line require-jsdoc
+  private tickBody_(budgetMs: number): void {
+
     const deadline = Date.now() + budgetMs
+    const before = this.generation_?.generation
 
     if (!this.ensureGeneration_()) {
       return
@@ -964,6 +1550,9 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
     const active = this.generation_!
     const { generation } = active
+    // See tickAsync_: a generation built this tick runs one unit, whatever
+    // the build left of the deadline.
+    const builtNow = generation !== before
 
     let attempts = 0
 
@@ -1012,22 +1601,11 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     while (this.hasPendingUnits_(generation) &&
         this.emittedUnits_ + extractedThisTick < this.maxUnits &&
         attempts < this.tickMaxAttempts_ &&
-        Date.now() < deadline) {
+        (Date.now() < deadline || (builtNow && attempts === 0))) {
 
       ++attempts
 
-      // Retries first: they are the units the index has most recently
-      // become able to place, and they are cheaper than a fresh attempt
-      // whichever way they go.
-      const isRetry = this.retryCursor_ < this.retryQueue_.length
-      const ordinal = isRetry ?
-        this.retryQueue_[this.retryCursor_++] : this.unitOrdinal_++
-
-      if (isRetry) {
-        ++this.retriedUnits_
-      }
-
-      extractedThisTick += generation.runUnits(ordinal, 1)
+      extractedThisTick += generation.runUnits(this.nextClassicOrdinal_(), 1)
       this.drainDeferrals_(generation)
     }
 
@@ -1132,6 +1710,70 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   private ensureGeneration_(complete: boolean = false): boolean {
 
+    const decision = this.generationDecision_(complete)
+
+    return decision === 'build' ?
+      this.adoptGeneration_(this.sink.topLevelCount) : decision
+  }
+
+  /**
+   * {@link ensureGeneration_} for the async tick: the same decision, with a
+   * build that may be promised, and the adoption hook run before the first
+   * unit.
+   *
+   * @return {Promise<boolean>} True when a generation with pending units
+   * exists.
+   */
+  private async ensureGenerationAsync_(): Promise< boolean > {
+
+    const decision = this.generationDecision_(false)
+
+    if (decision !== 'build') {
+      return decision
+    }
+
+    const records = this.sink.topLevelCount
+    const active = this.generation_
+    const buildStartedMs = Date.now()
+    let generation: PreviewPrefixGeneration | undefined
+
+    try {
+      generation = await this.adapter.buildGeneration(
+          this.data, this.conwaywasm, this.sink.snapshot(),
+          ( unitCount ) => this.wantsGeneration_(unitCount))
+    } catch (error) {
+      this.timeBuild_(records, buildStartedMs)
+      return this.buildFailed_(records, error)
+    }
+
+    this.timeBuild_(records, buildStartedMs)
+
+    if (!this.adoptBuilt_(records, active, generation)) {
+      return false
+    }
+
+    try {
+      await generation!.onAdopted?.({
+        coordinationMatrix: this.coordinationMatrix,
+        coordinateToOrigin: this.coordinateToOrigin,
+        onMesh: this.onMesh,
+      })
+    } catch {
+      // A hook is decoration; the generation's units still run.
+    }
+
+    return true
+  }
+
+  /**
+   * The decision behind {@link ensureGeneration_} and its async twin: keep
+   * the active generation (true), have none to run (false), or build one.
+   *
+   * @param complete See {@link ensureGeneration_}.
+   * @return {boolean | 'build'} The decision.
+   */
+  private generationDecision_(complete: boolean): boolean | 'build' {
+
     const active = this.generation_
     const records = this.sink.topLevelCount
 
@@ -1141,7 +1783,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
         return this.hasPendingUnits_(active.generation)
       }
 
-      return records > 0 && this.adoptGeneration_(records)
+      return records > 0 && this.affordsBuild_(records) ? 'build' : false
     }
 
     // Rebuild on INDEX GROWTH, not on running out of units. The order of
@@ -1196,7 +1838,13 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       return false
     }
 
-    return this.adoptGeneration_(records)
+    // Past every gate but the share (PREVIEW_PARSE_SHARE): a build the share
+    // cannot afford waits, and the active generation, if any, carries on.
+    if (!this.affordsBuild_(records)) {
+      return active !== void 0 && this.hasPendingUnits_(active.generation)
+    }
+
+    return 'build'
   }
 
   /**
@@ -1210,42 +1858,98 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   private adoptGeneration_(records: number): boolean {
 
     const active = this.generation_
+    const buildStartedMs = Date.now()
     const columns = this.sink.snapshot()
 
-    let generation: PreviewPrefixGeneration | undefined
+    let built: ReturnType< PreviewSchemaAdapter<TSource>[ 'buildGeneration' ] >
 
     try {
-      generation =
-        this.adapter.buildGeneration(this.data, this.conwaywasm, columns)
-    } catch {
-      // A mid-parse prefix can be structurally incomplete — dangling
-      // references throw schema-typed errors (AP214's assembly-tree
-      // prep especially; a bad prefix killed the whole STEP preview
-      // before this catch). That retires THIS attempt, not the
-      // channel: the growth gate above retries once the index has
-      // grown enough for a materially different prefix.
-      this.lastFailedSnapshotRecords_ = records
-      return false
+      built = this.adapter.buildGeneration(
+          this.data, this.conwaywasm, columns,
+          ( unitCount ) => this.wantsGeneration_(unitCount))
+    } catch (error) {
+      this.timeBuild_(records, buildStartedMs)
+      return this.buildFailed_(records, error)
     }
+
+    this.timeBuild_(records, buildStartedMs)
+
+    if (built instanceof Promise) {
+      // An async adapter ticked synchronously: a wiring error, not a prefix
+      // problem. Free whatever it builds, and count it as a failed build so
+      // the growth gate paces the retries.
+      built.then((late) => late?.dispose(), () => void 0)
+      return this.buildFailed_(records, new Error('async adapter on a sync tick'))
+    }
+
+    return this.adoptBuilt_(records, active, built)
+  }
+
+  /**
+   * Record a generation build that threw. A mid-parse prefix can be
+   * structurally incomplete — dangling references throw schema-typed errors
+   * (AP214's assembly-tree prep especially; a bad prefix killed the whole
+   * STEP preview before the catch that calls this). That retires THIS
+   * attempt, not the channel: the growth gate retries once the index has
+   * grown enough for a materially different prefix.
+   *
+   * @param records The sink's top-level count at the decision.
+   * @param error What the build threw.
+   * @return {boolean} Always false: no generation was adopted.
+   */
+  private buildFailed_(records: number, error: unknown): false {
+
+    this.lastFailedSnapshotRecords_ = records
+    this.lastFailReason = error instanceof Error ? error.message : String(error)
+
+    return false
+  }
+
+  /**
+   * Whether a generation of `unitCount` units would give this channel
+   * anything to run. What {@link adoptBuilt_} checks after a build, offered
+   * to the adapter beforehand so it can skip the preparation of one that
+   * would be disposed unread.
+   *
+   * A generation that adds no new units is still worth building when
+   * deferred ones are waiting: what changed is the INDEX behind them,
+   * which is the only reason a retry could now succeed.
+   *
+   * @param unitCount The prospective generation's units.
+   * @return {boolean} True when it is worth building.
+   */
+  private wantsGeneration_(unitCount: number): boolean {
+
+    return this.adapter.retryEmptyUnits === true ?
+      unitCount > 0 && this.completedUnits_.size < unitCount :
+      unitCount > this.unitOrdinal_ || this.deferredForRetry_.length > 0
+  }
+
+  /**
+   * Make a built generation the active one if it has anything to run —
+   * the bookkeeping half of a rebuild, shared by the sync and async ticks.
+   *
+   * @param records The sink's top-level count at the decision.
+   * @param active The generation active when the build started.
+   * @param generation What the adapter built.
+   * @return {boolean} True when it was adopted.
+   */
+  private adoptBuilt_(
+      records: number,
+      active: { generation: PreviewPrefixGeneration } | undefined,
+      generation: PreviewPrefixGeneration | undefined): boolean {
 
     this.lastFailedSnapshotRecords_ = 0
     this.lastSnapshotRecords_ = records
 
     if (generation === void 0) {
       // Prefix grew but cannot build yet — wait for more records.
+      this.lastFailReason = `no generation in ${records} records`
       return false
     }
 
-    // A generation that adds no new units is still worth building when
-    // deferred ones are waiting: what changed is the INDEX behind them,
-    // which is the only reason a retry could now succeed.
-    const newGenerationPending = this.adapter.retryEmptyUnits === true ?
-      generation.unitCount > 0 &&
-        this.completedUnits_.size < generation.unitCount :
-      generation.unitCount > this.unitOrdinal_ ||
-        this.deferredForRetry_.length > 0
-
-    if (!newGenerationPending) {
+    // See wantsGeneration_ for when a generation is worth keeping.
+    if (!this.wantsGeneration_(generation.unitCount)) {
       // Nothing this prefix can add — free it and wait for more records.
       // (The active generation, if any, keeps its scan state untouched.)
       try {
@@ -1290,6 +1994,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       generation,
       capturedCounts: new Map<number, number>(),
     }
+    this.lastFailReason = void 0
 
     return true
   }

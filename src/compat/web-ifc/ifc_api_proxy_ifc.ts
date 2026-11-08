@@ -71,7 +71,9 @@ import {
   buildColumnarIndexStreamingAsync,
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
-import { StorePreviewChannel } from './store_preview_channel'
+import {
+  windowedIfcPreviewChannel,
+} from './ifc_windowed_preview_adapter'
 import {
   ifcPreviewAdapter,
   StreamedPreviewChannel,
@@ -1833,7 +1835,7 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
    *    `OpenModelStream`. Re-parsing silently here would spend exactly the
    *    cost the caller asked to avoid, and hide a stale index behind a slow
    *    success.
-   *  - **no preview channel.** `StorePreviewChannel` snapshots a *live*
+   *  - **no preview channel.** The preview channel snapshots a *live*
    *    parse; there is none, so there is no preview and no derived
    *    coordination frame. Fine for a worker (it takes the coordinator's
    *    via `SetCoordinationFrame`), which is also why index-first must not
@@ -1965,14 +1967,17 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
 
     const parseStartTime = Date.now()
 
-    // Live sink so the store preview channel can snapshot a prefix
-    // mid-parse without a resident source buffer.
+    // Live sink so the preview channel can snapshot a prefix mid-parse
+    // without a resident source buffer. The same channel as the buffered
+    // open's, with the windowed adapter: its prefix models page the store
+    // and its ticks await that paging, which is why this parse's progress
+    // callback is async (conway#775, which retired StorePreviewChannel).
     const sink = new ColumnarIndexSink< EntityTypesIfc >()
     let storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
-      new StorePreviewChannel(
+      windowedIfcPreviewChannel(
           store,
-          sink,
           conwaywasm,
+          sink,
           settings.COORDINATE_TO_ORIGIN === true,
           settings.ON_PREVIEW_MESH ) : void 0
 
@@ -1986,8 +1991,8 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // gate rides `onHeaderParsed`, the builder's own seam (codex review of
     // bldrs-ai/conway#713, P1/P2/round 4 — see streaming_index_builder.ts):
     // it fires from the real parse's own header, after COMPLETE and
-    // strictly before any record reaches `sink` or the `StorePreviewChannel`
-    // below gets to tick, so a throw here still means zero IFC4-typed
+    // strictly before any record reaches `sink` or the preview channel
+    // above gets to tick, so a throw here still means zero IFC4-typed
     // preview meshes or index rows ever reach the caller. This replaces the
     // old two-gate arrangement (an up-front bounded sniff of `store`, plus a
     // post-parse fallback for when that sniff's smaller window disagreed
