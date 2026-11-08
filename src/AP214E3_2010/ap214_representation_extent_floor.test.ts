@@ -517,4 +517,28 @@ describe('AP214 representation-extent deflection floor (bldrs-ai/conway#564 §5)
       AP214GeometryExtraction.prototype.collectRepresentationExtents = original
     }
   })
+
+  // A preview prefix generation's plan leaves the walk to the first face
+  // (eagerExtentWalk false): the walk in every prefix plan put DSA2's Parsing
+  // up 0.22 s in Share's worker path. Same values either way.
+  test('a plan with eagerExtentWalk off defers the walk, and the extents come out the same', () => {
+
+    const [eagerModel, eager] = load( TWO_REPRESENTATION_FIXTURE )
+    const [lazyModel, lazy] = load( TWO_REPRESENTATION_FIXTURE )
+
+    lazy.eagerExtentWalk = false
+
+    eager.prepareDemandExtraction()
+    lazy.prepareDemandExtraction()
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    expect(( eager as any ).extentTable_).toBeDefined()
+    expect(( lazy as any ).extentTable_).toBeUndefined()
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    for ( const name of [ 'small face', 'large face' ] ) {
+      expect(lazy.representationExtentForFace( faceNamed( lazyModel, name ) ))
+          .toBe(eager.representationExtentForFace( faceNamed( eagerModel, name ) ))
+    }
+  })
 })

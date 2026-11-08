@@ -276,6 +276,60 @@ describe( 'a windowed prefix model holds no window views between units', () => {
   }, 240000 )
 } )
 
+describe( 'a preview prefix generation does not walk the extent table in its plan', () => {
+
+  test( 'the preview plan defers the walk; the durable plan walks up front', async () => {
+
+    const { ColumnarIndexSink: Sink } = await import( '../../step/parsing/columnar_index' )
+    const { buildIndexStreaming } = await import( '../../step/parsing/streaming_index_builder' )
+    const { BufferByteSource } = await import( '../../step/parsing/byte_source' )
+    const AP214StepParser = ( await import( '../../AP214E3_2010/ap214_step_parser' ) ).default
+    const { ap214PreviewAdapter } = await import( './streamed_preview_channel' )
+    const { AP214GeometryExtraction } =
+      await import( '../../AP214E3_2010/ap214_geometry_extraction' )
+    const AP214StepModel = ( await import( '../../AP214E3_2010/ap214_step_model' ) ).default
+
+    const bytes = new Uint8Array( fs.readFileSync( OCCURRENCE_FIXTURE ) )
+    const sink = new Sink<number>()
+
+    buildIndexStreaming( new BufferByteSource( bytes ), AP214StepParser.Instance, 1 << 20, void 0, sink )
+
+    const conwayGeometry = new ConwayGeometry()
+
+    expect( await conwayGeometry.initialize() ).toBe( true )
+
+    const original = AP214GeometryExtraction.prototype.collectRepresentationExtents
+    let walks = 0
+
+    AP214GeometryExtraction.prototype.collectRepresentationExtents = function() {
+      ++walks
+      return original.call( this )
+    }
+
+    try {
+      const generation = ap214PreviewAdapter().buildGeneration(
+          bytes, conwayGeometry, sink.snapshot() )
+
+      // Non-vacuous: the generation planned units over a fixture with
+      // advanced faces, and its plan did not walk.
+      expect( generation?.unitCount ?? 0 ).toBeGreaterThan( 0 )
+      expect( walks ).toBe( 0 )
+
+      generation?.dispose()
+
+      // The control: a durable extraction over the same index walks in its
+      // plan, once.
+      const durable = new AP214GeometryExtraction(
+          conwayGeometry, new AP214StepModel( bytes, sink.finalize() ) )
+
+      durable.prepareDemandExtraction()
+      expect( walks ).toBe( 1 )
+    } finally {
+      AP214GeometryExtraction.prototype.collectRepresentationExtents = original
+    }
+  }, 240000 )
+} )
+
 describe( 'retry-mode preview channel: cost and the parse-end tick', () => {
 
   const makeSink = ( records: { count: number } ) => ( {
