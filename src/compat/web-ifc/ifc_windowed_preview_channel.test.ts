@@ -1,7 +1,7 @@
 /* eslint-disable no-magic-numbers */
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, jest, test } from '@jest/globals'
+import { afterAll, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import IfcStepParser from '../../ifc/ifc_step_parser'
@@ -22,6 +22,7 @@ import {
   ap214PreviewAdapter,
   DEFAULT_MAX_PREVIEW_UNITS,
   ifcPreviewAdapter,
+  PREVIEW_PARSE_SHARE,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
 import type { PreviewMeshPayload } from './streamed_preview_channel'
@@ -98,7 +99,22 @@ describe( 'windowed IFC preview channel (StreamedPreviewChannel + windowedIfcPre
   let conwayGeometry: ConwayGeometry
   let bytes: Uint8Array
 
+  // These tests pin what the channel does with its units (deferral, retry,
+  // preemption, plates), on the real clock. The share-of-parse bound
+  // (PREVIEW_PARSE_SHARE) is read off that clock too, so on a slow runner it
+  // cut ticks these tests count on: conway#777's first CI run failed "a
+  // grid-placed product blocked on a reference array is retried" with 2 of 3
+  // retries, and a 0.01 share reproduces that here along with six more. The
+  // bound has its own tests on a stubbed clock
+  // (streamed_preview_channel_share.test.ts); here it is lifted.
+  const parseShare = PREVIEW_PARSE_SHARE.share
+
+  afterAll( () => {
+    PREVIEW_PARSE_SHARE.share = parseShare
+  } )
+
   beforeAll( async () => {
+    PREVIEW_PARSE_SHARE.share = Infinity
     bytes = new Uint8Array( fs.readFileSync( 'data/index.ifc' ) )
     const api = new IfcAPI()
     await api.Init()

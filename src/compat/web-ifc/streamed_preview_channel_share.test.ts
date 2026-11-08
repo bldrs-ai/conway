@@ -280,16 +280,107 @@ describe( 'preview channel: all of its work is bounded at a share of the parse',
     internals.unitOrdinal_ = 2000
     expect( builds ).toEqual( [ 1000, 2000 ] )
 
-    // The fit through those two alone is 1,000 + 0.99 per record: 2,980 ms
-    // at 4k. The cheaper observed rate, 0.01 ms per record, says 40 ms.
-    expect( internals.predictBuildMs_( 4000 ) ).toBeCloseTo( 40, 6 )
+    // The fit through those two is 1,000 + 0.99 per record: 2,980 ms at 4k,
+    // which no share of a few seconds' parse covers.
+    expect( internals.predictBuildMs_( 4000 ) ).toBeCloseTo( 2980, 6 )
 
-    // Back on the share, with 100 ms of it left: the next build runs.
+    // Back on the share, with 100 ms of it left: the fit refuses, the probe
+    // prices the build at the cheaper observed rate (0.01 ms per record,
+    // 40 ms), and it runs.
     internals.parseShare_ = 0.2
     records.count = 4000
     now = internals.startedMs_ + ( ( internals.spentMs_ + 100 ) / 0.2 )
     channel.maybeTickInline()
     expect( builds ).toEqual( [ 1000, 2000, 4000 ] )
+
+    // Its 40 ms is a sample now, and the fit through 1,000 ms at 2k and
+    // 40 ms at 4k is flat (a cheaper second build is no discount): 40 ms at
+    // 8k, which the fit lets through on its own and which comes in at its
+    // prediction, re-arming the probe.
+    costs.push( 40 )
+    internals.unitOrdinal_ = 4000
+    records.count = 8000
+    now = internals.startedMs_ + ( ( internals.spentMs_ + 50 ) / 0.2 )
+    // The cadence backs off after a productive tick; this test is about the
+    // share, so take the cadence out of it.
+    internals.lastInlineTick_ = 0
+    channel.maybeTickInline()
+    expect( builds ).toEqual( [ 1000, 2000, 4000, 8000 ] )
+    expect( internals.probeArmed_ ).toBe( true )
+
+    channel.stop()
+  }, 240000 )
+
+  // codex on conway#777, round 2: a standing "cheapest observed rate" floor
+  // under the prediction underprices every build when cost grows faster than
+  // the records do. At k·r², samples at r/2 and r price 2r at k·r² against
+  // an actual 4k·r², at every doubling, so the channel overshoots its share
+  // by three quarters of a build each time. The fit alone underprices too,
+  // but by less (2.5k·r² for 4k·r²), and the probe may add one cheap-rate
+  // build per stretch of mispredicting fit, which here is the whole parse.
+  test( 'builds that cost k·r² overshoot the share by more than half a build at most once', () => {
+
+    now = 1000
+    const records = { count: 0 }
+    const builds: number[] = []
+    const runs: number[] = []
+    const k = 1e-7
+    const costs: number[] = []
+
+    const adapter: PreviewSchemaAdapter = {
+      buildGeneration: () => {
+        builds.push( records.count )
+        const ms = k * records.count * records.count
+        costs.push( ms )
+        now += ms
+        return makeGeneration( records.count, runs )
+      },
+    }
+
+    jest.spyOn( Date, 'now' ).mockImplementation( () => now )
+
+    const channel = new StreamedPreviewChannel(
+        new Uint8Array( 0 ), conwayGeometry, makeSink( records ), adapter,
+        false, () => { /* no payloads */ }, void 0, void 0, 1 )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    internals.tickIntervalMs_ = 0
+    internals.tickMaxAttempts_ = 1
+    internals.parseShare_ = 0.2
+
+    const startedMs = internals.startedMs_
+    const overshoots: number[] = []
+
+    // Each step doubles the index and exhausts the generation, so a rebuild
+    // is due and only the share decides when it runs. Time then advances a
+    // millisecond at a time until it does, i.e. the build starts the moment
+    // the estimator says it fits; how far past the share its actual cost
+    // lands is the estimator's error.
+    records.count = 1000
+    channel.maybeTickInline()
+
+    for ( let step = 1; step <= 10; ++step ) {
+      records.count = 1000 * ( 2 ** step )
+      internals.unitOrdinal_ = Number.MAX_SAFE_INTEGER
+      const before = builds.length
+
+      for ( let wait = 0; builds.length === before && wait < 10000000; ++wait ) {
+        now += 1
+        internals.lastInlineTick_ = 0
+        channel.maybeTickInline()
+      }
+
+      expect( builds.length ).toBe( before + 1 )
+      const allowed = Math.max( 100, 0.2 * ( now - startedMs ) )
+      overshoots.push( ( internals.spentMs_ - allowed ) / costs[ costs.length - 1 ] )
+    }
+
+    // Measured here: a standing cheap-rate floor admits every doubling at a
+    // quarter of its cost and lands 0.55 of a build past the share each time
+    // (the share accrues a little during the build itself); the fit lands
+    // 0.17 past it, and the probe adds one 0.55, once.
+    expect( overshoots.filter( ( o ) => o > 0.5 ).length ).toBeLessThanOrEqual( 1 )
 
     channel.stop()
   }, 240000 )

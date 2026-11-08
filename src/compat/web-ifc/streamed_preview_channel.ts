@@ -883,6 +883,13 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * the next one (see predictBuildMs_); empty before the first build. */
   private readonly builds_: [number, number][] = []
 
+  /** affordsBuild_'s one-shot probe, armed until used (see there). */
+  private probeArmed_ = true
+
+  /** What the fit predicted for the build affordsBuild_ last let through;
+   * undefined when the probe, or no prediction, let it through. */
+  private admittedPredictionMs_?: number
+
   /** PREVIEW_PARSE_SHARE at construction. A field so a test can lift it the
    * way it lifts tickBudgetMs_. */
   private parseShare_ = PREVIEW_PARSE_SHARE.share
@@ -1403,13 +1410,72 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * nothing to predict from, and it is the cheapest one
    * (FIRST_GENERATION_MIN_RECORDS).
    *
+   * Every caller asks only when the build is needed: there is no active
+   * generation, or it is exhausted, or its deferrals want a longer index.
+   *
+   * The fit (predictBuildMs_) decides. When it refuses, one probe may still
+   * let a build through, priced at the cheapest rate an actual build has run
+   * at. That is for a fit spoiled by one transiently slow build: fitted
+   * through two samples, 10 ms at 1k records then 1,000 ms at 2k prices 4k
+   * at 2,980 ms, and only a build replaces a sample, so without the probe
+   * the channel would never build again and its retry queue would be
+   * stranded (codex on conway#777, round 1). Clamping the slope would not
+   * recover it: the outlier is also the fit's intercept.
+   *
+   * The probe is one-shot. It re-arms only when a build the FIT let through
+   * comes in at or under its prediction, i.e. once the fit is trustworthy
+   * again, which it is after an isolated outlier. It does not re-arm while
+   * costs grow faster than the fit expects (k·r² builds, codex round 2),
+   * where a standing cheap-rate minimum would underprice every build by 4×
+   * at each doubling. So the probe adds at most one underpriced build per
+   * stretch of mispredicting fit, and on growing costs one over the whole
+   * parse. Its time is charged like any build's, so later builds wait for
+   * the share to cover it.
+   *
    * @param records The records the build would snapshot.
    * @return {boolean} True to build.
    */
   private affordsBuild_(records: number): boolean {
 
-    return this.builds_.length === 0 ||
-      this.predictBuildMs_(records) <= this.shareLeftMs_()
+    if (this.builds_.length === 0) {
+      this.admittedPredictionMs_ = void 0
+      return true
+    }
+
+    const leftMs = this.shareLeftMs_()
+    const predictedMs = this.predictBuildMs_(records)
+
+    if (predictedMs <= leftMs) {
+      this.admittedPredictionMs_ = predictedMs
+      return true
+    }
+
+    if (this.probeArmed_ && this.cheapestBuildRateMs_() * records <= leftMs) {
+      this.probeArmed_ = false
+      this.admittedPredictionMs_ = void 0
+      return true
+    }
+
+    return false
+  }
+
+  /**
+   * The cheapest cost per record any kept build ran at; Infinity with none
+   * that had records.
+   *
+   * @return {number} Milliseconds per record.
+   */
+  private cheapestBuildRateMs_(): number {
+
+    let rate = Infinity
+
+    for (const [ count, ms ] of this.builds_) {
+      if (count > 0) {
+        rate = Math.min(rate, ms / count)
+      }
+    }
+
+    return rate
   }
 
   /**
@@ -1431,17 +1497,8 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * negative (a second build cheaper than the first is noise, not a
    * discount).
    *
-   * And never above the cheapest rate either build actually ran at, times
-   * the records: the fit goes through only two samples, so one transiently
-   * slow build (10 ms at 1k records, then 1,000 ms at 2k) gives it a slope
-   * that prices every later build out of the share, and since only a build
-   * replaces a sample, the estimate would never recover and the retry queue
-   * would be stranded for the rest of the open (codex on conway#777).
-   * Clamping the slope alone would not recover: the outlier is also the
-   * fit's intercept. The cheaper rate is a cost the channel has observed;
-   * if the next build is slower than that, it is one misprediction, after
-   * which both samples are the slow ones. When builds are mostly fixed cost,
-   * as on PSB, the fit is the lower of the two and this changes nothing.
+   * An outlier build can spoil the fit; affordsBuild_'s probe is how it
+   * recovers.
    *
    * @param records The records the build would snapshot.
    * @return {number} Milliseconds.
@@ -1454,18 +1511,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     const [ lastRecords, lastMs ] = last
     const perRecord = last[0] > first[0] ?
       Math.max(0, (last[1] - first[1]) / (last[0] - first[0])) : 0
-    const fitted = lastMs + perRecord * Math.max(0, records - lastRecords)
-
-    // A build over 0 records has no rate; it cannot bound anything.
-    const rates = this.builds_
-        .filter(([ count ]) => count > 0)
-        .map(([ count, ms ]) => ms / count)
-
-    if (rates.length === 0) {
-      return fitted
-    }
-
-    return Math.min(fitted, Math.min(...rates) * records)
+    return lastMs + perRecord * Math.max(0, records - lastRecords)
   }
 
   /**
@@ -1476,7 +1522,16 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   private timeBuild_(records: number, startedMs: number): void {
 
-    this.builds_.push([ records, Date.now() - startedMs ])
+    const ms = Date.now() - startedMs
+
+    // The fit was right about a build it let through: re-arm the probe
+    // (see affordsBuild_).
+    if (this.admittedPredictionMs_ !== void 0 && ms <= this.admittedPredictionMs_) {
+      this.probeArmed_ = true
+    }
+
+    this.admittedPredictionMs_ = void 0
+    this.builds_.push([ records, ms ])
 
     if (this.builds_.length > 2) {
       this.builds_.shift()

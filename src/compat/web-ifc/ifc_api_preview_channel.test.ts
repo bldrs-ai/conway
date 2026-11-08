@@ -7,7 +7,7 @@
 // preview hands over to is already pinned to classic parity.
 import * as fs from 'fs'
 
-import { beforeAll, describe, expect, jest, test } from '@jest/globals'
+import { afterAll, beforeAll, describe, expect, jest, test } from '@jest/globals'
 
 import { ConwayGeometry } from '../../../dependencies/conway-geom'
 import IfcStepParser from '../../ifc/ifc_step_parser'
@@ -23,6 +23,7 @@ import { buildIndexStreaming } from '../../step/parsing/streaming_index_builder'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import {
   ifcPreviewAdapter,
+  PREVIEW_PARSE_SHARE,
   PreviewMeshPayload,
   StreamedPreviewChannel,
 } from './streamed_preview_channel'
@@ -92,7 +93,22 @@ function classicInstances( modelID: number ):
   return instances
 }
 
+// These tests pin what the channel does with its units (deferral, retry,
+// preemption, plates), on the real clock. The share-of-parse bound
+// (PREVIEW_PARSE_SHARE) is read off that clock too, so on a slow runner it
+// cut ticks these tests count on: conway#777's first CI run failed "a
+// grid-placed product blocked on a reference array is retried" with 2 of 3
+// retries, and a 0.01 share reproduces that here along with six more. The
+// bound has its own tests on a stubbed clock
+// (streamed_preview_channel_share.test.ts); here it is lifted.
+const parseShare = PREVIEW_PARSE_SHARE.share
+
+afterAll( () => {
+  PREVIEW_PARSE_SHARE.share = parseShare
+} )
+
 beforeAll( async () => {
+  PREVIEW_PARSE_SHARE.share = Infinity
   api = new IfcAPI()
   await api.Init()
 
