@@ -1,7 +1,13 @@
 import fs from 'fs'
-import { describe, expect, test, beforeAll } from '@jest/globals'
+import { describe, expect, jest, test, beforeAll } from '@jest/globals'
 import { AP214GeometryExtraction } from './ap214_geometry_extraction'
-import { advanced_face, cartesian_point, vertex_point } from './AP214E3_2010_gen'
+import {
+  advanced_brep_shape_representation,
+  advanced_face,
+  cartesian_point,
+  vertex_point,
+} from './AP214E3_2010_gen'
+import Logger from '../logging/logger'
 import { ParseResult } from '../step/parsing/step_parser'
 import AP214StepParser from './ap214_step_parser'
 import AP214StepModel from './ap214_step_model'
@@ -52,8 +58,19 @@ let conwayGeometry: ConwayGeometry
  * an extraction over it.
  */
 function load( fixture: string = FIXTURE ): [AP214StepModel, AP214GeometryExtraction] {
+  return loadBuffer( fs.readFileSync(fixture) )
+}
+
+
+/**
+ * Parse STEP bytes into a fresh model and extraction (see {@link load}).
+ *
+ * @param buffer The STEP file's bytes.
+ * @return {[AP214StepModel, AP214GeometryExtraction]} The parsed model and
+ * an extraction over it.
+ */
+function loadBuffer( buffer: Buffer ): [AP214StepModel, AP214GeometryExtraction] {
   const parser = AP214StepParser.Instance
-  const buffer: Buffer = fs.readFileSync(fixture)
   const bufferInput = new ParsingBuffer(buffer)
 
   expect(parser.parseHeader(bufferInput)[1]).toBe(ParseResult.COMPLETE)
@@ -278,5 +295,226 @@ describe('AP214 representation-extent deflection floor (bldrs-ai/conway#564 §5)
 
     expect(floored).toBeGreaterThan(0)
     expect(floored).toBeLessThan(unfloored)
+  })
+
+  // conway#773. The table used to be built whole on the first face: every
+  // representation descended to its points before that face could be
+  // tessellated, which put Arty_Z7's whole-model descent (238 ms) inside the
+  // first demand unit of every extraction. A representation is now
+  // descended the first time one of its own faces asks, so the first face
+  // pays for its representation alone. Counted at the descent itself
+  // (growBoxByFace runs once per sampled face), so the claim is about the
+  // work, not about a flag.
+  test('a face descends only the representations that define it', () => {
+
+    const [model, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const prototype = AP214GeometryExtraction.prototype as any
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    const original = prototype.growBoxByFace
+    const descended: number[] = []
+
+    prototype.growBoxByFace = function( face_: { localID: number }, ...rest: unknown[] ) {
+      descended.push( face_.localID )
+      return original.call( this, face_, ...rest )
+    }
+
+    try {
+      const small = faceNamed( model, 'small face' )
+      const large = faceNamed( model, 'large face' )
+
+      expect(extraction.representationExtentForFace( small )).toBeCloseTo(Math.sqrt(3), 9)
+      expect(descended).toEqual( [ small ] )
+
+      // Asked again: memoized, nothing descended twice.
+      expect(extraction.representationExtentForFace( small )).toBeCloseTo(Math.sqrt(3), 9)
+      expect(descended).toEqual( [ small ] )
+
+      expect(extraction.representationExtentForFace( large ))
+          .toBeCloseTo(Math.sqrt(3) * LARGE_BODY_SPAN, 6)
+      expect(descended).toEqual( [ small, large ] )
+    } finally {
+      prototype.growBoxByFace = original
+    }
+  })
+
+  // The other half of the same move: the membership walk is preparation, so
+  // the demand plan builds it and the first unit does not.
+  test('the demand plan builds the membership walk and descends nothing', () => {
+
+    const [, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const internals = extraction as any
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    expect(internals.extentTable_).toBeUndefined()
+
+    extraction.prepareDemandExtraction()
+
+    const table = internals.extentTable_
+
+    expect(table).toBeDefined()
+    expect(table.samples.length).toBe(2)
+    expect(Array.from( table.extents as Float64Array ).every( Number.isNaN )).toBe(true)
+  })
+
+  // A face two representations both list (a malformed file: here the small
+  // solid is also an item of the large body) still takes the SMALLER extent,
+  // whichever face asks first — which is only true if a face is answered
+  // over every representation that holds it, not just the first one to be
+  // descended.
+  test('a face two representations define takes the smaller extent, in either order', () => {
+
+    const text = fs.readFileSync( TWO_REPRESENTATION_FIXTURE, 'utf8' )
+    const listedTwice = text.replace(
+        "ADVANCED_BREP_SHAPE_REPRESENTATION('large body',(#313),#100)",
+        "ADVANCED_BREP_SHAPE_REPRESENTATION('large body',(#313,#413),#100)" )
+
+    expect(listedTwice).not.toBe(text)
+
+    for ( const order of [ [ 'small face', 'large face' ], [ 'large face', 'small face' ] ] ) {
+
+      const [model, extraction] = loadBuffer( Buffer.from( listedTwice ) )
+      const extents = new Map< string, number >()
+
+      for ( const name of order ) {
+        extents.set( name, extraction.representationExtentForFace( faceNamed( model, name ) ) )
+      }
+
+      expect(extents.get( 'small face' )).toBeCloseTo(Math.sqrt(3), 9)
+      // The large body's own extent, at least: the small solid adds its
+      // corner to that representation's box, it cannot shrink it.
+      expect(extents.get( 'large face' )!)
+          .toBeGreaterThanOrEqual(extents.get( 'small face' )! * LARGE_BODY_SPAN)
+    }
+  })
+
+  // The plan is published only once the membership walk has run: a walk that
+  // throws must leave the plan latched failed, so the pump keeps reporting
+  // the failure instead of running a plan whose preparation never finished
+  // (codex on #774).
+  test('a membership walk that throws leaves the demand plan failed, not half-built', () => {
+
+    const [, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+    const original = AP214GeometryExtraction.prototype.collectRepresentationExtents
+    const failure = new Error( 'membership walk failed' )
+
+    AP214GeometryExtraction.prototype.collectRepresentationExtents = () => {
+      throw failure
+    }
+
+    try {
+      expect(() => extraction.prepareDemandExtraction()).toThrow( failure )
+      expect(() => extraction.prepareDemandExtraction()).toThrow( failure )
+      expect(extraction.isDemandExtractionPrepared).toBe(false)
+      expect(extraction.demandUnitCount).toBe(0)
+    } finally {
+      AP214GeometryExtraction.prototype.collectRepresentationExtents = original
+    }
+  })
+
+  // codex round 2 on #774. The membership walk is preparation, so a record
+  // that throws as the walk materializes it (a malformed complex record, say)
+  // must not end the plan: it is logged, its representation's faces get no
+  // floor, and the extraction goes on. Before the walk moved into the plan,
+  // the same throw escaped the table build on the first advanced face, the
+  // table was never built, and every advanced face of the model failed.
+  // The throw is injected only while the walk runs, on the one record that
+  // only the walk reads: the small body, which no SDR names.
+  test('a record that throws in the extent walk is logged; the plan and the extraction complete', () => {
+
+    const [model, extraction] = load( TWO_REPRESENTATION_FIXTURE )
+    const [control, controlExtraction] = load( TWO_REPRESENTATION_FIXTURE )
+
+    const smallBody = Array.from( model.types( advanced_brep_shape_representation ) )
+        .find( ( rep ) => rep.name === 'small body' )
+
+    expect(smallBody).toBeDefined()
+
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const prototype = AP214GeometryExtraction.prototype as any
+    const internals = model as any
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    const originalCollect = prototype.collectRepresentationExtents
+    const originalGet = model.getElementByLocalID.bind( model )
+    let walking = false
+
+    prototype.collectRepresentationExtents = function( ...args: unknown[] ) {
+      walking = true
+      try {
+        return originalCollect.apply( this, args )
+      } finally {
+        walking = false
+      }
+    }
+    internals.getElementByLocalID = ( localID: number ) => {
+      if ( walking && localID === smallBody!.localID ) {
+        throw new Error( 'malformed record in the extent walk' )
+      }
+      return originalGet( localID )
+    }
+
+    const logged = jest.spyOn( Logger, 'error' ).mockImplementation( () => { /* captured */ } )
+
+    try {
+      expect(() => extraction.prepareDemandExtraction()).not.toThrow()
+      expect(logged.mock.calls.some( ( call ) =>
+        String( call[ 0 ] ).includes( 'malformed record in the extent walk' ) )).toBe(true)
+
+      // The skipped representation's face gets no floor; the other keeps its own.
+      expect(extraction.representationExtentForFace( faceNamed( model, 'small face' ) )).toBe(0)
+      expect(extraction.representationExtentForFace( faceNamed( model, 'large face' ) ))
+          .toBeCloseTo(Math.sqrt(3) * LARGE_BODY_SPAN, 6)
+    } finally {
+      prototype.collectRepresentationExtents = originalCollect
+      delete internals.getElementByLocalID
+      logged.mockRestore()
+    }
+
+    // And the extraction completes: the same meshes as an unbroken one.
+    extraction.extractAP214GeometryData()
+    controlExtraction.extractAP214GeometryData()
+
+    const meshes = Array.from( model.geometry ).length
+
+    expect(meshes).toBeGreaterThan(0)
+    expect(meshes).toBe(Array.from( control.geometry ).length)
+  })
+
+  // codex round 2 on #774. The plan turns element memoization off for a large
+  // buffer (here: low-memory mode), and only finishDemandExtraction restored
+  // it, which a failed plan never reaches. Forced here by making the walk
+  // throw, so the plan fails after memoization is off.
+  test('a plan that fails restores element memoization and stays failed', () => {
+
+    const [model] = load( TWO_REPRESENTATION_FIXTURE )
+    // The constructor's own defaults for the CSG depth arguments, then
+    // low-memory mode, which is what makes the plan turn memoization off.
+    const limitCsgDepth = true
+    const csgDepthLimit = 20 // eslint-disable-line no-magic-numbers
+    const lowMemoryMode = true
+    const extraction = new AP214GeometryExtraction(
+        conwayGeometry, model, limitCsgDepth, csgDepthLimit, lowMemoryMode )
+    const before = model.elementMemoization
+    const original = AP214GeometryExtraction.prototype.collectRepresentationExtents
+    const failure = new Error( 'plan failed after memoization was turned off' )
+    let memoizationDuringPlan: boolean | undefined
+
+    AP214GeometryExtraction.prototype.collectRepresentationExtents = function() {
+      memoizationDuringPlan = this.model.elementMemoization
+      throw failure
+    }
+
+    try {
+      expect(() => extraction.prepareDemandExtraction()).toThrow( failure )
+      // The case under test: the plan really had turned memoization off.
+      expect(memoizationDuringPlan).toBe(false)
+      expect(model.elementMemoization).toBe(before)
+      expect(() => extraction.prepareDemandExtraction()).toThrow( failure )
+    } finally {
+      AP214GeometryExtraction.prototype.collectRepresentationExtents = original
+    }
   })
 })

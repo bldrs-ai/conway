@@ -21,6 +21,10 @@
  * mesh, and reports when that landed: the number a preview has to beat to be
  * worth anything.
  *
+ * `--finish-parse` / `--no-finish-parse` turn the parse-end tick
+ * (PREVIEW_FINISH_PARSE, conway#773) on or off for the run, whatever the
+ * build's default is, so one build can be timed both ways.
+ *
  * `--no-preview` opens with ON_PREVIEW_MESH unset, which is the control: the
  * channel ticks inline on parse progress and pages source through the
  * windowed provider on every attempt, INCLUDING the ones that go on to
@@ -36,6 +40,8 @@ const argv = process.argv.slice(2)
 const noPreview = argv.includes('--no-preview')
 const buffered = argv.includes('--buffered')
 const pump = argv.includes('--pump')
+const finishParse = argv.includes('--finish-parse')
+const noFinishParse = argv.includes('--no-finish-parse')
 const filePath = argv.find((a) => !a.startsWith('--'))
 
 if (!filePath) {
@@ -61,6 +67,12 @@ class FileStore {
 }
 
 const { IfcAPI, LogLevel } = await import('../compiled/src/compat/web-ifc/ifc_api.js')
+
+if (finishParse || noFinishParse) {
+  const { PREVIEW_FINISH_PARSE } =
+    await import('../compiled/src/compat/web-ifc/streamed_preview_channel.js')
+  PREVIEW_FINISH_PARSE.enabled = finishParse
+}
 
 const api = new IfcAPI()
 await api.Init()

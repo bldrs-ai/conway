@@ -59,6 +59,8 @@ import { ExtractResult } from '../core/shared_constants'
 import Logger, { DATA_DEFECT } from '../logging/logger'
 import { isUnresolvedReferenceError } from '../step/dangling_reference_error'
 import { arrayToWasmHeap, wasmHeapView } from '../core/wasm_heap'
+import { cursorIterator } from '../indexing/cursor_utilities'
+import { StepEntityConstructorAbstract } from '../step/step_entity_constructor'
 import {
   advanced_brep_shape_representation,
   advanced_face,
@@ -929,11 +931,44 @@ export class AP214GeometryExtraction {
 
 
   /**
-   * Face localID to the extent of the representation that DEFINES it, in
-   * that representation's own raw file coordinates. `undefined` until
-   * `resolveRepresentationExtents` has run.
+   * Which representations DEFINE each face, and each representation's
+   * extent once a face of it has asked — the table behind
+   * `representationExtentForFace`. `undefined` until
+   * `collectRepresentationExtents` has run.
+   *
+   * Two halves because they cost very differently (conway#773). Membership
+   * — which faces each representation's items reach — is a cheap walk over
+   * shells, and it has to be whole-model up front: a face's extent is the
+   * MIN over every representation that reaches it, so a face cannot be
+   * answered until every representation has been asked whether it holds
+   * it. The extent of one representation — a descent through edges and
+   * vertices to the points — is the expensive half, and it is needed only
+   * for representations whose faces are actually tessellated. Building both
+   * halves on the first face put that whole-model descent inside whichever
+   * demand unit ran first: 238 ms of Arty_Z7's first unit (an estimated 163
+   * faces) and 135 ms of DSA2's, measured in Node, in the durable pump and
+   * again in the preview channel's parse-end generation, where no per-unit
+   * estimate could see it and no tick could preempt it.
+   *
+   * The values are unchanged: each representation's extent is the same
+   * min/max reduction over the same sample as before, whenever it runs,
+   * and a face still takes the min over the same set of representations.
+   * What moved is only WHEN a representation is descended.
    */
-  private faceExtent_: Map< number, number > | undefined = undefined
+  private extentTable_?: {
+    /** Face localID → slot of the first representation that defines it. */
+    firstSlot: Map< number, number >
+    /** Face localID → slots of any FURTHER representations that define it
+     * (a malformed file listing one solid twice; empty on the corpus). */
+    furtherSlots: Map< number, number[] >
+    /** Per slot: the localIDs of the faces `extentSample` picked, until the
+     * slot is descended; then undefined. */
+    samples: ( number[] | undefined )[]
+    /** Per slot: the extent diagonal once descended, NaN before, and
+     * -Infinity for a representation whose sample reached no finite point
+     * (whose faces the table therefore does not answer). */
+    extents: Float64Array
+  }
 
   /**
    * How many advanced faces this extraction tessellated, and how many of
@@ -1167,9 +1202,85 @@ export class AP214GeometryExtraction {
    */
   private representationExtentEntry( faceLocalID: number ): number | undefined {
 
-    this.faceExtent_ ??= this.resolveRepresentationExtents()
+    const table = this.collectRepresentationExtents()
+    const first = table.firstSlot.get( faceLocalID )
 
-    return this.faceExtent_.get( faceLocalID )
+    if ( first === void 0 ) {
+      return void 0
+    }
+
+    // A face reached from two representations is malformed — the same
+    // solid listed twice — and there is then no single right answer. Take
+    // the SMALLER extent, matching every other bound in this design: it
+    // errs toward a finer floor, i.e. less of the saving and never a
+    // fidelity loss. (The larger one is arguable too, on the grounds that
+    // the bigger representation is the visual object; it is rejected only
+    // because it errs the other way.) A representation whose sample reached
+    // no finite point contributes nothing, exactly as it contributed no
+    // entry to the eager table this replaces.
+    let extent = this.slotExtent( table, first )
+
+    const further = table.furtherSlots.get( faceLocalID )
+
+    if ( further !== void 0 ) {
+      for ( const slot of further ) {
+        const candidate = this.slotExtent( table, slot )
+
+        if ( candidate !== -Infinity &&
+            ( extent === -Infinity || candidate < extent ) ) {
+          extent = candidate
+        }
+      }
+    }
+
+    return extent === -Infinity ? void 0 : extent
+  }
+
+  /**
+   * One representation's extent, descending its sample the first time it is
+   * asked (see `extentTable_`).
+   *
+   * @param table The extent table.
+   * @param slot The representation's slot.
+   * @return {number} The extent diagonal, or -Infinity when its sample
+   * reached no finite point.
+   */
+  private slotExtent(
+      table: NonNullable< AP214GeometryExtraction[ 'extentTable_' ] >,
+      slot: number ): number {
+
+    const known = table.extents[ slot ]
+
+    if ( !Number.isNaN( known ) ) {
+      return known
+    }
+
+    const box = {
+      minX: Infinity, minY: Infinity, minZ: Infinity,
+      maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
+    }
+
+    for ( const faceLocalID of table.samples[ slot ] ?? [] ) {
+
+      // The same record the collection walk read, resolved again by localID
+      // so the table holds numbers rather than face objects between the
+      // collection and the descent (models over MEMOIZATION_THRESHOLD do not
+      // cache entities, so held objects would be the table's own copies).
+      const face_ = this.model.getElementByLocalID( faceLocalID ) as face | undefined
+
+      if ( face_ !== void 0 ) {
+        this.growBoxByFace( face_, box )
+      }
+    }
+
+    const extent = Number.isFinite( box.minX ) ?
+      Math.hypot( box.maxX - box.minX, box.maxY - box.minY, box.maxZ - box.minZ ) :
+      -Infinity
+
+    table.extents[ slot ] = extent
+    table.samples[ slot ] = void 0
+
+    return extent
   }
 
   /**
@@ -1213,7 +1324,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const definition of this.model.types( shape_definition_representation ) ) {
+    for ( const definition of this.extentWalkEntities_( shape_definition_representation ) ) {
       try {
         add( definition.used_representation )
       } catch {
@@ -1221,7 +1332,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const relationship of this.model.types( shape_representation_relationship ) ) {
+    for ( const relationship of this.extentWalkEntities_( shape_representation_relationship ) ) {
       try {
         add( relationship.rep_1 )
         add( relationship.rep_2 )
@@ -1230,7 +1341,7 @@ export class AP214GeometryExtraction {
       }
     }
 
-    for ( const map of this.model.types( representation_map ) ) {
+    for ( const map of this.extentWalkEntities_( representation_map ) ) {
       try {
         add( map.mapped_representation )
       } catch {
@@ -1240,7 +1351,7 @@ export class AP214GeometryExtraction {
 
     // Free-floating representations, which no relationship or definition
     // names. These are the concrete kinds extraction's own root scan uses.
-    for ( const free of this.model.types(
+    for ( const free of this.extentWalkEntities_(
         shape_representation,
         advanced_brep_shape_representation,
         geometrically_bounded_wireframe_shape_representation ) ) {
@@ -1249,6 +1360,63 @@ export class AP214GeometryExtraction {
     }
 
     return found.values()
+  }
+
+  /**
+   * `model.types(...)` for the extent walk, with each record materialized
+   * under its own catch.
+   *
+   * The walk is preparation (it runs in the demand plan), so a record that
+   * throws as it materializes, such as a malformed complex record, must not
+   * end the plan. A generator that throws cannot be resumed, so the catch
+   * has to sit inside the iteration, around each record. A skipped record's
+   * faces get no floor (the pre-#564 per-face target), which is the safe
+   * direction everywhere in this table. The throw is logged the way a
+   * failing demand unit's is.
+   *
+   * Before the walk moved into the plan, the same throw escaped
+   * `resolveRepresentationExtents` on the first advanced face. The table was
+   * never built, so every later face retried the walk and threw again: every
+   * advanced face of the model failed (codex on #774).
+   *
+   * Same records in the same order as `model.types`: the same type-index
+   * cursor, and a record with no entity is skipped as `StepModelBase.from`
+   * skips it.
+   *
+   * @param types The entity types to walk.
+   * @yields Each record of those types that materializes.
+   */
+  private *extentWalkEntities_<
+      T extends StepEntityConstructorAbstract< EntityTypesAP214 >[]>( ...types: T ):
+      IterableIterator< InstanceType< T[ number ] > > {
+
+    const distinctTypes = types.length === 1 ? types[ 0 ].query :
+      new Set( types.flatMap( ( type ) => type.query ) )
+    const cursor = this.model.typeIndex.cursor( ...distinctTypes )
+
+    try {
+      for ( const localID of cursorIterator( cursor ) ) {
+
+        let entity: unknown
+
+        try {
+          entity = this.model.getElementByLocalID( localID )
+        } catch ( ex ) {
+          if ( !this.quietRecoverableLogging ) {
+            Logger.error( ex instanceof Error ?
+              `Error collecting representation extents: \n\t${ex.name}\n\t${ex.message}` :
+              `Unknown exception collecting representation extents (${ex})` )
+          }
+          continue
+        }
+
+        if ( entity !== void 0 ) {
+          yield entity as InstanceType< T[ number ] >
+        }
+      }
+    } finally {
+      cursor.free()
+    }
   }
 
   /**
@@ -1302,7 +1470,17 @@ export class AP214GeometryExtraction {
   }
 
   /**
-   * Build the face localID to defining-representation-extent table.
+   * Build the membership half of the face localID to defining-representation
+   * extent table (see `extentTable_`): which representations define each
+   * face, and which of each one's faces `extentSample` will descend. No
+   * representation is descended here; `slotExtent` does that the first time
+   * a face of it asks. Idempotent — the table is built once per extraction.
+   *
+   * Public so a caller can pay it at a point of its choosing instead of
+   * inside the first face: `prepareDemandExtraction` builds it as part of
+   * the plan, which is what moves it out of the first demand unit and into
+   * the preparation the preview channel times as a generation build
+   * (conway#773).
    *
    * `mapped_item` is deliberately NOT followed. A mapped representation is
    * visited in its own right by the loop below, and following it from here
@@ -1310,12 +1488,18 @@ export class AP214GeometryExtraction {
    * which is precisely the reference-dependence that scoping to the
    * definition exists to remove.
    *
-   * @return {Map<number, number>} Extent diagonal keyed by face localID.
-   * Faces no representation reaches are absent.
+   * @return The table.
    */
-  private resolveRepresentationExtents(): Map< number, number > {
+  public collectRepresentationExtents():
+      NonNullable< AP214GeometryExtraction[ 'extentTable_' ] > {
 
-    const faceExtent = new Map< number, number >()
+    if ( this.extentTable_ !== void 0 ) {
+      return this.extentTable_
+    }
+
+    const firstSlot = new Map< number, number >()
+    const furtherSlots = new Map< number, number[] >()
+    const samples: number[][] = []
 
     for ( const representation_ of this.geometryRepresentations() ) {
 
@@ -1335,40 +1519,43 @@ export class AP214GeometryExtraction {
         continue
       }
 
-      const box = {
-        minX: Infinity, minY: Infinity, minZ: Infinity,
-        maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
-      }
+      const slot = samples.length
 
-      for ( const face_ of this.extentSample( faces ) ) {
-        this.growBoxByFace( face_, box )
-      }
-
-      if ( !Number.isFinite( box.minX ) ) {
-        continue
-      }
-
-      const extent =
-        Math.hypot( box.maxX - box.minX, box.maxY - box.minY, box.maxZ - box.minZ )
+      samples.push( this.extentSample( faces ).map( ( face_ ) => face_.localID ) )
 
       for ( const face_ of faces ) {
 
-        const existing = faceExtent.get( face_.localID )
+        const first = firstSlot.get( face_.localID )
 
-        // A face reached from two representations is malformed — the same
-        // solid listed twice — and there is then no single right answer.
-        // Take the SMALLER extent, matching every other bound in this
-        // design: it errs toward a finer floor, i.e. less of the saving and
-        // never a fidelity loss. (The larger one is arguable too, on the
-        // grounds that the bigger representation is the visual object; it is
-        // rejected only because it errs the other way.)
-        faceExtent.set(
-            face_.localID,
-            existing === undefined ? extent : Math.min( existing, extent ) )
+        if ( first === void 0 ) {
+          firstSlot.set( face_.localID, slot )
+          continue
+        }
+
+        // Listed twice in one representation: one membership, as the eager
+        // table's repeated set of the same extent was.
+        if ( first === slot ) {
+          continue
+        }
+
+        const further = furtherSlots.get( face_.localID )
+
+        if ( further === void 0 ) {
+          furtherSlots.set( face_.localID, [ slot ] )
+        } else if ( further[ further.length - 1 ] !== slot ) {
+          further.push( slot )
+        }
       }
     }
 
-    return faceExtent
+    this.extentTable_ = {
+      firstSlot,
+      furtherSlots,
+      samples,
+      extents: new Float64Array( samples.length ).fill( NaN ),
+    }
+
+    return this.extentTable_
   }
 
   /**
@@ -6414,6 +6601,16 @@ export class AP214GeometryExtraction {
       this.planDemandUnits_()
     } catch ( ex ) {
       this.demandPrepFailure_ = { error: ex }
+
+      // The plan may have turned element memoization off for a large
+      // buffer, and its restore lives in finishDemandExtraction, which a
+      // failed plan never reaches. Restore it here so a failed plan does
+      // not leave the model unmemoized (codex on #774).
+      if ( this.demandMemoizationRestore_ !== void 0 ) {
+        this.model.elementMemoization = this.demandMemoizationRestore_
+        this.demandMemoizationRestore_ = void 0
+      }
+
       throw ex
     }
   }
@@ -7763,6 +7960,23 @@ export class AP214GeometryExtraction {
           units.push( () => sliced( void 0, scaleTransform ) )
           unitCosts.push( faces )
         } )
+      }
+
+      // The extent table's membership walk, here rather than on the first
+      // face (conway#773): it is preparation, every advanced face's
+      // tessellation reads it, and paid inside a unit it is a cost no
+      // per-unit estimate can see. Representations are still descended
+      // lazily, per first face. Only advanced faces read the table
+      // (extractAdvancedFace), so a model with none — a faceted export —
+      // skips the walk here, as it always has; the type index answers that
+      // without materializing a face.
+      //
+      // BEFORE the unit list is published, not after: `demandUnits_` being
+      // set is what tells prepareDemandExtraction the plan is done, so a
+      // walk that threw after it would latch the failure once and then let
+      // every later call run the plan anyway (codex on #774).
+      if ( model.typeCount( advanced_face ) > 0 ) {
+        this.collectRepresentationExtents()
       }
 
       this.demandUnits_ = units
