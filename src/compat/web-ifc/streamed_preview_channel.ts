@@ -1126,12 +1126,23 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     try {
       const deadline = Date.now() +
         (bounded ? Math.min(budgetMs, this.shareLeftMs_()) : budgetMs)
+      const before = this.generation_?.generation
 
       if (!(await this.ensureGenerationAsync_())) {
         return 0
       }
 
       const { generation } = this.generation_!
+
+      // A generation built this tick runs at least one unit, even when the
+      // build itself used up the deadline or the share: the build is already
+      // paid for, and a windowed first build can cost more than the 100 ms
+      // floor on its own (residency, prep), which would otherwise leave the
+      // first preview to whenever the share recovers, on a short parse
+      // never (codex on conway#777). One unit is the retired store
+      // channel's guarantee, which attempted a product on every tick. The
+      // unit's time is charged like any other, so later ticks wait for it.
+      const builtNow = generation !== before
 
       let attempts = 0
 
@@ -1140,7 +1151,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
           this.emittedUnits_ < this.maxUnits &&
           !this.capped &&
           attempts < maxAttempts &&
-          Date.now() < deadline) {
+          (Date.now() < deadline || (builtNow && attempts === 0))) {
 
         ++attempts
 
@@ -1420,6 +1431,18 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * negative (a second build cheaper than the first is noise, not a
    * discount).
    *
+   * And never above the cheapest rate either build actually ran at, times
+   * the records: the fit goes through only two samples, so one transiently
+   * slow build (10 ms at 1k records, then 1,000 ms at 2k) gives it a slope
+   * that prices every later build out of the share, and since only a build
+   * replaces a sample, the estimate would never recover and the retry queue
+   * would be stranded for the rest of the open (codex on conway#777).
+   * Clamping the slope alone would not recover: the outlier is also the
+   * fit's intercept. The cheaper rate is a cost the channel has observed;
+   * if the next build is slower than that, it is one misprediction, after
+   * which both samples are the slow ones. When builds are mostly fixed cost,
+   * as on PSB, the fit is the lower of the two and this changes nothing.
+   *
    * @param records The records the build would snapshot.
    * @return {number} Milliseconds.
    */
@@ -1431,8 +1454,18 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     const [ lastRecords, lastMs ] = last
     const perRecord = last[0] > first[0] ?
       Math.max(0, (last[1] - first[1]) / (last[0] - first[0])) : 0
+    const fitted = lastMs + perRecord * Math.max(0, records - lastRecords)
 
-    return lastMs + perRecord * Math.max(0, records - lastRecords)
+    // A build over 0 records has no rate; it cannot bound anything.
+    const rates = this.builds_
+        .filter(([ count ]) => count > 0)
+        .map(([ count, ms ]) => ms / count)
+
+    if (rates.length === 0) {
+      return fitted
+    }
+
+    return Math.min(fitted, Math.min(...rates) * records)
   }
 
   /**
@@ -1454,6 +1487,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   private tickBody_(budgetMs: number): void {
 
     const deadline = Date.now() + budgetMs
+    const before = this.generation_?.generation
 
     if (!this.ensureGeneration_()) {
       return
@@ -1461,6 +1495,9 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
     const active = this.generation_!
     const { generation } = active
+    // See tickAsync_: a generation built this tick runs one unit, whatever
+    // the build left of the deadline.
+    const builtNow = generation !== before
 
     let attempts = 0
 
@@ -1509,7 +1546,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     while (this.hasPendingUnits_(generation) &&
         this.emittedUnits_ + extractedThisTick < this.maxUnits &&
         attempts < this.tickMaxAttempts_ &&
-        Date.now() < deadline) {
+        (Date.now() < deadline || (builtNow && attempts === 0))) {
 
       ++attempts
 

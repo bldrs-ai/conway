@@ -168,7 +168,7 @@ describe( 'preview channel: all of its work is bounded at a share of the parse',
     channel.stop()
   }, 240000 )
 
-  test( 'a tick runs no unit once the share is spent', () => {
+  test( 'once the share is spent a tick runs no unit, but the one after a build', () => {
 
     now = 1000
     const records = { count: 1000 }
@@ -181,14 +181,115 @@ describe( 'preview channel: all of its work is bounded at a share of the parse',
     // Spent: the floor is 100 ms, and the channel has had it.
     internals.spentMs_ = 100
 
+    // The first build is always allowed, and the generation it built runs
+    // one unit (see the next test) — and only one.
     channel.maybeTickInline()
     expect( builds ).toEqual( [ 1000 ] )
-    expect( runs ).toEqual( [] )
+    expect( runs ).toEqual( [ 0 ] )
+
+    // No build this tick, and nothing left of the share: nothing runs.
+    channel.maybeTickInline()
+    expect( runs ).toEqual( [ 0 ] )
 
     // 10 s in, the share allows 2 s and the tick runs.
     now = 11000
     channel.maybeTickInline()
-    expect( runs.length ).toBeGreaterThan( 0 )
+    expect( runs.length ).toBeGreaterThan( 1 )
+
+    channel.stop()
+  }, 240000 )
+
+  // codex on conway#777: the floor is meant to keep the first preview where
+  // it was, but a first build that costs more than the floor used up the
+  // tick's deadline before any unit could run, and with the build charged,
+  // a short parse's flush got a negative share and ran nothing either. A
+  // windowed first build pays residency and prep, so 300 ms is not exotic.
+  test( 'a first build slower than the floor still runs its first unit, in the flush', async () => {
+
+    now = 1000
+    const records = { count: 1000 }
+    const builds: number[] = []
+    const runs: number[] = []
+    const { channel } = makeChannel( records, builds, 300, 0, runs )
+
+    // A one-second parse whose index only reached the first generation's
+    // size at the end: the flush builds it, for 300 ms against the 200 ms
+    // the share allows.
+    now = 2000
+    await channel.flushAsync()
+    expect( builds ).toEqual( [ 1000 ] )
+    expect( runs ).toEqual( [ 0 ] )
+
+    channel.stop()
+  }, 240000 )
+
+  test( 'a first build slower than the floor still runs its first unit, in a parse-time tick', () => {
+
+    now = 1000
+    const records = { count: 1000 }
+    const builds: number[] = []
+    const runs: number[] = []
+    const { channel } = makeChannel( records, builds, 300, 0, runs )
+
+    now = 1050
+    channel.maybeTickInline()
+    expect( builds ).toEqual( [ 1000 ] )
+    expect( runs ).toEqual( [ 0 ] )
+
+    channel.stop()
+  }, 240000 )
+
+  // codex on conway#777: fitted through two samples, one slow build gives the
+  // predictor a slope that prices every later build out of the share, and
+  // only a build replaces a sample, so the channel never builds again and
+  // its retry queue is stranded.
+  test( 'one slow build does not price every later build out of the share', () => {
+
+    now = 1000
+    const records = { count: 1000 }
+    const builds: number[] = []
+    const runs: number[] = []
+    const costs = [ 10, 1000, 40 ]
+
+    const adapter: PreviewSchemaAdapter = {
+      buildGeneration: () => {
+        builds.push( records.count )
+        now += costs[ builds.length - 1 ]
+        return makeGeneration( records.count, runs )
+      },
+    }
+
+    jest.spyOn( Date, 'now' ).mockImplementation( () => now )
+
+    const channel = new StreamedPreviewChannel(
+        new Uint8Array( 0 ), conwayGeometry, makeSink( records ), adapter,
+        false, () => { /* no payloads */ }, void 0, void 0, 1 )
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const internals = channel as any
+
+    internals.tickIntervalMs_ = 0
+    internals.tickMaxAttempts_ = 1
+
+    // 10 ms at 1k records, then a transiently slow 1,000 ms at 2k, both let
+    // through with the share lifted.
+    internals.parseShare_ = Infinity
+    channel.maybeTickInline()
+    internals.unitOrdinal_ = 1000
+    records.count = 2000
+    channel.maybeTickInline()
+    internals.unitOrdinal_ = 2000
+    expect( builds ).toEqual( [ 1000, 2000 ] )
+
+    // The fit through those two alone is 1,000 + 0.99 per record: 2,980 ms
+    // at 4k. The cheaper observed rate, 0.01 ms per record, says 40 ms.
+    expect( internals.predictBuildMs_( 4000 ) ).toBeCloseTo( 40, 6 )
+
+    // Back on the share, with 100 ms of it left: the next build runs.
+    internals.parseShare_ = 0.2
+    records.count = 4000
+    now = internals.startedMs_ + ( ( internals.spentMs_ + 100 ) / 0.2 )
+    channel.maybeTickInline()
+    expect( builds ).toEqual( [ 1000, 2000, 4000 ] )
 
     channel.stop()
   }, 240000 )
