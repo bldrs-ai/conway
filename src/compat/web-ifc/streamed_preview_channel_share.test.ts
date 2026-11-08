@@ -438,4 +438,49 @@ describe( 'preview channel: all of its work is bounded at a share of the parse',
 
     channel.stop()
   }, 240000 )
+
+  // Share#2087 / conway#777: bounded by the share too, the parse-end flush of
+  // a short parse that had spent its floor ran nothing, and Momentum.ifc
+  // showed 7–9 preview meshes at the index instead of the store channel's 73.
+  test( 'a short parse that spent its floor still flushes for the flush budget', async () => {
+
+    now = 1000
+    const records = { count: 1000 }
+    const builds: number[] = []
+    const runs: number[] = []
+    const { channel, internals } = makeChannel( records, builds, 0, 0, runs )
+
+    // A unit costs 10 ms, so the flush's 100 ms clock runs ten of them.
+    const generation = makeGeneration( 1000, runs )
+    const runUnits = generation.runUnits
+    generation.runUnits = ( from: number, count: number ) => {
+      now += 10
+      return runUnits( from, count )
+    }
+    internals.adapter.buildGeneration = () => {
+      builds.push( records.count )
+      return generation
+    }
+
+    // The parse-time tick builds, runs its one unit, and the floor is spent.
+    internals.tickMaxAttempts_ = 1
+    await channel.maybeTickAsync()
+    expect( builds ).toEqual( [ 1000 ] )
+    internals.spentMs_ = 100
+
+    // 300 ms in, the share allows 100 ms, all spent: a parse-time tick runs
+    // nothing,
+    now = 1300
+    internals.lastInlineTick_ = 0
+    const before = runs.length
+    await channel.maybeTickAsync()
+    expect( runs.length ).toBe( before )
+
+    // but the flush, after the parse, runs for its own clock.
+    await channel.flushAsync()
+    expect( runs.length - before ).toBe( 10 )
+    expect( builds ).toEqual( [ 1000 ] )
+
+    channel.stop()
+  }, 240000 )
 } )

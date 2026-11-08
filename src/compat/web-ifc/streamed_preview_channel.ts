@@ -1062,6 +1062,17 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * store channel's flush (conway#775). A schema whose unit list is fixed
    * (`retryEmptyUnits`) takes {@link finishParse} instead.
    *
+   * Its units are not held to the share of the parse (PREVIEW_PARSE_SHARE),
+   * only to FLUSH_BUDGET_MS. The share exists so the preview cannot slow the
+   * parse; the flush runs once the parse is over, so what it can cost is
+   * that budget, once per open. Bounded by the share as well, a short parse
+   * that had spent its 100 ms floor flushed nothing: Momentum.ifc (5.9 MB)
+   * showed 7–9 preview meshes at the index where the store channel showed
+   * 73, and previewInteraction.spec.ts (Share#2087) failed four times as
+   * often. A generation BUILD in the flush still has to fit the share
+   * (affordsBuild_): a build over the whole index is not bounded by the
+   * flush's clock, which is only checked between units.
+   *
    * @return {Promise<void>} Settles when the flush ends.
    */
   public async flushAsync(): Promise< void > {
@@ -1072,10 +1083,11 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     }
 
     try {
-      // The clock is the flush's only bound, as it was the store channel's:
-      // the per-tick attempt cap paces ticks that share the thread with a
-      // running parse, and this one runs after the parse.
-      await this.tickAsync_(FLUSH_BUDGET_MS, Number.MAX_SAFE_INTEGER)
+      // FLUSH_BUDGET_MS is the only bound on the flush's units: no attempt
+      // cap (that paces ticks sharing the thread with a running parse, and
+      // this one runs after it) and no share (`bounded` false; see above).
+      // Its time is still charged to the channel's account.
+      await this.tickAsync_(FLUSH_BUDGET_MS, Number.MAX_SAFE_INTEGER, false)
     } catch {
       this.stopped_ = true
     }
@@ -1119,6 +1131,9 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    *
    * @param budgetMs Wall clock for this tick.
    * @param maxAttempts Attempts for this tick, at most.
+   * @param bounded Also cut the tick's budget to what the share has left
+   * (PREVIEW_PARSE_SHARE). False for the parse-end flush and the test drain.
+   * A generation build is held to the share either way.
    * @return {Promise<number>} Units attempted.
    */
   private async tickAsync_(
