@@ -531,6 +531,12 @@ export function ap214PreviewAdapter<TSource = Uint8Array>(
       // (Arty: 5k+ styled-item warnings across generations).
       extraction.quietRecoverableLogging = true
 
+      // The extent walk waits for the first face a unit tessellates, rather
+      // than running in every prefix plan (AP214GeometryExtraction
+      // .eagerExtentWalk): the cost gate passes over most of a generation's
+      // units, and a parse builds about ten generations.
+      extraction.eagerExtentWalk = false
+
       extraction.prepareDemandExtraction()
 
       // Planning reads records all over the model; on a windowed prefix model

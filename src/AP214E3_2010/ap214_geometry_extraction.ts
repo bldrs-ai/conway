@@ -7969,13 +7969,14 @@ export class AP214GeometryExtraction {
       // lazily, per first face. Only advanced faces read the table
       // (extractAdvancedFace), so a model with none — a faceted export —
       // skips the walk here, as it always has; the type index answers that
-      // without materializing a face.
+      // without materializing a face. A preview prefix generation
+      // (eagerExtentWalk false) leaves it to the first face; see that flag.
       //
       // BEFORE the unit list is published, not after: `demandUnits_` being
       // set is what tells prepareDemandExtraction the plan is done, so a
       // walk that threw after it would latch the failure once and then let
       // every later call run the plan anyway (codex on #774).
-      if ( model.typeCount( advanced_face ) > 0 ) {
+      if ( this.eagerExtentWalk && model.typeCount( advanced_face ) > 0 ) {
         this.collectRepresentationExtents()
       }
 
@@ -7983,6 +7984,25 @@ export class AP214GeometryExtraction {
       this.demandUnitCosts_ = unitCosts
     }
   }
+
+  /**
+   * Whether {@link prepareDemandExtraction} walks the extent table's
+   * membership up front (true, the durable extraction) or leaves it to the
+   * first advanced face that asks (false).
+   *
+   * False for the parse-time preview channel's throwaway prefix generations
+   * (ap214PreviewAdapter). Each of those builds its own plan over a longer
+   * prefix, about ten per parse, and the channel's cost gate passes over most
+   * of their units, so a walk in every plan was paid for faces no unit ever
+   * tessellated. Measured in Share's worker path after conway#774 moved the
+   * walk into the plan: DSA2's Parsing 3.24 -> 3.46 s and Arty_Z7's
+   * 1.62 -> 1.77 s (n=3 medians), with previews on and none on screen. A
+   * prefix generation that does run a unit pays the walk then, as it did
+   * before #774, and over its own prefix.
+   *
+   * Set before preparation.
+   */
+  public eagerExtentWalk = true
 
   /**
    * Items one demand unit carries, and equivalently the subtree size a
