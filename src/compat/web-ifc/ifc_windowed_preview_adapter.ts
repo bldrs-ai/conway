@@ -11,12 +11,16 @@ import { WindowedStepBufferProvider } from '../../step/step_buffer_provider'
 import type { StepExternalByteStore } from '../../step/step_buffer_provider'
 import { IDENTITY_MAT4 } from './coordination_f64'
 import { emitSpatialStructureImposters } from './spatial_imposter'
+import type { ConwayGeometry } from '../../index'
+import type { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import {
   ifcPreviewExtraction,
   ifcPreviewGeneration,
   ifcPreviewProducts,
   PreviewAdoptionContext,
+  PreviewMeshPayload,
   PreviewSchemaAdapter,
+  StreamedPreviewChannel,
 } from './streamed_preview_channel'
 
 
@@ -53,6 +57,33 @@ const WINDOWED_IFC_TICK_BUDGET_MS = 20
  * the file.
  */
 const WINDOWED_IFC_MAX_ATTEMPTS_PER_TICK = 32
+
+/**
+ * The preview channel a windowed IFC open runs: the shared channel with the
+ * windowed adapter, at the channel's own unit and byte caps. No cap of its
+ * own: the windowed open used to stop at 512 units while every other open
+ * ran to DEFAULT_MAX_PREVIEW_UNITS (conway#775), and the share-of-parse
+ * bound is what limits the channel now. The open builds its channel here so
+ * that one cap is what a test can pin.
+ *
+ * @param store The store the parse reads.
+ * @param conwaywasm The geometry wasm wrapper.
+ * @param sink The parse's live sink.
+ * @param coordinateToOrigin COORDINATE_TO_ORIGIN.
+ * @param onMesh The consumer.
+ * @return {StreamedPreviewChannel} The channel.
+ */
+export function windowedIfcPreviewChannel(
+    store: StepExternalByteStore,
+    conwaywasm: ConwayGeometry,
+    sink: ColumnarIndexSink< number >,
+    coordinateToOrigin: boolean,
+    onMesh: ( mesh: PreviewMeshPayload ) => void ):
+    StreamedPreviewChannel< StepExternalByteStore > {
+
+  return new StreamedPreviewChannel< StepExternalByteStore >(
+      store, conwaywasm, sink, windowedIfcPreviewAdapter(), coordinateToOrigin, onMesh )
+}
 
 /**
  * IFC adapter for the windowed (store-backed) open: the resident adapter's

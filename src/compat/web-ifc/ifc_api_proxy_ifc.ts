@@ -72,7 +72,7 @@ import {
 } from '../../step/parsing/streaming_index_builder'
 import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import {
-  windowedIfcPreviewAdapter,
+  windowedIfcPreviewChannel,
 } from './ifc_windowed_preview_adapter'
 import {
   ifcPreviewAdapter,
@@ -1974,11 +1974,10 @@ export class IfcApiProxyIfc implements IfcApiModelPassthrough {
     // callback is async (conway#775, which retired StorePreviewChannel).
     const sink = new ColumnarIndexSink< EntityTypesIfc >()
     let storePreview = settings?.ON_PREVIEW_MESH !== void 0 ?
-      new StreamedPreviewChannel< StepExternalByteStore >(
+      windowedIfcPreviewChannel(
           store,
           conwaywasm,
           sink,
-          windowedIfcPreviewAdapter(),
           settings.COORDINATE_TO_ORIGIN === true,
           settings.ON_PREVIEW_MESH ) : void 0
 

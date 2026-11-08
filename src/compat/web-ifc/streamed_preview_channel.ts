@@ -171,7 +171,7 @@ const RETRY_QUEUE_MAX = 4096
  * same file kept going to ~2,180. One cap makes the two opens of a file
  * build up alike (conway#775).
  */
-const DEFAULT_MAX_PREVIEW_UNITS = 4096
+export const DEFAULT_MAX_PREVIEW_UNITS = 4096
 
 /** Default cap on total payload bytes copied out to the consumer. */
 const DEFAULT_MAX_PREVIEW_BYTES = 48 * 1024 * 1024

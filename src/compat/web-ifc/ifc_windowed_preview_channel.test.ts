@@ -14,8 +14,16 @@ import { InMemoryStepByteStore } from '../../step/step_buffer_provider'
 import { openStreamedIfcModelFromStore } from '../../ifc/ifc_stream_open'
 import { IfcAPI } from './ifc_api'
 import type { StepExternalByteStore } from '../../step/step_buffer_provider'
-import { windowedIfcPreviewAdapter } from './ifc_windowed_preview_adapter'
-import { StreamedPreviewChannel } from './streamed_preview_channel'
+import {
+  windowedIfcPreviewAdapter,
+  windowedIfcPreviewChannel,
+} from './ifc_windowed_preview_adapter'
+import {
+  ap214PreviewAdapter,
+  DEFAULT_MAX_PREVIEW_UNITS,
+  ifcPreviewAdapter,
+  StreamedPreviewChannel,
+} from './streamed_preview_channel'
 import type { PreviewMeshPayload } from './streamed_preview_channel'
 
 
@@ -958,5 +966,33 @@ describe( 'windowed IFC preview channel (StreamedPreviewChannel + windowedIfcPre
         expect.stringContaining( 'Preview: no mesh, 0 meshes from 0 units, 0 deferred' ) )
 
     infoSpy.mockRestore()
+  } )
+
+  test( 'the windowed open caps its preview at the same unit count as every other open', () => {
+
+    // conway#775: the windowed IFC open kept the retired store channel's 512
+    // units while the buffered IFC open and both STEP opens ran to the
+    // channel default, so the same file built up two different previews
+    // depending on how it was opened (PSB: 484 meshes by 75% of the parse
+    // windowed, ~2,180 buffered). The open builds its channel through
+    // windowedIfcPreviewChannel; a cap passed there fails this.
+    const store = new InMemoryStepByteStore( bytes )
+    const sink = new ColumnarIndexSink< number >()
+    const noop = () => { /* no payloads read */ }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const capOf = ( channel: StreamedPreviewChannel< any > ): number =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ( channel as any ).maxUnits
+
+    const windowed = windowedIfcPreviewChannel( store, conwayGeometry, sink, false, noop )
+    const bufferedIfc = new StreamedPreviewChannel(
+        bytes, conwayGeometry, sink, ifcPreviewAdapter(), false, noop )
+    const bufferedStep = new StreamedPreviewChannel(
+        bytes, conwayGeometry, sink, ap214PreviewAdapter(), false, noop )
+
+    expect( DEFAULT_MAX_PREVIEW_UNITS ).toBe( 4096 )
+    expect( capOf( windowed ) ).toBe( DEFAULT_MAX_PREVIEW_UNITS )
+    expect( capOf( bufferedIfc ) ).toBe( DEFAULT_MAX_PREVIEW_UNITS )
+    expect( capOf( bufferedStep ) ).toBe( DEFAULT_MAX_PREVIEW_UNITS )
   } )
 } )
