@@ -12,6 +12,7 @@ import { ColumnarIndexSink } from '../../step/parsing/columnar_index'
 import { FlatMesh, IfcAPI } from './ifc_api'
 import {
   PREVIEW_FINISH_PARSE,
+  PREVIEW_PARSE_SHARE,
   PreviewMeshPayload,
   PreviewPrefixGeneration,
   StreamedPreviewChannel,
@@ -41,10 +42,18 @@ beforeAll( async () => {
   // The parse-end tick is off by default until conway#773; these tests are
   // about what it delivers, so they run with it on.
   PREVIEW_FINISH_PARSE.enabled = true
+  // And without the share-of-parse bound (conway#775): these are about what
+  // the payloads carry, and on a loaded runner a 1 MB fixture's parse is short
+  // enough that the bound's floor can be spent before the parse-end tick runs.
+  // streamed_preview_channel_share.test.ts is where the bound is pinned.
+  PREVIEW_PARSE_SHARE.share = Infinity
 }, 120000 )
+
+const DEFAULT_PARSE_SHARE = PREVIEW_PARSE_SHARE.share
 
 afterAll( () => {
   PREVIEW_FINISH_PARSE.enabled = false
+  PREVIEW_PARSE_SHARE.share = DEFAULT_PARSE_SHARE
 } )
 
 /**

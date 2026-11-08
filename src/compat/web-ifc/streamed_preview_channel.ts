@@ -79,6 +79,38 @@ const FLUSH_BUDGET_MS = 100
 export const PREVIEW_FINISH_PARSE = { enabled: false }
 
 /**
+ * The share of the parse's wall clock the preview channel may spend, all of
+ * its work counted: generation builds (snapshot, prefix model, plan,
+ * residency), ticks, and the parse-end tick or flush (conway#775 stage 1).
+ *
+ * Before this, only a tick's own units were budgeted (TICK_BUDGET_MS per
+ * cadence interval). A generation build could not be, and a STEP parse
+ * rebuilds about ten times (GENERATION_GROWTH_FACTOR from
+ * FIRST_GENERATION_MIN_RECORDS), each over the whole index so far, so the
+ * builds were the bulk of the cost.
+ *
+ * The bound is enforced, not just measured:
+ * - a build runs only when its predicted cost (the last build's ms per
+ *   record, times the records now) fits what the share has left;
+ * - a tick's budget is cut to what is left.
+ * The worst overrun is one mispredicted build or one unit, neither of which
+ * can be preempted.
+ *
+ * Mutable so a test or a measurement can lift it (`Infinity`), as with
+ * PREVIEW_FINISH_PARSE.
+ */
+export const PREVIEW_PARSE_SHARE = { share: 0.2 }
+
+/**
+ * What the channel may always spend, whatever the share allows: so the first
+ * generation and its first tick fit before the share has accrued anything
+ * (at 0.2 the share covers 100 ms only after half a second of parse). This
+ * is what keeps the first preview where it was. PSB's first preview mesh
+ * lands about 0.2–0.4 s into its parse in Share's worker path.
+ */
+const PREVIEW_SHARE_FLOOR_MS = 100
+
+/**
  * Starting milliseconds per estimated face, for a generation that offers
  * {@link PreviewPrefixGeneration.unitFaceEstimate}, until the channel has
  * timed a unit of its own. Measured in Node over the complete index of
@@ -832,6 +864,18 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
   private readonly startedMs_ = Date.now()
 
+  /** Wall clock the channel has spent so far: builds, ticks, the parse-end
+   * tick or flush (see PREVIEW_PARSE_SHARE). */
+  private spentMs_ = 0
+
+  /** The last two generation builds, as [records, ms] — the predictor for
+   * the next one (see predictBuildMs_); empty before the first build. */
+  private readonly builds_: [number, number][] = []
+
+  /** PREVIEW_PARSE_SHARE at construction. A field so a test can lift it the
+   * way it lifts tickBudgetMs_. */
+  private parseShare_ = PREVIEW_PARSE_SHARE.share
+
   /** Ordinal cursor into the unit list (see the adapter's stability
    * notes). */
   private unitOrdinal_ = 0
@@ -1010,7 +1054,10 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     }
 
     try {
-      await this.tickAsync_(FLUSH_BUDGET_MS)
+      // The clock is the flush's only bound, as it was the store channel's:
+      // the per-tick attempt cap paces ticks that share the thread with a
+      // running parse, and this one runs after the parse.
+      await this.tickAsync_(FLUSH_BUDGET_MS, Number.MAX_SAFE_INTEGER)
     } catch {
       this.stopped_ = true
     }
@@ -1025,7 +1072,8 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   public async drainForTestAsync(): Promise< void > {
 
     for (; ;) {
-      if (this.capped || (await this.tickAsync_(Number.MAX_SAFE_INTEGER, 1)) === 0) {
+      if (this.capped ||
+          (await this.tickAsync_(Number.MAX_SAFE_INTEGER, 1, false)) === 0) {
         return
       }
     }
@@ -1057,12 +1105,16 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   private async tickAsync_(
       budgetMs: number,
-      maxAttempts: number = this.tickMaxAttempts_ ): Promise< number > {
+      maxAttempts: number = this.tickMaxAttempts_,
+      bounded: boolean = true ): Promise< number > {
 
     this.asyncTickInFlight_ = true
 
+    const startedMs = Date.now()
+
     try {
-      const deadline = Date.now() + budgetMs
+      const deadline = Date.now() +
+        (bounded ? Math.min(budgetMs, this.shareLeftMs_()) : budgetMs)
 
       if (!(await this.ensureGenerationAsync_())) {
         return 0
@@ -1100,6 +1152,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
       return attempts
     } finally {
+      this.spentMs_ += Date.now() - startedMs
       this.asyncTickInFlight_ = false
     }
   }
@@ -1161,7 +1214,16 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
     }
 
     try {
-      if (this.ensureGeneration_(true)) {
+      const startedMs = Date.now()
+      let ready: boolean
+
+      try {
+        ready = this.ensureGeneration_(true)
+      } finally {
+        this.spentMs_ += Date.now() - startedMs
+      }
+
+      if (ready) {
         this.tick_(FINISH_BUDGET_MS)
       }
     } catch {
@@ -1240,7 +1302,8 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    */
   public get previewYield(): {
     firstMeshMs?: number, meshes: number, emitted: number, deferred: number,
-    deferredOnPlacement: number, retried: number, overBudget: number } {
+    deferredOnPlacement: number, retried: number, overBudget: number,
+    channelMs: number } {
 
     return {
       firstMeshMs: this.firstMeshMs_,
@@ -1250,6 +1313,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       deferredOnPlacement: this.deferredOnPlacement_,
       retried: this.retriedUnits_,
       overBudget: this.skippedForCost_,
+      channelMs: this.spentMs_,
     }
   }
 
@@ -1280,6 +1344,103 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
    * extract + capture under the time budget.
    */
   private tick_(budgetMs: number = this.tickBudgetMs_): void {
+
+    const startedMs = Date.now()
+
+    try {
+      this.tickBody_(Math.min(budgetMs, this.shareLeftMs_()))
+    } finally {
+      this.spentMs_ += Date.now() - startedMs
+    }
+  }
+
+  /**
+   * What the share (PREVIEW_PARSE_SHARE) still allows the channel to spend:
+   * the larger of the floor and the share of the wall clock since the parse
+   * started, less what it has spent.
+   *
+   * @return {number} Milliseconds, possibly negative.
+   */
+  private shareLeftMs_(): number {
+
+    // A lifted share is unbounded at every instant, including the first
+    // millisecond, where Infinity * 0 would be NaN and refuse everything.
+    if (this.parseShare_ === Infinity) {
+      return Infinity
+    }
+
+    const allowed = Math.max(
+        PREVIEW_SHARE_FLOOR_MS, this.parseShare_ * (Date.now() - this.startedMs_))
+
+    return allowed - this.spentMs_
+  }
+
+  /**
+   * Whether a generation build over `records` records is predicted to fit
+   * what the share has left. The first build is always allowed: there is
+   * nothing to predict from, and it is the cheapest one
+   * (FIRST_GENERATION_MIN_RECORDS).
+   *
+   * @param records The records the build would snapshot.
+   * @return {boolean} True to build.
+   */
+  private affordsBuild_(records: number): boolean {
+
+    return this.builds_.length === 0 ||
+      this.predictBuildMs_(records) <= this.shareLeftMs_()
+  }
+
+  /**
+   * Predicted cost of a generation build over `records` records: a fixed
+   * part plus a part per record, fitted through the last two builds.
+   *
+   * Not the last build's cost per record. A build's cost is mostly fixed
+   * while the prefix is small (a prefix model, an extraction, a plan, the
+   * windowed prep's residency), so a per-record rate taken off the first
+   * build at FIRST_GENERATION_MIN_RECORDS extrapolates absurdly: measured
+   * on PSB in Share's worker path, a first build of ~1k records priced the
+   * next one, over the index the parse had reached by then, at more than
+   * the whole parse, and the channel never built again (137 meshes, where
+   * the unbounded channel made 484).
+   *
+   * With one build there is nothing to fit: the next is predicted to cost
+   * the same, and if it does not, the misprediction is one build, which the
+   * share's doc already allows for. The per-record part is never taken as
+   * negative (a second build cheaper than the first is noise, not a
+   * discount).
+   *
+   * @param records The records the build would snapshot.
+   * @return {number} Milliseconds.
+   */
+  private predictBuildMs_(records: number): number {
+
+    const [ first, last ] = this.builds_.length === 1 ?
+      [ this.builds_[0], this.builds_[0] ] : this.builds_
+
+    const [ lastRecords, lastMs ] = last
+    const perRecord = last[0] > first[0] ?
+      Math.max(0, (last[1] - first[1]) / (last[0] - first[0])) : 0
+
+    return lastMs + perRecord * Math.max(0, records - lastRecords)
+  }
+
+  /**
+   * Fold one generation build's cost into the predictor.
+   *
+   * @param records The records it snapshotted.
+   * @param startedMs When it started (Date.now()).
+   */
+  private timeBuild_(records: number, startedMs: number): void {
+
+    this.builds_.push([ records, Date.now() - startedMs ])
+
+    if (this.builds_.length > 2) {
+      this.builds_.shift()
+    }
+  }
+
+  // eslint-disable-next-line require-jsdoc
+  private tickBody_(budgetMs: number): void {
 
     const deadline = Date.now() + budgetMs
 
@@ -1470,6 +1631,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
 
     const records = this.sink.topLevelCount
     const active = this.generation_
+    const buildStartedMs = Date.now()
     let generation: PreviewPrefixGeneration | undefined
 
     try {
@@ -1477,8 +1639,11 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
           this.data, this.conwaywasm, this.sink.snapshot(),
           ( unitCount ) => this.wantsGeneration_(unitCount))
     } catch (error) {
+      this.timeBuild_(records, buildStartedMs)
       return this.buildFailed_(records, error)
     }
+
+    this.timeBuild_(records, buildStartedMs)
 
     if (!this.adoptBuilt_(records, active, generation)) {
       return false
@@ -1515,7 +1680,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
         return this.hasPendingUnits_(active.generation)
       }
 
-      return records > 0 ? 'build' : false
+      return records > 0 && this.affordsBuild_(records) ? 'build' : false
     }
 
     // Rebuild on INDEX GROWTH, not on running out of units. The order of
@@ -1570,6 +1735,12 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
       return false
     }
 
+    // Past every gate but the share (PREVIEW_PARSE_SHARE): a build the share
+    // cannot afford waits, and the active generation, if any, carries on.
+    if (!this.affordsBuild_(records)) {
+      return active !== void 0 && this.hasPendingUnits_(active.generation)
+    }
+
     return 'build'
   }
 
@@ -1584,6 +1755,7 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
   private adoptGeneration_(records: number): boolean {
 
     const active = this.generation_
+    const buildStartedMs = Date.now()
     const columns = this.sink.snapshot()
 
     let built: ReturnType< PreviewSchemaAdapter<TSource>[ 'buildGeneration' ] >
@@ -1593,8 +1765,11 @@ export class StreamedPreviewChannel<TSource = Uint8Array> {
           this.data, this.conwaywasm, columns,
           ( unitCount ) => this.wantsGeneration_(unitCount))
     } catch (error) {
+      this.timeBuild_(records, buildStartedMs)
       return this.buildFailed_(records, error)
     }
+
+    this.timeBuild_(records, buildStartedMs)
 
     if (built instanceof Promise) {
       // An async adapter ticked synchronously: a wiring error, not a prefix
